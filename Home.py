@@ -1,3 +1,4 @@
+from theme import apply_clc_theme
 import streamlit as st
 from auth import require_auth, logout_button, get_staff_name
 
@@ -15,7 +16,6 @@ logout_button("sidebar")
 
 staff_name = get_staff_name()
 from datetime import date
-from theme import apply_clc_theme
 today = date.today().strftime("%A %-d %B %Y")
 
 st.markdown(f"""
