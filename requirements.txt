@@ -27,4 +27,13 @@ groq>=0.9.0
 
 # ── Utilities ─────────────────────────────────────────────────────
 python-dateutil>=2.9.0
-
+streamlit>=1.28.0
+pandas>=2.0.0
+plotly>=5.17.0
+python-docx>=0.8.11
+matplotlib>=3.7.0
+pillow>=10.0.0
+supabase>=2.0.0
+bcrypt==4.0.1
+openpyxl
+groq
