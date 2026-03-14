@@ -1,3 +1,4 @@
+from theme import apply_clc_theme
 import streamlit as st
 import re
 import time
@@ -25,7 +26,6 @@ from database import (
     get_agenda_attachment_bytes, delete_agenda_attachment
 )
 from email_utils import send_edition_notification
-from theme import apply_clc_theme
 
 # ── Supabase client for timetable storage ─────────────────────────────────────
 @st.cache_resource

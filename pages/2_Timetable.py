@@ -1,3 +1,4 @@
+from theme import apply_clc_theme
 """
 CLC Timetable — Cowandilla Learning Centre
 ==========================================
@@ -22,7 +23,6 @@ st.set_page_config(
 apply_clc_theme()
 
 from auth import require_auth, logout_button, get_staff_name
-from theme import apply_clc_theme
 require_auth("CLC Timetable", "📅")
 logout_button("sidebar")
 

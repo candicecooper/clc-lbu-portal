@@ -1,3 +1,4 @@
+from theme import apply_clc_theme
 import streamlit as st
 import pandas as pd
 import numpy as np

@@ -1,3 +1,4 @@
+from theme import apply_clc_theme
 import streamlit as st
 from supabase import create_client, Client
 from datetime import date, datetime, timedelta
@@ -8,7 +9,6 @@ st.set_page_config(page_title="CLC Calendar", page_icon="📅", layout="wide", i
 apply_clc_theme()
 
 from auth import require_auth, logout_button, get_staff_name
-from theme import apply_clc_theme
 require_auth("CLC Calendar", "📅")
 logout_button("sidebar")
 

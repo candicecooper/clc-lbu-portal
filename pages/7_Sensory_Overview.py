@@ -1,3 +1,4 @@
+from theme import apply_clc_theme
 import streamlit as st
 from supabase import create_client
 import json
@@ -13,7 +14,6 @@ st.set_page_config(
 apply_clc_theme()
 
 from auth import require_auth, logout_button, get_staff_name
-from theme import apply_clc_theme
 require_auth("Sensory Overview", "🧠")
 logout_button("sidebar")
 

@@ -1,3 +1,4 @@
+from theme import apply_clc_theme
 import streamlit as st
 from datetime import date, timedelta, datetime
 import database as db
@@ -12,7 +13,6 @@ st.set_page_config(
 apply_clc_theme()
 
 from auth import require_auth, logout_button, get_staff_name
-from theme import apply_clc_theme
 require_auth("Daily Bulletin", "📰")
 logout_button("sidebar")
 

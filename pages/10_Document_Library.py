@@ -1,3 +1,4 @@
+from theme import apply_clc_theme
 """
 CLC Document Library
 Leadership resources & Policies (DfE / LBU / CLC)
@@ -20,7 +21,6 @@ st.set_page_config(
 apply_clc_theme()
 
 from auth import require_auth, logout_button, get_staff_name
-from theme import apply_clc_theme
 require_auth("CLC Document Library", "📄")
 logout_button("sidebar")
 
