@@ -40,55 +40,125 @@ def init_supabase() -> Client:
 # Global Supabase client
 supabase: Client = init_supabase()
 
-# ── Sensory Overview app URL — update once deployed ───────────────────────────
-SENSORY_OVERVIEW_APP_URL = "https://your-sensory-overview-app.streamlit.app"
-
 st.set_page_config(page_title="CLC Behaviour Support", page_icon="📊", layout="wide", initial_sidebar_state="collapsed")
 
-# MINIMALIST PROFESSIONAL STYLING
+# CLC BRAND STYLING — Teal #1A7A7A / Amber #C8760A
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    
     * { font-family: 'Inter', sans-serif; }
-    .stApp { background: #f8fafc; }
+    
+    /* Background */
+    .stApp { background: #f0f4f4 !important; }
+    
+    /* Sidebar */
+    [data-testid="stSidebar"] { background: #1A7A7A !important; }
+    
+    /* Primary buttons — teal */
+    button[kind="primary"], .stButton>button[kind="primary"] {
+        background: #1A7A7A !important; color: white !important;
+        border: none !important; border-radius: 8px !important;
+        padding: 0.55rem 1.4rem !important; font-weight: 600 !important;
+        letter-spacing: 0.02em !important;
+        box-shadow: 0 2px 6px rgba(26,122,122,0.25) !important;
+        transition: all 0.2s ease !important;
+    }
+    button[kind="primary"]:hover {
+        background: #145f5f !important;
+        box-shadow: 0 4px 12px rgba(26,122,122,0.35) !important;
+        transform: translateY(-1px) !important;
+    }
+    
+    /* Secondary buttons — slate */
     .stButton>button {
-        background: #334155 !important; color: white !important;
-        border: none !important; border-radius: 6px !important;
-        padding: 0.5rem 1.2rem !important; font-weight: 600 !important;
-        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;
-        transition: all 0.2s !important;
+        background: #2d4a4a !important; color: white !important;
+        border: none !important; border-radius: 8px !important;
+        padding: 0.5rem 1.2rem !important; font-weight: 500 !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.12) !important;
+        transition: all 0.2s ease !important;
     }
-    .stButton>button:hover { background: #1e293b !important; transform: translateY(-1px) !important; }
-    button[kind="primary"] { background: #0ea5e9 !important; color: white !important; }
-    button[kind="primary"]:hover { background: #0284c7 !important; }
+    .stButton>button:hover {
+        background: #1A7A7A !important;
+        transform: translateY(-1px) !important;
+    }
+
+    /* Cards / containers */
     [data-testid="stVerticalBlock"] > div[style*="border"] {
-        background: white !important; border-radius: 8px !important;
-        padding: 1.5rem !important; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;
-        border: 1px solid #e2e8f0 !important;
+        background: white !important; border-radius: 12px !important;
+        padding: 1.5rem !important;
+        box-shadow: 0 1px 4px rgba(26,122,122,0.08) !important;
+        border: 1px solid #d0e8e8 !important;
     }
+
+    /* Metrics */
     [data-testid="stMetricValue"] {
-        font-size: 1.875rem !important; font-weight: 700 !important; color: #0f172a !important;
+        font-size: 2rem !important; font-weight: 700 !important; color: #1A7A7A !important;
     }
     [data-testid="stMetricLabel"] {
-        color: #64748b !important; font-weight: 600 !important; font-size: 0.875rem !important;
-        text-transform: uppercase !important; letter-spacing: 0.05em !important;
+        color: #5a8a8a !important; font-weight: 600 !important; font-size: 0.8rem !important;
+        text-transform: uppercase !important; letter-spacing: 0.06em !important;
     }
-    .stTextInput>div>div>input, .stSelectbox>div>div>select, 
+
+    /* Inputs */
+    .stTextInput>div>div>input, .stSelectbox>div>div,
     .stTextArea>div>div>textarea, .stNumberInput>div>div>input,
     .stDateInput>div>div>input, .stTimeInput>div>div>input {
-        border: 1px solid #cbd5e1 !important; background: white !important;
-        color: #0f172a !important; font-weight: 500 !important; border-radius: 6px !important;
+        border: 1.5px solid #b8d8d8 !important; background: white !important;
+        color: #1a2e2e !important; font-weight: 400 !important;
+        border-radius: 8px !important;
+        transition: border-color 0.2s !important;
     }
-    h1 { color: #0f172a !important; font-weight: 700 !important; }
-    h2 { color: #0f172a !important; font-weight: 700 !important; }
-    h3 { color: #0f172a !important; font-weight: 600 !important; }
-    label { color: #334155 !important; font-weight: 600 !important; font-size: 0.875rem !important; }
-    .stSuccess { background: #ecfdf5 !important; color: #065f46 !important; 
-                 border-left: 4px solid #10b981 !important; }
-    .stInfo { background: #f0f9ff !important; color: #075985 !important; 
-              border-left: 4px solid #0ea5e9 !important; }
-    .stWarning { background: #fffbeb !important; color: #92400e !important; 
-                 border-left: 4px solid #f59e0b !important; }
+    .stTextInput>div>div>input:focus {
+        border-color: #1A7A7A !important;
+        box-shadow: 0 0 0 3px rgba(26,122,122,0.12) !important;
+    }
+
+    /* Headings */
+    h1 { color: #1A7A7A !important; font-weight: 700 !important; letter-spacing: -0.02em !important; }
+    h2 { color: #1a2e2e !important; font-weight: 700 !important; letter-spacing: -0.01em !important; }
+    h3 { color: #1a2e2e !important; font-weight: 600 !important; }
+    label { color: #2d4a4a !important; font-weight: 600 !important; font-size: 0.875rem !important; }
+
+    /* Tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        border-bottom: 2px solid #d0e8e8 !important;
+        gap: 0.25rem !important;
+    }
+    .stTabs [data-baseweb="tab"] {
+        color: #5a8a8a !important; font-weight: 500 !important;
+        border-radius: 8px 8px 0 0 !important; padding: 0.6rem 1.2rem !important;
+    }
+    .stTabs [aria-selected="true"] {
+        color: #1A7A7A !important; font-weight: 700 !important;
+        border-bottom: 3px solid #1A7A7A !important;
+        background: rgba(26,122,122,0.06) !important;
+    }
+
+    /* Dividers */
+    hr { border-color: #d0e8e8 !important; }
+
+    /* Alerts */
+    .stSuccess { background: #e8f5f0 !important; color: #0d4a30 !important;
+                 border-left: 4px solid #1A7A7A !important; border-radius: 0 8px 8px 0 !important; }
+    .stInfo    { background: #e8f2f2 !important; color: #1a3a3a !important;
+                 border-left: 4px solid #1A7A7A !important; border-radius: 0 8px 8px 0 !important; }
+    .stWarning { background: #fdf3e3 !important; color: #6b3a00 !important;
+                 border-left: 4px solid #C8760A !important; border-radius: 0 8px 8px 0 !important; }
+    .stError   { background: #fdecea !important; color: #5c1a14 !important;
+                 border-left: 4px solid #dc2626 !important; border-radius: 0 8px 8px 0 !important; }
+
+    /* Expanders */
+    .streamlit-expanderHeader {
+        background: #e8f2f2 !important; border-radius: 8px !important;
+        color: #1A7A7A !important; font-weight: 600 !important;
+    }
+
+    /* Top header bar accent */
+    header[data-testid="stHeader"] {
+        background: white !important;
+        border-bottom: 3px solid #1A7A7A !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -524,11 +594,11 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         info_table = doc.add_table(rows=5, cols=2)
         info_table.style = 'Light Grid Accent 1'
         info_table.rows[0].cells[0].text = 'Student:'
-        info_table.rows[0].cells[1].text = str(student.get('name') or '')
+        info_table.rows[0].cells[1].text = student['name']
         info_table.rows[1].cells[0].text = 'Program:'
-        info_table.rows[1].cells[1].text = PROGRAM_NAMES.get(student.get('program',''), student.get('program',''))
+        info_table.rows[1].cells[1].text = PROGRAM_NAMES.get(student['program'], student['program'])
         info_table.rows[2].cells[0].text = 'Grade:'
-        info_table.rows[2].cells[1].text = str(student.get('grade') or '—')
+        info_table.rows[2].cells[1].text = student['grade']
         info_table.rows[3].cells[0].text = 'Analysis completed on:'
         info_table.rows[3].cells[1].text = datetime.now().strftime('%d %B %Y')
         info_table.rows[4].cells[0].text = 'Data Period:'
@@ -1801,24 +1871,50 @@ def generate_mock_incidents(n=70):
 
 # PAGES
 def render_login_page():
-    st.markdown("## 🔐 Staff Login")
+    st.markdown("""
+    <div style="text-align:center; padding: 2.5rem 0 1.5rem 0;">
+        <div style="display:inline-block; background:#1A7A7A; color:white; border-radius:16px;
+                    padding: 1rem 2rem; margin-bottom: 1rem;">
+            <span style="font-size:2rem;">📊</span>
+        </div>
+        <h1 style="color:#1A7A7A !important; font-size:1.8rem; margin:0.5rem 0 0.25rem;">
+            Behaviour Support Tool
+        </h1>
+        <p style="color:#5a8a8a; font-size:0.95rem; margin:0;">
+            Cowandilla Learning Centre — Learning & Behaviour Unit
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
-    email = st.text_input("Email Address", placeholder="your.email@example.com", key="login_email")
-    password = st.text_input("Password", type="password", placeholder="Enter password", key="login_pass")
-    if st.button("Login", type="primary", use_container_width=True):
-        if login_user(email, password):
-            st.success(f"Welcome {st.session_state.current_user['name']}!")
-            st.rerun()
-        else:
-            st.error("Invalid credentials. Contact your admin to reset your password.")
+    col_l, col_m, col_r = st.columns([1, 2, 1])
+    with col_m:
+        with st.container(border=True):
+            st.markdown("<p style='color:#1A7A7A; font-weight:700; font-size:1.1rem; margin-bottom:1rem;'>Staff Sign In</p>", unsafe_allow_html=True)
+            email = st.text_input("Email Address", placeholder="your.email@schools.sa.edu.au", key="login_email")
+            password = st.text_input("Password", type="password", placeholder="Enter your password", key="login_pass")
+            st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+            if st.button("Sign In", type="primary", use_container_width=True):
+                if login_user(email, password):
+                    st.success(f"Welcome {st.session_state.current_user['name']}!")
+                    st.rerun()
+                else:
+                    st.error("Invalid credentials. Contact your admin to reset your password.")
+        st.markdown("<p style='text-align:center; color:#8aabab; font-size:0.8rem; margin-top:1rem;'>For access issues contact your program administrator</p>", unsafe_allow_html=True)
 
 def render_landing_page():
     user = st.session_state.current_user or {}
-    st.markdown(f"### 👋 Welcome, {user.get('name', 'User')}")
     
-    col1, col2 = st.columns([6, 1])
-    with col2:
-        if st.button("Logout", key="logout_btn"):
+    col_head, col_logout = st.columns([7, 1])
+    with col_head:
+        st.markdown(f"""
+        <div style="border-left: 4px solid #1A7A7A; padding: 0.4rem 0 0.4rem 1rem; margin-bottom:0.5rem;">
+            <p style="margin:0; color:#5a8a8a; font-size:0.8rem; font-weight:600; text-transform:uppercase; letter-spacing:0.06em;">Behaviour Support Tool</p>
+            <h2 style="margin:0; color:#1A7A7A !important; font-size:1.6rem;">Welcome, {user.get('name', 'User').split()[0]} 👋</h2>
+        </div>
+        """, unsafe_allow_html=True)
+    with col_logout:
+        st.markdown("<div style='height:1.2rem'></div>", unsafe_allow_html=True)
+        if st.button("Sign Out", key="logout_btn"):
             st.session_state.logged_in = False
             st.session_state.current_page = "login"
             st.rerun()
@@ -1912,166 +2008,6 @@ def render_program_students_page():
                                 st.error(f"Archive failed: {e}")
                         st.rerun()
 
-def render_sensory_panel(student_id: str, student_name: str):
-    """
-    Renders a collapsible sensory profile panel for a student.
-    Shows HIGH/MEDIUM priority areas, review status, and links to the Sensory Overview app.
-    Safe to call anywhere a student is in context — handles missing data gracefully.
-    """
-    SECTION_ICONS = {
-        "Body Awareness (Interoception)": "🫀",
-        "Visual":                         "👁️",
-        "Sense of Body in Space":         "🗺️",
-        "Auditory":                       "👂",
-        "Auditory Processing":            "🔊",
-        "Smell":                          "👃",
-        "Touch and Textures":             "🤚",
-        "Kinaesthetic":                   "🏃",
-    }
-
-    def _priority_css(pct):
-        if pct >= 60:   return "high", "🔴", "#c62828", "#fff8f8"
-        elif pct >= 30: return "med",  "🟡", "#e65100", "#fffaf5"
-        return "low", "🟢", "#2e7d32", "#f6fff6"
-
-    def _review_status(review_date_str):
-        if not review_date_str:
-            return "No review date set", "#888"
-        try:
-            rv = date.fromisoformat(review_date_str)
-            delta = (rv - date.today()).days
-            if delta < 0:
-                return f"⚠️ Review overdue ({abs(delta)} days ago)", "#c62828"
-            elif delta <= 14:
-                return f"🟡 Review due in {delta} days", "#e65100"
-            return f"🟢 Review due {rv.strftime('%d %b %Y')}", "#2e7d32"
-        except Exception:
-            return review_date_str, "#555"
-
-    # Fetch latest overview for this student
-    overview = None
-    if supabase:
-        try:
-            res = supabase.table("sensory_overviews") \
-                .select("overview_date,review_date,completed_by,priority_results") \
-                .eq("student_id", student_id) \
-                .order("overview_date", desc=True) \
-                .limit(1).execute()
-            overview = res.data[0] if res.data else None
-        except Exception:
-            pass
-
-    # Determine expander label
-    if not overview:
-        label = f"🧠 Sensory Profile — {student_name}  ·  ⚠️ No overview on file"
-    else:
-        ov_date = overview.get("overview_date", "—")
-        rv_label, _ = _review_status(overview.get("review_date"))
-        label = f"🧠 Sensory Profile — {student_name}  ·  Last overview: {ov_date}  ·  {rv_label}"
-
-    with st.expander(label, expanded=False):
-        if not overview:
-            st.markdown(
-                f"""<div style="background:#fff8e1;border:2px dashed #C8760A;border-radius:8px;
-                padding:12px 16px;color:#7a5800;font-size:0.9rem;">
-                ⚠️ No sensory overview has been completed for <strong>{student_name}</strong> yet.
-                Click below to start one — the student will be pre-selected.
-                </div>""",
-                unsafe_allow_html=True,
-            )
-            st.link_button(
-                "➕ Start Sensory Overview",
-                f"{SENSORY_OVERVIEW_APP_URL}?student_id={student_id}",
-                use_container_width=True,
-            )
-            return
-
-        # Meta bar
-        ov_date  = overview.get("overview_date", "—")
-        rev_date = overview.get("review_date")
-        by       = overview.get("completed_by", "—")
-        rv_label, rv_colour = _review_status(rev_date)
-
-        st.markdown(
-            f"""<div style="background:#e8f4f4;border-radius:6px;padding:8px 14px;
-            font-size:0.82rem;color:#2a5a5a;margin-bottom:10px;">
-            📅 Overview: <strong>{ov_date}</strong> &nbsp;·&nbsp;
-            Completed by: <strong>{by}</strong> &nbsp;·&nbsp;
-            <span style="color:{rv_colour};font-weight:700;">{rv_label}</span>
-            </div>""",
-            unsafe_allow_html=True,
-        )
-
-        # Parse priorities
-        try:
-            pr = overview["priority_results"]
-            if isinstance(pr, str):
-                pr = json.loads(pr)
-        except Exception:
-            pr = {}
-
-        if not pr:
-            st.warning("Priority data unavailable for this overview.")
-        else:
-            high = [(s, i) for s, i in pr.items() if i.get("priority") == "HIGH PRIORITY"]
-            med  = [(s, i) for s, i in pr.items() if i.get("priority") == "MEDIUM PRIORITY"]
-
-            if high:
-                st.markdown("**🔴 High Priority Sensory Areas**")
-                hcols = st.columns(min(len(high), 4))
-                for idx, (sec, info) in enumerate(high):
-                    icon = SECTION_ICONS.get(sec, "")
-                    pct  = info.get("pct", 0)
-                    _, _, colour, bg = _priority_css(pct)
-                    with hcols[idx % 4]:
-                        st.markdown(
-                            f"""<div style="background:{bg};border-left:4px solid {colour};
-                            padding:8px 12px;border-radius:6px;margin:2px 0;">
-                            <div style="font-size:0.72rem;font-weight:700;color:#555;">{icon} {sec}</div>
-                            <div style="font-size:1rem;font-weight:800;color:{colour};">🔴 HIGH</div>
-                            <div style="font-size:0.7rem;color:#777;">{info.get('checked',0)}/{info.get('total',0)} ({pct}%)</div>
-                            </div>""",
-                            unsafe_allow_html=True,
-                        )
-
-            if med:
-                st.markdown("**🟡 Medium Priority Sensory Areas**")
-                mcols = st.columns(min(len(med), 4))
-                for idx, (sec, info) in enumerate(med):
-                    icon = SECTION_ICONS.get(sec, "")
-                    pct  = info.get("pct", 0)
-                    _, _, colour, bg = _priority_css(pct)
-                    with mcols[idx % 4]:
-                        st.markdown(
-                            f"""<div style="background:{bg};border-left:4px solid {colour};
-                            padding:8px 12px;border-radius:6px;margin:2px 0;">
-                            <div style="font-size:0.72rem;font-weight:700;color:#555;">{icon} {sec}</div>
-                            <div style="font-size:1rem;font-weight:800;color:{colour};">🟡 MEDIUM</div>
-                            <div style="font-size:0.7rem;color:#777;">{info.get('checked',0)}/{info.get('total',0)} ({pct}%)</div>
-                            </div>""",
-                            unsafe_allow_html=True,
-                        )
-
-            if not high and not med:
-                st.success("🟢 All sensory areas are low priority based on the most recent overview.")
-
-        # Footer links
-        st.markdown("---")
-        lc1, lc2 = st.columns(2)
-        with lc1:
-            st.link_button(
-                "🔄 Start updated overview",
-                f"{SENSORY_OVERVIEW_APP_URL}?student_id={student_id}",
-                use_container_width=True,
-            )
-        with lc2:
-            st.link_button(
-                "📋 View all sensory profiles",
-                SENSORY_OVERVIEW_APP_URL,
-                use_container_width=True,
-            )
-
-
 def render_incident_log_page():
     student_id = st.session_state.get("selected_student_id")
     student = get_student(student_id)
@@ -2091,10 +2027,7 @@ def render_incident_log_page():
             go_to("landing")
     
     show_severity_guide()
-
-    # Sensory profile — gives staff context before logging
-    render_sensory_panel(student_id, student["name"])
-
+    
     # Check if critical form is required
     if st.session_state.show_critical_prompt:
         inc_info = st.session_state.get("last_incident_info", {})
@@ -3509,12 +3442,7 @@ def render_student_dashboard():
             go_to("student_analysis", selected_student_id=student_id)
     
     st.markdown("---")
-
-    # Sensory profile summary
-    render_sensory_panel(student_id, student["name"])
-
-    st.markdown("---")
-
+    
     incidents = [i for i in st.session_state.incidents if i["student_id"] == student_id]
     critical = [c for c in st.session_state.critical_incidents if c["student_id"] == student_id]
     
