@@ -10,54 +10,16 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+apply_clc_theme()
 
 from auth import require_auth, logout_button, get_staff_name
+from theme import apply_clc_theme
 require_auth("Sensory Overview", "🧠")
 logout_button("sidebar")
 
 TEAL  = "#1A7A7A"
 AMBER = "#C8760A"
 
-st.markdown(f"""
-<style>
-    .stApp {{ background-color: #f5f7f7; }}
-    h1 {{ color: {TEAL}; }}
-    .section-header {{
-        background: {TEAL}; color: white;
-        padding: 8px 14px; border-radius: 6px;
-        font-weight: 700; font-size: 1rem; margin-bottom: 6px;
-    }}
-    .priority-card {{
-        padding: 10px 14px; border-radius: 6px; margin: 4px 0;
-        background: white; border-left: 5px solid #ccc;
-    }}
-    .priority-card.high {{ border-left-color: #c62828; }}
-    .priority-card.med  {{ border-left-color: #e65100; }}
-    .priority-card.low  {{ border-left-color: #2e7d32; }}
-    .priority-card .label {{ font-size: 0.75rem; font-weight: 700; color: #444; }}
-    .priority-card .pval  {{ font-size: 1.1rem; font-weight: 800; }}
-    .priority-card.high .pval {{ color: #c62828; }}
-    .priority-card.med  .pval {{ color: #e65100; }}
-    .priority-card.low  .pval {{ color: #2e7d32; }}
-    .priority-card .sub {{ font-size: 0.75rem; color: #666; }}
-    .student-badge {{
-        background: {TEAL}; color: white;
-        padding: 6px 14px; border-radius: 20px;
-        font-weight: 700; display: inline-block; margin-bottom: 8px;
-    }}
-    div[data-testid="stCheckbox"] label {{ font-size: 0.9rem; }}
-    .stTabs [data-baseweb="tab-list"] {{ gap: 4px; }}
-    .stTabs [data-baseweb="tab"] {{
-        background: #e0ecec; border-radius: 6px 6px 0 0;
-        color: {TEAL}; font-weight: 600;
-    }}
-    .stTabs [aria-selected="true"] {{ background: {TEAL} !important; color: white !important; }}
-    .new-student-box {{
-        background: #fff8e1; border: 2px dashed {AMBER};
-        border-radius: 8px; padding: 14px; margin-top: 8px;
-    }}
-</style>
-""", unsafe_allow_html=True)
 
 # ── Supabase ───────────────────────────────────────────────────────────────────
 @st.cache_resource

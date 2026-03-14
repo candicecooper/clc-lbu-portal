@@ -12,8 +12,10 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+apply_clc_theme()
 
 from auth import require_auth, logout_button, get_staff_name
+from theme import apply_clc_theme
 require_auth("PAC – Personnel Advisory Committee", "🏛️")
 logout_button("sidebar")
 
@@ -27,121 +29,6 @@ def init_supabase() -> Client:
 supabase = init_supabase()
 
 # ─── STYLES ─────────────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-
-html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-
-.main { background: #f8f6f0; }
-.block-container { padding-top: 1.5rem; padding-bottom: 2rem; max-width: 1100px; }
-
-.pac-header {
-    background: linear-gradient(135deg, #1a2e4a 0%, #2d4a6e 60%, #3a5f8a 100%);
-    color: white;
-    padding: 2rem 2.5rem;
-    border-radius: 12px;
-    margin-bottom: 1rem;
-    display: flex;
-    align-items: center;
-    gap: 1.5rem;
-    box-shadow: 0 4px 20px rgba(26,46,74,0.25);
-}
-.pac-header-icon { font-size: 3rem; }
-.pac-header-text h1 { margin: 0; font-size: 1.8rem; font-weight: 700; letter-spacing: -0.5px; }
-.pac-header-text p { margin: 0.25rem 0 0; opacity: 0.8; font-size: 0.95rem; }
-
-.meeting-card {
-    background: white;
-    border-radius: 10px;
-    padding: 1.2rem 1.5rem;
-    margin-bottom: 0.75rem;
-    border-left: 5px solid #1a2e4a;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.07);
-    transition: box-shadow 0.2s;
-}
-.meeting-card:hover { box-shadow: 0 4px 14px rgba(0,0,0,0.12); }
-.meeting-card.draft { border-left-color: #f59e0b; }
-.meeting-card.open { border-left-color: #3b82f6; }
-.meeting-card.finalised { border-left-color: #10b981; }
-.meeting-card.upcoming { border-left-color: #8b5cf6; }
-.meeting-card h3 { margin: 0 0 0.25rem; font-size: 1.05rem; color: #1a2e4a; }
-.meeting-card .meta { font-size: 0.82rem; color: #666; display: flex; gap: 1.2rem; flex-wrap: wrap; }
-
-.status-badge {
-    display: inline-block; padding: 0.2rem 0.65rem;
-    border-radius: 20px; font-size: 0.75rem; font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.5px;
-}
-.badge-upcoming { background: #ede9fe; color: #6d28d9; }
-.badge-open { background: #dbeafe; color: #1d4ed8; }
-.badge-draft { background: #fef3c7; color: #92400e; }
-.badge-finalised { background: #d1fae5; color: #065f46; }
-
-.section-card {
-    background: white;
-    border-radius: 10px;
-    padding: 1.5rem;
-    margin-bottom: 1rem;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.07);
-}
-
-.agenda-item {
-    background: #f8f6f0;
-    border-radius: 8px;
-    padding: 0.9rem 1.1rem;
-    margin-bottom: 0.6rem;
-    border-left: 3px solid #d4af37;
-}
-.agenda-item h4 { margin: 0 0 0.2rem; font-size: 0.95rem; color: #1a2e4a; }
-.agenda-item p { margin: 0; font-size: 0.85rem; color: #555; }
-.agenda-item .submitter { font-size: 0.78rem; color: #888; margin-top: 0.3rem; }
-
-.action-item {
-    background: #fff8f0;
-    border-radius: 8px;
-    padding: 0.9rem 1.1rem;
-    margin-bottom: 0.6rem;
-    border-left: 3px solid #f59e0b;
-}
-.action-done { background: #f0fdf4; border-left-color: #10b981; }
-
-.minutes-box {
-    background: #fafaf8;
-    border: 1px solid #e2ddd3;
-    border-radius: 8px;
-    padding: 1.2rem;
-    white-space: pre-wrap;
-    font-size: 0.9rem;
-    line-height: 1.7;
-    color: #333;
-}
-
-hr { border: none; border-top: 1px solid #e8e4d9; margin: 1rem 0; }
-
-.stButton>button { border-radius: 8px; font-weight: 500; transition: all 0.15s; }
-.stDownloadButton>button { border-radius: 8px; }
-
-.info-box {
-    background: #eff6ff;
-    border: 1px solid #bfdbfe;
-    border-radius: 8px;
-    padding: 0.75rem 1rem;
-    font-size: 0.88rem;
-    color: #1e40af;
-    margin-bottom: 1rem;
-}
-.warn-box {
-    background: #fffbeb;
-    border: 1px solid #fde68a;
-    border-radius: 8px;
-    padding: 0.75rem 1rem;
-    font-size: 0.88rem;
-    color: #92400e;
-    margin-bottom: 1rem;
-}
-</style>
-""", unsafe_allow_html=True)
 
 # ─── DB HELPERS ─────────────────────────────────────────────────────────────────
 

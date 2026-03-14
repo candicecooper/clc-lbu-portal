@@ -19,8 +19,10 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+apply_clc_theme()
 
 from auth import require_auth, logout_button, get_staff_name
+from theme import apply_clc_theme
 require_auth("CLC Timetable", "📅")
 logout_button("sidebar")
 
@@ -143,133 +145,6 @@ def pdf_to_images(pdf_bytes: bytes) -> list | None:
         return None
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Serif+Display&display=swap');
-*,*::before,*::after{box-sizing:border-box}
-:root{
-  --navy:#1a2e44;--navy-mid:#2d4f72;--navy-light:#e8edf3;--navy-border:#c5d3e0;
-  --green:#059669;--green-light:#d1fae5;
-  --red:#dc2626;--red-light:#fee2e2;
-  --white:#ffffff;--bg:#f4f6f9;--ink:#1a2332;--ink-light:#6b7f94;--radius:12px
-}
-html,body,[class*="css"]{font-family:'DM Sans',sans-serif!important;background:var(--bg)!important}
-.block-container{padding:0!important;max-width:100%!important}
-header{display:none!important}
-
-/* ── Header ── */
-.app-header{
-  background:linear-gradient(135deg,var(--navy) 0%,var(--navy-mid) 100%);
-  padding:22px 32px;
-  display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;
-}
-.app-header-left{display:flex;align-items:center;gap:14px}
-.app-header-icon{
-  width:44px;height:44px;min-width:44px;
-  background:rgba(255,255,255,0.12);border-radius:10px;
-  display:flex;align-items:center;justify-content:center;font-size:22px;
-}
-.app-header-title{
-  font-family:'DM Serif Display',serif;font-size:22px;
-  color:white;line-height:1.1;
-}
-.app-header-sub{font-size:12px;color:rgba(255,255,255,0.55);margin-top:2px}
-.header-badges{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.badge-white{
-  background:rgba(255,255,255,0.12);
-  border:1px solid rgba(255,255,255,0.2);
-  border-radius:20px;padding:4px 12px;
-  font-size:11px;font-weight:600;color:rgba(255,255,255,0.85);
-  white-space:nowrap;
-}
-.badge-term{
-  background:rgba(200,168,75,0.25);
-  border:1px solid rgba(200,168,75,0.4);
-  border-radius:20px;padding:4px 12px;
-  font-size:11px;font-weight:700;color:#f0d080;
-  white-space:nowrap;
-}
-
-/* ── Layout ── */
-.main-wrap{max-width:980px;margin:0 auto;padding:28px 16px 60px}
-
-/* ── Cards ── */
-.card-wrap{
-  background:var(--white);border:1px solid var(--navy-border);
-  border-radius:14px;overflow:hidden;margin-bottom:18px;
-}
-.card-header{
-  background:linear-gradient(90deg,var(--navy-light),#f0f4f8);
-  padding:14px 20px;
-  display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;
-  border-bottom:1px solid var(--navy-border);
-}
-.card-title{font-size:14px;font-weight:700;color:var(--navy)}
-.card-meta{font-size:11px;color:var(--ink-light);margin-top:2px}
-.badge-green{
-  background:var(--green-light);color:var(--green);
-  font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px;
-  white-space:nowrap;
-}
-
-/* ── Timetable image ── */
-.timetable-img{width:100%;display:block}
-.page-divider{border:none;border-top:2px dashed var(--navy-border);margin:4px 0}
-
-/* ── Empty state ── */
-.no-tt{text-align:center;padding:48px 20px;color:var(--ink-light)}
-.no-tt-icon{font-size:44px;margin-bottom:10px}
-.no-tt h3{font-size:17px;font-weight:600;color:var(--navy);margin-bottom:6px}
-
-/* ── Section label ── */
-.section-label{
-  font-size:10px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;
-  color:var(--ink-light);margin:24px 0 10px;
-}
-
-/* ── History rows ── */
-.history-row{
-  background:var(--white);border:1px solid var(--navy-border);
-  border-radius:10px;padding:10px 14px;margin-bottom:7px;
-  display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;
-}
-.history-label{font-size:13px;font-weight:600;color:var(--ink)}
-.history-meta{font-size:11px;color:var(--ink-light);margin-top:1px}
-
-/* ── Admin panel ── */
-.admin-panel{
-  background:var(--white);border:1px solid var(--navy-border);
-  border-radius:14px;padding:20px 24px;margin-bottom:18px;
-}
-
-/* ── Buttons ── */
-.stButton>button{border-radius:8px!important;font-weight:600!important;font-family:'DM Sans',sans-serif!important}
-.stButton>button[kind="primary"]{background:var(--navy)!important;border-color:var(--navy)!important;color:white!important}
-.stDownloadButton>button{
-  background:var(--navy)!important;color:white!important;
-  border-radius:8px!important;font-weight:600!important;width:100%;
-}
-div[data-testid="stExpander"]{border:1px solid var(--navy-border)!important;border-radius:var(--radius)!important}
-
-/* ── Tabs ── */
-.stTabs [data-baseweb="tab-list"]{gap:4px;background:transparent}
-.stTabs [data-baseweb="tab"]{
-  background:#e8edf3;border-radius:8px 8px 0 0;
-  color:var(--navy);font-weight:600;padding:8px 18px;border:none;font-size:13px;
-}
-.stTabs [aria-selected="true"]{background:var(--navy-mid)!important;color:#fff!important}
-
-/* ── Mobile ── */
-@media(max-width:600px){
-  .app-header{padding:16px 16px}
-  .app-header-title{font-size:18px}
-  .main-wrap{padding:16px 10px 40px}
-  .admin-panel{padding:16px 14px}
-  .card-header{padding:12px 14px}
-  .stTabs [data-baseweb="tab"]{padding:6px 10px;font-size:12px}
-}
-</style>
-""", unsafe_allow_html=True)
 
 # ── Session state ─────────────────────────────────────────────────────────────
 if "admin_authed" not in st.session_state:

@@ -19,8 +19,10 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+apply_clc_theme()
 
 from auth import require_auth, logout_button, get_staff_name
+from theme import apply_clc_theme
 require_auth("CLC Committees", "🏛️")
 logout_button("sidebar")
 
@@ -90,45 +92,6 @@ DFE_AGENDA_SECTIONS = [
 ]
 
 # ─── STYLES ──────────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-.main { background: #f0f2f6; }
-.block-container { padding-top: 1.2rem; padding-bottom: 2rem; max-width: 1200px; }
-.comm-header {
-    color: white; padding: 1.25rem 2rem; border-radius: 12px;
-    margin-bottom: 1rem; display: flex; align-items: center;
-    gap: 1.5rem; box-shadow: 0 4px 20px rgba(0,0,0,0.2);
-}
-.comm-header h1 { margin: 0; font-size: 1.5rem; font-weight: 700; }
-.comm-header p  { margin: 0.2rem 0 0; opacity: 0.8; font-size: 0.88rem; }
-.card { background: white; border-radius: 12px; padding: 1.25rem;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.07); margin-bottom: 1rem; }
-.section-label { font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
-                 letter-spacing: 0.06em; color: #888; margin-bottom: 0.3rem; }
-.agenda-item { background: #f8faff; border: 1px solid #e0e7ef; border-radius: 10px;
-               padding: 0.9rem 1.1rem; margin-bottom: 0.6rem;
-               border-left: 4px solid #4a6cf7; }
-.minutes-card { background: white; border-radius: 10px; padding: 1rem 1.25rem;
-                box-shadow: 0 1px 6px rgba(0,0,0,0.08); margin-bottom: 0.75rem;
-                border-left: 5px solid; }
-.status-badge { font-size: 0.7rem; font-weight: 700; padding: 0.2rem 0.6rem;
-                border-radius: 20px; display: inline-block; }
-.next-meeting-box { border-radius: 12px; padding: 1.25rem 1.5rem;
-                    border: 2px solid; margin-bottom: 1rem; }
-.dfe-section { background: #f8fafc; border-radius: 10px; padding: 0.9rem 1.1rem;
-               margin-bottom: 0.75rem; border-left: 4px solid #1a2e44; }
-.dfe-section h4 { margin: 0 0 0.4rem; color: #1a2e44; font-size: 0.9rem; font-weight: 700; }
-.ai-box { background: linear-gradient(135deg,#f0f9ff,#e0f2fe); border: 1.5px solid #7dd3fc;
-          border-radius: 12px; padding: 1.1rem 1.3rem; margin-bottom: 1rem; }
-.ai-box h4 { color: #0369a1; margin: 0 0 0.4rem; font-size: 0.95rem; }
-.info-box { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px;
-            padding: 0.6rem 0.9rem; font-size: 0.84rem; color: #1e40af; margin-bottom: 0.75rem; }
-.stButton>button { border-radius: 7px; font-weight: 500; }
-hr { border: none; border-top: 1px solid #eaecf0; margin: 0.75rem 0; }
-</style>
-""", unsafe_allow_html=True)
 
 # ─── SESSION STATE ────────────────────────────────────────────────────────────
 today = date.today()

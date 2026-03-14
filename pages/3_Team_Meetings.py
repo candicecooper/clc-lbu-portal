@@ -13,8 +13,10 @@ from docx.oxml import OxmlElement
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(page_title="CLC Team Meetings", page_icon="👥", layout="wide")
+apply_clc_theme()
 
 from auth import require_auth, logout_button, get_staff_name
+from theme import apply_clc_theme
 require_auth("Team Meetings", "👥")
 logout_button("sidebar")
 

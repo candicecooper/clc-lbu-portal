@@ -9,8 +9,10 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+apply_clc_theme()
 
 from auth import require_auth, logout_button, get_staff_name
+from theme import apply_clc_theme
 require_auth("CLC Footy Tipping", "🏉")
 logout_button("sidebar")
 
@@ -32,34 +34,6 @@ AFL_TEAMS = [
 ]
 
 # ─── STYLES ──────────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-html,body,[class*="css"]{font-family:'Inter',sans-serif;}
-.block-container{padding-top:1.2rem;max-width:960px;}
-.hero{background:linear-gradient(135deg,#002B5C,#005EB8);color:white;
-      border-radius:14px;padding:1.5rem 2rem;margin-bottom:1.5rem;
-      box-shadow:0 4px 20px rgba(0,43,92,0.3);}
-.hero h1{margin:0;font-size:1.8rem;font-weight:800;}
-.hero p{margin:0.3rem 0 0;opacity:0.8;font-size:0.92rem;}
-.ladder-row{background:white;border-radius:10px;padding:0.7rem 1rem;
-            margin-bottom:0.4rem;display:flex;align-items:center;
-            box-shadow:0 1px 6px rgba(0,0,0,0.07);border-left:4px solid #005EB8;}
-.ladder-row.top1{border-left-color:#FFD700;}
-.ladder-row.top2{border-left-color:#C0C0C0;}
-.ladder-row.top3{border-left-color:#CD7F32;}
-.pos-badge{font-weight:800;font-size:1.1rem;color:#002B5C;width:28px;text-align:center;}
-.staff-name{font-weight:600;font-size:0.95rem;color:#1a2e44;flex:1;margin:0 1rem;}
-.afl-nick{font-size:0.75rem;color:#888;margin-left:0.3rem;}
-.pts-total{font-weight:800;font-size:1.1rem;color:#005EB8;min-width:60px;text-align:right;}
-.pts-label{font-size:0.65rem;color:#aaa;text-align:right;}
-.round-score{font-size:0.78rem;color:#555;min-width:40px;text-align:center;
-             background:#f0f4f8;border-radius:6px;padding:0.15rem 0.4rem;margin:0 0.15rem;}
-.section-title{font-weight:700;font-size:0.75rem;text-transform:uppercase;
-               letter-spacing:0.1em;color:#888;margin:1.5rem 0 0.6rem;}
-.winner-crown{font-size:1.4rem;margin-right:0.4rem;}
-</style>
-""", unsafe_allow_html=True)
 
 # ─── DB HELPERS ──────────────────────────────────────────────────────────────
 def db_participants():

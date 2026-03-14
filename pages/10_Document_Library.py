@@ -17,70 +17,14 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+apply_clc_theme()
 
 from auth import require_auth, logout_button, get_staff_name
+from theme import apply_clc_theme
 require_auth("CLC Document Library", "📄")
 logout_button("sidebar")
 
 # ── STYLING ────────────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-  * { font-family: 'Inter', sans-serif; }
-  .stApp { background: #f8fafc; }
-
-  .stButton>button {
-    background: #1e293b !important; color: white !important;
-    border: none !important; border-radius: 6px !important;
-    padding: 0.45rem 1.1rem !important; font-weight: 600 !important;
-    transition: all 0.15s !important;
-  }
-  .stButton>button:hover { background: #0f172a !important; }
-  button[kind="primary"] { background: #2563eb !important; }
-  button[kind="primary"]:hover { background: #1d4ed8 !important; }
-
-  .doc-card {
-    background: white;
-    border: 1px solid #e2e8f0;
-    border-radius: 10px;
-    padding: 1rem 1.25rem;
-    margin-bottom: 0.6rem;
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-  }
-  .doc-icon { font-size: 1.6rem; flex-shrink: 0; }
-  .doc-info { flex: 1; min-width: 0; }
-  .doc-title { font-weight: 600; font-size: 0.95rem; color: #0f172a; }
-  .doc-meta  { font-size: 0.78rem; color: #64748b; margin-top: 2px; }
-
-  .section-banner {
-    background: linear-gradient(135deg, #1e293b, #334155);
-    color: white;
-    border-radius: 10px;
-    padding: 1rem 1.25rem;
-    margin-bottom: 1.25rem;
-  }
-  .section-banner h2 { margin: 0; font-size: 1.15rem; font-weight: 700; }
-  .section-banner p  { margin: 0.2rem 0 0; font-size: 0.83rem; opacity: 0.75; }
-
-  .upload-area {
-    background: white;
-    border: 2px dashed #cbd5e1;
-    border-radius: 10px;
-    padding: 1.25rem;
-    margin-bottom: 1rem;
-  }
-
-  .stTabs [data-baseweb="tab-list"] { gap: 4px; }
-  .stTabs [data-baseweb="tab"] {
-    font-weight: 600 !important;
-    border-radius: 6px 6px 0 0 !important;
-  }
-  [data-testid="stFileUploader"] label { font-weight: 500; }
-</style>
-""", unsafe_allow_html=True)
 
 # ── SUPABASE ───────────────────────────────────────────────────────────────────
 @st.cache_resource

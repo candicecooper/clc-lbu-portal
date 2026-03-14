@@ -10,8 +10,10 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+apply_clc_theme()
 
 from auth import require_auth, logout_button, get_staff_name
+from theme import apply_clc_theme
 require_auth("Sensory Profiles", "🧠")
 logout_button("sidebar")
 
@@ -23,99 +25,6 @@ AMBER = "#C8760A"
 # Format: https://your-portal-app.streamlit.app/Sensory_Overview
 SENSORY_OVERVIEW_APP_URL = "https://your-portal-app.streamlit.app/Sensory_Overview"
 
-st.markdown(f"""
-<style>
-    .stApp {{ background-color: #f5f7f7; }}
-    h1, h2, h3 {{ color: {TEAL}; }}
-
-    /* Student card */
-    .student-card {{
-        background: white;
-        border-radius: 10px;
-        border-left: 6px solid {TEAL};
-        padding: 14px 18px;
-        margin-bottom: 10px;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.07);
-    }}
-    .student-card .sname  {{ font-size: 1.1rem; font-weight: 700; color: {TEAL}; }}
-    .student-card .smeta  {{ font-size: 0.8rem; color: #666; margin-top: 2px; }}
-
-    /* Priority pills */
-    .pill {{
-        display: inline-block;
-        padding: 3px 10px;
-        border-radius: 12px;
-        font-size: 0.75rem;
-        font-weight: 700;
-        margin: 2px 2px;
-    }}
-    .pill.high {{ background: #fde8e8; color: #c62828; }}
-    .pill.med  {{ background: #fff3e0; color: #e65100; }}
-    .pill.low  {{ background: #e8f5e9; color: #2e7d32; }}
-    .pill.none {{ background: #eeeeee; color: #555; }}
-
-    /* Priority breakdown cards */
-    .pri-card {{
-        padding: 10px 14px;
-        border-radius: 8px;
-        margin: 4px 0;
-        background: white;
-        border-left: 5px solid #ccc;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-    }}
-    .pri-card.high {{ border-left-color: #c62828; background: #fff8f8; }}
-    .pri-card.med  {{ border-left-color: #e65100; background: #fffaf5; }}
-    .pri-card.low  {{ border-left-color: #2e7d32; background: #f6fff6; }}
-    .pri-card .plabel {{ font-size: 0.72rem; font-weight: 700; color: #555; }}
-    .pri-card .pval   {{ font-size: 1rem;   font-weight: 800; }}
-    .pri-card.high .pval {{ color: #c62828; }}
-    .pri-card.med  .pval {{ color: #e65100; }}
-    .pri-card.low  .pval {{ color: #2e7d32; }}
-    .pri-card .psub  {{ font-size: 0.7rem; color: #888; }}
-
-    /* No overview banner */
-    .no-overview {{
-        background: #fff8e1;
-        border: 2px dashed {AMBER};
-        border-radius: 8px;
-        padding: 14px;
-        color: #7a5800;
-        font-size: 0.9rem;
-    }}
-
-    /* Overview meta bar */
-    .ov-meta {{
-        background: #e8f4f4;
-        border-radius: 6px;
-        padding: 8px 14px;
-        font-size: 0.82rem;
-        color: #2a5a5a;
-        margin-bottom: 10px;
-    }}
-
-    /* Tab styling */
-    .stTabs [data-baseweb="tab-list"] {{ gap: 4px; }}
-    .stTabs [data-baseweb="tab"] {{
-        background: #e0ecec; border-radius: 6px 6px 0 0;
-        color: {TEAL}; font-weight: 600;
-    }}
-    .stTabs [aria-selected="true"] {{ background: {TEAL} !important; color: white !important; }}
-
-    /* Program badge */
-    .prog-badge {{
-        display: inline-block;
-        background: {TEAL};
-        color: white;
-        padding: 2px 9px;
-        border-radius: 10px;
-        font-size: 0.75rem;
-        font-weight: 700;
-    }}
-    .prog-badge.jp {{ background: #1565c0; }}
-    .prog-badge.py {{ background: #6a1b9a; }}
-    .prog-badge.sy {{ background: {TEAL};  }}
-</style>
-""", unsafe_allow_html=True)
 
 # ── Supabase ───────────────────────────────────────────────────────────────────
 @st.cache_resource
