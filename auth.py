@@ -16,7 +16,11 @@ Secrets required in .streamlit/secrets.toml:
 
 import streamlit as st
 import time
-import bcrypt
+try:
+    import bcrypt
+    BCRYPT_AVAILABLE = True
+except ImportError:
+    BCRYPT_AVAILABLE = False
 from supabase import create_client
 
 TEAL       = "#1A7A7A"
@@ -30,10 +34,15 @@ LOCKOUT_SECS  = 300  # 5 minutes
 
 @st.cache_resource(ttl=60)
 def _get_supabase():
+    import os
     try:
-        # Use Behaviour Support Supabase as single staff auth source
-        url = st.secrets.get("supabase", {}).get("url") or st.secrets.get("BEHAVIOUR_SUPABASE_URL", "")
-        key = st.secrets.get("supabase", {}).get("key") or st.secrets.get("BEHAVIOUR_SUPABASE_KEY", "")
+        # Try secrets first, fall back to env vars
+        try:
+            url = st.secrets.get("supabase", {}).get("url") or st.secrets.get("BEHAVIOUR_SUPABASE_URL", "")
+            key = st.secrets.get("supabase", {}).get("key") or st.secrets.get("BEHAVIOUR_SUPABASE_KEY", "")
+        except Exception:
+            url = os.environ.get("BEHAVIOUR_SUPABASE_URL", "")
+            key = os.environ.get("BEHAVIOUR_SUPABASE_KEY", "")
         if not url or not key:
             return None
         return create_client(url, key)
@@ -54,7 +63,7 @@ def _load_staff():
 
 def _verify_password(plain: str, stored_hash: str, stored_plain: str) -> bool:
     """Try bcrypt hash first, fall back to plain text comparison."""
-    if stored_hash:
+    if stored_hash and BCRYPT_AVAILABLE:
         try:
             return bcrypt.checkpw(plain.encode(), stored_hash.encode())
         except Exception:
@@ -68,9 +77,14 @@ def _authenticate(email: str, password: str):
     """
     Returns staff dict if credentials valid, None otherwise.
     """
-    # Admin bypass via secrets
-    admin_email = st.secrets.get("admin", {}).get("email", "")
-    admin_password = st.secrets.get("admin", {}).get("password", "")
+    # Admin bypass via secrets or env vars
+    import os
+    try:
+        admin_email = st.secrets.get("admin", {}).get("email", "") or os.environ.get("BEHAVIOUR_ADMIN_EMAIL", "")
+        admin_password = st.secrets.get("admin", {}).get("password", "") or os.environ.get("BEHAVIOUR_ADMIN_PASSWORD", "")
+    except Exception:
+        admin_email = os.environ.get("BEHAVIOUR_ADMIN_EMAIL", "")
+        admin_password = os.environ.get("BEHAVIOUR_ADMIN_PASSWORD", "")
     if admin_email and email.lower() == admin_email.lower() and password == admin_password:
         return {
             "id": "admin",
