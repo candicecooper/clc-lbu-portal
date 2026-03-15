@@ -1,303 +1,112 @@
 """
-auth.py — CLC LBU Shared Authentication Module
-Authenticates staff via email + password against the Supabase staff table.
-
-Usage:
-    from auth import require_auth, logout_button, get_staff_name, is_admin
-    require_auth("App Title", "🏫")
-
-Supabase staff table must have columns:
-    email, password, name, role (ADM = admin, others = staff)
-
-Secrets required in .streamlit/secrets.toml:
-    SUPABASE_URL = "..."
-    SUPABASE_KEY = "..."
+auth.py — CLC LBU Shared Authentication
+Simple name dropdown + shared password for portal apps.
 """
 
 import streamlit as st
 import time
-try:
-    import bcrypt
-    BCRYPT_AVAILABLE = True
-except ImportError:
-    BCRYPT_AVAILABLE = False
-from supabase import create_client
 
-TEAL       = "#1A7A7A"
-TEAL_DARK  = "#0f5252"
-AMBER      = "#C8760A"
-MAX_ATTEMPTS  = 5
-LOCKOUT_SECS  = 300  # 5 minutes
+TEAL  = "#1A7A7A"
+AMBER = "#C8760A"
+MAX_ATTEMPTS = 5
+LOCKOUT_SECS = 300
 
-
-# ── Supabase connection ───────────────────────────────────────────
-
-@st.cache_resource(ttl=60)
-def _get_supabase():
-    import os
-    try:
-        # Try secrets first, fall back to env vars
-        try:
-            url = st.secrets.get("supabase", {}).get("url") or st.secrets.get("BEHAVIOUR_SUPABASE_URL", "")
-            key = st.secrets.get("supabase", {}).get("key") or st.secrets.get("BEHAVIOUR_SUPABASE_KEY", "")
-        except Exception:
-            url = os.environ.get("BEHAVIOUR_SUPABASE_URL", "")
-            key = os.environ.get("BEHAVIOUR_SUPABASE_KEY", "")
-        if not url or not key:
-            return None
-        return create_client(url, key)
-    except Exception:
-        return None
-
-
-def _load_staff():
-    supabase = _get_supabase()
-    if not supabase:
-        return []
-    try:
-        response = supabase.table("staff").select("*").execute()
-        return response.data or []
-    except Exception:
-        return []
-
-
-def _verify_password(plain: str, stored_hash: str, stored_plain: str) -> bool:
-    """Try bcrypt hash first, fall back to plain text comparison."""
-    if stored_hash and BCRYPT_AVAILABLE:
-        try:
-            return bcrypt.checkpw(plain.encode(), stored_hash.encode())
-        except Exception:
-            pass
-    if stored_plain:
-        return plain == stored_plain
-    return False
-
-
-def _authenticate(email: str, password: str):
-    """
-    Returns staff dict if credentials valid, None otherwise.
-    """
-    import os
-
-    # ── Check all possible admin credentials ──────────────────────
-    admin_emails = []
-    admin_passwords = []
-
-    # From secrets
-    try:
-        e = st.secrets.get("admin", {}).get("email", "")
-        p = st.secrets.get("admin", {}).get("password", "")
-        if e: admin_emails.append(e.lower())
-        if p: admin_passwords.append(p)
-    except Exception:
-        pass
-
-    # From env vars
-    e2 = os.environ.get("BEHAVIOUR_ADMIN_EMAIL", "")
-    p2 = os.environ.get("BEHAVIOUR_ADMIN_PASSWORD", "")
-    if e2: admin_emails.append(e2.lower())
-    if p2: admin_passwords.append(p2)
-
-    # Also accept ADMIN_PASSWORD env var as universal fallback
-    p3 = os.environ.get("ADMIN_PASSWORD", "")
-    if p3: admin_passwords.append(p3)
-
-    if email.lower() in admin_emails and password in admin_passwords:
-        return {
-            "id": "admin",
-            "name": "Admin",
-            "email": email,
-            "role": "ADM",
-        }
-
-    # Universal staff password fallback
-    staff_pw = os.environ.get("ADMIN_PASSWORD", "")
-    if staff_pw and password == staff_pw:
-        return {
-            "id": "staff_fallback",
-            "name": email.split("@")[0].replace(".", " ").title(),
-            "email": email,
-            "role": "TSS",
-        }
-
-    # ── Supabase staff lookup ──────────────────────────────────────
-    staff_list = _load_staff()
-    for s in staff_list:
-        if s.get("email", "").lower() == email.lower():
-            stored_hash  = s.get("password_hash") or ""
-            stored_plain = s.get("password") or ""
-            if _verify_password(password, stored_hash, stored_plain):
-                return s
-    return None
-
-
-# ── Session state ─────────────────────────────────────────────────
 
 def _init_auth_state():
     defaults = {
-        "authenticated":  False,
-        "staff_name":     "",
-        "staff_email":    "",
-        "staff_role":     "",
-        "staff_id":       "",
+        "authenticated": False,
+        "staff_name":    "",
         "login_attempts": 0,
-        "locked_until":   0.0,
+        "locked_until":  0.0,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
 
-def _is_locked() -> bool:
+def _is_locked():
     return time.time() < st.session_state.locked_until
 
 
-def _remaining_lockout() -> int:
-    return max(0, int(st.session_state.locked_until - time.time()))
-
-
-# ── Public API ────────────────────────────────────────────────────
-
-def require_auth(app_title: str = "CLC LBU", app_icon: str = "🏫"):
-    """
-    Call at the top of any Streamlit page.
-    Blocks rendering until authenticated.
-    """
+def require_auth(app_title="CLC LBU", app_icon="🏫"):
     _init_auth_state()
 
     if st.session_state.authenticated:
         return
 
-    # ── Login page styling ────────────────────────────────────────
     st.markdown(f"""
     <style>
       .block-container {{ max-width: 440px; padding-top: 3rem; }}
       .login-header {{ text-align: center; margin-bottom: 2rem; }}
-      .login-icon {{ font-size: 48px; margin-bottom: 8px; }}
-      .login-title {{ font-size: 22px; font-weight: 700; color: {TEAL}; margin-bottom: 2px; }}
-      .login-sub {{ font-size: 13px; color: #888; }}
-      .lockout-box {{ background: #fce8e8; border: 1px solid #f0b0b0; border-radius: 8px;
-                      padding: 12px 16px; font-size: 13px; color: #a32d2d; text-align: center; }}
-      .attempt-note {{ font-size: 12px; color: {AMBER}; text-align: center; margin-top: 4px; }}
-      div[data-testid="stForm"] {{ border: none; padding: 0; }}
     </style>
     """, unsafe_allow_html=True)
 
     st.markdown(f"""
-    <div class="login-header">
-      <div class="login-icon">{app_icon}</div>
-      <div class="login-title">{app_title}</div>
-      <div class="login-sub">Cowandilla Learning Centre — LBU Staff Portal</div>
+    <div style="text-align:center; padding: 2rem 0 1rem;">
+      <div style="font-size:3rem;">{app_icon}</div>
+      <h2 style="color:{TEAL}; margin:0.5rem 0 0.25rem;">{app_title}</h2>
+      <p style="color:#888; font-size:0.85rem;">Cowandilla Learning Centre — LBU Staff Portal</p>
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Lockout check ─────────────────────────────────────────────
     if _is_locked():
-        mins, secs = divmod(_remaining_lockout(), 60)
-        st.markdown(f"""
-        <div class="lockout-box">
-          🔒 Too many incorrect attempts.<br>
-          Please wait <strong>{mins}:{secs:02d}</strong> before trying again.
-        </div>
-        """, unsafe_allow_html=True)
+        remaining = max(0, int(st.session_state.locked_until - time.time()))
+        mins, secs = divmod(remaining, 60)
+        st.error(f"🔒 Too many attempts. Try again in {mins}:{secs:02d}")
         time.sleep(1)
         st.rerun()
         return
 
-    # ── Login form (no st.form to avoid submit issues) ────────────
-    email_input    = st.text_input("Email address",
-                                    placeholder="your.name@schools.sa.edu.au",
-                                    key="auth_email")
-    password_input = st.text_input("Password", type="password",
-                                    placeholder="Your password",
-                                    key="auth_password")
-    submitted = st.button("Sign in", use_container_width=True, type="primary", key="auth_submit")
+    # Get staff list from secrets
+    import os
+    try:
+        staff_names_raw = st.secrets.get("STAFF_NAMES", "")
+    except Exception:
+        staff_names_raw = os.environ.get("STAFF_NAMES", "")
+    
+    staff_list = [s.strip() for s in staff_names_raw.split(",") if s.strip()]
 
-    st.markdown(
-        "<p style='text-align:center; color:#aaa; font-size:0.8rem; margin-top:0.5rem;'>"
-        "Contact your admin if you need access</p>",
-        unsafe_allow_html=True
-    )
+    if staff_list:
+        name_input = st.selectbox("Your name", ["— select —"] + staff_list, key="auth_name")
+    else:
+        name_input = st.text_input("Your name", placeholder="Enter your name", key="auth_name")
 
-    if submitted:
-        if not email_input or not password_input:
-            st.warning("Please enter your email and password.")
-        else:
-            # Debug info
-            import os
-            sb = _get_supabase()
-            staff_list = _load_staff()
-            with st.expander("🔍 Debug info (remove after fixing)"):
-                st.write(f"Supabase connected: {sb is not None}")
-                st.write(f"Staff count: {len(staff_list)}")
-                st.write(f"Admin email from env: {os.environ.get('BEHAVIOUR_ADMIN_EMAIL', 'NOT SET')}")
-                try:
-                    st.write(f"Admin email from secrets: {st.secrets.get('admin', {}).get('email', 'NOT SET')}")
-                except:
-                    st.write("Secrets not accessible")
-                if staff_list:
-                    st.write(f"First staff email: {staff_list[0].get('email', 'no email field')}")
-            staff = _authenticate(email_input.strip(), password_input)
-            if staff:
-                # Handle both name (single field) and first_name/last_name
-                first = staff.get("first_name", "")
-                last  = staff.get("last_name", "")
-                full_name = f"{first} {last}".strip() if (first or last) else staff.get("name", email_input.split("@")[0].replace(".", " ").title())
-                st.session_state.authenticated  = True
-                st.session_state.staff_name     = full_name
-                st.session_state.staff_email    = email_input.strip()
-                st.session_state.staff_role     = staff.get("role", "")
-                st.session_state.staff_id       = str(staff.get("id", ""))
+    try:
+        correct_pw = st.secrets.get("ADMIN_PASSWORD", "") or st.secrets.get("APP_PASSWORD", "")
+    except Exception:
+        correct_pw = os.environ.get("ADMIN_PASSWORD", "") or os.environ.get("APP_PASSWORD", "")
+
+    password_input = st.text_input("Password", type="password", placeholder="Staff password", key="auth_password")
+    
+    if st.button("Sign in", type="primary", use_container_width=True, key="auth_submit"):
+        name_ok = name_input not in ("", "— select —")
+        pw_ok   = (password_input == correct_pw) if correct_pw else False
+
+        if not name_ok:
+            st.warning("Please select or enter your name.")
+        elif not pw_ok:
+            st.session_state.login_attempts += 1
+            remaining = MAX_ATTEMPTS - st.session_state.login_attempts
+            if remaining <= 0:
+                st.session_state.locked_until = time.time() + LOCKOUT_SECS
                 st.session_state.login_attempts = 0
-                st.rerun()
+                st.error("Too many incorrect attempts.")
             else:
-                st.session_state.login_attempts += 1
-                remaining = MAX_ATTEMPTS - st.session_state.login_attempts
-                if remaining <= 0:
-                    st.session_state.locked_until   = time.time() + LOCKOUT_SECS
-                    st.session_state.login_attempts = 0
-                    st.error(f"Too many incorrect attempts. Locked for {LOCKOUT_SECS // 60} minutes.")
-                else:
-                    st.error("Incorrect email or password.")
-                    if remaining <= 2:
-                        st.markdown(
-                            f'<p class="attempt-note">{remaining} attempt{"s" if remaining > 1 else ""} remaining before lockout.</p>',
-                            unsafe_allow_html=True,
-                        )
-                st.rerun()
+                st.error(f"Incorrect password. {remaining} attempt(s) remaining.")
+        else:
+            st.session_state.authenticated = True
+            st.session_state.staff_name    = name_input
+            st.session_state.login_attempts = 0
+            st.rerun()
 
+    st.markdown("<p style='text-align:center;color:#aaa;font-size:0.8rem;margin-top:0.5rem;'>Contact your admin if you need access</p>", unsafe_allow_html=True)
     st.stop()
 
 
-def require_admin(message: str = "This section requires admin access."):
-    """
-    Call inside any admin-only section.
-    Shows password prompt if not already admin-authenticated.
-    """
-    if is_admin():
-        return True
-
-    admin_pw = st.secrets.get("ADMIN_PASSWORD", "")
-    with st.form("admin_auth_form"):
-        st.warning(f"🔒 {message}")
-        entered = st.text_input("Admin password", type="password")
-        if st.form_submit_button("Unlock", type="primary"):
-            if entered == admin_pw or entered == st.secrets.get("admin", {}).get("password", ""):
-                st.session_state.staff_role = "ADM"
-                st.rerun()
-            else:
-                st.error("Incorrect admin password.")
-    st.stop()
-    return False
-
-
-def logout_button(location: str = "sidebar"):
-    """Render a logout button."""
+def logout_button(location="sidebar"):
     if not st.session_state.get("authenticated"):
         return
-
     label = f"👋 Sign out ({st.session_state.get('staff_name', 'Staff')})"
-
     if location == "sidebar":
         with st.sidebar:
             st.markdown("---")
@@ -309,22 +118,40 @@ def logout_button(location: str = "sidebar"):
 
 
 def _do_logout():
-    for k in ["authenticated", "staff_name", "staff_email", "staff_role",
-              "staff_id", "login_attempts", "locked_until"]:
+    for k in ["authenticated", "staff_name", "login_attempts", "locked_until"]:
         st.session_state.pop(k, None)
     st.rerun()
 
 
-def get_staff_name() -> str:
-    """Return the logged-in staff member's display name."""
+def get_staff_name():
     return st.session_state.get("staff_name", "Staff")
 
 
-def get_staff_role() -> str:
-    """Return the logged-in staff member's role."""
+def get_staff_role():
     return st.session_state.get("staff_role", "")
 
 
-def is_admin() -> bool:
-    """Return True if the logged-in user has admin role."""
+def is_admin():
     return st.session_state.get("staff_role", "") == "ADM"
+
+
+def require_admin(message="This section requires admin access."):
+    import os
+    try:
+        admin_pw = st.secrets.get("ADMIN_PASSWORD", "")
+    except Exception:
+        admin_pw = os.environ.get("ADMIN_PASSWORD", "")
+    
+    if st.session_state.get("is_portal_admin"):
+        return True
+    
+    st.warning(f"🔒 {message}")
+    entered = st.text_input("Admin password", type="password", key="admin_unlock_pw")
+    if st.button("Unlock", type="primary", key="admin_unlock_btn"):
+        if entered == admin_pw:
+            st.session_state.is_portal_admin = True
+            st.rerun()
+        else:
+            st.error("Incorrect admin password.")
+    st.stop()
+    return False
