@@ -983,7 +983,6 @@ def delete_agenda_attachment(attachment_id) -> bool:
         return True
     except:
         return False
--e 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DAILY BULLETIN
