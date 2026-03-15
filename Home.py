@@ -40,7 +40,7 @@ APPS = {
             "desc": "Vehicle bookings, staff notices, program changes, TRT workflow and printable bulletin.",
             "tag": "tag-ops",
             "tag_label": "Daily ops",
-            "page": "Daily_Bulletin",
+            "page": "1_Daily_Bulletin",
         },
         {
             "icon": "📅",
