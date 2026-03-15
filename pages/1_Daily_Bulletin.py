@@ -1,4 +1,5 @@
 from theme import apply_clc_theme
+from auth import require_auth, logout_button
 import streamlit as st
 from datetime import date, timedelta, datetime
 import database as db
@@ -10,13 +11,48 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
-apply_clc_theme()
 
-from auth import require_auth, logout_button, get_staff_name
+apply_clc_theme()
 require_auth("Daily Bulletin", "📰")
 logout_button("sidebar")
 
-# ── DESIGN SYSTEM ─────────────────────────────────────────────
+
+# ── BULLETIN CSS (display mode + own styling) ─────────────────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
+.main .block-container { padding: 0 !important; max-width: 100% !important; }
+.top-nav { background: #1a2e44; padding: 0 2rem; height: 56px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 1000; box-shadow: 0 2px 12px rgba(0,0,0,0.2); }
+.bulletin-hero { background: linear-gradient(135deg, #3d7a28 0%, #6BBF4E 60%, #8fd468 100%); padding: 1.75rem 2rem 1.5rem; position: relative; overflow: hidden; }
+.section-card { background: white; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); overflow: hidden; margin-bottom: 1.25rem; }
+.section-card-header { padding: 0.6rem 1rem; display: flex; align-items: center; gap: 0.5rem; }
+.section-card-header.green { background: #6BBF4E; } .section-card-header.navy { background: #1a2e44; }
+.section-card-header.brown { background: #A67C6A; } .section-card-header.amber { background: #e8a125; }
+.section-card-header.blue { background: #4a7fb5; } .section-card-header.purple { background: #7a5bb5; }
+.section-card-header.slate { background: #6a7f8a; }
+.section-card-header h3 { font-size: 0.72rem; font-weight: 700; color: white; text-transform: uppercase; letter-spacing: 0.1em; margin: 0; }
+.data-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+.data-table th { background: #f4f8f2; color: #4a6640; font-weight: 600; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; padding: 0.4rem 0.6rem; text-align: left; border-bottom: 2px solid #d8ead2; }
+.data-table td { padding: 0.4rem 0.6rem; border-bottom: 1px solid #f0f4ee; color: #2a3a2a; vertical-align: top; }
+.arch-card { background: white; border: 1.5px solid #e0e8dc; border-left: 4px solid #6BBF4E; border-radius: 10px; padding: 0.85rem 1rem; margin-bottom: 0.6rem; }
+.arch-card-date { font-weight: 700; font-size: 0.9rem; color: #1a2e44; }
+.arch-card-fact { font-size: 0.78rem; color: #7a907a; margin-top: 0.2rem; }
+.empty-state { text-align: center; padding: 2rem; color: #9ab09a; font-size: 0.85rem; }
+.empty-state .icon { font-size: 2rem; margin-bottom: 0.5rem; }
+.content-area { padding: 1.5rem 2rem 3rem; max-width: 1600px; margin: 0 auto; }
+.dp { background: #ffffff; border: 1px solid #d8ead8; border-radius: 8px; overflow: hidden; margin-bottom: 6px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+.dp-header { padding: 0.3rem 0.6rem; font-size: 0.6rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: white; }
+.dp-header.green { background: #4a8f33; } .dp-header.navy { background: #1a2e44; }
+.dp-header.brown { background: #7a5c4a; } .dp-header.amber { background: #c97b1a; color: #1a2e44; }
+.dp-header.blue { background: #3a6a9a; } .dp-header.purple { background: #6a4a9a; }
+.dp-header.slate { background: #4a5a6a; }
+.dp-body { padding: 0.4rem 0.5rem; }
+.dt { width: 100%; border-collapse: collapse; font-size: 0.62rem; color: #1e3a1e; }
+.dt th { color: #6BBF4E; font-weight: 600; font-size: 0.55rem; text-transform: uppercase; padding: 0.2rem 0.3rem; border-bottom: 1px solid #2a3d2a; }
+.dt td { padding: 0.18rem 0.3rem; border-bottom: 1px solid #e8f0e8; vertical-align: top; }
+.dt-em { color: #9aaa9a; font-style: italic; font-size: 0.55rem; }
+</style>
+""", unsafe_allow_html=True)
 
 # ── SESSION STATE ─────────────────────────────────────────────
 def _default_date():
@@ -496,7 +532,7 @@ if params.get("display") == "true":
     r1c1, r1c2, r1c3, r1c4, r1c5 = st.columns([2,2,2.5,1.5,2])
 
     with r1c1:
-        
+        pass  # display content restored below
     
     qa_col, preview_col = st.columns([1, 1])
 
