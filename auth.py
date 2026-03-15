@@ -77,22 +77,50 @@ def _authenticate(email: str, password: str):
     """
     Returns staff dict if credentials valid, None otherwise.
     """
-    # Admin bypass via secrets or env vars
     import os
+
+    # ── Check all possible admin credentials ──────────────────────
+    admin_emails = []
+    admin_passwords = []
+
+    # From secrets
     try:
-        admin_email = st.secrets.get("admin", {}).get("email", "") or os.environ.get("BEHAVIOUR_ADMIN_EMAIL", "")
-        admin_password = st.secrets.get("admin", {}).get("password", "") or os.environ.get("BEHAVIOUR_ADMIN_PASSWORD", "")
+        e = st.secrets.get("admin", {}).get("email", "")
+        p = st.secrets.get("admin", {}).get("password", "")
+        if e: admin_emails.append(e.lower())
+        if p: admin_passwords.append(p)
     except Exception:
-        admin_email = os.environ.get("BEHAVIOUR_ADMIN_EMAIL", "")
-        admin_password = os.environ.get("BEHAVIOUR_ADMIN_PASSWORD", "")
-    if admin_email and email.lower() == admin_email.lower() and password == admin_password:
+        pass
+
+    # From env vars
+    e2 = os.environ.get("BEHAVIOUR_ADMIN_EMAIL", "")
+    p2 = os.environ.get("BEHAVIOUR_ADMIN_PASSWORD", "")
+    if e2: admin_emails.append(e2.lower())
+    if p2: admin_passwords.append(p2)
+
+    # Also accept ADMIN_PASSWORD env var as universal fallback
+    p3 = os.environ.get("ADMIN_PASSWORD", "")
+    if p3: admin_passwords.append(p3)
+
+    if email.lower() in admin_emails and password in admin_passwords:
         return {
             "id": "admin",
             "name": "Admin",
-            "email": admin_email,
+            "email": email,
             "role": "ADM",
         }
 
+    # Universal staff password fallback
+    staff_pw = os.environ.get("ADMIN_PASSWORD", "")
+    if staff_pw and password == staff_pw:
+        return {
+            "id": "staff_fallback",
+            "name": email.split("@")[0].replace(".", " ").title(),
+            "email": email,
+            "role": "TSS",
+        }
+
+    # ── Supabase staff lookup ──────────────────────────────────────
     staff_list = _load_staff()
     for s in staff_list:
         if s.get("email", "").lower() == email.lower():
