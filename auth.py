@@ -31,8 +31,9 @@ LOCKOUT_SECS  = 300  # 5 minutes
 @st.cache_resource(ttl=60)
 def _get_supabase():
     try:
-        url = st.secrets.get("SUPABASE_URL", "")
-        key = st.secrets.get("SUPABASE_KEY", "")
+        # Use Behaviour Support Supabase as single staff auth source
+        url = st.secrets.get("supabase", {}).get("url") or st.secrets.get("BEHAVIOUR_SUPABASE_URL", "")
+        key = st.secrets.get("supabase", {}).get("key") or st.secrets.get("BEHAVIOUR_SUPABASE_KEY", "")
         if not url or not key:
             return None
         return create_client(url, key)
@@ -182,8 +183,12 @@ def require_auth(app_title: str = "CLC LBU", app_icon: str = "🏫"):
         else:
             staff = _authenticate(email_input.strip(), password_input)
             if staff:
+                # Handle both name (single field) and first_name/last_name
+                first = staff.get("first_name", "")
+                last  = staff.get("last_name", "")
+                full_name = f"{first} {last}".strip() if (first or last) else staff.get("name", email_input.split("@")[0].replace(".", " ").title())
                 st.session_state.authenticated  = True
-                st.session_state.staff_name     = staff.get("name", email_input.split("@")[0].replace(".", " ").title())
+                st.session_state.staff_name     = full_name
                 st.session_state.staff_email    = email_input.strip()
                 st.session_state.staff_role     = staff.get("role", "")
                 st.session_state.staff_id       = str(staff.get("id", ""))
