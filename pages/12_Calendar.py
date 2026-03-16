@@ -66,7 +66,15 @@ except Exception:
     CAL_ADMIN_PW = "CLC2026"
 
 # ─── SESSION STATE ───────────────────────────────────────────────────────────────
-today = date.today()
+# Use Adelaide timezone for today's date
+from datetime import timezone
+import zoneinfo
+try:
+    _adelaide = zoneinfo.ZoneInfo("Australia/Adelaide")
+    from datetime import datetime as _dt
+    today = _dt.now(_adelaide).date()
+except Exception:
+    today = date.today()
 for k, v in [("cal_year", today.year), ("cal_month", today.month),
               ("cal_week_start", today - timedelta(days=today.weekday())),
               ("selected_date", today), ("is_admin", False), ("edit_event_id", None),
