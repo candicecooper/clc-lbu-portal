@@ -19,6 +19,8 @@ def apply_clc_theme():
     .stApp { background: #f0f4f4 !important; }
 
     /* ── Sidebar ── */
+    [data-testid="stSidebarNav"] { display: none !important; }
+    [data-testid="stSidebarNavItems"] { display: none !important; }
     [data-testid="stSidebar"] {
         background: #1A7A7A !important;
     }
