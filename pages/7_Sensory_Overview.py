@@ -34,11 +34,48 @@ AMBER = "#C8760A"
 # ── Supabase ───────────────────────────────────────────────────────────────────
 @st.cache_resource
 def get_supabase():
-    url = st.secrets.get("supabase", {}).get("url") or st.secrets.get("BEHAVIOUR_SUPABASE_URL", "")
-    key = st.secrets.get("supabase", {}).get("key") or st.secrets.get("BEHAVIOUR_SUPABASE_KEY", "")
+    """Connect to Behaviour Support Supabase (has students + sensory tables)."""
+    import os
+    try:
+        url = st.secrets.get("supabase", {}).get("url") or st.secrets.get("BEHAVIOUR_SUPABASE_URL", "")
+        key = st.secrets.get("supabase", {}).get("key") or st.secrets.get("BEHAVIOUR_SUPABASE_KEY", "")
+    except Exception:
+        url = os.environ.get("BEHAVIOUR_SUPABASE_URL", "")
+        key = os.environ.get("BEHAVIOUR_SUPABASE_KEY", "")
+    return create_client(url, key)
+
+@st.cache_resource
+def get_supabase_main():
+    """Connect to main portal Supabase."""
+    import os
+    try:
+        url = st.secrets.get("SUPABASE_URL", "") or os.environ.get("SUPABASE_URL", "")
+        key = st.secrets.get("SUPABASE_KEY", "") or os.environ.get("SUPABASE_KEY", "")
+    except Exception:
+        url = os.environ.get("SUPABASE_URL", "")
+        key = os.environ.get("SUPABASE_KEY", "")
+    return create_client(url, key)
+
+@st.cache_resource  
+def get_main_supabase():
+    """Connect to main portal Supabase (fallback for students table)."""
+    import os
+    try:
+        url = st.secrets.get("SUPABASE_URL", "")
+        key = st.secrets.get("SUPABASE_KEY", "")
+    except Exception:
+        url = os.environ.get("SUPABASE_URL", "")
+        key = os.environ.get("SUPABASE_KEY", "")
     return create_client(url, key)
 
 supabase = get_supabase()
+
+# ── Students table helper ──────────────────────────────────────────────────────
+# Students table lives in the Behaviour Support Supabase
+# If not accessible, fall back to main Supabase
+def _get_students_sb():
+    """Get supabase client that has the students table."""
+    return supabase  # Behaviour Support Supabase has students table
 
 # ── Section definitions ────────────────────────────────────────────────────────
 SECTIONS = {
@@ -189,13 +226,17 @@ def priority_card(section_name, info, icon=""):
 @st.cache_data(ttl=60)
 def load_students():
     """Load all active students from the shared students table."""
-    try:
-        res = supabase.table("students").select("id,name,edid,program,grade") \
-            .eq("archived", False).order("name").execute()
-        return res.data or []
-    except Exception as e:
-        st.error(f"Could not load students: {e}")
-        return []
+    # Try behaviour Supabase first, then main Supabase
+    for sb in [supabase, get_supabase_main()]:
+        try:
+            res = sb.table("students").select("id,name,edid,program,grade") \
+                .eq("archived", False).order("name").execute()
+            if res.data is not None:
+                return res.data or []
+        except Exception:
+            continue
+    st.error("Could not load students from either database.")
+    return []
 
 def load_all_overviews():
     try:
