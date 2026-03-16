@@ -32,7 +32,7 @@ AMBER = "#C8760A"
 
 
 # ── Supabase ───────────────────────────────────────────────────────────────────
-@st.cache_resource
+@st.cache_resource(ttl=60)
 def get_supabase():
     """Connect to Behaviour Support Supabase (has students + sensory tables)."""
     import os
@@ -44,7 +44,7 @@ def get_supabase():
         key = os.environ.get("BEHAVIOUR_SUPABASE_KEY", "")
     return create_client(url, key)
 
-@st.cache_resource
+@st.cache_resource(ttl=60)
 def get_supabase_main():
     """Connect to main portal Supabase."""
     import os
