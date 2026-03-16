@@ -9,6 +9,17 @@ st.set_page_config(
 )
 apply_clc_theme()
 
+# Suppress automatic sidebar page navigation
+st.markdown("""
+<style>
+[data-testid="stSidebarNav"] { display: none !important; }
+[data-testid="stSidebarNavItems"] { display: none !important; }
+section[data-testid="stSidebar"] > div > div > div > div:first-child { display: none !important; }
+.st-emotion-cache-1cypcdb { display: none !important; }
+ul[data-testid="stSidebarNavItems"] { display: none !important; }
+</style>
+""", unsafe_allow_html=True)
+
 require_auth("CLC LBU Staff Portal", "🏫")
 logout_button("sidebar")
 
@@ -48,7 +59,7 @@ APPS = {
             "desc": "JP, PY and SY timetables with SA school calendar term/week detection and PDF export.",
             "tag": "tag-ops",
             "tag_label": "Daily ops",
-            "page": "Timetable",
+            "page": "2_Timetable",
         },
     ],
     "Staff & HR": [
@@ -58,15 +69,15 @@ APPS = {
             "desc": "Schedule, agenda, minutes, actions, attendance and documents for JP/PY/SY/Staff/Admin.",
             "tag": "tag-staff",
             "tag_label": "Staff & HR",
-            "page": "Team_Meetings",
+            "page": "3_Team_Meetings",
         },
         {
             "icon": "🗓",
-            "title": "Staff Meeting",
+            "title": "Digital Staff Meeting",
             "desc": "Weekly staff meeting agenda submission, acknowledgements, polls and comments.",
             "tag": "tag-staff",
             "tag_label": "Staff & HR",
-            "page": "Staff_Meeting",
+            "page": "11_Digital_Staff_Meeting",
         },
     ],
     "Safety & Behaviour": [
@@ -76,7 +87,7 @@ APPS = {
             "desc": "Incident logging, ABCH forms, student dashboards, BAP generation and approval workflow.",
             "tag": "tag-safety",
             "tag_label": "Safety",
-            "page": "Behaviour_Support",
+            "page": "5_Behaviour_Support",
         },
         {
             "icon": "📈",
@@ -92,7 +103,7 @@ APPS = {
             "desc": "Whole-cohort sensory profile overview across programs and support needs.",
             "tag": "tag-safety",
             "tag_label": "Safety",
-            "page": "Sensory_Overview",
+            "page": "7_Sensory_Overview",
         },
         {
             "icon": "📋",
@@ -100,18 +111,10 @@ APPS = {
             "desc": "Individual student sensory profile with recommendations and strategies.",
             "tag": "tag-safety",
             "tag_label": "Safety",
-            "page": "Sensory_Profile",
+            "page": "8_Sensory_Profile",
         },
     ],
     "Governance": [
-        {
-            "icon": "📑",
-            "title": "PAC Meeting Portal",
-            "desc": "Personnel Advisory Committee procedures, checklists and progress tracking.",
-            "tag": "tag-gov",
-            "tag_label": "Governance",
-            "page": "PAC_Meeting",
-        },
     ],
 }
 
