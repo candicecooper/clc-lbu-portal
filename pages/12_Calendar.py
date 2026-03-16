@@ -82,6 +82,12 @@ for k, v in [("cal_year", today.year), ("cal_month", today.month),
     if k not in st.session_state:
         st.session_state[k] = v
 
+# Always reset to today on fresh page load (fixes stale date from previous session)
+st.session_state.selected_date = today
+st.session_state.cal_week_start = today - timedelta(days=today.weekday())
+st.session_state.cal_year = today.year
+st.session_state.cal_month = today.month
+
 # ─── DB HELPERS ─────────────────────────────────────────────────────────────────
 def db_events(start_date=None, end_date=None):
     q = supabase.table("clc_events").select("*").order("event_date").order("start_time")
