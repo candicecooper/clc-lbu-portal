@@ -21,6 +21,12 @@ def apply_clc_theme():
     /* ── Sidebar ── */
     [data-testid="stSidebarNav"] { display: none !important; }
     [data-testid="stSidebarNavItems"] { display: none !important; }
+    [data-testid="stSidebarNavSeparator"] { display: none !important; }
+    section[data-testid="stSidebar"] ul { display: none !important; }
+    section[data-testid="stSidebar"] nav { display: none !important; }
+    .st-emotion-cache-1cypcdb { display: none !important; }
+    .st-emotion-cache-pbk8do { display: none !important; }
+    div[data-testid="stSidebarNav"] { display: none !important; }
     [data-testid="stSidebar"] {
         background: #1A7A7A !important;
     }
