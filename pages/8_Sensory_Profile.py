@@ -37,7 +37,7 @@ SENSORY_OVERVIEW_APP_URL = "https://your-portal-app.streamlit.app/Sensory_Overvi
 
 
 # ── Supabase ───────────────────────────────────────────────────────────────────
-@st.cache_resource
+@st.cache_resource(ttl=60)
 def get_supabase():
     """Connect to Behaviour Support Supabase (has students + sensory tables)."""
     import os
@@ -49,7 +49,7 @@ def get_supabase():
         key = os.environ.get("BEHAVIOUR_SUPABASE_KEY", "")
     return create_client(url, key)
 
-@st.cache_resource
+@st.cache_resource(ttl=60)
 def get_supabase_main():
     """Connect to main portal Supabase."""
     import os
@@ -125,8 +125,7 @@ def load_students():
     for sb in [supabase, get_supabase_main()]:
         try:
             res = sb.table("students") \
-                .select("id,name,edid,program,grade,dob") \
-                .eq("archived", False) \
+                .select("id,name,year_level,class") \
                 .order("name").execute()
             if res.data is not None:
                 return res.data or []
