@@ -1685,9 +1685,14 @@ def login_user(email: str, password: str) -> bool:
         return False
 
     # --- ADMIN BYPASS ---
-    # Allows access even if Supabase is down or staff table is empty
-    ADMIN_EMAIL = st.secrets.get("admin", {}).get("email", "")
-    ADMIN_PASSWORD = st.secrets.get("admin", {}).get("password", "")
+    import os
+    try:
+        ADMIN_EMAIL    = st.secrets.get("admin", {}).get("email", "") or os.environ.get("BEHAVIOUR_ADMIN_EMAIL", "")
+        ADMIN_PASSWORD = st.secrets.get("admin", {}).get("password", "") or os.environ.get("BEHAVIOUR_ADMIN_PASSWORD", "")
+    except Exception:
+        ADMIN_EMAIL    = os.environ.get("BEHAVIOUR_ADMIN_EMAIL", "")
+        ADMIN_PASSWORD = os.environ.get("BEHAVIOUR_ADMIN_PASSWORD", "")
+
     if ADMIN_EMAIL and email == ADMIN_EMAIL.lower() and password == ADMIN_PASSWORD:
         st.session_state.logged_in = True
         st.session_state.current_user = {
@@ -1698,6 +1703,16 @@ def login_user(email: str, password: str) -> bool:
         }
         st.session_state.current_page = "landing"
         return True
+
+    # --- SECONDARY ADMIN BYPASS for ADM role staff ---
+    # Allows ADM staff to log in using the admin password even if bcrypt fails
+    for staff in st.session_state.staff:
+        if staff.get("email", "").lower() == email and staff.get("role") == "ADM":
+            if ADMIN_PASSWORD and password == ADMIN_PASSWORD:
+                st.session_state.logged_in = True
+                st.session_state.current_user = staff
+                st.session_state.current_page = "landing"
+                return True
 
     # --- NORMAL STAFF LOGIN ---
     for staff in st.session_state.staff:
