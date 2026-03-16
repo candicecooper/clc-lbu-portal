@@ -11,17 +11,22 @@ logout_button("sidebar")
 staff_name = get_staff_name()
 today = date.today().strftime("%A %-d %B %Y")
 
-st.markdown(f"### 👋 Welcome, {staff_name} — {today}")
-st.markdown("Use the links below to open each app, or visit the [staff portal home](https://16cefb77.clc-portal.pages.dev/).")
+BASE = "https://clc-lbu-portal.onrender.com"
 
-st.page_link("pages/1_Daily_Bulletin.py", label="📰 Daily Bulletin", use_container_width=True)
-st.page_link("pages/2_Timetable.py", label="📅 Timetable", use_container_width=True)
-st.page_link("pages/3_Team_Meetings.py", label="👥 Team Meetings", use_container_width=True)
-st.page_link("pages/5_Behaviour_Support.py", label="📊 Behaviour Support", use_container_width=True)
-st.page_link("pages/7_Sensory_Overview.py", label="🧠 Sensory Overview", use_container_width=True)
-st.page_link("pages/8_Sensory_Profile.py", label="📋 Sensory Profile", use_container_width=True)
-st.page_link("pages/10_Document_Library.py", label="📁 Document Library", use_container_width=True)
-st.page_link("pages/11_Digital_Staff_Meeting.py", label="🗓 Digital Staff Meeting", use_container_width=True)
-st.page_link("pages/12_Calendar.py", label="📆 Calendar", use_container_width=True)
-st.page_link("pages/13_Footy_Tipping.py", label="🏈 Footy Tipping", use_container_width=True)
-st.page_link("pages/14_Committees.py", label="🏛 Committees", use_container_width=True)
+st.markdown(f"### 👋 Welcome, {staff_name} — {today}")
+
+st.markdown(f"""
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin-top:1rem;">
+  <a href="{BASE}/Daily_Bulletin" style="display:block;background:#1A7A7A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">📰 Daily Bulletin</a>
+  <a href="{BASE}/Timetable" style="display:block;background:#1A7A7A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">📅 Timetable</a>
+  <a href="{BASE}/Team_Meetings" style="display:block;background:#1A7A7A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">👥 Team Meetings</a>
+  <a href="{BASE}/Digital_Staff_Meeting" style="display:block;background:#1A7A7A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">🗓 Digital Staff Meeting</a>
+  <a href="{BASE}/Behaviour_Support" style="display:block;background:#1A7A7A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">📊 Behaviour Support</a>
+  <a href="{BASE}/Sensory_Overview" style="display:block;background:#1A7A7A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">🧠 Sensory Overview</a>
+  <a href="{BASE}/Sensory_Profile" style="display:block;background:#1A7A7A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">📋 Sensory Profile</a>
+  <a href="{BASE}/Document_Library" style="display:block;background:#1A7A7A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">📁 Document Library</a>
+  <a href="{BASE}/Calendar" style="display:block;background:#1A7A7A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">📆 Calendar</a>
+  <a href="{BASE}/Footy_Tipping" style="display:block;background:#C8760A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">🏈 Footy Tipping</a>
+  <a href="{BASE}/Committees" style="display:block;background:#C8760A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">🏛 Committees</a>
+</div>
+""", unsafe_allow_html=True)
