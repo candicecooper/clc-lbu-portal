@@ -25,7 +25,11 @@ from database import (
     save_agenda_attachment, get_agenda_attachments,
     get_agenda_attachment_bytes, delete_agenda_attachment
 )
-from email_utils import send_edition_notification
+try:
+    from email_utils import send_edition_notification
+except ImportError:
+    def send_edition_notification(*args, **kwargs):
+        return False
 
 # ── Supabase client for timetable storage ─────────────────────────────────────
 @st.cache_resource
