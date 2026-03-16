@@ -31,6 +31,12 @@ except ImportError:
     def send_edition_notification(*args, **kwargs):
         return False
 
+st.set_page_config(page_title="CLC Digital Staff Meeting", page_icon="📋",
+                   layout="wide", initial_sidebar_state="collapsed")
+apply_clc_theme()
+
+
+
 # ── Supabase client for timetable storage ─────────────────────────────────────
 @st.cache_resource
 def _get_supabase():
@@ -87,13 +93,7 @@ def get_timetable_filename(edition_id: str) -> str | None:
     except:
         return None
 
-st.set_page_config(page_title="CLC Digital Staff Meeting", page_icon="📋",
-                   layout="wide", initial_sidebar_state="collapsed")
-apply_clc_theme()
 
-# ── Back to Portal ─────────────────────────────────────────────────────────────
-if st.sidebar.button("🏠 Back to Staff Portal", use_container_width=True, key="back_to_portal"):
-    st.markdown(f'<meta http-equiv="refresh" content="0;url=https://16cefb77.clc-portal.pages.dev/">', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
