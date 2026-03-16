@@ -17,6 +17,16 @@ from auth import require_auth, logout_button, get_staff_name
 require_auth("Sensory Profiles", "🧠")
 logout_button("sidebar")
 
+# ── Back to Portal ─────────────────────────────────────────────────────────────
+st.sidebar.markdown(
+    f'''<a href="https://16cefb77.clc-portal.pages.dev/" target="_self" style="display:block;text-align:center;
+    background:#1A7A7A;color:white;font-weight:600;font-size:0.85rem;
+    padding:0.5rem;border-radius:8px;text-decoration:none;margin-bottom:0.5rem;">
+    🏠 Back to Staff Portal</a>''',
+    unsafe_allow_html=True
+)
+
+
 TEAL  = "#1A7A7A"
 AMBER = "#C8760A"
 
@@ -29,7 +39,9 @@ SENSORY_OVERVIEW_APP_URL = "https://your-portal-app.streamlit.app/Sensory_Overvi
 # ── Supabase ───────────────────────────────────────────────────────────────────
 @st.cache_resource
 def get_supabase():
-    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+    url = st.secrets.get("supabase", {}).get("url") or st.secrets.get("BEHAVIOUR_SUPABASE_URL", "")
+    key = st.secrets.get("supabase", {}).get("key") or st.secrets.get("BEHAVIOUR_SUPABASE_KEY", "")
+    return create_client(url, key)
 
 supabase = get_supabase()
 
