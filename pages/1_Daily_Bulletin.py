@@ -1136,4 +1136,4 @@ with login_tab:
                 st.rerun()
             else:
                 st.error("Incorrect password.")
-        st.markdown('</div>', unsafe_allow_html=True) 
+        st.markdown('</div>', unsafe_allow_html=True)
