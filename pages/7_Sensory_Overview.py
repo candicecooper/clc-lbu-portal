@@ -229,7 +229,7 @@ def load_students():
     # Try behaviour Supabase first, then main Supabase
     for sb in [supabase, get_supabase_main()]:
         try:
-            res = sb.table("students").select("id,name,edid,program,grade") \
+            res = sb.table("students").select("id,name,year_level,class") \
                 .eq("archived", False).order("name").execute()
             if res.data is not None:
                 return res.data or []
@@ -241,7 +241,7 @@ def load_students():
 def load_all_overviews():
     try:
         res = supabase.table("sensory_overviews") \
-            .select("*, students(name,edid,program)") \
+            .select("*, students(name,year_level,class)") \
             .order("created_at", desc=True).execute()
         return res.data or []
     except Exception as e:
@@ -302,7 +302,7 @@ with tab_new:
         st.markdown("#### 👤 Student")
 
         students = load_students()
-        student_options = {s["id"]: f"{s['name']} ({s.get('program','?')} · {s.get('edid','—')})" for s in students}
+        student_options = {s["id"]: f"{s['name']} ({s.get('class','?')} · {s.get('year_level','—')})" for s in students}
 
         default_idx = 0
         all_ids = ["— Select a student —"] + list(student_options.keys())
