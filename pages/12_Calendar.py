@@ -12,6 +12,16 @@ from auth import require_auth, logout_button, get_staff_name
 require_auth("CLC Calendar", "📅")
 logout_button("sidebar")
 
+# ── Back to Portal ─────────────────────────────────────────────────────────────
+st.sidebar.markdown(
+    '<a href="https://16cefb77.clc-portal.pages.dev/" target="_self" style="display:block;text-align:center;'
+    'background:#1A7A7A;color:white;font-weight:600;font-size:0.85rem;'
+    'padding:0.5rem;border-radius:8px;text-decoration:none;margin-bottom:0.5rem;">'
+    '🏠 Back to Staff Portal</a>',
+    unsafe_allow_html=True
+)
+
+
 # ─── SUPABASE ───────────────────────────────────────────────────────────────────
 @st.cache_resource
 def init_supabase() -> Client:
@@ -403,7 +413,7 @@ def event_detail_panel():
 # ═══════════════ WEEK VIEW ═════════════════════════════════════════════════════
 with tab_week:
     # Hide the transparent overlay buttons on day tabs
-        ws = st.session_state.cal_week_start
+    ws = st.session_state.cal_week_start
     we = ws + timedelta(days=6)
     wp, wt, wn, wtod = st.columns([1,3,1,1])
     with wp:
@@ -632,135 +642,135 @@ with tab_list:
 with tab_students:
     st.markdown("### 👨‍🎓 Student Placements & Meetings")
     
-        # ── Helpers for transition table ──
-        DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-        DAY_KEYS = ["mon", "tue", "wed", "thu", "fri"]
+    # ── Helpers for transition table ──
+    DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    DAY_KEYS = ["mon", "tue", "wed", "thu", "fri"]
 
-        def db_transitions(initials=None):
-            try:
-                q = supabase.table("student_transitions").select("*").order("week_start_date").order("student_initials")
-                if initials:
-                    q = q.eq("student_initials", initials)
-                return q.execute().data or []
-            except Exception as e:
-                st.error(f"Could not load transition data. Have you run the SQL migration? ({e})")
-                return []
+    def db_transitions(initials=None):
+        try:
+            q = supabase.table("student_transitions").select("*").order("week_start_date").order("student_initials")
+            if initials:
+                q = q.eq("student_initials", initials)
+            return q.execute().data or []
+        except Exception as e:
+            st.error(f"Could not load transition data. Have you run the SQL migration? ({e})")
+            return []
 
-        def save_transition(d):
-            supabase.table("student_transitions").insert(d).execute()
+    def save_transition(d):
+        supabase.table("student_transitions").insert(d).execute()
 
-        def upd_transition(tid, d):
-            supabase.table("student_transitions").update(d).eq("id", tid).execute()
+    def upd_transition(tid, d):
+        supabase.table("student_transitions").update(d).eq("id", tid).execute()
 
-        def del_transition(tid):
-            supabase.table("student_transitions").delete().eq("id", tid).execute()
+    def del_transition(tid):
+        supabase.table("student_transitions").delete().eq("id", tid).execute()
 
-        def fmt_time_short(t):
-            if not t: return ""
-            try: return datetime.strptime(str(t)[:5], "%H:%M").strftime("%-I:%M%p").lower()
-            except: return str(t)[:5]
+    def fmt_time_short(t):
+        if not t: return ""
+        try: return datetime.strptime(str(t)[:5], "%H:%M").strftime("%-I:%M%p").lower()
+        except: return str(t)[:5]
 
-        # ── Filters ──
-        tr1, tr2, tr3 = st.columns(3)
-        with tr1:
-            tr_prog = st.multiselect("Program", ["JP","PY","SY"], default=["JP","PY","SY"], key="tr_prog")
-        with tr2:
-            # Get distinct students from transitions for filter
-            all_trans = db_transitions()
-            all_inits = sorted(set(t.get("student_initials","") for t in all_trans if t.get("student_initials")))
-            tr_student = st.selectbox("Filter by student", ["All"] + all_inits, key="tr_student")
-        with tr3:
-            tr_term = st.selectbox("Filter by term", ["All", "Term 1", "Term 2", "Term 3", "Term 4"], key="tr_term")
+    # ── Filters ──
+    tr1, tr2, tr3 = st.columns(3)
+    with tr1:
+        tr_prog = st.multiselect("Program", ["JP","PY","SY"], default=["JP","PY","SY"], key="tr_prog")
+    with tr2:
+        # Get distinct students from transitions for filter
+        all_trans = db_transitions()
+        all_inits = sorted(set(t.get("student_initials","") for t in all_trans if t.get("student_initials")))
+        tr_student = st.selectbox("Filter by student", ["All"] + all_inits, key="tr_student")
+    with tr3:
+        tr_term = st.selectbox("Filter by term", ["All", "Term 1", "Term 2", "Term 3", "Term 4"], key="tr_term")
 
-        # ── Add new transition week ──
-        with st.expander("➕ Add Transition Week"):
-            with st.form("tr_add_form", clear_on_submit=True):
-                tf1, tf2 = st.columns(2)
-                with tf1:
-                    tr_initials  = st.text_input("Student initials *", placeholder="e.g. J.S.")
-                    tr_program_s = st.selectbox("Program *", ["", "JP", "PY", "SY"], key="tr_prog_add")
-                    tr_school    = st.text_input("Mainstream school name", placeholder="e.g. Cowandilla Primary")
-                    tr_added_by  = st.text_input("Added by *", placeholder="Your name")
-                with tf2:
-                    tr_term_val  = st.selectbox("Term *", ["Term 1", "Term 2", "Term 3", "Term 4"], key="tr_term_add")
-                    tr_week_lbl  = st.text_input("Week label *", placeholder="e.g. Week 3")
-                    tr_week_date = st.date_input("Week start date (Monday) *", value=today - timedelta(days=today.weekday()), key="tr_week_date")
-                    tr_notes     = st.text_area("Notes (optional)", height=60)
+    # ── Add new transition week ──
+    with st.expander("➕ Add Transition Week"):
+        with st.form("tr_add_form", clear_on_submit=True):
+            tf1, tf2 = st.columns(2)
+            with tf1:
+                tr_initials  = st.text_input("Student initials *", placeholder="e.g. J.S.")
+                tr_program_s = st.selectbox("Program *", ["", "JP", "PY", "SY"], key="tr_prog_add")
+                tr_school    = st.text_input("Mainstream school name", placeholder="e.g. Cowandilla Primary")
+                tr_added_by  = st.text_input("Added by *", placeholder="Your name")
+            with tf2:
+                tr_term_val  = st.selectbox("Term *", ["Term 1", "Term 2", "Term 3", "Term 4"], key="tr_term_add")
+                tr_week_lbl  = st.text_input("Week label *", placeholder="e.g. Week 3")
+                tr_week_date = st.date_input("Week start date (Monday) *", value=today - timedelta(days=today.weekday()), key="tr_week_date")
+                tr_notes     = st.text_area("Notes (optional)", height=60)
 
-                st.markdown("**Times at mainstream school** *(leave blank = at CLC all day)*")
-                day_cols = st.columns(5)
-                tr_times = {}
-                for i, (day, dk) in enumerate(zip(DAYS, DAY_KEYS)):
-                    with day_cols[i]:
-                        st.markdown(f"**{day[:3]}**")
-                        tr_times[f"{dk}_start"] = st.time_input(f"From", value=None, key=f"tr_{dk}_s")
-                        tr_times[f"{dk}_end"]   = st.time_input(f"To",   value=None, key=f"tr_{dk}_e")
+            st.markdown("**Times at mainstream school** *(leave blank = at CLC all day)*")
+            day_cols = st.columns(5)
+            tr_times = {}
+            for i, (day, dk) in enumerate(zip(DAYS, DAY_KEYS)):
+                with day_cols[i]:
+                    st.markdown(f"**{day[:3]}**")
+                    tr_times[f"{dk}_start"] = st.time_input(f"From", value=None, key=f"tr_{dk}_s")
+                    tr_times[f"{dk}_end"]   = st.time_input(f"To",   value=None, key=f"tr_{dk}_e")
 
-                tr_ok = st.form_submit_button("✅ Save Transition Week", type="primary", use_container_width=True)
-                if tr_ok:
-                    if not tr_initials.strip():
-                        st.warning("Please enter student initials.")
-                    elif not tr_program_s:
-                        st.warning("Please select a program.")
-                    elif not tr_added_by.strip():
-                        st.warning("Please enter your name.")
-                    elif not tr_week_lbl.strip():
-                        st.warning("Please enter a week label.")
-                    else:
-                        row = {
-                            "student_initials": tr_initials.strip(),
-                            "program": tr_program_s,
-                            "mainstream_school": tr_school.strip(),
-                            "term": tr_term_val,
-                            "week_label": tr_week_lbl.strip(),
-                            "week_start_date": str(tr_week_date),
-                            "notes": tr_notes.strip(),
-                            "added_by": tr_added_by.strip(),
-                        }
-                        for dk in DAY_KEYS:
-                            s = tr_times.get(f"{dk}_start")
-                            e = tr_times.get(f"{dk}_end")
-                            row[f"{dk}_start"] = str(s) if s else None
-                            row[f"{dk}_end"]   = str(e) if e else None
-                        save_transition(row)
-                        st.success(f"✅ Transition week saved for {tr_initials.strip()}!")
-                        st.rerun()
+            tr_ok = st.form_submit_button("✅ Save Transition Week", type="primary", use_container_width=True)
+            if tr_ok:
+                if not tr_initials.strip():
+                    st.warning("Please enter student initials.")
+                elif not tr_program_s:
+                    st.warning("Please select a program.")
+                elif not tr_added_by.strip():
+                    st.warning("Please enter your name.")
+                elif not tr_week_lbl.strip():
+                    st.warning("Please enter a week label.")
+                else:
+                    row = {
+                        "student_initials": tr_initials.strip(),
+                        "program": tr_program_s,
+                        "mainstream_school": tr_school.strip(),
+                        "term": tr_term_val,
+                        "week_label": tr_week_lbl.strip(),
+                        "week_start_date": str(tr_week_date),
+                        "notes": tr_notes.strip(),
+                        "added_by": tr_added_by.strip(),
+                    }
+                    for dk in DAY_KEYS:
+                        s = tr_times.get(f"{dk}_start")
+                        e = tr_times.get(f"{dk}_end")
+                        row[f"{dk}_start"] = str(s) if s else None
+                        row[f"{dk}_end"]   = str(e) if e else None
+                    save_transition(row)
+                    st.success(f"✅ Transition week saved for {tr_initials.strip()}!")
+                    st.rerun()
 
-        st.markdown("---")
+    st.markdown("---")
 
-        # ── Fetch and filter ──
-        disp_trans = db_transitions(initials=None if tr_student == "All" else tr_student)
-        if tr_prog != ["JP","PY","SY"]:
-            disp_trans = [t for t in disp_trans if t.get("program","") in tr_prog]
-        if tr_term != "All":
-            disp_trans = [t for t in disp_trans if t.get("term","") == tr_term]
+    # ── Fetch and filter ──
+    disp_trans = db_transitions(initials=None if tr_student == "All" else tr_student)
+    if tr_prog != ["JP","PY","SY"]:
+        disp_trans = [t for t in disp_trans if t.get("program","") in tr_prog]
+    if tr_term != "All":
+        disp_trans = [t for t in disp_trans if t.get("term","") == tr_term]
 
-        if not disp_trans:
-            st.markdown('<div class="info-box">No transition schedules found. Add one above.</div>', unsafe_allow_html=True)
-        else:
-            # Group by student
-            from collections import defaultdict
-            by_student = defaultdict(list)
-            for t in disp_trans:
-                by_student[t.get("student_initials","?")].append(t)
+    if not disp_trans:
+        st.markdown('<div class="info-box">No transition schedules found. Add one above.</div>', unsafe_allow_html=True)
+    else:
+        # Group by student
+        from collections import defaultdict
+        by_student = defaultdict(list)
+        for t in disp_trans:
+            by_student[t.get("student_initials","?")].append(t)
 
-            for init, weeks in by_student.items():
-                prog = weeks[0].get("program","")
-                pc   = PROGRAM_COLORS.get(prog, {"color":"#374151","bg":"#f3f4f6"})
-                school = weeks[0].get("mainstream_school","")
+        for init, weeks in by_student.items():
+            prog = weeks[0].get("program","")
+            pc   = PROGRAM_COLORS.get(prog, {"color":"#374151","bg":"#f3f4f6"})
+            school = weeks[0].get("mainstream_school","")
 
-                # Student header
-                st.markdown(
-                    f'<div style="background:{pc["bg"]};border-left:4px solid {pc["color"]};border-radius:10px;'
-                    f'padding:0.6rem 1rem;margin:1rem 0 0.5rem;display:flex;align-items:center;gap:0.75rem;">'
-                    f'<span style="background:{pc["color"]};color:white;font-size:0.75rem;font-weight:700;'
-                    f'padding:0.2rem 0.55rem;border-radius:8px;">{prog}</span>'
-                    f'<strong style="font-size:1rem;color:{pc["color"]};">🔀 {init}</strong>'
-                    f'{"<span style=\"font-size:0.82rem;color:#666;\">→ "+school+"</span>" if school else ""}'
-                    f'</div>', unsafe_allow_html=True)
+            # Student header
+            st.markdown(
+                f'<div style="background:{pc["bg"]};border-left:4px solid {pc["color"]};border-radius:10px;'
+                f'padding:0.6rem 1rem;margin:1rem 0 0.5rem;display:flex;align-items:center;gap:0.75rem;">'
+                f'<span style="background:{pc["color"]};color:white;font-size:0.75rem;font-weight:700;'
+                f'padding:0.2rem 0.55rem;border-radius:8px;">{prog}</span>'
+                f'<strong style="font-size:1rem;color:{pc["color"]};">🔀 {init}</strong>'
+                f'{"<span style=\"font-size:0.82rem;color:#666;\">→ "+school+"</span>" if school else ""}'
+                f'</div>', unsafe_allow_html=True)
 
-                # Build timetable HTML grid
-                html = """
+            # Build timetable HTML grid
+            html = """
 <style>
 .tr-grid{border-collapse:collapse;width:100%;font-family:'Inter',sans-serif;margin-bottom:1rem;}
 .tr-grid th{background:#4a7c59;color:white;padding:6px 10px;font-size:0.78rem;font-weight:600;text-align:center;border:1px solid #3a6347;}
@@ -776,119 +786,119 @@ with tab_students:
   <th class="row-h">Term / Week</th>
   <th>Monday</th><th>Tuesday</th><th>Wednesday</th><th>Thursday</th><th>Friday</th>
 </tr>"""
-                cur_term = None
-                for idx_w, week in enumerate(weeks):
-                    trm  = week.get("term","")
-                    wlbl = week.get("week_label","")
-                    tid  = week.get("id","")
-                    # Week date labels row
+            cur_term = None
+            for idx_w, week in enumerate(weeks):
+                trm  = week.get("term","")
+                wlbl = week.get("week_label","")
+                tid  = week.get("id","")
+                # Week date labels row
+                wdate = week.get("week_start_date","")
+                try:
+                    wmon = datetime.strptime(wdate[:10], "%Y-%m-%d").date()
+                    date_cells = "".join([
+                        f'<td style="font-size:0.7rem;color:#888;background:#fafafa;">{(wmon+timedelta(days=i)).strftime("%-d %b")}</td>'
+                        for i in range(5)])
+                except:
+                    date_cells = "<td colspan='5'></td>"
+
+                # Term header row
+                if trm != cur_term:
+                    cur_term = trm
+                    html += f'<tr><td class="label-cell" colspan="6" style="background:#2d5a3d;color:white;font-size:0.8rem;letter-spacing:0.05em;text-transform:uppercase;">{trm}</td></tr>'
+
+                # Week label + dates
+                html += f'<tr class="{"week-divider" if idx_w>0 else ""}"><td class="label-cell" rowspan="2">{wlbl}</td>{date_cells}</tr>'
+
+                # Time cells row
+                html += "<tr>"
+                for dk in DAY_KEYS:
+                    s = fmt_time_short(week.get(f"{dk}_start"))
+                    e = fmt_time_short(week.get(f"{dk}_end"))
+                    if s and e:
+                        html += f'<td class="has-time">{s}–{e}</td>'
+                    elif s:
+                        html += f'<td class="has-time">{s}</td>'
+                    else:
+                        html += '<td class="no-time">CLC</td>'
+                html += "</tr>"
+
+            html += "</table>"
+            st.markdown(html, unsafe_allow_html=True)
+
+            # Notes
+            if weeks[0].get("notes"):
+                st.caption(f"📝 {weeks[0]['notes']}")
+
+            # Edit / delete controls per week
+            with st.expander(f"✏️ Edit / delete weeks for {init}"):
+                for week in weeks:
+                    tid   = week.get("id","")
+                    wlbl  = week.get("week_label","")
                     wdate = week.get("week_start_date","")
-                    try:
-                        wmon = datetime.strptime(wdate[:10], "%Y-%m-%d").date()
-                        date_cells = "".join([
-                            f'<td style="font-size:0.7rem;color:#888;background:#fafafa;">{(wmon+timedelta(days=i)).strftime("%-d %b")}</td>'
-                            for i in range(5)])
-                    except:
-                        date_cells = "<td colspan='5'></td>"
+                    ec1, ec2, ec3 = st.columns([4,1,1])
+                    with ec1:
+                        st.markdown(f"**{week.get('term','')} · {wlbl}** — {wdate}")
+                    with ec2:
+                        if st.button("✏️", key=f"tr_ed_{tid}"):
+                            st.session_state.edit_event_id = tid if st.session_state.edit_event_id != tid else None
+                            st.rerun()
+                    with ec3:
+                        if st.session_state.is_admin:
+                            if st.button("🗑️", key=f"tr_del_{tid}"):
+                                del_transition(tid); st.rerun()
 
-                    # Term header row
-                    if trm != cur_term:
-                        cur_term = trm
-                        html += f'<tr><td class="label-cell" colspan="6" style="background:#2d5a3d;color:white;font-size:0.8rem;letter-spacing:0.05em;text-transform:uppercase;">{trm}</td></tr>'
+                    if st.session_state.edit_event_id == tid:
+                        with st.form(f"tr_ef_{tid}", clear_on_submit=False):
+                            ef1, ef2 = st.columns(2)
+                            with ef1:
+                                e_init_tr   = st.text_input("Student initials *", value=week.get("student_initials",""))
+                                prog_opts   = ["", "JP", "PY", "SY"]
+                                e_prog_tr   = st.selectbox("Program *", prog_opts,
+                                                           index=prog_opts.index(week.get("program","")) if week.get("program","") in prog_opts else 0)
+                                e_school_tr = st.text_input("Mainstream school", value=week.get("mainstream_school",""))
+                                e_by_tr     = st.text_input("Added by *", value=week.get("added_by",""))
+                            with ef2:
+                                e_term_tr   = st.selectbox("Term *", ["Term 1","Term 2","Term 3","Term 4"],
+                                                           index=["Term 1","Term 2","Term 3","Term 4"].index(week.get("term","Term 1")) if week.get("term") in ["Term 1","Term 2","Term 3","Term 4"] else 0)
+                                e_wlbl_tr   = st.text_input("Week label *", value=week.get("week_label",""))
+                                try:
+                                    e_wdate_tr = st.date_input("Week start date *",
+                                                               value=datetime.strptime(week.get("week_start_date","")[:10],"%Y-%m-%d").date(),
+                                                               key=f"tr_wd_{tid}")
+                                except:
+                                    e_wdate_tr = st.date_input("Week start date *", value=today, key=f"tr_wd_{tid}")
+                                e_notes_tr  = st.text_area("Notes", value=week.get("notes",""), height=50)
 
-                    # Week label + dates
-                    html += f'<tr class="{"week-divider" if idx_w>0 else ""}"><td class="label-cell" rowspan="2">{wlbl}</td>{date_cells}</tr>'
+                            st.markdown("**Times at mainstream**")
+                            eday_cols = st.columns(5)
+                            e_tr_times = {}
+                            for i, (day, dk) in enumerate(zip(DAYS, DAY_KEYS)):
+                                with eday_cols[i]:
+                                    st.markdown(f"**{day[:3]}**")
+                                    existing_s = week.get(f"{dk}_start")
+                                    existing_e = week.get(f"{dk}_end")
+                                    e_tr_times[f"{dk}_start"] = st.time_input(f"From", value=None, key=f"tr_e{dk}s_{tid}")
+                                    e_tr_times[f"{dk}_end"]   = st.time_input(f"To",   value=None, key=f"tr_e{dk}e_{tid}")
 
-                    # Time cells row
-                    html += "<tr>"
-                    for dk in DAY_KEYS:
-                        s = fmt_time_short(week.get(f"{dk}_start"))
-                        e = fmt_time_short(week.get(f"{dk}_end"))
-                        if s and e:
-                            html += f'<td class="has-time">{s}–{e}</td>'
-                        elif s:
-                            html += f'<td class="has-time">{s}</td>'
-                        else:
-                            html += '<td class="no-time">CLC</td>'
-                    html += "</tr>"
-
-                html += "</table>"
-                st.markdown(html, unsafe_allow_html=True)
-
-                # Notes
-                if weeks[0].get("notes"):
-                    st.caption(f"📝 {weeks[0]['notes']}")
-
-                # Edit / delete controls per week
-                with st.expander(f"✏️ Edit / delete weeks for {init}"):
-                    for week in weeks:
-                        tid   = week.get("id","")
-                        wlbl  = week.get("week_label","")
-                        wdate = week.get("week_start_date","")
-                        ec1, ec2, ec3 = st.columns([4,1,1])
-                        with ec1:
-                            st.markdown(f"**{week.get('term','')} · {wlbl}** — {wdate}")
-                        with ec2:
-                            if st.button("✏️", key=f"tr_ed_{tid}"):
-                                st.session_state.edit_event_id = tid if st.session_state.edit_event_id != tid else None
-                                st.rerun()
-                        with ec3:
-                            if st.session_state.is_admin:
-                                if st.button("🗑️", key=f"tr_del_{tid}"):
-                                    del_transition(tid); st.rerun()
-
-                        if st.session_state.edit_event_id == tid:
-                            with st.form(f"tr_ef_{tid}", clear_on_submit=False):
-                                ef1, ef2 = st.columns(2)
-                                with ef1:
-                                    e_init_tr   = st.text_input("Student initials *", value=week.get("student_initials",""))
-                                    prog_opts   = ["", "JP", "PY", "SY"]
-                                    e_prog_tr   = st.selectbox("Program *", prog_opts,
-                                                               index=prog_opts.index(week.get("program","")) if week.get("program","") in prog_opts else 0)
-                                    e_school_tr = st.text_input("Mainstream school", value=week.get("mainstream_school",""))
-                                    e_by_tr     = st.text_input("Added by *", value=week.get("added_by",""))
-                                with ef2:
-                                    e_term_tr   = st.selectbox("Term *", ["Term 1","Term 2","Term 3","Term 4"],
-                                                               index=["Term 1","Term 2","Term 3","Term 4"].index(week.get("term","Term 1")) if week.get("term") in ["Term 1","Term 2","Term 3","Term 4"] else 0)
-                                    e_wlbl_tr   = st.text_input("Week label *", value=week.get("week_label",""))
-                                    try:
-                                        e_wdate_tr = st.date_input("Week start date *",
-                                                                   value=datetime.strptime(week.get("week_start_date","")[:10],"%Y-%m-%d").date(),
-                                                                   key=f"tr_wd_{tid}")
-                                    except:
-                                        e_wdate_tr = st.date_input("Week start date *", value=today, key=f"tr_wd_{tid}")
-                                    e_notes_tr  = st.text_area("Notes", value=week.get("notes",""), height=50)
-
-                                st.markdown("**Times at mainstream**")
-                                eday_cols = st.columns(5)
-                                e_tr_times = {}
-                                for i, (day, dk) in enumerate(zip(DAYS, DAY_KEYS)):
-                                    with eday_cols[i]:
-                                        st.markdown(f"**{day[:3]}**")
-                                        existing_s = week.get(f"{dk}_start")
-                                        existing_e = week.get(f"{dk}_end")
-                                        e_tr_times[f"{dk}_start"] = st.time_input(f"From", value=None, key=f"tr_e{dk}s_{tid}")
-                                        e_tr_times[f"{dk}_end"]   = st.time_input(f"To",   value=None, key=f"tr_e{dk}e_{tid}")
-
-                                if st.form_submit_button("💾 Save Changes", type="primary", use_container_width=True):
-                                    upd_row = {
-                                        "student_initials": e_init_tr.strip(),
-                                        "program": e_prog_tr,
-                                        "mainstream_school": e_school_tr.strip(),
-                                        "term": e_term_tr,
-                                        "week_label": e_wlbl_tr.strip(),
-                                        "week_start_date": str(e_wdate_tr),
-                                        "notes": e_notes_tr.strip(),
-                                        "added_by": e_by_tr.strip(),
-                                    }
-                                    for dk in DAY_KEYS:
-                                        s = e_tr_times.get(f"{dk}_start")
-                                        e_val = e_tr_times.get(f"{dk}_end")
-                                        upd_row[f"{dk}_start"] = str(s) if s else None
-                                        upd_row[f"{dk}_end"]   = str(e_val) if e_val else None
-                                    upd_transition(tid, upd_row)
-                                    st.session_state.edit_event_id = None
-                                    st.success("Updated!"); st.rerun()
+                            if st.form_submit_button("💾 Save Changes", type="primary", use_container_width=True):
+                                upd_row = {
+                                    "student_initials": e_init_tr.strip(),
+                                    "program": e_prog_tr,
+                                    "mainstream_school": e_school_tr.strip(),
+                                    "term": e_term_tr,
+                                    "week_label": e_wlbl_tr.strip(),
+                                    "week_start_date": str(e_wdate_tr),
+                                    "notes": e_notes_tr.strip(),
+                                    "added_by": e_by_tr.strip(),
+                                }
+                                for dk in DAY_KEYS:
+                                    s = e_tr_times.get(f"{dk}_start")
+                                    e_val = e_tr_times.get(f"{dk}_end")
+                                    upd_row[f"{dk}_start"] = str(s) if s else None
+                                    upd_row[f"{dk}_end"]   = str(e_val) if e_val else None
+                                upd_transition(tid, upd_row)
+                                st.session_state.edit_event_id = None
+                                st.success("Updated!"); st.rerun()
 
 # ─── FOOTER ─────────────────────────────────────────────────────────────────────
 st.markdown("""
