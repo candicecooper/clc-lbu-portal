@@ -1,18 +1,9 @@
-from theme import apply_clc_theme
 import streamlit as st
-from auth import require_auth, logout_button, get_staff_name
 
-st.set_page_config(
-    page_title="CLC LBU Staff Portal",
-    page_icon="🏫",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
-
-# ── Use st.navigation to hide sidebar page list ────────────────────────────
+# Must be FIRST streamlit call
 pg = st.navigation(
     [
-        st.Page("pages/1_Daily_Bulletin.py",       title="Daily Bulletin",        icon="📰"),
+        st.Page("pages/1_Daily_Bulletin.py",       title="Daily Bulletin",        icon="📰", url_path="Daily_Bulletin"),
         st.Page("pages/2_Timetable.py",             title="Timetable",             icon="📅"),
         st.Page("pages/3_Team_Meetings.py",          title="Team Meetings",         icon="👥"),
         st.Page("pages/5_Behaviour_Support.py",      title="Behaviour Support",     icon="📊"),
