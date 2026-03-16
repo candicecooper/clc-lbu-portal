@@ -1,12 +1,12 @@
 #!/bin/bash
-# Creates .streamlit/secrets.toml from Render environment variables
-# then starts the Streamlit app
-
 mkdir -p .streamlit
 
-cat > .streamlit/secrets.toml << EOF
-# Auto-generated from environment variables at startup
+cat > .streamlit/config.toml << 'CONFIGEOF'
+[client]
+showSidebarNavigation = false
+CONFIGEOF
 
+cat > .streamlit/secrets.toml << EOF
 SUPABASE_URL = "${SUPABASE_URL}"
 SUPABASE_KEY = "${SUPABASE_KEY}"
 GROQ_API_KEY = "${GROQ_API_KEY}"
@@ -45,6 +45,6 @@ sender_password = "${SMTP_PASSWORD}"
 enabled = true
 EOF
 
-echo "✅ secrets.toml created"
+echo "✅ config.toml and secrets.toml created"
 
 streamlit run Home.py --server.port $PORT --server.address 0.0.0.0 --server.headless true
