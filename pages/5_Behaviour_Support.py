@@ -43,6 +43,16 @@ supabase: Client = init_supabase()
 
 st.set_page_config(page_title="CLC Behaviour Support", page_icon="📊", layout="wide", initial_sidebar_state="collapsed")
 
+with st.sidebar:
+    st.markdown(
+        '<a href="https://16cefb77.clc-portal.pages.dev/" target="_self" style="display:block;text-align:center;'
+        'background:#1A7A7A;color:white;font-weight:600;font-size:0.85rem;'
+        'padding:0.5rem;border-radius:8px;text-decoration:none;margin-bottom:0.5rem;">'
+        '🏠 Back to Staff Portal</a>',
+        unsafe_allow_html=True
+    )
+
+
 # CLC BRAND STYLING — Teal #1A7A7A / Amber #C8760A
 
 # Production mode - sandbox banner removed
