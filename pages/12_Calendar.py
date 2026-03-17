@@ -420,9 +420,13 @@ def event_detail_panel():
                 st.success("Updated!"); st.rerun()
 
     add_label = f"➕ Add event on {sel.strftime('%-d %B')}"
+    # Store the date we are adding an event for so it persists through rerun
+    if "add_event_date" not in st.session_state:
+        st.session_state.add_event_date = sel
     with st.expander(add_label, expanded=st.session_state.quick_add_open):
         st.session_state.quick_add_open = False
-        ok, data = event_form(f"madd_{str(sel)}", default_date=sel)
+        st.session_state.add_event_date = sel
+        ok, data = event_form("madd_fixed", default_date=st.session_state.add_event_date)
         if ok:
             save_event(data)
             st.success(f"✅ '{data['title']}' added!")
