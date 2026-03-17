@@ -136,15 +136,19 @@ def select_day(d):
     st.session_state.edit_event_id = None
 
 def save_event(d):
-    supabase.table("clc_events").insert({
-        "title": d["title"].strip(), "event_type": d["etype"],
-        "event_date": str(d["ev_date"]),
-        "end_date": str(d["end_date"]) if d["end_date"] and d["end_date"] != d["ev_date"] else None,
-        "start_time": str(d["start_t"]) if d["start_t"] else None,
-        "end_time": str(d["end_t"]) if d["end_t"] else None,
-        "location": d["location"].strip(), "added_by": d["who"].strip(), "notes": d["notes"].strip(),
-        "program": d.get("program",""), "student_initials": d.get("student_initials",""),
-    }).execute()
+    try:
+        supabase.table("clc_events").insert({
+            "title": d["title"].strip(), "event_type": d["etype"],
+            "event_date": str(d["ev_date"]),
+            "end_date": str(d["end_date"]) if d["end_date"] and d["end_date"] != d["ev_date"] else None,
+            "start_time": str(d["start_t"]) if d["start_t"] else None,
+            "end_time": str(d["end_t"]) if d["end_t"] else None,
+            "location": d["location"].strip(), "added_by": d["who"].strip(), "notes": d["notes"].strip(),
+            "program": d.get("program",""), "student_initials": d.get("student_initials",""),
+        }).execute()
+        st.success(f"✅ Event saved for {d['ev_date'].strftime('%-d %B %Y')}!")
+    except Exception as e:
+        st.error(f"❌ Could not save event: {e}")
 
 def upd_event(ev_id, d):
     supabase.table("clc_events").update({
