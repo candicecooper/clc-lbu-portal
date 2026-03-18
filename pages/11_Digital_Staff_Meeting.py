@@ -1093,8 +1093,9 @@ def show_archive():
             </div>""", unsafe_allow_html=True)
         with col2:
             st.write("")
-            if status=="published":
-                if st.button("View →", key=f"arch_{ed['id']}", use_container_width=True):
+            if status=="published" or st.session_state.get("is_admin"):
+                btn_label = "View →" if status=="published" else "Preview →"
+                if st.button(btn_label, key=f"arch_{ed['id']}", use_container_width=True):
                     nav("archive_week", edition_id=ed["id"])
         st.write("")
 
