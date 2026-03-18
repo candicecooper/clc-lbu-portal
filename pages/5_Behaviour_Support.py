@@ -3357,7 +3357,6 @@ def render_student_dashboard():
     
     if not incidents and not critical:
         st.info("📋 No incident data yet. Click 'Log Incident' to start tracking.")
-        return
     
     quick_df = pd.DataFrame(incidents) if incidents else pd.DataFrame()
     crit_df = pd.DataFrame(critical) if critical else pd.DataFrame()
