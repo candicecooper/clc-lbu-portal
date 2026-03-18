@@ -1093,6 +1093,7 @@ def save_student_to_db(student):
             "first_name": student.get('first_name') or student.get('name', '').split(' ')[0],
             "last_name": student.get('last_name') or (' '.join(student.get('name', '').split(' ')[1:]) or ''),
             "edid": student.get('edid', ''),
+            "name": f"{student.get('first_name', '')} {student.get('last_name', '')}".strip() or student.get('name', ''),
             "grade": (lambda g: int(g.replace('Y','').replace('R','0').replace('r','0')) if g and g.upper() not in ['','NONE'] else None)(str(student.get('grade', '') or '')),
             "dob": student.get('dob', ''),
             "program": student.get('program', ''),
@@ -3561,7 +3562,7 @@ def render_admin_portal():
                     else:
                         st.error("❌ Failed to save student to database")
 
-    if submitted:
+    if "submitted" in dir() and submitted:
         if not location or not behaviour or not antecedent or not interventions:
             st.error("Please complete all required fields marked with *")
         else:
