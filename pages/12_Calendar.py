@@ -419,16 +419,11 @@ def event_detail_panel():
                 upd_event(eid, data); st.session_state.edit_event_id=None
                 st.success("Updated!"); st.rerun()
 
-    add_label = f"➕ Add event on {sel.strftime('%-d %B')}"
-    with st.expander(add_label, expanded=st.session_state.quick_add_open):
-        st.session_state.quick_add_open = False
-        # Use a date picker so user can confirm/change the date - avoids rerun date reset issues
-        add_date = st.date_input("Event date", value=sel, key="add_event_date_picker")
-        ok, data = event_form("madd_fixed", default_date=add_date)
-        if ok:
-            data["ev_date"] = add_date
-            save_event(data)
-            st.rerun()
+    st.markdown(f"#### ➕ Add event on {sel.strftime('%-d %B %Y')}")
+    ok, data = event_form(f"madd_{sel.year}_{sel.month}_{sel.day}", default_date=sel)
+    if ok:
+        save_event(data)
+        st.rerun()
 
 # ═══════════════ WEEK VIEW ═════════════════════════════════════════════════════
 with tab_week:
