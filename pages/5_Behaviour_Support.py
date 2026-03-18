@@ -3535,9 +3535,9 @@ def render_admin_portal():
                     st.write("")  # Spacer
                     new_placement_end = st.date_input("Placement End Date (Optional)", value=None)
                 
-                submitted = st.form_submit_button("Add Student", type="primary")
+                student_submitted = st.form_submit_button("Add Student", type="primary")
             
-            if submitted:
+            if student_submitted:
                 if not new_first_name or not new_last_name or not new_edid or not new_grade or not new_program:
                     st.error("Please complete all required fields marked with *")
                 else:
