@@ -3489,6 +3489,194 @@ def render_student_dashboard():
         if st.button("⬅ Back", use_container_width=True, key="dash_back_btn"):
             go_to("program_students", selected_program=student["program"])
 
+    # ── Historical Incidents ──────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 📋 Historical Critical Incidents")
+    st.caption("Add past incident data from Word documents or other records to build a complete picture.")
+
+    hist_tab1, hist_tab2, hist_tab3 = st.tabs(["➕ Add Single", "📤 Bulk Add", "🤖 AI Extract from Notes"])
+
+    with hist_tab1:
+        st.markdown("**Add a single historical critical incident:**")
+        with st.form("hist_single_form", clear_on_submit=True):
+            hc1, hc2 = st.columns(2)
+            with hc1:
+                h_date = st.date_input("Date of incident *", value=date.today(), key="h_date")
+                h_behaviour = st.text_area("Behaviour description *", placeholder="Describe what happened...", height=100, key="h_beh")
+                h_severity = st.slider("Severity", 1, 5, 3, key="h_sev")
+            with hc2:
+                h_antecedent = st.text_area("Antecedent / trigger (optional)", placeholder="What happened before...", height=80, key="h_ant")
+                h_intervention = st.text_area("Intervention used (optional)", placeholder="What was done...", height=80, key="h_int")
+                h_notes = st.text_area("Additional notes (optional)", height=60, key="h_notes")
+            h_submit = st.form_submit_button("💾 Save Historical Incident", type="primary", use_container_width=True)
+        if h_submit:
+            if not h_behaviour.strip():
+                st.warning("Please enter a behaviour description.")
+            else:
+                try:
+                    supabase.table("critical_incidents").insert({
+                        "student_id": student_id,
+                        "student_name": student["name"],
+                        "date": str(h_date),
+                        "behaviour": h_behaviour.strip(),
+                        "antecedent": h_antecedent.strip(),
+                        "consequence": h_intervention.strip(),
+                        "notes": h_notes.strip(),
+                        "severity": h_severity,
+                        "historical": True,
+                        "status": "historical",
+                        "submitted_by": st.session_state.get("staff_name", ""),
+                        "created_at": datetime.utcnow().isoformat(),
+                    }).execute()
+                    st.success(f"✅ Historical incident saved for {h_date.strftime('%-d %B %Y')}.")
+                    st.session_state.critical_incidents = load_data_from_db("critical_incidents") if supabase else st.session_state.critical_incidents
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Could not save: {e}")
+
+    with hist_tab2:
+        st.markdown("**Bulk add multiple historical incidents:**")
+        st.caption("Enter one incident per row. Format: `YYYY-MM-DD | Behaviour description | Severity (1-5) | Antecedent | Intervention`")
+        bulk_text = st.text_area(
+            "Paste incidents (one per line)",
+            placeholder="2025-03-15 | Student threw chair | 4 | Change in routine | SSO support\n2025-03-20 | Verbal aggression | 3 | Unstructured time | Cool-down space",
+            height=200,
+            key="bulk_hist"
+        )
+        if st.button("📥 Import Bulk Incidents", type="primary", key="bulk_import_btn"):
+            if not bulk_text.strip():
+                st.warning("Please paste some incident data.")
+            else:
+                lines = [l.strip() for l in bulk_text.strip().splitlines() if l.strip()]
+                saved = 0
+                errors = 0
+                for line in lines:
+                    parts = [p.strip() for p in line.split("|")]
+                    if len(parts) < 2:
+                        errors += 1
+                        continue
+                    try:
+                        inc_date = parts[0] if len(parts) > 0 else str(date.today())
+                        behaviour = parts[1] if len(parts) > 1 else ""
+                        severity = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 3
+                        antecedent = parts[3] if len(parts) > 3 else ""
+                        intervention = parts[4] if len(parts) > 4 else ""
+                        if behaviour:
+                            supabase.table("critical_incidents").insert({
+                                "student_id": student_id,
+                                "student_name": student["name"],
+                                "date": inc_date,
+                                "behaviour": behaviour,
+                                "antecedent": antecedent,
+                                "consequence": intervention,
+                                "severity": severity,
+                                "historical": True,
+                                "status": "historical",
+                                "submitted_by": st.session_state.get("staff_name", ""),
+                                "created_at": datetime.utcnow().isoformat(),
+                            }).execute()
+                            saved += 1
+                    except Exception:
+                        errors += 1
+                if saved > 0:
+                    st.success(f"✅ Imported {saved} incident(s).")
+                if errors > 0:
+                    st.warning(f"⚠️ {errors} row(s) could not be parsed — check format.")
+
+    with hist_tab3:
+        st.markdown("**Paste notes or Word doc content — AI will extract structured incidents:**")
+        st.caption("Paste raw notes, Word doc text, or any description of incidents. Groq AI will identify and structure each incident automatically.")
+        ai_notes = st.text_area(
+            "Paste your notes here",
+            placeholder="e.g. On 15 March 2025, student became dysregulated during literacy transition and threw a chair. Severity was significant...",
+            height=250,
+            key="ai_hist_notes"
+        )
+        if st.button("🤖 Extract Incidents with AI", type="primary", key="ai_extract_btn"):
+            if not ai_notes.strip():
+                st.warning("Please paste some notes.")
+            else:
+                GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
+                if not GROQ_KEY:
+                    st.error("Groq API key not configured.")
+                else:
+                    with st.spinner("AI is extracting incidents..."):
+                        try:
+                            from groq import Groq as GroqClient
+                            client = GroqClient(api_key=GROQ_KEY)
+                            prompt = f"""You are a behaviour support data analyst for an alternative education school (Cowandilla Learning Centre, Learning & Behaviour Unit).
+
+Extract all critical incidents from the following notes for student: {student['name']}.
+
+For each incident found, output a JSON array with objects containing:
+- date: (YYYY-MM-DD format, estimate if unclear)
+- behaviour: (clear description of the behaviour)
+- severity: (integer 1-5, where 1=minor, 5=extreme)
+- antecedent: (what triggered it, or "Not recorded")
+- intervention: (what was done, or "Not recorded")
+- notes: (any other relevant information)
+
+Return ONLY valid JSON array, no other text. If no incidents found, return [].
+
+Notes to analyse:
+{ai_notes}"""
+                            response = client.chat.completions.create(
+                                model="llama-3.3-70b-versatile",
+                                messages=[{"role": "user", "content": prompt}],
+                                max_tokens=2000,
+                                temperature=0.1,
+                            )
+                            import json as _json
+                            raw = response.choices[0].message.content.strip()
+                            # Clean up markdown code blocks if present
+                            raw = raw.replace("```json", "").replace("```", "").strip()
+                            extracted = _json.loads(raw)
+                            if not extracted:
+                                st.info("No incidents found in the notes.")
+                            else:
+                                st.markdown(f"**Found {len(extracted)} incident(s):**")
+                                # Show preview and let user confirm
+                                confirmed = []
+                                for i, inc in enumerate(extracted):
+                                    with st.expander(f"Incident {i+1}: {inc.get('date','?')} — {inc.get('behaviour','?')[:60]}...", expanded=True):
+                                        ec1, ec2 = st.columns(2)
+                                        with ec1:
+                                            inc['date'] = st.text_input("Date", value=inc.get('date',''), key=f"ai_date_{i}")
+                                            inc['behaviour'] = st.text_area("Behaviour", value=inc.get('behaviour',''), key=f"ai_beh_{i}", height=80)
+                                            inc['severity'] = st.slider("Severity", 1, 5, int(inc.get('severity', 3)), key=f"ai_sev_{i}")
+                                        with ec2:
+                                            inc['antecedent'] = st.text_area("Antecedent", value=inc.get('antecedent',''), key=f"ai_ant_{i}", height=60)
+                                            inc['intervention'] = st.text_area("Intervention", value=inc.get('intervention',''), key=f"ai_int_{i}", height=60)
+                                            inc['notes'] = st.text_area("Notes", value=inc.get('notes',''), key=f"ai_notes_{i}", height=40)
+                                        confirmed.append(inc)
+                                if confirmed:
+                                    if st.button(f"💾 Save All {len(confirmed)} Extracted Incidents", type="primary", key="save_ai_extracted"):
+                                        saved = 0
+                                        for inc in confirmed:
+                                            try:
+                                                supabase.table("critical_incidents").insert({
+                                                    "student_id": student_id,
+                                                    "student_name": student["name"],
+                                                    "date": inc.get('date', str(date.today())),
+                                                    "behaviour": inc.get('behaviour',''),
+                                                    "antecedent": inc.get('antecedent',''),
+                                                    "consequence": inc.get('intervention',''),
+                                                    "notes": inc.get('notes',''),
+                                                    "severity": int(inc.get('severity', 3)),
+                                                    "historical": True,
+                                                    "status": "historical",
+                                                    "submitted_by": st.session_state.get("staff_name", ""),
+                                                    "created_at": datetime.utcnow().isoformat(),
+                                                }).execute()
+                                                saved += 1
+                                            except Exception as e:
+                                                st.error(f"Error saving incident: {e}")
+                                        if saved > 0:
+                                            st.success(f"✅ Saved {saved} historical incident(s)!")
+                                            st.rerun()
+                        except Exception as e:
+                            st.error(f"AI extraction failed: {e}")
+
 
 
 def render_admin_portal():
