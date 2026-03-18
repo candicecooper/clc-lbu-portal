@@ -253,7 +253,33 @@ def event_detail_panel():
     if ev.get("end_date") and ev["end_date"] != ev.get("event_date"):
         edate += f" → {fmt_date(ev['end_date'])}"
 
-    
+
+# ─── MAIN PAGE ────────────────────────────────────────────────────────────────
+yr = st.session_state.cal_year
+mo = st.session_state.cal_month
+
+ph_col1, ph_col2, ph_col3, ph_col4 = st.columns([1,3,1,1])
+with ph_col1:
+    if st.button("◀ Prev", use_container_width=True, key="m_prev"):
+        if mo == 1: st.session_state.cal_month=12; st.session_state.cal_year=yr-1
+        else: st.session_state.cal_month=mo-1
+        st.rerun()
+with ph_col2:
+    import calendar as _cal
+    st.markdown(f"<h2 style='text-align:center;margin:0;color:#1a2e44;'>{_cal.month_name[mo]} {yr}</h2>", unsafe_allow_html=True)
+with ph_col3:
+    if st.button("▶ Next", use_container_width=True, key="m_next"):
+        if mo == 12: st.session_state.cal_month=1; st.session_state.cal_year=yr+1
+        else: st.session_state.cal_month=mo+1
+        st.rerun()
+with ph_col4:
+    if st.button("Today", use_container_width=True, key="m_today"):
+        st.session_state.cal_year=today.year; st.session_state.cal_month=today.month
+        select_day(today); st.rerun()
+
+tab_month, tab_week, tab_list, tab_students = st.tabs(["📅 Month", "📆 Week", "📋 List", "👤 Students"])
+
+with tab_month:
     day_headers = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
     hcols = st.columns(7)
     for i, dn in enumerate(day_headers):
