@@ -1,5 +1,5 @@
 # updated 2026-03-14c
-streamlit>=1.40.0
+streamlit>=1.35.0
 supabase>=2.4.0
 pandas>=2.0.0
 numpy>=1.26.0
@@ -12,3 +12,4 @@ matplotlib>=3.7.0
 pillow>=10.0.0
 bcrypt>=4.0.1
 openpyxl
+PyMuPDF==1.23.8
