@@ -1095,7 +1095,6 @@ def save_student_to_db(student):
             "edid": student.get('edid', ''),
             "name": f"{student.get('first_name', '')} {student.get('last_name', '')}".strip() or student.get('name', ''),
             "year_level": (lambda g: int(g.replace('Y','').replace('R','0').replace('r','0')) if g and str(g).upper() not in ['','NONE'] else 0)(str(student.get('grade', '') or '')),
-            "grade": str(student.get('grade', '')),
             "dob": student.get('dob', ''),
             "program": student.get('program', ''),
             "placement_start": student.get('placement_start'),
