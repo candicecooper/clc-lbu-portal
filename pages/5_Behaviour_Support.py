@@ -3373,7 +3373,7 @@ def render_student_dashboard():
     full_df = pd.concat([quick_df, crit_df], ignore_index=True).sort_values("date_parsed") if not quick_df.empty or not crit_df.empty else pd.DataFrame()
     
     total_incidents = len(full_df)
-    critical_count = len(full_df[full_df["incident_type"] == "Critical"])
+    critical_count = len(full_df[full_df.get("incident_type", pd.Series(dtype=str)) == "Critical"]) if "incident_type" in full_df.columns else len(crit_df)
     avg_severity = full_df["severity"].mean() if "severity" in full_df.columns else 0
     
     week_ago = datetime.now() - timedelta(days=7)
