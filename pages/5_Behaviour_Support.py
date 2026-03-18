@@ -3514,6 +3514,36 @@ def render_admin_portal():
     with tab1:
         st.markdown("### Student Management")
         
+        # ACTIVE STUDENTS LIST
+        active_students = [s for s in st.session_state.students if not s.get("archived", False)]
+        st.markdown(f"**{len(active_students)} active students**")
+        
+        if active_students:
+            for prog in ["JP", "PY", "SY"]:
+                prog_students = [s for s in active_students if s.get("program") == prog]
+                if prog_students:
+                    st.markdown(f"**{prog}** ({len(prog_students)})")
+                    for s in sorted(prog_students, key=lambda x: x.get("name","")):
+                        sc1, sc2, sc3, sc4 = st.columns([3, 2, 2, 1])
+                        with sc1:
+                            st.markdown(f"**{s.get('name','Unknown')}**")
+                        with sc2:
+                            st.caption(f"EDID: {s.get('edid','—')}")
+                        with sc3:
+                            st.caption(f"Grade: {s.get('grade','—')} · DOB: {s.get('dob','—')}")
+                        with sc4:
+                            if st.button("Archive", key=f"arch_{s['id']}", help="Archive student"):
+                                s["archived"] = True
+                                try:
+                                    supabase.table("students").update({"archived": True}).eq("id", s["id"]).execute()
+                                    st.session_state.students = load_students_from_db()
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Could not archive: {e}")
+                    st.markdown("---")
+        else:
+            st.info("No active students. Add students below.")
+        
         # ADD NEW STUDENT
         with st.expander("➕ Add New Student", expanded=False):
             with st.form("add_student_form"):
