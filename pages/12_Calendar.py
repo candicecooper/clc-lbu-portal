@@ -420,16 +420,14 @@ def event_detail_panel():
                 st.success("Updated!"); st.rerun()
 
     add_label = f"➕ Add event on {sel.strftime('%-d %B')}"
-    # Store the date we are adding an event for so it persists through rerun
-    if "add_event_date" not in st.session_state:
-        st.session_state.add_event_date = sel
     with st.expander(add_label, expanded=st.session_state.quick_add_open):
         st.session_state.quick_add_open = False
-        st.session_state.add_event_date = sel
-        ok, data = event_form("madd_fixed", default_date=st.session_state.add_event_date)
+        # Use a date picker so user can confirm/change the date - avoids rerun date reset issues
+        add_date = st.date_input("Event date", value=sel, key="add_event_date_picker")
+        ok, data = event_form("madd_fixed", default_date=add_date)
         if ok:
+            data["ev_date"] = add_date
             save_event(data)
-            st.success(f"✅ '{data['title']}' added!")
             st.rerun()
 
 # ═══════════════ WEEK VIEW ═════════════════════════════════════════════════════
