@@ -280,6 +280,9 @@ with ph_col4:
 tab_month, tab_week, tab_list, tab_students = st.tabs(["📅 Month", "📆 Week", "📋 List", "👤 Students"])
 
 with tab_month:
+    ts = str(today)
+    ss = str(st.session_state.selected_date)
+    idx_evs = ev_index(db_events(date(yr, mo, 1), date(yr, mo, 28) + timedelta(days=4)))
     day_headers = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
     hcols = st.columns(7)
     for i, dn in enumerate(day_headers):
