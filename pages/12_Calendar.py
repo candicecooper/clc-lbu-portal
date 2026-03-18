@@ -76,10 +76,13 @@ for k, v in [("cal_year", today.year), ("cal_month", today.month),
     if k not in st.session_state:
         st.session_state[k] = v
 
-st.session_state.selected_date  = today
-st.session_state.cal_week_start = today - timedelta(days=today.weekday())
-st.session_state.cal_year       = today.year
-st.session_state.cal_month      = today.month
+# Only reset to today if navigating here fresh (no existing navigation state)
+if "cal_initialised" not in st.session_state:
+    st.session_state.selected_date  = today
+    st.session_state.cal_week_start = today - timedelta(days=today.weekday())
+    st.session_state.cal_year       = today.year
+    st.session_state.cal_month      = today.month
+    st.session_state.cal_initialised = True
 
 # ─── DB HELPERS ─────────────────────────────────────────────────────────────────
 def db_events(start_date=None, end_date=None):
