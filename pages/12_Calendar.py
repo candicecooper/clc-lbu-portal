@@ -144,7 +144,8 @@ def save_event(d):
             "location": d["location"].strip(), "added_by": d["who"].strip(), "notes": d["notes"].strip(),
             "program": d.get("program",""), "student_initials": d.get("student_initials",""),
         }).execute()
-        st.success(f"✅ Event saved for {d['ev_date'].strftime('%-d %B %Y')}!")
+        st.toast(f"✅ Event saved for {d['ev_date'].strftime('%-d %B %Y')}!", icon="✅")
+        st.rerun()
     except Exception as e:
         st.error(f"❌ Could not save event: {e}")
 
@@ -312,16 +313,26 @@ mo = st.session_state.cal_month
 ph_col1, ph_col2, ph_col3, ph_col4 = st.columns([1,3,1,1])
 with ph_col1:
     if st.button("◀ Prev", use_container_width=True, key="m_prev"):
-        if mo == 1: st.session_state.cal_month=12; st.session_state.cal_year=yr-1
-        else: st.session_state.cal_month=mo-1
+        if mo == 1:
+            st.session_state.cal_month = 12; st.session_state.cal_year = yr - 1
+        else:
+            st.session_state.cal_month = mo - 1
+        # Move selected_date into the new month so the add-form defaults correctly
+        new_mo = st.session_state.cal_month; new_yr = st.session_state.cal_year
+        st.session_state.selected_date = date(new_yr, new_mo, 1)
         st.rerun()
 with ph_col2:
     import calendar as _cal
     st.markdown(f"<h2 style='text-align:center;margin:0;color:#1a2e44;'>{_cal.month_name[mo]} {yr}</h2>", unsafe_allow_html=True)
 with ph_col3:
     if st.button("▶ Next", use_container_width=True, key="m_next"):
-        if mo == 12: st.session_state.cal_month=1; st.session_state.cal_year=yr+1
-        else: st.session_state.cal_month=mo+1
+        if mo == 12:
+            st.session_state.cal_month = 1; st.session_state.cal_year = yr + 1
+        else:
+            st.session_state.cal_month = mo + 1
+        # Move selected_date into the new month so the add-form defaults correctly
+        new_mo = st.session_state.cal_month; new_yr = st.session_state.cal_year
+        st.session_state.selected_date = date(new_yr, new_mo, 1)
         st.rerun()
 with ph_col4:
     if st.button("Today", use_container_width=True, key="m_today"):
@@ -423,7 +434,6 @@ with tab_month:
     ok, data = event_form(f"madd_{sel.year}_{sel.month}_{sel.day}", default_date=sel)
     if ok:
         save_event(data)
-        st.rerun()
 
 # ═══════════════ WEEK VIEW ═════════════════════════════════════════════════════
 with tab_week:
@@ -517,7 +527,7 @@ with tab_week:
 
     with st.expander(f"➕ Add event on {sel.strftime('%-d %B')}", expanded=(not d_evs and sel != today)):
         ok, data = event_form(f"wadd_{str(sel)}", default_date=sel)
-        if ok: save_event(data); st.success(f"✅ '{data['title']}' added!"); st.rerun()
+        if ok: save_event(data)
 
 # ═══════════════ AGENDA / LIST VIEW ══════════════════════════════════════════
 with tab_list:
@@ -528,7 +538,7 @@ with tab_list:
 
     with st.expander("➕ Add New Event"):
         ok, data = event_form("ladd")
-        if ok: save_event(data); st.success(f"✅ '{data['title']}' added!"); st.rerun()
+        if ok: save_event(data)
 
     st.markdown("---")
     levs  = db_events(ls, le) + pac_events(db_pac(), ls, le)
