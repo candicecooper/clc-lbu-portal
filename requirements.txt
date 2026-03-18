@@ -12,4 +12,4 @@ matplotlib>=3.7.0
 pillow>=10.0.0
 bcrypt>=4.0.1
 openpyxl
-PyMuPDF==1.23.8
+PyMuPDF==1.24.14
