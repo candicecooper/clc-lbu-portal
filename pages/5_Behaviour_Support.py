@@ -1090,8 +1090,8 @@ def save_student_to_db(student):
     
     try:
         data = {
-            "first_name": student.get('first_name') or student.get('name', '').split(' ')[0],
-            "last_name": student.get('last_name') or (' '.join(student.get('name', '').split(' ')[1:]) or ''),
+            "first_name": (student.get('first_name') or student.get('name', '').split(' ')[0]).strip(),
+            "last_name": (student.get('last_name') or ' '.join(student.get('name', '').split(' ')[1:])).strip() or '-',
             "edid": student.get('edid', ''),
             "name": f"{student.get('first_name', '')} {student.get('last_name', '')}".strip() or student.get('name', ''),
             "year_level": (lambda g: int(g.replace('Y','').replace('R','0').replace('r','0')) if g and str(g).upper() not in ['','NONE'] else 0)(str(student.get('grade', '') or '')),
@@ -3556,7 +3556,7 @@ def render_admin_portal():
                         "archived": False
                     }
                     if save_student_to_db(new_student):
-                        st.session_state.students.append(new_student)
+                        st.session_state.students = load_students_from_db()
                         st.success(f"✅ Added {new_student['name']} to {new_program}")
                         st.rerun()
                     else:
