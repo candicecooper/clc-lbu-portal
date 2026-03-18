@@ -28,8 +28,24 @@ st.markdown("""
   .folder-header { background:linear-gradient(135deg,#1A7A7A,#0f5f5f);color:white;border-radius:10px;padding:0.85rem 1.25rem;margin-bottom:1rem;display:flex;align-items:center;gap:0.75rem; }
   .folder-header h3 { margin:0;font-size:1rem;font-weight:700; }
   .folder-header p  { margin:0.15rem 0 0;font-size:0.8rem;opacity:0.7; }
+  .alloc-banner {
+    background: linear-gradient(135deg, #0D5C6E 0%, #1A7A8F 100%);
+    border-left: 5px solid #F5A623;
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1.1rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    box-shadow: 0 2px 8px rgba(13,92,110,0.15);
+  }
+  .alloc-banner-text { flex: 1; }
+  .alloc-banner-text h4 { margin: 0; color: white; font-size: 1rem; font-weight: 700; }
+  .alloc-banner-text p  { margin: 0.2rem 0 0; color: rgba(255,255,255,0.75); font-size: 0.82rem; }
 </style>
 """, unsafe_allow_html=True)
+
+ALLOCATION_DASHBOARD_URL = "https://schoolssaedu-my.sharepoint.com/:x:/g/personal/candice_cooper330_schools_sa_edu_au/IQBwBkyLQUyyQbJk9mO8m4l9AWdt9I-B5mQ3krc0USBYfSI?email=Annette.Balestrin13%40schools.sa.edu.au&e=0HwxwB"
 
 # ── SUPABASE ───────────────────────────────────────────────────────────────────
 @st.cache_resource
@@ -118,6 +134,25 @@ def get_download_url(storage_path):
     except Exception:
         return None
 
+# ── ALLOCATION DASHBOARD BANNER ────────────────────────────────────────────────
+def render_allocation_banner():
+    st.markdown("""
+    <div class="alloc-banner">
+      <span style="font-size:2rem;">📊</span>
+      <div class="alloc-banner-text">
+        <h4>CLC Allocation Dashboard 2026</h4>
+        <p>Live allocation tracker — student placements, program capacity & priority profiles · Stored in OneDrive</p>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.link_button(
+        "📊 Open Allocation Dashboard (OneDrive)",
+        ALLOCATION_DASHBOARD_URL,
+        use_container_width=True,
+        type="primary",
+    )
+    st.markdown("<div style='margin-bottom:1rem;'></div>", unsafe_allow_html=True)
+
 # ── FOLDER RENDERER ────────────────────────────────────────────────────────────
 def render_folder(folder_key, folder_cfg):
     docs = load_docs(folder_key)
@@ -127,6 +162,10 @@ def render_folder(folder_key, folder_cfg):
       <div><h3>{folder_cfg['label']}</h3><p>{folder_cfg['desc']}</p></div>
     </div>
     """, unsafe_allow_html=True)
+
+    # ── Allocation Dashboard pinned tile (partnerships only) ───────────────────
+    if folder_key == "leadership_partnerships":
+        render_allocation_banner()
 
     with st.expander("➕ Upload to this folder", expanded=False):
         doc_title     = st.text_input("Document Title *", placeholder="e.g. 2026 Site Plan Draft", key=f"title_{folder_key}")
