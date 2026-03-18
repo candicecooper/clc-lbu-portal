@@ -1071,7 +1071,7 @@ def load_students_from_db():
                 "first_name": row.get('first_name', ''),
                 "last_name": row.get('last_name', ''),
                 "edid": row.get('edid', ''),
-                "grade": row.get('grade', ''),
+                "grade": row.get('grade', '') or str(row.get('year_level', '')),
                 "dob": row.get('dob', ''),
                 "program": row.get('program', ''),
                 "placement_start": row.get('placement_start'),
@@ -1907,7 +1907,7 @@ def render_program_students_page():
                     go_to("incident_log", selected_student_id=stu["id"])
                 if st.button("📈 Analysis", key=f"ana_{stu['id']}", use_container_width=True):
                     go_to("student_analysis", selected_student_id=stu["id"])
-                if st.session_state.current_user.get("role") == "ADM":
+                if st.session_state.get("is_admin") or (st.session_state.get("current_user") or {}).get("role") == "ADM":
                     if st.button("📦 Archive", key=f"archive_prog_{stu['id']}", use_container_width=True):
                         stu['archived'] = True
                         if supabase:
