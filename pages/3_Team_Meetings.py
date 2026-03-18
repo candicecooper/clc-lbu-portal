@@ -37,6 +37,9 @@ PROGRAMS = {
     "ADMIN": {"label": "Admin Meetings",  "color": "#92400e", "light": "#fef3c7", "emoji": "🏢"},
 }
 
+# Programs that use the structured Program Meeting tab
+PROGRAM_TEAMS = ["JP", "PY", "SY"]
+
 DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 RECURRENCE_TYPES = ["Weekly", "Fortnightly", "Monthly"]
 
@@ -57,8 +60,6 @@ def get_week_from_params():
         return None
 
 def admin_login():
-    # This is a separate in-app admin level for editing/deleting content
-    # (distinct from the shared staff auth handled by auth.py above)
     if "admin" not in st.session_state:
         st.session_state.admin = False
     with st.sidebar:
@@ -125,6 +126,39 @@ def update_row(table, row_id, data):
 
 def delete_row(table, row_id):
     supabase.table(table).delete().eq("id", row_id).execute()
+
+def fetch_students_for_program(program):
+    """Fetch students associated with a program. Falls back gracefully."""
+    try:
+        result = supabase.table("students").select("id, name, preferred_name").eq("program", program).order("name").execute()
+        return result.data or []
+    except Exception:
+        try:
+            result = supabase.table("students").select("id, name, preferred_name").execute()
+            return result.data or []
+        except Exception:
+            return []
+
+def fetch_student_incidents(student_name):
+    """Fetch recent behaviour incidents for a student."""
+    try:
+        result = supabase.table("behaviour_incidents")\
+            .select("incident_date, behaviour_description, antecedent, consequence")\
+            .eq("student_name", student_name)\
+            .order("incident_date", desc=True).limit(3).execute()
+        return result.data or []
+    except Exception:
+        return []
+
+def fetch_last_program_meeting(program):
+    """Get the most recent program meeting for carry-forward actions."""
+    try:
+        result = supabase.table("tm_program_meetings")\
+            .select("*").eq("program", program)\
+            .order("meeting_date", desc=True).limit(1).execute()
+        return result.data[0] if result.data else None
+    except Exception:
+        return None
 
 # ─────────────────────────────────────────────────────────────────────────────
 # WORD DOCUMENT HELPERS
@@ -320,6 +354,196 @@ def _doc_cover(doc, program, title, meeting_date):
               bold=False, size_pt=10, colour=accent.upper() if len(accent) == 6 else "7dd3fc")
     doc.add_paragraph().paragraph_format.space_after = Pt(4)
 
+def _add_jsonb_table(doc, rows_data, headers, col_widths_cm, accent_hex):
+    """Generic helper for rendering JSONB data rows as a Word table."""
+    if not rows_data:
+        p = doc.add_paragraph("No entries recorded.")
+        p.paragraph_format.space_after = Pt(4)
+        return
+    table = doc.add_table(rows=len(rows_data) + 1, cols=len(headers))
+    try:
+        table.style = "Table Grid"
+    except Exception:
+        pass
+    for ci, hdr in enumerate(headers):
+        c = table.cell(0, ci)
+        _shade_cell(c, accent_hex)
+        _para_run(c.paragraphs[0], hdr, bold=True, size_pt=9, colour="FFFFFF")
+    keys = [h.lower().replace(" ", "_").replace("/", "_") for h in headers]
+    for ri, row in enumerate(rows_data):
+        bg = "f8fafc" if ri % 2 == 0 else "FFFFFF"
+        for ci, key in enumerate(keys):
+            # Try various key forms
+            val = row.get(key, row.get(headers[ci], ""))
+            cell = table.cell(ri + 1, ci)
+            _shade_cell(cell, bg)
+            _para_run(cell.paragraphs[0], str(val), size_pt=9)
+    try:
+        for ci, w in enumerate(col_widths_cm):
+            for row in table.rows:
+                row.cells[ci].width = Cm(w)
+    except Exception:
+        pass
+    doc.add_paragraph().paragraph_format.space_after = Pt(4)
+
+def generate_program_meeting_docx(m: dict, program: str) -> bytes:
+    """Generate a formatted Word doc for a structured program meeting record."""
+    try:
+        doc = Document()
+        for section in doc.sections:
+            section.top_margin    = Cm(1.8)
+            section.bottom_margin = Cm(1.8)
+            section.left_margin   = Cm(2.2)
+            section.right_margin  = Cm(2.2)
+
+        prog_colours = {"JP": "2d7d4f", "PY": "1a4d8c", "SY": "7c3aed"}
+        col = prog_colours.get(program, "1e293b")
+        week_type = m.get("week_type", "A")
+        lens_label = "STUDENT LENS" if week_type == "A" else "SYSTEM LENS"
+
+        title = f"{PROGRAMS[program]['label']} Program Meeting — Week {week_type} ({lens_label})"
+        _doc_cover(doc, program, title, m.get("meeting_date", ""))
+
+        # Meeting details
+        _add_banner(doc, "📋  MEETING DETAILS", bg=col)
+        _add_kv_table(doc, [
+            ("Field",        "Details"),
+            ("Program",      PROGRAMS[program]["label"]),
+            ("Date",         m.get("meeting_date", "—")),
+            ("Term",         m.get("term", "—") or "—"),
+            ("Week",         f"Week {m.get('week_number','—')} — Type {week_type} ({lens_label})"),
+            ("Facilitator",  m.get("facilitator", "—") or "—"),
+        ])
+
+        # Attendance
+        _add_banner(doc, "🙋  ATTENDANCE", bg=col)
+        present = [n.strip() for n in (m.get("attendees") or "").split(",") if n.strip()]
+        _add_attendance_table(doc, present, [])
+
+        # Check-in
+        _add_banner(doc, "⏱  TEAM CHECK-IN — Regulation Before Reaction", bg=col)
+        _add_content_block(doc, m.get("checkin_notes"), "No check-in notes recorded.")
+
+        if week_type == "A":
+            # Student concerns
+            _add_banner(doc, "🔎  STUDENT CONCERNS — Structured Problem Solving", bg=col)
+            concerns = m.get("student_concerns") or []
+            if isinstance(concerns, str):
+                try:
+                    concerns = json.loads(concerns)
+                except Exception:
+                    concerns = []
+            _add_jsonb_table(
+                doc, concerns,
+                ["Student", "Concern / Behaviour", "Hypothesis (Why?)", "Strategy to Try", "Who", "By When"],
+                [3.5, 3.5, 3.5, 3.5, 2.0, 2.0],
+                col
+            )
+
+            # SMARTAR spotlight
+            _add_banner(doc, "🎯  SMARTAR GOAL SPOTLIGHT — 4 Students", bg=col)
+            smartar = m.get("smartar_spotlight") or []
+            if isinstance(smartar, str):
+                try:
+                    smartar = json.loads(smartar)
+                except Exception:
+                    smartar = []
+            _add_jsonb_table(
+                doc, smartar,
+                ["Student", "Goal Area", "Current Level / Evidence", "Next Adjustment", "Responsible"],
+                [3.0, 2.5, 4.5, 4.5, 3.0],
+                col
+            )
+
+            # Reports / TAC
+            _add_banner(doc, "📅  REPORTS / TAC / TRANSITIONS", bg=col)
+            _add_content_block(doc, m.get("reports_tac_notes"), "Nothing noted.")
+
+        else:
+            # CLC Priority focus
+            _add_banner(doc, "🏫  CLC PRIORITY FOCUS — Implementation Fidelity", bg=col)
+            priorities = m.get("priority_focus") or []
+            if isinstance(priorities, str):
+                try:
+                    priorities = json.loads(priorities)
+                except Exception:
+                    priorities = []
+            _add_jsonb_table(
+                doc, priorities,
+                ["Priority Area", "What's Working", "Gap", "Adjustment", "Evidence to Collect", "Who"],
+                [3.0, 3.0, 3.0, 3.0, 3.0, 2.5],
+                col
+            )
+
+            # SMARTAR spotlight
+            _add_banner(doc, "🎯  SMARTAR GOAL SPOTLIGHT — 4 Students", bg=col)
+            smartar = m.get("smartar_spotlight") or []
+            if isinstance(smartar, str):
+                try:
+                    smartar = json.loads(smartar)
+                except Exception:
+                    smartar = []
+            _add_jsonb_table(
+                doc, smartar,
+                ["Student", "Goal Area", "Current Level / Evidence", "Next Adjustment", "Responsible"],
+                [3.0, 2.5, 4.5, 4.5, 3.0],
+                col
+            )
+
+        # Meeting close
+        _add_banner(doc, "⭐  MEETING CLOSE", bg="1e293b")
+        close_items = [
+            ("Key Decision", m.get("key_decision")),
+            ("What will look different in practice by next week?", m.get("practice_change")),
+            ("Carry forward to next meeting", m.get("carry_forward")),
+        ]
+        for label, value in close_items:
+            p = doc.add_paragraph()
+            _para_run(p, label, bold=True, size_pt=10, colour="1e293b")
+            _add_content_block(doc, value, "Not recorded.")
+
+        # Actions
+        actions = m.get("actions") or []
+        if isinstance(actions, str):
+            try:
+                actions = json.loads(actions)
+            except Exception:
+                actions = []
+        if actions:
+            _add_banner(doc, "✅  ACTIONS — Who / What / By When", bg="4c1d95", fg="FFFFFF", size=11)
+            _add_jsonb_table(
+                doc, actions,
+                ["Action", "Who", "By When"],
+                [9.5, 4.0, 4.0],
+                "5b21b6"
+            )
+
+        # Footer
+        doc.add_paragraph()
+        footer_table = doc.add_table(rows=1, cols=1)
+        fc = footer_table.cell(0, 0)
+        _shade_cell(fc, "f1f5f9")
+        fp = fc.paragraphs[0]
+        fp.paragraph_format.space_before = Pt(4)
+        fp.paragraph_format.space_after  = Pt(4)
+        _para_run(fp,
+            f"  Generated {datetime.datetime.now().strftime('%d %b %Y, %I:%M %p')}  "
+            f"·  CLC Learning & Behaviour Unit  ·  CONFIDENTIAL",
+            italic=True, size_pt=8, colour="64748b")
+
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        return buf.getvalue()
+
+    except Exception as e:
+        doc2 = Document()
+        doc2.add_paragraph(f"Error generating document: {e}")
+        buf2 = io.BytesIO()
+        doc2.save(buf2)
+        buf2.seek(0)
+        return buf2.getvalue()
+
 def generate_combined_docx(m: dict) -> bytes:
     try:
         doc = Document()
@@ -381,11 +605,6 @@ def generate_combined_docx(m: dict) -> bytes:
     except Exception as e:
         doc2 = Document()
         doc2.add_paragraph(f"Error generating formatted document: {e}")
-        doc2.add_paragraph(f"Title: {m.get('title','')}")
-        doc2.add_paragraph(f"Date: {m.get('meeting_date','')}")
-        doc2.add_paragraph(m.get("digital_summary",""))
-        doc2.add_paragraph(m.get("face_to_face_content","") or m.get("content",""))
-        doc2.add_paragraph(m.get("action_summary",""))
         buf2 = io.BytesIO()
         doc2.save(buf2)
         buf2.seek(0)
@@ -441,17 +660,516 @@ def generate_team_docx(m: dict, program: str) -> bytes:
     except Exception as e:
         doc2 = Document()
         doc2.add_paragraph(f"Error generating formatted document: {e}")
-        doc2.add_paragraph(f"Title: {m.get('title','')}")
-        doc2.add_paragraph(f"Date: {m.get('meeting_date','')}")
-        doc2.add_paragraph(m.get("content",""))
-        doc2.add_paragraph(m.get("action_summary",""))
         buf2 = io.BytesIO()
         doc2.save(buf2)
         buf2.seek(0)
         return buf2.getvalue()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SECTION RENDERERS
+# PROGRAM MEETING — structured template tab
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _prog_colour(program):
+    return {"JP": "#2d7d4f", "PY": "#1a4d8c", "SY": "#7c3aed"}.get(program, "#1e293b")
+
+def _prog_hex(program):
+    return {"JP": "2d7d4f", "PY": "1a4d8c", "SY": "7c3aed"}.get(program, "1e293b")
+
+def _section_header(label, sub=None, color="#1e6f75"):
+    sub_html = f"<span style='font-size:12px;color:rgba(255,255,255,0.8);margin-left:10px;'>{sub}</span>" if sub else ""
+    st.markdown(f"""
+    <div style="background:{color};border-radius:8px;padding:10px 18px;margin:18px 0 10px;">
+      <strong style="color:white;font-size:14px;">{label}</strong>{sub_html}
+    </div>""", unsafe_allow_html=True)
+
+def _info_pill(text, color="#e8edf3"):
+    st.markdown(f"""
+    <div style="background:{color};border-radius:6px;padding:7px 14px;
+                font-size:12px;color:#1a2e44;margin-bottom:10px;">
+      {text}
+    </div>""", unsafe_allow_html=True)
+
+def render_dynamic_table(key_prefix, columns, default_rows=3, max_rows=10):
+    """
+    Render an editable in-meeting table using session state rows.
+    Returns list of dicts keyed by column name.
+    """
+    rows_key = f"_rows_{key_prefix}"
+    if rows_key not in st.session_state:
+        st.session_state[rows_key] = [
+            {col: "" for col in columns} for _ in range(default_rows)
+        ]
+
+    rows = st.session_state[rows_key]
+    col_count = len(columns)
+
+    # Header row
+    header_cols = st.columns(col_count)
+    for i, col in enumerate(columns):
+        header_cols[i].markdown(f"<small><strong>{col}</strong></small>", unsafe_allow_html=True)
+
+    # Data rows
+    updated_rows = []
+    for ri, row in enumerate(rows):
+        row_cols = st.columns(col_count)
+        new_row = {}
+        for ci, col in enumerate(columns):
+            field_key = f"{key_prefix}_r{ri}_c{ci}"
+            new_row[col] = row_cols[ci].text_input(
+                label=col,
+                value=row.get(col, ""),
+                key=field_key,
+                label_visibility="collapsed"
+            )
+        updated_rows.append(new_row)
+
+    st.session_state[rows_key] = updated_rows
+
+    btn_col1, btn_col2, _ = st.columns([1, 1, 4])
+    with btn_col1:
+        if len(rows) < max_rows:
+            if st.button("➕ Add row", key=f"{key_prefix}_add"):
+                st.session_state[rows_key].append({col: "" for col in columns})
+                st.rerun()
+    with btn_col2:
+        if len(rows) > 1:
+            if st.button("➖ Remove last", key=f"{key_prefix}_rem"):
+                st.session_state[rows_key].pop()
+                st.rerun()
+
+    return [r for r in st.session_state[rows_key] if any(v.strip() for v in r.values())]
+
+def render_program_meeting(program):
+    """Structured Week A/B program meeting tab for JP, PY, SY."""
+
+    color    = _prog_colour(program)
+    hex_col  = _prog_hex(program)
+    prog_lbl = PROGRAMS[program]["label"]
+
+    # ── Load support data ────────────────────────────────────────────────────
+    students      = fetch_students_for_program(program)
+    student_names = [s.get("preferred_name") or s.get("name", "") for s in students]
+    last_meeting  = fetch_last_program_meeting(program)
+
+    # ── Past records viewer ──────────────────────────────────────────────────
+    past_records = fetch("tm_program_meetings", {"program": program}, "meeting_date")
+    if past_records:
+        with st.expander(f"📂 Past program meeting records ({len(past_records)})", expanded=False):
+            for rec in past_records:
+                wt = rec.get("week_type", "?")
+                label = f"📄 {rec.get('meeting_date','')}  —  Week {rec.get('week_number','')} Type {wt}  ·  {rec.get('facilitator','')}"
+                with st.expander(label):
+                    _render_program_meeting_record(rec, program, color)
+
+    st.divider()
+
+    # ── Meeting header ───────────────────────────────────────────────────────
+    st.subheader("🗒️ Record Program Meeting")
+
+    if last_meeting:
+        last_date = last_meeting.get("meeting_date", "")
+        last_wt   = last_meeting.get("week_type", "?")
+        _info_pill(f"📌 Last meeting: {last_date} — Week Type {last_wt}. Previous actions carried forward below.")
+
+    # Meeting meta
+    mc1, mc2, mc3, mc4, mc5 = st.columns([2, 1, 1, 2, 2])
+    with mc1: m_date  = st.date_input("Meeting date", value=datetime.date.today(), key=f"pm_date_{program}")
+    with mc2: m_term  = st.selectbox("Term", ["T1", "T2", "T3", "T4"], key=f"pm_term_{program}")
+    with mc3: m_wknum = st.number_input("Week #", min_value=1, max_value=11, value=1, key=f"pm_wknum_{program}")
+    with mc4:
+        # Suggest next type based on last meeting
+        suggested = "B" if last_meeting and last_meeting.get("week_type") == "A" else "A"
+        week_type = st.radio(
+            "Week type", ["A — Student Lens", "B — System Lens"],
+            index=0 if suggested == "A" else 1,
+            key=f"pm_wktype_{program}",
+            horizontal=True
+        )
+        week_type = "A" if week_type.startswith("A") else "B"
+    with mc5:
+        m_facilitator = st.text_input("Facilitator", value=get_staff_name(), key=f"pm_fac_{program}")
+
+    m_attendees = st.text_input(
+        "Attendees (comma-separated)",
+        placeholder="e.g. Candice Cooper, Jane Smith, Alex Jones",
+        key=f"pm_att_{program}"
+    )
+
+    # Meeting norms reminder
+    st.markdown(f"""
+    <div style="background:{color}18;border:1px solid {color}44;border-radius:8px;
+                padding:8px 16px;margin:8px 0 16px;font-size:12px;color:#1a2e44;">
+      <strong>Meeting norms:</strong>
+      ☐ Student-centred &nbsp;·&nbsp; ☐ Evidence before opinion &nbsp;·&nbsp;
+      ☐ Clear actions + ownership &nbsp;·&nbsp; ☐ Stick to time
+    </div>""", unsafe_allow_html=True)
+
+    # ── WEEK TYPE INDICATOR ──────────────────────────────────────────────────
+    if week_type == "A":
+        st.markdown(f"""
+        <div style="background:{color};border-radius:10px;padding:12px 20px;margin-bottom:8px;">
+          <span style="color:white;font-size:16px;font-weight:700;">⬤  WEEK A — STUDENT LENS</span>
+          <span style="color:rgba(255,255,255,0.8);font-size:12px;margin-left:12px;">
+            Individual Progress · SMARTAR Goals · Evidence
+          </span>
+        </div>""", unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+        <div style="background:#D4860A;border-radius:10px;padding:12px 20px;margin-bottom:8px;">
+          <span style="color:white;font-size:16px;font-weight:700;">⬤  WEEK B — SYSTEM LENS</span>
+          <span style="color:rgba(255,255,255,0.8);font-size:12px;margin-left:12px;">
+            CLC Priorities · Innovation Fidelity · Staff Alignment
+          </span>
+        </div>""", unsafe_allow_html=True)
+
+    # ── CHECK-IN ─────────────────────────────────────────────────────────────
+    _section_header("⏱ 0–10 min  |  TEAM CHECK-IN — Regulation Before Reaction",
+                    "What do we need to know to support students effectively today?", color)
+    m_checkin = st.text_area(
+        "Check-in notes",
+        placeholder="Key updates · Immediate risks · Students needing priority attention today",
+        height=80,
+        key=f"pm_checkin_{program}",
+        label_visibility="collapsed"
+    )
+
+    # ── WEEK A SECTIONS ──────────────────────────────────────────────────────
+    if week_type == "A":
+
+        # Student Concerns
+        _section_header(
+            "⏱ 10–25 min  |  STUDENT CONCERNS — Structured Problem Solving",
+            "Facilitator: Push for function-based thinking, not description.", color
+        )
+        concern_cols = ["Student", "Concern / Behaviour", "Hypothesis (Why?)", "Strategy to Try", "Who", "By When"]
+        concerns = render_dynamic_table(f"concerns_{program}", concern_cols, default_rows=3)
+
+        # SMARTAR Spotlight
+        _section_header(
+            "⏱ 25–40 min  |  SMARTAR GOAL SPOTLIGHT — 4 Students",
+            "Rule: no update without evidence.", color
+        )
+        _render_smartar_spotlight(program, student_names, f"smartarA_{program}")
+        smartar_data = _collect_smartar_data(program, f"smartarA_{program}", student_names)
+
+        # Reports / TAC
+        _section_header("⏱ 40–45 min  |  REPORTS / TAC / TRANSITIONS", None, color)
+        m_reports = st.text_area(
+            "Reports / TAC notes",
+            placeholder="Upcoming reports due · TAC meetings · Review or transition planning",
+            height=80,
+            key=f"pm_reports_{program}",
+            label_visibility="collapsed"
+        )
+        priority_data = []
+
+    # ── WEEK B SECTIONS ──────────────────────────────────────────────────────
+    else:
+        amber = "#D4860A"
+
+        # CLC Priority Focus
+        _section_header(
+            "⏱ 10–30 min  |  CLC PRIORITY FOCUS — Implementation Fidelity",
+            "Align to: Implementation Plan · PDP Focus Areas · LBU Priorities",
+            amber
+        )
+        priority_cols = ["Priority Area", "What's Working", "Gap", "Adjustment", "Evidence to Collect", "Who"]
+        priority_data = render_dynamic_table(f"priority_{program}", priority_cols, default_rows=3)
+
+        # SMARTAR Spotlight
+        _section_header(
+            "⏱ 30–45 min  |  SMARTAR GOAL SPOTLIGHT — 4 Students",
+            "Same structure as Week A — consistency is key.", amber
+        )
+        _render_smartar_spotlight(program, student_names, f"smartarB_{program}")
+        smartar_data = _collect_smartar_data(program, f"smartarB_{program}", student_names)
+        concerns = []
+        m_reports = ""
+
+    # ── MEETING CLOSE ─────────────────────────────────────────────────────────
+    st.markdown(f"""
+    <div style="background:#1e293b;border-radius:10px;padding:12px 20px;margin:24px 0 10px;">
+      <span style="color:white;font-size:15px;font-weight:700;">⭐  MEETING CLOSE — Before You Leave, Name:</span>
+    </div>""", unsafe_allow_html=True)
+
+    cc1, cc2 = st.columns(2)
+    with cc1:
+        m_key_decision = st.text_area(
+            "1. What is the single most important thing we agreed on today?",
+            height=80, key=f"pm_decision_{program}"
+        )
+    with cc2:
+        m_practice_change = st.text_area(
+            "2. What will look DIFFERENT in practice by next week?",
+            height=80, key=f"pm_practice_{program}"
+        )
+
+    m_carry_forward = st.text_area(
+        "3. Carry forward to next meeting",
+        height=60, key=f"pm_carry_{program}"
+    )
+
+    # ── ACTIONS TABLE ─────────────────────────────────────────────────────────
+    _section_header("✅  ACTIONS — This is the most important output of the meeting", None, "#4c1d95")
+
+    # Carry forward incomplete actions from last meeting
+    if last_meeting:
+        last_actions = last_meeting.get("actions") or []
+        if isinstance(last_actions, str):
+            try:
+                last_actions = json.loads(last_actions)
+            except Exception:
+                last_actions = []
+        if last_actions:
+            with st.expander(f"🔁 {len(last_actions)} action(s) carried from last meeting — review & re-add if still open"):
+                for a in last_actions:
+                    action_txt = a.get("Action") or a.get("action", "")
+                    who_txt    = a.get("Who")    or a.get("who", "")
+                    due_txt    = a.get("By When") or a.get("by_when", "")
+                    col1, col2 = st.columns([4, 1])
+                    col1.markdown(f"🔲 **{action_txt}** — {who_txt}" + (f" _(due {due_txt})_" if due_txt else ""))
+                    if col2.button("Re-add ↑", key=f"readd_{program}_{action_txt[:20]}"):
+                        rows_key = f"_rows_actions_{program}"
+                        if rows_key not in st.session_state:
+                            st.session_state[rows_key] = []
+                        st.session_state[rows_key].append({
+                            "Action": action_txt, "Who": who_txt, "By When": due_txt
+                        })
+                        st.rerun()
+
+    action_cols = ["Action", "Who", "By When"]
+    actions = render_dynamic_table(f"actions_{program}", action_cols, default_rows=3)
+
+    # ── SAVE ──────────────────────────────────────────────────────────────────
+    st.divider()
+    save_col, dl_col = st.columns([2, 1])
+
+    with save_col:
+        if st.button("💾 Save Program Meeting Record", type="primary", key=f"pm_save_{program}"):
+            if not m_attendees.strip():
+                st.warning("Please enter at least one attendee before saving.")
+            else:
+                record = {
+                    "program":           program,
+                    "meeting_date":      str(m_date),
+                    "term":              m_term,
+                    "week_number":       int(m_wknum),
+                    "week_type":         week_type,
+                    "facilitator":       m_facilitator.strip(),
+                    "attendees":         m_attendees.strip(),
+                    "checkin_notes":     m_checkin.strip(),
+                    "student_concerns":  json.dumps(concerns),
+                    "smartar_spotlight": json.dumps(smartar_data),
+                    "reports_tac_notes": m_reports.strip() if week_type == "A" else "",
+                    "priority_focus":    json.dumps(priority_data),
+                    "key_decision":      m_key_decision.strip(),
+                    "practice_change":   m_practice_change.strip(),
+                    "carry_forward":     m_carry_forward.strip(),
+                    "actions":           json.dumps(actions),
+                }
+                try:
+                    insert("tm_program_meetings", record)
+                    st.success("✅ Program meeting record saved!")
+                    # Clear session state rows for this program
+                    for key in list(st.session_state.keys()):
+                        if key.startswith("_rows_") and program in key:
+                            del st.session_state[key]
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Save failed: {e}")
+
+    # Preview download before saving
+    with dl_col:
+        if st.button("📥 Preview & Download Word Doc", key=f"pm_dl_preview_{program}"):
+            preview_record = {
+                "program":           program,
+                "meeting_date":      str(m_date),
+                "term":              m_term,
+                "week_number":       int(m_wknum),
+                "week_type":         week_type,
+                "facilitator":       m_facilitator.strip(),
+                "attendees":         m_attendees.strip(),
+                "checkin_notes":     m_checkin.strip(),
+                "student_concerns":  concerns,
+                "smartar_spotlight": smartar_data,
+                "reports_tac_notes": m_reports.strip() if week_type == "A" else "",
+                "priority_focus":    priority_data,
+                "key_decision":      m_key_decision.strip(),
+                "practice_change":   m_practice_change.strip(),
+                "carry_forward":     m_carry_forward.strip(),
+                "actions":           actions,
+            }
+            st.session_state[f"pm_preview_doc_{program}"] = preview_record
+
+    if st.session_state.get(f"pm_preview_doc_{program}"):
+        docx_bytes = generate_program_meeting_docx(
+            st.session_state[f"pm_preview_doc_{program}"], program
+        )
+        st.download_button(
+            label     = "📥 Download Word Document",
+            data      = docx_bytes,
+            file_name = f"CLC_{program}_Program_Meeting_{str(m_date)}.docx",
+            mime      = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            key       = f"pm_dl_btn_{program}",
+            type      = "primary",
+        )
+
+
+def _render_smartar_spotlight(program, student_names, key_prefix):
+    """Render 4 SMARTAR spotlight input blocks, each with student selector + fields."""
+    for i in range(4):
+        with st.expander(f"Student {i+1}", expanded=(i == 0)):
+            s_cols = st.columns([2, 2, 3])
+            if student_names:
+                options = ["— select —"] + student_names
+                chosen = s_cols[0].selectbox(
+                    "Student",
+                    options,
+                    key=f"{key_prefix}_s{i}_name",
+                    label_visibility="collapsed"
+                )
+                if chosen != "— select —":
+                    # Show recent behaviour context
+                    incidents = fetch_student_incidents(chosen)
+                    if incidents:
+                        with st.expander(f"📊 Recent incidents for {chosen} ({len(incidents)})", expanded=False):
+                            for inc in incidents:
+                                st.caption(f"📅 {inc.get('incident_date','')}  ·  {inc.get('behaviour_description','')[:80]}")
+            else:
+                s_cols[0].text_input("Student name", key=f"{key_prefix}_s{i}_name", label_visibility="collapsed",
+                                     placeholder="Student name")
+
+            s_cols[1].text_input("Goal area", key=f"{key_prefix}_s{i}_goal",
+                                 placeholder="e.g. Literacy / Numeracy / Self-regulation",
+                                 label_visibility="collapsed")
+            s_cols[2].text_input("Current level / evidence", key=f"{key_prefix}_s{i}_level",
+                                 placeholder="e.g. Reading at Level 8 — running record 14/03",
+                                 label_visibility="collapsed")
+
+            adj_col, res_col = st.columns(2)
+            adj_col.text_input("Next adjustment", key=f"{key_prefix}_s{i}_adj",
+                               placeholder="What changes based on this evidence?",
+                               label_visibility="collapsed")
+            res_col.text_input("Responsible", key=f"{key_prefix}_s{i}_resp",
+                               placeholder="Who owns this?",
+                               label_visibility="collapsed")
+
+
+def _collect_smartar_data(program, key_prefix, student_names):
+    """Collect SMARTAR spotlight values from session state into a list of dicts."""
+    result = []
+    for i in range(4):
+        student = st.session_state.get(f"{key_prefix}_s{i}_name", "")
+        if student == "— select —":
+            student = ""
+        goal    = st.session_state.get(f"{key_prefix}_s{i}_goal", "")
+        level   = st.session_state.get(f"{key_prefix}_s{i}_level", "")
+        adj     = st.session_state.get(f"{key_prefix}_s{i}_adj", "")
+        resp    = st.session_state.get(f"{key_prefix}_s{i}_resp", "")
+        if any([student, goal, level, adj, resp]):
+            result.append({
+                "Student":                  student,
+                "Goal Area":                goal,
+                "Current Level / Evidence": level,
+                "Next Adjustment":          adj,
+                "Responsible":              resp,
+            })
+    return result
+
+
+def _render_program_meeting_record(rec, program, color):
+    """Display a saved program meeting record."""
+    week_type = rec.get("week_type", "?")
+    lens = "Student Lens" if week_type == "A" else "System Lens"
+
+    st.markdown(f"""
+    <div style="background:{color};border-radius:8px;padding:10px 16px;margin-bottom:10px;
+                display:flex;gap:2rem;flex-wrap:wrap;">
+      <span style="color:white;font-size:13px;"><strong>Facilitator:</strong> {rec.get('facilitator','—')}</span>
+      <span style="color:white;font-size:13px;"><strong>Term:</strong> {rec.get('term','—')} Week {rec.get('week_number','—')}</span>
+      <span style="color:white;font-size:13px;"><strong>Type:</strong> {week_type} — {lens}</span>
+    </div>""", unsafe_allow_html=True)
+
+    # Attendees
+    if rec.get("attendees"):
+        st.markdown(f"**Attendees:** {rec['attendees']}")
+
+    # Check-in
+    if rec.get("checkin_notes"):
+        st.markdown("**Check-in:**")
+        st.caption(rec["checkin_notes"])
+
+    def show_jsonb(data_raw, headers):
+        if isinstance(data_raw, str):
+            try:
+                data = json.loads(data_raw)
+            except Exception:
+                return
+        else:
+            data = data_raw or []
+        if not data:
+            return
+        import pandas as pd
+        rows = []
+        for item in data:
+            row = {h: item.get(h, item.get(h.lower().replace(" ", "_"), "")) for h in headers}
+            rows.append(row)
+        df = pd.DataFrame(rows, columns=headers)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
+    if week_type == "A":
+        if rec.get("student_concerns"):
+            st.markdown("**Student Concerns:**")
+            show_jsonb(rec["student_concerns"],
+                       ["Student", "Concern / Behaviour", "Hypothesis (Why?)", "Strategy to Try", "Who", "By When"])
+        if rec.get("smartar_spotlight"):
+            st.markdown("**SMARTAR Spotlight:**")
+            show_jsonb(rec["smartar_spotlight"],
+                       ["Student", "Goal Area", "Current Level / Evidence", "Next Adjustment", "Responsible"])
+        if rec.get("reports_tac_notes"):
+            st.markdown(f"**Reports / TAC:** {rec['reports_tac_notes']}")
+    else:
+        if rec.get("priority_focus"):
+            st.markdown("**CLC Priority Focus:**")
+            show_jsonb(rec["priority_focus"],
+                       ["Priority Area", "What's Working", "Gap", "Adjustment", "Evidence to Collect", "Who"])
+        if rec.get("smartar_spotlight"):
+            st.markdown("**SMARTAR Spotlight:**")
+            show_jsonb(rec["smartar_spotlight"],
+                       ["Student", "Goal Area", "Current Level / Evidence", "Next Adjustment", "Responsible"])
+
+    # Close
+    for label, key in [
+        ("Key Decision", "key_decision"),
+        ("What will look different", "practice_change"),
+        ("Carry forward", "carry_forward"),
+    ]:
+        if rec.get(key):
+            st.markdown(f"**{label}:** {rec[key]}")
+
+    # Actions
+    if rec.get("actions"):
+        st.markdown("**Actions:**")
+        show_jsonb(rec["actions"], ["Action", "Who", "By When"])
+
+    # Download button
+    docx_bytes = generate_program_meeting_docx(rec, program)
+    st.download_button(
+        label     = "📥 Download Word Document",
+        data      = docx_bytes,
+        file_name = f"CLC_{program}_ProgramMeeting_{rec.get('meeting_date','')}.docx",
+        mime      = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        key       = f"dl_pm_{rec.get('id','')}_rec",
+    )
+
+    if st.session_state.get("admin"):
+        if st.button("🗑️ Delete record", key=f"del_pm_{rec.get('id','')}"):
+            delete_row("tm_program_meetings", rec["id"])
+            st.rerun()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION RENDERERS (original tabs — unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def render_schedules(program):
@@ -542,7 +1260,6 @@ def render_agenda(program):
         with st.form(f"agenda_form_{program}"):
             a_title = st.text_input("Item title *")
             a_desc  = st.text_area("Description (optional)", height=80)
-            # Pre-fill with logged-in staff name
             a_by    = st.text_input("Your name", value=get_staff_name())
             if st.form_submit_button("Submit"):
                 if a_title.strip():
@@ -1053,9 +1770,19 @@ def main():
             st.markdown("### ⚙️ Admin Mode Active")
             st.caption("You can add, edit and delete all content.")
 
-    tab_sched, tab_agenda, tab_minutes, tab_actions, tab_attend, tab_docs = st.tabs([
-        "📅 Schedules", "📋 Agenda", "📝 Minutes", "✅ Actions", "🙋 Attendance", "📎 Documents"
-    ])
+    # ── Tabs — program team gets the structured meeting tab ──────────────────
+    is_program_team = program in PROGRAM_TEAMS
+
+    if is_program_team:
+        tab_meeting, tab_sched, tab_agenda, tab_minutes, tab_actions, tab_attend, tab_docs = st.tabs([
+            "🗒️ Program Meeting", "📅 Schedules", "📋 Agenda",
+            "📝 Minutes", "✅ Actions", "🙋 Attendance", "📎 Documents"
+        ])
+        with tab_meeting: render_program_meeting(program)
+    else:
+        tab_sched, tab_agenda, tab_minutes, tab_actions, tab_attend, tab_docs = st.tabs([
+            "📅 Schedules", "📋 Agenda", "📝 Minutes", "✅ Actions", "🙋 Attendance", "📎 Documents"
+        ])
 
     with tab_sched:   render_schedules(program)
     with tab_agenda:  render_agenda(program)
