@@ -1093,7 +1093,7 @@ def save_student_to_db(student):
             "first_name": student.get('first_name') or student.get('name', '').split(' ')[0],
             "last_name": student.get('last_name') or (' '.join(student.get('name', '').split(' ')[1:]) or ''),
             "edid": student.get('edid', ''),
-            "grade": student.get('grade', ''),
+            "grade": (lambda g: int(g.replace('Y','').replace('R','0').replace('r','0')) if g and g.upper() not in ['','NONE'] else None)(str(student.get('grade', '') or '')),
             "dob": student.get('dob', ''),
             "program": student.get('program', ''),
             "placement_start": student.get('placement_start'),
@@ -1971,7 +1971,7 @@ def render_incident_log_page():
         manual_critical = st.checkbox("This incident requires a Critical Incident ABCH Form (regardless of severity)", key="manual_crit")
         submitted = st.form_submit_button("Submit Incident", type="primary")
     
-    if submitted:
+    if submitted and 'location' in dir():
         if not location or not behaviour or not antecedent or not interventions:
             st.error("Please complete all required fields marked with *")
         else:
