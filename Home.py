@@ -24,9 +24,11 @@ st.markdown(f"""
   <a href="{BASE}/Behaviour_Support" style="display:block;background:#1A7A7A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">📊 Behaviour Support</a>
   <a href="{BASE}/Sensory_Overview" style="display:block;background:#1A7A7A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">🧠 Sensory Overview</a>
   <a href="{BASE}/Sensory_Profile" style="display:block;background:#1A7A7A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">📋 Sensory Profile</a>
+  <a href="{BASE}/Engagement_Tracker" style="display:block;background:#1A7A7A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">🎯 Engagement Tracker</a>
   <a href="{BASE}/Document_Library" style="display:block;background:#1A7A7A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">📁 Document Library</a>
   <a href="{BASE}/Calendar" style="display:block;background:#1A7A7A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">📆 Calendar</a>
   <a href="{BASE}/Footy_Tipping" style="display:block;background:#C8760A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">🏈 Footy Tipping</a>
   <a href="{BASE}/Committees" style="display:block;background:#C8760A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">🏛 Committees</a>
+  <a href="{BASE}/Leadership" style="display:block;background:#0f5f5f;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">👔 Leadership</a>
 </div>
 """, unsafe_allow_html=True)
