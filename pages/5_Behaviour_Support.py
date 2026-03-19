@@ -2540,11 +2540,24 @@ def render_student_analysis_page():
         crit_df["severity"] = 5
         crit_df["antecedent"] = crit_df["ABCH_primary"].apply(lambda d: d.get("context","") if isinstance(d, dict) else "")
         crit_df["behaviour_type"] = crit_df["ABCH_primary"].apply(lambda d: d.get("behaviour","") if isinstance(d, dict) else "")
-    
+        # Pull primary_time into a top-level time column so hour extraction works
+        crit_df["time"] = crit_df["ABCH_primary"].apply(
+            lambda d: d.get("time", "09:00:00") if isinstance(d, dict) else "09:00:00"
+        )
+        # Ensure required columns exist so concat never raises KeyError
+        for _col in ["location", "session"]:
+            if _col not in crit_df.columns:
+                crit_df[_col] = crit_df["ABCH_primary"].apply(
+                    lambda d: d.get(_col, "") if isinstance(d, dict) else ""
+                )
+
     full_df = pd.concat([quick_df, crit_df], ignore_index=True).sort_values("date_parsed")
+    # time column may still be missing if only quick incidents with no time field
+    if "time" not in full_df.columns:
+        full_df["time"] = "09:00:00"
     full_df["hour"] = pd.to_datetime(full_df["time"], format="%H:%M:%S", errors="coerce").dt.hour
     full_df["day_of_week"] = full_df["date_parsed"].dt.day_name()
-    
+
     quick_only_df = full_df[full_df['incident_type'] == 'Quick'].copy() if 'Quick' in full_df['incident_type'].values else pd.DataFrame()
     crit_only_df = full_df[full_df['incident_type'] == 'Critical'].copy() if 'Critical' in full_df['incident_type'].values else pd.DataFrame()
     
@@ -2903,9 +2916,18 @@ def render_student_dashboard():
         crit_df["incident_type"] = "Critical"
         crit_df["date_parsed"] = pd.to_datetime(crit_df.get("created_at", datetime.now().isoformat()), utc=True).dt.tz_localize(None)
         crit_df["severity"] = 5
-    
+        # Ensure columns present so concat never raises KeyError
+        crit_df["time"] = crit_df["ABCH_primary"].apply(
+            lambda d: d.get("time", "09:00:00") if isinstance(d, dict) else "09:00:00"
+        ) if "ABCH_primary" in crit_df.columns else "09:00:00"
+        for _col in ["location", "session", "antecedent", "behaviour_type"]:
+            if _col not in crit_df.columns:
+                crit_df[_col] = crit_df["ABCH_primary"].apply(
+                    lambda d: d.get(_col, "") if isinstance(d, dict) else ""
+                ) if "ABCH_primary" in crit_df.columns else ""
+
     full_df = pd.concat([quick_df, crit_df], ignore_index=True).sort_values("date_parsed") if not quick_df.empty or not crit_df.empty else pd.DataFrame()
-    
+
     total_incidents = len(full_df)
     critical_count = len(full_df[full_df.get("incident_type", pd.Series(dtype=str)) == "Critical"]) if "incident_type" in full_df.columns else len(crit_df)
     avg_severity = full_df["severity"].mean() if "severity" in full_df.columns else 0
