@@ -1691,13 +1691,15 @@ def render_program_students_page():
     students = [s for s in st.session_state.students if s["program"] == program and not s.get("archived", False)]
     for stu in students:
         stu_incidents = [i for i in st.session_state.incidents if i["student_id"] == stu["id"]]
+        stu_critical = [c for c in st.session_state.critical_incidents if c["student_id"] == stu["id"]]
+        stu_total = len(stu_incidents) + len(stu_critical)
         with st.container(border=True):
             col1, col2, col3 = st.columns([3, 2, 2])
             with col1:
                 st.markdown(f"**{stu['name']}**")
                 st.caption(f"Grade {stu['grade']}")
             with col2:
-                st.metric("Incidents", len(stu_incidents))
+                st.metric("Incidents", stu_total)
             with col3:
                 if st.button("📊 Dashboard", key=f"dash_{stu['id']}", use_container_width=True):
                     go_to("student_dashboard", selected_student_id=stu["id"])
@@ -3075,18 +3077,18 @@ Extract the incident as a single JSON object with this exact structure:
   "sapol_reference": "reference number or null",
   "outcomes": ["list", "of", "outcomes"],
   "primary": {{
-    "time": "time of first entry",
-    "location": "location of first entry",
-    "context": "antecedent/context of first entry",
-    "behaviour": "behaviour of first entry",
-    "consequence": "consequence/staff response of first entry"
+    "time": "time of the HIGHEST RISK behaviour",
+    "location": "location of the HIGHEST RISK behaviour",
+    "context": "full antecedent context — what led to the highest risk behaviour, including any earlier triggering events such as peer conflict or verbal exchanges",
+    "behaviour": "the HIGHEST RISK behaviour only — prioritise: absconding/elopement > physical aggression > property destruction > verbal aggression. If SAPOL were called or the student left school grounds, that IS the primary behaviour.",
+    "consequence": "staff response and outcome for the highest risk behaviour"
   }},
   "additional_entries": [
     {{
       "time": "time",
       "location": "location",
       "context": "antecedent or what happened before",
-      "behaviour": "what the student did",
+      "behaviour": "what the student did at this point in the timeline",
       "consequence": "staff response or what happened after",
       "hypothesis": ""
     }}
@@ -3095,11 +3097,14 @@ Extract the incident as a single JSON object with this exact structure:
 }}
 
 Rules:
-- The FIRST timeline entry goes into "primary"
-- All SUBSEQUENT timeline entries go into "additional_entries" as an array
+- "primary" must contain the HIGHEST RISK / MOST CLINICALLY SIGNIFICANT behaviour, NOT necessarily the first chronological entry
+- Priority order for primary behaviour: absconding/leaving grounds/SAPOL involvement > physical aggression > property destruction > verbal aggression/swearing
+- If the student left school grounds or emergency services were called, that must be the primary behaviour
+- Earlier lower-level behaviours (e.g. swearing at a peer) belong in "additional_entries" as context, OR included in the primary context field as the trigger
+- All OTHER timeline entries go into "additional_entries" as an array in chronological order
 - If there is only one timeline entry, "additional_entries" should be []
-- severity: 1=minor, 2=low, 3=moderate, 4=serious, 5=extreme/crisis
-- Extract SAPOL reference number if present (look for police reference, SAPOL ref etc)
+- severity: 1=minor, 2=low, 3=moderate, 4=serious, 5=extreme/crisis — if SAPOL were called this is at least 4
+- Extract SAPOL reference number if present (look for police reference, SAPOL ref, incident number etc)
 - Extract outcomes/intended outcomes if listed
 - Return ONLY the JSON object, no other text, no markdown code fences
 
