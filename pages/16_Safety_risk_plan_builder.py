@@ -10,7 +10,7 @@ Multi-step wizard that:
 """
 
 import streamlit as st
-import anthropic
+from groq import Groq
 import json
 import os
 import io
@@ -250,11 +250,11 @@ st.markdown(f"""
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def get_client():
-    api_key = st.secrets.get("ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_API_KEY", ""))
+    api_key = st.secrets.get("GROQ_API_KEY", os.environ.get("GROQ_API_KEY", ""))
     if not api_key:
-        st.error("⚠️  ANTHROPIC_API_KEY not found. Add it to your Streamlit secrets.")
+        st.error("⚠️  GROQ_API_KEY not found. Add it to your Streamlit secrets or Render environment variables.")
         st.stop()
-    return anthropic.Anthropic(api_key=api_key)
+    return Groq(api_key=api_key)
 
 
 def extract_docx_text(uploaded_file) -> str:
@@ -301,12 +301,12 @@ PLAN TEXT:
 {plan_text[:8000]}"""
 
     try:
-        resp = client.messages.create(
-            model="claude-sonnet-4-6",
+        resp = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
             max_tokens=3000,
             messages=[{"role": "user", "content": prompt}]
         )
-        raw = resp.content[0].text.strip()
+        raw = resp.choices[0].message.content.strip()
         raw = raw.replace("```json", "").replace("```", "").strip()
         risks = json.loads(raw)
         for r in risks:
@@ -357,12 +357,12 @@ Your task: Write a SHORT, professional advisory note (200-300 words) for the sta
 Keep it practical, direct, and relevant to a trauma-informed specialist setting. Do not repeat the school plan content back verbatim."""
 
     try:
-        resp = client.messages.create(
-            model="claude-sonnet-4-6",
+        resp = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
             max_tokens=700,
             messages=[{"role": "user", "content": prompt}]
         )
-        return resp.content[0].text.strip()
+        return resp.choices[0].message.content.strip()
     except Exception as e:
         return f"[AI unavailable: {e}]"
 
@@ -390,12 +390,12 @@ Generate CLC-specific content in two sections. Return as JSON only (no markdown)
 }}"""
 
     try:
-        resp = client.messages.create(
-            model="claude-sonnet-4-6",
+        resp = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
             max_tokens=1200,
             messages=[{"role": "user", "content": prompt}]
         )
-        raw = resp.content[0].text.strip().replace("```json","").replace("```","").strip()
+        raw = resp.choices[0].message.content.strip().replace("```json","").replace("```","").strip()
         return json.loads(raw)
     except Exception:
         return {"proactive": "", "procedure": ""}
