@@ -12,7 +12,6 @@ from auth import require_auth, logout_button, get_staff_name
 require_auth("CLC Calendar", "📅")
 logout_button("sidebar")
 
-# ── Back to Portal ─────────────────────────────────────────────────────────────
 st.sidebar.markdown(
     '<a href="https://16cefb77.clc-portal.pages.dev/" target="_self" style="display:block;text-align:center;'
     'background:#1A7A7A;color:white;font-weight:600;font-size:0.85rem;'
@@ -53,7 +52,6 @@ PROGRAM_COLORS = {
     "SY": {"color": "#a16207", "bg": "#fef9c3", "label": "Senior Years"},
 }
 
-# ─── ADMIN PASSWORD ──────────────────────────────────────────────────────────────
 try:
     CAL_ADMIN_PW = st.secrets["CAL_ADMIN_PASSWORD"]
 except Exception:
@@ -76,20 +74,25 @@ for k, v in [("cal_year", today.year), ("cal_month", today.month),
     if k not in st.session_state:
         st.session_state[k] = v
 
-# Only reset to today if navigating here fresh (no existing navigation state)
 if "cal_initialised" not in st.session_state:
-    st.session_state.selected_date  = today
-    st.session_state.cal_week_start = today - timedelta(days=today.weekday())
-    st.session_state.cal_year       = today.year
-    st.session_state.cal_month      = today.month
+    st.session_state.selected_date   = today
+    st.session_state.cal_week_start  = today - timedelta(days=today.weekday())
+    st.session_state.cal_year        = today.year
+    st.session_state.cal_month       = today.month
     st.session_state.cal_initialised = True
 
 # ─── DB HELPERS ─────────────────────────────────────────────────────────────────
 def db_events(start_date=None, end_date=None):
-    q = supabase.table("clc_events").select("*").order("event_date").order("start_time")
-    if start_date: q = q.gte("event_date", str(start_date))
-    if end_date:   q = q.lte("event_date", str(end_date))
-    return q.execute().data
+    """Load events from Supabase. Returns [] on error."""
+    try:
+        q = supabase.table("clc_events").select("*").order("event_date").order("start_time")
+        if start_date: q = q.gte("event_date", str(start_date))
+        if end_date:   q = q.lte("event_date", str(end_date))
+        result = q.execute()
+        return result.data or []
+    except Exception as e:
+        st.error(f"❌ Could not load events: {e}")
+        return []
 
 def db_pac():
     try: return supabase.table("pac_meetings").select("*").order("meeting_date").execute().data
@@ -115,6 +118,13 @@ def ev_index(events):
         idx.setdefault(str(ev.get("event_date",""))[:10], []).append(ev)
     return idx
 
+def month_date_range(yr, mo):
+    """Return (first_day, last_day) of a month correctly for any month."""
+    first = date(yr, mo, 1)
+    last_day = calendar.monthrange(yr, mo)[1]
+    last = date(yr, mo, last_day)
+    return first, last
+
 def fmt_date(d):
     try: return datetime.strptime(str(d)[:10], "%Y-%m-%d").strftime("%-d %B %Y")
     except: return str(d)[:10]
@@ -134,31 +144,71 @@ def select_day(d):
     st.session_state.edit_event_id = None
 
 def save_event(d):
+    """
+    Save event to Supabase with proper response checking.
+    Shows a clear error if the save fails — no silent failures.
+    """
     try:
-        supabase.table("clc_events").insert({
-            "title": d["title"].strip(), "event_type": d["etype"],
-            "event_date": str(d["ev_date"]),
-            "end_date": str(d["end_date"]) if d["end_date"] and d["end_date"] != d["ev_date"] else None,
-            "start_time": str(d["start_t"]) if d["start_t"] else None,
-            "end_time": str(d["end_t"]) if d["end_t"] else None,
-            "location": d["location"].strip(), "added_by": d["who"].strip(), "notes": d["notes"].strip(),
-            "program": d.get("program",""), "student_initials": d.get("student_initials",""),
+        response = supabase.table("clc_events").insert({
+            "title":            d["title"].strip(),
+            "event_type":       d["etype"],
+            "event_date":       str(d["ev_date"]),
+            "end_date":         str(d["end_date"]) if d["end_date"] and d["end_date"] != d["ev_date"] else None,
+            "start_time":       str(d["start_t"]) if d["start_t"] else None,
+            "end_time":         str(d["end_t"])   if d["end_t"]   else None,
+            "location":         d["location"].strip(),
+            "added_by":         d["who"].strip(),
+            "notes":            d["notes"].strip(),
+            "program":          d.get("program",""),
+            "student_initials": d.get("student_initials",""),
         }).execute()
-        st.toast(f"✅ Event saved for {d['ev_date'].strftime('%-d %B %Y')}!", icon="✅")
+
+        # ── Check the response actually contains the saved row ────────────────
+        if not response.data:
+            st.error(
+                "❌ Event could not be saved — Supabase returned no data. "
+                "This usually means a Row Level Security (RLS) policy is blocking inserts. "
+                "Go to Supabase → Table Editor → clc_events → RLS and add an INSERT policy, "
+                "or disable RLS on this table."
+            )
+            return False
+
+        # ── Success ───────────────────────────────────────────────────────────
+        ev_date_obj = d["ev_date"]
+        st.toast(
+            f"✅ '{d['title']}' saved for {ev_date_obj.strftime('%-d %B %Y')}!",
+            icon="✅"
+        )
+        # Ensure session state still points to the month/year of the saved event
+        # so the calendar rerenders showing that month
+        st.session_state.cal_year  = ev_date_obj.year
+        st.session_state.cal_month = ev_date_obj.month
         st.rerun()
+        return True
+
     except Exception as e:
         st.error(f"❌ Could not save event: {e}")
+        return False
 
 def upd_event(ev_id, d):
-    supabase.table("clc_events").update({
-        "title": d["title"].strip(), "event_type": d["etype"],
-        "event_date": str(d["ev_date"]),
-        "end_date": str(d["end_date"]) if d["end_date"] and d["end_date"] != d["ev_date"] else None,
-        "start_time": str(d["start_t"]) if d["start_t"] else None,
-        "end_time": str(d["end_t"]) if d["end_t"] else None,
-        "location": d["location"].strip(), "added_by": d["who"].strip(), "notes": d["notes"].strip(),
-        "program": d.get("program",""), "student_initials": d.get("student_initials",""),
-    }).eq("id", ev_id).execute()
+    try:
+        supabase.table("clc_events").update({
+            "title":            d["title"].strip(),
+            "event_type":       d["etype"],
+            "event_date":       str(d["ev_date"]),
+            "end_date":         str(d["end_date"]) if d["end_date"] and d["end_date"] != d["ev_date"] else None,
+            "start_time":       str(d["start_t"]) if d["start_t"] else None,
+            "end_time":         str(d["end_t"])   if d["end_t"]   else None,
+            "location":         d["location"].strip(),
+            "added_by":         d["who"].strip(),
+            "notes":            d["notes"].strip(),
+            "program":          d.get("program",""),
+            "student_initials": d.get("student_initials",""),
+        }).eq("id", ev_id).execute()
+        return True
+    except Exception as e:
+        st.error(f"❌ Could not update event: {e}")
+        return False
 
 def del_event(ev_id):
     try:
@@ -168,7 +218,7 @@ def del_event(ev_id):
         st.error(f"Could not delete event: {e}")
         return False
 
-# ─── EVENT CARD RENDERER (used in List tab) ──────────────────────────────────────
+# ─── EVENT CARD RENDERER ──────────────────────────────────────────────────────────
 def render_event_card(ev, key_prefix="ev"):
     eid    = ev.get("id", "")
     pac    = str(eid).startswith("pac_")
@@ -221,7 +271,6 @@ def render_event_card(ev, key_prefix="ev"):
                     st.session_state[confirm_key] = True
                     st.rerun()
 
-    # Expanded detail panel
     if is_expanded:
         edate = fmt_date(ev.get("event_date", ""))
         if ev.get("end_date") and ev["end_date"] != ev.get("event_date"):
@@ -249,15 +298,14 @@ def render_event_card(ev, key_prefix="ev"):
             f'{"<div>👤 <b>Added by:</b> " + ev.get("added_by","") + "</div>" if ev.get("added_by") else "<div></div>"}'
             f'</div>{notes_html}</div>', unsafe_allow_html=True)
 
-    # Edit form
     if st.session_state.edit_event_id == eid and can_edit:
         st.markdown("**✏️ Edit event:**")
         ok, data = event_form(f"{key_prefix}ef_{eid}", existing=ev, label="💾 Save Changes")
         if ok:
-            upd_event(eid, data)
-            st.session_state.edit_event_id = None
-            st.success("Updated!")
-            st.rerun()
+            if upd_event(eid, data):
+                st.session_state.edit_event_id = None
+                st.success("✅ Updated!")
+                st.rerun()
 
 # ─── EVENT FORM ──────────────────────────────────────────────────────────────────
 def event_form(key, default_date=None, existing=None, label="📅 Save Event"):
@@ -272,11 +320,15 @@ def event_form(key, default_date=None, existing=None, label="📅 Save Event"):
             etype = st.selectbox("Type", list(EVENT_TYPES.keys()),
                                  index=list(EVENT_TYPES.keys()).index(ev.get("event_type","Other"))
                                  if ev.get("event_type") in EVENT_TYPES else len(EVENT_TYPES)-1)
-            who = st.text_input("Added by *", value=ev.get("added_by",""), placeholder="Your name")
+            who = st.text_input("Added by *", value=ev.get("added_by", get_staff_name()),
+                                placeholder="Your name")
         with c2:
-            ev_date  = st.date_input("Date *",
-                                     value=datetime.strptime(str(ev.get("event_date",d0))[:10],"%Y-%m-%d").date()
-                                     if ev.get("event_date") else d0)
+            ev_date = st.date_input(
+                "Date *",
+                value=datetime.strptime(str(ev.get("event_date", d0))[:10], "%Y-%m-%d").date()
+                      if ev.get("event_date") else d0
+            )
+            # FIX: end_date defaults to ev_date (same day = single day event)
             end_date = st.date_input("End date (leave same for single day)", value=ev_date)
             location = st.text_input("Location", value=ev.get("location",""))
 
@@ -298,8 +350,11 @@ def event_form(key, default_date=None, existing=None, label="📅 Save Event"):
         notes = st.text_area("Notes", value=ev.get("notes",""), height=64)
         ok = st.form_submit_button(label, type="primary", use_container_width=True)
         if ok:
-            if not title.strip() or not who.strip():
-                st.warning("Event title and 'Added by' are required.")
+            if not title.strip():
+                st.warning("Please enter an event title.")
+                return False, {}
+            if not who.strip():
+                st.warning("Please enter your name in 'Added by'.")
                 return False, {}
             return True, dict(title=title, etype=etype, ev_date=ev_date, end_date=end_date,
                               start_t=start_t, end_t=end_t, location=location, who=who,
@@ -317,26 +372,25 @@ with ph_col1:
             st.session_state.cal_month = 12; st.session_state.cal_year = yr - 1
         else:
             st.session_state.cal_month = mo - 1
-        # Move selected_date into the new month so the add-form defaults correctly
         new_mo = st.session_state.cal_month; new_yr = st.session_state.cal_year
         st.session_state.selected_date = date(new_yr, new_mo, 1)
         st.rerun()
 with ph_col2:
     import calendar as _cal
-    st.markdown(f"<h2 style='text-align:center;margin:0;color:#1a2e44;'>{_cal.month_name[mo]} {yr}</h2>", unsafe_allow_html=True)
+    st.markdown(f"<h2 style='text-align:center;margin:0;color:#1a2e44;'>{_cal.month_name[mo]} {yr}</h2>",
+                unsafe_allow_html=True)
 with ph_col3:
     if st.button("▶ Next", use_container_width=True, key="m_next"):
         if mo == 12:
             st.session_state.cal_month = 1; st.session_state.cal_year = yr + 1
         else:
             st.session_state.cal_month = mo + 1
-        # Move selected_date into the new month so the add-form defaults correctly
         new_mo = st.session_state.cal_month; new_yr = st.session_state.cal_year
         st.session_state.selected_date = date(new_yr, new_mo, 1)
         st.rerun()
 with ph_col4:
     if st.button("Today", use_container_width=True, key="m_today"):
-        st.session_state.cal_year=today.year; st.session_state.cal_month=today.month
+        st.session_state.cal_year = today.year; st.session_state.cal_month = today.month
         select_day(today); st.rerun()
 
 tab_month, tab_week, tab_list, tab_students = st.tabs(["📅 Month", "📆 Week", "📋 List", "👤 Students"])
@@ -346,10 +400,12 @@ with tab_month:
     ts = str(today)
     ss = str(st.session_state.selected_date)
 
-    # FIX: was named idx_evs then referenced as idx — now consistently idx_evs
+    # FIX: use calendar.monthrange to get the correct last day for any month
+    _mo_first, _mo_last = month_date_range(yr, mo)
+
     idx_evs = ev_index(
-        db_events(date(yr, mo, 1), date(yr, mo, 28) + timedelta(days=4)) +
-        pac_events(db_pac(), date(yr, mo, 1), date(yr, mo, 28) + timedelta(days=4))
+        db_events(_mo_first, _mo_last) +
+        pac_events(db_pac(), _mo_first, _mo_last)
     )
 
     day_headers = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
@@ -369,8 +425,7 @@ with tab_month:
                     continue
                 d = date(yr, mo, day); ds = str(d)
                 is_today = ds == ts; is_sel = ds == ss
-                # FIX: was idx.get — now correctly idx_evs.get
-                day_evs = idx_evs.get(ds, [])
+                day_evs  = idx_evs.get(ds, [])
 
                 border = "3px solid #d4af37" if is_today else ("3px solid #1a2e4a" if is_sel else "1px solid #e5e7eb")
                 bg     = "#fffef5" if is_today else ("#e8edf3" if is_sel else "white")
@@ -413,9 +468,13 @@ with tab_month:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    jumped = st.date_input("Jump to date:", value=st.session_state.selected_date, key="m_jump", label_visibility="collapsed")
+    jumped = st.date_input("Jump to date:", value=st.session_state.selected_date,
+                           key="m_jump", label_visibility="collapsed")
     if jumped != st.session_state.selected_date:
-        select_day(jumped); st.session_state.cal_year=jumped.year; st.session_state.cal_month=jumped.month; st.rerun()
+        select_day(jumped)
+        st.session_state.cal_year  = jumped.year
+        st.session_state.cal_month = jumped.month
+        st.rerun()
 
     st.markdown("---")
 
@@ -425,7 +484,7 @@ with tab_month:
     st.markdown(f"### {'📍 ' if sel==today else ''}📅 {sel.strftime('%A %-d %B %Y')}")
 
     if not d_evs:
-        st.info("📭 No events on this day — use ➕ below to add one")
+        st.info("📭 No events on this day — use the form below to add one")
 
     for ev in d_evs:
         render_event_card(ev, "m")
@@ -444,13 +503,15 @@ with tab_week:
         if st.button("◀ Prev", use_container_width=True, key="w_prev"):
             st.session_state.cal_week_start -= timedelta(weeks=1); st.rerun()
     with wt:
-        st.markdown(f"<h3 style='text-align:center;margin:0;color:#1a2e4a;'>{fmt_date(ws)} – {fmt_date(we)}</h3>", unsafe_allow_html=True)
+        st.markdown(f"<h3 style='text-align:center;margin:0;color:#1a2e44;'>{fmt_date(ws)} – {fmt_date(we)}</h3>",
+                    unsafe_allow_html=True)
     with wn:
         if st.button("Next ▶", use_container_width=True, key="w_next"):
             st.session_state.cal_week_start += timedelta(weeks=1); st.rerun()
     with wtod:
         if st.button("Today", use_container_width=True, key="w_today"):
-            st.session_state.cal_week_start = today-timedelta(days=today.weekday()); select_day(today); st.rerun()
+            st.session_state.cal_week_start = today - timedelta(days=today.weekday())
+            select_day(today); st.rerun()
 
     wevs  = db_events(ws, we) + pac_events(db_pac(), ws, we)
     widx  = ev_index(wevs)
@@ -520,7 +581,7 @@ with tab_week:
     st.markdown(f"### {'📍 ' if sel==today else ''}📅 {sel.strftime('%A %-d %B %Y')}")
 
     if not d_evs:
-        st.info("📭 No events on this day — click a day above or use ➕ below")
+        st.info("📭 No events on this day — click a day above or use the form below")
 
     for ev in d_evs:
         render_event_card(ev, "w")
@@ -534,7 +595,8 @@ with tab_list:
     lc1, lc2, lc3 = st.columns(3)
     with lc1: ls = st.date_input("From", value=today, key="ls")
     with lc2: le = st.date_input("To",   value=today+timedelta(weeks=8), key="le")
-    with lc3: tf = st.multiselect("Filter type", list(EVENT_TYPES.keys()), default=list(EVENT_TYPES.keys()), key="tf")
+    with lc3: tf = st.multiselect("Filter type", list(EVENT_TYPES.keys()),
+                                   default=list(EVENT_TYPES.keys()), key="tf")
 
     with st.expander("➕ Add New Event"):
         ok, data = event_form("ladd")
@@ -609,7 +671,8 @@ with tab_students:
             with tf2:
                 tr_term_val  = st.selectbox("Term *", ["Term 1", "Term 2", "Term 3", "Term 4"], key="tr_term_add")
                 tr_week_lbl  = st.text_input("Week label *", placeholder="e.g. Week 3")
-                tr_week_date = st.date_input("Week start date (Monday) *", value=today - timedelta(days=today.weekday()), key="tr_week_date")
+                tr_week_date = st.date_input("Week start date (Monday) *",
+                                             value=today - timedelta(days=today.weekday()), key="tr_week_date")
                 tr_notes     = st.text_area("Notes (optional)", height=60)
 
             st.markdown("**Times at mainstream school** *(leave blank = at CLC all day)*")
@@ -699,8 +762,8 @@ with tab_students:
 </tr>"""
             cur_term = None
             for idx_w, week in enumerate(weeks):
-                trm  = week.get("term","")
-                wlbl = week.get("week_label","")
+                trm   = week.get("term","")
+                wlbl  = week.get("week_label","")
                 wdate = week.get("week_start_date","")
                 try:
                     wmon = datetime.strptime(wdate[:10], "%Y-%m-%d").date()
@@ -762,7 +825,8 @@ with tab_students:
                                 e_by_tr     = st.text_input("Added by *", value=week.get("added_by",""))
                             with ef2:
                                 e_term_tr   = st.selectbox("Term *", ["Term 1","Term 2","Term 3","Term 4"],
-                                                           index=["Term 1","Term 2","Term 3","Term 4"].index(week.get("term","Term 1")) if week.get("term") in ["Term 1","Term 2","Term 3","Term 4"] else 0)
+                                                           index=["Term 1","Term 2","Term 3","Term 4"].index(week.get("term","Term 1"))
+                                                                 if week.get("term") in ["Term 1","Term 2","Term 3","Term 4"] else 0)
                                 e_wlbl_tr   = st.text_input("Week label *", value=week.get("week_label",""))
                                 try:
                                     e_wdate_tr = st.date_input("Week start date *",
