@@ -2487,7 +2487,7 @@ def render_student_analysis_page():
                 end_dt = datetime.fromisoformat(student['placement_end'])
                 status_txt = "Completed"
             else:
-                end_dt = datetime.now()
+                end_dt = datetime.utcnow()
                 status_txt = "Ongoing"
             days_enrolled = (end_dt.date() - start_dt.date()).days
             st.markdown("---")
@@ -2527,13 +2527,13 @@ def render_student_analysis_page():
     
     if not quick_df.empty:
         quick_df["incident_type"] = "Quick"
-        quick_df["date_parsed"] = pd.to_datetime(quick_df["date"])
+        quick_df["date_parsed"] = pd.to_datetime(quick_df["date"], utc=True).dt.tz_localize(None)
         if "intervention" in quick_df.columns:
             quick_df["intervention_str"] = quick_df["intervention"].apply(lambda x: ", ".join(x) if isinstance(x, list) else str(x))
     
     if not crit_df.empty:
         crit_df["incident_type"] = "Critical"
-        crit_df["date_parsed"] = pd.to_datetime(crit_df.get("created_at", datetime.now().isoformat()))
+        crit_df["date_parsed"] = pd.to_datetime(crit_df.get("created_at", datetime.now().isoformat()), utc=True).dt.tz_localize(None)
         crit_df["severity"] = 5
         crit_df["antecedent"] = crit_df["ABCH_primary"].apply(lambda d: d.get("context","") if isinstance(d, dict) else "")
         crit_df["behaviour_type"] = crit_df["ABCH_primary"].apply(lambda d: d.get("behaviour","") if isinstance(d, dict) else "")
@@ -2894,11 +2894,11 @@ def render_student_dashboard():
     
     if not quick_df.empty:
         quick_df["incident_type"] = "Quick"
-        quick_df["date_parsed"] = pd.to_datetime(quick_df["date"])
+        quick_df["date_parsed"] = pd.to_datetime(quick_df["date"], utc=True).dt.tz_localize(None)
     
     if not crit_df.empty:
         crit_df["incident_type"] = "Critical"
-        crit_df["date_parsed"] = pd.to_datetime(crit_df.get("created_at", datetime.now().isoformat()))
+        crit_df["date_parsed"] = pd.to_datetime(crit_df.get("created_at", datetime.now().isoformat()), utc=True).dt.tz_localize(None)
         crit_df["severity"] = 5
     
     full_df = pd.concat([quick_df, crit_df], ignore_index=True).sort_values("date_parsed") if not quick_df.empty or not crit_df.empty else pd.DataFrame()
@@ -2907,7 +2907,7 @@ def render_student_dashboard():
     critical_count = len(full_df[full_df.get("incident_type", pd.Series(dtype=str)) == "Critical"]) if "incident_type" in full_df.columns else len(crit_df)
     avg_severity = full_df["severity"].mean() if "severity" in full_df.columns else 0
     
-    week_ago = datetime.now() - timedelta(days=7)
+    week_ago = datetime.utcnow() - timedelta(days=7)
     recent_incidents = len(full_df[full_df["date_parsed"] >= week_ago]) if not full_df.empty else 0
     
     risk_score = min(100, int(
@@ -2944,7 +2944,7 @@ def render_student_dashboard():
     with col1:
         st.markdown("#### Daily Trend (Last 30 Days)")
         if not full_df.empty:
-            thirty_days_ago = datetime.now() - timedelta(days=30)
+            thirty_days_ago = datetime.utcnow() - timedelta(days=30)
             recent_df = full_df[full_df["date_parsed"] >= thirty_days_ago]
             daily = recent_df.groupby(recent_df["date_parsed"].dt.date).size().reset_index(name="count")
             fig = go.Figure()
