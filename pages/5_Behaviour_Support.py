@@ -2552,11 +2552,16 @@ def render_student_analysis_page():
                 )
 
     full_df = pd.concat([quick_df, crit_df], ignore_index=True).sort_values("date_parsed")
-    # time column may still be missing if only quick incidents with no time field
+    # Guarantee time column always exists before hour extraction
     if "time" not in full_df.columns:
         full_df["time"] = "09:00:00"
-    full_df["hour"] = pd.to_datetime(full_df["time"], format="%H:%M:%S", errors="coerce").dt.hour
+    else:
+        full_df["time"] = full_df["time"].fillna("09:00:00")
+    full_df["hour"] = pd.to_datetime(full_df["time"], format="%H:%M:%S", errors="coerce").dt.hour.fillna(9).astype(int)
     full_df["day_of_week"] = full_df["date_parsed"].dt.day_name()
+    # Guarantee session column always exists
+    if "session" not in full_df.columns:
+        full_df["session"] = full_df["hour"].apply(lambda h: "Morning" if h < 11 else "Middle" if h < 13 else "Afternoon")
 
     quick_only_df = full_df[full_df['incident_type'] == 'Quick'].copy() if 'Quick' in full_df['incident_type'].values else pd.DataFrame()
     crit_only_df = full_df[full_df['incident_type'] == 'Critical'].copy() if 'Critical' in full_df['incident_type'].values else pd.DataFrame()
