@@ -892,29 +892,61 @@ def _render_new_staff_minutes():
             m_apologies = st.text_area("Apologies — one name per line", height=100)
 
         st.markdown("##### 💻 Part 1 — Digital Staff Meeting")
+        st.caption("Automatically loaded from the most recent published Digital Staff Meeting.")
+        
+        # Auto-load DSM content
+        _dsm_summary = ""
+        _dsm_items_raw = ""
+        try:
+            _dsm_res = supabase.table("weekly_editions").select("*").eq("status","published").order("week_start", desc=True).limit(1).execute()
+            if _dsm_res.data:
+                _dsm_ed = _dsm_res.data[0]
+                _dsm_ed_id = _dsm_ed["id"]
+                _notices_res = supabase.table("notices").select("*").eq("edition_id", _dsm_ed_id).order("created_at").execute()
+                _notices = _notices_res.data or []
+                if _notices:
+                    _dsm_summary = f"**{_dsm_ed.get('week_label','Digital Staff Meeting')}**\n\n"
+                    _dsm_summary += "\n\n".join([
+                        f"**{n.get('section','General')}** — {n.get('content','')}"
+                        for n in _notices if n.get('content','').strip()
+                    ])
+                    _dsm_items_raw = "\n".join([
+                        f"{n.get('section','Item')}|Digital Staff Meeting|All Staff|Noted"
+                        for n in _notices if n.get('content','').strip()
+                    ])
+                    st.success(f"✅ Loaded {len(_notices)} items from {_dsm_ed.get('week_label','latest DSM')}")
+        except Exception as _e:
+            st.caption(f"Could not auto-load DSM: {_e}")
+        
         m_digital_summary = st.text_area("Digital meeting summary", height=90,
+            value=_dsm_summary,
             placeholder="Brief overview of what staff were asked to review / action online this week.")
         st.markdown("**Items table** — one item per line: `Item | Raised By | Actioned By | Status`")
         st.caption("Status options: Actioned · Noted · Pending")
         m_digital_items_raw = st.text_area("Digital items", height=110,
+            value=_dsm_items_raw,
             placeholder="Timetable update Week 5 | Candice Cooper | All staff | Noted")
 
         st.markdown("##### 👥 Part 2 — Face-to-Face Meeting")
-        ff_method = st.radio("Minutes input method",
-            ["📄 Type / paste minutes directly", "🎙️ Drop transcript — AI will structure and improve it"],
-            horizontal=True)
-        do_ai = "🎙️" in ff_method
+        st.markdown("""
+        <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;
+                    padding:10px 16px;margin-bottom:12px;font-size:13px;color:#14532d;">
+          🎙️ <strong>Paste your meeting transcript or recording below.</strong>
+          AI will structure it into professional minutes including attendance, apologies, 
+          arising business and standing items.
+        </div>""", unsafe_allow_html=True)
+        do_ai = True
         m_ff_content = st.text_area(
-            "Face-to-face minutes" if not do_ai else "Paste transcript or rough notes",
-            height=280)
+            "Paste meeting transcript or rough notes here",
+            height=300,
+            placeholder="Paste the full transcript or recording from your face-to-face meeting. Include who was present, what was discussed, decisions made and actions agreed...")
 
         st.markdown("##### ✅ Action Items")
         st.caption("One per line: `Action | Assigned To | Due date`")
         m_actions = st.text_area("Action items", height=80,
             placeholder="Update student profiles | Candice Cooper | Week 5")
 
-        submitted = st.form_submit_button(
-            "✨ Improve with AI & Save" if do_ai else "💾 Save Combined Minutes", type="primary")
+        submitted = st.form_submit_button("✨ Improve with AI & Save", type="primary")
 
         if submitted:
             if not m_title.strip():
