@@ -3010,15 +3010,16 @@ def render_student_dashboard():
     # ── Historical Incidents ──────────────────────────────────────────────────
     st.markdown("---")
     st.markdown("### 📋 Historical Critical Incidents")
-    st.caption("Paste the content of a Word document below. AI will extract and structure all critical incidents automatically.")
+    st.caption("Paste the content of a Word document below. AI will extract the critical incident and structure it automatically.")
 
     ai_notes = st.text_area(
         "Paste Word document content here",
-        placeholder="Paste the full text of your Word document here. Include all incident descriptions, dates, and relevant details. The AI will identify and structure each incident automatically.",
+        placeholder="Paste the full text of your ABCH Word document here. The AI will identify it as a single critical incident and extract the timeline, student details, outcomes and SAPOL reference automatically.",
         height=300,
         key="ai_hist_notes"
     )
-    if st.button("🤖 Extract Incidents with AI", type="primary", key="ai_extract_btn", use_container_width=True):
+
+    if st.button("🤖 Extract Incident with AI", type="primary", key="ai_extract_btn", use_container_width=True):
         if not ai_notes.strip():
             st.warning("Please paste your document content first.")
         else:
@@ -3026,28 +3027,55 @@ def render_student_dashboard():
             if not GROQ_KEY:
                 st.error("Groq API key not configured.")
             else:
-                with st.spinner("AI is reading your document and extracting incidents..."):
+                with st.spinner("AI is reading your document and extracting the critical incident..."):
                     try:
                         from groq import Groq as GroqClient
                         import json as _json
                         client = GroqClient(api_key=GROQ_KEY)
-                        prompt = f"""You are a behaviour support data analyst for an alternative education school (Cowandilla Learning Centre, Learning & Behaviour Unit).
 
-Extract all critical incidents from the following document for student: {student['name']}.
+                        prompt = f"""You are a behaviour support data analyst for Cowandilla Learning Centre, Learning & Behaviour Unit.
 
-For each incident found, output a JSON array with objects containing:
-- date: (YYYY-MM-DD format, estimate if unclear)
-- behaviour: (clear, detailed description of the behaviour)
-- severity: (integer 1-5, where 1=minor, 3=moderate, 5=extreme/dangerous)
-- antecedent: (what triggered or preceded it, or "Not recorded")
-- intervention: (what was done in response, or "Not recorded")
-- notes: (any other relevant context, consequences, follow-up)
+The following document describes ONE critical incident involving student: {student['name']}.
+It may contain a timeline with multiple entries (e.g. 9:45, 9:50, 10:00 etc.) — these are NOT separate incidents, they are continuation entries within the SAME single incident.
 
-Return ONLY valid JSON array, no other text, no markdown. If no incidents found, return [].
+Extract the incident as a single JSON object with this exact structure:
+{{
+  "date": "YYYY-MM-DD",
+  "severity": 3,
+  "sapol_reference": "reference number or null",
+  "outcomes": ["list", "of", "outcomes"],
+  "primary": {{
+    "time": "time of first entry",
+    "location": "location of first entry",
+    "context": "antecedent/context of first entry",
+    "behaviour": "behaviour of first entry",
+    "consequence": "consequence/staff response of first entry"
+  }},
+  "additional_entries": [
+    {{
+      "time": "time",
+      "location": "location",
+      "context": "antecedent or what happened before",
+      "behaviour": "what the student did",
+      "consequence": "staff response or what happened after",
+      "hypothesis": ""
+    }}
+  ],
+  "notes": "any other relevant context, TAC meetings, DCP notifications etc"
+}}
+
+Rules:
+- The FIRST timeline entry goes into "primary"
+- All SUBSEQUENT timeline entries go into "additional_entries" as an array
+- If there is only one timeline entry, "additional_entries" should be []
+- severity: 1=minor, 2=low, 3=moderate, 4=serious, 5=extreme/crisis
+- Extract SAPOL reference number if present (look for police reference, SAPOL ref etc)
+- Extract outcomes/intended outcomes if listed
+- Return ONLY the JSON object, no other text, no markdown code fences
 
 Document content:
 {ai_notes}"""
-                        # FIX 3A: single braces — normal list containing a dict, NOT a set
+
                         response = client.chat.completions.create(
                             model="llama-3.3-70b-versatile",
                             messages=[{"role": "user", "content": prompt}],
@@ -3057,65 +3085,125 @@ Document content:
                         raw = response.choices[0].message.content.strip()
                         raw = raw.replace("```json", "").replace("```", "").strip()
                         extracted = _json.loads(raw)
+
+                        # Guard: if AI returned a list despite instructions, take first item
+                        if isinstance(extracted, list):
+                            extracted = extracted[0] if extracted else {}
+
                         if not extracted:
-                            st.info("No incidents found in the document. Check that the content includes incident descriptions.")
+                            st.info("No incident data could be extracted. Check the document content and try again.")
                         else:
-                            st.success(f"✅ Found {len(extracted)} incident(s). Review and edit below before saving.")
-                            st.session_state["ai_extracted_incidents"] = extracted
+                            n_additional = len(extracted.get("additional_entries", []))
+                            st.success(f"✅ Critical incident extracted — {1 + n_additional} timeline entries found. Review and edit below before saving.")
+                            st.session_state["ai_extracted_incident"] = extracted
+
                     except Exception as e:
-                        # FIX 3B: single braces in f-string
                         st.error(f"AI extraction failed: {e}")
 
-    if st.session_state.get("ai_extracted_incidents"):
-        extracted = st.session_state["ai_extracted_incidents"]
-        st.markdown(f"**{len(extracted)} incident(s) extracted — review and edit before saving:**")
-        confirmed = []
-        for i, inc in enumerate(extracted):
-            with st.expander(f"Incident {i+1}: {inc.get('date','?')} — {str(inc.get('behaviour','?'))[:60]}...", expanded=(i==0)):
-                ec1, ec2 = st.columns(2)
-                with ec1:
-                    inc['date'] = st.text_input("Date", value=inc.get('date',''), key=f"ai_date_{i}")
-                    inc['behaviour'] = st.text_area("Behaviour", value=inc.get('behaviour',''), key=f"ai_beh_{i}", height=100)
-                    inc['severity'] = st.slider("Severity", 1, 5, int(inc.get('severity', 3)), key=f"ai_sev_{i}")
-                with ec2:
-                    inc['antecedent'] = st.text_area("Antecedent / Trigger", value=inc.get('antecedent',''), key=f"ai_ant_{i}", height=80)
-                    inc['intervention'] = st.text_area("Intervention / Response", value=inc.get('intervention',''), key=f"ai_int_{i}", height=80)
-                    inc['notes'] = st.text_area("Additional Notes", value=inc.get('notes',''), key=f"ai_notes_f_{i}", height=50)
-            confirmed.append(inc)
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button(f"💾 Save All {len(confirmed)} Incidents", type="primary", key="save_ai_extracted", use_container_width=True):
-                saved = 0
-                for inc in confirmed:
-                    try:
-                        # FIX 3C: single braces — normal dict for supabase insert
-                        # Column names corrected to match critical_incidents schema
-                        supabase.table("critical_incidents").insert({
-                            "student_id": student_id,
-                            "primary_time": inc.get('date', str(date.today())),
-                            "primary_behaviour": inc.get('behaviour', ''),
-                            "primary_context": inc.get('antecedent', ''),
-                            "primary_consequence": inc.get('intervention', ''),
-                            "admin_summary": inc.get('notes', ''),
-                            "severity": int(inc.get('severity', 3)),
-                            "status": "historical",
-                            "reported_by": st.session_state.current_user.get("id"),
-                            "created_at": datetime.utcnow().isoformat(),
-                            "outcomes": [],
-                            "audit_trail": "[]",
-                            "include_audit_in_report": False,
-                        }).execute()
-                        saved += 1
-                    except Exception as e:
-                        st.error(f"Error saving incident: {e}")
-                if saved > 0:
-                    st.success(f"✅ Saved {saved} historical incident(s)!")
-                    st.session_state["ai_extracted_incidents"] = None
+    # ── Review & Edit ─────────────────────────────────────────────────────────
+    if st.session_state.get("ai_extracted_incident"):
+        inc = st.session_state["ai_extracted_incident"]
+
+        st.markdown("---")
+        st.markdown("#### Review Extracted Incident")
+        st.caption("Check all fields before saving. This will be saved as a single critical incident in the student's record.")
+
+        # Top-level metadata
+        meta_col1, meta_col2, meta_col3 = st.columns(3)
+        with meta_col1:
+            inc["date"] = st.text_input("Incident Date (YYYY-MM-DD)", value=inc.get("date", ""), key="ai_inc_date")
+        with meta_col2:
+            inc["severity"] = st.slider("Severity", 1, 5, int(inc.get("severity", 3)), key="ai_inc_sev")
+        with meta_col3:
+            inc["sapol_reference"] = st.text_input("SAPOL Reference (if any)", value=inc.get("sapol_reference") or "", key="ai_inc_sapol")
+
+        inc["outcomes"] = st.text_area(
+            "Outcomes / Intended Actions",
+            value=", ".join(inc.get("outcomes", [])) if isinstance(inc.get("outcomes"), list) else inc.get("outcomes", ""),
+            key="ai_inc_outcomes",
+            height=60
+        )
+        inc["notes"] = st.text_area("Additional Notes", value=inc.get("notes", ""), key="ai_inc_notes", height=60)
+
+        # Primary ABCH entry
+        st.markdown("##### Initial Entry (Primary)")
+        primary = inc.get("primary", {})
+        p_col1, p_col2 = st.columns(2)
+        with p_col1:
+            primary["time"] = st.text_input("Time", value=primary.get("time", ""), key="ai_p_time")
+            primary["location"] = st.text_input("Location", value=primary.get("location", ""), key="ai_p_loc")
+            primary["context"] = st.text_area("Antecedent / Context", value=primary.get("context", ""), key="ai_p_ctx", height=100)
+        with p_col2:
+            primary["behaviour"] = st.text_area("Behaviour", value=primary.get("behaviour", ""), key="ai_p_beh", height=100)
+            primary["consequence"] = st.text_area("Consequence / Staff Response", value=primary.get("consequence", ""), key="ai_p_con", height=100)
+        inc["primary"] = primary
+
+        # Continuation entries
+        additional = inc.get("additional_entries", [])
+        if additional:
+            st.markdown(f"##### Continuation Entries ({len(additional)})")
+            for idx, entry in enumerate(additional):
+                with st.expander(f"Entry {idx + 1} — {entry.get('time', '')} {entry.get('location', '')}", expanded=False):
+                    a_col1, a_col2 = st.columns(2)
+                    with a_col1:
+                        entry["time"] = st.text_input("Time", value=entry.get("time", ""), key=f"ai_a_time_{idx}")
+                        entry["location"] = st.text_input("Location", value=entry.get("location", ""), key=f"ai_a_loc_{idx}")
+                        entry["context"] = st.text_area("Antecedent / Context", value=entry.get("context", ""), key=f"ai_a_ctx_{idx}", height=80)
+                    with a_col2:
+                        entry["behaviour"] = st.text_area("Behaviour", value=entry.get("behaviour", ""), key=f"ai_a_beh_{idx}", height=80)
+                        entry["consequence"] = st.text_area("Consequence / Staff Response", value=entry.get("consequence", ""), key=f"ai_a_con_{idx}", height=80)
+            inc["additional_entries"] = additional
+
+        st.markdown("---")
+        save_col, clear_col = st.columns(2)
+
+        with save_col:
+            if st.button("💾 Save as Critical Incident", type="primary", key="save_ai_extracted", use_container_width=True):
+                try:
+                    # Parse outcomes back to list if edited as string
+                    outcomes_raw = inc.get("outcomes", "")
+                    if isinstance(outcomes_raw, str):
+                        outcomes_list = [o.strip() for o in outcomes_raw.split(",") if o.strip()]
+                    else:
+                        outcomes_list = outcomes_raw
+
+                    primary_data = inc.get("primary", {})
+                    additional_data = inc.get("additional_entries", [])
+                    sapol_ref = inc.get("sapol_reference", "") or None
+                    if sapol_ref == "":
+                        sapol_ref = None
+
+                    record = {
+                        "student_id":              student_id,
+                        "severity":                int(inc.get("severity", 3)),
+                        "reported_by":             st.session_state.current_user.get("id"),
+                        "created_at":              f"{inc.get('date', str(date.today()))}T00:00:00",
+                        "primary_location":        primary_data.get("location", ""),
+                        "primary_context":         primary_data.get("context", ""),
+                        "primary_time":            primary_data.get("time", ""),
+                        "primary_behaviour":       primary_data.get("behaviour", ""),
+                        "primary_consequence":     primary_data.get("consequence", ""),
+                        "additional_entries":      additional_data,
+                        "outcomes":                outcomes_list,
+                        "sapol_reference":         sapol_ref,
+                        "admin_summary":           inc.get("notes", ""),
+                        "status":                  "historical",
+                        "audit_trail":             "[]",
+                        "include_audit_in_report": False,
+                    }
+
+                    supabase.table("critical_incidents").insert(record).execute()
+
+                    st.success(f"✅ Critical incident saved to {student['name']}'s record with {1 + len(additional_data)} timeline entries!")
+                    st.session_state["ai_extracted_incident"] = None
                     st.rerun()
-        with col2:
+
+                except Exception as e:
+                    st.error(f"Error saving incident: {e}")
+
+        with clear_col:
             if st.button("🗑️ Clear & Start Over", key="clear_ai", use_container_width=True):
-                st.session_state["ai_extracted_incidents"] = None
+                st.session_state["ai_extracted_incident"] = None
                 st.rerun()
 
 
