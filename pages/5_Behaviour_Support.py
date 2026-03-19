@@ -2106,7 +2106,10 @@ def render_critical_incident_page():
             )
             
             if save_critical_incident_to_db(record):
-                st.session_state.critical_incidents.append(record)
+                # Clear and reload so fresh data is always shown
+                for _key in ["critical_incidents", "incidents"]:
+                    if _key in st.session_state:
+                        del st.session_state[_key]
                 st.session_state.abch_rows = []
                 st.session_state.hyp_1_generated = False
                 st.session_state.ci_draft_id = None
@@ -3196,6 +3199,10 @@ Document content:
 
                     st.success(f"✅ Critical incident saved to {student['name']}'s record with {1 + len(additional_data)} timeline entries!")
                     st.session_state["ai_extracted_incident"] = None
+                    # Force fresh reload from Supabase so new record appears immediately
+                    for _key in ["critical_incidents", "incidents"]:
+                        if _key in st.session_state:
+                            del st.session_state[_key]
                     st.rerun()
 
                 except Exception as e:
