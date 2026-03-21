@@ -29,15 +29,16 @@ st.sidebar.markdown(
     unsafe_allow_html=True
 )
 
+
 # ── Supabase ──────────────────────────────────────────────────────────────────
-SUPABASE_URL   = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY   = st.secrets["SUPABASE_KEY"]
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "CLC2026admin")
-GROQ_KEY       = st.secrets.get("GROQ_API_KEY", "")
+GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ── Constants ─────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 PROGRAMS = {
     "JP":    {"label": "Junior Primary",  "color": "#2d7d4f", "light": "#d1fae5", "emoji": "🟢"},
     "PY":    {"label": "Primary Years",   "color": "#1a4d8c", "light": "#dbeafe", "emoji": "🔵"},
@@ -46,25 +47,9 @@ PROGRAMS = {
     "ADMIN": {"label": "Admin Meetings",  "color": "#92400e", "light": "#fef3c7", "emoji": "🏢"},
 }
 
-DAYS_OF_WEEK    = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 RECURRENCE_TYPES = ["Weekly", "Fortnightly", "Monthly"]
 
-# DfE standing agenda item labels — used in both recording and display
-DFE_STANDING_ITEMS = [
-    ("1",  "Welcome",                              "👋"),
-    ("2",  "Acknowledgement of Chair & Minute Taker", "📌"),
-    ("3",  "Apologies",                            "🙏"),
-    ("4",  "Confirmation of Previous Minutes",     "✅"),
-    ("5",  "Business Arising from Previous Minutes","🔁"),
-]
-DFE_CLOSING_ITEMS = [
-    ("GB", "General Business / Other Business",   "💬"),
-    ("NM", "Next Meeting",                         "📅"),
-    ("CL", "Close of Meeting",                     "🔔"),
-]
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
 def get_program_from_params():
     params = st.query_params
     prog = params.get("program", "JP")
@@ -82,6 +67,8 @@ def get_week_from_params():
         return None
 
 def admin_login():
+    # This is a separate in-app admin level for editing/deleting content
+    # (distinct from the shared staff auth handled by auth.py above)
     if "admin" not in st.session_state:
         st.session_state.admin = False
     with st.sidebar:
@@ -100,13 +87,61 @@ def admin_login():
                 st.session_state.admin = False
                 st.rerun()
 
-
-def improve_with_ai(raw_text: str, program: str, meeting_date: str) -> str:
-    """Generic AI improvement for JP/PY/SY/ADMIN team minutes."""
-    if not GROQ_KEY or not raw_text.strip():
+def improve_with_ai(raw_text: str, program: str, meeting_date: str, dsm_summary: str = "") -> str:
+    if not GROQ_KEY:
         return raw_text
     client = Groq(api_key=GROQ_KEY)
-    prompt = f"""You are a professional minute-taker for an alternative education school (Cowandilla Learning Centre, Learning & Behaviour Unit).
+    
+    if program == "STAFF":
+        dsm_context = f"""
+PART 1 — DIGITAL STAFF MEETING (already recorded, include as first section):
+{dsm_summary}
+""" if dsm_summary else ""
+        
+        prompt = f"""You are a professional minute-taker for Cowandilla Learning Centre (CLC), Learning & Behaviour Unit — an alternative education school in South Australia.
+
+Meeting: Staff Meeting (Combined — Digital + Face-to-Face)
+Date: {meeting_date}
+{dsm_context}
+PART 2 — FACE-TO-FACE MEETING TRANSCRIPT:
+{raw_text}
+
+Transform the face-to-face transcript into polished, professional minutes using this EXACT structure:
+
+## PART 2 — FACE-TO-FACE STAFF MEETING
+
+### Attendance
+List names present and apologies from the transcript. If not clear, note "See attendance record."
+
+### Apologies
+Names with apologies.
+
+### Arising Business
+Any matters arising from previous meetings mentioned in the transcript.
+
+### Standing Items
+Present each discussion point as a numbered item:
+1. **Item title** — summary of discussion and any decisions made
+
+### Actions
+| Action | Assigned To | Due |
+|--------|-------------|-----|
+| (list all actions agreed) | (who) | (when) |
+
+### Next Meeting
+Date/time if mentioned, otherwise leave blank.
+
+Rules:
+- Professional but warm, accessible language appropriate for a school setting
+- Trauma-informed, strengths-based framing
+- Preserve ALL factual content — do not add or fabricate anything
+- Keep it concise — one clear sentence per discussion point unless more detail is essential
+- Use plain English, avoid jargon
+
+Transcript to transform:
+{raw_text}"""
+    else:
+        prompt = f"""You are a professional minute-taker for an alternative education school (Cowandilla Learning Centre, Learning & Behaviour Unit).
 
 Program team: {PROGRAMS[program]['label']} ({program})
 Meeting date: {meeting_date}
@@ -132,96 +167,6 @@ Raw input:
     )
     return response.choices[0].message.content
 
-
-def improve_staff_ff_with_ai(
-    raw_text: str,
-    meeting_date: str,
-    chair: str,
-    minutes_taker: str,
-    apologies: str,
-    prev_minutes_confirmed: bool,
-    business_arising: str,
-    extra_agenda_items: list,
-    general_business: str,
-    next_meeting: str,
-) -> str:
-    """
-    AI structures the face-to-face transcript into the DfE staff meeting format.
-    Produces output as numbered sections matching the Chair's Running Sheet.
-    """
-    if not GROQ_KEY or not raw_text.strip():
-        return raw_text
-
-    client = Groq(api_key=GROQ_KEY)
-
-    extra_items_text = ""
-    if extra_agenda_items:
-        for idx, item in enumerate(extra_agenda_items):
-            extra_items_text += f"\n  Item {6 + idx}: {item}"
-    else:
-        extra_items_text = "\n  (No additional agenda items submitted)"
-
-    prompt = f"""You are a professional minute-taker for Cowandilla Learning Centre — Learning & Behaviour Unit.
-You are structuring the face-to-face component of a DfE-format staff meeting.
-
-Meeting date: {meeting_date}
-Chair: {chair}
-Minute taker: {minutes_taker}
-Apologies recorded: {apologies or 'None'}
-Previous minutes confirmed: {'Yes' if prev_minutes_confirmed else 'Not recorded'}
-Business arising (pre-filled): {business_arising or 'Nil'}
-Additional agenda items:{extra_items_text}
-General business (pre-filled): {general_business or 'Nil'}
-Next meeting details: {next_meeting or 'To be confirmed'}
-
-The following is the raw transcript or notes from the face-to-face portion of the meeting.
-Structure it into the exact DfE staff meeting format below. Use professional, accessible language.
-Trauma-informed and strengths-based framing where appropriate.
-Preserve all factual content — do not fabricate or add information not present.
-
-Output format — use these EXACT section headings in this order:
-
-**Item 1 — Welcome**
-[Brief note that Chair opened the meeting]
-
-**Item 2 — Acknowledgement of Chair & Minute Taker**
-Chair: {chair}
-Minute Taker: {minutes_taker}
-
-**Item 3 — Apologies**
-[List apologies or state 'Nil']
-
-**Item 4 — Confirmation of Previous Minutes**
-[Moved/seconded or not recorded]
-
-**Item 5 — Business Arising from Previous Minutes**
-[Summary of actions/progress from previous meeting]
-
-[For each additional agenda item, use:]
-**Item 6 — [Item Title]**
-[Summary of discussion, decisions, outcomes]
-
-**General Business**
-[Any other matters raised]
-
-**Next Meeting**
-[Date, time, location if known]
-
-**Close of Meeting**
-[Chair closed the meeting]
-
----
-Raw transcript/notes to structure:
-{raw_text}"""
-
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=4000
-    )
-    return response.choices[0].message.content
-
-
 # ── DB helpers ────────────────────────────────────────────────────────────────
 def fetch(table, filters=None, order=None):
     q = supabase.table(table).select("*")
@@ -240,7 +185,6 @@ def update_row(table, row_id, data):
 
 def delete_row(table, row_id):
     supabase.table(table).delete().eq("id", row_id).execute()
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # WORD DOCUMENT HELPERS
@@ -406,6 +350,7 @@ def _add_content_block(doc, text, placeholder="Not recorded."):
         if stripped:
             p = doc.add_paragraph(stripped)
             p.paragraph_format.space_after = Pt(2)
+            p.runs[0].font.size = Pt(10) if p.runs else None
     doc.add_paragraph().paragraph_format.space_after = Pt(4)
 
 def _doc_cover(doc, program, title, meeting_date):
@@ -461,6 +406,7 @@ def generate_combined_docx(m: dict) -> bytes:
         digital_summary = (m.get("digital_summary") or "").strip()
         if digital_summary:
             p = doc.add_paragraph()
+            p.paragraph_format.space_before = Pt(2)
             _para_run(p, "Digital Meeting Summary", bold=True, size_pt=10, colour="1a4d8c")
             _add_content_block(doc, digital_summary)
         p = doc.add_paragraph()
@@ -471,7 +417,7 @@ def generate_combined_docx(m: dict) -> bytes:
         except Exception:
             digital_items = []
         _add_digital_items_table(doc, digital_items)
-        _add_banner(doc, "👥  PART 2 — FACE-TO-FACE MEETING (DfE FORMAT)", bg="1e6f75")
+        _add_banner(doc, "👥  PART 2 — FACE-TO-FACE MEETING", bg="2d7d4f")
         ff = (m.get("face_to_face_content") or m.get("content") or "").strip()
         _add_content_block(doc, ff, placeholder="No face-to-face minutes recorded.")
         action_text = (m.get("action_summary") or "").strip()
@@ -495,8 +441,11 @@ def generate_combined_docx(m: dict) -> bytes:
     except Exception as e:
         doc2 = Document()
         doc2.add_paragraph(f"Error generating formatted document: {e}")
+        doc2.add_paragraph(f"Title: {m.get('title','')}")
+        doc2.add_paragraph(f"Date: {m.get('meeting_date','')}")
         doc2.add_paragraph(m.get("digital_summary",""))
         doc2.add_paragraph(m.get("face_to_face_content","") or m.get("content",""))
+        doc2.add_paragraph(m.get("action_summary",""))
         buf2 = io.BytesIO()
         doc2.save(buf2)
         buf2.seek(0)
@@ -552,12 +501,14 @@ def generate_team_docx(m: dict, program: str) -> bytes:
     except Exception as e:
         doc2 = Document()
         doc2.add_paragraph(f"Error generating formatted document: {e}")
+        doc2.add_paragraph(f"Title: {m.get('title','')}")
+        doc2.add_paragraph(f"Date: {m.get('meeting_date','')}")
         doc2.add_paragraph(m.get("content",""))
+        doc2.add_paragraph(m.get("action_summary",""))
         buf2 = io.BytesIO()
         doc2.save(buf2)
         buf2.seek(0)
         return buf2.getvalue()
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION RENDERERS
@@ -586,7 +537,8 @@ def render_schedules(program):
                 if s.get("notes"):
                     st.caption(s["notes"])
                 if st.session_state.get("admin"):
-                    with st.columns(2)[1]:
+                    col_e, col_d = st.columns(2)
+                    with col_d:
                         if st.button("🗑️ Delete", key=f"del_sched_{s['id']}"):
                             delete_row("tm_schedules", s["id"])
                             st.rerun()
@@ -623,11 +575,14 @@ def render_agenda(program):
     st.subheader("📋 Agenda")
 
     if is_staff:
-        schedules    = fetch("tm_schedules", {"program": "STAFF"}, "created_at")
-        chair_name   = schedules[0].get("chair","—") if schedules and schedules[0].get("chair") else "—"
+        # ── DfE Meeting Structure — Chair's Running Sheet ──────────────────
+        # Load schedules for chair/minutes taker
+        schedules = fetch("tm_schedules", {"program": "STAFF"}, "created_at")
+        chair_name = schedules[0].get("chair","—") if schedules and schedules[0].get("chair") else "—"
         minutes_name = schedules[0].get("minutes_taker","—") if schedules and schedules[0].get("minutes_taker") else "—"
 
-        items        = fetch("tm_agenda_items", {"program": program}, "created_at")
+        # Load agenda items
+        items = fetch("tm_agenda_items", {"program": program}, "created_at")
         open_items   = [i for i in items if i.get("status","open") != "closed"]
         closed_items = [i for i in items if i.get("status","open") == "closed"]
 
@@ -650,17 +605,32 @@ def render_agenda(program):
             </div>
             """, unsafe_allow_html=True)
 
+        # Item 1 — Welcome
         agenda_section(1, "Welcome", "👋",
-            f"Chair <strong>{chair_name}</strong> opens the meeting and welcomes all staff.", color="#1e6f75")
-        agenda_section(2, "Acknowledgement of Chair & Minute Taker", "📌",
-            f"<strong>Chair:</strong> {chair_name}<br><strong>Minute Taker:</strong> {minutes_name}", color="#1a4d8c")
-        agenda_section(3, "Apologies", "🙏",
-            "Chair calls for apologies. Minute taker records names of staff unable to attend.", color="#92400e")
-        agenda_section(4, "Confirmation of Previous Minutes", "✅",
-            "Chair asks if previous minutes are a true and accurate record. Moved and seconded.", color="#065f46")
-        agenda_section(5, "Business Arising from Previous Minutes", "🔁",
-            "Review of actions from previous meeting. Staff report on progress.", color="#6d28d9")
+            f"Chair <strong>{chair_name}</strong> opens the meeting and welcomes all staff.",
+            color="#1e6f75")
 
+        # Item 2 — Acknowledgement of Chair and Minute Taker
+        agenda_section(2, "Acknowledgement of Chair & Minute Taker", "📌",
+            f"<strong>Chair:</strong> {chair_name}<br><strong>Minute Taker:</strong> {minutes_name}",
+            color="#1a4d8c")
+
+        # Item 3 — Apologies
+        agenda_section(3, "Apologies", "🙏",
+            "Chair calls for apologies. Minute taker records names of staff unable to attend.",
+            color="#92400e")
+
+        # Item 4 — Confirmation of Previous Minutes
+        agenda_section(4, "Confirmation of Previous Minutes", "✅",
+            "Chair asks if previous minutes are a true and accurate record. Moved and seconded.",
+            color="#065f46")
+
+        # Item 5 — Business Arising from Previous Minutes
+        agenda_section(5, "Business Arising from Previous Minutes", "🔁",
+            "Review of actions from previous meeting. Staff report on progress.",
+            color="#6d28d9")
+
+        # Items 6+ — Agenda items from staff
         if open_items:
             for idx_i, item in enumerate(open_items):
                 item_num = 6 + idx_i
@@ -671,7 +641,8 @@ def render_agenda(program):
                     agenda_section(item_num, item['title'], "📌",
                         f"{desc_html}{submitted}", color="#1e6f75")
                 with c2:
-                    st.write(""); st.write("")
+                    st.write("")
+                    st.write("")
                     if st.session_state.get("admin"):
                         if st.button("✅ Close", key=f"close_agenda_{item['id']}"):
                             update_row("tm_agenda_items", item["id"], {"status": "closed"})
@@ -682,12 +653,20 @@ def render_agenda(program):
         else:
             st.info("No additional agenda items submitted yet. Staff can add items below.")
 
+        # Standing item — Other Business
         agenda_section(6 + len(open_items), "General Business / Other Business", "💬",
-            "Chair invites any other matters not previously listed. Brief discussion only.", color="#475569")
+            "Chair invites any other matters not previously listed. Brief discussion only.",
+            color="#475569")
+
+        # Standing item — Next Meeting
         agenda_section(7 + len(open_items), "Next Meeting", "📅",
-            "Chair confirms date, time and location of next meeting.", color="#475569")
+            "Chair confirms date, time and location of next meeting.",
+            color="#475569")
+
+        # Standing item — Close
         agenda_section(8 + len(open_items), "Close of Meeting", "🔔",
-            "Chair formally closes the meeting and thanks staff for their attendance.", color="#1e6f75")
+            "Chair formally closes the meeting and thanks staff for their attendance.",
+            color="#1e6f75")
 
         if closed_items:
             with st.expander(f"✅ Closed agenda items ({len(closed_items)})"):
@@ -695,7 +674,8 @@ def render_agenda(program):
                     st.markdown(f"~~{item['title']}~~ — {item.get('submitted_by','—')}")
 
     else:
-        items        = fetch("tm_agenda_items", {"program": program}, "created_at")
+        # Standard agenda for JP/PY/SY/ADMIN
+        items = fetch("tm_agenda_items", {"program": program}, "created_at")
         open_items   = [i for i in items if i.get("status","open") != "closed"]
         closed_items = [i for i in items if i.get("status","open") == "closed"]
         if open_items:
@@ -799,7 +779,6 @@ def render_minutes(program, week_range=None):
                         st.markdown("\n".join(f"- {n}" for n in apologies_list) if apologies_list else "_None_")
 
                 if is_staff:
-                    # ── Part 1: Digital Staff Meeting ─────────────────────
                     st.markdown("""
                     <div style="background:#dbeafe;border-left:5px solid #1a4d8c;
                                 border-radius:0 8px 8px 0;padding:10px 16px;margin:14px 0 8px;">
@@ -822,21 +801,16 @@ def render_minutes(program, week_range=None):
                         st.dataframe(df, use_container_width=True, hide_index=True)
                     else:
                         st.caption("_No items recorded._")
-
-                    # ── Part 2: Face-to-Face — DfE structured display ─────
                     st.markdown("""
-                    <div style="background:#d1fae5;border-left:5px solid #1e6f75;
+                    <div style="background:#d1fae5;border-left:5px solid #2d7d4f;
                                 border-radius:0 8px 8px 0;padding:10px 16px;margin:14px 0 8px;">
-                      <strong style="color:#1e6f75;font-size:14px;">👥 Part 2 — Face-to-Face Meeting (DfE Format)</strong>
+                      <strong style="color:#2d7d4f;font-size:14px;">👥 Part 2 — Face-to-Face Meeting</strong>
                     </div>""", unsafe_allow_html=True)
-
                     ff = (m.get("face_to_face_content") or m.get("content") or "").strip()
                     if ff:
-                        # Render with section-aware styling
-                        _render_dfe_minutes_display(ff)
+                        st.markdown(ff)
                     else:
                         st.caption("_No face-to-face minutes recorded._")
-
                 else:
                     content = (m.get("content") or m.get("face_to_face_content") or "").strip()
                     if content:
@@ -890,19 +864,19 @@ def render_minutes(program, week_range=None):
                             ec1, ec2 = st.columns([3, 1])
                             with ec1: etitle = st.text_input("Title", value=m.get("title",""))
                             with ec2: edate  = st.date_input("Date", value=datetime.date.fromisoformat(m["meeting_date"]) if m.get("meeting_date") else datetime.date.today())
-                            ec3, ec4 = st.columns(2)
+                            ec3, ec4, ec5 = st.columns(3)
                             with ec3: echair = st.text_input("Chair", value=m.get("chair",""))
                             with ec4: eloc   = st.text_input("Location", value=m.get("location",""))
+                            with ec5: pass
                             eatt  = st.text_input("Present (comma-separated)", value=m.get("attendees",""))
                             eapol = st.text_input("Apologies (comma-separated)", value=m.get("apologies",""))
                             if is_staff:
                                 edigital = st.text_area("Digital meeting summary", value=m.get("digital_summary",""), height=120)
-                                eitems   = st.text_area("Digital items (Item|Raised By|Actioned By|Status)",
-                                    value="\n".join(
-                                        f"{i.get('item','')}|{i.get('raised_by','')}|{i.get('actioned_by','')}|{i.get('status','')}"
-                                        for i in json.loads(m.get("digital_items") or "[]")
-                                    ), height=100)
-                                eff = st.text_area("Face-to-face minutes (DfE structured)", value=m.get("face_to_face_content",""), height=300)
+                                eitems   = st.text_area("Digital items (Item|Raised By|Actioned By|Status)", value="\n".join(
+                                    f"{i.get('item','')}|{i.get('raised_by','')}|{i.get('actioned_by','')}|{i.get('status','')}"
+                                    for i in json.loads(m.get("digital_items") or "[]")
+                                ), height=100)
+                                eff      = st.text_area("Face-to-face minutes", value=m.get("face_to_face_content",""), height=200)
                                 econtent = ""
                             else:
                                 edigital = ""; eitems = ""; eff = ""
@@ -915,8 +889,7 @@ def render_minutes(program, week_range=None):
                                         parts = [p.strip() for p in line.split("|")]
                                         if parts and parts[0]:
                                             parsed_items.append({
-                                                "item": parts[0],
-                                                "raised_by": parts[1] if len(parts)>1 else "",
+                                                "item": parts[0], "raised_by": parts[1] if len(parts)>1 else "",
                                                 "actioned_by": parts[2] if len(parts)>2 else "",
                                                 "status": parts[3] if len(parts)>3 else "Noted"
                                             })
@@ -944,106 +917,68 @@ def render_minutes(program, week_range=None):
         _render_new_team_minutes(program)
 
 
-def _render_dfe_minutes_display(content: str):
-    """
-    Renders face-to-face content with DfE section headings styled to match
-    the agenda Chair's Running Sheet, whether AI-structured or plain text.
-    """
-    SECTION_COLORS = {
-        "item 1": "#1e6f75", "welcome": "#1e6f75",
-        "item 2": "#1a4d8c", "acknowledgement": "#1a4d8c",
-        "item 3": "#92400e", "apolog": "#92400e",
-        "item 4": "#065f46", "confirmation": "#065f46",
-        "item 5": "#6d28d9", "business arising": "#6d28d9",
-        "general business": "#475569",
-        "next meeting": "#475569",
-        "close": "#1e6f75",
-    }
-
-    lines = content.splitlines()
-    current_section = None
-    current_body = []
-
-    def flush_section(section_title, body_lines, color="#1e293b"):
-        if not section_title:
-            # No heading yet — just render as plain text
-            for line in body_lines:
-                if line.strip():
-                    st.markdown(line)
-            return
-        body_text = "\n".join(body_lines).strip()
-        st.markdown(f"""
-        <div style="border:1.5px solid #e2e8f0;border-left:5px solid {color};
-                    border-radius:8px;padding:0.85rem 1rem;margin-bottom:0.75rem;background:white;">
-          <div style="font-weight:700;color:{color};font-size:0.95rem;margin-bottom:0.35rem;">
-            {section_title}
-          </div>
-          <div style="font-size:0.88rem;color:#374151;white-space:pre-wrap;">{body_text or "—"}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    for line in lines:
-        stripped = line.strip()
-        # Detect bold headings: **Item X — Title** or **Title**
-        if stripped.startswith("**") and stripped.endswith("**") and len(stripped) > 4:
-            # Flush previous section
-            flush_section(current_section, current_body,
-                color=_get_dfe_color(current_section or "", SECTION_COLORS))
-            current_section = stripped.strip("*").strip()
-            current_body = []
-        elif stripped.startswith("---"):
-            # Divider — flush and reset
-            flush_section(current_section, current_body,
-                color=_get_dfe_color(current_section or "", SECTION_COLORS))
-            current_section = None
-            current_body = []
-        else:
-            current_body.append(line)
-
-    # Flush final section
-    flush_section(current_section, current_body,
-        color=_get_dfe_color(current_section or "", SECTION_COLORS))
-
-
-def _get_dfe_color(section_title: str, color_map: dict) -> str:
-    lower = section_title.lower()
-    for key, color in color_map.items():
-        if key in lower:
-            return color
-    return "#1e293b"
-
-
 def _render_new_staff_minutes():
-    """
-    Records combined staff meeting minutes.
-    Part 2 (face-to-face) is structured into the DfE format with
-    fields for each standing agenda item, plus AI structuring.
-    """
     st.subheader("✍️ Record Combined Staff Meeting Minutes")
+    
+    # ── Step 1: Load DSM content (outside form so it shows immediately) ────────
+    _dsm_summary = ""
+    _dsm_week_label = ""
+    _dsm_items_raw = ""
+    _dsm_loaded = False
+    try:
+        _dsm_res = supabase.table("weekly_editions").select("*").eq("status","published").order("week_start", desc=True).limit(1).execute()
+        if _dsm_res.data:
+            _dsm_ed = _dsm_res.data[0]
+            _dsm_week_label = _dsm_ed.get("week_label", "Digital Staff Meeting")
+            _notices_res = supabase.table("notices").select("*").eq("edition_id", _dsm_ed["id"]).order("created_at").execute()
+            _notices = _notices_res.data or []
+            if _notices:
+                _dsm_summary = "\n\n".join([
+                    f"**{n.get('section','General')}**\n{n.get('content','')}"
+                    for n in _notices if n.get("content","").strip()
+                ])
+                _dsm_items_raw = "\n".join([
+                    f"{n.get('section','Item')}|Digital Staff Meeting|All Staff|Noted"
+                    for n in _notices if n.get("content","").strip()
+                ])
+                _dsm_loaded = True
+    except Exception as _e:
+        st.caption(f"Could not auto-load DSM: {_e}")
+
+    # Show DSM preview
+    if _dsm_loaded:
+        st.markdown(f"""
+        <div style="background:#dbeafe;border-left:5px solid #1a4d8c;border-radius:0 8px 8px 0;
+                    padding:10px 16px;margin-bottom:16px;">
+          <strong style="color:#1a4d8c;">💻 Part 1 — Digital Staff Meeting auto-loaded:</strong>
+          <span style="font-size:0.85rem;color:#1a4d8c;margin-left:8px;">{_dsm_week_label}</span>
+          <div style="font-size:0.78rem;color:#374151;margin-top:4px;">
+            {len([n for n in (_dsm_summary or "").split(chr(10)+chr(10)) if n.strip()])} item(s) loaded and will appear as Part 1 of the minutes.
+          </div>
+        </div>""", unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div style="background:#fef3c7;border-left:5px solid #d97706;border-radius:0 8px 8px 0;
+                    padding:10px 16px;margin-bottom:16px;font-size:13px;">
+          ⚠️ No published Digital Staff Meeting found. Part 1 will be blank — you can fill it in manually below.
+        </div>""", unsafe_allow_html=True)
+
     st.markdown("""
-    <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;
-                padding:10px 16px;margin-bottom:16px;font-size:13px;color:#0c4a6e;">
-      Complete meeting details, attendance, then fill in each <strong>DfE agenda item</strong>.
-      AI will structure your notes into professional minutes in the correct format.
+    <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;
+                padding:10px 16px;margin-bottom:16px;font-size:13px;color:#14532d;">
+      🎙️ <strong>How to use:</strong> After your face-to-face meeting, paste the recording transcript 
+      into the field below. AI will combine Part 1 (Digital Staff Meeting) with the structured 
+      face-to-face minutes into a single professional record.
     </div>""", unsafe_allow_html=True)
 
-    # ── Load open agenda items for this program ───────────────────────────────
-    extra_agenda_items_db = fetch("tm_agenda_items", {"program": "STAFF"}, "created_at")
-    open_extra = [i for i in extra_agenda_items_db if i.get("status","open") != "closed"]
-
     with st.form("new_staff_minutes_form", clear_on_submit=True):
-
-        # ── Meeting Details ───────────────────────────────────────────────────
         st.markdown("##### 📋 Meeting Details")
         dc1, dc2, dc3 = st.columns([3, 2, 2])
-        with dc1: m_title    = st.text_input("Meeting title *", placeholder="e.g. Staff Meeting — T1 W4")
+        with dc1: m_title    = st.text_input("Meeting title *", placeholder="e.g. Staff Meeting — T1 W8")
         with dc2: m_date     = st.date_input("Date *", value=datetime.date.today())
         with dc3: m_chair    = st.text_input("Chair", value=get_staff_name())
-        dc4, dc5 = st.columns(2)
-        with dc4: m_location     = st.text_input("Location / format", placeholder="e.g. Staff Room / Teams")
-        with dc5: m_minutes_taker = st.text_input("Minute Taker", value=get_staff_name())
+        m_location = st.text_input("Location / format", placeholder="e.g. Staff Room")
 
-        # ── Attendance ────────────────────────────────────────────────────────
         st.markdown("##### 🙋 Attendance")
         ac1, ac2 = st.columns(2)
         with ac1:
@@ -1051,199 +986,77 @@ def _render_new_staff_minutes():
         with ac2:
             m_apologies = st.text_area("Apologies — one name per line", height=100)
 
-        # ── Part 1: Digital Staff Meeting ─────────────────────────────────────
         st.markdown("##### 💻 Part 1 — Digital Staff Meeting")
-        st.caption("Auto-loaded from the most recent published Digital Staff Meeting.")
-
-        _dsm_summary = ""
-        _dsm_items_raw = ""
-        try:
-            _dsm_res = supabase.table("weekly_editions").select("*").eq("status","published")\
-                .order("week_start", desc=True).limit(1).execute()
-            if _dsm_res.data:
-                _dsm_ed     = _dsm_res.data[0]
-                _dsm_ed_id  = _dsm_ed["id"]
-                _notices    = supabase.table("notices").select("*").eq("edition_id", _dsm_ed_id)\
-                    .order("created_at").execute().data or []
-                if _notices:
-                    _dsm_summary = f"**{_dsm_ed.get('week_label','Digital Staff Meeting')}**\n\n"
-                    _dsm_summary += "\n\n".join([
-                        f"**{n.get('section','General')}** — {n.get('content','')}"
-                        for n in _notices if n.get('content','').strip()
-                    ])
-                    _dsm_items_raw = "\n".join([
-                        f"{n.get('section','Item')}|Digital Staff Meeting|All Staff|Noted"
-                        for n in _notices if n.get('content','').strip()
-                    ])
-                    st.success(f"✅ Loaded {len(_notices)} items from {_dsm_ed.get('week_label','latest DSM')}")
-        except Exception as _e:
-            st.caption(f"Could not auto-load DSM: {_e}")
-
+        st.caption("Auto-loaded from the most recently published Digital Staff Meeting. Edit if needed.")
         m_digital_summary = st.text_area("Digital meeting summary", height=90,
             value=_dsm_summary,
-            placeholder="Brief overview of what staff were asked to review / action online this week.")
-        st.markdown("**Items table** — one item per line: `Item | Raised By | Actioned By | Status`")
-        st.caption("Status options: Actioned · Noted · Pending")
-        m_digital_items_raw = st.text_area("Digital items", height=110,
+            placeholder="Will be auto-loaded from the published Digital Staff Meeting.")
+        st.markdown("**Items table** (one per line: `Item | Raised By | Actioned By | Status`)")
+        m_digital_items_raw = st.text_area("Digital items", height=100,
             value=_dsm_items_raw,
-            placeholder="Timetable update Week 5 | Candice Cooper | All staff | Noted")
+            placeholder="Timetable update Week 8 | Candice Cooper | All staff | Noted")
 
-        # ── Part 2: Face-to-Face — DfE Structured Fields ──────────────────────
-        st.markdown("---")
+        st.markdown("##### 🎙️ Part 2 — Face-to-Face Meeting Transcript")
         st.markdown("""
-        <div style="background:linear-gradient(135deg,#1e6f75,#0f4f54);color:white;border-radius:10px;padding:0.75rem 1.25rem;margin-bottom:1rem;">
-          <div style="font-size:0.95rem;font-weight:700;">👥 Part 2 — Face-to-Face Meeting (DfE Format)</div>
-          <div style="font-size:0.78rem;opacity:0.85;margin-top:0.2rem;">
-            Fill in each standing item. AI will structure your notes into professional minutes.
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        def dfe_field_header(item_num, title, icon, color):
-            st.markdown(f"""
-            <div style="border-left:4px solid {color};padding:0.3rem 0.75rem;margin:0.75rem 0 0.35rem;background:#f8fafc;border-radius:0 6px 6px 0;">
-              <span style="background:{color};color:white;font-size:0.7rem;font-weight:700;padding:0.1rem 0.4rem;border-radius:12px;margin-right:0.4rem;">Item {item_num}</span>
-              <span style="font-size:0.95rem;">{icon}</span>
-              <strong style="color:{color};font-size:0.9rem;"> {title}</strong>
-            </div>
-            """, unsafe_allow_html=True)
-
-        # Item 1 — Welcome (auto, no input needed)
-        dfe_field_header("1", "Welcome", "👋", "#1e6f75")
-        st.caption(f"Chair {m_chair or '—'} opens the meeting. (Auto-recorded — no input needed)")
-
-        # Item 2 — Acknowledgement (auto)
-        dfe_field_header("2", "Acknowledgement of Chair & Minute Taker", "📌", "#1a4d8c")
-        st.caption(f"Chair: {m_chair or '—'} · Minute Taker: {m_minutes_taker or '—'} (Auto-recorded)")
-
-        # Item 3 — Apologies (pulled from attendance above)
-        dfe_field_header("3", "Apologies", "🙏", "#92400e")
-        st.caption("Pulled from apologies entered above.")
-
-        # Item 4 — Confirmation of previous minutes
-        dfe_field_header("4", "Confirmation of Previous Minutes", "✅", "#065f46")
-        prev_confirmed = st.checkbox("Previous minutes confirmed as true and accurate record")
-        prev_mover     = st.text_input("Moved by", key="prev_mover", placeholder="Staff name")
-        prev_seconder  = st.text_input("Seconded by", key="prev_seconder", placeholder="Staff name")
-
-        # Item 5 — Business arising
-        dfe_field_header("5", "Business Arising from Previous Minutes", "🔁", "#6d28d9")
-        business_arising = st.text_area(
-            "Summary of actions/progress from previous meeting",
-            height=90,
-            key="business_arising",
-            placeholder="Item 1 — Student profiles updated ✅\nItem 2 — Playground supervision roster — in progress")
-
-        # Items 6+ — Submitted agenda items
-        if open_extra:
-            for idx_i, item in enumerate(open_extra):
-                item_num = 6 + idx_i
-                dfe_field_header(str(item_num), item["title"], "📌", "#1e6f75")
-                if item.get("description"):
-                    st.caption(f"Submitted by {item.get('submitted_by','—')}: {item['description']}")
-                st.text_area(
-                    f"Notes for: {item['title']}",
-                    height=80,
-                    key=f"extra_item_notes_{item['id']}",
-                    placeholder="Summarise discussion, decisions and outcomes..."
-                )
-
-        # Transcript / additional notes
-        st.markdown("---")
-        st.markdown("""
-        <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;
-                    padding:10px 16px;margin-bottom:10px;font-size:13px;color:#14532d;">
-          🎙️ <strong>Paste meeting transcript or additional notes here.</strong>
-          AI will use this along with your structured fields above to produce complete minutes.
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;
+                    padding:10px 14px;font-size:12px;color:#475569;margin-bottom:8px;">
+          <strong>Instructions for minute taker:</strong><br>
+          1. Record your face-to-face meeting using your phone or recording device<br>
+          2. Use a transcription tool (e.g. Otter.ai, Teams transcript, or your phone's speech-to-text)<br>
+          3. Paste the full transcript into the field below<br>
+          4. Click <strong>✨ Process with AI</strong> — the AI will structure it into professional minutes
         </div>""", unsafe_allow_html=True)
-        m_transcript = st.text_area(
-            "Meeting transcript or rough notes (optional — supplements the fields above)",
-            height=200,
-            key="m_transcript",
-            placeholder="Paste the full recording transcript here, or add any notes not captured in the fields above.")
+        m_ff_content = st.text_area(
+            "Paste face-to-face meeting transcript here",
+            height=300,
+            placeholder="Paste the full transcript here. Include everything — the AI will extract what's relevant and structure it correctly...")
 
-        # General Business
-        dfe_field_header("GB", "General Business / Other Business", "💬", "#475569")
-        general_business = st.text_area(
-            "Any other matters raised",
-            height=80,
-            key="general_business",
-            placeholder="Brief notes on any other matters raised.")
+        st.markdown("##### ✅ Action Items (optional — AI will also extract these)")
+        st.caption("Add any actions the AI might miss. One per line: `Action | Assigned To | Due`")
+        m_actions = st.text_area("Additional action items", height=60,
+            placeholder="Update student profiles | Candice Cooper | Week 9")
 
-        # Next Meeting
-        dfe_field_header("NM", "Next Meeting", "📅", "#475569")
-        next_meeting = st.text_input(
-            "Next meeting details",
-            key="next_meeting",
-            placeholder="e.g. Wednesday Week 5, 3:00pm, Staff Room")
-
-        # Close
-        dfe_field_header("CL", "Close of Meeting", "🔔", "#1e6f75")
-        st.caption("Chair formally closes the meeting. (Auto-recorded)")
-
-        # ── Action Items ───────────────────────────────────────────────────────
         st.markdown("---")
-        st.markdown("##### ✅ Action Items")
-        st.caption("One per line: `Action | Assigned To | Due date`")
-        m_actions = st.text_area("Action items", height=80,
-            placeholder="Update student profiles | Candice Cooper | Week 5")
+        st.markdown("##### ✔️ Confirmation")
+        m_confirmed_by = st.text_input("Your name (confirming minutes are accurate) *",
+            value=get_staff_name(),
+            placeholder="e.g. Sarah Jones")
+        m_confirmed = st.checkbox(
+            "I confirm that these minutes accurately represent what was discussed in this meeting.",
+            value=False)
 
-        submitted = st.form_submit_button("✨ Structure with AI & Save", type="primary")
+        submitted = st.form_submit_button("✨ Process with AI & Save Minutes", type="primary",
+                                          use_container_width=True)
 
         if submitted:
             if not m_title.strip():
                 st.warning("Please enter a meeting title.")
+            elif not m_confirmed:
+                st.warning("Please confirm the minutes are accurate before saving.")
+            elif not m_confirmed_by.strip():
+                st.warning("Please enter your name for confirmation.")
             else:
-                attendees_str  = ", ".join(n.strip() for n in m_attendees.replace("\n",",").split(",") if n.strip())
-                apologies_str  = ", ".join(n.strip() for n in m_apologies.replace("\n",",").split(",") if n.strip())
-
+                attendees_str = ", ".join(n.strip() for n in m_attendees.replace("\n",",").split(",") if n.strip())
+                apologies_str = ", ".join(n.strip() for n in m_apologies.replace("\n",",").split(",") if n.strip())
                 digital_items = []
                 for line in m_digital_items_raw.splitlines():
                     parts = [p.strip() for p in line.split("|")]
                     if parts and parts[0]:
                         digital_items.append({
                             "item": parts[0],
-                            "raised_by": parts[1] if len(parts)>1 else "",
-                            "actioned_by": parts[2] if len(parts)>2 else "",
-                            "status": parts[3] if len(parts)>3 else "Noted",
+                            "raised_by": parts[1] if len(parts) > 1 else "",
+                            "actioned_by": parts[2] if len(parts) > 2 else "",
+                            "status": parts[3] if len(parts) > 3 else "Noted",
                         })
-
-                # Build the combined transcript for AI
-                # Stitch together structured fields + any extra transcript
-                prev_conf_str = ""
-                if prev_confirmed:
-                    movers = []
-                    if prev_mover: movers.append(f"Moved: {prev_mover}")
-                    if prev_seconder: movers.append(f"Seconded: {prev_seconder}")
-                    prev_conf_str = "Confirmed. " + (" ".join(movers) if movers else "")
+                final_ff = m_ff_content.strip()
+                if final_ff:
+                    with st.spinner("✨ AI is processing your transcript into structured minutes…"):
+                        final_ff = improve_with_ai(final_ff, "STAFF", str(m_date), dsm_summary=m_digital_summary.strip())
                 else:
-                    prev_conf_str = "Not recorded."
+                    final_ff = "_No face-to-face transcript provided._"
 
-                # Build extra item notes
-                extra_items_for_ai = []
-                if open_extra:
-                    for idx_i, item in enumerate(open_extra):
-                        notes = st.session_state.get(f"extra_item_notes_{item['id']}", "").strip()
-                        extra_items_for_ai.append(
-                            f"{item['title']}: {notes or '(No notes recorded)'}"
-                        )
-
-                # Combined raw text = transcript + any notes
-                combined_raw = m_transcript.strip()
-
-                with st.spinner("AI is structuring your minutes into DfE format…"):
-                    final_ff = improve_staff_ff_with_ai(
-                        raw_text               = combined_raw,
-                        meeting_date           = str(m_date),
-                        chair                  = m_chair.strip(),
-                        minutes_taker          = m_minutes_taker.strip(),
-                        apologies              = apologies_str,
-                        prev_minutes_confirmed = prev_confirmed,
-                        business_arising       = business_arising.strip(),
-                        extra_agenda_items     = extra_items_for_ai,
-                        general_business       = general_business.strip(),
-                        next_meeting           = next_meeting.strip(),
-                    )
+                confirmation_note = f"\n\n---\n*Minutes confirmed by {m_confirmed_by.strip()} on {datetime.date.today().strftime('%-d %B %Y')}.*"
+                final_ff = final_ff + confirmation_note
 
                 insert("tm_minutes", {
                     "program": "STAFF",
@@ -1259,21 +1072,107 @@ def _render_new_staff_minutes():
                     "content": "",
                     "action_summary": m_actions.strip(),
                 })
-                st.success("✅ Combined meeting minutes saved and structured!")
+                st.success("✅ Combined staff meeting minutes saved!")
                 st.rerun()
 
 
+# ── Meeting type templates ────────────────────────────────────────────────────
+STUDENT_LENS_TEMPLATE = """## Student Lens Meeting
+
+### Students of Focus
+(List students being discussed this meeting)
+
+### Celebration / Strengths
+What has been going well for each student?
+
+### Current Concerns / Observations
+What are we noticing? Behaviours, engagement, relationships, learning?
+
+### Hypothesis
+What do we think is driving this? (Function of behaviour / unmet need)
+
+### Current Strategies in Place
+What are we already doing?
+
+### Adjustments / New Strategies
+What will we try or change?
+
+### Review Date
+When will we check back on these students?
+
+### Actions
+(Action | Assigned To | Due)
+"""
+
+SYSTEM_LENS_TEMPLATE = """## System Lens Meeting
+
+### Program / School System Focus
+What part of our system are we reviewing today?
+
+### What's Working Well
+Strengths in our current approach
+
+### What's Not Working / Gaps
+Where are the breakdowns or inefficiencies?
+
+### Root Cause Analysis
+Why is this happening at a systems level?
+
+### Priority Actions
+What changes do we need to make?
+
+### Who Owns This
+Roles and responsibilities
+
+### Review Date
+When will we check back?
+
+### Actions
+(Action | Assigned To | Due)
+"""
+
 def _render_new_team_minutes(program):
     st.subheader("✍️ Record New Minutes")
+
+    # Meeting type selector
+    meeting_type = st.radio(
+        "Meeting type",
+        ["🔍 Student Lens", "⚙️ System Lens"],
+        horizontal=True,
+        key=f"meeting_type_{program}",
+        help="Student Lens = focus on individual students. System Lens = focus on programs, processes and structures."
+    )
+    is_student_lens = "Student" in meeting_type
+
+    if is_student_lens:
+        st.markdown("""
+        <div style="background:#dbeafe;border-left:4px solid #1a4d8c;border-radius:0 8px 8px 0;
+                    padding:8px 14px;margin-bottom:12px;font-size:13px;color:#1a4d8c;">
+          🔍 <strong>Student Lens</strong> — Focus on individual student progress, strengths, concerns and strategies.
+          Alternates fortnightly with System Lens.
+        </div>""", unsafe_allow_html=True)
+        template = STUDENT_LENS_TEMPLATE
+        title_placeholder = f"{PROGRAMS[program]['label']} Student Lens — T1 W4"
+    else:
+        st.markdown("""
+        <div style="background:#f0fdf4;border-left:4px solid #2d7d4f;border-radius:0 8px 8px 0;
+                    padding:8px 14px;margin-bottom:12px;font-size:13px;color:#2d7d4f;">
+          ⚙️ <strong>System Lens</strong> — Focus on program systems, structures, and processes.
+          Alternates fortnightly with Student Lens.
+        </div>""", unsafe_allow_html=True)
+        template = SYSTEM_LENS_TEMPLATE
+        title_placeholder = f"{PROGRAMS[program]['label']} System Lens — T1 W4"
+
+    # Input method
     ff_method = st.radio("Minutes input method",
-        ["📄 Type / paste minutes directly", "🎙️ Drop transcript — AI will structure and improve it"],
+        ["📝 Use structured template", "🎙️ Drop transcript — AI will structure it"],
         horizontal=True, key=f"ff_method_{program}")
     do_ai = "🎙️" in ff_method
 
     with st.form(f"new_minutes_form_{program}", clear_on_submit=True):
         st.markdown("##### 📋 Meeting Details")
         dc1, dc2, dc3 = st.columns([3, 2, 2])
-        with dc1: m_title    = st.text_input("Meeting title *", placeholder=f"{PROGRAMS[program]['label']} Meeting — T1 W4")
+        with dc1: m_title    = st.text_input("Meeting title *", placeholder=title_placeholder)
         with dc2: m_date     = st.date_input("Date *", value=datetime.date.today())
         with dc3: m_chair    = st.text_input("Chair", value=get_staff_name())
         m_location = st.text_input("Location / format", placeholder="e.g. Room 3 / Teams")
@@ -1289,8 +1188,13 @@ def _render_new_team_minutes(program):
         m_sched = st.selectbox("Associated schedule", list(sched_opts.keys()))
 
         st.markdown("##### 📝 Minutes")
-        m_content = st.text_area(
-            "Minutes" if not do_ai else "Paste transcript or rough notes", height=280)
+        if do_ai:
+            st.caption("Paste transcript or rough notes — AI will structure into the correct format.")
+            m_content = st.text_area("Paste transcript here", height=280,
+                placeholder="Paste your meeting recording transcript or rough notes here...")
+        else:
+            st.caption("Pre-filled with the structured template. Edit as you go.")
+            m_content = st.text_area("Minutes", height=400, value=template)
 
         st.markdown("##### ✅ Action Items")
         st.caption("One per line: `Action | Assigned To | Due date`")
@@ -1308,8 +1212,14 @@ def _render_new_team_minutes(program):
                 apologies_str = ", ".join(n.strip() for n in m_apologies.replace("\n",",").split(",") if n.strip())
                 final_content = m_content.strip()
                 if do_ai and final_content:
-                    with st.spinner("AI is improving your minutes…"):
-                        final_content = improve_with_ai(final_content, program, str(m_date))
+                    # Add meeting type context to AI prompt
+                    lens_context = f"This is a {'Student Lens' if is_student_lens else 'System Lens'} meeting for {PROGRAMS[program]['label']} program."
+                    with st.spinner("AI is structuring your minutes…"):
+                        final_content = improve_with_ai(
+                            f"{lens_context}\n\n{final_content}", program, str(m_date))
+                # Prepend meeting type badge
+                type_badge = "🔍 Student Lens" if is_student_lens else "⚙️ System Lens"
+                final_content = f"**Meeting Type: {type_badge}**\n\n" + final_content
                 insert("tm_minutes", {
                     "program": program, "schedule_id": sched_opts.get(m_sched),
                     "title": m_title.strip(), "meeting_date": str(m_date),
@@ -1324,7 +1234,7 @@ def _render_new_team_minutes(program):
 
 def render_actions(program):
     st.subheader("✅ Action Items")
-    actions      = fetch("tm_actions", {"program": program}, "due_date")
+    actions = fetch("tm_actions", {"program": program}, "due_date")
     open_actions = [a for a in actions if a.get("status") != "completed"]
     completed    = [a for a in actions if a.get("status") == "completed"]
     if open_actions:
@@ -1357,8 +1267,7 @@ def render_actions(program):
                 a_text = st.text_input("Action")
                 a_col1, a_col2 = st.columns(2)
                 with a_col1: a_assigned = st.text_input("Assigned to")
-                with a_col2: a_due = st.date_input("Due date",
-                    value=datetime.date.today() + datetime.timedelta(weeks=2))
+                with a_col2: a_due = st.date_input("Due date", value=datetime.date.today() + datetime.timedelta(weeks=2))
                 a_notes = st.text_input("Notes (optional)")
                 if st.form_submit_button("Add"):
                     if a_text.strip():
@@ -1378,9 +1287,9 @@ def render_attendance(program):
         st.info("Add a meeting schedule first.")
         return
     sched_opts = {s["schedule_name"]: s["id"] for s in schedules}
-    sel_sched  = st.selectbox("Meeting", list(sched_opts.keys()), key="att_sched")
-    sel_date   = st.date_input("Meeting date", value=datetime.date.today(), key="att_date")
-    existing   = supabase.table("tm_attendance").select("*").eq("program", program)\
+    sel_sched = st.selectbox("Meeting", list(sched_opts.keys()), key="att_sched")
+    sel_date  = st.date_input("Meeting date", value=datetime.date.today(), key="att_date")
+    existing = supabase.table("tm_attendance").select("*").eq("program", program)\
         .eq("schedule_id", sched_opts[sel_sched]).eq("meeting_date", str(sel_date)).execute().data or []
     if existing:
         st.markdown("**Attendance record:**")
@@ -1453,8 +1362,8 @@ def render_documents(program):
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
-    program    = get_program_from_params()
-    prog_info  = PROGRAMS[program]
+    program   = get_program_from_params()
+    prog_info = PROGRAMS[program]
     week_range = get_week_from_params()
 
     admin_login()
@@ -1507,8 +1416,9 @@ def main():
             ("🤝 Shoutout Circle", "Before the agenda begins, anyone can give a shoutout to a colleague for something they observed. Creates a culture of noticing and naming positive contributions — aligned to relational and restorative practice."),
         ]
 
-        _week_seed   = int(_hashlib.md5(str(_date.today().isocalendar()[:2]).encode()).hexdigest(), 16)
-        _icebreaker  = ICEBREAKERS[_week_seed % len(ICEBREAKERS)]
+        # Rotate icebreaker by week
+        _week_seed = int(_hashlib.md5(str(_date.today().isocalendar()[:2]).encode()).hexdigest(), 16)
+        _icebreaker = ICEBREAKERS[_week_seed % len(ICEBREAKERS)]
 
         ic1, ic2 = st.columns(2)
         with ic1:
