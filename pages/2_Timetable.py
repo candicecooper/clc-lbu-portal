@@ -94,15 +94,34 @@ def get_all_timetables(program: str):
     except Exception:
         return []
 
+TIMETABLE_BUCKET = "notice-attachments"  # reuse existing bucket
+
 def save_timetable(filename, file_b64, label, program, uploaded_by="Admin"):
+    """Save timetable — stores PDF in Supabase Storage, path in DB."""
+    import base64 as _b64, uuid as _uuid
     try:
-        get_client().table("timetable_store").insert({
-            "filename":    filename,
-            "file_data":   file_b64,
-            "label":       label,
-            "program":     program,
-            "uploaded_by": uploaded_by,
-            "uploaded_at": datetime.now(timezone.utc).isoformat(),
+        client = get_client()
+        # Decode b64 back to bytes for storage upload
+        pdf_bytes = _b64.b64decode(file_b64)
+        storage_path = f"timetables/{program}/{_uuid.uuid4().hex[:8]}_{filename}"
+        try:
+            client.storage.from_(TIMETABLE_BUCKET).upload(
+                storage_path, pdf_bytes,
+                {"content-type": "application/pdf", "upsert": "true"}
+            )
+            use_storage = True
+        except Exception:
+            use_storage = False
+            storage_path = ""
+
+        client.table("timetable_store").insert({
+            "filename":     filename,
+            "file_data":    file_b64 if not use_storage else "",
+            "storage_path": storage_path if use_storage else "",
+            "label":        label,
+            "program":      program,
+            "uploaded_by":  uploaded_by,
+            "uploaded_at":  datetime.now(timezone.utc).isoformat(),
         }).execute()
         return True
     except Exception as e:
@@ -456,9 +475,19 @@ def render_timetable_view(program: str):
         uploader = current.get("uploaded_by", "Admin")
 
         try:
-            pdf_bytes = base64.b64decode(current["file_data"])
-            has_pdf   = True
-        except Exception:
+            storage_path = current.get("storage_path", "")
+            if storage_path:
+                # Fetch from Supabase Storage
+                _res = get_client().storage.from_(TIMETABLE_BUCKET).download(storage_path)
+                pdf_bytes = _res if isinstance(_res, bytes) else bytes(_res)
+                has_pdf = True
+            elif current.get("file_data"):
+                pdf_bytes = base64.b64decode(current["file_data"])
+                has_pdf = True
+            else:
+                has_pdf = False
+                pdf_bytes = None
+        except Exception as _e:
             has_pdf   = False
             pdf_bytes = None
 
