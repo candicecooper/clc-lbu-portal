@@ -1,4 +1,3 @@
-from theme import apply_clc_theme
 """
 CLC Timetable — Cowandilla Learning Centre
 ==========================================
@@ -20,7 +19,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
-apply_clc_theme()
 
 from auth import require_auth, logout_button, get_staff_name
 require_auth("CLC Timetable", "📅")
@@ -54,13 +52,14 @@ def get_client():
     from supabase import create_client
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
-PROGRAMS = ["General", "JP", "PY", "SY", "SSO"]
+PROGRAMS = ["General", "JP", "PY", "SY", "SSO", "Meetings"]
 PROGRAM_LABELS = {
     "General": "📋 All Staff",
     "JP":      "🟢 Junior Primary",
     "PY":      "🔵 Primary Years",
     "SY":      "🟣 Senior Years",
     "SSO":     "🟠 SSO Support",
+    "Meetings": "📅 Scheduled Meetings",
 }
 
 def get_timetable(program: str):
@@ -145,6 +144,133 @@ def pdf_to_images(pdf_bytes: bytes) -> list | None:
         return None
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Serif+Display&display=swap');
+*,*::before,*::after{box-sizing:border-box}
+:root{
+  --navy:#1a2e44;--navy-mid:#2d4f72;--navy-light:#e8edf3;--navy-border:#c5d3e0;
+  --green:#059669;--green-light:#d1fae5;
+  --red:#dc2626;--red-light:#fee2e2;
+  --white:#ffffff;--bg:#f4f6f9;--ink:#1a2332;--ink-light:#6b7f94;--radius:12px
+}
+html,body,[class*="css"]{font-family:'DM Sans',sans-serif!important;background:var(--bg)!important}
+.block-container{padding:0!important;max-width:100%!important}
+header{display:none!important}
+
+/* ── Header ── */
+.app-header{
+  background:linear-gradient(135deg,var(--navy) 0%,var(--navy-mid) 100%);
+  padding:22px 32px;
+  display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;
+}
+.app-header-left{display:flex;align-items:center;gap:14px}
+.app-header-icon{
+  width:44px;height:44px;min-width:44px;
+  background:rgba(255,255,255,0.12);border-radius:10px;
+  display:flex;align-items:center;justify-content:center;font-size:22px;
+}
+.app-header-title{
+  font-family:'DM Serif Display',serif;font-size:22px;
+  color:white;line-height:1.1;
+}
+.app-header-sub{font-size:12px;color:rgba(255,255,255,0.55);margin-top:2px}
+.header-badges{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.badge-white{
+  background:rgba(255,255,255,0.12);
+  border:1px solid rgba(255,255,255,0.2);
+  border-radius:20px;padding:4px 12px;
+  font-size:11px;font-weight:600;color:rgba(255,255,255,0.85);
+  white-space:nowrap;
+}
+.badge-term{
+  background:rgba(200,168,75,0.25);
+  border:1px solid rgba(200,168,75,0.4);
+  border-radius:20px;padding:4px 12px;
+  font-size:11px;font-weight:700;color:#f0d080;
+  white-space:nowrap;
+}
+
+/* ── Layout ── */
+.main-wrap{max-width:980px;margin:0 auto;padding:28px 16px 60px}
+
+/* ── Cards ── */
+.card-wrap{
+  background:var(--white);border:1px solid var(--navy-border);
+  border-radius:14px;overflow:hidden;margin-bottom:18px;
+}
+.card-header{
+  background:linear-gradient(90deg,var(--navy-light),#f0f4f8);
+  padding:14px 20px;
+  display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;
+  border-bottom:1px solid var(--navy-border);
+}
+.card-title{font-size:14px;font-weight:700;color:var(--navy)}
+.card-meta{font-size:11px;color:var(--ink-light);margin-top:2px}
+.badge-green{
+  background:var(--green-light);color:var(--green);
+  font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px;
+  white-space:nowrap;
+}
+
+/* ── Timetable image ── */
+.timetable-img{width:100%;display:block}
+.page-divider{border:none;border-top:2px dashed var(--navy-border);margin:4px 0}
+
+/* ── Empty state ── */
+.no-tt{text-align:center;padding:48px 20px;color:var(--ink-light)}
+.no-tt-icon{font-size:44px;margin-bottom:10px}
+.no-tt h3{font-size:17px;font-weight:600;color:var(--navy);margin-bottom:6px}
+
+/* ── Section label ── */
+.section-label{
+  font-size:10px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;
+  color:var(--ink-light);margin:24px 0 10px;
+}
+
+/* ── History rows ── */
+.history-row{
+  background:var(--white);border:1px solid var(--navy-border);
+  border-radius:10px;padding:10px 14px;margin-bottom:7px;
+  display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;
+}
+.history-label{font-size:13px;font-weight:600;color:var(--ink)}
+.history-meta{font-size:11px;color:var(--ink-light);margin-top:1px}
+
+/* ── Admin panel ── */
+.admin-panel{
+  background:var(--white);border:1px solid var(--navy-border);
+  border-radius:14px;padding:20px 24px;margin-bottom:18px;
+}
+
+/* ── Buttons ── */
+.stButton>button{border-radius:8px!important;font-weight:600!important;font-family:'DM Sans',sans-serif!important}
+.stButton>button[kind="primary"]{background:var(--navy)!important;border-color:var(--navy)!important;color:white!important}
+.stDownloadButton>button{
+  background:var(--navy)!important;color:white!important;
+  border-radius:8px!important;font-weight:600!important;width:100%;
+}
+div[data-testid="stExpander"]{border:1px solid var(--navy-border)!important;border-radius:var(--radius)!important}
+
+/* ── Tabs ── */
+.stTabs [data-baseweb="tab-list"]{gap:4px;background:transparent}
+.stTabs [data-baseweb="tab"]{
+  background:#e8edf3;border-radius:8px 8px 0 0;
+  color:var(--navy);font-weight:600;padding:8px 18px;border:none;font-size:13px;
+}
+.stTabs [aria-selected="true"]{background:var(--navy-mid)!important;color:#fff!important}
+
+/* ── Mobile ── */
+@media(max-width:600px){
+  .app-header{padding:16px 16px}
+  .app-header-title{font-size:18px}
+  .main-wrap{padding:16px 10px 40px}
+  .admin-panel{padding:16px 14px}
+  .card-header{padding:12px 14px}
+  .stTabs [data-baseweb="tab"]{padding:6px 10px;font-size:12px}
+}
+</style>
+""", unsafe_allow_html=True)
 
 # ── Session state ─────────────────────────────────────────────────────────────
 if "admin_authed" not in st.session_state:
@@ -212,39 +338,81 @@ else:
     📤 Upload New Timetable</div>
     </div>""", unsafe_allow_html=True)
 
-    with st.form("upload_form_top", clear_on_submit=False):
-        col_prog, col_lbl = st.columns([1, 2])
-        with col_prog:
-            prog_choice = st.selectbox("Program", options=PROGRAMS,
-                                       format_func=lambda p: PROGRAM_LABELS[p])
-        with col_lbl:
-            lbl = st.text_input("Label", placeholder="e.g. Term 1 · Week 6 · 2 Mar 2026")
+    upload_mode = st.radio("Upload mode", 
+        ["📄 Full PDF (auto-split all sections)", "📑 Single section PDF"],
+        horizontal=True, key="upload_mode")
+    
+    if upload_mode == "📄 Full PDF (auto-split all sections)":
+        st.markdown("""<div style="background:#e8f5e1;border:1px solid #6BBF4E;border-radius:8px;
+            padding:0.75rem 1rem;font-size:0.85rem;color:#1a2e44;margin-bottom:0.75rem;">
+            📋 <strong>Page mapping:</strong> Page 1 = Specialist (Roisin) · 
+            Pages 2–3 = JP · Pages 4–5 = PY · Page 6 = SY · 
+            Pages 7–8 = SSO · Page 9 = Meetings
+        </div>""", unsafe_allow_html=True)
+        
+        full_lbl = st.text_input("Label for all sections", placeholder="e.g. Term 1 · Week 6 · 2 Mar 2026", key="full_lbl")
+        full_file = st.file_uploader("Upload full timetable PDF (all pages)", type=["pdf"], key="full_pdf")
+        
+        fc1, fc2 = st.columns(2)
+        with fc1:
+            if st.button("✅ Split & Upload All Sections", type="primary", use_container_width=True, key="full_upload_btn"):
+                if not full_file:
+                    st.error("Please choose a PDF file.")
+                elif not full_lbl.strip():
+                    st.error("Please add a label.")
+                else:
+                    full_file.seek(0)
+                    raw = full_file.read()
+                    with st.spinner("Splitting PDF and uploading all sections..."):
+                        results = split_and_save_full_pdf(raw, full_lbl.strip())
+                    if "error" in results:
+                        st.error(f"❌ Split failed: {results['error']}")
+                    else:
+                        st.cache_resource.clear()
+                        for prog, msg in results.items():
+                            label = PROGRAM_LABELS.get(prog, prog)
+                            st.markdown(f"**{label}:** {msg}")
+                        st.success("✅ All sections uploaded!")
+                        st.rerun()
+        with fc2:
+            if st.button("🚪 Logout Admin", use_container_width=True, key="logout_full"):
+                st.session_state.admin_authed = False
+                st.rerun()
+    
+    else:
+        with st.form("upload_form_top", clear_on_submit=False):
+            col_prog, col_lbl = st.columns([1, 2])
+            with col_prog:
+                prog_choice = st.selectbox("Program", options=PROGRAMS,
+                                           format_func=lambda p: PROGRAM_LABELS[p])
+            with col_lbl:
+                lbl = st.text_input("Label", placeholder="e.g. Term 1 · Week 6 · 2 Mar 2026")
 
-        file = st.file_uploader("Choose PDF", type=["pdf"], label_visibility="collapsed")
+            file = st.file_uploader("Choose PDF", type=["pdf"], label_visibility="collapsed")
 
-        uc1, uc2 = st.columns(2)
-        with uc1:
-            submitted = st.form_submit_button("✅ Upload & Set as Current",
-                                              type="primary", use_container_width=True)
-        with uc2:
-            logout = st.form_submit_button("🚪 Logout Admin", use_container_width=True)
+            uc1, uc2 = st.columns(2)
+            with uc1:
+                submitted = st.form_submit_button("✅ Upload & Set as Current",
+                                                  type="primary", use_container_width=True)
+            with uc2:
+                logout = st.form_submit_button("🚪 Logout Admin", use_container_width=True)
 
-        if submitted:
-            if not file:
-                st.error("Please choose a PDF file.")
-            elif not lbl.strip():
-                st.error("Please add a label.")
-            else:
-                file.seek(0)
-                raw = file.read()
-                b64data = base64.b64encode(raw).decode("utf-8")
-                if save_timetable(file.name, b64data, lbl.strip(), prog_choice):
-                    st.success(f"✅ {PROGRAM_LABELS[prog_choice]} timetable updated — {lbl.strip()}")
-                    st.cache_resource.clear()
-                    st.rerun()
-        if logout:
-            st.session_state.admin_authed = False
-            st.rerun()
+            if submitted:
+                if not file:
+                    st.error("Please choose a PDF file.")
+                elif not lbl.strip():
+                    st.error("Please add a label.")
+                else:
+                    file.seek(0)
+                    raw = file.read()
+                    b64data = base64.b64encode(raw).decode("utf-8")
+                    if save_timetable(file.name, b64data, lbl.strip(), prog_choice):
+                        st.success(f"✅ {PROGRAM_LABELS[prog_choice]} timetable updated — {lbl.strip()}")
+                        st.cache_resource.clear()
+                        st.rerun()
+            if logout:
+                st.session_state.admin_authed = False
+                st.rerun()
 
     # ── Version history with delete ──
     with st.expander("🗂️ Version History & Delete Old Versions"):
