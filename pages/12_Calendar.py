@@ -698,6 +698,62 @@ with tab_week:
         ok, data = event_form(f"wadd_{str(sel)}", default_date=sel)
         if ok: save_event(data); st.success(f"✅ '{data['title']}' added!"); st.rerun()
 
+def render_event_card(ev, key_prefix="e"):
+    """Render a single event as a styled card with optional edit/delete."""
+    eid    = ev.get("id","")
+    pac    = str(eid).startswith("pac_")
+    sched  = ev.get("_from_schedule", False)
+    cfg_ev = EVENT_TYPES.get(ev.get("event_type","Other"), EVENT_TYPES["Other"])
+    prog   = ev.get("program","")
+    ecol   = (PROGRAM_COLORS.get(prog,{}).get("color", cfg_ev["color"])
+              if prog and ev.get("event_type") in STUDENT_EVENT_TYPES else cfg_ev["color"])
+    ebg    = (PROGRAM_COLORS.get(prog,{}).get("bg", cfg_ev["bg"])
+              if prog and ev.get("event_type") in STUDENT_EVENT_TYPES else cfg_ev["bg"])
+    tr_ev  = fmt_time(ev.get("start_time",""))
+    if ev.get("end_time"): tr_ev += f" – {fmt_time(ev['end_time'])}"
+    can_edit = st.session_state.is_admin and not pac and not sched
+
+    edate_str = ""
+    if ev.get("end_date") and ev["end_date"] != ev.get("event_date"):
+        edate_str = f" → {fmt_date(ev['end_date'])}"
+
+    notes_html = (f'<div style="font-size:0.8rem;color:#555;border-top:1px solid rgba(0,0,0,0.08);'
+                  f'padding-top:0.3rem;margin-top:0.3rem;">{ev["notes"]}</div>'
+                  if ev.get("notes") else "")
+    sched_badge = (' <span style="font-size:0.65rem;background:#e8f0fe;color:#1a4d8c;'
+                   'border-radius:8px;padding:1px 6px;">🔁 Recurring</span>' if sched else "")
+
+    st.markdown(
+        f'<div style="background:{ebg};border-left:4px solid {ecol};border-radius:8px;'
+        f'padding:0.55rem 0.85rem;margin-bottom:0.4rem;">'
+        f'<div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">'
+        f'<span style="font-size:0.82rem;font-weight:700;color:{ecol};">'
+        f'{cfg_ev["emoji"]} {ev.get("event_type","")}</span>'
+        f'{sched_badge}'
+        f'<span style="font-size:0.82rem;font-weight:600;color:#1a2e44;">{ev.get("title","")}</span>'
+        f'{"<span style=\"font-size:0.75rem;color:#666;\"> · " + tr_ev + "</span>" if tr_ev else ""}'
+        f'{"<span style=\"font-size:0.75rem;color:#666;\"> · 📍 " + ev["location"] + "</span>" if ev.get("location") else ""}'
+        f'{"<span style=\"font-size:0.75rem;color:#888;\"> · " + ev.get("notes","") + "</span>" if ev.get("notes") and not notes_html else ""}'
+        f'</div>{notes_html}</div>',
+        unsafe_allow_html=True
+    )
+    if can_edit:
+        ec1, ec2 = st.columns([1,1])
+        with ec1:
+            if st.button("✏️ Edit", key=f"edit_{key_prefix}_{eid}", use_container_width=True):
+                st.session_state.edit_event_id = (None if st.session_state.edit_event_id==eid else eid)
+                st.rerun()
+        with ec2:
+            if st.button("🗑️ Delete", key=f"del_{key_prefix}_{eid}", use_container_width=True):
+                del_event(eid); st.rerun()
+        if st.session_state.get("edit_event_id") == eid:
+            ok, data = event_form(f"ef_{key_prefix}_{eid}", existing=ev, label="💾 Save Changes")
+            if ok:
+                upd_event(eid, data)
+                st.session_state.edit_event_id = None
+                st.success("Updated!"); st.rerun()
+
+
 # ═══════════════ AGENDA VIEW ══════════════════════════════════════════════════
 with tab_list:
     lc1, lc2, lc3 = st.columns(3)
