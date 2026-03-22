@@ -162,6 +162,69 @@ def pdf_to_images(pdf_bytes: bytes) -> list | None:
     except Exception:
         return None
 
+# ── PDF split & bulk save ─────────────────────────────────────────────────────
+# Page mapping (0-indexed):
+#   Page 0       → Specialist
+#   Pages 1–2    → JP
+#   Pages 3–4    → PY
+#   Page 5       → SY
+#   Pages 6–7    → SSO
+#   Page 8       → Meetings
+
+PAGE_MAP = {
+    "Specialist": [0],
+    "JP":         [1, 2],
+    "PY":         [3, 4],
+    "SY":         [5],
+    "SSO":        [6, 7],
+    "Meetings":   [8],
+}
+
+def split_and_save_full_pdf(pdf_bytes: bytes, label: str) -> dict:
+    """
+    Split a full timetable PDF into per-program sections and save each one.
+    Returns a dict of {program: status_message} or {"error": message}.
+    """
+    try:
+        import fitz  # PyMuPDF
+        import base64 as _b64, uuid as _uuid
+    except ImportError:
+        return {"error": "PyMuPDF (fitz) is not installed."}
+
+    try:
+        full_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        total_pages = len(full_doc)
+    except Exception as e:
+        return {"error": f"Could not open PDF: {e}"}
+
+    results = {}
+    for program, page_indices in PAGE_MAP.items():
+        # Skip pages that don't exist in this PDF
+        valid_pages = [p for p in page_indices if p < total_pages]
+        if not valid_pages:
+            results[program] = "⚠️ Skipped — pages not found in PDF"
+            continue
+
+        try:
+            # Build a new single-program PDF
+            sub_doc = fitz.open()
+            for page_idx in valid_pages:
+                sub_doc.insert_pdf(full_doc, from_page=page_idx, to_page=page_idx)
+
+            sub_bytes = sub_doc.tobytes()
+            sub_doc.close()
+
+            filename = f"timetable_{program.lower()}_{_uuid.uuid4().hex[:6]}.pdf"
+            b64data = _b64.b64encode(sub_bytes).decode("utf-8")
+
+            ok = save_timetable(filename, b64data, label, program)
+            results[program] = "✅ Uploaded" if ok else "❌ Save failed"
+        except Exception as e:
+            results[program] = f"❌ Error: {e}"
+
+    full_doc.close()
+    return results
+
 # ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
