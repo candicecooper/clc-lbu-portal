@@ -1466,6 +1466,203 @@ def render_documents(program):
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
+def _render_adhoc_meeting(program, last_actions):
+    """Ad-hoc / additional meeting form with transcript → AI minutes."""
+    import json as _json
+
+    prog_label = PROGRAMS[program]["label"]
+
+    st.markdown("#### 📋 Meeting Details")
+    mc1, mc2, mc3 = st.columns(3)
+    with mc1: ah_date      = st.date_input("Date", value=datetime.date.today(), key=f"ah_date_{program}")
+    with mc2: ah_purpose   = st.text_input("Meeting purpose / title *", key=f"ah_purpose_{program}",
+                                            placeholder="e.g. Emergency planning meeting")
+    with mc3: ah_facilitator = st.text_input("Facilitator", value=get_staff_name(), key=f"ah_fac_{program}")
+    ah_attendees = st.text_input("Attendees", placeholder="Names separated by commas", key=f"ah_att_{program}")
+
+    st.markdown("---")
+
+    # Input method
+    input_method = st.radio(
+        "How would you like to record minutes?",
+        ["📝 Type / fill in template", "🎙️ Paste transcript — AI will format"],
+        horizontal=True, key=f"ah_method_{program}")
+    use_ai = "🎙️" in input_method
+
+    st.markdown("---")
+
+    if use_ai:
+        st.markdown("#### 🎙️ Meeting Transcript")
+        st.markdown("""<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;
+            padding:10px 14px;font-size:12px;color:#475569;margin-bottom:8px;">
+            <strong>Instructions:</strong><br>
+            1. Record your meeting using your phone or a recording tool<br>
+            2. Transcribe using Otter.ai, Teams transcript, or phone speech-to-text<br>
+            3. Paste the full transcript below — AI will structure it into professional minutes
+        </div>""", unsafe_allow_html=True)
+        ah_transcript = st.text_area("Paste transcript here", height=300,
+            key=f"ah_transcript_{program}",
+            placeholder="Paste full transcript here. Include everything — AI will extract what's relevant...")
+        ah_content = ""
+    else:
+        ah_transcript = ""
+        st.markdown("#### 📝 Minutes")
+        ah_content = st.text_area("Minutes", height=300, key=f"ah_content_{program}",
+            value="""## Purpose / Agenda
+What is this meeting about?
+
+---
+
+## Discussion
+Key points discussed:
+
+
+---
+
+## Decisions Made
+
+
+---
+
+## Meeting Close
+What is the single most important thing agreed today?
+
+---
+
+## Actions
+| Action | Who | By When |
+|--------|-----|---------|
+|        |     |         |
+""")
+
+    st.markdown("---")
+
+    # Actions table
+    st.markdown("#### ✅ Actions")
+    actions_key = f"ah_actions_{program}"
+    if actions_key not in st.session_state:
+        carried = [a for a in last_actions if not a.get("done", False)]
+        st.session_state[actions_key] = carried if carried else [{"action":"","who":"","by_when":""}]
+
+    ah_actions = st.session_state[actions_key]
+    ah_cols = st.columns([4,1,1,0.5])
+    for h, label in zip(ah_cols, ["Action","Who","By When",""]):
+        h.markdown(f"**{label}**" if label else "")
+
+    for idx, row in enumerate(ah_actions):
+        a1,a2,a3,a4 = st.columns([4,1,1,0.5])
+        with a1: row["action"]  = st.text_input("Act", value=row.get("action",""),  key=f"ah_act_a_{program}_{idx}", label_visibility="collapsed")
+        with a2: row["who"]     = st.text_input("Who", value=row.get("who",""),     key=f"ah_act_w_{program}_{idx}", label_visibility="collapsed")
+        with a3: row["by_when"] = st.text_input("By",  value=row.get("by_when",""), key=f"ah_act_by_{program}_{idx}", label_visibility="collapsed")
+        with a4:
+            if len(ah_actions) > 1:
+                if st.button("✕", key=f"ah_act_del_{program}_{idx}"):
+                    ah_actions.pop(idx); st.rerun()
+    if st.button("➕ Add action", key=f"ah_act_add_{program}"):
+        ah_actions.append({"action":"","who":"","by_when":""}); st.rerun()
+
+    st.markdown("---")
+
+    # Confirmation
+    ah_confirmed_by = st.text_input("Your name (confirming minutes are accurate)",
+        value=get_staff_name(), key=f"ah_confirmed_{program}")
+    ah_confirmed = st.checkbox(
+        "I confirm these minutes accurately represent what was discussed.",
+        key=f"ah_confirm_chk_{program}")
+
+    if st.button("✨ Process & Save Minutes", type="primary", use_container_width=True, key=f"ah_save_{program}"):
+        if not ah_purpose.strip():
+            st.warning("Please enter a meeting purpose / title.")
+        elif not ah_confirmed:
+            st.warning("Please tick the confirmation checkbox before saving.")
+        elif not ah_confirmed_by.strip():
+            st.warning("Please enter your name.")
+        else:
+            final_content = ""
+            if use_ai and ah_transcript.strip():
+                with st.spinner("✨ AI is structuring your transcript into minutes…"):
+                    prompt = f"""You are a professional minute-taker for Cowandilla Learning Centre (CLC), 
+Learning & Behaviour Unit — {prog_label} team. 
+
+Meeting: {ah_purpose.strip()}
+Date: {ah_date}
+Facilitator: {ah_facilitator.strip()}
+Attendees: {ah_attendees.strip()}
+
+Transform this transcript into professional meeting minutes using this structure:
+
+## {ah_purpose.strip()}
+
+### Attendance
+{ah_attendees.strip() or "See attendance record"}
+
+### Purpose
+{ah_purpose.strip()}
+
+### Discussion
+(Extract and summarise key discussion points)
+
+### Decisions Made
+(List decisions reached)
+
+### Meeting Close
+(Key agreement or next step)
+
+### Actions
+| Action | Who | By When |
+|--------|-----|---------|
+(Extract all actions mentioned)
+
+Rules:
+- Professional but warm, accessible language
+- Trauma-informed, strengths-based framing
+- Preserve ALL factual content — do not fabricate
+- Concise — one clear sentence per point unless more detail is essential
+
+Transcript:
+{ah_transcript.strip()}"""
+                    if GROQ_KEY:
+                        client = Groq(api_key=GROQ_KEY)
+                        resp = client.chat.completions.create(
+                            model="llama-3.3-70b-versatile",
+                            messages=[{"role":"user","content":prompt}],
+                            max_tokens=2000,
+                        )
+                        final_content = resp.choices[0].message.content
+                    else:
+                        final_content = ah_transcript.strip()
+            else:
+                final_content = ah_content.strip()
+
+            confirmation_note = f"\n\n---\n*Minutes confirmed by {ah_confirmed_by.strip()} on {datetime.date.today().strftime('%-d %B %Y')}.*"
+            final_content = final_content + confirmation_note
+
+            try:
+                insert("tm_minutes", {
+                    "program": program,
+                    "schedule_id": None,
+                    "title": ah_purpose.strip(),
+                    "meeting_date": str(ah_date),
+                    "chair": ah_facilitator.strip(),
+                    "location": "",
+                    "attendees": ah_attendees.strip(),
+                    "apologies": "",
+                    "content": final_content,
+                    "action_summary": "\n".join(
+                        f"{a.get('action','')} | {a.get('who','')} | {a.get('by_when','')}"
+                        for a in ah_actions if a.get("action","").strip()
+                    ),
+                    "digital_summary": "",
+                    "digital_items": "[]",
+                    "face_to_face_content": "",
+                })
+                st.success("✅ Ad-hoc meeting minutes saved!")
+                st.session_state.pop(f"ah_actions_{program}", None)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Could not save: {e}")
+
+
 def render_program_meeting(program):
     """Structured weekly program meeting — Week A (Student Lens) or Week B (System Lens)."""
     import json as _json
@@ -1511,28 +1708,40 @@ def render_program_meeting(program):
     wt_col1, wt_col2 = st.columns([3, 2])
     with wt_col1:
         week_type = st.radio(
-            "Week type",
-            ["A — Student Lens", "B — System Lens"],
+            "Meeting type",
+            ["A — Student Lens", "B — System Lens", "📋 Ad-hoc Meeting"],
             index=0 if suggested_type == "A" else 1,
             horizontal=True,
             key=f"pm_wt_{program}",
         )
     with wt_col2:
         if last_week_type:
-            st.caption(f"Last meeting: Week {last_week_type}")
+            st.caption(f"Last scheduled meeting: Week {last_week_type}")
 
     is_week_a = week_type.startswith("A")
+    is_adhoc  = week_type.startswith("📋")
 
     if is_week_a:
         st.markdown(f"""<div style="background:#dbeafe;border-left:5px solid #1a4d8c;
             border-radius:0 8px 8px 0;padding:8px 14px;margin-bottom:12px;font-size:13px;color:#1a4d8c;">
             ⬤ <strong>WEEK A — STUDENT LENS</strong> · Individual Progress · SMARTAR Goals · Evidence
         </div>""", unsafe_allow_html=True)
+    elif is_adhoc:
+        st.markdown(f"""<div style="background:#f3f0ff;border-left:5px solid #6d28d9;
+            border-radius:0 8px 8px 0;padding:8px 14px;margin-bottom:12px;font-size:13px;color:#4c1d95;">
+            📋 <strong>AD-HOC / ADDITIONAL MEETING</strong> · Record minutes for any unscheduled or additional team meeting.
+            Use the transcript tool to paste a recording and have AI format the minutes.
+        </div>""", unsafe_allow_html=True)
     else:
         st.markdown(f"""<div style="background:#fef3c7;border-left:5px solid #d97706;
             border-radius:0 8px 8px 0;padding:8px 14px;margin-bottom:12px;font-size:13px;color:#92400e;">
             ⬤ <strong>WEEK B — SYSTEM LENS</strong> · CLC Priorities · Innovation Fidelity · Staff Alignment
         </div>""", unsafe_allow_html=True)
+
+    # ── Ad-hoc meeting — separate flow ───────────────────────────────────────
+    if is_adhoc:
+        _render_adhoc_meeting(program, last_actions)
+        return
 
     # ── Meeting details ───────────────────────────────────────────────────────
     st.markdown("#### 📋 Meeting Details")
