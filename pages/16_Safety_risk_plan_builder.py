@@ -204,44 +204,39 @@ def ai_synthesise_from_docs(support_docs: list, student: dict) -> list:
         f"=== {d['doc_type'].upper()}: {d['name']} ===\n{d['text'][:3000]}"
         for d in support_docs
     )
-    student_ctx = f"Student: {student['name']}, Age {student['age']}, Program {student['program']}"
-    prompt = f"""You are a behaviour support specialist analysing documents for {student['name']} to write a CLC Safety & Risk Management Plan.
+    student_ctx = f"Student: {student['name']}, Age {student.get('age','')}, Program {student.get('program','')}"
+    prompt = f"""You are a behaviour support specialist analysing documents about {student['name']} to identify specific safety risks for a CLC Safety & Risk Management Plan.
 
-CLC (Cowandilla Learning Centre) is a specialist program option for students with educational exclusion in Adelaide, South Australia.
-CLC context: small group setting with frequent externalising behaviour presentations from other students; playground adjacent to carpark via climbable fence; nearby roads include Marion Road, Sir Donald Bradman Drive, and South Road.
+MOST IMPORTANT RULE: Only identify risks that are directly evidenced in the documents provided below.
+Do NOT include risks because they are common or because they appeared in another student's plan.
+Do NOT invent behaviours. Every risk must trace to specific content in the documents.
 
-CRITICAL RULES:
-- Identify risks by what the student DOES that is risky — observable behaviours only
-- Do NOT include triggers or function in the risk description — those go in proactive strategies
-- Describe behaviours specifically: e.g. "running onto roads", "climbing fence", "verbal aggression including swearing"
-- Identify STAFF SAFETY risks as well as student risks
-- Rate risks conservatively — err toward higher ratings given CLC environment
-- Always consider whether absconding / road safety / fence climbing are relevant given CLC's physical context
+CLC CONTEXT (apply only where relevant to evidenced risks):
+- CLC is a program option for students with educational exclusion in Adelaide SA
+- Small group setting; playground adjacent to carpark via climbable fence; busy roads nearby
+- TAC, CARL, DCP, IRMS processes apply; trauma-informed relational practice
 
 {student_ctx}
-Medical/context notes: {student.get('medical_notes','')}
-CLC context: {student.get('clc_context','')}
+Medical/context: {student.get('medical_notes','')}
+Staff notes: {student.get('clc_context','')}
 
-DOCUMENTS PROVIDED:
+DOCUMENTS:
 {combined}
 
-Generate a comprehensive set of CLC-appropriate safety risk rows as a JSON array. Each object must have:
-- issue_title: specific, behaviour-focused title
-- issue_detail: 2-3 sentences of observable behaviour description only
-- behaviour_descriptors: specific observable behaviours, one per line starting with •
-- function: function of behaviour based on available evidence
-- likelihood: A/B/C/D/E
-- consequence: 1/2/3/4/5
-- proactive: CLC-specific proactive strategies, one per line starting with •, with ### subheadings for categories
-- procedure: CLC-specific reactive procedures with ### Subheadings and • bullets
+Based ONLY on the above documents, identify the specific safety risks for {student['name']}.
+If the documents do not describe absconding — do not include it.
+If the documents do not describe aggression — do not include it.
+Only include what is actually described about this student.
 
-Always consider these CLC-specific risks and include them if evidence exists:
-- Absconding/running from CLC grounds
-- Fence climbing
-- Community road safety during absconding
-- Staff safety during community follow
-- Peer-triggered rapid escalation
-- Parent/carer handover
+Return a JSON array. Each object:
+- issue_title: behaviour-focused title derived from documents
+- issue_detail: 2-3 sentences of what THIS student does — sourced from documents only
+- behaviour_descriptors: specific observable behaviours from documents, one per line starting with •
+- function: function of behaviour as evidenced
+- likelihood: A/B/C/D/E based on frequency described in documents
+- consequence: 1/2/3/4/5 based on severity described in documents
+- proactive: CLC-specific proactive strategies with ### subheadings and • bullets
+- procedure: reactive procedures with ### subheadings and • bullets
 
 Return ONLY valid JSON array. No markdown, no preamble."""
     try:
@@ -363,62 +358,84 @@ def ai_generate_full_plan(student: dict, school_plan_text: str, support_docs: li
     for d in support_docs:
         combined_docs += f"=== {d['doc_type'].upper()}: {d['name']} ===\n{d['text'][:2500]}\n\n"
 
-    prompt = f"""You are an expert behaviour support specialist writing a complete Safety & Risk Management Plan for Cowandilla Learning Centre (CLC) LBU.
+    # Warn if documents are very thin
+    if len(combined_docs.strip()) < 200:
+        return {"error": "Documents provided contain very little text. Please check the files uploaded and try again.", "risks": [], "priority_actions": "", "review_date": ""}
 
-STUDENT:
+    prompt = f"""You are an expert behaviour support specialist writing a Safety & Risk Management Plan for Cowandilla Learning Centre (CLC) LBU, Adelaide SA.
+
+STUDENT DETAILS:
 Name: {student['name']}
-Age: {student['age']}  DOB: {student['dob']}  EDSAS: {student['edsas']}
-Program: {student['program']}  Home school: {student['home_school']}
-Key staff: {student['key_staff']}
-CLC context: {student['clc_context']}
-Medical/background: {student['medical_notes']}
+Age: {student.get('age','—')}  DOB: {student.get('dob','—')}  EDSAS: {student.get('edsas','—')}
+Program: {student.get('program','—')}  Home school: {student.get('home_school','—')}
+Key staff: {student.get('key_staff','—')}
+Additional context provided by staff: {student.get('clc_context','')}
+Medical/background notes: {student.get('medical_notes','')}
 
-CLC CONTEXT (always apply):
-- Program option for students with educational exclusion — NOT a "specialist centre"
+═══════════════════════════════════════════════
+MOST IMPORTANT RULE — READ CAREFULLY:
+You must ONLY identify risks that are directly evidenced in the documents below.
+DO NOT include risks simply because they are common CLC risks or because they appeared in a previous student's plan.
+DO NOT invent, assume, or generalise behaviours not described in the documents.
+If a behaviour is not described in the documents, do NOT include it as a risk.
+Every risk row must be traceable to specific content in the provided documents.
+═══════════════════════════════════════════════
+
+CLC ENVIRONMENTAL CONTEXT (apply only where relevant to evidenced risks):
+- CLC is a program option for students with educational exclusion — NOT a "specialist centre"
 - Small group setting with frequent externalising behaviour presentations from other students
-- Playground directly adjacent to carpark accessible via climbable external fence
-- Jenkins Road, Marion Road, Sir Donald Bradman Drive within 100m; South Road ~15 min on foot
-- All staff carry walkie talkies; program vehicle keys stored in program office; school mobile for SAPOL
-- TAC, CARL, DCP, IRMS, ED155/ED165 all apply; trauma-informed relational practice
+- Playground directly adjacent to carpark via climbable external fence
+- Jenkins Road, Marion Road, Sir Donald Bradman Drive within 100m; South Road nearby
+- All staff carry walkie talkies; program vehicle available; school mobile for SAPOL contact
+- TAC, CARL, DCP, IRMS, ED155/ED165 apply; trauma-informed relational practice
 
-CRITICAL RULES FOR RISK DESCRIPTIONS:
-- Describe what the student DOES — observable behaviour only
-- NEVER put triggers or function in the risk description — triggers go in proactive strategies
-- Use specific language: "climbing boundary fence", "running onto roads", "verbal aggression including swearing"
-- Always consider: absconding/road safety, fence climbing, peer-triggered escalation, staff safety during follow
+RULES FOR RISK DESCRIPTIONS:
+- Describe what THIS student DOES — observable behaviour only, sourced from the documents
+- Do NOT include triggers or function in the risk description — triggers go in proactive strategies
+- Use specific language from the documents (e.g. "threw chairs", "bit staff", "ran into traffic")
+- Risk ratings must reflect the actual severity and frequency described in the documents
+- Proactive strategies and procedures must be specific to this student's needs, not generic
 
-DOCUMENTS PROVIDED:
-{combined_docs[:12000]}
+DOCUMENTS TO BASE THE PLAN ON:
+{combined_docs[:14000]}
 
-Generate a COMPLETE, professionally written Safety & Risk Management Plan.
+Based ONLY on the documents above, generate a complete Safety & Risk Management Plan.
+Include only risks that are clearly evidenced in the documents. Typically 3-6 risks.
+If a document describes a student who does NOT abscond, do NOT include absconding as a risk.
+If there is no evidence of fence climbing, do NOT include it.
+Only include what the documents actually describe about {student['name']}.
 
-Return as JSON only (no markdown fences):
+Return as JSON only (no markdown fences, no preamble):
 {{
   "risks": [
     {{
-      "issue_title": "specific behaviour-focused title",
-      "issue_detail": "2-3 sentences of observable behaviour description only",
-      "behaviour_descriptors": "• specific descriptor\\n• specific descriptor\\n• specific descriptor",
-      "function": "function of behaviour",
-      "likelihood": "D – Likely/frequently",
-      "consequence": "3 – Moderate",
-      "proactive": "### Environment & supervision\\n• strategy\\n• strategy\\n\\n### Relational strategies\\n• strategy\\n• strategy\\n\\n### Skill building\\n• strategy",
-      "procedure": "### If early warning signs:\\n• step\\n• step\\n\\n### If [scenario]:\\n• step\\n• step\\n\\n### Post-incident:\\n• step",
-      "clc_notes": "any CLC-specific context for this risk",
+      "issue_title": "specific behaviour-focused title based on documents",
+      "issue_detail": "2-3 sentences describing what {student['name']} does — sourced from documents only",
+      "behaviour_descriptors": "• specific observable descriptor from documents\\n• specific descriptor\\n• specific descriptor",
+      "function": "function of behaviour as evidenced in documents",
+      "likelihood": "one of: A – Rare / B – Unlikely / C – Likely sometimes / D – Likely/frequently / E – Almost certain",
+      "consequence": "one of: 1 – Insignificant / 2 – Minor / 3 – Moderate / 4 – Major / 5 – Catastrophic",
+      "proactive": "### Category\\n• strategy specific to {student['name']}\\n• strategy\\n\\n### Next category\\n• strategy",
+      "procedure": "### If early warning signs:\\n• step\\n\\n### If [specific scenario from documents]:\\n• step\\n\\n### Post-incident:\\n• step",
+      "clc_notes": "CLC-specific context for this risk — only if relevant to what documents describe",
       "from_school": false,
       "from_docs": true
     }}
   ],
-  "priority_actions": "• Priority action 1\\n• Priority action 2\\n• Priority action 3\\n• Priority action 4\\n• Priority action 5",
-  "review_date": "review date string e.g. in 8 weeks from today"
+  "priority_actions": "• action specific to {student['name']}'s needs\\n• action\\n• action\\n• action\\n• action",
+  "review_date": "suggested review date (typically 8 weeks from today: approx {__import__('datetime').date.today().__class__.fromordinal(__import__('datetime').date.today().toordinal() + 56).strftime('%d/%m/%Y')})"
 }}
 
-Generate 4-7 risks. Each risk must have COMPLETE, detailed, ready-to-use proactive strategies (6-9 bullet points in 2-3 subheaded categories) and procedures (4-6 subheaded scenario sections). Do not leave any field empty or with placeholder text.
-Always include these risks if evidence supports them: absconding, fence/boundary climbing, road safety during absconding, verbal aggression, peer-triggered escalation, staff safety during community follow, parent/carer handover."""
+Each risk must have complete, detailed proactive strategies (6-8 bullets across 2-3 subheadings) and procedures (3-5 scenario sections). Write for this specific student based on the evidence in the documents."""
 
     try:
         raw = groq_call(prompt, 4000)
         raw = raw.replace("```json","").replace("```","").strip()
+        # Handle case where model wraps in extra text
+        if not raw.startswith("{"):
+            start = raw.find("{")
+            if start != -1:
+                raw = raw[start:]
         result = json.loads(raw)
         # Ensure all risk fields present
         for r in result.get("risks", []):
@@ -427,7 +444,7 @@ Always include these risks if evidence supports them: absconding, fence/boundary
                     r[k] = v
         return result
     except Exception as e:
-        return {"error": str(e), "risks": [], "priority_actions": "", "review_date": ""}
+        return {"error": f"Generation failed: {e}. Try uploading richer documents or use the step-by-step builder.", "risks": [], "priority_actions": "", "review_date": ""}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1079,7 +1096,7 @@ elif st.session_state.step == 6:
         cpara(ctx_cell, "CURRENT CONTEXTUAL RISKS — CLC SETTING",
               bold=True, size=18, color=TEAL.lstrip("#"), sb=40, sa=60)
         for line in [
-            "Xavier is enrolled at CLC as a program option for students with educational exclusion.",
+            f"{student['name']} is enrolled at CLC as a program option for students with educational exclusion.",
             "Small group setting of up to 10 students with frequent externalising behaviour presentations from other students.",
             "Playground is directly adjacent to a carpark accessible via a climbable external fence. Jenkins Road, Marion Road, and Sir Donald Bradman Drive are within 100m. South Road is approximately 15 minutes on foot at pace.",
             "All staff carry walkie talkies. Program vehicle keys stored in program office. School mobile designated for SAPOL contact.",
@@ -1428,6 +1445,19 @@ elif st.session_state.step == 8:
                 unsafe_allow_html=True)
             if r.get("issue_detail"):
                 st.caption(r["issue_detail"][:120] + "…")
+
+    # Quality warning — if risks seem generic/template-derived
+    all_risk_text = " ".join(r.get("issue_detail","") + r.get("proactive","") for r in risks)
+    if "Xavier" in all_risk_text or (n_risks >= 6 and all(
+        any(t in r.get("issue_title","").lower() for t in ["abscond","fence","road","verbal","peer","staff safety","handover"])
+        for r in risks if r.get("issue_title")
+    )):
+        st.markdown(f"""<div class="card-red">
+        ⚠️ <strong>Quality check:</strong> The generated risks may be based on a template rather than
+        {student['name']}'s specific documents. Before downloading, review each risk in the preview above
+        and confirm it matches the documents you uploaded. If the content looks generic,
+        click <em>Switch to step-by-step</em> below to review and correct individual risks.
+        </div>""", unsafe_allow_html=True)
 
     # ── Build docx (reuse Step 6 helpers inline) ──────────────────────────────
     with st.spinner("Building document…"):
