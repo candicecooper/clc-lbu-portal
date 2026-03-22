@@ -88,16 +88,31 @@ def get_client():
     return Groq(api_key=key)
 
 def extract_docx_text(uploaded_file) -> str:
+    """Extract plain text from an uploaded .docx or .pdf file."""
+    name = getattr(uploaded_file, "name", "").lower()
     try:
-        doc = DocxDocument(io.BytesIO(uploaded_file.read()))
-        lines = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
-        for table in doc.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    cell_text = " ".join(p.text.strip() for p in cell.paragraphs if p.text.strip())
-                    if cell_text:
-                        lines.append(cell_text)
-        return "\n".join(lines)
+        if name.endswith(".pdf"):
+            try:
+                import fitz  # PyMuPDF — already installed for timetable
+                raw = uploaded_file.read()
+                doc = fitz.open(stream=raw, filetype="pdf")
+                lines = [page.get_text() for page in doc]
+                doc.close()
+                return "\n".join(lines)
+            except Exception as e:
+                return f"[PDF extraction error: {e}]"
+        else:
+            doc = DocxDocument(io.BytesIO(uploaded_file.read()))
+            lines = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        cell_text = " ".join(
+                            p.text.strip() for p in cell.paragraphs if p.text.strip()
+                        )
+                        if cell_text:
+                            lines.append(cell_text)
+            return "\n".join(lines)
     except Exception as e:
         return f"[Extraction error: {e}]"
 
@@ -573,7 +588,7 @@ elif st.session_state.step == 2:
     Upload it below and the AI will extract and adapt all risk rows for CLC's context.
     </div>""", unsafe_allow_html=True)
 
-    school_plan = st.file_uploader("Upload school safety plan (.docx)", type=["docx"],
+    school_plan = st.file_uploader("Upload school safety plan (.docx or .pdf)", type=["docx","pdf"],
                                     key="school_upload")
     if school_plan:
         text = extract_docx_text(school_plan)
@@ -605,7 +620,7 @@ elif st.session_state.step == 2:
     ]
 
     uploaded_docs = st.file_uploader(
-        "Upload supporting documents (.docx)", type=["docx"],
+        "Upload supporting documents (.docx or .pdf)", type=["docx","pdf"],
         accept_multiple_files=True, key="support_upload"
     )
 
@@ -1278,7 +1293,7 @@ elif st.session_state.step == 7:
 
     # ── Document uploads ──────────────────────────────────────────────────────
     st.markdown('<div class="sec-head">School Safety Plan (optional)</div>', unsafe_allow_html=True)
-    school_upload = st.file_uploader("Upload existing school safety plan (.docx)",
+    school_upload = st.file_uploader("Upload existing school safety plan (.docx or .pdf)",
                                      type=["docx"], key="express_school")
     if school_upload:
         text = extract_docx_text(school_upload)
@@ -1296,8 +1311,8 @@ elif st.session_state.step == 7:
         "Team Meeting Notes", "TAC Meeting Notes", "Other",
     ]
 
-    uploaded_docs = st.file_uploader("Upload supporting documents (.docx)",
-                                     type=["docx"], accept_multiple_files=True,
+    uploaded_docs = st.file_uploader("Upload supporting documents (.docx or .pdf)",
+                                     type=["docx","pdf"], accept_multiple_files=True,
                                      key="express_docs")
     if uploaded_docs:
         new_docs = []
