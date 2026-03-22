@@ -908,8 +908,6 @@ def render_minutes(program, week_range=None):
     else:
         st.info("No minutes recorded yet. Use the form below to add the first entry.")
 
-    if not st.session_state.get("admin"):
-        return
     st.divider()
     if is_staff:
         _render_new_staff_minutes()
@@ -2019,7 +2017,10 @@ def main():
         st.markdown("### 🔀 Switch Program")
         for p, info in PROGRAMS.items():
             if p != program:
-                st.markdown(f"[{info['emoji']} {info['label']}](?program={p})")
+                if st.button(f"{info['emoji']} {info['label']}", key=f"sw_{p}",
+                             use_container_width=True):
+                    st.query_params["program"] = p
+                    st.rerun()
         st.divider()
         if st.session_state.get("admin"):
             st.markdown("### ⚙️ Admin Mode Active")
