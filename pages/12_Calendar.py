@@ -12,6 +12,7 @@ from auth import require_auth, logout_button, get_staff_name
 require_auth("CLC Calendar", "📅")
 logout_button("sidebar")
 
+# ── Back to Portal ─────────────────────────────────────────────────────────────
 st.sidebar.markdown(
     '<a href="https://16cefb77.clc-portal.pages.dev/" target="_self" style="display:block;text-align:center;'
     'background:#1A7A7A;color:white;font-weight:600;font-size:0.85rem;'
@@ -19,6 +20,7 @@ st.sidebar.markdown(
     '🏠 Back to Staff Portal</a>',
     unsafe_allow_html=True
 )
+
 
 # ─── SUPABASE ───────────────────────────────────────────────────────────────────
 @st.cache_resource
@@ -43,21 +45,28 @@ EVENT_TYPES = {
     "Other":                 {"color": "#374151", "bg": "#f3f4f6", "emoji": "📌"},
 }
 
+# Student meeting types — appear in BOTH normal calendar AND student placement view
 STUDENT_MEETING_TYPES = ["Entry Meeting", "Review Meeting", "Transition Meeting", "TAC Meeting"]
+# All student-related types
 STUDENT_EVENT_TYPES   = STUDENT_MEETING_TYPES + ["Student Placement"]
 
+# Program colour coding
 PROGRAM_COLORS = {
     "JP": {"color": "#1d4ed8", "bg": "#dbeafe", "label": "Junior Primary"},
     "PY": {"color": "#15803d", "bg": "#dcfce7", "label": "Primary Years"},
     "SY": {"color": "#a16207", "bg": "#fef9c3", "label": "Senior Years"},
 }
 
+# ─── STYLES ─────────────────────────────────────────────────────────────────────
+
+# ─── ADMIN PASSWORD ──────────────────────────────────────────────────────────────
 try:
     CAL_ADMIN_PW = st.secrets["CAL_ADMIN_PASSWORD"]
 except Exception:
     CAL_ADMIN_PW = "CLC2026"
 
 # ─── SESSION STATE ───────────────────────────────────────────────────────────────
+# Use Adelaide timezone for today's date
 from datetime import timezone
 import zoneinfo
 try:
@@ -66,33 +75,32 @@ try:
     today = _dt.now(_adelaide).date()
 except Exception:
     today = date.today()
-
 for k, v in [("cal_year", today.year), ("cal_month", today.month),
               ("cal_week_start", today - timedelta(days=today.weekday())),
-              ("selected_date", today), ("is_admin", False), ("edit_event_id", None),
+              ("selected_date", today), ("is_admin", True), ("edit_event_id", None),
               ("selected_event_id", None), ("quick_add_open", False)]:
     if k not in st.session_state:
         st.session_state[k] = v
 
-if "cal_initialised" not in st.session_state:
-    st.session_state.selected_date   = today
-    st.session_state.cal_week_start  = today - timedelta(days=today.weekday())
-    st.session_state.cal_year        = today.year
-    st.session_state.cal_month       = today.month
-    st.session_state.cal_initialised = True
+# Only set defaults if not already in session state (don't override navigation)
+if "selected_date" not in st.session_state:
+    st.session_state.selected_date = today
+if "cal_week_start" not in st.session_state:
+    st.session_state.cal_week_start = today - timedelta(days=today.weekday())
+if "cal_year" not in st.session_state:
+    st.session_state.cal_year = today.year
+if "cal_month" not in st.session_state:
+    st.session_state.cal_month = today.month
 
 # ─── DB HELPERS ─────────────────────────────────────────────────────────────────
 def db_events(start_date=None, end_date=None):
-    """Load events from Supabase. Returns [] on error."""
-    try:
-        q = supabase.table("clc_events").select("*").order("event_date").order("start_time")
-        if start_date: q = q.gte("event_date", str(start_date))
-        if end_date:   q = q.lte("event_date", str(end_date))
-        result = q.execute()
-        return result.data or []
-    except Exception as e:
-        st.error(f"❌ Could not load events: {e}")
-        return []
+    q = supabase.table("clc_events").select("*").order("event_date").order("start_time")
+    if start_date: q = q.gte("event_date", str(start_date))
+    if end_date:   q = q.lte("event_date", str(end_date))
+    return q.execute().data
+
+def db_events_all():
+    return supabase.table("clc_events").select("*").order("event_date").execute().data
 
 def db_pac():
     try: return supabase.table("pac_meetings").select("*").order("meeting_date").execute().data
@@ -112,18 +120,49 @@ def pac_events(pac_list, d_from=None, d_to=None):
                     "id": f"pac_{p['id']}"})
     return out
 
+_DAY_NAME_TO_INT = {"Monday":0,"Tuesday":1,"Wednesday":2,"Thursday":3,"Friday":4,"Saturday":5,"Sunday":6}
+_PROG_LABEL = {"JP":"Junior Primary","PY":"Primary Years","SY":"Senior Years","STAFF":"All Staff","ADMIN":"Admin"}
+
+def schedule_events(d_from=None, d_to=None):
+    """Generate synthetic calendar events from tm_schedules flagged show_in_calendar."""
+    try:
+        res = supabase.table("tm_schedules").select("*").eq("show_in_calendar", True).execute()
+        schedules = res.data or []
+    except Exception:
+        return []
+    if not schedules or not d_from or not d_to:
+        return []
+    out = []
+    cur = d_from
+    while cur <= d_to:
+        for s in schedules:
+            dow = s.get("day_of_week", "")
+            target = _DAY_NAME_TO_INT.get(dow, -1)
+            if target == cur.weekday():
+                prog = s.get("program", "")
+                out.append({
+                    "id": f"sched_{s['id']}_{cur}",
+                    "title": s.get("schedule_name", "Team Meeting"),
+                    "event_type": "Team Meeting",
+                    "event_date": str(cur),
+                    "end_date": None,
+                    "start_time": s.get("meeting_time") or None,
+                    "end_time": None,
+                    "location": "",
+                    "added_by": _PROG_LABEL.get(prog, prog),
+                    "notes": s.get("notes",""),
+                    "program": prog,
+                    "student_initials": "",
+                    "_from_schedule": True,
+                })
+        cur += timedelta(days=1)
+    return out
+
 def ev_index(events):
     idx = {}
     for ev in events:
         idx.setdefault(str(ev.get("event_date",""))[:10], []).append(ev)
     return idx
-
-def month_date_range(yr, mo):
-    """Return (first_day, last_day) of a month correctly for any month."""
-    first = date(yr, mo, 1)
-    last_day = calendar.monthrange(yr, mo)[1]
-    last = date(yr, mo, last_day)
-    return first, last
 
 def fmt_date(d):
     try: return datetime.strptime(str(d)[:10], "%Y-%m-%d").strftime("%-d %B %Y")
@@ -134,183 +173,49 @@ def fmt_time(t):
     try: return datetime.strptime(str(t)[:5], "%H:%M").strftime("%-I:%M %p")
     except: return str(t)[:5]
 
-def fmt_time_short(t):
-    if not t: return ""
-    try: return datetime.strptime(str(t)[:5], "%H:%M").strftime("%-I:%M%p").lower()
-    except: return str(t)[:5]
-
 def select_day(d):
     st.session_state.selected_date = d
     st.session_state.edit_event_id = None
 
 def save_event(d):
-    """
-    Save event to Supabase with proper response checking.
-    Shows a clear error if the save fails — no silent failures.
-    """
     try:
-        response = supabase.table("clc_events").insert({
-            "title":            d["title"].strip(),
-            "event_type":       d["etype"],
-            "event_date":       str(d["ev_date"]),
-            "end_date":         str(d["end_date"]) if d["end_date"] and d["end_date"] != d["ev_date"] else None,
-            "start_time":       str(d["start_t"]) if d["start_t"] else None,
-            "end_time":         str(d["end_t"])   if d["end_t"]   else None,
-            "location":         d["location"].strip(),
-            "added_by":         d["who"].strip(),
-            "notes":            d["notes"].strip(),
-            "program":          d.get("program",""),
-            "student_initials": d.get("student_initials",""),
+        supabase.table("clc_events").insert({
+            "title": d["title"].strip(), "event_type": d["etype"],
+            "event_date": str(d["ev_date"]),
+            "end_date": str(d["end_date"]) if d["end_date"] and d["end_date"] != d["ev_date"] else None,
+            "start_time": str(d["start_t"]) if d["start_t"] else None,
+            "end_time": str(d["end_t"]) if d["end_t"] else None,
+            "location": d["location"].strip(), "added_by": d["who"].strip(), "notes": d["notes"].strip(),
+            "program": d.get("program",""), "student_initials": d.get("student_initials",""),
         }).execute()
-
-        # ── Check the response actually contains the saved row ────────────────
-        if not response.data:
-            st.error(
-                "❌ Event could not be saved — Supabase returned no data. "
-                "This usually means a Row Level Security (RLS) policy is blocking inserts. "
-                "Go to Supabase → Table Editor → clc_events → RLS and add an INSERT policy, "
-                "or disable RLS on this table."
-            )
-            return False
-
-        # ── Success ───────────────────────────────────────────────────────────
-        ev_date_obj = d["ev_date"]
-        st.toast(
-            f"✅ '{d['title']}' saved for {ev_date_obj.strftime('%-d %B %Y')}!",
-            icon="✅"
-        )
-        # Ensure session state still points to the month/year of the saved event
-        # so the calendar rerenders showing that month
-        st.session_state.cal_year  = ev_date_obj.year
-        st.session_state.cal_month = ev_date_obj.month
-        st.rerun()
-        return True
-
+        st.success(f"✅ Event saved for {d['ev_date'].strftime('%-d %B %Y')}!")
     except Exception as e:
         st.error(f"❌ Could not save event: {e}")
-        return False
 
 def upd_event(ev_id, d):
-    try:
-        supabase.table("clc_events").update({
-            "title":            d["title"].strip(),
-            "event_type":       d["etype"],
-            "event_date":       str(d["ev_date"]),
-            "end_date":         str(d["end_date"]) if d["end_date"] and d["end_date"] != d["ev_date"] else None,
-            "start_time":       str(d["start_t"]) if d["start_t"] else None,
-            "end_time":         str(d["end_t"])   if d["end_t"]   else None,
-            "location":         d["location"].strip(),
-            "added_by":         d["who"].strip(),
-            "notes":            d["notes"].strip(),
-            "program":          d.get("program",""),
-            "student_initials": d.get("student_initials",""),
-        }).eq("id", ev_id).execute()
-        return True
-    except Exception as e:
-        st.error(f"❌ Could not update event: {e}")
-        return False
+    supabase.table("clc_events").update({
+        "title": d["title"].strip(), "event_type": d["etype"],
+        "event_date": str(d["ev_date"]),
+        "end_date": str(d["end_date"]) if d["end_date"] and d["end_date"] != d["ev_date"] else None,
+        "start_time": str(d["start_t"]) if d["start_t"] else None,
+        "end_time": str(d["end_t"]) if d["end_t"] else None,
+        "location": d["location"].strip(), "added_by": d["who"].strip(), "notes": d["notes"].strip(),
+        "program": d.get("program",""), "student_initials": d.get("student_initials",""),
+    }).eq("id", ev_id).execute()
 
 def del_event(ev_id):
     try:
-        supabase.table("clc_events").delete().eq("id", str(ev_id)).execute()
+        result = supabase.table("clc_events").delete().eq("id", str(ev_id)).execute()
         return True
     except Exception as e:
         st.error(f"Could not delete event: {e}")
         return False
 
-# ─── EVENT CARD RENDERER ──────────────────────────────────────────────────────────
-def render_event_card(ev, key_prefix="ev"):
-    eid    = ev.get("id", "")
-    pac    = str(eid).startswith("pac_")
-    cfg_ev = EVENT_TYPES.get(ev.get("event_type", "Other"), EVENT_TYPES["Other"])
-    prog   = ev.get("program", "")
-    ecol   = (PROGRAM_COLORS.get(prog, {}).get("color", cfg_ev["color"])
-              if prog and ev.get("event_type") in STUDENT_EVENT_TYPES else cfg_ev["color"])
-    ebg    = (PROGRAM_COLORS.get(prog, {}).get("bg", cfg_ev["bg"])
-              if prog and ev.get("event_type") in STUDENT_EVENT_TYPES else cfg_ev["bg"])
-    tr_ev  = fmt_time(ev.get("start_time", ""))
-    if ev.get("end_time"): tr_ev += f" – {fmt_time(ev['end_time'])}"
-    can_edit   = (st.session_state.is_admin or ev.get("event_type") in STUDENT_EVENT_TYPES) and not pac
-    is_expanded = st.session_state.selected_event_id == eid
-
-    ev_cols = st.columns([7, 1, 1, 1])
-    with ev_cols[0]:
-        st.markdown(
-            f'<div style="background:{ebg};border-left:4px solid {ecol};border-radius:8px;'
-            f'padding:0.6rem 1rem;margin-bottom:0.4rem;">'
-            f'<h4 style="color:{ecol};margin:0 0 0.2rem;">{cfg_ev["emoji"]} {ev.get("title","")}'
-            f'{(" · " + ev.get("student_initials","")) if ev.get("student_initials") else ""}</h4>'
-            f'<div style="font-size:0.8rem;color:#555;">'
-            f'{(" ⏰ " + tr_ev) if tr_ev else ""}'
-            f'{(" 📍 " + ev.get("location","")) if ev.get("location") else ""}'
-            f'{(" 👤 " + ev.get("added_by","")) if ev.get("added_by") else ""}'
-            f'</div></div>', unsafe_allow_html=True)
-    with ev_cols[1]:
-        st.write("")
-        lbl = "✖" if is_expanded else "🔍"
-        if st.button(lbl, key=f"{key_prefix}det_{eid}", help="View details" if not is_expanded else "Close"):
-            st.session_state.selected_event_id = None if is_expanded else eid
-            st.rerun()
-    with ev_cols[2]:
-        if can_edit:
-            st.write("")
-            if st.button("✏️", key=f"{key_prefix}ed_{eid}", help="Edit"):
-                st.session_state.edit_event_id = eid if st.session_state.edit_event_id != eid else None
-                st.rerun()
-    with ev_cols[3]:
-        if st.session_state.is_admin and not pac:
-            st.write("")
-            confirm_key = f"confirm_del_{eid}"
-            if st.session_state.get(confirm_key):
-                if st.button("✅ Yes", key=f"{key_prefix}del_yes_{eid}", type="primary"):
-                    del_event(eid)
-                    st.session_state[confirm_key] = False
-                    st.rerun()
-            else:
-                if st.button("🗑️", key=f"{key_prefix}del_{eid}", help="Delete event"):
-                    st.session_state[confirm_key] = True
-                    st.rerun()
-
-    if is_expanded:
-        edate = fmt_date(ev.get("event_date", ""))
-        if ev.get("end_date") and ev["end_date"] != ev.get("event_date"):
-            edate += f" → {fmt_date(ev['end_date'])}"
-        prog_badge = ""
-        if prog:
-            pc = PROGRAM_COLORS.get(prog, {})
-            prog_badge = (f'<span style="background:{pc.get("bg","#f3f4f6")};color:{pc.get("color","#374151")};'
-                          f'font-size:0.7rem;font-weight:700;padding:0.15rem 0.5rem;border-radius:20px;margin-left:6px;">{prog}</span>')
-        notes_html = (f'<div style="margin-top:0.5rem;font-size:0.84rem;color:#555;border-top:1px solid '
-                      f'rgba(0,0,0,0.08);padding-top:0.4rem;">{ev.get("notes")}</div>'
-                      if ev.get("notes") else "")
-        st.markdown(
-            f'<div style="background:{ebg};border:2px solid {ecol};border-radius:12px;'
-            f'padding:1rem 1.25rem;margin:0.25rem 0 0.75rem;box-shadow:0 3px 12px rgba(0,0,0,0.1);">'
-            f'<div style="font-weight:800;color:{ecol};font-size:1rem;margin-bottom:0.6rem;">'
-            f'{cfg_ev["emoji"]} {ev.get("title","")}'
-            f'<span style="background:{ecol};color:white;font-size:0.68rem;font-weight:700;'
-            f'padding:0.15rem 0.5rem;border-radius:20px;margin-left:8px;">{ev.get("event_type","")}</span>'
-            f'{prog_badge}</div>'
-            f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:0.4rem;font-size:0.84rem;color:#374151;">'
-            f'<div>📅 <b>Date:</b> {edate}</div>'
-            f'{"<div>⏰ <b>Time:</b> " + tr_ev + "</div>" if tr_ev else "<div></div>"}'
-            f'{"<div>📍 <b>Location:</b> " + ev.get("location","") + "</div>" if ev.get("location") else "<div></div>"}'
-            f'{"<div>👤 <b>Added by:</b> " + ev.get("added_by","") + "</div>" if ev.get("added_by") else "<div></div>"}'
-            f'</div>{notes_html}</div>', unsafe_allow_html=True)
-
-    if st.session_state.edit_event_id == eid and can_edit:
-        st.markdown("**✏️ Edit event:**")
-        ok, data = event_form(f"{key_prefix}ef_{eid}", existing=ev, label="💾 Save Changes")
-        if ok:
-            if upd_event(eid, data):
-                st.session_state.edit_event_id = None
-                st.success("✅ Updated!")
-                st.rerun()
-
 # ─── EVENT FORM ──────────────────────────────────────────────────────────────────
 def event_form(key, default_date=None, existing=None, label="📅 Save Event"):
     ev = existing or {}
     d0 = default_date or today
+    is_student = ev.get("event_type") in STUDENT_EVENT_TYPES
 
     with st.form(key, clear_on_submit=(existing is None)):
         c1, c2 = st.columns(2)
@@ -320,18 +225,16 @@ def event_form(key, default_date=None, existing=None, label="📅 Save Event"):
             etype = st.selectbox("Type", list(EVENT_TYPES.keys()),
                                  index=list(EVENT_TYPES.keys()).index(ev.get("event_type","Other"))
                                  if ev.get("event_type") in EVENT_TYPES else len(EVENT_TYPES)-1)
-            who = st.text_input("Added by *", value=ev.get("added_by", get_staff_name()),
-                                placeholder="Your name")
+            _staff_default = ev.get("added_by","") or get_staff_name()
+            who = st.text_input("Added by *", value=_staff_default, placeholder="Your name")
         with c2:
-            ev_date = st.date_input(
-                "Date *",
-                value=datetime.strptime(str(ev.get("event_date", d0))[:10], "%Y-%m-%d").date()
-                      if ev.get("event_date") else d0
-            )
-            # FIX: end_date defaults to ev_date (same day = single day event)
+            ev_date  = st.date_input("Date *",
+                                     value=datetime.strptime(str(ev.get("event_date",d0))[:10],"%Y-%m-%d").date()
+                                     if ev.get("event_date") else d0)
             end_date = st.date_input("End date (leave same for single day)", value=ev_date)
             location = st.text_input("Location", value=ev.get("location",""))
 
+        # Student-specific fields — shown when student event type selected
         st.markdown("**Student details** *(fill in for Entry/Review/Transition/Placement events)*")
         sc1, sc2 = st.columns(2)
         with sc1:
@@ -350,16 +253,49 @@ def event_form(key, default_date=None, existing=None, label="📅 Save Event"):
         notes = st.text_area("Notes", value=ev.get("notes",""), height=64)
         ok = st.form_submit_button(label, type="primary", use_container_width=True)
         if ok:
-            if not title.strip():
-                st.warning("Please enter an event title.")
-                return False, {}
-            if not who.strip():
-                st.warning("Please enter your name in 'Added by'.")
+            if not title.strip() or not who.strip():
+                st.warning("Event title and 'Added by' are required.")
                 return False, {}
             return True, dict(title=title, etype=etype, ev_date=ev_date, end_date=end_date,
                               start_t=start_t, end_t=end_t, location=location, who=who,
                               notes=notes, program=program, student_initials=student_initials)
     return False, {}
+
+# ─── EVENT DETAIL PANEL ─────────────────────────────────────────────────────────
+def event_detail_panel():
+    """Show a floating detail card for the selected event."""
+    eid = st.session_state.selected_event_id
+    if not eid:
+        return
+    # Load event
+    pac = str(eid).startswith("pac_")
+    if pac:
+        all_pac = db_pac()
+        ev = next((e for e in pac_events(all_pac, date(2000,1,1), date(2099,12,31)) if e.get("id")==eid), None)
+    else:
+        try:
+            res = supabase.table("clc_events").select("*").eq("id", eid).execute()
+            ev  = res.data[0] if res.data else None
+        except:
+            ev = None
+    if not ev:
+        st.session_state.selected_event_id = None
+        return
+
+    cfg   = EVENT_TYPES.get(ev.get("event_type","Other"), EVENT_TYPES["Other"])
+    prog  = ev.get("program","")
+    if prog and ev.get("event_type") in STUDENT_EVENT_TYPES:
+        pc  = PROGRAM_COLORS.get(prog, {})
+        color = pc.get("color", cfg["color"]); bg = pc.get("bg", cfg["bg"])
+    else:
+        color = cfg["color"]; bg = cfg["bg"]
+
+    tr = fmt_time(ev.get("start_time",""))
+    if ev.get("end_time"): tr += f" – {fmt_time(ev['end_time'])}"
+    edate = fmt_date(ev.get("event_date",""))
+    if ev.get("end_date") and ev["end_date"] != ev.get("event_date"):
+        edate += f" → {fmt_date(ev['end_date'])}"
+
 
 # ─── MAIN PAGE ────────────────────────────────────────────────────────────────
 yr = st.session_state.cal_year
@@ -368,46 +304,30 @@ mo = st.session_state.cal_month
 ph_col1, ph_col2, ph_col3, ph_col4 = st.columns([1,3,1,1])
 with ph_col1:
     if st.button("◀ Prev", use_container_width=True, key="m_prev"):
-        if mo == 1:
-            st.session_state.cal_month = 12; st.session_state.cal_year = yr - 1
-        else:
-            st.session_state.cal_month = mo - 1
-        new_mo = st.session_state.cal_month; new_yr = st.session_state.cal_year
-        st.session_state.selected_date = date(new_yr, new_mo, 1)
+        if mo == 1: st.session_state.cal_month=12; st.session_state.cal_year=yr-1
+        else: st.session_state.cal_month=mo-1
         st.rerun()
 with ph_col2:
     import calendar as _cal
-    st.markdown(f"<h2 style='text-align:center;margin:0;color:#1a2e44;'>{_cal.month_name[mo]} {yr}</h2>",
-                unsafe_allow_html=True)
+    st.markdown(f"<h2 style='text-align:center;margin:0;color:#1a2e44;'>{_cal.month_name[mo]} {yr}</h2>", unsafe_allow_html=True)
 with ph_col3:
     if st.button("▶ Next", use_container_width=True, key="m_next"):
-        if mo == 12:
-            st.session_state.cal_month = 1; st.session_state.cal_year = yr + 1
-        else:
-            st.session_state.cal_month = mo + 1
-        new_mo = st.session_state.cal_month; new_yr = st.session_state.cal_year
-        st.session_state.selected_date = date(new_yr, new_mo, 1)
+        if mo == 12: st.session_state.cal_month=1; st.session_state.cal_year=yr+1
+        else: st.session_state.cal_month=mo+1
         st.rerun()
 with ph_col4:
     if st.button("Today", use_container_width=True, key="m_today"):
-        st.session_state.cal_year = today.year; st.session_state.cal_month = today.month
+        st.session_state.cal_year=today.year; st.session_state.cal_month=today.month
         select_day(today); st.rerun()
 
 tab_month, tab_week, tab_list, tab_students = st.tabs(["📅 Month", "📆 Week", "📋 List", "👤 Students"])
 
-# ═══════════════ MONTH VIEW ═══════════════════════════════════════════════════
 with tab_month:
     ts = str(today)
     ss = str(st.session_state.selected_date)
-
-    # FIX: use calendar.monthrange to get the correct last day for any month
-    _mo_first, _mo_last = month_date_range(yr, mo)
-
-    idx_evs = ev_index(
-        db_events(_mo_first, _mo_last) +
-        pac_events(db_pac(), _mo_first, _mo_last)
-    )
-
+    _mo_start = date(yr, mo, 1)
+    _mo_end = date(yr, mo, 28) + timedelta(days=4)
+    idx = ev_index(db_events(_mo_start, _mo_end) + schedule_events(_mo_start, _mo_end))
     day_headers = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
     hcols = st.columns(7)
     for i, dn in enumerate(day_headers):
@@ -425,7 +345,7 @@ with tab_month:
                     continue
                 d = date(yr, mo, day); ds = str(d)
                 is_today = ds == ts; is_sel = ds == ss
-                day_evs  = idx_evs.get(ds, [])
+                day_evs  = idx.get(ds, [])
 
                 border = "3px solid #d4af37" if is_today else ("3px solid #1a2e4a" if is_sel else "1px solid #e5e7eb")
                 bg     = "#fffef5" if is_today else ("#e8edf3" if is_sel else "white")
@@ -458,6 +378,7 @@ with tab_month:
                     f"padding:0.4rem;min-height:80px;'>"
                     f"<div style='margin-bottom:4px;'>{badge}</div>{chips_html}</div>",
                     unsafe_allow_html=True)
+                # Hidden click button
                 if st.button(" ", key=f"mday_{yr}_{mo}_{day}", use_container_width=True):
                     select_day(d)
                     st.session_state.cal_year  = yr
@@ -468,34 +389,122 @@ with tab_month:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    jumped = st.date_input("Jump to date:", value=st.session_state.selected_date,
-                           key="m_jump", label_visibility="collapsed")
+    # Jump to date
+    jumped = st.date_input("Jump to date:", value=st.session_state.selected_date, key="m_jump", label_visibility="collapsed")
     if jumped != st.session_state.selected_date:
-        select_day(jumped)
-        st.session_state.cal_year  = jumped.year
-        st.session_state.cal_month = jumped.month
-        st.rerun()
+        select_day(jumped); st.session_state.cal_year=jumped.year; st.session_state.cal_month=jumped.month; st.rerun()
 
     st.markdown("---")
 
-    sel   = st.session_state.selected_date
-    d_evs = db_events(sel, sel) + pac_events(db_pac(), sel, sel)
+    # ── Day panel ──
+    sel = st.session_state.selected_date
+    d_evs = db_events(sel, sel) + schedule_events(sel, sel) + pac_events(db_pac(), sel, sel)
     d_evs.sort(key=lambda x: str(x.get("start_time","")))
     st.markdown(f"### {'📍 ' if sel==today else ''}📅 {sel.strftime('%A %-d %B %Y')}")
 
     if not d_evs:
-        st.info("📭 No events on this day — use the form below to add one")
+        st.markdown('<div class="add-prompt">📭 No events on this day — click ➕ below to add one</div>', unsafe_allow_html=True)
 
     for ev in d_evs:
-        render_event_card(ev, "m")
+        eid    = ev.get("id","")
+        pac    = str(eid).startswith("pac_")
+        cfg_ev = EVENT_TYPES.get(ev.get("event_type","Other"), EVENT_TYPES["Other"])
+        prog   = ev.get("program","")
+        ecol   = (PROGRAM_COLORS.get(prog,{}).get("color", cfg_ev["color"])
+                  if prog and ev.get("event_type") in STUDENT_EVENT_TYPES else cfg_ev["color"])
+        ebg    = (PROGRAM_COLORS.get(prog,{}).get("bg", cfg_ev["bg"])
+                  if prog and ev.get("event_type") in STUDENT_EVENT_TYPES else cfg_ev["bg"])
+        tr_ev  = fmt_time(ev.get("start_time",""))
+        if ev.get("end_time"): tr_ev += f" – {fmt_time(ev['end_time'])}"
+        can_edit = (st.session_state.is_admin or ev.get("event_type") in STUDENT_EVENT_TYPES) and not pac and not ev.get("_from_schedule")
+        is_expanded = st.session_state.selected_event_id == eid
+
+        # Event row
+        ev_cols = st.columns([7, 1, 1, 1])
+        with ev_cols[0]:
+            st.markdown(
+                f'<div class="ev-card" style="background:{ebg};border-left-color:{ecol};">'
+                f'<h4 style="color:{ecol};margin:0 0 0.2rem;">{cfg_ev["emoji"]} {ev.get("title","")}'
+                f'{(" · "+ev.get("student_initials","")) if ev.get("student_initials") else ""}</h4>'
+                f'<div class="meta">'
+                f'{(" ⏰ "+tr_ev) if tr_ev else ""}'
+                f'{(" 📍 "+ev.get("location","")) if ev.get("location") else ""}'
+                f'{(" 👤 "+ev.get("added_by","")) if ev.get("added_by") else ""}'
+                f'</div></div>', unsafe_allow_html=True)
+        with ev_cols[1]:
+            st.write("")
+            lbl = "✖" if is_expanded else "🔍"
+            if st.button(lbl, key=f"mdet_{eid}", help="View details" if not is_expanded else "Close"):
+                st.session_state.selected_event_id = None if is_expanded else eid
+                st.rerun()
+        with ev_cols[2]:
+            if can_edit:
+                st.write("")
+                if st.button("✏️", key=f"med_{eid}", help="Edit"):
+                    st.session_state.edit_event_id = eid if st.session_state.edit_event_id != eid else None
+                    st.rerun()
+        with ev_cols[3]:
+            if st.session_state.is_admin and not pac:
+                st.write("")
+                confirm_key = f"confirm_del_{eid}"
+                if st.session_state.get(confirm_key):
+                    if st.button("✅ Yes", key=f"mdel_yes_{eid}", help="Confirm delete", type="primary"):
+                        del_event(eid)
+                        st.session_state[confirm_key] = False
+                        st.rerun()
+                else:
+                    if st.button("🗑️", key=f"mdel_{eid}", help="Delete event"):
+                        st.session_state[confirm_key] = True
+                        st.rerun()
+
+        # ── Inline detail panel — expands directly under the event ──
+        if is_expanded:
+            edate = fmt_date(ev.get("event_date",""))
+            if ev.get("end_date") and ev["end_date"] != ev.get("event_date"):
+                edate += f" → {fmt_date(ev['end_date'])}"
+            prog_badge = ""
+            if prog:
+                pc = PROGRAM_COLORS.get(prog,{})
+                prog_badge = (f'<span style="background:{pc.get("bg","#f3f4f6")};color:{pc.get("color","#374151")};'
+                              f'font-size:0.7rem;font-weight:700;padding:0.15rem 0.5rem;border-radius:20px;margin-left:6px;">{prog}</span>')
+            st.markdown(
+                f'<div style="background:{ebg};border:2px solid {ecol};border-radius:12px;'
+                f'padding:1rem 1.25rem;margin:0.25rem 0 0.75rem;'
+                f'box-shadow:0 3px 12px rgba(0,0,0,0.1);">'
+                f'<div style="font-weight:800;color:{ecol};font-size:1rem;margin-bottom:0.6rem;">'
+                f'{cfg_ev["emoji"]} {ev.get("title","")}'
+                f'<span style="background:{ecol};color:white;font-size:0.68rem;font-weight:700;'
+                f'padding:0.15rem 0.5rem;border-radius:20px;margin-left:8px;">{ev.get("event_type","")}</span>'
+                f'{prog_badge}</div>'
+                f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:0.4rem;font-size:0.84rem;color:#374151;">'
+                f'<div>📅 <b>Date:</b> {edate}</div>'
+                f'{f"<div>⏰ <b>Time:</b> {tr_ev}</div>" if tr_ev else "<div></div>"}'
+                f'{f"<div>📍 <b>Location:</b> {ev.get(chr(108)+chr(111)+chr(99)+chr(97)+chr(116)+chr(105)+chr(111)+chr(110))}</div>" if ev.get("location") else "<div></div>"}'
+                f'{f"<div>👤 <b>Added by:</b> {ev.get(chr(97)+chr(100)+chr(100)+chr(101)+chr(100)+chr(95)+chr(98)+chr(121))}</div>" if ev.get("added_by") else "<div></div>"}'
+                f'</div>'
+                f'{f'<div style="margin-top:0.5rem;font-size:0.84rem;color:#555;border-top:1px solid rgba(0,0,0,0.08);padding-top:0.4rem;">{ev.get("notes")}</div>' if ev.get("notes") else ""}'
+                f'</div>', unsafe_allow_html=True)
+
+        # Edit form inline
+        if st.session_state.edit_event_id == eid and can_edit:
+            st.markdown("**✏️ Edit event:**")
+            ok, data = event_form(f"mef_{eid}", existing=ev, label="💾 Save Changes")
+            if ok:
+                upd_event(eid, data); st.session_state.edit_event_id=None
+                st.success("Updated!"); st.rerun()
 
     st.markdown(f"#### ➕ Add event on {sel.strftime('%-d %B %Y')}")
     ok, data = event_form(f"madd_{sel.year}_{sel.month}_{sel.day}", default_date=sel)
     if ok:
         save_event(data)
+        # Preserve month/year navigation state so user stays in current month
+        st.session_state.cal_year  = sel.year
+        st.session_state.cal_month = sel.month
+        st.rerun()
 
 # ═══════════════ WEEK VIEW ═════════════════════════════════════════════════════
 with tab_week:
+    # Hide the transparent overlay buttons on day tabs
     ws = st.session_state.cal_week_start
     we = ws + timedelta(days=6)
     wp, wt, wn, wtod = st.columns([1,3,1,1])
@@ -503,17 +512,15 @@ with tab_week:
         if st.button("◀ Prev", use_container_width=True, key="w_prev"):
             st.session_state.cal_week_start -= timedelta(weeks=1); st.rerun()
     with wt:
-        st.markdown(f"<h3 style='text-align:center;margin:0;color:#1a2e44;'>{fmt_date(ws)} – {fmt_date(we)}</h3>",
-                    unsafe_allow_html=True)
+        st.markdown(f"<h3 style='text-align:center;margin:0;color:#1a2e4a;'>{fmt_date(ws)} – {fmt_date(we)}</h3>", unsafe_allow_html=True)
     with wn:
         if st.button("Next ▶", use_container_width=True, key="w_next"):
             st.session_state.cal_week_start += timedelta(weeks=1); st.rerun()
     with wtod:
         if st.button("Today", use_container_width=True, key="w_today"):
-            st.session_state.cal_week_start = today - timedelta(days=today.weekday())
-            select_day(today); st.rerun()
+            st.session_state.cal_week_start = today-timedelta(days=today.weekday()); select_day(today); st.rerun()
 
-    wevs  = db_events(ws, we) + pac_events(db_pac(), ws, we)
+    wevs  = db_events(ws, we) + schedule_events(ws, we) + pac_events(db_pac(), ws, we)
     widx  = ev_index(wevs)
     ts    = str(today)
     ss    = str(st.session_state.selected_date)
@@ -524,8 +531,9 @@ with tab_week:
         d    = ws + timedelta(days=i); ds = str(d)
         itod = ds==ts; isel = ds==ss
         top  = "#d4af37" if itod else ("#1a2e4a" if isel else "#e0e0e0")
-        bg   = "#fffef5" if itod else ("#f0f4ff" if isel else "white")
+        bg   = "#fffef5" if itod else ("f0f4ff" if isel else "white")
         with wc:
+            # Day header - clicking selects the day
             num_col = "#d4af37" if itod else ("#1a2e4a" if isel else "#374151")
             badge = (f"<span style='background:#d4af37;color:white;border-radius:50%;"
                      f"width:22px;height:22px;display:inline-flex;align-items:center;"
@@ -549,25 +557,42 @@ with tab_week:
                 t     = fmt_time(ev.get("start_time",""))
                 title = ev.get("student_initials","") or ev.get("title","")
                 short = title[:9]+"…" if len(title)>9 else title
-                t_html = f'<br><span style="color:#777;font-size:0.62rem;">{t}</span>' if t else ''
                 st.markdown(
                     f"<div style='background:{cbg};border-left:3px solid {ccol};border-radius:4px;"
                     f"padding:0.15rem 0.3rem;margin-bottom:3px;font-size:0.68rem;'>"
                     f"<span style='font-weight:600;color:{ccol};'>{emoji} {short}</span>"
-                    f"{t_html}</div>", unsafe_allow_html=True)
+                    f"{f'<br><span style=chr(34)color:#777;font-size:0.62rem;{chr(34)}>{t}</span>' if t else ''}"
+                    f"</div>", unsafe_allow_html=True)
             if not widx.get(ds,[]):
                 st.markdown("<div style='color:#ddd;font-size:0.72rem;text-align:center;padding:0.3rem 0;'>—</div>",
                             unsafe_allow_html=True)
             st.markdown("</div>", unsafe_allow_html=True)
+            # Coloured button directly — label carries the colour info via CSS keyed on index
             n_evs = len(widx.get(ds,[]))
             if isel:
+                tab_bg = "#1a2e44"; tab_col = "white"
                 tab_lbl = "✅ Selected"
             elif itod:
+                tab_bg = "#d4af37"; tab_col = "white"
                 tab_lbl = (f"📍 {n_evs} event{'s' if n_evs!=1 else ''}") if n_evs else "📍 Today"
             elif n_evs:
+                tab_bg = "#2d4a6e"; tab_col = "white"
                 tab_lbl = f"👁 {n_evs} event{'s' if n_evs!=1 else ''}"
             else:
+                tab_bg = "#6b7280"; tab_col = "white"
                 tab_lbl = "➕ Add"
+            # Inject CSS targeting this specific column button
+            st.markdown(
+                f"<style>div[data-testid='column']:nth-child({i+1}) "
+                f"button[data-testid='baseButton-secondary'] {{"
+                f" background-color:{tab_bg} !important;"
+                f" color:{tab_col} !important;"
+                f" border:none !important;"
+                f" font-size:0.68rem !important;"
+                f" font-weight:700 !important;"
+                f" padding:0.3rem 0.1rem !important;"
+                f" border-radius:6px !important; }}</style>",
+                unsafe_allow_html=True)
             if st.button(tab_lbl, key=f"wsel_{i}", use_container_width=True):
                 select_day(d)
                 st.session_state.selected_event_id = None
@@ -575,40 +600,122 @@ with tab_week:
 
     st.markdown("---")
 
+    # ── Day panel — same inline detail expansion as month view ──
     sel   = st.session_state.selected_date
-    d_evs = db_events(sel, sel) + pac_events(db_pac(), sel, sel)
+    d_evs = db_events(sel, sel) + schedule_events(sel, sel) + pac_events(db_pac(), sel, sel)
     d_evs.sort(key=lambda x: str(x.get("start_time","")))
     st.markdown(f"### {'📍 ' if sel==today else ''}📅 {sel.strftime('%A %-d %B %Y')}")
 
     if not d_evs:
-        st.info("📭 No events on this day — click a day above or use the form below")
+        st.markdown('<div class="add-prompt">📭 No events on this day — click a day above or use ➕ below</div>',
+                    unsafe_allow_html=True)
 
     for ev in d_evs:
-        render_event_card(ev, "w")
+        eid    = ev.get("id","")
+        pac    = str(eid).startswith("pac_")
+        cfg_ev = EVENT_TYPES.get(ev.get("event_type","Other"), EVENT_TYPES["Other"])
+        prog   = ev.get("program","")
+        ecol   = (PROGRAM_COLORS.get(prog,{}).get("color", cfg_ev["color"])
+                  if prog and ev.get("event_type") in STUDENT_EVENT_TYPES else cfg_ev["color"])
+        ebg    = (PROGRAM_COLORS.get(prog,{}).get("bg", cfg_ev["bg"])
+                  if prog and ev.get("event_type") in STUDENT_EVENT_TYPES else cfg_ev["bg"])
+        tr_ev  = fmt_time(ev.get("start_time",""))
+        if ev.get("end_time"): tr_ev += f" – {fmt_time(ev['end_time'])}"
+        can_edit  = (st.session_state.is_admin or ev.get("event_type") in STUDENT_EVENT_TYPES) and not pac
+        is_expanded = st.session_state.selected_event_id == eid
+
+        ev_cols = st.columns([7, 1, 1, 1])
+        with ev_cols[0]:
+            st.markdown(
+                f'<div class="ev-card" style="background:{ebg};border-left-color:{ecol};">'
+                f'<h4 style="color:{ecol};margin:0 0 0.2rem;">{cfg_ev["emoji"]} {ev.get("title","")}'
+                f'{(" · "+ev.get("student_initials","")) if ev.get("student_initials") else ""}</h4>'
+                f'<div class="meta">'
+                f'{(" ⏰ "+tr_ev) if tr_ev else ""}'
+                f'{(" 📍 "+ev.get("location","")) if ev.get("location") else ""}'
+                f'{(" 👤 "+ev.get("added_by","")) if ev.get("added_by") else ""}'
+                f'</div></div>', unsafe_allow_html=True)
+        with ev_cols[1]:
+            st.write("")
+            if st.button("✖" if is_expanded else "🔍", key=f"wdet2_{eid}",
+                         help="Close" if is_expanded else "View details"):
+                st.session_state.selected_event_id = None if is_expanded else eid
+                st.rerun()
+        with ev_cols[2]:
+            if can_edit:
+                st.write("")
+                if st.button("✏️", key=f"wed_{eid}", help="Edit"):
+                    st.session_state.edit_event_id = eid if st.session_state.edit_event_id != eid else None
+                    st.rerun()
+        with ev_cols[3]:
+            if st.session_state.is_admin and not pac:
+                st.write("")
+                confirm_key = f"confirm_del_{eid}"
+                if st.session_state.get(confirm_key):
+                    if st.button("✅ Yes", key=f"wdel_yes_{eid}", help="Confirm delete", type="primary"):
+                        del_event(eid)
+                        st.session_state[confirm_key] = False
+                        st.rerun()
+                else:
+                    if st.button("🗑️", key=f"wdel_{eid}", help="Delete event"):
+                        st.session_state[confirm_key] = True
+                        st.rerun()
+
+        if is_expanded:
+            edate = fmt_date(ev.get("event_date",""))
+            if ev.get("end_date") and ev["end_date"] != ev.get("event_date"):
+                edate += f" → {fmt_date(ev['end_date'])}"
+            prog_badge = ""
+            if prog:
+                pc = PROGRAM_COLORS.get(prog,{})
+                prog_badge = (f'<span style="background:{pc.get("bg","#f3f4f6")};color:{pc.get("color","#374151")};'
+                              f'font-size:0.7rem;font-weight:700;padding:0.15rem 0.5rem;border-radius:20px;margin-left:6px;">{prog}</span>')
+            st.markdown(
+                f'<div style="background:{ebg};border:2px solid {ecol};border-radius:12px;'
+                f'padding:1rem 1.25rem;margin:0.25rem 0 0.75rem;box-shadow:0 3px 12px rgba(0,0,0,0.1);">'
+                f'<div style="font-weight:800;color:{ecol};font-size:1rem;margin-bottom:0.6rem;">'
+                f'{cfg_ev["emoji"]} {ev.get("title","")}'
+                f'<span style="background:{ecol};color:white;font-size:0.68rem;font-weight:700;'
+                f'padding:0.15rem 0.5rem;border-radius:20px;margin-left:8px;">{ev.get("event_type","")}</span>'
+                f'{prog_badge}</div>'
+                f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:0.4rem;font-size:0.84rem;color:#374151;">'
+                f'<div>📅 <b>Date:</b> {edate}</div>'
+                f'{f"<div>⏰ <b>Time:</b> {tr_ev}</div>" if tr_ev else "<div></div>"}'
+                f'{f"<div>📍 <b>Location:</b> {ev.get('location','')}</div>" if ev.get("location") else "<div></div>"}'
+                f'{f"<div>👤 <b>Added by:</b> {ev.get('added_by','')}</div>" if ev.get("added_by") else "<div></div>"}'
+                f'</div>'
+                f'{f'<div style="margin-top:0.5rem;font-size:0.84rem;color:#555;border-top:1px solid rgba(0,0,0,0.08);padding-top:0.4rem;">{ev.get("notes")}</div>' if ev.get("notes") else ""}'
+                f'</div>', unsafe_allow_html=True)
+
+        if st.session_state.edit_event_id == eid and can_edit:
+            st.markdown("**✏️ Edit event:**")
+            ok, data = event_form(f"wef_{eid}", existing=ev, label="💾 Save Changes")
+            if ok:
+                upd_event(eid, data); st.session_state.edit_event_id=None
+                st.success("Updated!"); st.rerun()
 
     with st.expander(f"➕ Add event on {sel.strftime('%-d %B')}", expanded=(not d_evs and sel != today)):
         ok, data = event_form(f"wadd_{str(sel)}", default_date=sel)
-        if ok: save_event(data)
+        if ok: save_event(data); st.success(f"✅ '{data['title']}' added!"); st.rerun()
 
-# ═══════════════ AGENDA / LIST VIEW ══════════════════════════════════════════
+# ═══════════════ AGENDA VIEW ══════════════════════════════════════════════════
 with tab_list:
     lc1, lc2, lc3 = st.columns(3)
     with lc1: ls = st.date_input("From", value=today, key="ls")
     with lc2: le = st.date_input("To",   value=today+timedelta(weeks=8), key="le")
-    with lc3: tf = st.multiselect("Filter type", list(EVENT_TYPES.keys()),
-                                   default=list(EVENT_TYPES.keys()), key="tf")
+    with lc3: tf = st.multiselect("Filter type", list(EVENT_TYPES.keys()), default=list(EVENT_TYPES.keys()), key="tf")
 
     with st.expander("➕ Add New Event"):
         ok, data = event_form("ladd")
-        if ok: save_event(data)
+        if ok: save_event(data); st.success(f"✅ '{data['title']}' added!"); st.rerun()
 
     st.markdown("---")
-    levs  = db_events(ls, le) + pac_events(db_pac(), ls, le)
+    levs  = db_events(ls, le) + schedule_events(ls, le) + pac_events(db_pac(), ls, le)
     levs  = [e for e in levs if e.get("event_type") in tf]
     levs.sort(key=lambda x: (str(x.get("event_date","")), str(x.get("start_time",""))))
 
     if not levs:
-        st.info("No events in this date range.")
+        st.markdown('<div class="info-box">No events in this date range.</div>', unsafe_allow_html=True)
     else:
         st.markdown(f"**{len(levs)} event{'s' if len(levs)!=1 else ''} found**")
         cur_d = None
@@ -617,18 +724,18 @@ with tab_list:
             if eds != cur_d:
                 cur_d = eds
                 try:
-                    do  = datetime.strptime(eds,"%Y-%m-%d").date()
+                    do = datetime.strptime(eds,"%Y-%m-%d").date()
                     lbl = f"📍 **TODAY — {do.strftime('%A %-d %B %Y')}**" if do==today else f"**{do.strftime('%A %-d %B %Y')}**"
                     st.markdown(lbl)
-                except:
-                    st.markdown(f"**{eds}**")
+                except: st.markdown(f"**{eds}**")
             render_event_card(ev, "l")
 
 # ═══════════════ STUDENTS VIEW ════════════════════════════════════════════════
 with tab_students:
     st.markdown("### 👨‍🎓 Student Placements & Meetings")
-
-    DAYS     = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    
+    # ── Helpers for transition table ──
+    DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
     DAY_KEYS = ["mon", "tue", "wed", "thu", "fri"]
 
     def db_transitions(initials=None):
@@ -650,16 +757,24 @@ with tab_students:
     def del_transition(tid):
         supabase.table("student_transitions").delete().eq("id", tid).execute()
 
+    def fmt_time_short(t):
+        if not t: return ""
+        try: return datetime.strptime(str(t)[:5], "%H:%M").strftime("%-I:%M%p").lower()
+        except: return str(t)[:5]
+
+    # ── Filters ──
     tr1, tr2, tr3 = st.columns(3)
     with tr1:
         tr_prog = st.multiselect("Program", ["JP","PY","SY"], default=["JP","PY","SY"], key="tr_prog")
     with tr2:
+        # Get distinct students from transitions for filter
         all_trans = db_transitions()
         all_inits = sorted(set(t.get("student_initials","") for t in all_trans if t.get("student_initials")))
         tr_student = st.selectbox("Filter by student", ["All"] + all_inits, key="tr_student")
     with tr3:
         tr_term = st.selectbox("Filter by term", ["All", "Term 1", "Term 2", "Term 3", "Term 4"], key="tr_term")
 
+    # ── Add new transition week ──
     with st.expander("➕ Add Transition Week"):
         with st.form("tr_add_form", clear_on_submit=True):
             tf1, tf2 = st.columns(2)
@@ -671,8 +786,7 @@ with tab_students:
             with tf2:
                 tr_term_val  = st.selectbox("Term *", ["Term 1", "Term 2", "Term 3", "Term 4"], key="tr_term_add")
                 tr_week_lbl  = st.text_input("Week label *", placeholder="e.g. Week 3")
-                tr_week_date = st.date_input("Week start date (Monday) *",
-                                             value=today - timedelta(days=today.weekday()), key="tr_week_date")
+                tr_week_date = st.date_input("Week start date (Monday) *", value=today - timedelta(days=today.weekday()), key="tr_week_date")
                 tr_notes     = st.text_area("Notes (optional)", height=60)
 
             st.markdown("**Times at mainstream school** *(leave blank = at CLC all day)*")
@@ -716,6 +830,7 @@ with tab_students:
 
     st.markdown("---")
 
+    # ── Fetch and filter ──
     disp_trans = db_transitions(initials=None if tr_student == "All" else tr_student)
     if tr_prog != ["JP","PY","SY"]:
         disp_trans = [t for t in disp_trans if t.get("program","") in tr_prog]
@@ -723,27 +838,30 @@ with tab_students:
         disp_trans = [t for t in disp_trans if t.get("term","") == tr_term]
 
     if not disp_trans:
-        st.info("No transition schedules found. Add one above.")
+        st.markdown('<div class="info-box">No transition schedules found. Add one above.</div>', unsafe_allow_html=True)
     else:
+        # Group by student
         from collections import defaultdict
         by_student = defaultdict(list)
         for t in disp_trans:
             by_student[t.get("student_initials","?")].append(t)
 
         for init, weeks in by_student.items():
-            prog   = weeks[0].get("program","")
-            pc     = PROGRAM_COLORS.get(prog, {"color":"#374151","bg":"#f3f4f6"})
+            prog = weeks[0].get("program","")
+            pc   = PROGRAM_COLORS.get(prog, {"color":"#374151","bg":"#f3f4f6"})
             school = weeks[0].get("mainstream_school","")
 
+            # Student header
             st.markdown(
                 f'<div style="background:{pc["bg"]};border-left:4px solid {pc["color"]};border-radius:10px;'
                 f'padding:0.6rem 1rem;margin:1rem 0 0.5rem;display:flex;align-items:center;gap:0.75rem;">'
                 f'<span style="background:{pc["color"]};color:white;font-size:0.75rem;font-weight:700;'
                 f'padding:0.2rem 0.55rem;border-radius:8px;">{prog}</span>'
                 f'<strong style="font-size:1rem;color:{pc["color"]};">🔀 {init}</strong>'
-                f'{"<span style=\"font-size:0.82rem;color:#666;\"> → " + school + "</span>" if school else ""}'
+                f'{"<span style=\"font-size:0.82rem;color:#666;\">→ "+school+"</span>" if school else ""}'
                 f'</div>', unsafe_allow_html=True)
 
+            # Build timetable HTML grid
             html = """
 <style>
 .tr-grid{border-collapse:collapse;width:100%;font-family:'Inter',sans-serif;margin-bottom:1rem;}
@@ -762,8 +880,10 @@ with tab_students:
 </tr>"""
             cur_term = None
             for idx_w, week in enumerate(weeks):
-                trm   = week.get("term","")
-                wlbl  = week.get("week_label","")
+                trm  = week.get("term","")
+                wlbl = week.get("week_label","")
+                tid  = week.get("id","")
+                # Week date labels row
                 wdate = week.get("week_start_date","")
                 try:
                     wmon = datetime.strptime(wdate[:10], "%Y-%m-%d").date()
@@ -773,11 +893,15 @@ with tab_students:
                 except:
                     date_cells = "<td colspan='5'></td>"
 
+                # Term header row
                 if trm != cur_term:
                     cur_term = trm
                     html += f'<tr><td class="label-cell" colspan="6" style="background:#2d5a3d;color:white;font-size:0.8rem;letter-spacing:0.05em;text-transform:uppercase;">{trm}</td></tr>'
 
+                # Week label + dates
                 html += f'<tr class="{"week-divider" if idx_w>0 else ""}"><td class="label-cell" rowspan="2">{wlbl}</td>{date_cells}</tr>'
+
+                # Time cells row
                 html += "<tr>"
                 for dk in DAY_KEYS:
                     s = fmt_time_short(week.get(f"{dk}_start"))
@@ -793,9 +917,11 @@ with tab_students:
             html += "</table>"
             st.markdown(html, unsafe_allow_html=True)
 
+            # Notes
             if weeks[0].get("notes"):
                 st.caption(f"📝 {weeks[0]['notes']}")
 
+            # Edit / delete controls per week
             with st.expander(f"✏️ Edit / delete weeks for {init}"):
                 for week in weeks:
                     tid   = week.get("id","")
@@ -825,8 +951,7 @@ with tab_students:
                                 e_by_tr     = st.text_input("Added by *", value=week.get("added_by",""))
                             with ef2:
                                 e_term_tr   = st.selectbox("Term *", ["Term 1","Term 2","Term 3","Term 4"],
-                                                           index=["Term 1","Term 2","Term 3","Term 4"].index(week.get("term","Term 1"))
-                                                                 if week.get("term") in ["Term 1","Term 2","Term 3","Term 4"] else 0)
+                                                           index=["Term 1","Term 2","Term 3","Term 4"].index(week.get("term","Term 1")) if week.get("term") in ["Term 1","Term 2","Term 3","Term 4"] else 0)
                                 e_wlbl_tr   = st.text_input("Week label *", value=week.get("week_label",""))
                                 try:
                                     e_wdate_tr = st.date_input("Week start date *",
@@ -834,7 +959,7 @@ with tab_students:
                                                                key=f"tr_wd_{tid}")
                                 except:
                                     e_wdate_tr = st.date_input("Week start date *", value=today, key=f"tr_wd_{tid}")
-                                e_notes_tr = st.text_area("Notes", value=week.get("notes",""), height=50)
+                                e_notes_tr  = st.text_area("Notes", value=week.get("notes",""), height=50)
 
                             st.markdown("**Times at mainstream**")
                             eday_cols = st.columns(5)
@@ -842,6 +967,8 @@ with tab_students:
                             for i, (day, dk) in enumerate(zip(DAYS, DAY_KEYS)):
                                 with eday_cols[i]:
                                     st.markdown(f"**{day[:3]}**")
+                                    existing_s = week.get(f"{dk}_start")
+                                    existing_e = week.get(f"{dk}_end")
                                     e_tr_times[f"{dk}_start"] = st.time_input(f"From", value=None, key=f"tr_e{dk}s_{tid}")
                                     e_tr_times[f"{dk}_end"]   = st.time_input(f"To",   value=None, key=f"tr_e{dk}e_{tid}")
 
@@ -857,7 +984,7 @@ with tab_students:
                                     "added_by": e_by_tr.strip(),
                                 }
                                 for dk in DAY_KEYS:
-                                    s     = e_tr_times.get(f"{dk}_start")
+                                    s = e_tr_times.get(f"{dk}_start")
                                     e_val = e_tr_times.get(f"{dk}_end")
                                     upd_row[f"{dk}_start"] = str(s) if s else None
                                     upd_row[f"{dk}_end"]   = str(e_val) if e_val else None
