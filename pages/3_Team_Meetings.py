@@ -1466,6 +1466,325 @@ def render_documents(program):
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
+def render_program_meeting(program):
+    """Structured weekly program meeting — Week A (Student Lens) or Week B (System Lens)."""
+    import json as _json
+
+    prog_label = PROGRAMS[program]["label"]
+    accent = PROGRAMS[program]["color"]
+
+    # ── Fetch students for this program ──────────────────────────────────────
+    @st.cache_data(ttl=120)
+    def fetch_students(prog):
+        try:
+            # Try behaviour Supabase first
+            import os
+            from supabase import create_client as _cc
+            burl = st.secrets.get("BEHAVIOUR_SUPABASE_URL","") or os.environ.get("BEHAVIOUR_SUPABASE_URL","")
+            bkey = st.secrets.get("BEHAVIOUR_SUPABASE_KEY","") or os.environ.get("BEHAVIOUR_SUPABASE_KEY","")
+            if burl:
+                bsb = _cc(burl, bkey)
+                res = bsb.table("students").select("id,name,year_level").eq("archived", False).execute()
+                if res.data:
+                    return [s["name"] for s in res.data]
+        except Exception:
+            pass
+        return []
+
+    student_names = fetch_students(program)
+
+    # ── Detect last meeting week type ─────────────────────────────────────────
+    last_records = fetch("tm_program_meetings", {"program": program}, "meeting_date")
+    last_week_type = None
+    last_actions = []
+    if last_records:
+        last = last_records[-1]
+        last_week_type = last.get("week_type")
+        try:
+            last_actions = _json.loads(last.get("actions", "[]") or "[]")
+        except Exception:
+            last_actions = []
+
+    suggested_type = "B" if last_week_type == "A" else "A"
+
+    # ── Week type selector ────────────────────────────────────────────────────
+    wt_col1, wt_col2 = st.columns([3, 2])
+    with wt_col1:
+        week_type = st.radio(
+            "Week type",
+            ["A — Student Lens", "B — System Lens"],
+            index=0 if suggested_type == "A" else 1,
+            horizontal=True,
+            key=f"pm_wt_{program}",
+        )
+    with wt_col2:
+        if last_week_type:
+            st.caption(f"Last meeting: Week {last_week_type}")
+
+    is_week_a = week_type.startswith("A")
+
+    if is_week_a:
+        st.markdown(f"""<div style="background:#dbeafe;border-left:5px solid #1a4d8c;
+            border-radius:0 8px 8px 0;padding:8px 14px;margin-bottom:12px;font-size:13px;color:#1a4d8c;">
+            ⬤ <strong>WEEK A — STUDENT LENS</strong> · Individual Progress · SMARTAR Goals · Evidence
+        </div>""", unsafe_allow_html=True)
+    else:
+        st.markdown(f"""<div style="background:#fef3c7;border-left:5px solid #d97706;
+            border-radius:0 8px 8px 0;padding:8px 14px;margin-bottom:12px;font-size:13px;color:#92400e;">
+            ⬤ <strong>WEEK B — SYSTEM LENS</strong> · CLC Priorities · Innovation Fidelity · Staff Alignment
+        </div>""", unsafe_allow_html=True)
+
+    # ── Meeting details ───────────────────────────────────────────────────────
+    st.markdown("#### 📋 Meeting Details")
+    mc1, mc2, mc3, mc4 = st.columns(4)
+    with mc1: pm_date = st.date_input("Date", value=datetime.date.today(), key=f"pm_date_{program}")
+    with mc2: pm_term = st.text_input("Term", placeholder="T1", key=f"pm_term_{program}")
+    with mc3: pm_week = st.number_input("Week #", min_value=1, max_value=11, value=1, key=f"pm_week_{program}")
+    with mc4: pm_facilitator = st.text_input("Facilitator", value=get_staff_name(), key=f"pm_fac_{program}")
+    pm_attendees = st.text_input("Attendees", placeholder="Names separated by commas", key=f"pm_att_{program}")
+
+    st.markdown("""<div style="background:#f0f9f9;border:1px solid #1A7A7A;border-radius:8px;
+        padding:6px 12px;font-size:0.78rem;color:#1A7A7A;margin-bottom:8px;">
+        <strong>Meeting Norms:</strong> ☑ Student-centred &nbsp;·&nbsp; ☑ Evidence before opinion
+        &nbsp;·&nbsp; ☑ Clear actions + ownership &nbsp;·&nbsp; ☑ Stick to time
+    </div>""", unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # ── Section 1: Check-In ───────────────────────────────────────────────────
+    checkin_label = "TEAM CHECK-IN — Regulation Before Reaction" if is_week_a else "TEAM CHECK-IN"
+    checkin_prompt = "What do we need to know to support students effectively today?" if is_week_a else "Quick updates impacting program delivery"
+    st.markdown(f"#### ⏱ 0–10 min | {checkin_label}")
+    st.caption(checkin_prompt)
+    pm_checkin = st.text_area("Check-in notes", height=80, key=f"pm_checkin_{program}",
+        label_visibility="collapsed", placeholder=checkin_prompt)
+
+    st.markdown("---")
+
+    if is_week_a:
+        # ── Week A: Student Concerns ──────────────────────────────────────────
+        st.markdown("#### ⏱ 10–25 min | STUDENT CONCERNS — Structured Problem Solving")
+        st.caption("Facilitator prompt: Push for function-based thinking, not description.")
+
+        concerns_key = f"pm_concerns_{program}"
+        if concerns_key not in st.session_state:
+            st.session_state[concerns_key] = [{"student":"","concern":"","hypothesis":"","strategy":"","who":"","by_when":""}]
+
+        concerns = st.session_state[concerns_key]
+        header_cols = st.columns([2,2,2,2,1,1,0.5])
+        for h, label in zip(header_cols, ["Student","Concern / Behaviour","Hypothesis (Why?)","Strategy to Try","Who","By When",""]):
+            h.markdown(f"**{label}**" if label else "")
+
+        for idx, row in enumerate(concerns):
+            c1,c2,c3,c4,c5,c6,c7 = st.columns([2,2,2,2,1,1,0.5])
+            with c1: row["student"] = st.selectbox("S",[""] + student_names, key=f"con_stu_{program}_{idx}", label_visibility="collapsed")
+            with c2: row["concern"] = st.text_input("C", value=row["concern"], key=f"con_c_{program}_{idx}", label_visibility="collapsed")
+            with c3: row["hypothesis"] = st.text_input("H", value=row["hypothesis"], key=f"con_h_{program}_{idx}", label_visibility="collapsed")
+            with c4: row["strategy"] = st.text_input("St", value=row["strategy"], key=f"con_st_{program}_{idx}", label_visibility="collapsed")
+            with c5: row["who"] = st.text_input("W", value=row["who"], key=f"con_w_{program}_{idx}", label_visibility="collapsed")
+            with c6: row["by_when"] = st.text_input("By", value=row["by_when"], key=f"con_by_{program}_{idx}", label_visibility="collapsed")
+            with c7:
+                if len(concerns) > 1:
+                    if st.button("✕", key=f"con_del_{program}_{idx}"):
+                        concerns.pop(idx); st.rerun()
+        if st.button("➕ Add student concern", key=f"con_add_{program}"):
+            concerns.append({"student":"","concern":"","hypothesis":"","strategy":"","who":"","by_when":""}); st.rerun()
+
+        st.markdown("---")
+
+        # ── Week A: SMARTAR Spotlight ─────────────────────────────────────────
+        st.markdown("#### ⏱ 25–40 min | SMARTAR GOAL SPOTLIGHT — 4 Students")
+        st.caption("Rule: No update without evidence. What data or artefact supports this?")
+
+        smartar_key = f"pm_smartar_{program}"
+        if smartar_key not in st.session_state:
+            st.session_state[smartar_key] = [{"student":"","goal_area":"","evidence":"","adjustment":"","responsible":""} for _ in range(4)]
+
+        smartar = st.session_state[smartar_key]
+        sh_cols = st.columns([2,2,2,2,1,0.5])
+        for h, label in zip(sh_cols, ["Student","Goal Area","Current Level / Evidence","Next Adjustment","Responsible",""]):
+            h.markdown(f"**{label}**" if label else "")
+
+        for idx, row in enumerate(smartar):
+            s1,s2,s3,s4,s5,s6 = st.columns([2,2,2,2,1,0.5])
+            with s1: row["student"] = st.selectbox("S",[""] + student_names, key=f"sm_stu_{program}_{idx}", label_visibility="collapsed")
+            with s2: row["goal_area"] = st.text_input("G", value=row["goal_area"], key=f"sm_g_{program}_{idx}", label_visibility="collapsed")
+            with s3: row["evidence"] = st.text_input("E", value=row["evidence"], key=f"sm_e_{program}_{idx}", label_visibility="collapsed")
+            with s4: row["adjustment"] = st.text_input("A", value=row["adjustment"], key=f"sm_a_{program}_{idx}", label_visibility="collapsed")
+            with s5: row["responsible"] = st.text_input("R", value=row["responsible"], key=f"sm_r_{program}_{idx}", label_visibility="collapsed")
+            with s6:
+                if len(smartar) > 1:
+                    if st.button("✕", key=f"sm_del_{program}_{idx}"):
+                        smartar.pop(idx); st.rerun()
+        if st.button("➕ Add SMARTAR row", key=f"sm_add_{program}"):
+            smartar.append({"student":"","goal_area":"","evidence":"","adjustment":"","responsible":""}); st.rerun()
+
+        st.markdown("---")
+
+        # ── Week A: Reports / TAC ─────────────────────────────────────────────
+        st.markdown("#### ⏱ 40–45 min | REPORTS / TAC / TRANSITIONS")
+        pm_reports = st.text_area("Reports, TAC meetings, review or transition planning",
+            height=80, key=f"pm_reports_{program}", label_visibility="collapsed",
+            placeholder="Upcoming reports due · TAC meetings · Review or transition planning")
+        priority_rows = []
+
+    else:
+        # ── Week B: CLC Priority Focus ────────────────────────────────────────
+        st.markdown("#### ⏱ 10–30 min | CLC PRIORITY FOCUS — Implementation Fidelity")
+        st.caption("Align to: Implementation Plan · PDP Focus Areas · LBU Priorities")
+
+        priority_key = f"pm_priority_{program}"
+        if priority_key not in st.session_state:
+            st.session_state[priority_key] = [{"area":"","working":"","gap":"","adjustment":"","evidence":"","who":""}]
+
+        priority_rows = st.session_state[priority_key]
+        ph_cols = st.columns([2,2,2,2,2,1,0.5])
+        for h, label in zip(ph_cols, ["Priority Area","What's Working","Gap Identified","Adjustment","Evidence to Collect","Who",""]):
+            h.markdown(f"**{label}**" if label else "")
+
+        for idx, row in enumerate(priority_rows):
+            p1,p2,p3,p4,p5,p6,p7 = st.columns([2,2,2,2,2,1,0.5])
+            with p1: row["area"] = st.text_input("A", value=row["area"], key=f"pr_a_{program}_{idx}", label_visibility="collapsed")
+            with p2: row["working"] = st.text_input("W", value=row["working"], key=f"pr_w_{program}_{idx}", label_visibility="collapsed")
+            with p3: row["gap"] = st.text_input("G", value=row["gap"], key=f"pr_g_{program}_{idx}", label_visibility="collapsed")
+            with p4: row["adjustment"] = st.text_input("Adj", value=row["adjustment"], key=f"pr_adj_{program}_{idx}", label_visibility="collapsed")
+            with p5: row["evidence"] = st.text_input("E", value=row["evidence"], key=f"pr_e_{program}_{idx}", label_visibility="collapsed")
+            with p6: row["who"] = st.text_input("Who", value=row["who"], key=f"pr_who_{program}_{idx}", label_visibility="collapsed")
+            with p7:
+                if len(priority_rows) > 1:
+                    if st.button("✕", key=f"pr_del_{program}_{idx}"):
+                        priority_rows.pop(idx); st.rerun()
+        if st.button("➕ Add priority row", key=f"pr_add_{program}"):
+            priority_rows.append({"area":"","working":"","gap":"","adjustment":"","evidence":"","who":""}); st.rerun()
+
+        st.markdown("---")
+
+        # ── Week B: SMARTAR Spotlight ─────────────────────────────────────────
+        st.markdown("#### ⏱ 30–45 min | SMARTAR GOAL SPOTLIGHT — 4 Students")
+        st.caption("Rule: No update without evidence.")
+
+        smartar_key = f"pm_smartar_{program}"
+        if smartar_key not in st.session_state:
+            st.session_state[smartar_key] = [{"student":"","goal_area":"","evidence":"","adjustment":"","responsible":""} for _ in range(4)]
+
+        smartar = st.session_state[smartar_key]
+        sh_cols = st.columns([2,2,2,2,1,0.5])
+        for h, label in zip(sh_cols, ["Student","Goal Area","Current Level / Evidence","Next Adjustment","Responsible",""]):
+            h.markdown(f"**{label}**" if label else "")
+
+        for idx, row in enumerate(smartar):
+            s1,s2,s3,s4,s5,s6 = st.columns([2,2,2,2,1,0.5])
+            with s1: row["student"] = st.selectbox("S",[""] + student_names, key=f"sm_stu_{program}_{idx}", label_visibility="collapsed")
+            with s2: row["goal_area"] = st.text_input("G", value=row["goal_area"], key=f"sm_g_{program}_{idx}", label_visibility="collapsed")
+            with s3: row["evidence"] = st.text_input("E", value=row["evidence"], key=f"sm_e_{program}_{idx}", label_visibility="collapsed")
+            with s4: row["adjustment"] = st.text_input("A", value=row["adjustment"], key=f"sm_a_{program}_{idx}", label_visibility="collapsed")
+            with s5: row["responsible"] = st.text_input("R", value=row["responsible"], key=f"sm_r_{program}_{idx}", label_visibility="collapsed")
+            with s6:
+                if len(smartar) > 1:
+                    if st.button("✕", key=f"sm_del_{program}_{idx}"):
+                        smartar.pop(idx); st.rerun()
+        if st.button("➕ Add SMARTAR row", key=f"sm_add_{program}"):
+            smartar.append({"student":"","goal_area":"","evidence":"","adjustment":"","responsible":""}); st.rerun()
+
+        pm_reports = ""
+        concerns = []
+
+    st.markdown("---")
+
+    # ── Meeting Close ─────────────────────────────────────────────────────────
+    st.markdown("#### ⭐ MEETING CLOSE")
+    pm_decision = st.text_input("1. What is the single most important thing we agreed on today?",
+        key=f"pm_dec_{program}", placeholder="The most important agreement...")
+    pm_practice = st.text_input("2. What will look DIFFERENT in practice by next week?",
+        key=f"pm_prac_{program}", placeholder="Concrete change to practice...")
+    pm_carry = st.text_input("3. Carry forward to next meeting:",
+        key=f"pm_carry_{program}", placeholder="Anything not resolved today...")
+
+    st.markdown("---")
+
+    # ── Actions — with carry-forward ─────────────────────────────────────────
+    st.markdown("#### ✅ ACTIONS")
+    actions_key = f"pm_actions_{program}"
+    if actions_key not in st.session_state:
+        # Pre-populate with incomplete actions from last meeting
+        carried = [a for a in last_actions if not a.get("done", False)]
+        st.session_state[actions_key] = carried if carried else [{"action":"","who":"","by_when":"","done":False}]
+
+    actions = st.session_state[actions_key]
+
+    if last_actions:
+        incomplete = [a for a in last_actions if not a.get("done", False)]
+        if incomplete:
+            st.caption(f"⬆️ {len(incomplete)} action(s) carried forward from last meeting")
+
+    ah_cols = st.columns([4,1,1,0.7,0.5])
+    for h, label in zip(ah_cols, ["Action","Who","By When","✓ Done",""]):
+        h.markdown(f"**{label}**" if label else "")
+
+    for idx, row in enumerate(actions):
+        a1,a2,a3,a4,a5 = st.columns([4,1,1,0.7,0.5])
+        with a1: row["action"] = st.text_input("Act", value=row.get("action",""), key=f"act_a_{program}_{idx}", label_visibility="collapsed")
+        with a2: row["who"] = st.text_input("Who", value=row.get("who",""), key=f"act_w_{program}_{idx}", label_visibility="collapsed")
+        with a3: row["by_when"] = st.text_input("By", value=row.get("by_when",""), key=f"act_by_{program}_{idx}", label_visibility="collapsed")
+        with a4: row["done"] = st.checkbox("✓", value=row.get("done",False), key=f"act_done_{program}_{idx}")
+        with a5:
+            if len(actions) > 1:
+                if st.button("✕", key=f"act_del_{program}_{idx}"):
+                    actions.pop(idx); st.rerun()
+
+    if st.button("➕ Add action", key=f"act_add_{program}"):
+        actions.append({"action":"","who":"","by_when":"","done":False}); st.rerun()
+
+    st.markdown("---")
+
+    # ── Save ──────────────────────────────────────────────────────────────────
+    if st.button("💾 Save Meeting Record", type="primary", use_container_width=True, key=f"pm_save_{program}"):
+        smartar_data = st.session_state.get(f"pm_smartar_{program}", [])
+        actions_data = st.session_state.get(f"pm_actions_{program}", [])
+        concerns_data = st.session_state.get(f"pm_concerns_{program}", []) if is_week_a else []
+        priority_data = st.session_state.get(f"pm_priority_{program}", []) if not is_week_a else []
+
+        try:
+            insert("tm_program_meetings", {
+                "program": program,
+                "meeting_date": str(pm_date),
+                "term": pm_term.strip(),
+                "week_number": int(pm_week),
+                "week_type": "A" if is_week_a else "B",
+                "facilitator": pm_facilitator.strip(),
+                "attendees": pm_attendees.strip(),
+                "checkin_notes": pm_checkin.strip(),
+                "student_concerns": _json.dumps(concerns_data),
+                "smartar_spotlight": _json.dumps(smartar_data),
+                "reports_tac_notes": pm_reports.strip() if is_week_a else "",
+                "priority_focus": _json.dumps(priority_data),
+                "key_decision": pm_decision.strip(),
+                "practice_change": pm_practice.strip(),
+                "carry_forward": pm_carry.strip(),
+                "actions": _json.dumps(actions_data),
+            })
+            st.success("✅ Meeting record saved!")
+            # Clear session state for this meeting
+            for k in [f"pm_concerns_{program}", f"pm_smartar_{program}",
+                      f"pm_priority_{program}", f"pm_actions_{program}"]:
+                st.session_state.pop(k, None)
+            st.rerun()
+        except Exception as e:
+            st.error(f"Could not save: {e}")
+
+    # ── Past meetings ─────────────────────────────────────────────────────────
+    if last_records:
+        with st.expander(f"📚 Past meeting records ({len(last_records)})", expanded=False):
+            for rec in reversed(last_records[-5:]):
+                wt = rec.get("week_type","?")
+                badge = "🔵 Week A" if wt == "A" else "🟡 Week B"
+                st.markdown(f"**{badge}** · {rec.get('meeting_date','')} · Term {rec.get('term','')} W{rec.get('week_number','')}")
+                key_dec = rec.get("key_decision","")
+                if key_dec:
+                    st.caption(f"Key decision: {key_dec}")
+                st.divider()
+
+
 def main():
     program   = get_program_from_params()
     prog_info = PROGRAMS[program]
@@ -1542,9 +1861,15 @@ def main():
             </div>
             """, unsafe_allow_html=True)
 
-    tab_sched, tab_agenda, tab_minutes, tab_actions, tab_attend, tab_docs = st.tabs([
-        "📅 Schedules", "📋 Agenda", "📝 Minutes", "✅ Actions", "🙋 Attendance", "📎 Documents"
-    ])
+    if program in ("JP", "PY", "SY"):
+        tab_meeting, tab_sched, tab_agenda, tab_minutes, tab_actions, tab_attend, tab_docs = st.tabs([
+            "🗒️ Program Meeting", "📅 Schedules", "📋 Agenda", "📝 Minutes", "✅ Actions", "🙋 Attendance", "📎 Documents"
+        ])
+        with tab_meeting: render_program_meeting(program)
+    else:
+        tab_sched, tab_agenda, tab_minutes, tab_actions, tab_attend, tab_docs = st.tabs([
+            "📅 Schedules", "📋 Agenda", "📝 Minutes", "✅ Actions", "🙋 Attendance", "📎 Documents"
+        ])
 
     with tab_sched:   render_schedules(program)
     with tab_agenda:  render_agenda(program)
