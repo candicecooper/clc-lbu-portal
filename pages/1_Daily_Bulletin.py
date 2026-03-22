@@ -782,6 +782,33 @@ def save_notice(row):
     except Exception as e:
         st.error(f"Could not save notice: {e}")
 
+def load_scheduled_meetings(for_date=None):
+    """Load team meetings from tm_schedules that are flagged show_in_bulletin,
+       filtered to the given date's day of week."""
+    _DAY_NAMES = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+    try:
+        d = for_date or date.today()
+        day_name = _DAY_NAMES[d.weekday()]
+        res = _get_sb().table("tm_schedules").select("*").eq("show_in_bulletin", True).execute()
+        rows = res.data or []
+        meetings = []
+        for r in rows:
+            if r.get("day_of_week","").strip().lower() == day_name.lower():
+                prog = r.get("program","")
+                prog_label = {"JP":"Junior Primary","PY":"Primary Years","SY":"Senior Years",
+                              "STAFF":"All Staff","ADMIN":"Admin"}.get(prog, prog)
+                meetings.append({
+                    "Type": r.get("schedule_name","Team Meeting"),
+                    "Staff Member": prog_label,
+                    "Location": "",
+                    "Time Departing": r.get("meeting_time",""),
+                    "Time Returning": "",
+                    "Student": "",
+                })
+        return meetings
+    except Exception:
+        return []
+
 def delete_notice(nid):
     try:
         _get_sb().table("bulletin_notices").delete().eq("id", nid).execute()
@@ -964,10 +991,12 @@ if params.get("display") == "true":
         """, unsafe_allow_html=True)
 
     with r1c3:
+        _sched_mtgs = load_scheduled_meetings(today)
+        _all_mtgs = list(d_data.get("staff_meetings") or []) + _sched_mtgs
         st.markdown(f"""
         <div class="dp"><div class="dp-header navy">🤝 Staff Meetings</div><div class="dp-body">
         <table class="dt"><tr><th>Type</th><th>Staff</th><th>Location</th><th>Depart</th><th>Return</th><th>Student</th></tr>
-        {tbl_rows(d_data.get("staff_meetings",[]), ["Type","Staff Member","Location","Time Departing","Time Returning","Student"])}
+        {tbl_rows(_all_mtgs, ["Type","Staff Member","Location","Time Departing","Time Returning","Student"])}
         </table></div></div>
         """, unsafe_allow_html=True)
 
