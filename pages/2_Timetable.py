@@ -54,12 +54,12 @@ def get_client():
 
 PROGRAMS = ["Specialist", "JP", "PY", "SY", "SSO", "Meetings"]
 PROGRAM_LABELS = {
-    "General": "📋 Specialist",
-    "JP":      "🟢 Junior Primary",
-    "PY":      "🔵 Primary Years",
-    "SY":      "🟣 Senior Years",
-    "SSO":     "🟠 SSO Support",
-    "Meetings": "📅 Scheduled Meetings",
+    "Specialist": "📋 Specialist Teacher",
+    "JP":         "🟢 Junior Primary",
+    "PY":         "🔵 Primary Years",
+    "SY":         "🟣 Senior Years",
+    "SSO":        "🟠 SSO Support",
+    "Meetings":   "📅 Scheduled Meetings",
 }
 
 def get_timetable(program: str):
@@ -364,7 +364,7 @@ else:
     if upload_mode == "📄 Full PDF (auto-split all sections)":
         st.markdown("""<div style="background:#e8f5e1;border:1px solid #6BBF4E;border-radius:8px;
             padding:0.75rem 1rem;font-size:0.85rem;color:#1a2e44;margin-bottom:0.75rem;">
-            📋 <strong>Page mapping:</strong> Page 1 = Specialist (Roisin) · 
+            📋 <strong>Page mapping:</strong> Page 1 = Specialist Teacher (Roisin) · 
             Pages 2–3 = JP · Pages 4–5 = PY · Page 6 = SY · 
             Pages 7–8 = SSO · Page 9 = Meetings
         </div>""", unsafe_allow_html=True)
