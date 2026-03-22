@@ -1077,58 +1077,147 @@ def _render_new_staff_minutes():
 
 
 # ── Meeting type templates ────────────────────────────────────────────────────
-STUDENT_LENS_TEMPLATE = """## Student Lens Meeting
+STUDENT_LENS_TEMPLATE = """## ⬤ WEEK A — STUDENT LENS
+Individual Progress · SMARTAR Goals · Evidence
 
-### Students of Focus
-(List students being discussed this meeting)
+---
 
-### Celebration / Strengths
-What has been going well for each student?
+### 0–10 min | TEAM CHECK-IN — Regulation Before Reaction
+What do we need to know to support students effectively today?
 
-### Current Concerns / Observations
-What are we noticing? Behaviours, engagement, relationships, learning?
 
-### Hypothesis
-What do we think is driving this? (Function of behaviour / unmet need)
+---
 
-### Current Strategies in Place
-What are we already doing?
+### 10–25 min | STUDENT CONCERNS — Structured Problem Solving
+*Facilitator prompt: Push for function-based thinking, not description.*
 
-### Adjustments / New Strategies
-What will we try or change?
+| Student | Concern / Behaviour | Hypothesis (Why?) | Strategy to Try | Who | By When |
+|---------|--------------------|--------------------|-----------------|-----|---------|
+|         |                    |                    |                 |     |         |
+|         |                    |                    |                 |     |         |
+|         |                    |                    |                 |     |         |
+|         |                    |                    |                 |     |         |
 
-### Review Date
-When will we check back on these students?
+---
 
-### Actions
-(Action | Assigned To | Due)
+### 25–40 min | SMARTAR GOAL SPOTLIGHT — 4 Students
+*Rule: No update without evidence. What data or artefact supports this?*
+
+| Student | Goal Area | Current Level / Evidence | Next Adjustment | Responsible |
+|---------|-----------|--------------------------|-----------------|-------------|
+|         |           |                          |                 |             |
+|         |           |                          |                 |             |
+|         |           |                          |                 |             |
+|         |           |                          |                 |             |
+
+---
+
+### 40–45 min | REPORTS / TAC / TRANSITIONS
+Upcoming reports due · TAC meetings · Review or transition planning
+
+
+---
+
+### ⭐ MEETING CLOSE — Before You Leave, Name:
+1. What is the single most important thing we agreed on today?
+
+2. What will look DIFFERENT in practice by next week?
+
+3. Carry forward to next meeting:
+
+---
+
+### ACTIONS
+| Action | Who | By When | ✓ Check Next Meeting |
+|--------|-----|---------|----------------------|
+|        |     |         |                      |
+|        |     |         |                      |
+|        |     |         |                      |
+
 """
 
-SYSTEM_LENS_TEMPLATE = """## System Lens Meeting
+SYSTEM_LENS_TEMPLATE = """## ⬤ WEEK B — SYSTEM LENS
+CLC Priorities · Innovation Fidelity · Staff Alignment · Artefacts
 
-### Program / School System Focus
-What part of our system are we reviewing today?
+---
 
-### What's Working Well
-Strengths in our current approach
+### 0–10 min | TEAM CHECK-IN
+Quick updates impacting program delivery
 
-### What's Not Working / Gaps
-Where are the breakdowns or inefficiencies?
 
-### Root Cause Analysis
-Why is this happening at a systems level?
+---
 
-### Priority Actions
-What changes do we need to make?
+### 10–30 min | CLC PRIORITY FOCUS — Implementation Fidelity
+*Align to: Implementation Plan · PDP Focus Areas · LBU Priorities*
 
-### Who Owns This
-Roles and responsibilities
+| Priority Area | What's Working | Gap Identified | Adjustment | Evidence to Collect | Who |
+|---------------|---------------|----------------|------------|---------------------|-----|
+|               |               |                |            |                     |     |
+|               |               |                |            |                     |     |
+|               |               |                |            |                     |     |
 
-### Review Date
-When will we check back?
+---
 
-### Actions
-(Action | Assigned To | Due)
+### 30–45 min | SMARTAR GOAL SPOTLIGHT — 4 Students
+
+| Student | Goal Area | Current Level / Evidence | Next Adjustment | Responsible |
+|---------|-----------|--------------------------|-----------------|-------------|
+|         |           |                          |                 |             |
+|         |           |                          |                 |             |
+|         |           |                          |                 |             |
+|         |           |                          |                 |             |
+
+---
+
+### ⭐ MEETING CLOSE — Before You Leave, Name:
+1. What is the single most important thing we agreed on today?
+
+2. What will look DIFFERENT in practice by next week?
+
+3. Carry forward to next meeting:
+
+---
+
+### ACTIONS
+| Action | Who | By When | ✓ Check Next Meeting |
+|--------|-----|---------|----------------------|
+|        |     |         |                      |
+|        |     |         |                      |
+|        |     |         |                      |
+
+"""
+
+ADHOC_MINUTES_TEMPLATE = """## Meeting Minutes
+
+### Purpose / Agenda
+What is this meeting about?
+
+---
+
+### Discussion
+Key points discussed:
+
+
+---
+
+### Decisions Made
+
+
+---
+
+### ⭐ MEETING CLOSE
+1. What is the single most important thing we agreed on today?
+
+2. What will look DIFFERENT in practice?
+
+---
+
+### ACTIONS
+| Action | Who | By When |
+|--------|-----|---------|
+|        |     |         |
+|        |     |         |
+
 """
 
 def _render_new_team_minutes(program):
@@ -1137,31 +1226,39 @@ def _render_new_team_minutes(program):
     # Meeting type selector
     meeting_type = st.radio(
         "Meeting type",
-        ["🔍 Student Lens", "⚙️ System Lens"],
+        ["🔍 Week A — Student Lens", "⚙️ Week B — System Lens", "📋 Ad-hoc / Additional Meeting"],
         horizontal=True,
         key=f"meeting_type_{program}",
-        help="Student Lens = focus on individual students. System Lens = focus on programs, processes and structures."
     )
     is_student_lens = "Student" in meeting_type
+    is_system_lens = "System" in meeting_type
+    is_adhoc = "Ad-hoc" in meeting_type
 
     if is_student_lens:
         st.markdown("""
         <div style="background:#dbeafe;border-left:4px solid #1a4d8c;border-radius:0 8px 8px 0;
                     padding:8px 14px;margin-bottom:12px;font-size:13px;color:#1a4d8c;">
-          🔍 <strong>Student Lens</strong> — Focus on individual student progress, strengths, concerns and strategies.
-          Alternates fortnightly with System Lens.
+          🔍 <strong>Week A — Student Lens</strong> · Individual Progress · SMARTAR Goals · Evidence
         </div>""", unsafe_allow_html=True)
         template = STUDENT_LENS_TEMPLATE
         title_placeholder = f"{PROGRAMS[program]['label']} Student Lens — T1 W4"
-    else:
+    elif is_system_lens:
         st.markdown("""
         <div style="background:#f0fdf4;border-left:4px solid #2d7d4f;border-radius:0 8px 8px 0;
                     padding:8px 14px;margin-bottom:12px;font-size:13px;color:#2d7d4f;">
-          ⚙️ <strong>System Lens</strong> — Focus on program systems, structures, and processes.
-          Alternates fortnightly with Student Lens.
+          ⚙️ <strong>Week B — System Lens</strong> · CLC Priorities · Innovation Fidelity · Staff Alignment
         </div>""", unsafe_allow_html=True)
         template = SYSTEM_LENS_TEMPLATE
         title_placeholder = f"{PROGRAMS[program]['label']} System Lens — T1 W4"
+    else:
+        st.markdown("""
+        <div style="background:#fef3c7;border-left:4px solid #d97706;border-radius:0 8px 8px 0;
+                    padding:8px 14px;margin-bottom:12px;font-size:13px;color:#92400e;">
+          📋 <strong>Ad-hoc / Additional Meeting</strong> · Record minutes for any unscheduled or additional team meeting.
+          Use the template or drop in a transcript for AI formatting.
+        </div>""", unsafe_allow_html=True)
+        template = ADHOC_MINUTES_TEMPLATE
+        title_placeholder = f"{PROGRAMS[program]['label']} Additional Meeting"
 
     # Input method
     ff_method = st.radio("Minutes input method",
@@ -1213,12 +1310,20 @@ def _render_new_team_minutes(program):
                 final_content = m_content.strip()
                 if do_ai and final_content:
                     # Add meeting type context to AI prompt
-                    lens_context = f"This is a {'Student Lens' if is_student_lens else 'System Lens'} meeting for {PROGRAMS[program]['label']} program."
+                    if is_student_lens:
+                        lens_type = "Week A Student Lens"
+                    elif is_system_lens:
+                        lens_type = "Week B System Lens"
+                    else:
+                        lens_type = "Ad-hoc"
+                    lens_context = f"This is a {lens_type} meeting for {PROGRAMS[program]['label']} program at Cowandilla Learning Centre LBU."
                     with st.spinner("AI is structuring your minutes…"):
                         final_content = improve_with_ai(
                             f"{lens_context}\n\n{final_content}", program, str(m_date))
                 # Prepend meeting type badge
-                type_badge = "🔍 Student Lens" if is_student_lens else "⚙️ System Lens"
+                if is_student_lens: type_badge = "🔍 Week A — Student Lens"
+                elif is_system_lens: type_badge = "⚙️ Week B — System Lens"
+                else: type_badge = "📋 Ad-hoc Meeting"
                 final_content = f"**Meeting Type: {type_badge}**\n\n" + final_content
                 insert("tm_minutes", {
                     "program": program, "schedule_id": sched_opts.get(m_sched),
