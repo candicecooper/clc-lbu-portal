@@ -52,9 +52,9 @@ def get_client():
     from supabase import create_client
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
-PROGRAMS = ["General", "JP", "PY", "SY", "SSO", "Meetings"]
+PROGRAMS = ["Specialist", "JP", "PY", "SY", "SSO", "Meetings"]
 PROGRAM_LABELS = {
-    "General": "📋 All Staff",
+    "General": "📋 Specialist",
     "JP":      "🟢 Junior Primary",
     "PY":      "🔵 Primary Years",
     "SY":      "🟣 Senior Years",
