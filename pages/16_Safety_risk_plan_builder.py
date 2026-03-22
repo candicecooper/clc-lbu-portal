@@ -612,13 +612,13 @@ elif st.session_state.step == 2:
     if uploaded_docs:
         st.markdown("**Classify each document:**")
         new_docs = []
-        for f in uploaded_docs:
+        for fi, f in enumerate(uploaded_docs):
             col_name, col_type = st.columns([2,2])
             with col_name:
                 st.markdown(f"📄 `{f.name}`")
             with col_type:
                 dtype = st.selectbox("Document type", doc_type_options,
-                                     key=f"dtype_{f.name}")
+                                     key=f"dtype_{fi}_{f.name[:20]}")
             text = extract_docx_text(f)
             new_docs.append({"name": f.name, "text": text, "doc_type": dtype})
         st.session_state.support_docs = new_docs
@@ -1301,12 +1301,12 @@ elif st.session_state.step == 7:
                                      key="express_docs")
     if uploaded_docs:
         new_docs = []
-        for f in uploaded_docs:
+        for fi, f in enumerate(uploaded_docs):
             col_n, col_t = st.columns([2,2])
             with col_n:
                 st.markdown(f"📄 `{f.name}`")
             with col_t:
-                dtype = st.selectbox("Type", doc_type_options, key=f"etype_{f.name}")
+                dtype = st.selectbox("Type", doc_type_options, key=f"etype_{fi}_{f.name[:20]}")
             new_docs.append({"name": f.name, "text": extract_docx_text(f), "doc_type": dtype})
         st.session_state.support_docs = new_docs
 
