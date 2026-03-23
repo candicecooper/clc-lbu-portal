@@ -364,69 +364,83 @@ def ai_generate_full_plan(student: dict, school_plan_text: str, support_docs: li
 
     prompt = f"""You are an expert behaviour support specialist writing a Safety & Risk Management Plan for Cowandilla Learning Centre (CLC) LBU, Adelaide SA.
 
-STUDENT DETAILS:
+IMPORTANT — SITE NAME: This plan is for COWANDILLA LEARNING CENTRE (CLC), the Learning and Behaviour Unit.
+This is NOT Cowandilla Primary School. These are two separate schools in the same suburb.
+Some students at CLC have Cowandilla Primary School as their home school — this is normal and correct.
+The plan must always read "Cowandilla Learning Centre" as the placement site regardless of home school.
+
+STUDENT DETAILS PROVIDED BY STAFF:
 Name: {student['name']}
 Age: {student.get('age','—')}  DOB: {student.get('dob','—')}  EDSAS: {student.get('edsas','—')}
 Program: {student.get('program','—')}  Home school: {student.get('home_school','—')}
 Key staff: {student.get('key_staff','—')}
-Additional context provided by staff: {student.get('clc_context','')}
-Medical/background notes: {student.get('medical_notes','')}
+Additional context: {student.get('clc_context','')}
+Medical/background: {student.get('medical_notes','')}
+
+STUDENT DETAIL EXTRACTION TASK:
+If any of the above are blank or "—", search the documents and extract:
+- Full name (confirm or correct spelling)
+- Date of birth (DD/MM/YYYY format)
+- Age
+- EDSAS ID (numeric student ID, may be labelled EDSAS, student ID, or similar)
+- Home school (the school they normally attend — this will NOT be Cowandilla Learning Centre)
+Include extracted values in the student_details section of your response.
 
 ═══════════════════════════════════════════════
-MOST IMPORTANT RULE — READ CAREFULLY:
-You must ONLY identify risks that are directly evidenced in the documents below.
-DO NOT include risks simply because they are common CLC risks or because they appeared in a previous student's plan.
-DO NOT invent, assume, or generalise behaviours not described in the documents.
-If a behaviour is not described in the documents, do NOT include it as a risk.
-Every risk row must be traceable to specific content in the provided documents.
+MOST IMPORTANT RULE:
+ONLY identify risks that are directly evidenced in the documents provided.
+DO NOT include risks because they are common or appeared in another student's plan.
+DO NOT invent behaviours. Every risk must trace to the provided documents.
 ═══════════════════════════════════════════════
 
-CLC ENVIRONMENTAL CONTEXT (apply only where relevant to evidenced risks):
-- CLC is a program option for students with educational exclusion — NOT a "specialist centre"
-- Small group setting with frequent externalising behaviour presentations from other students
-- Playground directly adjacent to carpark via climbable external fence
-- Jenkins Road, Marion Road, Sir Donald Bradman Drive within 100m; South Road nearby
+CLC CONTEXT (apply only where relevant to evidenced risks):
+- Program option for students with educational exclusion — NOT a specialist centre
+- Small group setting with frequent externalising behaviour from other students
+- Playground adjacent to carpark via climbable fence; Marion Rd/Sir Donald Bradman Dr within 100m
 - All staff carry walkie talkies; program vehicle available; school mobile for SAPOL contact
 - TAC, CARL, DCP, IRMS, ED155/ED165 apply; trauma-informed relational practice
 
-RULES FOR RISK DESCRIPTIONS:
-- Describe what THIS student DOES — observable behaviour only, sourced from the documents
-- Do NOT include triggers or function in the risk description — triggers go in proactive strategies
+RISK DESCRIPTION RULES:
+- Describe what THIS student DOES — observable behaviour only from the documents
+- Do NOT include triggers or function in the risk description
 - Use specific language from the documents (e.g. "threw chairs", "bit staff", "ran into traffic")
-- Risk ratings must reflect the actual severity and frequency described in the documents
-- Proactive strategies and procedures must be specific to this student's needs, not generic
+- Rate based on actual severity and frequency described in the documents
 
-DOCUMENTS TO BASE THE PLAN ON:
+DOCUMENTS:
 {combined_docs[:14000]}
 
-Based ONLY on the documents above, generate a complete Safety & Risk Management Plan.
-Include only risks that are clearly evidenced in the documents. Typically 3-6 risks.
-If a document describes a student who does NOT abscond, do NOT include absconding as a risk.
-If there is no evidence of fence climbing, do NOT include it.
-Only include what the documents actually describe about {student['name']}.
+Based ONLY on the above documents, generate a complete plan for {student['name']}.
+Include only risks clearly evidenced. Typically 3–6 risks.
 
-Return as JSON only (no markdown fences, no preamble):
+Return JSON only (no markdown fences):
 {{
+  "student_details": {{
+    "name": "confirmed full name from documents",
+    "dob": "date of birth DD/MM/YYYY from documents, or blank if not found",
+    "age": "age from documents, or blank",
+    "edsas": "EDSAS ID from documents, or blank",
+    "home_school": "home school from documents — NOT Cowandilla Learning Centre"
+  }},
   "risks": [
     {{
-      "issue_title": "specific behaviour-focused title based on documents",
-      "issue_detail": "2-3 sentences describing what {student['name']} does — sourced from documents only",
-      "behaviour_descriptors": "• specific observable descriptor from documents\\n• specific descriptor\\n• specific descriptor",
-      "function": "function of behaviour as evidenced in documents",
-      "likelihood": "one of: A – Rare / B – Unlikely / C – Likely sometimes / D – Likely/frequently / E – Almost certain",
-      "consequence": "one of: 1 – Insignificant / 2 – Minor / 3 – Moderate / 4 – Major / 5 – Catastrophic",
-      "proactive": "### Category\\n• strategy specific to {student['name']}\\n• strategy\\n\\n### Next category\\n• strategy",
-      "procedure": "### If early warning signs:\\n• step\\n\\n### If [specific scenario from documents]:\\n• step\\n\\n### Post-incident:\\n• step",
-      "clc_notes": "CLC-specific context for this risk — only if relevant to what documents describe",
+      "issue_title": "specific behaviour-focused title",
+      "issue_detail": "2-3 sentences of what {student['name']} does — from documents only",
+      "behaviour_descriptors": "• specific descriptor\n• descriptor\n• descriptor",
+      "function": "function of behaviour from documents",
+      "likelihood": "A – Rare / B – Unlikely / C – Likely sometimes / D – Likely/frequently / E – Almost certain",
+      "consequence": "1 – Insignificant / 2 – Minor / 3 – Moderate / 4 – Major / 5 – Catastrophic",
+      "proactive": "### Category\n• strategy\n• strategy\n\n### Category\n• strategy",
+      "procedure": "### If early warning signs:\n• step\n\n### If [scenario]:\n• step\n\n### Post-incident:\n• step",
+      "clc_notes": "CLC-specific context if relevant to evidenced risks",
       "from_school": false,
       "from_docs": true
     }}
   ],
-  "priority_actions": "• action specific to {student['name']}'s needs\\n• action\\n• action\\n• action\\n• action",
-  "review_date": "suggested review date (typically 8 weeks from today: approx {__import__('datetime').date.today().__class__.fromordinal(__import__('datetime').date.today().toordinal() + 56).strftime('%d/%m/%Y')})"
+  "priority_actions": "• action\n• action\n• action\n• action\n• action",
+  "review_date": "approx 8 weeks from today"
 }}
 
-Each risk must have complete, detailed proactive strategies (6-8 bullets across 2-3 subheadings) and procedures (3-5 scenario sections). Write for this specific student based on the evidence in the documents."""
+Each risk: 6-8 proactive strategies across 2-3 subheadings; procedures in 3-5 scenario sections."""
 
     try:
         raw = groq_call(prompt, 4000)
@@ -442,6 +456,12 @@ Each risk must have complete, detailed proactive strategies (6-8 bullets across 
             for k, v in BLANK_RISK.items():
                 if k not in r:
                     r[k] = v
+        # Back-fill any blank student details with what the AI found in the documents
+        extracted = result.get("student_details", {})
+        for field, key in [("dob","dob"),("age","age"),("edsas","edsas"),("home_school","home_school"),("name","name")]:
+            val = extracted.get(field,"").strip()
+            if val and val.lower() not in ("blank","not found","—","unknown","") and not student.get(key,"").strip():
+                student[key] = val
         return result
     except Exception as e:
         return {"error": f"Generation failed: {e}. Try uploading richer documents or use the step-by-step builder.", "risks": [], "priority_actions": "", "review_date": ""}
@@ -524,20 +544,37 @@ st.markdown(bar, unsafe_allow_html=True)
 if st.session_state.step == 1:
     s = st.session_state.student
 
+    st.markdown(f"""<div class="card-teal">
+    <strong>📍 This plan is for Cowandilla Learning Centre LBU</strong> — not a home school plan.
+    If a student's home school is Cowandilla Primary School, enter <em>Cowandilla Primary School</em>
+    in the Home School field below. The plan will correctly show CLC LBU as the placement site.
+    </div>""", unsafe_allow_html=True)
+
     st.markdown('<div class="sec-head">Student Details</div>', unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     with c1:
-        s["name"]        = st.text_input("Full name *", value=s["name"])
-        s["dob"]         = st.text_input("Date of birth (DD/MM/YYYY)", value=s["dob"])
-        s["age"]         = st.text_input("Age", value=s["age"])
-        s["edsas"]       = st.text_input("EDSAS ID", value=s["edsas"])
+        s["name"]  = st.text_input("Full name *", value=s["name"])
+        s["dob"]   = st.text_input("Date of birth * (DD/MM/YYYY)", value=s["dob"],
+                        help="Required — will appear on the generated plan")
+        s["age"]   = st.text_input("Age *", value=s["age"])
+        s["edsas"] = st.text_input("EDSAS ID *", value=s["edsas"],
+                        help="Required — enter the student's EDSAS number e.g. 10981999M")
     with c2:
-        s["program"]     = st.selectbox("Program", ["JP","MP","SP","Other"],
+        s["program"] = st.selectbox("CLC Program *", ["JP","MP","SP","Other"],
                             index=["JP","MP","SP","Other"].index(s["program"]) if s["program"] in ["JP","MP","SP","Other"] else 0)
-        s["home_school"] = st.text_input("Home school", value=s["home_school"])
-        s["key_staff"]   = st.text_input("Key CLC staff", value=s["key_staff"],
+        s["home_school"] = st.text_input(
+            "Home school (student's mainstream school) *",
+            value=s["home_school"],
+            placeholder="e.g. Cowandilla Primary School, Mount Barker Primary",
+            help="Enter the student's HOME school — the school they are excluded from. "
+                 "This plan is always for CLC LBU regardless of which school is entered here.")
+        # Warning if they accidentally enter CLC itself
+        if s["home_school"].strip().lower() in ("cowandilla learning centre","clc","clc lbu"):
+            st.warning("⚠️ The home school should be the student's mainstream school, not CLC. "
+                       "This plan is automatically for Cowandilla Learning Centre LBU.")
+        s["key_staff"]  = st.text_input("Key CLC staff", value=s["key_staff"],
                             help="e.g. Annette, Vinnie, Naomi")
-        s["plan_date"]   = st.text_input("Plan date", value=s["plan_date"])
+        s["plan_date"]  = st.text_input("Plan date", value=s["plan_date"])
 
     st.markdown('<div class="sec-head">CLC Context</div>', unsafe_allow_html=True)
     s["clc_context"] = st.text_area(
@@ -587,8 +624,13 @@ if st.session_state.step == 1:
 
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("Continue →", type="primary"):
-        if not s["name"].strip():
-            st.error("Student name is required.")
+        errors = []
+        if not s["name"].strip():      errors.append("Student name is required.")
+        if not s["dob"].strip():       errors.append("Date of birth is required.")
+        if not s["edsas"].strip():     errors.append("EDSAS ID is required.")
+        if not s["home_school"].strip(): errors.append("Home school is required.")
+        if errors:
+            for e in errors: st.error(e)
         else:
             st.session_state.step = 7 if st.session_state.mode == "express" else 2
             st.rerun()
@@ -624,13 +666,18 @@ elif st.session_state.step == 2:
     </div>""", unsafe_allow_html=True)
 
     doc_type_options = [
-        "Behaviour Support Plan (BAP)",
+        "Behaviour Summary",
         "ABCH / Incident Report",
         "Psychological Report",
         "OT / Sensory Report",
         "SSS / BSE Notes",
         "Paediatrician / Medical Report",
         "School Report / Academic Summary",
+        "LC Referral",
+        "Exclusion Documentation",
+        "Exclusion Paperwork",
+        "Entry Meeting Notes",
+        "Entry Meeting Minutes",
         "Team Meeting Notes",
         "TAC Meeting Notes",
         "Other",
@@ -1058,11 +1105,11 @@ elif st.session_state.step == 6:
         set_bg(hdr, GREY_DARK.lstrip("#")); set_borders(hdr, TEAL.lstrip("#"))
         arun(hdr.paragraphs[0], "STUDENT DETAILS", bold=True, size=18, color="FFFFFF")
 
-        details_l = [("Full Name", student['name']), ("Date of Birth", student['dob']),
-                     ("Age", student['age']), ("EDSAS ID", student['edsas'])]
-        details_r = [("Home School", student['home_school']),
-                     ("Placement", "Program option for students with educational exclusion"),
-                     ("Program", student['program']), ("Plan Date", student['plan_date'])]
+        details_l = [("Full Name", student['name']), ("Date of Birth", student['dob'] or "—"),
+                     ("Age", student['age'] or "—"), ("EDSAS ID", student['edsas'] or "—")]
+        details_r = [("Home School", student['home_school'] or "—"),
+                     ("CLC Placement", "Cowandilla Learning Centre — Learning & Behaviour Unit"),
+                     ("CLC Program", student['program']), ("Plan Date", student['plan_date'])]
 
         for ci, items in enumerate([details_l, details_r]):
             c = det.rows[1].cells[ci]; set_bg(c,"F2F6F6"); set_borders(c, TEAL.lstrip("#"))
@@ -1311,7 +1358,7 @@ elif st.session_state.step == 7:
     # ── Document uploads ──────────────────────────────────────────────────────
     st.markdown('<div class="sec-head">School Safety Plan (optional)</div>', unsafe_allow_html=True)
     school_upload = st.file_uploader("Upload existing school safety plan (.docx or .pdf)",
-                                     type=["docx"], key="express_school")
+                                     type=["docx","pdf"], key="express_school")
     if school_upload:
         text = extract_docx_text(school_upload)
         st.session_state.school_plan_text = text
@@ -1322,10 +1369,21 @@ elif st.session_state.step == 7:
     st.caption("BAPs, incident reports, psych reports, OT reports, SSS/BSE notes, paediatrician letters, school reports, TAC notes — upload as many as you have.")
 
     doc_type_options = [
-        "Behaviour Support Plan (BAP)", "ABCH / Incident Report",
-        "Psychological Report", "OT / Sensory Report", "SSS / BSE Notes",
-        "Paediatrician / Medical Report", "School Report / Academic Summary",
-        "Team Meeting Notes", "TAC Meeting Notes", "Other",
+        "Behaviour Summary",
+        "ABCH / Incident Report",
+        "Psychological Report",
+        "OT / Sensory Report",
+        "SSS / BSE Notes",
+        "Paediatrician / Medical Report",
+        "School Report / Academic Summary",
+        "LC Referral",
+        "Exclusion Documentation",
+        "Exclusion Paperwork",
+        "Entry Meeting Notes",
+        "Entry Meeting Minutes",
+        "Team Meeting Notes",
+        "TAC Meeting Notes",
+        "Other",
     ]
 
     uploaded_docs = st.file_uploader("Upload supporting documents (.docx or .pdf)",
@@ -1544,11 +1602,11 @@ elif st.session_state.step == 8:
         hdr = det.rows[0].cells[0].merge(det.rows[0].cells[1])
         set_bg(hdr, GREY_DARK.lstrip("#")); set_borders(hdr, TEAL.lstrip("#"))
         arun(hdr.paragraphs[0], "STUDENT DETAILS", bold=True, size=18, color="FFFFFF")
-        details_l = [("Full Name", student['name']), ("Date of Birth", student['dob']),
-                     ("Age", student['age']), ("EDSAS ID", student['edsas'])]
-        details_r = [("Home School", student['home_school']),
-                     ("Placement", "Program option for students with educational exclusion"),
-                     ("Program", student['program']), ("Plan Date", student['plan_date'])]
+        details_l = [("Full Name", student['name']), ("Date of Birth", student['dob'] or "—"),
+                     ("Age", student['age'] or "—"), ("EDSAS ID", student['edsas'] or "—")]
+        details_r = [("Home School", student['home_school'] or "—"),
+                     ("CLC Placement", "Cowandilla Learning Centre — Learning & Behaviour Unit"),
+                     ("CLC Program", student['program']), ("Plan Date", student['plan_date'])]
         for ci, items in enumerate([details_l, details_r]):
             c = det.rows[1].cells[ci]; set_bg(c,"F2F6F6"); set_borders(c, TEAL.lstrip("#"))
             c.paragraphs[0].clear()
