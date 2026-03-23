@@ -22,23 +22,18 @@ except ImportError:
     SUPABASE_AVAILABLE = False
     st.warning("⚠️ Supabase not installed. Run: pip install supabase")
 
-# Initialize Supabase client
 @st.cache_resource(ttl=60)
 def init_supabase() -> Client:
-    """Initialize Supabase client with credentials from secrets"""
     if not SUPABASE_AVAILABLE:
         return None
-    
     try:
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["key"]
         return create_client(url, key)
     except Exception as e:
         st.error(f"❌ Supabase connection failed: {e}")
-        st.info("💡 Add Supabase credentials to .streamlit/secrets.toml")
         return None
 
-# Global Supabase client
 supabase: Client = init_supabase()
 
 st.set_page_config(page_title="CLC Behaviour Support", page_icon="📊", layout="wide", initial_sidebar_state="collapsed")
@@ -52,10 +47,6 @@ with st.sidebar:
         unsafe_allow_html=True
     )
 
-
-# CLC BRAND STYLING — Teal #1A7A7A / Amber #C8760A
-
-# MOCK DATA
 MOCK_STAFF = [
     {"id": "s1", "name": "Emily Jones", "role": "JP", "email": "emily.jones@example.com", "password": "demo123"},
     {"id": "s2", "name": "Daniel Lee", "role": "PY", "email": "daniel.lee@example.com", "password": "demo123"},
@@ -64,7 +55,7 @@ MOCK_STAFF = [
 ]
 
 MOCK_STUDENTS = [
-    {"id": "stu_jp1", "name": "Emma T.", "grade": "R", "dob": "2018-05-30", "program": "JP", 
+    {"id": "stu_jp1", "name": "Emma T.", "grade": "R", "dob": "2018-05-30", "program": "JP",
      "edid": "ED123456", "placement_start": "2024-02-01", "placement_end": None},
     {"id": "stu_jp2", "name": "Oliver S.", "grade": "Y1", "dob": "2017-09-12", "program": "JP",
      "edid": "ED234567", "placement_start": "2024-03-15", "placement_end": None},
@@ -85,12 +76,12 @@ MOCK_STUDENTS = [
 ]
 
 PROGRAM_NAMES = {"JP": "Junior Primary", "PY": "Primary Years", "SY": "Senior Years"}
-BEHAVIOUR_TYPES = ["Verbal Refusal", "Elopement", "Property Destruction", "Aggression (Peer)", 
+BEHAVIOUR_TYPES = ["Verbal Refusal", "Elopement", "Property Destruction", "Aggression (Peer)",
                    "Aggression (Adult)", "Self-Harm", "Verbal Aggression", "Other"]
 ANTECEDENTS = [
     "--- PEER ---",
     "Peer - negative peer feedback",
-    "Peer - peer conflict/interaction", 
+    "Peer - peer conflict/interaction",
     "Peer - participating in competition",
     "Peer - losing against a peer/s",
     "Peer - another student escalating",
@@ -131,17 +122,15 @@ ANTECEDENTS = [
     "Other - unstructured time",
     "Other - access denied"
 ]
-INTERVENTIONS = ["CPI Supportive stance", "Offered break", "Reduced demand", "Provided choices", 
+INTERVENTIONS = ["CPI Supportive stance", "Offered break", "Reduced demand", "Provided choices",
                 "Removed audience", "Visual supports", "Co-regulation", "Prompted coping skill", "Redirection"]
 LOCATIONS = ["JP Classroom", "PY Classroom", "SY Classroom", "Playground", "Library", "Office", "Student Gate", "Toilets"]
 VALID_PAGES = ["login", "landing", "program_students", "incident_log", "critical_incident", "review_critical", "leader_approve_critical", "student_analysis", "student_dashboard", "admin_portal"]
 
-# AI HYPOTHESIS SYSTEM
 HYPOTHESIS_FUNCTIONS = ["To get", "To avoid"]
 HYPOTHESIS_ITEMS = ["Tangible", "Activity", "Sensory", "Attention"]
 
 def format_time_12hr(time_str):
-    """Convert 24hr time string to 12hr format"""
     try:
         if isinstance(time_str, str):
             dt = datetime.strptime(time_str, "%H:%M:%S")
@@ -152,59 +141,47 @@ def format_time_12hr(time_str):
         return time_str
 
 def generate_hypothesis(antecedent, behaviour, consequence):
-    """Auto-generate hypothesis based on ABC data"""
     hypotheses = []
     antecedent_lower = antecedent.lower()
     behaviour_lower = behaviour.lower()
-    
     if any(word in antecedent_lower for word in [
         "instruction", "demand", "task", "transition", "work", "non-preferred",
         "literacy", "maths", "wait", "routine", "independently", "difficult"
     ]):
         hypotheses.append("To avoid or escape the demand/task")
-        
     if any(word in antecedent_lower for word in [
         "attention", "shifted", "ignored", "alone", "feedback", "conflict",
         "interaction", "escalating", "injustice"
     ]):
         hypotheses.append("To gain staff/peer attention")
-        
     if any(word in antecedent_lower for word in [
         "sensory", "loud", "noise", "bright", "touch", "crowded", "medication",
         "hungry", "thirsty", "movement"
     ]):
         hypotheses.append("To escape sensory discomfort or seek sensory input")
-        
     if any(word in antecedent_lower for word in [
         "denied", "can't have", "no", "wait", "device", "finish", "preferred"
     ]):
         hypotheses.append("To gain access to preferred item/activity")
-        
     if any(word in behaviour_lower for word in ["refusal", "defiance", "left", "ran", "elopement"]):
         hypotheses.append("To assert control or autonomy")
-    
     if not hypotheses:
         hypotheses.append("Function requires further analysis")
-    
     return " / ".join(hypotheses[:2])
 
 def generate_admin_summary(incident_data, student, staff_name):
-    """Generate brief summary for external incident log - FOR ADMIN USE ONLY"""
     abch_primary = incident_data.get("ABCH_primary", {})
     intended = incident_data.get("intended_outcomes", [])
-    
     date_time = incident_data.get("created_at", datetime.now().isoformat())
     dt = datetime.fromisoformat(date_time)
-    
     location = abch_primary.get("location", "Unknown location")
     time_str = abch_primary.get("time", "Unknown time")
     behaviour = abch_primary.get("behaviour", "Behaviour not specified")
     context = abch_primary.get("context", "")
     consequence = abch_primary.get("consequence", "")
     hypothesis = abch_primary.get("hypothesis", "")
-    
     summary = f"""CRITICAL INCIDENT SUMMARY - FOR ADMIN USE ONLY
-    
+
 Student: {student['name']} (Grade {student['grade']})
 Date/Time: {dt.strftime('%d/%m/%Y')} at {time_str}
 Location: {location}
@@ -230,64 +207,40 @@ FORM COMPLETED: {dt.strftime('%d/%m/%Y %H:%M')}
 ** This summary is for external departmental incident log entry purposes only **
 ** Full critical incident form has been saved and distributed to relevant parties **
 """
-    
     return summary
 
-
 def generate_hypothesis_ai(antecedent, behaviour, consequence=""):
-    """AI generates structured hypothesis from ABC data - ENHANCED VERSION"""
     ant_lower = (antecedent or "").lower()
     beh_lower = (behaviour or "").lower()
     cons_lower = (consequence or "").lower()
-    
-    avoid_keywords = [
-        "instruction", "demand", "task", "transition", "work", "difficult", "challenging",
-        "non-preferred", "literacy", "maths", "wait", "routine", "peer", "independently",
-        "interrupted", "finish", "teacher coming"
-    ]
-    
-    get_keywords = [
-        "attention", "item", "toy", "want", "access", "denied", "device", "finish",
-        "preferred", "competition", "feedback"
-    ]
-    
-    sensory_keywords = [
-        "sensory", "loud", "noise", "touch", "bright", "crowded", "medication",
-        "hungry", "thirsty", "movement break"
-    ]
-    
-    attention_keywords = [
-        "attention", "staff", "peer", "ignored", "escalating", "feedback",
-        "conflict", "interaction", "injustice"
-    ]
-    
+    avoid_keywords = ["instruction","demand","task","transition","work","difficult","challenging",
+        "non-preferred","literacy","maths","wait","routine","peer","independently","interrupted","finish","teacher coming"]
+    get_keywords = ["attention","item","toy","want","access","denied","device","finish","preferred","competition","feedback"]
+    sensory_keywords = ["sensory","loud","noise","touch","bright","crowded","medication","hungry","thirsty","movement break"]
+    attention_keywords = ["attention","staff","peer","ignored","escalating","feedback","conflict","interaction","injustice"]
     function = "To avoid"
     if any(word in ant_lower for word in get_keywords):
         function = "To get"
-    elif any(word in cons_lower for word in ["given", "received", "got", "obtained"]):
+    elif any(word in cons_lower for word in ["given","received","got","obtained"]):
         function = "To get"
     elif "denied" in ant_lower or "can't" in ant_lower or "wait" in ant_lower:
         function = "To get"
     elif "off a device" in ant_lower or "finish" in ant_lower:
         function = "To get"
-    
     item = "Activity"
-    
     if any(word in ant_lower + beh_lower for word in attention_keywords):
         item = "Attention"
     elif any(word in ant_lower + beh_lower for word in sensory_keywords):
         item = "Sensory"
-    elif any(word in ant_lower + beh_lower for word in ["toy", "item", "object", "food", "device", "tangible"]):
+    elif any(word in ant_lower + beh_lower for word in ["toy","item","object","food","device","tangible"]):
         item = "Tangible"
-    elif any(word in ant_lower for word in ["instruction", "demand", "task", "work", "learning", "maths", "literacy"]):
+    elif any(word in ant_lower for word in ["instruction","demand","task","work","learning","maths","literacy"]):
         item = "Activity"
     elif "transition" in ant_lower or "environment" in ant_lower or "classroom" in ant_lower:
         item = "Activity"
-    
     return {"function": function, "item": item}
 
 def format_hypothesis(hyp):
-    """Format hypothesis dict to string"""
     if isinstance(hyp, dict):
         return f"{hyp.get('function', 'Unknown')} {hyp.get('item', 'Unknown')}"
     elif isinstance(hyp, str):
@@ -296,680 +249,540 @@ def format_hypothesis(hyp):
         return "Unknown"
 
 def show_severity_guide():
-    """Behaviour Severity Continuum using Streamlit components"""
     with st.expander("📊 Behaviour Severity Continuum Guide", expanded=False):
-        
         col1, col2, col3, col4, col5 = st.columns(5)
-        
         with col1:
             st.markdown("### 🟢 Level 1")
             st.caption("**Low Level / Engaged**")
             st.markdown("**Examples:**")
             st.markdown("- Following instructions\n- Minor defiance\n- Answering back\n- Mumbling\n- Attention seeking")
-        
         with col2:
             st.markdown("### 🟡 Level 2")
             st.caption("**Escalating**")
             st.markdown("**Examples:**")
             st.markdown("- Raised voice\n- Arguing\n- Frustration\n- Crying\n- Pacing")
-        
         with col3:
             st.markdown("### 🟠 Level 3")
             st.caption("**High Risk**")
             st.markdown("**Examples:**")
             st.markdown("- Yelling, swearing\n- Throwing items\n- Property damage\n- Attempting to run")
-        
         with col4:
             st.markdown("### 🔴 Level 4")
             st.caption("**Dangerous**")
             st.markdown("**Examples:**")
             st.markdown("- Attempts to hit/kick\n- Dangerous objects\n- Threats of violence\n- Absconding")
-        
         with col5:
             st.markdown("### ⚫ Crisis")
             st.caption("**Crisis Situation**")
             st.markdown("**Examples:**")
             st.markdown("- Physical violence\n- Severe self-harm\n- Use of weapons\n- Loss of control")
-        
         st.warning("⚠️ **Level 3 or above requires a Critical Incident ABCH Form**")
 
 def send_critical_incident_email(incident_data, student, staff_email, leader_email, admin_email):
-    """Send email notification to all parties"""
     st.info(f"""📧 **Email Notification Sent**
-    
-**To:** {leader_email}, {admin_email}, {staff_email}  
+
+**To:** {leader_email}, {admin_email}, {staff_email}
 **Subject:** CRITICAL INCIDENT - {student['name']}
 
-**Student:** {student['name']} | **Programme:** {student['program']} | **Grade:** {student['grade']}  
-
 Critical Incident Form completed and saved.
-Admin summary included for departmental log.
-
 *(In production, this sends via SMTP)*
     """)
 
 
 def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level):
-    """Generate comprehensive BAP with matplotlib graphs"""
+    """Generate professional BAP matching CLC Safety & Risk Plan styling."""
     try:
         from docx import Document
-        from docx.shared import Inches, Pt, RGBColor
+        from docx.shared import Pt, RGBColor, Cm
         from docx.enum.text import WD_ALIGN_PARAGRAPH
-        import matplotlib.pyplot as plt
+        from docx.oxml.ns import qn
+        from docx.oxml import OxmlElement
         import matplotlib
         matplotlib.use('Agg')
-        
-        from docx.oxml.ns import qn
-        
-        def set_arial(run):
-            run.font.name = 'Arial'
-            run._element.rPr.rFonts.set(qn('w:eastAsia'), 'Arial')
-        
-        GREEN_RGB = RGBColor(34, 139, 34)
-        PROGRAM_NAMES = {"JP": "Junior Primary", "PY": "Primary Years", "SY": "Senior Years"}
-        
+        import matplotlib.pyplot as plt
+        import matplotlib.ticker as mticker
+        import matplotlib.dates as mdates
+        import numpy as np
+
+        # ── Brand colours matching Safety & Risk plan ─────────────────────────
+        TEAL_HEX    = "1A7A6E"
+        TEAL_LIGHT  = "D6EEEB"
+        AMBER_HEX   = "D97706"
+        AMBER_LIGHT = "FEF3C7"
+        GREY_DARK   = "2E4057"
+        WHITE       = "FFFFFF"
+        LIGHT_GREY  = "F2F6F6"
+
+        def rgb(h):
+            h = h.lstrip("#")
+            return RGBColor(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+        def set_bg(cell, hex_color):
+            tc = cell._tc
+            tcPr = tc.get_or_add_tcPr()
+            shd = OxmlElement('w:shd')
+            shd.set(qn('w:val'), 'clear')
+            shd.set(qn('w:color'), 'auto')
+            shd.set(qn('w:fill'), hex_color.lstrip("#"))
+            tcPr.append(shd)
+
+        def set_borders(cell, color="1A7A6E", size="4"):
+            tc = cell._tc
+            tcPr = tc.get_or_add_tcPr()
+            tcB = OxmlElement('w:tcBorders')
+            for side in ['top', 'left', 'bottom', 'right']:
+                b = OxmlElement(f'w:{side}')
+                b.set(qn('w:val'), 'single')
+                b.set(qn('w:sz'), size)
+                b.set(qn('w:space'), '0')
+                b.set(qn('w:color'), color.lstrip("#"))
+                tcB.append(b)
+            tcPr.append(tcB)
+
+        def arun(para, text, bold=False, italic=False, size=18, color="000000"):
+            run = para.add_run(text)
+            run.bold = bold
+            run.italic = italic
+            run.font.size = Pt(size / 2)
+            run.font.color.rgb = rgb(color)
+            run.font.name = "Arial"
+            return run
+
+        def cpara(cell, text, bold=False, italic=False, size=18, color="000000",
+                  align=WD_ALIGN_PARAGRAPH.LEFT, sb=40, sa=40):
+            p = cell.add_paragraph()
+            p.paragraph_format.space_before = Pt(sb / 20)
+            p.paragraph_format.space_after = Pt(sa / 20)
+            p.alignment = align
+            if text:
+                arun(p, text, bold=bold, italic=italic, size=size, color=color)
+            return p
+
+        def cbullet(cell, text, size=17, color="333333"):
+            p = cell.add_paragraph(style='List Bullet')
+            p.paragraph_format.space_before = Pt(1)
+            p.paragraph_format.space_after = Pt(1)
+            arun(p, text, size=size, color=color)
+
+        def section_header(doc, text):
+            tbl = doc.add_table(rows=1, cols=1)
+            tbl.style = 'Table Grid'
+            cell = tbl.rows[0].cells[0]
+            set_bg(cell, GREY_DARK)
+            set_borders(cell, TEAL_HEX)
+            p = cell.paragraphs[0]
+            arun(p, text, bold=True, size=18, color=WHITE)
+            doc.add_paragraph()
+
+        def chart_to_docx(doc, fig, width_cm=16):
+            buf = BytesIO()
+            fig.savefig(buf, format='png', dpi=150, bbox_inches='tight',
+                        facecolor='white', edgecolor='none')
+            buf.seek(0)
+            doc.add_picture(buf, width=Cm(width_cm))
+            doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            plt.close(fig)
+
         doc = Document()
-        
-        style = doc.styles['Normal']
-        font = style.font
-        font.name = 'Arial'
-        style.element.rPr.rFonts.set(qn('w:eastAsia'), 'Arial')
-        
-        # TITLE PAGE
-        heading = doc.add_heading('Behaviour Analysis Plan', 0)
-        for run in heading.runs:
-            run.font.color.rgb = GREEN_RGB
-            set_arial(run)
-        heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        
-        subtitle = doc.add_paragraph('Evidence-Based Analysis & Recommendations')
-        subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        for run in subtitle.runs:
-            run.font.size = Pt(14)
-            run.font.color.rgb = RGBColor(100, 116, 139)
-        
+        sec = doc.sections[0]
+        sec.page_width = Cm(21)
+        sec.page_height = Cm(29.7)
+        for attr in ('left_margin', 'right_margin', 'top_margin', 'bottom_margin'):
+            setattr(sec, attr, Cm(1.8))
+
+        # ── TITLE BLOCK ───────────────────────────────────────────────────────
+        t = doc.add_table(rows=1, cols=1)
+        t.style = 'Table Grid'
+        tc = t.rows[0].cells[0]
+        set_bg(tc, TEAL_HEX)
+        set_borders(tc, TEAL_HEX)
+        p1 = tc.paragraphs[0]
+        p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        arun(p1, "BEHAVIOUR ANALYSIS PLAN", bold=True, size=30, color=WHITE)
+        cpara(tc, f"{student['name']}  |  Cowandilla Learning Centre  |  LBU {student.get('program', '')} Program",
+              size=18, color="FEF3C7", align=WD_ALIGN_PARAGRAPH.CENTER, sb=20, sa=40)
         doc.add_paragraph()
-        
-        try:
-            import matplotlib
-            matplotlib.use('Agg')
-            import matplotlib.pyplot as plt
-            import matplotlib.patches as mpatches
-            from matplotlib.patches import FancyBboxPatch, Circle
-            import numpy as np
-            
-            fig, ax = plt.subplots(figsize=(6, 3), dpi=150)
-            ax.set_xlim(0, 10)
-            ax.set_ylim(0, 5)
-            ax.axis('off')
-            
-            ax.add_patch(FancyBboxPatch((0, 0), 10, 5, boxstyle="round,pad=0.1", 
-                                        facecolor='#f8fafc', edgecolor='#e2e8f0', linewidth=2))
-            
-            bars_x = [1.5, 2.5, 3.5, 4.5, 5.5]
-            bars_y = [2.5, 3.2, 2.8, 3.5, 3.0]
-            for x, y in zip(bars_x, bars_y):
-                ax.add_patch(plt.Rectangle((x-0.3, 0.5), 0.6, y-0.5, 
-                                          facecolor='#3b82f6', alpha=0.7))
-            
-            line_x = np.linspace(6.5, 9.5, 50)
-            line_y = 1.5 + (line_x - 6.5) * 0.2
-            ax.plot(line_x, line_y, color='#22c55e', linewidth=3, alpha=0.8)
-            ax.scatter([6.5, 7.5, 8.5, 9.5], [1.5, 1.7, 2.1, 2.3], 
-                      s=60, color='#22c55e', zorder=5, alpha=0.8)
-            
-            circle = Circle((1, 1.5), 0.4, facecolor='none', edgecolor='#0ea5e9', linewidth=3)
-            ax.add_patch(circle)
-            ax.plot([1.3, 1.6], [1.2, 0.9], color='#0ea5e9', linewidth=3)
-            
-            plt.tight_layout()
-            
-            img_stream = BytesIO()
-            plt.savefig(img_stream, format='png', dpi=150, bbox_inches='tight', 
-                       facecolor='white', edgecolor='none')
-            img_stream.seek(0)
-            plt.close()
-            
-            doc.add_picture(img_stream, width=Inches(5))
-            last_paragraph = doc.paragraphs[-1]
-            last_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        except:
-            pass
-        
+
+        # ── STUDENT DETAILS TABLE ─────────────────────────────────────────────
+        det = doc.add_table(rows=3, cols=2)
+        det.style = 'Table Grid'
+        hdr = det.rows[0].cells[0].merge(det.rows[0].cells[1])
+        set_bg(hdr, GREY_DARK)
+        set_borders(hdr, TEAL_HEX)
+        arun(hdr.paragraphs[0], "STUDENT DETAILS", bold=True, size=18, color=WHITE)
+
+        details_l = [
+            ("Student", student['name']),
+            ("Program", PROGRAM_NAMES.get(student.get('program', ''), student.get('program', ''))),
+            ("Grade", student.get('grade', '—')),
+        ]
+        details_r = [
+            ("Analysis Date", datetime.now().strftime('%d %B %Y')),
+            ("Data Period", f"{full_df['date_parsed'].min().strftime('%d/%m/%Y')} – {full_df['date_parsed'].max().strftime('%d/%m/%Y')}"),
+            ("Risk Level", f"{risk_level} ({risk_score}/100)"),
+        ]
+        for ci, items in enumerate([details_l, details_r]):
+            c = det.rows[1].cells[ci]
+            set_bg(c, LIGHT_GREY)
+            set_borders(c, TEAL_HEX)
+            c.paragraphs[0].clear()
+            for label, val in items:
+                p = c.add_paragraph()
+                arun(p, f"{label}: ", bold=True, size=17, color=GREY_DARK)
+                arun(p, val, size=17)
+
+        summary_cell = det.rows[2].cells[0].merge(det.rows[2].cells[1])
+        set_bg(summary_cell, AMBER_LIGHT)
+        set_borders(summary_cell, AMBER_HEX)
+        p_s = summary_cell.paragraphs[0]
+        arun(p_s, "Summary: ", bold=True, size=17, color=AMBER_HEX)
+        arun(p_s,
+             f"Total incidents: {len(full_df)}  |  "
+             f"Critical: {len(full_df[full_df['incident_type'] == 'Critical'])}  |  "
+             f"Average severity: {full_df['severity'].mean():.1f}/5",
+             size=17)
         doc.add_paragraph()
-        branding = doc.add_paragraph('Prepared by: Learning and Behaviour Unit')
-        branding.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        for run in branding.runs:
-            run.font.size = Pt(11)
-            run.font.bold = True
-            run.font.color.rgb = RGBColor(14, 165, 233)
-        
+
+        # ── KEY FINDINGS BOX ─────────────────────────────────────────────────
+        ctx = doc.add_table(rows=1, cols=1)
+        ctx.style = 'Table Grid'
+        ctx_c = ctx.rows[0].cells[0]
+        set_bg(ctx_c, TEAL_LIGHT)
+        set_borders(ctx_c, TEAL_HEX)
+        ctx_c.paragraphs[0].clear()
+        cpara(ctx_c, "KEY FINDINGS", bold=True, size=18, color=TEAL_HEX, sb=40, sa=60)
+        for label, val in [
+            ("Primary behaviour of concern", top_beh),
+            ("Most common trigger / antecedent", top_ant),
+            ("Hotspot location", top_loc),
+            ("Peak time of day", top_session),
+        ]:
+            p = ctx_c.add_paragraph()
+            arun(p, f"{label}: ", bold=True, size=16, color=GREY_DARK)
+            arun(p, val, size=16)
+        doc.add_paragraph()
+
         doc.add_page_break()
-        
-        school_name = doc.add_heading('Cowandilla Learning Centre', 0)
-        school_name.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        for run in school_name.runs:
-            run.font.color.rgb = GREEN_RGB
-            run.font.size = Pt(18)
-            set_arial(run)
-        
-        doc.add_paragraph()
-        
-        heading = doc.add_heading('Student Information', 1)
-        for run in heading.runs:
-            run.font.color.rgb = GREEN_RGB
-            set_arial(run)
-            
-        info_table = doc.add_table(rows=5, cols=2)
-        info_table.style = 'Light Grid Accent 1'
-        info_table.rows[0].cells[0].text = 'Student:'
-        info_table.rows[0].cells[1].text = student['name']
-        info_table.rows[1].cells[0].text = 'Program:'
-        info_table.rows[1].cells[1].text = PROGRAM_NAMES.get(student['program'], student['program'])
-        info_table.rows[2].cells[0].text = 'Grade:'
-        info_table.rows[2].cells[1].text = student['grade']
-        info_table.rows[3].cells[0].text = 'Analysis completed on:'
-        info_table.rows[3].cells[1].text = datetime.now().strftime('%d %B %Y')
-        info_table.rows[4].cells[0].text = 'Data Period:'
-        info_table.rows[4].cells[1].text = f"{full_df['date_parsed'].min().strftime('%d/%m/%Y')} - {full_df['date_parsed'].max().strftime('%d/%m/%Y')}"
-        
-        doc.add_paragraph()
-        
-        heading = doc.add_heading('Summary', 1)
-        for run in heading.runs:
-            run.font.color.rgb = GREEN_RGB
-            set_arial(run)
-            
-        summary = doc.add_paragraph()
-        summary.add_run('Total Incidents: ').bold = True
-        summary.add_run(f"{len(full_df)}\n")
-        summary.add_run('Critical Incidents: ').bold = True
-        summary.add_run(f"{len(full_df[full_df['incident_type'] == 'Critical'])}\n")
-        summary.add_run('Average Severity: ').bold = True
-        summary.add_run(f"{full_df['severity'].mean():.2f}/5\n")
-        summary.add_run('Risk Level: ').bold = True
-        summary.add_run(f"{risk_level} ({risk_score}/100)")
-        
-        doc.add_paragraph()
-        
-        heading = doc.add_heading('Key Findings', 1)
-        for run in heading.runs:
-            run.font.color.rgb = GREEN_RGB
-            set_arial(run)
-            
-        findings = doc.add_paragraph()
-        findings.add_run('Behaviours of Concern: ').bold = True
-        findings.add_run(f"{top_beh}\n\n")
-        findings.add_run('Most Common Trigger: ').bold = True
-        findings.add_run(f"{top_ant}\n\n")
-        findings.add_run('Hotspot Location: ').bold = True
-        findings.add_run(f"{top_loc}\n\n")
-        findings.add_run('Occurs mainly in the: ').bold = True
-        findings.add_run(f"{top_session}")
-        
-        doc.add_page_break()
-        
-        heading = doc.add_heading('Visual Analytics', 1)
-        for run in heading.runs:
-            run.font.color.rgb = GREEN_RGB
-            set_arial(run)
-        doc.add_paragraph('The following graphs provide visual representation of incident patterns and trends.')
-        
-        plt.style.use('default')
-        from matplotlib.ticker import MaxNLocator
-        
-        heading = doc.add_heading('1. Daily Incident Frequency', 2)
-        for run in heading.runs:
-            run.font.color.rgb = GREEN_RGB
-            set_arial(run)
-            
+
+        # ── VISUAL ANALYTICS ─────────────────────────────────────────────────
+        section_header(doc, "VISUAL ANALYTICS — INCIDENT PATTERNS")
+
+        plt.rcParams.update({
+            'font.family': 'DejaVu Sans',
+            'axes.spines.top': False,
+            'axes.spines.right': False,
+        })
+
+        # Chart 1: Daily Frequency
         daily = full_df.groupby(full_df["date_parsed"].dt.date).size().reset_index(name="count")
-        fig, ax = plt.subplots(figsize=(10, 4), dpi=150)
-        ax.bar(daily["date_parsed"], daily["count"], color='#334155', width=0.8, edgecolor='white', linewidth=0.5)
-        ax.set_xlabel('Date', fontsize=11, fontweight='bold')
-        ax.set_ylabel('Incident Count', fontsize=11, fontweight='bold')
+        fig, ax = plt.subplots(figsize=(14, 4), dpi=120)
+        bar_colours_daily = ['#C0392B' if v >= 3 else '#1A7A6E' for v in daily["count"]]
+        bars = ax.bar(range(len(daily)), daily["count"], color=bar_colours_daily,
+                      width=0.7, edgecolor='white', linewidth=0.8)
+        ax.set_xticks(range(len(daily)))
+        ax.set_xticklabels([d.strftime("%a\n%d/%m") for d in daily["date_parsed"]], fontsize=8)
+        ax.set_ylabel("Incidents", fontsize=10, fontweight='bold')
+        ax.set_title("Daily Incident Frequency  (teal = 1–2, red = 3+)", fontsize=11, fontweight='bold', pad=10)
+        ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
         ax.grid(True, alpha=0.3, linestyle='--', axis='y')
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
-        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-        plt.xticks(rotation=45, ha='right')
+        for bar, v in zip(bars, daily["count"]):
+            if v > 0:
+                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.05,
+                        str(int(v)), ha='center', va='bottom', fontsize=9, fontweight='bold')
         plt.tight_layout()
-        img_buffer = BytesIO()
-        plt.savefig(img_buffer, format='png', dpi=150, bbox_inches='tight')
-        img_buffer.seek(0)
-        doc.add_picture(img_buffer, width=Inches(6))
-        plt.close()
-        doc.add_paragraph("Daily incident frequency shows when behaviours occur most often.")
+        chart_to_docx(doc, fig)
+        p = doc.add_paragraph()
+        arun(p, "Daily incident frequency. Red bars = days with 3+ incidents — priority days for proactive planning.",
+             size=15, italic=True, color="555555")
         doc.add_paragraph()
-        
-        heading = doc.add_heading('2. Most Common Behaviours', 2)
-        for run in heading.runs:
-            run.font.color.rgb = GREEN_RGB
-            set_arial(run)
-            
-        beh_counts = full_df["behaviour_type"].value_counts().head(5)
-        fig, ax = plt.subplots(figsize=(8, 4), dpi=150)
-        ax.barh(beh_counts.index, beh_counts.values, color='#334155')
-        ax.set_xlabel('Incident Count', fontsize=11, fontweight='bold')
+
+        # Chart 2: Behaviour Types
+        beh_counts = full_df["behaviour_type"].value_counts().head(6)
+        fig, ax = plt.subplots(figsize=(12, 4), dpi=120)
+        chart_colours = ['#C0392B', '#E67E22', '#1A7A6E', '#2E4057', '#D97706', '#5D6D7E']
+        bars = ax.barh(beh_counts.index[::-1], beh_counts.values[::-1],
+                       color=chart_colours[:len(beh_counts)], edgecolor='white')
+        ax.set_xlabel("Number of incidents", fontsize=10, fontweight='bold')
+        ax.set_title("Behaviours of Concern — Frequency", fontsize=11, fontweight='bold', pad=10)
+        ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
+        ax.grid(True, alpha=0.3, linestyle='--', axis='x')
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
-        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-        for i, v in enumerate(beh_counts.values):
-            ax.text(v + 0.3, i, str(int(v)), va='center', fontweight='bold')
+        for bar, v in zip(bars, beh_counts.values[::-1]):
+            ax.text(v + 0.1, bar.get_y() + bar.get_height() / 2,
+                    f"{int(v)} incidents", va='center', fontsize=9, fontweight='bold')
         plt.tight_layout()
-        img_buffer = BytesIO()
-        plt.savefig(img_buffer, format='png', dpi=150, bbox_inches='tight')
-        img_buffer.seek(0)
-        doc.add_picture(img_buffer, width=Inches(6))
-        plt.close()
-        doc.add_paragraph(f"Primary behaviour of concern: {beh_counts.index[0]} ({int(beh_counts.values[0])} incidents).")
+        chart_to_docx(doc, fig)
+        p = doc.add_paragraph()
+        arun(p, f"Primary behaviour: {beh_counts.index[0]} "
+             f"({int(beh_counts.values[0])} of {len(full_df)} incidents, "
+             f"{int(beh_counts.values[0]/len(full_df)*100)}%).",
+             size=15, italic=True, color="555555")
         doc.add_paragraph()
-        
-        heading = doc.add_heading('3. Most Common Triggers', 2)
-        for run in heading.runs:
-            run.font.color.rgb = GREEN_RGB
-            set_arial(run)
-            
-        ant_counts = full_df["antecedent"].value_counts().head(5)
-        fig, ax = plt.subplots(figsize=(8, 4), dpi=150)
-        ax.barh(ant_counts.index, ant_counts.values, color='#475569')
-        ax.set_xlabel('Incident Count', fontsize=11, fontweight='bold')
+
+        # Chart 3: Antecedents
+        ant_counts = full_df["antecedent"].value_counts().head(6)
+        fig, ax = plt.subplots(figsize=(12, 4.5), dpi=120)
+        bars = ax.barh(ant_counts.index[::-1], ant_counts.values[::-1], color='#2E4057', edgecolor='white')
+        ax.set_xlabel("Number of incidents preceded by this trigger", fontsize=10, fontweight='bold')
+        ax.set_title("Most Common Triggers / Antecedents", fontsize=11, fontweight='bold', pad=10)
+        ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
+        ax.grid(True, alpha=0.3, linestyle='--', axis='x')
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
-        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-        for i, v in enumerate(ant_counts.values):
-            ax.text(v + 0.3, i, str(int(v)), va='center', fontweight='bold')
+        for bar, v in zip(bars, ant_counts.values[::-1]):
+            ax.text(v + 0.1, bar.get_y() + bar.get_height() / 2,
+                    f"{int(v)}×", va='center', fontsize=9, fontweight='bold', color='#2E4057')
         plt.tight_layout()
-        img_buffer = BytesIO()
-        plt.savefig(img_buffer, format='png', dpi=150, bbox_inches='tight')
-        img_buffer.seek(0)
-        doc.add_picture(img_buffer, width=Inches(6))
-        plt.close()
-        doc.add_paragraph(f"Key trigger: {ant_counts.index[0]}.")
+        chart_to_docx(doc, fig)
+        p = doc.add_paragraph()
+        arun(p, f"Key trigger: '{top_ant}'. Pre-empting this trigger is the highest-leverage prevention strategy.",
+             size=15, italic=True, color="555555")
         doc.add_paragraph()
-        
-        heading = doc.add_heading('4. Severity Over Time', 2)
-        for run in heading.runs:
-            run.font.color.rgb = GREEN_RGB
-            set_arial(run)
-            
-        fig, ax = plt.subplots(figsize=(10, 4), dpi=150)
-        colors = {1: '#10b981', 2: '#3b82f6', 3: '#f59e0b', 4: '#ef4444', 5: '#7f1d1d'}
-        for sev_level in [1, 2, 3, 4, 5]:
-            sev_data = full_df[full_df['severity'] == sev_level]
-            if len(sev_data) > 0:
-                ax.scatter(sev_data["date_parsed"], sev_data["severity"], 
-                          alpha=0.7, s=80, color=colors[sev_level], 
-                          label=f'Level {sev_level}', edgecolors='white', linewidth=0.5)
-        ax.set_xlabel('Date', fontsize=11, fontweight='bold')
-        ax.set_ylabel('Severity', fontsize=11, fontweight='bold')
-        ax.set_ylim(0, 5.5)
-        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.legend(loc='upper right', frameon=False)
+
+        doc.add_page_break()
+        section_header(doc, "VISUAL ANALYTICS — TIME AND LOCATION PATTERNS")
+
+        # Chart 4: Time of Day with real time ranges
+        SESSION_LABELS = {
+            'Morning':   'Morning\n(9:00am – 11:00am)',
+            'Middle':    'Middle\n(11:00am – 1:00pm)',
+            'Afternoon': 'Afternoon\n(1:00pm – 3:00pm)',
+        }
+        session_order_bap = ['Morning', 'Middle', 'Afternoon']
+        session_counts_bap = full_df["session"].value_counts().reindex(session_order_bap, fill_value=0)
+        session_display_bap = [SESSION_LABELS[s] for s in session_order_bap]
+        fig, ax = plt.subplots(figsize=(10, 4), dpi=120)
+        peak_idx = session_counts_bap.values.argmax()
+        bar_colours_session = ['#E67E22' if i == peak_idx else '#1A7A6E'
+                               for i in range(len(session_order_bap))]
+        bars = ax.bar(session_display_bap, session_counts_bap.values,
+                      color=bar_colours_session, edgecolor='white', linewidth=1.5, width=0.5)
+        ax.set_ylabel("Number of incidents", fontsize=10, fontweight='bold')
+        ax.set_title("Incidents by Time of Day  (orange = peak session)", fontsize=11, fontweight='bold', pad=10)
+        ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
         ax.grid(True, alpha=0.3, linestyle='--', axis='y')
-        plt.xticks(rotation=45, ha='right')
-        plt.tight_layout()
-        img_buffer = BytesIO()
-        plt.savefig(img_buffer, format='png', dpi=150, bbox_inches='tight')
-        img_buffer.seek(0)
-        doc.add_picture(img_buffer, width=Inches(6))
-        plt.close()
-        doc.add_paragraph("Severity levels shown by colour: Green (Level 1-2 = Minor), Blue (Level 3 = Moderate), Orange (Level 4 = Serious), Red (Level 5 = Critical).")
-        doc.add_paragraph()
-        
-        heading = doc.add_heading('5. Location Hotspots', 2)
-        for run in heading.runs:
-            run.font.color.rgb = GREEN_RGB
-            set_arial(run)
-            
-        loc_counts = full_df["location"].value_counts().head(5)
-        fig, ax = plt.subplots(figsize=(8, 4), dpi=150)
-        ax.barh(loc_counts.index, loc_counts.values, color='#64748b')
-        ax.set_xlabel('Incident Count', fontsize=11, fontweight='bold')
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
-        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-        for i, v in enumerate(loc_counts.values):
-            ax.text(v + 0.3, i, str(int(v)), va='center', fontweight='bold')
+        for bar, v in zip(bars, session_counts_bap.values):
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.05,
+                    str(int(v)), ha='center', va='bottom', fontsize=12, fontweight='bold')
         plt.tight_layout()
-        img_buffer = BytesIO()
-        plt.savefig(img_buffer, format='png', dpi=150, bbox_inches='tight')
-        img_buffer.seek(0)
-        doc.add_picture(img_buffer, width=Inches(6))
-        plt.close()
-        doc.add_paragraph(f"Most incidents occur in: {loc_counts.index[0]}.")
+        chart_to_docx(doc, fig)
+        peak_session_bap = session_order_bap[peak_idx]
+        p = doc.add_paragraph()
+        arun(p, f"Peak: {SESSION_LABELS[peak_session_bap].replace(chr(10), ' ')} — "
+             f"{int(session_counts_bap[peak_session_bap])} of {len(full_df)} incidents "
+             f"({int(session_counts_bap[peak_session_bap]/len(full_df)*100)}%). "
+             "Consider additional proactive support during this window.",
+             size=15, italic=True, color="555555")
         doc.add_paragraph()
-        
-        heading = doc.add_heading('6. Time of Day Patterns', 2)
-        for run in heading.runs:
-            run.font.color.rgb = GREEN_RGB
-            set_arial(run)
-            
-        session_counts = full_df["session"].value_counts()
-        session_order = ['Morning', 'Middle', 'Afternoon']
-        session_counts = session_counts.reindex(session_order, fill_value=0)
-        fig, ax = plt.subplots(figsize=(8, 4), dpi=150)
-        bars = ax.bar(session_counts.index, session_counts.values, color='#475569', edgecolor='white', linewidth=1.5)
-        ax.set_ylabel('Incident Count', fontsize=11, fontweight='bold')
-        ax.set_xlabel('Time of Day', fontsize=11, fontweight='bold')
+
+        # Chart 5: Location Hotspots
+        loc_counts = full_df["location"].value_counts().head(6)
+        fig, ax = plt.subplots(figsize=(12, 4), dpi=120)
+        loc_colours = ['#C0392B' if i == 0 else '#1A7A6E' for i in range(len(loc_counts))]
+        bars = ax.barh(loc_counts.index[::-1], loc_counts.values[::-1],
+                       color=loc_colours[::-1], edgecolor='white')
+        ax.set_xlabel("Number of incidents in this location", fontsize=10, fontweight='bold')
+        ax.set_title("Location Hotspots  (red = highest frequency)", fontsize=11, fontweight='bold', pad=10)
+        ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
+        ax.grid(True, alpha=0.3, linestyle='--', axis='x')
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
-        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-        for i, (bar, v) in enumerate(zip(bars, session_counts.values)):
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2., height + 0.3,
-                   str(int(v)), ha='center', va='bottom', fontweight='bold', fontsize=11)
+        for bar, v in zip(bars, loc_counts.values[::-1]):
+            ax.text(v + 0.05, bar.get_y() + bar.get_height() / 2,
+                    f"{int(v)} incidents", va='center', fontsize=9, fontweight='bold')
         plt.tight_layout()
-        img_buffer = BytesIO()
-        plt.savefig(img_buffer, format='png', dpi=150, bbox_inches='tight')
-        img_buffer.seek(0)
-        doc.add_picture(img_buffer, width=Inches(6))
-        plt.close()
-        peak_session = session_counts.idxmax()
-        peak_count = int(session_counts.max())
-        doc.add_paragraph(f"Peak time: {peak_session} session with {peak_count} incidents. This pattern helps identify when additional support is most needed.")
-        
+        chart_to_docx(doc, fig)
+        p = doc.add_paragraph()
+        arun(p, f"Hotspot: {top_loc}. Environmental modification and proactive supervision in this area are priority strategies.",
+             size=15, italic=True, color="555555")
+        doc.add_paragraph()
+
+        # Chart 6: Severity Trajectory
+        fig, ax = plt.subplots(figsize=(14, 4), dpi=120)
+        ax.axhspan(0, 2.5, color='#d1fae5', alpha=0.35, label='Within Window (Levels 1–2)')
+        ax.axhspan(2.5, 3.5, color='#fef3c7', alpha=0.35, label='Edge of Window (Level 3)')
+        ax.axhspan(3.5, 5.5, color='#fee2e2', alpha=0.35, label='Outside Window (Levels 4–5)')
+        sev_colours = {1: '#10b981', 2: '#3b82f6', 3: '#f59e0b', 4: '#ef4444', 5: '#7f1d1d'}
+        for sev in [1, 2, 3, 4, 5]:
+            mask = full_df['severity'] == sev
+            if mask.any():
+                ax.scatter(full_df.loc[mask, 'date_parsed'], full_df.loc[mask, 'severity'],
+                           s=80, color=sev_colours[sev], alpha=0.8,
+                           label=f'Level {sev}', edgecolors='white', linewidth=0.8, zorder=5)
+        if len(full_df) >= 4:
+            x_num = np.arange(len(full_df))
+            z = np.polyfit(x_num, full_df['severity'], 1)
+            p_poly = np.poly1d(z)
+            trend_col = '#22c55e' if z[0] < 0 else '#ef4444'
+            ax.plot(full_df['date_parsed'], p_poly(x_num),
+                    color=trend_col, linewidth=2.5, linestyle='--', label='Trend', zorder=4)
+        ax.set_xlabel("Date", fontsize=10, fontweight='bold')
+        ax.set_yticks([1, 2, 3, 4, 5])
+        ax.set_yticklabels(['Level 1\n(Minor)', 'Level 2\n(Low)', 'Level 3\n(Moderate)',
+                            'Level 4\n(Serious)', 'Level 5\n(Critical)'], fontsize=8)
+        ax.set_ylim(0.3, 5.7)
+        ax.set_title("Severity Trajectory — Window of Tolerance Analysis", fontsize=11, fontweight='bold', pad=10)
+        ax.legend(loc='upper right', frameon=True, fontsize=8, framealpha=0.9, ncol=2)
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
+        plt.xticks(rotation=30, ha='right', fontsize=8)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        plt.tight_layout()
+        chart_to_docx(doc, fig)
+        if len(full_df) >= 5:
+            recent_avg = full_df.tail(5)['severity'].mean()
+            early_avg = full_df.head(5)['severity'].mean()
+            direction = "improving (trending down)" if recent_avg < early_avg else \
+                        "worsening (trending up)" if recent_avg > early_avg else "stable"
+        else:
+            direction = "insufficient data for trend"
+        p = doc.add_paragraph()
+        arun(p, f"Severity trend: {direction}. Green = within window; yellow = edge; red = outside window (crisis).",
+             size=15, italic=True, color="555555")
+        doc.add_paragraph()
+
         doc.add_page_break()
-        
-        heading = doc.add_heading('Clinical Interpretation', 1)
-        for run in heading.runs:
-            run.font.color.rgb = GREEN_RGB
-            set_arial(run)
-        
-        intro = doc.add_paragraph()
-        intro.add_run('This analysis is grounded in evidence-based frameworks that help us understand and support student behaviour. The following interpretation uses:')
-        doc.add_paragraph('• Applied Behaviour Analysis (ABA) - understanding what triggers and maintains behaviours', style='List Bullet')
-        doc.add_paragraph('• Trauma-Informed Practice - recognizing that behaviour is communication and often a response to stress', style='List Bullet')
-        doc.add_paragraph('• Berry Street Education Model - a whole-school approach to wellbeing and engagement', style='List Bullet')
-        doc.add_paragraph('• Crisis Prevention Institute (CPI) principles - de-escalation and maintaining dignity', style='List Bullet')
+
+        # ── SUMMARY ──────────────────────────────────────────────────────────
+        section_header(doc, "SUMMARY — EVIDENCE-BASED INTERPRETATION")
+        interp_tbl = doc.add_table(rows=1, cols=1)
+        interp_tbl.style = 'Table Grid'
+        interp_c = interp_tbl.rows[0].cells[0]
+        set_bg(interp_c, TEAL_LIGHT)
+        set_borders(interp_c, TEAL_HEX)
+        interp_c.paragraphs[0].clear()
+        total = len(full_df)
+        morning_pct = int(len(full_df[full_df['session'] == 'Morning']) / total * 100) if total else 0
+        middle_pct  = int(len(full_df[full_df['session'] == 'Middle']) / total * 100) if total else 0
+        arvo_pct    = int(len(full_df[full_df['session'] == 'Afternoon']) / total * 100) if total else 0
+        interp_text = (
+            f"Based on {total} recorded incidents, {student['name']} experiences the most difficulty "
+            f"when '{top_ant}' occurs. This happens most frequently in {top_loc}, particularly during "
+            f"the {top_session} session "
+            f"(Morning {morning_pct}% / Middle {middle_pct}% / Afternoon {arvo_pct}%).\n\n"
+            f"The behaviour '{top_beh}' is the primary concern. From a trauma-informed perspective, "
+            f"this behaviour is {student['name']}'s way of communicating an unmet need or responding "
+            f"to feeling unsafe or overwhelmed — it is a stress response, not deliberate defiance.\n\n"
+            f"Risk level: {risk_level} ({risk_score}/100). "
+            f"All recommendations below prioritise the Berry Street Body and Relationship domains first."
+        )
+        for line in interp_text.split('\n\n'):
+            p = interp_c.add_paragraph()
+            p.paragraph_format.space_before = Pt(3)
+            p.paragraph_format.space_after = Pt(3)
+            arun(p, line, size=17)
         doc.add_paragraph()
-        
-        pattern_heading = doc.add_heading('Understanding the Patterns', 2)
-        for run in pattern_heading.runs:
-            run.font.color.rgb = GREEN_RGB
-            set_arial(run)
-        
-        pattern = doc.add_paragraph()
-        pattern.add_run('What the data tells us:\n').bold = True
-        total_incidents = len(full_df)
-        morning_pct = (len(full_df[full_df['session'] == 'Morning']) / total_incidents * 100) if total_incidents > 0 else 0
-        middle_pct = (len(full_df[full_df['session'] == 'Middle']) / total_incidents * 100) if total_incidents > 0 else 0
-        afternoon_pct = (len(full_df[full_df['session'] == 'Afternoon']) / total_incidents * 100) if total_incidents > 0 else 0
-        pattern_text = pattern.add_run(
-            f"Based on analysis of {total_incidents} recorded incidents, {student['name']} experiences the most difficulty "
-            f"when '{top_ant}' occurs. This happens most frequently in {top_loc}, particularly during the {top_session} session. "
-            f"\n\nTime of day breakdown shows: Morning ({morning_pct:.0f}% of incidents), Middle of day ({middle_pct:.0f}%), "
-            f"and Afternoon ({afternoon_pct:.0f}%). This pattern suggests that {student['name']}'s ability to regulate and cope "
-            f"is affected by time of day, likely due to factors like fatigue, hunger, sensory overload, or accumulated stress."
-            f"\n\nThe behaviour '{top_beh}' is the primary concern. From a trauma-informed perspective, this behaviour is "
-            f"{student['name']}'s way of communicating an unmet need or responding to feeling unsafe or overwhelmed. "
-            f"It is not 'naughtiness' or 'choosing' to misbehave - it is a stress response."
-        )
-        set_arial(pattern_text)
+
+        # ── RECOMMENDATIONS TABLE ─────────────────────────────────────────────
+        section_header(doc, "EVIDENCE-BASED RECOMMENDATIONS")
+        rec_tbl = doc.add_table(rows=5, cols=2)
+        rec_tbl.style = 'Table Grid'
+        rec_headers = [
+            ("1. Body Domain — Regulation", TEAL_HEX),
+            ("2. Relationship Domain — Connection", GREY_DARK),
+            ("3. Stamina Domain — Persistence", AMBER_HEX),
+            ("4. CPI Principles — De-escalation", "C0392B"),
+            ("5. SMART Goal", "2E7D32"),
+        ]
+        rec_content = [
+            [f"• Regulated start before {top_session} (breathing, movement break)",
+             f"• Visual schedule check-in before '{top_ant}'",
+             f"• Environmental modification in {top_loc}",
+             "• Sensory regulation opportunities built into schedule",
+             "• Proactive breaks before dysregulation — widen the window"],
+            ["• CPI Supportive Stance — low, slow voice; body at an angle",
+             "• One key adult maintains consistent connection",
+             "• Acknowledge feelings: 'I can see that feels really hard'",
+             "• Offer choices to maintain sense of control",
+             "• Never correct publicly — maintain dignity always"],
+            ["• Teach help-seeking using a visual cue card",
+             "• Practice requesting breaks in low-stakes moments",
+             "• Emotional literacy: name the feeling, not just the behaviour",
+             "• Celebrate effort and regulation, not just outcomes",
+             "• Break tasks into small, achievable steps"],
+            [f"• Intervene at first signs of escalation — before '{top_beh}' occurs",
+             "• Co-regulation: your calm becomes their calm",
+             "• Remove audience; offer a face-saving way out",
+             "• Reduce demands when dysregulated — this is not rewarding behaviour",
+             "• Post-incident: repair relationship before re-engaging with learning"],
+            [f"• Over 5 weeks, {student['name']} will use a help-seeking strategy in 4/5 observed opportunities.",
+             f"• Review date: {(datetime.now() + timedelta(weeks=5)).strftime('%d %B %Y')}",
+             "• Measure: staff tally sheet, incident frequency trend",
+             "• Success indicator: reduction in severity and frequency of peak-session incidents"],
+        ]
+        for row_idx, ((hdr_text, hdr_colour), content_lines) in enumerate(zip(rec_headers, rec_content)):
+            row = rec_tbl.rows[row_idx]
+            hdr_cell = row.cells[0]
+            set_bg(hdr_cell, hdr_colour)
+            set_borders(hdr_cell, TEAL_HEX)
+            hdr_cell.paragraphs[0].clear()
+            p = hdr_cell.paragraphs[0]
+            p.paragraph_format.space_before = Pt(4)
+            arun(p, hdr_text, bold=True, size=16, color=WHITE)
+            content_cell = row.cells[1]
+            set_bg(content_cell, LIGHT_GREY if row_idx % 2 == 0 else WHITE)
+            set_borders(content_cell, TEAL_HEX)
+            content_cell.paragraphs[0].clear()
+            for line in content_lines:
+                p = content_cell.add_paragraph()
+                p.paragraph_format.space_before = Pt(2)
+                p.paragraph_format.space_after = Pt(2)
+                arun(p, line, size=16)
         doc.add_paragraph()
-        
-        berry_heading = doc.add_heading('Berry Street Education Model Framework', 2)
-        for run in berry_heading.runs:
-            run.font.color.rgb = GREEN_RGB
-            set_arial(run)
-        
-        berry_intro = doc.add_paragraph()
-        berry_intro_text = berry_intro.add_run(
-            "The Berry Street Education Model is an evidence-based whole-school approach developed in partnership "
-            "with Melbourne University. It recognizes that students cannot learn effectively when they are stressed, "
-            "unsafe, or disconnected. The model provides a sequential framework across five domains that must be "
-            "addressed in order:\n"
-        )
-        set_arial(berry_intro_text)
-        
-        domain1 = doc.add_paragraph()
-        d1_title = domain1.add_run('\n1. BODY Domain (Physical and Emotional Regulation):\n')
-        d1_title.bold = True
-        set_arial(d1_title)
-        d1_text = domain1.add_run(
-            f"This is the foundation. {student['name']} must feel physically and emotionally safe and regulated before "
-            "anything else can happen. This means:\n"
-            "• Helping the student recognize their own body signals (heart racing, muscles tight, breathing fast)\n"
-            "• Teaching and practicing calming strategies (deep breathing, movement breaks, sensory tools)\n"
-            "• Creating predictable routines so the nervous system feels safe\n"
-            "• Providing regulation breaks BEFORE dysregulation occurs\n"
-            f"• Recognizing that during {top_session}, {student['name']} may need extra body-based support\n\n"
-            "WHY THIS MATTERS: When stressed, the brain's 'thinking centre' goes offline and the 'survival centre' takes over. "
-            "A dysregulated student cannot access learning, problem-solving, or relationship skills. "
-            "We must help them get regulated first."
-        )
-        set_arial(d1_text)
-        
-        domain2 = doc.add_paragraph()
-        d2_title = domain2.add_run('\n2. RELATIONSHIP Domain (Connection and Trust):\n')
-        d2_title.bold = True
-        set_arial(d2_title)
-        d2_text = domain2.add_run(
-            "Once physically regulated, students need safe, predictable relationships. This means:\n"
-            f"• One key adult who {student['name']} can trust and turn to when struggling\n"
-            "• Consistent, calm responses even during difficult behaviour\n"
-            "• Seeing behaviour as communication, not defiance\n"
-            "• Maintaining connection even when setting boundaries\n"
-            "• Understanding that damaged relationships must be repaired before learning can resume\n\n"
-            "WHY THIS MATTERS: Behaviour often escalates when students feel disconnected, misunderstood, or unsafe "
-            "in relationships. A strong relationship with at least one trusted adult is protective and helps students "
-            "regulate their emotions and behaviour."
-        )
-        set_arial(d2_text)
-        
-        domain3 = doc.add_paragraph()
-        d3_title = domain3.add_run('\n3. STAMINA Domain (Persistence and Resilience):\n')
-        d3_title.bold = True
-        set_arial(d3_title)
-        d3_text = domain3.add_run(
-            f"With regulation and connection in place, we can build {student['name']}'s capacity to persist with challenges:\n"
-            "• Breaking tasks into smaller, achievable steps\n"
-            "• Celebrating effort, not just outcomes\n"
-            "• Teaching that mistakes are part of learning\n"
-            "• Building confidence through success experiences\n"
-            "• Gradually increasing expectations as capacity grows\n\n"
-            "WHY THIS MATTERS: Students who have experienced trauma or chronic stress often have learned that "
-            "'trying' leads to failure or shame. We must rebuild their belief that effort matters and that they are capable."
-        )
-        set_arial(d3_text)
-        
-        domain4 = doc.add_paragraph()
-        d4_title = domain4.add_run('\n4. ENGAGEMENT Domain (Active Learning Participation):\n')
-        d4_title.bold = True
-        set_arial(d4_title)
-        d4_text = domain4.add_run(
-            "With the first three domains secure, students can engage meaningfully in learning:\n"
-            "• Making learning relevant and purposeful\n"
-            "• Providing choice and autonomy\n"
-            "• Using strengths and interests\n"
-            "• Creating positive relationships with learning\n"
-            f"• Recognizing that during {top_session}, engagement may need additional scaffolding\n\n"
-            "WHY THIS MATTERS: Students cannot engage in learning when dysregulated, disconnected, or defeated. "
-            "Engagement is a result of getting the foundation domains right, not something we can demand."
-        )
-        set_arial(d4_text)
-        
-        domain5 = doc.add_paragraph()
-        d5_title = domain5.add_run('\n5. CHARACTER Domain (Values and Contribution):\n')
-        d5_title.bold = True
-        set_arial(d5_title)
-        d5_text = domain5.add_run(
-            "The final domain focuses on purpose and positive contribution:\n"
-            "• Developing empathy and perspective-taking\n"
-            "• Understanding impact of actions on others\n"
-            "• Finding ways to contribute positively\n"
-            "• Building identity as a capable, valued person\n\n"
-            "WHY THIS MATTERS: This is NOT about 'being good' or compliance. It's about helping students "
-            "develop a positive sense of self and their place in the community. This domain only works when "
-            "the foundation domains are solid."
-        )
-        set_arial(d5_text)
+
+        # ── FRAMEWORKS TABLE ──────────────────────────────────────────────────
+        section_header(doc, "THEORETICAL FRAMEWORKS APPLIED")
+        fw_tbl = doc.add_table(rows=1, cols=4)
+        fw_tbl.style = 'Table Grid'
+        for ci, (fw_name, fw_desc) in enumerate([
+            ("Applied Behaviour Analysis (ABA)",
+             "Understanding triggers, behaviour and consequences to identify function and reduce harmful behaviours."),
+            ("Trauma-Informed Practice",
+             "Behaviour is communication. Students cannot learn until they feel safe. Relationships are central."),
+            ("Berry Street Education Model",
+             "Sequential framework: Body → Relationship → Stamina → Engagement → Character."),
+            ("Crisis Prevention Institute (CPI)",
+             "De-escalation, supportive stance, maintaining dignity, early intervention, co-regulation."),
+        ]):
+            c = fw_tbl.rows[0].cells[ci]
+            set_bg(c, TEAL_LIGHT if ci % 2 == 0 else AMBER_LIGHT)
+            set_borders(c, TEAL_HEX)
+            c.paragraphs[0].clear()
+            p = c.paragraphs[0]
+            arun(p, fw_name + "\n", bold=True, size=15, color=GREY_DARK)
+            arun(p, fw_desc, size=14, color="444444")
         doc.add_paragraph()
-        
-        berry_application = doc.add_paragraph()
-        ba_title = berry_application.add_run(f'Application to {student["name"]}:\n')
-        ba_title.bold = True
-        set_arial(ba_title)
-        ba_text = berry_application.add_run(
-            f"Currently, our focus must be on BODY and RELATIONSHIP domains. The data shows {student['name']} "
-            f"is dysregulated during {top_session}, particularly when '{top_ant}' occurs. "
-            "We cannot expect engagement or character development until regulation and connection are secure. "
-            "All recommendations in this plan prioritize these foundation domains first."
-        )
-        set_arial(ba_text)
-        doc.add_paragraph()
-        
-        cpi_heading = doc.add_heading('Crisis Prevention Institute (CPI) Principles', 2)
-        for run in cpi_heading.runs:
-            run.font.color.rgb = GREEN_RGB
-            set_arial(run)
-        
-        cpi_intro = doc.add_paragraph()
-        cpi_intro_text = cpi_intro.add_run(
-            "CPI provides evidence-based training in de-escalation and crisis prevention. The core principles guide "
-            "how we respond when students are escalating or in crisis:\n"
-        )
-        set_arial(cpi_intro_text)
-        
-        cpi1 = doc.add_paragraph()
-        cpi1_title = cpi1.add_run('\nBehaviour is Communication:\n')
-        cpi1_title.bold = True
-        set_arial(cpi1_title)
-        cpi1_text = cpi1.add_run(
-            f"When {student['name']} displays '{top_beh}', they are communicating something important. "
-            "They might be saying: 'I'm overwhelmed,' 'I feel unsafe,' 'I don't understand,' 'I need help,' "
-            "or 'I'm hungry/tired/stressed.' Our job is to understand the message, not just stop the behaviour."
-        )
-        set_arial(cpi1_text)
-        
-        cpi2 = doc.add_paragraph()
-        cpi2_title = cpi2.add_run('\nSupportive Stance:\n')
-        cpi2_title.bold = True
-        set_arial(cpi2_title)
-        cpi2_text = cpi2.add_run(
-            "How we position our body matters. Stand at an angle (not directly facing), give space (don't crowd), "
-            "keep hands visible and open, stay at or below eye level. Use a low, slow, calm voice. "
-            "Your body language should say: 'I'm here to help, you are safe with me.'"
-        )
-        set_arial(cpi2_text)
-        
-        cpi3 = doc.add_paragraph()
-        cpi3_title = cpi3.add_run('\nMaintain Dignity:\n')
-        cpi3_title.bold = True
-        set_arial(cpi3_title)
-        cpi3_text = cpi3.add_run(
-            "Never shame, embarrass, or humiliate. Don't have an audience for correction. "
-            "Separate the behaviour from the person. The message should always be: 'I care about you, "
-            "even when your behaviour is difficult.'"
-        )
-        set_arial(cpi3_text)
-        
-        cpi4 = doc.add_paragraph()
-        cpi4_title = cpi4.add_run('\nEarly Intervention:\n')
-        cpi4_title.bold = True
-        set_arial(cpi4_title)
-        cpi4_text = cpi4.add_run(
-            f"The data shows that '{top_ant}' is a key trigger. CPI teaches us to intervene early - "
-            "at the first signs of escalation, before crisis. This might mean: offering a break, changing the task, "
-            "providing reassurance, or simply moving to a quieter space. Early intervention prevents crisis."
-        )
-        set_arial(cpi4_text)
-        
-        cpi5 = doc.add_paragraph()
-        cpi5_title = cpi5.add_run('\nCo-Regulation:\n')
-        cpi5_title.bold = True
-        set_arial(cpi5_title)
-        cpi5_text = cpi5.add_run(
-            f"Students like {student['name']} often cannot regulate themselves when dysregulated. "
-            "They need an adult to stay calm and lend them their regulation. Your calm becomes their calm. "
-            "This is why adult self-regulation is essential - you cannot co-regulate if you are also dysregulated."
-        )
-        set_arial(cpi5_text)
-        doc.add_paragraph()
-        
-        cpi_application = doc.add_paragraph()
-        ca_title = cpi_application.add_run(f'Application to {student["name"]}:\n')
-        ca_title.bold = True
-        set_arial(ca_title)
-        ca_text = cpi_application.add_run(
-            f"When incidents occur in {top_loc} during {top_session}, staff should use CPI principles: "
-            "approach calmly with supportive stance, offer choices to maintain dignity, intervene early "
-            f"when '{top_ant}' is present, and provide co-regulation rather than consequences. "
-            "The goal is always to help the student return to their window of tolerance, not to punish."
-        )
-        set_arial(ca_text)
-        
-        doc.add_page_break()
-        heading = doc.add_heading('Evidence-Based Recommendations', 1)
-        for run in heading.runs:
-            run.font.color.rgb = GREEN_RGB
-            set_arial(run)
-        
-        heading = doc.add_heading('1. Body Domain (Regulation)', 2)
-        for run in heading.runs:
-            run.font.color.rgb = GREEN_RGB
-            set_arial(run)
-        doc.add_paragraph(f"• Regulated start before {top_session}", style='List Bullet')
-        doc.add_paragraph(f"• Visual check-in before '{top_ant}'", style='List Bullet')
-        doc.add_paragraph(f"• Environmental modification in {top_loc}", style='List Bullet')
-        doc.add_paragraph("• Sensory regulation opportunities", style='List Bullet')
-        
-        heading = doc.add_heading('2. Relationship Domain (Connection)', 2)
-        for run in heading.runs:
-            run.font.color.rgb = GREEN_RGB
-            set_arial(run)
-        doc.add_paragraph("• Supportive Stance with low, slow voice", style='List Bullet')
-        doc.add_paragraph("• One key adult maintains connection", style='List Bullet')
-        doc.add_paragraph("• Acknowledge feelings", style='List Bullet')
-        doc.add_paragraph("• Offer choices for control", style='List Bullet')
-        
-        heading = doc.add_heading('3. Stamina Domain (Persistence)', 2)
-        for run in heading.runs:
-            run.font.color.rgb = GREEN_RGB
-            set_arial(run)
-        doc.add_paragraph("• Teach help-seeking with visual cues", style='List Bullet')
-        doc.add_paragraph("• Practice requesting breaks", style='List Bullet')
-        doc.add_paragraph("• Emotional literacy skills", style='List Bullet')
-        doc.add_paragraph("• Build coping strategies", style='List Bullet')
-        
-        heading = doc.add_heading('4. SMART Goal', 2)
-        for run in heading.runs:
-            run.font.color.rgb = GREEN_RGB
-            set_arial(run)
-        goal = doc.add_paragraph()
-        goal.add_run('Measurable: ').bold = True
-        goal.add_run("Over 5 weeks, use help-seeking strategy in 4/5 opportunities with support.")
-        doc.add_paragraph()
-        doc.add_paragraph('Review Date: ' + (datetime.now() + timedelta(weeks=5)).strftime('%d %B %Y'))
-        
-        doc.add_page_break()
-        
-        footer = doc.add_paragraph()
-        footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        footer_run = footer.add_run('\n\nLearning and Behaviour Unit\n')
-        footer_run.font.size = Pt(10)
-        footer_run.font.bold = True
-        footer_run.font.color.rgb = RGBColor(14, 165, 233)
-        
-        footer2 = doc.add_paragraph()
-        footer2.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        footer2_run = footer2.add_run('Evidence-based: ABA, Trauma-Informed, Berry Street, CPI\n')
-        footer2_run.font.size = Pt(9)
-        footer2_run.font.color.rgb = RGBColor(100, 116, 139)
-        
-        footer3 = doc.add_paragraph()
-        footer3.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        footer3_run = footer3.add_run(datetime.now().strftime('%d %B %Y'))
-        footer3_run.font.size = Pt(9)
-        footer3_run.font.color.rgb = RGBColor(100, 116, 139)
-        
+
+        # ── SIGN-OFF ──────────────────────────────────────────────────────────
+        sign_tbl = doc.add_table(rows=2, cols=3)
+        sign_tbl.style = 'Table Grid'
+        for ci, lbl in enumerate(["Prepared by", "Reviewed by", "Next Review Date"]):
+            c = sign_tbl.rows[0].cells[ci]
+            set_bg(c, GREY_DARK)
+            set_borders(c, TEAL_HEX)
+            c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            arun(c.paragraphs[0], lbl, bold=True, size=16, color=WHITE)
+        for ci, val in enumerate([
+            "_____________________________\nDate: _______________",
+            "_____________________________\nDate: _______________",
+            (datetime.now() + timedelta(weeks=5)).strftime('%d %B %Y'),
+        ]):
+            c = sign_tbl.rows[1].cells[ci]
+            set_bg(c, LIGHT_GREY)
+            set_borders(c, TEAL_HEX)
+            for line in val.split('\n'):
+                cpara(c, line, size=16, sb=20, sa=20)
+
         file_stream = BytesIO()
         doc.save(file_stream)
         file_stream.seek(0)
         return file_stream
-        
+
     except Exception as e:
         import traceback
         st.error(f"BAP Error: {e}")
@@ -1253,32 +1066,29 @@ def save_critical_incident_to_db(critical):
         return False
 
 
+
 # ===================================================================
 # CRITICAL INCIDENT WORKFLOW FUNCTIONS
 # ===================================================================
 
 def get_pending_reviews_for_user(user_id):
     if not supabase:
-        return [c for c in st.session_state.critical_incidents 
+        return [c for c in st.session_state.critical_incidents
                 if c.get('status') == 'pending_review' and c.get('assigned_to_id') == user_id]
     try:
         response = supabase.table('critical_incidents').select('*')\
-            .eq('status', 'pending_review')\
-            .eq('assigned_to_id', user_id)\
-            .execute()
+            .eq('status', 'pending_review').eq('assigned_to_id', user_id).execute()
         return response.data
     except:
         return []
 
 def get_pending_leader_approvals(leader_id):
     if not supabase:
-        return [c for c in st.session_state.critical_incidents 
+        return [c for c in st.session_state.critical_incidents
                 if c.get('status') == 'pending_leader' and c.get('assigned_to_id') == leader_id]
     try:
         response = supabase.table('critical_incidents').select('*')\
-            .eq('status', 'pending_leader')\
-            .eq('assigned_to_id', leader_id)\
-            .execute()
+            .eq('status', 'pending_leader').eq('assigned_to_id', leader_id).execute()
         return response.data
     except:
         return []
@@ -1475,22 +1285,18 @@ def init_state():
     if "logged_in" not in ss: ss.logged_in = False
     if "current_user" not in ss: ss.current_user = None
     if "current_page" not in ss: ss.current_page = "login"
-    
     ss.students = load_students_from_db() if supabase else MOCK_STUDENTS
     ss.staff = load_staff_from_db() if supabase else MOCK_STAFF
-    if "incidents" not in ss: 
+    if "incidents" not in ss:
         ss.incidents = load_incidents_from_db() if supabase else generate_mock_incidents(70)
-    if "critical_incidents" not in ss: 
+    if "critical_incidents" not in ss:
         ss.critical_incidents = load_critical_incidents_from_db() if supabase else []
-    
     if "selected_program" not in ss: ss.selected_program = "JP"
     if "selected_student_id" not in ss: ss.selected_student_id = None
     if "current_incident_id" not in ss: ss.current_incident_id = None
     if "abch_rows" not in ss: ss.abch_rows = []
-    # ── FIX 1+2: draft save state keys ──────────────────────────────────────
     if "ci_draft_id" not in ss: ss.ci_draft_id = None
     if "ci_last_saved" not in ss: ss.ci_last_saved = None
-    # ────────────────────────────────────────────────────────────────────────
     if "show_critical_prompt" not in ss: ss.show_critical_prompt = False
 
 def login_user(email: str, password: str) -> bool:
@@ -1498,7 +1304,6 @@ def login_user(email: str, password: str) -> bool:
     password = (password or "").strip()
     if not email or not password:
         return False
-
     import os
     try:
         ADMIN_EMAIL    = st.secrets.get("admin", {}).get("email", "") or os.environ.get("BEHAVIOUR_ADMIN_EMAIL", "")
@@ -1506,13 +1311,11 @@ def login_user(email: str, password: str) -> bool:
     except Exception:
         ADMIN_EMAIL    = os.environ.get("BEHAVIOUR_ADMIN_EMAIL", "")
         ADMIN_PASSWORD = os.environ.get("BEHAVIOUR_ADMIN_PASSWORD", "")
-
     if ADMIN_EMAIL and email == ADMIN_EMAIL.lower() and password == ADMIN_PASSWORD:
         st.session_state.logged_in = True
         st.session_state.current_user = {"id": "admin_bypass", "name": "Admin", "email": ADMIN_EMAIL, "role": "ADM"}
         st.session_state.current_page = "landing"
         return True
-
     for staff in st.session_state.staff:
         if staff.get("email", "").lower() == email and staff.get("role") == "ADM":
             if ADMIN_PASSWORD and password == ADMIN_PASSWORD:
@@ -1520,7 +1323,6 @@ def login_user(email: str, password: str) -> bool:
                 st.session_state.current_user = staff
                 st.session_state.current_page = "landing"
                 return True
-
     for staff in st.session_state.staff:
         if staff.get("email", "").lower() != email:
             continue
@@ -1540,7 +1342,6 @@ def login_user(email: str, password: str) -> bool:
             st.session_state.current_user = staff
             st.session_state.current_page = "landing"
             return True
-
     return False
 
 def go_to(page: str, **kwargs):
@@ -1550,10 +1351,10 @@ def go_to(page: str, **kwargs):
         setattr(st.session_state, k, v)
     st.rerun()
 
-def get_student(sid): 
+def get_student(sid):
     return next((s for s in st.session_state.students if s["id"] == sid), None)
 
-def get_session_from_time(t): 
+def get_session_from_time(t):
     return "Morning" if t.hour < 11 else "Middle" if t.hour < 13 else "Afternoon"
 
 def generate_mock_incidents(n=70):
@@ -1566,19 +1367,20 @@ def generate_mock_incidents(n=70):
         stu = random.choice(pool)
         sev = random.choices([1, 2, 3, 4, 5], weights=[20, 35, 25, 15, 5])[0]
         dt = datetime.now() - timedelta(days=random.randint(0, 90))
-        dt = dt.replace(hour=random.choices([9,10,11,12,13,14,15], weights=[10,15,12,8,12,18,10])[0], 
+        dt = dt.replace(hour=random.choices([9,10,11,12,13,14,15], weights=[10,15,12,8,12,18,10])[0],
                        minute=random.randint(0,59), second=0)
         incidents.append({
             "id": str(uuid.uuid4()), "student_id": stu["id"], "student_name": stu["name"],
             "date": dt.date().isoformat(), "time": dt.time().strftime("%H:%M:%S"),
             "day": dt.strftime("%A"), "session": get_session_from_time(dt.time()),
             "location": random.choice(LOCATIONS), "behaviour_type": random.choice(BEHAVIOUR_TYPES),
-            "antecedent": random.choice(ANTECEDENTS), 
+            "antecedent": random.choice(ANTECEDENTS),
             "intervention": [random.choice(INTERVENTIONS)],
             "severity": sev, "reported_by": random.choice(MOCK_STAFF)["name"],
             "description": "Mock incident", "is_critical": sev >= 3, "duration_minutes": random.randint(2, 25)
         })
     return incidents
+
 
 # PAGES
 def render_login_page():
@@ -1596,7 +1398,6 @@ def render_login_page():
         </p>
     </div>
     """, unsafe_allow_html=True)
-
     col_l, col_m, col_r = st.columns([1, 2, 1])
     with col_m:
         with st.container(border=True):
@@ -1612,9 +1413,9 @@ def render_login_page():
                     st.error("Invalid credentials. Contact your admin to reset your password.")
         st.markdown("<p style='text-align:center; color:#8aabab; font-size:0.8rem; margin-top:1rem;'>For access issues contact your program administrator</p>", unsafe_allow_html=True)
 
+
 def render_landing_page():
     user = st.session_state.current_user or {}
-    
     col_head, col_logout = st.columns([7, 1])
     with col_head:
         st.markdown(f"""
@@ -1629,16 +1430,13 @@ def render_landing_page():
             st.session_state.logged_in = False
             st.session_state.current_page = "login"
             st.rerun()
-    
     if st.session_state.current_user.get("role") == "ADM":
         st.markdown("---")
         if st.button("🔧 Admin Portal", use_container_width=True, key="goto_admin"):
             go_to("admin_portal")
-    
     current_user_id = st.session_state.current_user.get("id")
     pending_reviews = get_pending_reviews_for_user(current_user_id)
     pending_leader = get_pending_leader_approvals(current_user_id)
-    
     if pending_reviews or pending_leader:
         st.markdown("---")
         st.markdown("### 📋 Pending Actions")
@@ -1656,13 +1454,11 @@ def render_landing_page():
             with col_alert4:
                 if st.button("Approve Now", key="goto_leader_approve", use_container_width=True):
                     go_to("leader_approve_critical")
-    
     st.markdown("---")
     col1, col2, col3 = st.columns(3)
     with col1: st.metric("Students", len(st.session_state.students))
     with col2: st.metric("Total Incidents", len(st.session_state.incidents))
     with col3: st.metric("Critical", len([i for i in st.session_state.incidents if i.get("is_critical")]))
-    
     st.markdown("---")
     st.markdown("### Select Program")
     col1, col2, col3 = st.columns(3)
@@ -1679,15 +1475,14 @@ def render_landing_page():
         if st.button("Enter SY", use_container_width=True, type="primary", key="btn_sy"):
             go_to("program_students", selected_program="SY")
 
+
 def render_program_students_page():
     program = st.session_state.get("selected_program", "JP")
     st.markdown(f"## {PROGRAM_NAMES.get(program)} — Students")
-    
     col1, col2 = st.columns([6, 1])
     with col1:
         if st.button("⬅ Back to Landing", key="back_students"):
             go_to("landing")
-    
     students = [s for s in st.session_state.students if s["program"] == program and not s.get("archived", False)]
     for stu in students:
         stu_incidents = [i for i in st.session_state.incidents if i["student_id"] == stu["id"]]
@@ -1717,15 +1512,14 @@ def render_program_students_page():
                                 st.error(f"Archive failed: {e}")
                         st.rerun()
 
+
 def render_incident_log_page():
     student_id = st.session_state.get("selected_student_id")
     student = get_student(student_id)
     if not student:
         st.error("No student selected")
         return
-    
     st.markdown(f"## 📝 Incident Log — {student['name']}")
-    
     col1, col2 = st.columns([3, 1])
     with col1:
         if st.button("⬅ Back to Students", key="back_log_top"):
@@ -1733,9 +1527,7 @@ def render_incident_log_page():
     with col2:
         if st.button("🏠 Program Landing", key="home_log"):
             go_to("landing")
-    
     show_severity_guide()
-    
     if st.session_state.show_critical_prompt:
         inc_info = st.session_state.get("last_incident_info", {})
         if inc_info.get("severity", 0) >= 3:
@@ -1748,7 +1540,6 @@ def render_incident_log_page():
             go_to("critical_incident", current_incident_id=st.session_state.current_incident_id)
         st.markdown("---")
         st.stop()
-    
     with st.form("incident_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
@@ -1759,13 +1550,11 @@ def render_incident_log_page():
             behaviour = st.selectbox("Behaviour Type *", [""] + BEHAVIOUR_TYPES, key="inc_beh")
             antecedent = st.selectbox("Antecedent/Trigger *", [""] + ANTECEDENTS, key="inc_ant")
             interventions = st.multiselect("Interventions Used *", INTERVENTIONS, key="inc_ints")
-        
         duration = st.number_input("Duration (minutes) *", min_value=1, value=1, key="inc_dur")
-        severity = st.slider("Severity Level (from start to end of incident) *", 1, 5, 1, key="inc_sev")
+        severity = st.slider("Severity Level *", 1, 5, 1, key="inc_sev")
         description = st.text_area("Brief Description (Optional)", placeholder="Factual, objective description...", key="inc_desc")
         manual_critical = st.checkbox("This incident requires a Critical Incident ABCH Form (regardless of severity)", key="manual_crit")
         submitted = st.form_submit_button("Submit Incident", type="primary")
-    
     if submitted:
         if not location or not behaviour or not antecedent or not interventions:
             st.error("Please complete all required fields marked with *")
@@ -1774,24 +1563,14 @@ def render_incident_log_page():
             is_critical = (severity >= 3) or manual_critical
             hyp_ai = generate_hypothesis_ai(antecedent, behaviour, "")
             rec = {
-                "id": new_id, 
-                "student_id": student_id, 
-                "student_name": student["name"],
-                "date": inc_date.isoformat(), 
-                "time": inc_time.strftime("%H:%M:%S"),
-                "day": inc_date.strftime("%A"), 
-                "session": get_session_from_time(inc_time),
-                "location": location, 
-                "behaviour_type": behaviour, 
-                "antecedent": antecedent,
-                "intervention": interventions,
-                "severity": severity,
+                "id": new_id, "student_id": student_id, "student_name": student["name"],
+                "date": inc_date.isoformat(), "time": inc_time.strftime("%H:%M:%S"),
+                "day": inc_date.strftime("%A"), "session": get_session_from_time(inc_time),
+                "location": location, "behaviour_type": behaviour, "antecedent": antecedent,
+                "intervention": interventions, "severity": severity,
                 "reported_by": st.session_state.current_user.get("id", "unknown"),
-                "duration_minutes": duration, 
-                "description": description or "", 
-                "is_critical": is_critical,
-                "hypothesis_function": hyp_ai['function'],
-                "hypothesis_item": hyp_ai['item']
+                "duration_minutes": duration, "description": description or "", "is_critical": is_critical,
+                "hypothesis_function": hyp_ai['function'], "hypothesis_item": hyp_ai['item']
             }
             if save_incident_to_db(rec):
                 st.session_state.incidents.append(rec)
@@ -1806,20 +1585,13 @@ def render_incident_log_page():
 
 
 def render_critical_incident_page():
-    """Critical Incident Form — BUG FIXES APPLIED:
-    FIX 1: 'Add Continuation Entry' button moved to AFTER the loop
-    FIX 2: Draft auto-save to Supabase on every continuation add + Save Draft button
-    """
     inc_id = st.session_state.get("current_incident_id")
     quick_inc = next((i for i in st.session_state.incidents if i["id"] == inc_id), None)
-    
     if not quick_inc:
         st.error("No incident found")
         return
-    
     student = get_student(quick_inc["student_id"])
     st.markdown(f"## 🚨 Critical Incident ABCH Form")
-    
     col1, col2 = st.columns([3, 1])
     with col1:
         if st.button("⬅ Back to Students", key="back_crit_top"):
@@ -1827,7 +1599,6 @@ def render_critical_incident_page():
     with col2:
         if st.button("🏠 Program Landing", key="home_crit"):
             go_to("landing")
-    
     st.markdown("### Incident Details (from Quick Log)")
     with st.container(border=True):
         col1, col2, col3, col4 = st.columns(4)
@@ -1843,21 +1614,16 @@ def render_critical_incident_page():
         with col4:
             st.markdown(f"**Severity:** {quick_inc['severity']}")
         st.markdown(f"**Hypothesis:** {quick_inc.get('hypothesis', 'N/A')}")
-    
     st.markdown("---")
     st.markdown("### ABCH Chronology")
     st.caption("Document the sequence of events. Add continuation entries if incident was prolonged.")
-    
     if "abch_rows" not in st.session_state:
         st.session_state.abch_rows = []
-    
-    # PRIMARY ROW
     st.markdown("#### Initial Incident")
     col_header = st.columns([2, 2, 2, 2, 2])
     with col_header[0]: st.markdown("**ANTECEDENT (Triggers)**")
     with col_header[2]: st.markdown("**BEHAVIOUR**")
     with col_header[4]: st.markdown("**CONSEQUENCES**")
-    
     col_subheader = st.columns([1, 1, 1, 1, 2, 2])
     with col_subheader[0]: st.caption("Location")
     with col_subheader[1]: st.caption("Context (what was happening?)")
@@ -1865,22 +1631,17 @@ def render_critical_incident_page():
     with col_subheader[3]: st.caption("Observed Behaviour")
     with col_subheader[4]: st.caption("What happened after?")
     with col_subheader[5]: st.caption("HYPOTHESIS (Function)")
-    
     col_inputs1 = st.columns([1, 1, 1, 1, 2, 2])
-    
     with col_inputs1[0]:
         location_1 = st.text_input("", value=quick_inc['location'], key="loc_1", label_visibility="collapsed")
     with col_inputs1[1]:
-        context_1 = st.text_area("", placeholder="What was going on before?", 
-                                key="context_1", height=100, label_visibility="collapsed")
+        context_1 = st.text_area("", placeholder="What was going on before?", key="context_1", height=100, label_visibility="collapsed")
     with col_inputs1[2]:
         time_1 = st.text_input("", value=format_time_12hr(quick_inc['time']), key="time_1", label_visibility="collapsed")
     with col_inputs1[3]:
-        behaviour_1 = st.text_area("", placeholder="What did student do?", 
-                                  key="behaviour_1", height=100, label_visibility="collapsed")
+        behaviour_1 = st.text_area("", placeholder="What did student do?", key="behaviour_1", height=100, label_visibility="collapsed")
     with col_inputs1[4]:
-        consequence_1 = st.text_area("", placeholder="Staff response? Student reaction?", 
-                                    key="consequence_1", height=100, label_visibility="collapsed")
+        consequence_1 = st.text_area("", placeholder="Staff response? Student reaction?", key="consequence_1", height=100, label_visibility="collapsed")
     with col_inputs1[5]:
         if "hyp_1_generated" not in st.session_state:
             st.session_state.hyp_1_generated = False
@@ -1888,28 +1649,17 @@ def render_critical_incident_page():
             auto_hyp = generate_hypothesis(context_1, behaviour_1, consequence_1)
             st.session_state.hyp_1_auto = auto_hyp
             st.session_state.hyp_1_generated = True
-        hypothesis_1 = st.text_area("", 
-                                    value=st.session_state.get("hyp_1_auto", ""),
-                                    placeholder="Auto-generated (editable)", 
-                                    key="hypothesis_1", height=100, label_visibility="collapsed")
-    
+        hypothesis_1 = st.text_area("", value=st.session_state.get("hyp_1_auto", ""),
+                                    placeholder="Auto-generated (editable)", key="hypothesis_1", height=100, label_visibility="collapsed")
     st.markdown("---")
-
-    # ── FIX 1: Loop rendered BEFORE the "Add" button ─────────────────────────
-    # ADDITIONAL CONTINUATION ROWS
     for idx, row in enumerate(st.session_state.abch_rows):
         st.markdown(f"#### Continuation Entry {idx + 1}")
         col_add = st.columns([1, 1, 1, 1, 2, 2])
-        with col_add[0]:
-            row["location"] = st.text_input("", key=f"loc_{idx+2}", label_visibility="collapsed")
-        with col_add[1]:
-            row["context"] = st.text_area("", key=f"context_{idx+2}", height=100, label_visibility="collapsed")
-        with col_add[2]:
-            row["time"] = st.text_input("", key=f"time_{idx+2}", label_visibility="collapsed")
-        with col_add[3]:
-            row["behaviour"] = st.text_area("", key=f"behaviour_{idx+2}", height=100, label_visibility="collapsed")
-        with col_add[4]:
-            row["consequence"] = st.text_area("", key=f"consequence_{idx+2}", height=100, label_visibility="collapsed")
+        with col_add[0]: row["location"] = st.text_input("", key=f"loc_{idx+2}", label_visibility="collapsed")
+        with col_add[1]: row["context"] = st.text_area("", key=f"context_{idx+2}", height=100, label_visibility="collapsed")
+        with col_add[2]: row["time"] = st.text_input("", key=f"time_{idx+2}", label_visibility="collapsed")
+        with col_add[3]: row["behaviour"] = st.text_area("", key=f"behaviour_{idx+2}", height=100, label_visibility="collapsed")
+        with col_add[4]: row["consequence"] = st.text_area("", key=f"consequence_{idx+2}", height=100, label_visibility="collapsed")
         with col_add[5]:
             if row.get("context") and row.get("behaviour"):
                 auto_hyp_add = generate_hypothesis(row["context"], row["behaviour"], row.get("consequence", ""))
@@ -1918,27 +1668,20 @@ def render_critical_incident_page():
                 row["hypothesis"] = st.text_area("", key=f"hypothesis_{idx+2}", height=100, label_visibility="collapsed")
         st.markdown("---")
 
-    # ── FIX 2: Draft save helper ──────────────────────────────────────────────
     def _save_ci_draft():
-        """Capture current form state and upsert as a draft in Supabase."""
         draft_id = st.session_state.get("ci_draft_id") or str(uuid.uuid4())
         st.session_state.ci_draft_id = draft_id
         draft = {
-            "id":                      draft_id,
-            "created_at":              datetime.now().isoformat(),
-            "student_id":              quick_inc["student_id"],
-            "severity":                quick_inc.get("severity", 5),
-            "reported_by":             st.session_state.current_user.get("id"),
-            "primary_location":        st.session_state.get("loc_1", ""),
-            "primary_context":         st.session_state.get("context_1", ""),
-            "primary_time":            st.session_state.get("time_1", ""),
-            "primary_behaviour":       st.session_state.get("behaviour_1", ""),
-            "primary_consequence":     st.session_state.get("consequence_1", ""),
-            "additional_entries":      st.session_state.abch_rows.copy(),
-            "outcomes":                [],
-            "status":                  "draft",
-            "audit_trail":             "[]",
-            "include_audit_in_report": False,
+            "id": draft_id, "created_at": datetime.now().isoformat(),
+            "student_id": quick_inc["student_id"], "severity": quick_inc.get("severity", 5),
+            "reported_by": st.session_state.current_user.get("id"),
+            "primary_location": st.session_state.get("loc_1", ""),
+            "primary_context": st.session_state.get("context_1", ""),
+            "primary_time": st.session_state.get("time_1", ""),
+            "primary_behaviour": st.session_state.get("behaviour_1", ""),
+            "primary_consequence": st.session_state.get("consequence_1", ""),
+            "additional_entries": st.session_state.abch_rows.copy(),
+            "outcomes": [], "status": "draft", "audit_trail": "[]", "include_audit_in_report": False,
         }
         try:
             existing = supabase.table("critical_incidents").select("id").eq("id", draft_id).execute()
@@ -1950,7 +1693,6 @@ def render_critical_incident_page():
         except Exception as e:
             st.warning(f"⚠️ Draft save failed: {e}")
 
-    # ── FIX 1+2: Buttons now appear AFTER all continuation rows ──────────────
     btn_col1, btn_col2 = st.columns([3, 1])
     with btn_col1:
         if st.button("➕ Add Continuation Entry", key="add_abch_row"):
@@ -1958,14 +1700,12 @@ def render_critical_incident_page():
             _save_ci_draft()
             st.rerun()
     with btn_col2:
-        if st.button("💾 Save Draft", key="save_draft_btn", help="Save progress without submitting"):
+        if st.button("💾 Save Draft", key="save_draft_btn"):
             _save_ci_draft()
             st.rerun()
-
     if st.session_state.get("ci_last_saved"):
-        st.caption(f"✅ Draft auto-saved at {st.session_state.ci_last_saved} — your work is safe")
+        st.caption(f"✅ Draft auto-saved at {st.session_state.ci_last_saved}")
 
-    # ── INTENDED OUTCOMES ─────────────────────────────────────────────────────
     st.markdown("### Intended Outcomes")
     outcomes_options = [
         "Send Home", "Parent/Caregiver notified via Phone Call",
@@ -1974,28 +1714,19 @@ def render_critical_incident_page():
         "Complaint by co-located school/member of public",
         "Property damage", "Stealing", "Toileting issue",
         "ED155: Staff Injury", "ED155: Student injury",
-        "Emergency services - SAPOL",
-        "Emergency services - SA Ambulance",
+        "Emergency services - SAPOL", "Emergency services - SA Ambulance",
         "Incident Internally Managed - Restorative Session",
         "Incident Internally Managed - Community Service",
         "Incident Internally Managed - Re-Entry",
         "Incident Internally Managed - Case Review",
         "Incident Internally Managed - Make-up Time"
     ]
-    
     selected_outcomes = st.multiselect("Select all intended outcomes:", outcomes_options, key="intended_outcomes")
-    
     sapol_reference = ""
     if "Emergency services - SAPOL" in selected_outcomes:
         st.warning("⚠️ SAPOL involvement detected - Police Reference Number required")
-        sapol_reference = st.text_input("SAPOL Police Reference Number *", 
-                                       placeholder="Enter police reference number",
-                                       key="sapol_ref")
-    
-    tac_notes = st.text_area("Additional Outcome Notes (e.g., TAC meeting):", 
-                            placeholder="A TAC meeting will be held...",
-                            key="tac_notes", height=100)
-    
+        sapol_reference = st.text_input("SAPOL Police Reference Number *", placeholder="Enter police reference number", key="sapol_ref")
+    tac_notes = st.text_area("Additional Outcome Notes:", placeholder="A TAC meeting will be held...", key="tac_notes", height=100)
     st.markdown("---")
     st.markdown("### Notifications & Administration")
     col_notif1, col_notif2 = st.columns(2)
@@ -2005,14 +1736,11 @@ def render_critical_incident_page():
     with col_notif2:
         copy_in_file = st.checkbox("Copy in student file", key="copy_file", value=True)
         safety_plan_review = st.checkbox("Safety plan review required", key="safety_review")
-    
     st.markdown("---")
     st.markdown("### Staff Agreement")
     staff_name = st.session_state.current_user.get("name", "Staff Member")
     st.markdown(f"**Completing Staff Member:** {staff_name}")
-    staff_agrees = st.checkbox(f"✓ I, {staff_name}, confirm this information is accurate and complete.", 
-                               key="staff_agrees")
-    
+    staff_agrees = st.checkbox(f"✓ I, {staff_name}, confirm this information is accurate and complete.", key="staff_agrees")
     st.markdown("---")
     st.markdown("### Email Distribution")
     col_email1, col_email2 = st.columns(2)
@@ -2020,11 +1748,8 @@ def render_critical_incident_page():
         leader_email = st.text_input("Line Manager Email *", value="manager@clc.sa.edu.au", key="leader_email")
     with col_email2:
         admin_email = st.text_input("Admin Email *", value="admin@clc.sa.edu.au", key="admin_email")
-    
     st.markdown("---")
-    
     other_staff = [s for s in st.session_state.staff if s['id'] != st.session_state.current_user['id']]
-    
     st.markdown("### Assign for Review")
     st.caption("Select another staff member to review this critical incident report")
     assigned_staff_id = st.selectbox(
@@ -2033,9 +1758,7 @@ def render_critical_incident_page():
         format_func=lambda x: next((s['name'] for s in other_staff if s['id'] == x), "Unknown"),
         key="assigned_review_staff"
     )
-    
     st.markdown("---")
-    
     if st.button("📧 Complete & Assign for Review", type="primary", use_container_width=True, key="save_crit"):
         errors = []
         if not context_1 or not behaviour_1 or not consequence_1 or not hypothesis_1:
@@ -2046,69 +1769,38 @@ def render_critical_incident_page():
             errors.append("Please assign a staff member for review")
         if "Emergency services - SAPOL" in selected_outcomes and not sapol_reference:
             errors.append("SAPOL Reference Number is required when SAPOL is involved")
-        
         if errors:
             for error in errors:
                 st.error(f"❌ {error}")
         else:
             current_user_id = st.session_state.current_user['id']
             current_user_name = st.session_state.current_user['name']
-            
-            # Use draft ID if one exists (preserves continuity with any saved draft)
             record_id = st.session_state.get("ci_draft_id") or str(uuid.uuid4())
-            
             record = {
-                "id": record_id,
-                "created_at": datetime.now().isoformat(),
-                "quick_incident_id": inc_id,
-                "student_id": quick_inc["student_id"],
-                "student_name": student["name"],
-                "incident_type": "Critical",
+                "id": record_id, "created_at": datetime.now().isoformat(),
+                "quick_incident_id": inc_id, "student_id": quick_inc["student_id"],
+                "student_name": student["name"], "incident_type": "Critical",
                 "severity": quick_inc.get('severity', 5),
                 "ABCH_primary": {
-                    "location": location_1,
-                    "context": context_1,
-                    "time": time_1,
-                    "behaviour": behaviour_1,
-                    "consequence": consequence_1,
-                    "hypothesis": hypothesis_1
+                    "location": location_1, "context": context_1, "time": time_1,
+                    "behaviour": behaviour_1, "consequence": consequence_1, "hypothesis": hypothesis_1
                 },
                 "ABCH_additional": st.session_state.abch_rows.copy(),
                 "intended_outcomes": selected_outcomes,
                 "sapol_reference": sapol_reference if sapol_reference else None,
                 "tac_notes": tac_notes,
-                "notifications": {
-                    "line_manager": notified_line_manager,
-                    "parent": notified_parent,
-                    "copy_in_file": copy_in_file,
-                    "safety_plan_review": safety_plan_review
-                },
-                "staff_agreement": {
-                    "staff_name": staff_name,
-                    "agreed": staff_agrees,
-                    "timestamp": datetime.now().isoformat()
-                },
-                "leader_email": leader_email,
-                "admin_email": "clc.admin281@schools.sa.edu.au",
-                "status": "pending_review",
-                "completed_by_id": current_user_id,
-                "completed_by_name": current_user_name,
-                "assigned_to_id": assigned_staff_id,
+                "notifications": {"line_manager": notified_line_manager, "parent": notified_parent,
+                                  "copy_in_file": copy_in_file, "safety_plan_review": safety_plan_review},
+                "staff_agreement": {"staff_name": staff_name, "agreed": staff_agrees, "timestamp": datetime.now().isoformat()},
+                "leader_email": leader_email, "admin_email": "clc.admin281@schools.sa.edu.au",
+                "status": "pending_review", "completed_by_id": current_user_id,
+                "completed_by_name": current_user_name, "assigned_to_id": assigned_staff_id,
                 "assigned_to_name": next((s['name'] for s in other_staff if s['id'] == assigned_staff_id), "Unknown"),
-                "completed_at": datetime.now().isoformat(),
-                "audit_trail": [],
-                "include_audit_in_report": False
+                "completed_at": datetime.now().isoformat(), "audit_trail": [], "include_audit_in_report": False
             }
-            
-            record = add_audit_trail_entry(
-                record,
-                "ABCH Form Completed",
-                current_user_name,
-                f"Assigned to {record['assigned_to_name']} for review"
-            )
-            
+            record = add_audit_trail_entry(record, "ABCH Form Completed", current_user_name,
+                                           f"Assigned to {record['assigned_to_name']} for review")
             if save_critical_incident_to_db(record):
-                # Clear and reload so fresh data is always shown
                 for _key in ["critical_incidents", "incidents"]:
                     if _key in st.session_state:
                         del st.session_state[_key]
@@ -2116,35 +1808,20 @@ def render_critical_incident_page():
                 st.session_state.hyp_1_generated = False
                 st.session_state.ci_draft_id = None
                 st.session_state.ci_last_saved = None
-                
                 st.success("✅ Critical incident form completed and assigned for review")
                 st.info(f"📤 Assigned to **{record['assigned_to_name']}** for review")
-                st.info("💾 Critical incident data saved to database")
-                
-                assigned_staff = next((s for s in st.session_state.staff if s['id'] == assigned_staff_id), None)
-                if assigned_staff:
-                    email_sent = send_assignment_notification(
-                        assigned_staff, current_user_name, student['name'], record['id']
-                    )
-                    if email_sent:
-                        st.success(f"📧 Email notification sent to {record['assigned_to_name']}")
-                    else:
-                        st.info("📧 Email notifications not configured (see settings)")
-                
                 admin_summary = generate_admin_summary(record, student, staff_name)
-                
                 with st.expander("📋 ADMIN SUMMARY (For External Incident Log)", expanded=False):
                     st.text_area("Copy this summary for departmental log:", admin_summary, height=400, key="admin_summary_display")
-                    st.download_button(
-                        "📥 Download Admin Summary",
-                        admin_summary,
-                        file_name=f"Admin_Summary_{student['name'].replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.txt",
-                        mime="text/plain"
-                    )
-                
+                    st.download_button("📥 Download Admin Summary", admin_summary,
+                        file_name=f"Admin_Summary_{student['name'].replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.txt", mime="text/plain")
+                assigned_staff = next((s for s in st.session_state.staff if s['id'] == assigned_staff_id), None)
+                if assigned_staff:
+                    email_sent = send_assignment_notification(assigned_staff, current_user_name, student['name'], record['id'])
+                    if email_sent:
+                        st.success(f"📧 Email notification sent to {record['assigned_to_name']}")
                 if sapol_reference:
                     st.info(f"🚔 SAPOL Reference: {sapol_reference}")
-                
                 col1, col2, col3 = st.columns(3)
                 with col1:
                     if st.button("📊 View Analysis", type="primary", use_container_width=True, key="view_analysis"):
@@ -2158,47 +1835,35 @@ def render_critical_incident_page():
             else:
                 st.error("❌ Failed to save critical incident to database")
 
+
 def render_review_critical_page():
     current_user_id = st.session_state.current_user.get("id")
     current_user_name = st.session_state.current_user.get("name")
-    
     pending = get_pending_reviews_for_user(current_user_id)
-    
     st.markdown("## 📋 Critical Incidents Pending Your Review")
-    
     if st.button("⬅ Back to Landing", key="back_review"):
         go_to("landing")
-    
     if not pending:
         st.info("✅ No critical incidents pending your review")
         return
-    
     st.markdown("---")
     st.markdown(f"### You have {len(pending)} critical incident{'' if len(pending) == 1 else 's'} to review")
-    
     if len(pending) > 1:
-        incident_options = {str(inc.get('id')): f"{inc.get('student_name', 'Unknown')} - {inc.get('created_at', 'No date')}" 
+        incident_options = {str(inc.get('id')): f"{inc.get('student_name', 'Unknown')} - {inc.get('created_at', 'No date')}"
                            for inc in pending}
-        selected_id = st.selectbox("Select incident to review:", list(incident_options.keys()), 
+        selected_id = st.selectbox("Select incident to review:", list(incident_options.keys()),
                                    format_func=lambda x: incident_options[x])
         critical = next((inc for inc in pending if str(inc.get('id')) == selected_id), None)
     else:
         critical = pending[0]
-    
     if not critical:
-        st.error("Critical incident not found")
-        return
-    
+        st.error("Critical incident not found"); return
     student = get_student(critical['student_id'])
     if not student:
-        st.error("Student not found")
-        return
-    
+        st.error("Student not found"); return
     st.markdown("---")
     st.markdown(f"### Critical Incident - {student['name']}")
-    
     primary = critical.get('ABCH_primary', {})
-    
     with st.container(border=True):
         st.markdown("**Incident Overview**")
         col1, col2, col3 = st.columns(3)
@@ -2211,28 +1876,20 @@ def render_review_critical_page():
         with col3:
             st.markdown(f"**Completed by:** {critical.get('completed_by_name', 'N/A')}")
             st.markdown(f"**Status:** {critical.get('status', 'draft').replace('_', ' ').title()}")
-    
     st.markdown("---")
-    st.markdown("**ABCH Details**")
-    
-    with st.expander("📍 ANTECEDENT (What happened before)", expanded=True):
+    with st.expander("📍 ANTECEDENT", expanded=True):
         st.markdown(f"**Location:** {primary.get('location', 'N/A')}")
         st.markdown(f"**Time:** {primary.get('time', 'N/A')}")
         st.markdown(f"**Context:** {primary.get('context', 'N/A')}")
-    
-    with st.expander("🎯 BEHAVIOUR (What the student did)", expanded=True):
+    with st.expander("🎯 BEHAVIOUR", expanded=True):
         st.markdown(primary.get('behaviour', 'N/A'))
-    
-    with st.expander("📊 CONSEQUENCE (What happened after)", expanded=True):
+    with st.expander("📊 CONSEQUENCE", expanded=True):
         st.markdown(primary.get('consequence', 'N/A'))
-    
-    with st.expander("💡 HYPOTHESIS (Functional reason)", expanded=True):
+    with st.expander("💡 HYPOTHESIS", expanded=True):
         st.markdown(primary.get('hypothesis', 'N/A'))
-    
     additional = critical.get('ABCH_additional', [])
     if additional:
         st.markdown("---")
-        st.markdown(f"**Continuation Entries ({len(additional)})**")
         for idx, entry in enumerate(additional):
             with st.expander(f"Continuation Entry {idx + 1}"):
                 st.markdown(f"**Location:** {entry.get('location', 'N/A')}")
@@ -2241,35 +1898,24 @@ def render_review_critical_page():
                 st.markdown(f"**Behaviour:** {entry.get('behaviour', 'N/A')}")
                 st.markdown(f"**Consequence:** {entry.get('consequence', 'N/A')}")
                 st.markdown(f"**Hypothesis:** {entry.get('hypothesis', 'N/A')}")
-    
     st.markdown("---")
-    st.markdown("**Intended Outcomes**")
     outcomes = critical.get('intended_outcomes', [])
     if outcomes:
+        st.markdown("**Intended Outcomes**")
         for outcome in outcomes:
             st.markdown(f"- {outcome}")
-    
     if critical.get('sapol_reference'):
         st.warning(f"🚔 **SAPOL Reference:** {critical['sapol_reference']}")
-    
     st.markdown("---")
     st.markdown("### Your Review")
-    
-    review_notes = st.text_area(
-        "Review Notes (Optional)",
-        placeholder="Add any observations, concerns, or additional context...",
-        height=150,
-        key="review_notes_input"
-    )
-    
+    review_notes = st.text_area("Review Notes (Optional)", placeholder="Add any observations or additional context...", height=150, key="review_notes_input")
     st.markdown("---")
-    
     col1, col2 = st.columns(2)
     with col1:
         if st.button("✅ Approve & Forward to Leader", type="primary", use_container_width=True, key="approve_review"):
             manager_id = get_manager_staff_id()
             if not manager_id:
-                st.error("❌ No Leader/Manager found in system. Please contact admin.")
+                st.error("❌ No Leader/Manager found. Please contact admin.")
             else:
                 critical['status'] = 'pending_leader'
                 critical['reviewed_by_id'] = current_user_id
@@ -2277,141 +1923,73 @@ def render_review_critical_page():
                 critical['review_notes'] = review_notes
                 critical['reviewed_at'] = datetime.now().isoformat()
                 critical['assigned_to_id'] = manager_id
-                
-                critical = add_audit_trail_entry(
-                    critical, "Reviewed by Staff Member", current_user_name,
-                    review_notes if review_notes else "No additional notes"
-                )
-                
+                critical = add_audit_trail_entry(critical, "Reviewed by Staff Member", current_user_name,
+                                                 review_notes if review_notes else "No additional notes")
                 if save_critical_incident_to_db(critical):
                     for idx, inc in enumerate(st.session_state.critical_incidents):
                         if inc.get('id') == critical['id']:
                             st.session_state.critical_incidents[idx] = critical
                             break
-                    
                     leader_staff = next((s for s in st.session_state.staff if s['id'] == manager_id), None)
                     if leader_staff:
-                        email_sent = send_leader_notification(leader_staff, current_user_name, student['name'], critical['id'])
-                        if email_sent:
-                            st.info(f"📧 Email notification sent to Leader")
-                    
+                        send_leader_notification(leader_staff, current_user_name, student['name'], critical['id'])
                     st.success("✅ Review completed and forwarded to Leader for approval")
                     st.balloons()
-                    st.info("↩️ Returning to landing page...")
-                    time.sleep(2)
                     go_to("landing")
                 else:
-                    st.error("❌ Failed to save review to database")
-    
+                    st.error("❌ Failed to save review")
     with col2:
-        if st.button("🔙 Back to Landing (Save for Later)", use_container_width=True, key="back_review_later"):
+        if st.button("🔙 Back to Landing", use_container_width=True, key="back_review_later"):
             go_to("landing")
+
 
 def render_leader_approve_critical_page():
     current_user_id = st.session_state.current_user.get("id")
     current_user_name = st.session_state.current_user.get("name")
-    
     pending = get_pending_leader_approvals(current_user_id)
-    
     st.markdown("## 🎯 Critical Incidents Awaiting Leader Approval")
-    
     if st.button("⬅ Back to Landing", key="back_leader"):
         go_to("landing")
-    
     if not pending:
         st.info("✅ No critical incidents awaiting your approval")
         return
-    
     st.markdown("---")
-    st.markdown(f"### You have {len(pending)} critical incident{'' if len(pending) == 1 else 's'} awaiting approval")
-    
     if len(pending) > 1:
-        incident_options = {str(inc.get('id')): f"{inc.get('student_name', 'Unknown')} - {inc.get('created_at', 'No date')}" 
+        incident_options = {str(inc.get('id')): f"{inc.get('student_name', 'Unknown')} - {inc.get('created_at', 'No date')}"
                            for inc in pending}
-        selected_id = st.selectbox("Select incident to approve:", list(incident_options.keys()), 
+        selected_id = st.selectbox("Select incident to approve:", list(incident_options.keys()),
                                    format_func=lambda x: incident_options[x])
         critical = next((inc for inc in pending if str(inc.get('id')) == selected_id), None)
     else:
         critical = pending[0]
-    
     if not critical:
-        st.error("Critical incident not found")
-        return
-    
+        st.error("Critical incident not found"); return
     student = get_student(critical['student_id'])
     if not student:
-        st.error("Student not found")
-        return
-    
-    st.markdown("---")
+        st.error("Student not found"); return
     st.markdown(f"### Critical Incident - {student['name']}")
-    
-    primary = critical.get('ABCH_primary', {})
-    
     with st.container(border=True):
-        st.markdown("**Workflow Status**")
         col1, col2, col3 = st.columns(3)
-        with col1:
-            st.markdown(f"✅ **Completed by:** {critical.get('completed_by_name', 'N/A')}")
-        with col2:
-            st.markdown(f"✅ **Reviewed by:** {critical.get('reviewed_by_name', 'N/A')}")
-        with col3:
-            st.markdown(f"⏳ **Awaiting:** Leader Approval")
-    
+        with col1: st.markdown(f"✅ **Completed by:** {critical.get('completed_by_name', 'N/A')}")
+        with col2: st.markdown(f"✅ **Reviewed by:** {critical.get('reviewed_by_name', 'N/A')}")
+        with col3: st.markdown(f"⏳ **Awaiting:** Leader Approval")
     if critical.get('review_notes'):
         with st.expander("📝 Review Notes from Staff", expanded=True):
             st.info(critical['review_notes'])
-    
-    st.markdown("---")
-    
+    primary = critical.get('ABCH_primary', {})
     with st.expander("📋 View Complete ABCH Form"):
-        st.markdown(f"**Date:** {critical.get('created_at', 'N/A')[:10]}")
         st.markdown(f"**Severity:** {critical.get('severity', 'N/A')}")
-        st.markdown("---")
-        st.markdown("**Initial Incident**")
         st.markdown(f"**Location:** {primary.get('location', 'N/A')}")
-        st.markdown(f"**Time:** {primary.get('time', 'N/A')}")
-        st.markdown(f"**Context:** {primary.get('context', 'N/A')}")
         st.markdown(f"**Behaviour:** {primary.get('behaviour', 'N/A')}")
-        st.markdown(f"**Consequence:** {primary.get('consequence', 'N/A')}")
         st.markdown(f"**Hypothesis:** {primary.get('hypothesis', 'N/A')}")
-        
-        additional = critical.get('ABCH_additional', [])
-        if additional:
-            st.markdown("---")
-            for idx, entry in enumerate(additional):
-                st.markdown(f"**Continuation Entry {idx + 1}**")
-                st.markdown(f"**Behaviour:** {entry.get('behaviour', 'N/A')}")
-        
-        st.markdown("---")
-        st.markdown("**Intended Outcomes**")
         for outcome in critical.get('intended_outcomes', []):
             st.markdown(f"- {outcome}")
-        
         if critical.get('sapol_reference'):
             st.warning(f"🚔 **SAPOL Reference:** {critical['sapol_reference']}")
-    
     st.markdown("---")
-    st.markdown("### Leader Review & Amendments")
-    
-    leader_notes = st.text_area(
-        "Leader Notes / Amendments",
-        placeholder="Add any corrections, additional context, or amendments to the report...",
-        height=150,
-        key="leader_notes_input"
-    )
-    
+    leader_notes = st.text_area("Leader Notes / Amendments", placeholder="Add any corrections or amendments...", height=150, key="leader_notes_input")
+    include_audit = st.checkbox("Include full audit trail in final report", value=False, key="include_audit_toggle")
     st.markdown("---")
-    st.markdown("### Final Report Options")
-    include_audit = st.checkbox(
-        "Include full audit trail in final report",
-        value=False,
-        help="If checked, the PDF report will include all workflow steps and notes.",
-        key="include_audit_toggle"
-    )
-    
-    st.markdown("---")
-    
     if st.button("✅ Final Approval & Submit Report", type="primary", use_container_width=True, key="final_approve"):
         critical['status'] = 'completed'
         critical['leader_approved_by_id'] = current_user_id
@@ -2421,49 +1999,24 @@ def render_leader_approve_critical_page():
         critical['submitted_at'] = datetime.now().isoformat()
         critical['include_audit_in_report'] = include_audit
         critical['assigned_to_id'] = None
-        
-        critical = add_audit_trail_entry(
-            critical, "Approved by Leader", current_user_name,
-            leader_notes if leader_notes else "Final approval granted"
-        )
-        
+        critical = add_audit_trail_entry(critical, "Approved by Leader", current_user_name,
+                                         leader_notes if leader_notes else "Final approval granted")
         if save_critical_incident_to_db(critical):
             for idx, inc in enumerate(st.session_state.critical_incidents):
                 if inc.get('id') == critical['id']:
                     st.session_state.critical_incidents[idx] = critical
                     break
-            
             st.success("✅ Critical incident approved and submitted")
-            
             completed_by_staff = next((s for s in st.session_state.staff if s['id'] == critical.get('completed_by_id')), None)
             reviewed_by_staff = next((s for s in st.session_state.staff if s['id'] == critical.get('reviewed_by_id')), None)
             leader_staff = next((s for s in st.session_state.staff if s['id'] == current_user_id), None)
-            
-            emails_sent = send_completion_notifications(
-                critical, student,
-                completed_by_staff or {}, reviewed_by_staff or {}, leader_staff or {}
-            )
-            
-            st.markdown("---")
-            st.markdown("### 📧 Email Notifications")
+            emails_sent = send_completion_notifications(critical, student,
+                completed_by_staff or {}, reviewed_by_staff or {}, leader_staff or {})
             if emails_sent:
-                st.success(f"✅ Emails sent to: {', '.join(emails_sent)}")
+                st.success(f"📧 Emails sent to: {', '.join(emails_sent)}")
             else:
-                st.warning("⚠️ Email notifications not configured")
-                st.info("💡 To enable automatic emails, add SMTP settings to .streamlit/secrets.toml")
-            
-            email_content = generate_critical_incident_email_content(critical, student, include_audit)
-            
-            with st.expander("📋 View Email Content", expanded=False):
-                st.text_area("Email body (sent to all parties):", email_content, height=400, key="email_display")
-                st.markdown("**Recipients:**")
-                st.markdown(f"- Admin: clc.admin281@schools.sa.edu.au")
-                st.markdown(f"- Completing Staff: {critical.get('completed_by_name', 'N/A')}")
-                st.markdown(f"- Reviewing Staff: {critical.get('reviewed_by_name', 'N/A')}")
-                st.markdown(f"- Leader: {current_user_name}")
-            
+                st.info("📧 Email notifications not configured")
             st.balloons()
-            
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("📊 View Student Analysis", use_container_width=True, key="goto_analysis"):
@@ -2474,42 +2027,33 @@ def render_leader_approve_critical_page():
         else:
             st.error("❌ Failed to save approval to database")
 
+
 def render_student_analysis_page():
     student_id = st.session_state.get("selected_student_id")
     student = get_student(student_id)
     if not student:
-        st.error("No student selected")
-        return
-    
+        st.error("No student selected"); return
+
     st.markdown(f"## 📊 Comprehensive Behaviour Analysis — {student['name']}")
     st.caption("Evidence-based analysis prepared by Learning and Behaviour Unit")
-    st.caption("Using ABA, Trauma-Informed Practice, Berry Street Education Model, and CPI principles")
-    
+
     if student.get('placement_start'):
         try:
             start_dt = datetime.fromisoformat(student['placement_start'])
-            if student.get('placement_end'):
-                end_dt = datetime.fromisoformat(student['placement_end'])
-                status_txt = "Completed"
-            else:
-                end_dt = datetime.utcnow()
-                status_txt = "Ongoing"
+            end_dt = datetime.fromisoformat(student['placement_end']) if student.get('placement_end') else datetime.utcnow()
             days_enrolled = (end_dt.date() - start_dt.date()).days
             st.markdown("---")
             pcol1, pcol2, pcol3 = st.columns(3)
-            with pcol1:
-                st.metric("Placement Start", start_dt.strftime('%d/%m/%Y'))
+            with pcol1: st.metric("Placement Start", start_dt.strftime('%d/%m/%Y'))
             with pcol2:
                 if student.get('placement_end'):
                     st.metric("Placement End", datetime.fromisoformat(student['placement_end']).strftime('%d/%m/%Y'))
                 else:
-                    st.metric("Status", status_txt)
-            with pcol3:
-                st.metric("Days Enrolled", days_enrolled)
+                    st.metric("Status", "Ongoing")
+            with pcol3: st.metric("Days Enrolled", days_enrolled)
             st.markdown("---")
-        except:
-            pass
-    
+        except: pass
+
     col1, col2 = st.columns([3, 1])
     with col1:
         if st.button("⬅ Back to Students", key="back_analysis_top"):
@@ -2517,57 +2061,50 @@ def render_student_analysis_page():
     with col2:
         if st.button("🏠 Program Landing", key="home_analysis"):
             go_to("landing")
-    
+
     quick = [i for i in st.session_state.incidents if i["student_id"] == student_id]
     crit = [c for c in st.session_state.critical_incidents if c["student_id"] == student_id]
-    
+
     if not quick and not crit:
         st.info("No incident data available yet.")
         if st.button("↩️ Back", key="back_no_data"):
             go_to("program_students", selected_program=student["program"])
         return
-    
+
     quick_df = pd.DataFrame(quick) if quick else pd.DataFrame()
     crit_df = pd.DataFrame(crit) if crit else pd.DataFrame()
-    
+
     if not quick_df.empty:
         quick_df["incident_type"] = "Quick"
         quick_df["date_parsed"] = pd.to_datetime(quick_df["date"], utc=True).dt.tz_localize(None)
         if "intervention" in quick_df.columns:
             quick_df["intervention_str"] = quick_df["intervention"].apply(lambda x: ", ".join(x) if isinstance(x, list) else str(x))
-    
+
     if not crit_df.empty:
         crit_df["incident_type"] = "Critical"
         crit_df["date_parsed"] = pd.to_datetime(crit_df.get("created_at", datetime.now().isoformat()), utc=True).dt.tz_localize(None)
         crit_df["severity"] = 5
         crit_df["antecedent"] = crit_df["ABCH_primary"].apply(lambda d: d.get("context","") if isinstance(d, dict) else "")
         crit_df["behaviour_type"] = crit_df["ABCH_primary"].apply(lambda d: d.get("behaviour","") if isinstance(d, dict) else "")
-        # Pull primary_time into a top-level time column so hour extraction works
-        crit_df["time"] = crit_df["ABCH_primary"].apply(
-            lambda d: d.get("time", "09:00:00") if isinstance(d, dict) else "09:00:00"
-        )
-        # Ensure required columns exist so concat never raises KeyError
+        crit_df["time"] = crit_df["ABCH_primary"].apply(lambda d: d.get("time", "09:00:00") if isinstance(d, dict) else "09:00:00")
         for _col in ["location", "session"]:
             if _col not in crit_df.columns:
-                crit_df[_col] = crit_df["ABCH_primary"].apply(
-                    lambda d: d.get(_col, "") if isinstance(d, dict) else ""
-                )
+                crit_df[_col] = crit_df["ABCH_primary"].apply(lambda d: d.get(_col, "") if isinstance(d, dict) else "")
 
     full_df = pd.concat([quick_df, crit_df], ignore_index=True).sort_values("date_parsed")
-    # Guarantee time column always exists before hour extraction
     if "time" not in full_df.columns:
         full_df["time"] = "09:00:00"
     else:
         full_df["time"] = full_df["time"].fillna("09:00:00")
     full_df["hour"] = pd.to_datetime(full_df["time"], format="%H:%M:%S", errors="coerce").dt.hour.fillna(9).astype(int)
     full_df["day_of_week"] = full_df["date_parsed"].dt.day_name()
-    # Guarantee session column always exists
     if "session" not in full_df.columns:
         full_df["session"] = full_df["hour"].apply(lambda h: "Morning" if h < 11 else "Middle" if h < 13 else "Afternoon")
 
     quick_only_df = full_df[full_df['incident_type'] == 'Quick'].copy() if 'Quick' in full_df['incident_type'].values else pd.DataFrame()
     crit_only_df = full_df[full_df['incident_type'] == 'Critical'].copy() if 'Critical' in full_df['incident_type'].values else pd.DataFrame()
-    
+
+    # ── Executive Summary ──────────────────────────────────────────────────
     st.markdown("### 📈 Executive Summary")
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1: st.metric("Total", len(full_df))
@@ -2576,85 +2113,54 @@ def render_student_analysis_page():
     with col4:
         days = max((full_df["date_parsed"].max() - full_df["date_parsed"].min()).days, 1)
         st.metric("Days Span", days)
-    with col5:
-        st.metric("Per Day", f"{len(full_df) / days:.1f}")
-    
+    with col5: st.metric("Per Day", f"{len(full_df) / days:.1f}")
     st.markdown("---")
-    
-    st.markdown("### 📅 Daily Incident Frequency - Regular vs Critical")
-    st.caption("Understanding the relationship between regular incidents and critical escalations")
-    
+
+    # ── Chart 1: Daily Frequency ───────────────────────────────────────────
+    st.markdown("### 📅 Daily Incident Frequency")
     fig1 = go.Figure()
-    
     if not quick_only_df.empty:
         daily_quick = quick_only_df.groupby(quick_only_df["date_parsed"].dt.date).size().reset_index(name="count")
-        fig1.add_trace(go.Bar(
-            x=daily_quick["date_parsed"], y=daily_quick["count"],
-            name='Regular Incidents',
+        fig1.add_trace(go.Bar(x=daily_quick["date_parsed"], y=daily_quick["count"], name='Regular',
             marker=dict(color='#3b82f6', line=dict(color='white', width=1)),
             text=daily_quick["count"], textposition='inside',
             textfont=dict(color='white', size=11, family='Arial Black'),
-            hovertemplate='<b>Date:</b> %{x}<br><b>Regular:</b> %{y}<extra></extra>'
-        ))
-    
+            hovertemplate='<b>Date:</b> %{x|%a %d/%m}<br><b>Regular:</b> %{y}<extra></extra>'))
     if not crit_only_df.empty:
         daily_crit = crit_only_df.groupby(crit_only_df["date_parsed"].dt.date).size().reset_index(name="count")
-        fig1.add_trace(go.Bar(
-            x=daily_crit["date_parsed"], y=daily_crit["count"],
-            name='Critical Incidents',
+        fig1.add_trace(go.Bar(x=daily_crit["date_parsed"], y=daily_crit["count"], name='Critical',
             marker=dict(color='#ef4444', line=dict(color='white', width=1)),
             text=daily_crit["count"], textposition='inside',
             textfont=dict(color='white', size=11, family='Arial Black'),
-            hovertemplate='<b>Date:</b> %{x}<br><b>Critical:</b> %{y}<extra></extra>'
-        ))
-    
-    fig1.update_layout(
-        height=350, barmode='stack',
+            hovertemplate='<b>Date:</b> %{x|%a %d/%m}<br><b>Critical:</b> %{y}<extra></extra>'))
+    fig1.update_layout(height=350, barmode='stack',
         xaxis_title="<b>Date</b>", yaxis_title="<b>Incident Count</b>",
         plot_bgcolor='#f8fafc', paper_bgcolor='white',
         font=dict(color='#0f172a', size=12, family='Arial'),
-        yaxis=dict(tickmode='linear', tick0=0, dtick=1, gridcolor='#e2e8f0', gridwidth=1, showline=True, linewidth=2, linecolor='#cbd5e1'),
-        xaxis=dict(showline=True, linewidth=2, linecolor='#cbd5e1', gridcolor='#e2e8f0'),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, bgcolor='rgba(255,255,255,0.8)', bordercolor='#cbd5e1', borderwidth=1),
-        hovermode='x unified'
-    )
+        yaxis=dict(tickmode='linear', tick0=0, dtick=1, gridcolor='#e2e8f0', showline=True, linewidth=2, linecolor='#cbd5e1'),
+        xaxis=dict(showline=True, linewidth=2, linecolor='#cbd5e1', gridcolor='#e2e8f0', tickformat='%a\n%d/%m'),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        hovermode='x unified')
     st.plotly_chart(fig1, use_container_width=True)
-    
     if not quick_only_df.empty and not crit_only_df.empty:
         escalation_rate = (len(crit_only_df) / len(quick_only_df)) * 100 if len(quick_only_df) > 0 else 0
         col1, col2, col3 = st.columns(3)
         with col1: st.metric("Regular Incidents", len(quick_only_df))
         with col2: st.metric("Critical Incidents", len(crit_only_df))
         with col3: st.metric("Escalation Rate", f"{escalation_rate:.1f}%")
-    
-    with st.expander("💡 Clinical Interpretation (Berry Street Body Domain)"):
-        st.markdown(
-            "**Pattern Recognition:** Days with multiple regular incidents may predict critical escalation. "
-            "When you see clustering of regular incidents, it indicates the student's nervous system is already dysregulated.\n\n"
-            "**Berry Street Body:** On high-frequency days, increase proactive regulation - breathing exercises, "
-            "movement breaks, sensory activities. The goal is to widen the Window of Tolerance before it narrows further.\n\n"
-            "**Prevention Strategy:** If you see 2+ regular incidents in one day, immediately implement intensive Body domain supports "
-            "to prevent critical escalation."
-        )
     st.markdown("---")
-    
-    st.markdown("### 🎯 Behaviour Types - Regular vs Critical")
-    
+
+    # ── Chart 2: Behaviour Types ───────────────────────────────────────────
+    st.markdown("### 🎯 Behaviour Types")
     all_behaviours = full_df["behaviour_type"].value_counts().head(6).index.tolist()
-    quick_beh_counts = []
-    crit_beh_counts = []
-    for beh in all_behaviours:
-        quick_beh_counts.append(len(quick_only_df[quick_only_df["behaviour_type"] == beh]) if not quick_only_df.empty else 0)
-        crit_beh_counts.append(len(crit_only_df[crit_only_df["behaviour_type"] == beh]) if not crit_only_df.empty else 0)
-    
+    quick_beh_counts = [len(quick_only_df[quick_only_df["behaviour_type"] == b]) if not quick_only_df.empty else 0 for b in all_behaviours]
+    crit_beh_counts  = [len(crit_only_df[crit_only_df["behaviour_type"] == b]) if not crit_only_df.empty else 0 for b in all_behaviours]
     fig2 = go.Figure()
     fig2.add_trace(go.Bar(y=all_behaviours, x=quick_beh_counts, name='Regular', orientation='h',
-        marker=dict(color='#3b82f6', line=dict(color='white', width=1)),
-        text=quick_beh_counts, textposition='inside',
+        marker=dict(color='#3b82f6'), text=quick_beh_counts, textposition='inside',
         textfont=dict(color='white', size=11, family='Arial Black')))
     fig2.add_trace(go.Bar(y=all_behaviours, x=crit_beh_counts, name='Critical', orientation='h',
-        marker=dict(color='#ef4444', line=dict(color='white', width=1)),
-        text=crit_beh_counts, textposition='inside',
+        marker=dict(color='#ef4444'), text=crit_beh_counts, textposition='inside',
         textfont=dict(color='white', size=11, family='Arial Black')))
     fig2.update_layout(height=350, barmode='stack', xaxis_title="<b>Incident Count</b>",
         plot_bgcolor='#f8fafc', paper_bgcolor='white', font=dict(color='#0f172a', size=12, family='Arial'),
@@ -2662,34 +2168,26 @@ def render_student_analysis_page():
         yaxis=dict(showline=True, linewidth=2, linecolor='#cbd5e1'),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     st.plotly_chart(fig2, use_container_width=True)
-    
     st.markdown("**Escalation Risk by Behaviour:**")
     for i, beh in enumerate(all_behaviours):
         total = quick_beh_counts[i] + crit_beh_counts[i]
         if total > 0:
             risk_pct = (crit_beh_counts[i] / total) * 100
-            risk_level = "🔴 High Risk" if risk_pct > 50 else "🟡 Medium Risk" if risk_pct > 25 else "🟢 Low Risk"
-            st.markdown(f"• **{beh}**: {risk_pct:.0f}% escalate to critical - {risk_level}")
-    
+            risk_level_beh = "🔴 High Risk" if risk_pct > 50 else "🟡 Medium Risk" if risk_pct > 25 else "🟢 Low Risk"
+            st.markdown(f"• **{beh}**: {risk_pct:.0f}% escalate to critical — {risk_level_beh}")
     st.markdown("---")
-    
-    st.markdown("### 🔍 Trigger Analysis - What Leads to Critical Escalation?")
-    
+
+    # ── Chart 3: Triggers ─────────────────────────────────────────────────
+    st.markdown("### 🔍 Trigger Analysis")
     all_triggers = full_df["antecedent"].value_counts().head(6).index.tolist()
-    quick_ant_counts = []
-    crit_ant_counts = []
-    for ant in all_triggers:
-        quick_ant_counts.append(len(quick_only_df[quick_only_df["antecedent"] == ant]) if not quick_only_df.empty else 0)
-        crit_ant_counts.append(len(crit_only_df[crit_only_df["antecedent"] == ant]) if not crit_only_df.empty else 0)
-    
+    quick_ant_counts = [len(quick_only_df[quick_only_df["antecedent"] == a]) if not quick_only_df.empty else 0 for a in all_triggers]
+    crit_ant_counts  = [len(crit_only_df[crit_only_df["antecedent"] == a]) if not crit_only_df.empty else 0 for a in all_triggers]
     fig3 = go.Figure()
     fig3.add_trace(go.Bar(y=all_triggers, x=quick_ant_counts, name='Regular', orientation='h',
-        marker=dict(color='#3b82f6', line=dict(color='white', width=1)),
-        text=quick_ant_counts, textposition='inside',
+        marker=dict(color='#3b82f6'), text=quick_ant_counts, textposition='inside',
         textfont=dict(color='white', size=11, family='Arial Black')))
     fig3.add_trace(go.Bar(y=all_triggers, x=crit_ant_counts, name='Critical', orientation='h',
-        marker=dict(color='#ef4444', line=dict(color='white', width=1)),
-        text=crit_ant_counts, textposition='inside',
+        marker=dict(color='#ef4444'), text=crit_ant_counts, textposition='inside',
         textfont=dict(color='white', size=11, family='Arial Black')))
     fig3.update_layout(height=350, barmode='stack', xaxis_title="<b>Incident Count</b>",
         plot_bgcolor='#f8fafc', paper_bgcolor='white', font=dict(color='#0f172a', size=12, family='Arial'),
@@ -2697,7 +2195,6 @@ def render_student_analysis_page():
         yaxis=dict(showline=True, linewidth=2, linecolor='#cbd5e1'),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     st.plotly_chart(fig3, use_container_width=True)
-    
     st.markdown("**Critical Escalation Risk by Trigger:**")
     for i, ant in enumerate(all_triggers):
         total = quick_ant_counts[i] + crit_ant_counts[i]
@@ -2705,50 +2202,48 @@ def render_student_analysis_page():
             risk_pct = (crit_ant_counts[i] / total) * 100
             color = "🔴" if risk_pct > 60 else "🟡" if risk_pct > 30 else "🟢"
             st.markdown(f"{color} **{ant}**: {risk_pct:.0f}% lead to critical incidents ({crit_ant_counts[i]}/{total})")
-    
     st.markdown("---")
-    
-    st.markdown("### 📊 Severity Trajectory - Window of Tolerance Analysis")
-    
+
+    # ── Chart 4: Severity Trajectory ─────────────────────────────────────
+    st.markdown("### 📊 Severity Trajectory — Window of Tolerance Analysis")
     fig4 = go.Figure()
     fig4.add_hrect(y0=0, y1=2.5, fillcolor="#d1fae5", opacity=0.2,
-                   annotation_text="Within Window (Regulation)", annotation_position="top left", line_width=0)
+                   annotation_text="Within Window (Levels 1–2 — regulated)", annotation_position="top left", line_width=0)
     fig4.add_hrect(y0=2.5, y1=3.5, fillcolor="#fef3c7", opacity=0.2,
-                   annotation_text="Edge of Window", annotation_position="top left", line_width=0)
+                   annotation_text="Edge of Window (Level 3)", annotation_position="top left", line_width=0)
     fig4.add_hrect(y0=3.5, y1=5.5, fillcolor="#fee2e2", opacity=0.2,
-                   annotation_text="Outside Window (Crisis)", annotation_position="top left", line_width=0)
-    
-    if not quick_only_df.empty:
-        fig4.add_trace(go.Scatter(
-            x=quick_only_df["date_parsed"], y=quick_only_df["severity"],
-            mode='markers', name='Regular',
-            marker=dict(size=12, color='#3b82f6', opacity=0.7, line=dict(color='white', width=1.5))))
-    if not crit_only_df.empty:
-        fig4.add_trace(go.Scatter(
-            x=crit_only_df["date_parsed"], y=crit_only_df["severity"],
-            mode='markers', name='Critical',
-            marker=dict(size=15, color='#ef4444', opacity=0.8, symbol='diamond', line=dict(color='white', width=2))))
-    
+                   annotation_text="Outside Window (Levels 4–5 — crisis)", annotation_position="top left", line_width=0)
+    sev_colours = {1: '#10b981', 2: '#3b82f6', 3: '#f59e0b', 4: '#ef4444', 5: '#7f1d1d'}
+    for sev_level in [1, 2, 3, 4, 5]:
+        sev_data = full_df[full_df['severity'] == sev_level]
+        if len(sev_data) > 0:
+            fig4.add_trace(go.Scatter(x=sev_data["date_parsed"], y=sev_data["severity"],
+                mode='markers', name=f'Level {sev_level}',
+                marker=dict(size=12, color=sev_colours[sev_level], opacity=0.7,
+                            line=dict(color='white', width=1.5)),
+                hovertemplate='<b>%{x|%a %d/%m}</b><br>Severity: %{y}<extra></extra>'))
     if len(full_df) >= 3:
         z = np.polyfit(range(len(full_df)), full_df["severity"], 1)
         p = np.poly1d(z)
         trend_color = '#22c55e' if z[0] < 0 else '#ef4444'
-        fig4.add_trace(go.Scatter(
-            x=full_df["date_parsed"], y=p(range(len(full_df))),
+        fig4.add_trace(go.Scatter(x=full_df["date_parsed"], y=p(range(len(full_df))),
             mode='lines', name='Trend',
             line=dict(color=trend_color, width=3, dash='dash')))
-    
     fig4.update_layout(
-        height=400, xaxis_title="<b>Date</b>", yaxis_title="<b>Severity Level</b>",
-        yaxis=dict(range=[0, 5.5], tickmode='linear', tick0=0, dtick=1, gridcolor='#e2e8f0', showline=True, linewidth=2, linecolor='#cbd5e1'),
-        xaxis=dict(showline=True, linewidth=2, linecolor='#cbd5e1', gridcolor='#e2e8f0'),
+        height=420, xaxis_title="<b>Date</b>", yaxis_title="<b>Severity Level</b>",
+        yaxis=dict(
+            range=[0, 5.5], tickmode='array',
+            tickvals=[1, 2, 3, 4, 5],
+            ticktext=['Level 1<br>(Minor)', 'Level 2<br>(Low)', 'Level 3<br>(Moderate)',
+                      'Level 4<br>(Serious)', 'Level 5<br>(Critical)'],
+            gridcolor='#e2e8f0', showline=True, linewidth=2, linecolor='#cbd5e1'
+        ),
+        xaxis=dict(showline=True, linewidth=2, linecolor='#cbd5e1', gridcolor='#e2e8f0', tickformat='%a %d/%m'),
         plot_bgcolor='white', paper_bgcolor='white',
         font=dict(color='#0f172a', size=12, family='Arial'),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        hovermode='closest'
-    )
+        hovermode='closest')
     st.plotly_chart(fig4, use_container_width=True)
-    
     if len(full_df) >= 5:
         recent_avg = full_df.tail(5)["severity"].mean()
         early_avg = full_df.head(5)["severity"].mean()
@@ -2758,14 +2253,13 @@ def render_student_analysis_page():
         with col1: st.metric("Early Average", f"{early_avg:.1f}")
         with col2: st.metric("Recent Average", f"{recent_avg:.1f}")
         with col3: st.metric("Trend", f"{trend_emoji} {trend_dir.title()}")
-    
     st.markdown("---")
-    
+
+    # ── Chart 5: Location Hotspots ─────────────────────────────────────────
     st.markdown("### 📍 Location Hotspots")
     all_locations = full_df["location"].value_counts().head(6).index.tolist()
     quick_loc_counts = [len(quick_only_df[quick_only_df["location"] == loc]) if not quick_only_df.empty else 0 for loc in all_locations]
-    crit_loc_counts = [len(crit_only_df[crit_only_df["location"] == loc]) if not crit_only_df.empty else 0 for loc in all_locations]
-    
+    crit_loc_counts  = [len(crit_only_df[crit_only_df["location"] == loc]) if not crit_only_df.empty else 0 for loc in all_locations]
     fig5 = go.Figure()
     fig5.add_trace(go.Bar(y=all_locations, x=quick_loc_counts, name='Regular', orientation='h',
         marker=dict(color='#3b82f6'), text=quick_loc_counts, textposition='inside',
@@ -2779,30 +2273,37 @@ def render_student_analysis_page():
         yaxis=dict(showline=True, linewidth=2, linecolor='#cbd5e1'),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     st.plotly_chart(fig5, use_container_width=True)
-    
     st.markdown("---")
-    
+
+    # ── Chart 6: Time of Day — with real time labels ────────────────────────
     st.markdown("### ⏰ Time of Day Patterns")
+    SESSION_DISPLAY = {
+        'Morning':   'Morning<br>(9:00am – 11:00am)',
+        'Middle':    'Middle<br>(11:00am – 1:00pm)',
+        'Afternoon': 'Afternoon<br>(1:00pm – 3:00pm)',
+    }
     session_order = ['Morning', 'Middle', 'Afternoon']
     quick_session_counts = [len(quick_only_df[quick_only_df["session"] == s]) if not quick_only_df.empty and 'session' in quick_only_df.columns else 0 for s in session_order]
-    crit_session_counts = [len(crit_only_df[crit_only_df["session"] == s]) if not crit_only_df.empty and 'session' in crit_only_df.columns else 0 for s in session_order]
-    
+    crit_session_counts  = [len(crit_only_df[crit_only_df["session"] == s]) if not crit_only_df.empty and 'session' in crit_only_df.columns else 0 for s in session_order]
+    display_labels = [SESSION_DISPLAY[s] for s in session_order]
     fig6 = go.Figure()
-    fig6.add_trace(go.Bar(x=session_order, y=quick_session_counts, name='Regular',
+    fig6.add_trace(go.Bar(x=display_labels, y=quick_session_counts, name='Regular',
         marker=dict(color='#3b82f6'), text=quick_session_counts, textposition='inside',
         textfont=dict(color='white', size=12, family='Arial Black')))
-    fig6.add_trace(go.Bar(x=session_order, y=crit_session_counts, name='Critical',
+    fig6.add_trace(go.Bar(x=display_labels, y=crit_session_counts, name='Critical',
         marker=dict(color='#ef4444'), text=crit_session_counts, textposition='inside',
         textfont=dict(color='white', size=12, family='Arial Black')))
-    fig6.update_layout(height=350, barmode='stack', xaxis_title="<b>Time of Day</b>", yaxis_title="<b>Incident Count</b>",
-        plot_bgcolor='#f8fafc', paper_bgcolor='white', font=dict(color='#0f172a', size=12, family='Arial'),
+    fig6.update_layout(height=380, barmode='stack',
+        xaxis_title="<b>Time of Day</b>", yaxis_title="<b>Number of incidents</b>",
+        plot_bgcolor='#f8fafc', paper_bgcolor='white',
+        font=dict(color='#0f172a', size=12, family='Arial'),
         yaxis=dict(tickmode='linear', tick0=0, dtick=1, gridcolor='#e2e8f0', showline=True, linewidth=2, linecolor='#cbd5e1'),
-        xaxis=dict(showline=True, linewidth=2, linecolor='#cbd5e1'),
+        xaxis=dict(showline=True, linewidth=2, linecolor='#cbd5e1', tickfont=dict(size=11)),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     st.plotly_chart(fig6, use_container_width=True)
-    
     st.markdown("---")
-    
+
+    # ── Chart 7: Day of Week ───────────────────────────────────────────────
     st.markdown("### 📆 Day of Week Patterns")
     day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     day_counts = full_df["day_of_week"].value_counts().reindex(day_order, fill_value=0)
@@ -2812,16 +2313,16 @@ def render_student_analysis_page():
     fig7.update_layout(height=280, showlegend=False, yaxis_title="Total",
         plot_bgcolor='white', paper_bgcolor='white', font=dict(color='#334155', size=11))
     st.plotly_chart(fig7, use_container_width=True)
-    
     st.markdown("---")
-    
-    st.markdown("### 🧠 Clinical Summary")
-    
-    top_beh = full_df["behaviour_type"].mode()[0] if len(full_df) > 0 else "Unknown"
-    top_ant = full_df["antecedent"].mode()[0] if len(full_df) > 0 else "Unknown"
-    top_loc = full_df["location"].mode()[0] if len(full_df) > 0 else "Unknown"
+
+    # ── Summary (CHANGE 2: was "Clinical Summary") ─────────────────────────
+    st.markdown("### 🧠 Summary")
+
+    top_beh     = full_df["behaviour_type"].mode()[0] if len(full_df) > 0 else "Unknown"
+    top_ant     = full_df["antecedent"].mode()[0] if len(full_df) > 0 else "Unknown"
+    top_loc     = full_df["location"].mode()[0] if len(full_df) > 0 else "Unknown"
     top_session = full_df["session"].mode()[0] if len(full_df) > 0 else "Unknown"
-    
+
     recent = full_df.tail(7)
     risk_score = min(100, int(
         (len(recent) / 7 * 10) +
@@ -2829,51 +2330,87 @@ def render_student_analysis_page():
         (len(full_df[full_df["incident_type"] == "Critical"]) / len(full_df) * 50)
     ))
     risk_level = "LOW" if risk_score < 30 else "MODERATE" if risk_score < 60 else "HIGH"
-    
+
     st.info(f"""
-    **Key Patterns Identified:**
-    - Primary behaviour: **{top_beh}**
-    - Main trigger: **{top_ant}**
-    - Hotspot location: **{top_loc}**
-    - Peak time: **{top_session}**
-    - Risk Level: **{risk_level}** ({risk_score}/100)
-    
-    **Berry Street Focus:** Body (regulation) and Relationship (connection) domains are foundation.
+**Key Patterns Identified:**
+- Primary behaviour: **{top_beh}**
+- Main trigger: **{top_ant}**
+- Hotspot location: **{top_loc}**
+- Peak time: **{top_session}**
+- Risk Level: **{risk_level}** ({risk_score}/100)
+
+**Berry Street Focus:** Body (regulation) and Relationship (connection) domains are foundation.
     """)
-    
+
     st.success(f"""
-    **Evidence-Based Recommendations:**
-    
-    **1. Body Domain:** Regulated start before {top_session}, breathing exercises, movement breaks
-    **2. Relationship Domain:** Key adult check-in, acknowledgment of feelings, co-regulation
-    **3. Stamina Domain:** Teach help-seeking, practice requesting breaks
-    **4. SMART Goal:** Over 5 weeks, use help-seeking strategy in 4/5 opportunities
+**Evidence-Based Recommendations:**
+
+**1. Body Domain:** Regulated start before {top_session}, breathing exercises, movement breaks
+**2. Relationship Domain:** Key adult check-in, acknowledgment of feelings, co-regulation
+**3. Stamina Domain:** Teach help-seeking, practice requesting breaks
+**4. SMART Goal:** Over 5 weeks, use help-seeking strategy in 4/5 opportunities
     """)
-    
+
+    # ── CHANGE 4: Delete Incident ──────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 🗑️ Delete an Incident")
+    st.caption("Use this to remove an incorrectly logged or duplicate incident from this student's record.")
+
+    all_incidents_for_student = [i for i in st.session_state.incidents if i["student_id"] == student_id]
+
+    if not all_incidents_for_student:
+        st.info("No regular incidents to delete.")
+    else:
+        delete_options = {
+            f"{i['date']}  {i.get('time','')[:5]}  |  {i.get('behaviour_type','—')}  |  "
+            f"Severity {i.get('severity','?')}  |  {i.get('location','—')}": i['id']
+            for i in sorted(all_incidents_for_student, key=lambda x: x['date'], reverse=True)
+        }
+        selected_label = st.selectbox("Select incident to delete", list(delete_options.keys()), key="delete_incident_select")
+        selected_id = delete_options[selected_label]
+        confirm_key = f"confirm_del_inc_{selected_id}"
+        if st.session_state.get(confirm_key):
+            st.warning(f"⚠️ Permanently delete this incident?\n\n**{selected_label}**\n\nThis cannot be undone.")
+            col_yes, col_no = st.columns(2)
+            with col_yes:
+                if st.button("✅ Yes, delete this incident", type="primary", key=f"yes_del_{selected_id}"):
+                    if supabase:
+                        try:
+                            supabase.table('incidents').delete().eq('id', selected_id).execute()
+                        except Exception as e:
+                            st.error(f"Delete failed: {e}")
+                    st.session_state.incidents = [i for i in st.session_state.incidents if i['id'] != selected_id]
+                    st.session_state[confirm_key] = False
+                    st.success("✅ Incident deleted successfully.")
+                    st.rerun()
+            with col_no:
+                if st.button("❌ Cancel", key=f"no_del_{selected_id}"):
+                    st.session_state[confirm_key] = False
+                    st.rerun()
+        else:
+            if st.button("🗑️ Delete selected incident", key="del_inc_btn"):
+                st.session_state[confirm_key] = True
+                st.rerun()
+
+    # ── Export ─────────────────────────────────────────────────────────────
     st.markdown("---")
     st.markdown("### 📄 Export Data & Reports")
-    
     col1, col2 = st.columns(2)
     with col1:
         csv = full_df.to_csv(index=False)
-        st.download_button(
-            "📥 Download Raw Data (CSV)", csv,
+        st.download_button("📥 Download Raw Data (CSV)", csv,
             file_name=f"{student['name'].replace(' ', '_')}_Incident_Data_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv", use_container_width=True
-        )
+            mime="text/csv", use_container_width=True)
     with col2:
         with st.spinner("Generating Behaviour Analysis Plan..."):
             docx_file = generate_behaviour_analysis_plan_docx(
-                student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level
-            )
+                student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level)
         if docx_file:
-            st.download_button(
-                "📄 Behaviour Analysis Plan (Word)", docx_file,
+            st.download_button("📄 Behaviour Analysis Plan (Word)", docx_file,
                 file_name=f"BAP_{student['name'].replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True
-            )
-    
+                use_container_width=True)
+
     st.markdown("---")
     col1, col2 = st.columns(2)
     with col1:
@@ -2888,11 +2425,8 @@ def render_student_dashboard():
     student_id = st.session_state.get("selected_student_id")
     student = get_student(student_id)
     if not student:
-        st.error("No student selected")
-        return
-    
+        st.error("No student selected"); return
     st.markdown(f"## 📊 Dashboard — {student['name']}")
-    
     col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
         if st.button("⬅ Back to Students", key="back_dash"):
@@ -2903,27 +2437,20 @@ def render_student_dashboard():
     with col3:
         if st.button("📈 Full Analysis", key="analysis_dash"):
             go_to("student_analysis", selected_student_id=student_id)
-    
     st.markdown("---")
-    
     incidents = [i for i in st.session_state.incidents if i["student_id"] == student_id]
     critical = [c for c in st.session_state.critical_incidents if c["student_id"] == student_id]
-    
     if not incidents and not critical:
         st.info("📋 No incident data yet. Click 'Log Incident' to start tracking.")
-    
     quick_df = pd.DataFrame(incidents) if incidents else pd.DataFrame()
     crit_df = pd.DataFrame(critical) if critical else pd.DataFrame()
-    
     if not quick_df.empty:
         quick_df["incident_type"] = "Quick"
         quick_df["date_parsed"] = pd.to_datetime(quick_df["date"], utc=True).dt.tz_localize(None)
-    
     if not crit_df.empty:
         crit_df["incident_type"] = "Critical"
         crit_df["date_parsed"] = pd.to_datetime(crit_df.get("created_at", datetime.now().isoformat()), utc=True).dt.tz_localize(None)
         crit_df["severity"] = 5
-        # Ensure columns present so concat never raises KeyError
         crit_df["time"] = crit_df["ABCH_primary"].apply(
             lambda d: d.get("time", "09:00:00") if isinstance(d, dict) else "09:00:00"
         ) if "ABCH_primary" in crit_df.columns else "09:00:00"
@@ -2932,29 +2459,19 @@ def render_student_dashboard():
                 crit_df[_col] = crit_df["ABCH_primary"].apply(
                     lambda d: d.get(_col, "") if isinstance(d, dict) else ""
                 ) if "ABCH_primary" in crit_df.columns else ""
-
     full_df = pd.concat([quick_df, crit_df], ignore_index=True).sort_values("date_parsed") if not quick_df.empty or not crit_df.empty else pd.DataFrame()
-
     total_incidents = len(full_df)
     critical_count = len(full_df[full_df.get("incident_type", pd.Series(dtype=str)) == "Critical"]) if "incident_type" in full_df.columns else len(crit_df)
     avg_severity = full_df["severity"].mean() if "severity" in full_df.columns else 0
-    
     week_ago = datetime.utcnow() - timedelta(days=7)
     recent_incidents = len(full_df[full_df["date_parsed"] >= week_ago]) if not full_df.empty else 0
-    
-    risk_score = min(100, int(
-        (recent_incidents / 7 * 15) +
-        (avg_severity * 10) +
-        (critical_count / max(total_incidents, 1) * 40)
-    ))
-    
+    risk_score = min(100, int((recent_incidents / 7 * 15) + (avg_severity * 10) + (critical_count / max(total_incidents, 1) * 40)))
     if risk_score < 30:
         risk_level = "LOW"; risk_color = "#10b981"; risk_emoji = "🟢"
     elif risk_score < 60:
         risk_level = "MODERATE"; risk_color = "#f59e0b"; risk_emoji = "🟡"
     else:
         risk_level = "HIGH"; risk_color = "#ef4444"; risk_emoji = "🔴"
-    
     st.markdown("### 📈 Key Metrics")
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1: st.metric("Total Incidents", total_incidents)
@@ -2962,17 +2479,15 @@ def render_student_dashboard():
     with col3: st.metric("Avg Severity", f"{avg_severity:.1f}/5")
     with col4: st.metric("Last 7 Days", recent_incidents)
     with col5:
-        st.markdown(f"<div style='text-align: center; padding: 1rem; background: white; border-radius: 8px; border: 2px solid {risk_color};'>"
-                   f"<div style='font-size: 2rem;'>{risk_emoji}</div>"
-                   f"<div style='font-size: 0.875rem; color: #64748b; font-weight: 600;'>RISK LEVEL</div>"
-                   f"<div style='font-size: 1.5rem; font-weight: 700; color: {risk_color};'>{risk_level}</div>"
-                   f"<div style='font-size: 0.75rem; color: #64748b;'>{risk_score}/100</div>"
+        st.markdown(f"<div style='text-align:center;padding:1rem;background:white;border-radius:8px;border:2px solid {risk_color};'>"
+                   f"<div style='font-size:2rem;'>{risk_emoji}</div>"
+                   f"<div style='font-size:0.875rem;color:#64748b;font-weight:600;'>RISK LEVEL</div>"
+                   f"<div style='font-size:1.5rem;font-weight:700;color:{risk_color};'>{risk_level}</div>"
+                   f"<div style='font-size:0.75rem;color:#64748b;'>{risk_score}/100</div>"
                    f"</div>", unsafe_allow_html=True)
-    
     st.markdown("---")
     st.markdown("### 📊 Visual Summary")
     col1, col2 = st.columns(2)
-    
     with col1:
         st.markdown("#### Daily Trend (Last 30 Days)")
         if not full_df.empty:
@@ -2981,23 +2496,18 @@ def render_student_dashboard():
             daily = recent_df.groupby(recent_df["date_parsed"].dt.date).size().reset_index(name="count")
             fig = go.Figure()
             fig.add_trace(go.Bar(x=daily["date_parsed"], y=daily["count"], marker=dict(color='#334155')))
-            fig.update_layout(height=250, showlegend=False, plot_bgcolor='white', paper_bgcolor='white',
-                            margin=dict(l=20, r=20, t=20, b=20))
+            fig.update_layout(height=250, showlegend=False, plot_bgcolor='white', paper_bgcolor='white', margin=dict(l=20, r=20, t=20, b=20))
             st.plotly_chart(fig, use_container_width=True)
-    
     with col2:
         st.markdown("#### Top 5 Behaviours")
         if not full_df.empty and "behaviour_type" in full_df.columns:
             beh_counts = full_df["behaviour_type"].value_counts().head(5)
             fig = go.Figure()
             fig.add_trace(go.Bar(y=beh_counts.index, x=beh_counts.values, orientation='h', marker=dict(color='#475569')))
-            fig.update_layout(height=250, showlegend=False, plot_bgcolor='white', paper_bgcolor='white',
-                            margin=dict(l=20, r=20, t=20, b=20))
+            fig.update_layout(height=250, showlegend=False, plot_bgcolor='white', paper_bgcolor='white', margin=dict(l=20, r=20, t=20, b=20))
             st.plotly_chart(fig, use_container_width=True)
-    
     st.markdown("---")
     col1, col2 = st.columns(2)
-    
     with col1:
         st.markdown("### 🎯 Key Patterns")
         if not full_df.empty:
@@ -3006,7 +2516,6 @@ def render_student_dashboard():
             top_loc = full_df["location"].mode()[0] if "location" in full_df.columns else "Unknown"
             top_session = full_df["session"].mode()[0] if "session" in full_df.columns else "Unknown"
             st.markdown(f"- **Primary Behaviour:** {top_beh}\n- **Main Trigger:** {top_ant}\n- **Hotspot:** {top_loc}\n- **Peak Time:** {top_session}")
-    
     with col2:
         st.markdown("### 📋 Recent Activity")
         if not full_df.empty:
@@ -3016,17 +2525,14 @@ def render_student_dashboard():
                 sev = inc.get("severity", "?")
                 emoji = "🔴" if inc.get("incident_type") == "Critical" else "🟡" if sev >= 3 else "🟢"
                 st.markdown(f"{emoji} **{date_str}** - Sev {sev}")
-    
     st.markdown("---")
     st.markdown("### 💡 Quick Recommendations")
-    
     if risk_level == "HIGH":
         st.error("**⚠️ HIGH RISK**\n- Schedule urgent case review\n- Update safety plan\n- Daily check-ins")
     elif risk_level == "MODERATE":
         st.warning("**⚠️ MODERATE RISK**\n- Weekly review\n- Enhanced monitoring\n- Proactive strategies")
     else:
         st.success("**✅ LOW RISK**\n- Maintain supports\n- Continue monitoring\n- Celebrate progress")
-    
     st.markdown("---")
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -3039,18 +2545,13 @@ def render_student_dashboard():
         if st.button("⬅ Back", use_container_width=True, key="dash_back_btn"):
             go_to("program_students", selected_program=student["program"])
 
-    # ── Historical Incidents ──────────────────────────────────────────────────
+    # ── Historical AI Extraction ───────────────────────────────────────────
     st.markdown("---")
     st.markdown("### 📋 Historical Critical Incidents")
     st.caption("Paste the content of a Word document below. AI will extract the critical incident and structure it automatically.")
-
-    ai_notes = st.text_area(
-        "Paste Word document content here",
-        placeholder="Paste the full text of your ABCH Word document here. The AI will identify it as a single critical incident and extract the timeline, student details, outcomes and SAPOL reference automatically.",
-        height=300,
-        key="ai_hist_notes"
-    )
-
+    ai_notes = st.text_area("Paste Word document content here",
+        placeholder="Paste the full text of your ABCH Word document here...",
+        height=300, key="ai_hist_notes")
     if st.button("🤖 Extract Incident with AI", type="primary", key="ai_extract_btn", use_container_width=True):
         if not ai_notes.strip():
             st.warning("Please paste your document content first.")
@@ -3059,187 +2560,99 @@ def render_student_dashboard():
             if not GROQ_KEY:
                 st.error("Groq API key not configured.")
             else:
-                with st.spinner("AI is reading your document and extracting the critical incident..."):
+                with st.spinner("AI is reading your document..."):
                     try:
                         from groq import Groq as GroqClient
                         import json as _json
                         client = GroqClient(api_key=GROQ_KEY)
-
                         prompt = f"""You are a behaviour support data analyst for Cowandilla Learning Centre, Learning & Behaviour Unit.
-
 The following document describes ONE critical incident involving student: {student['name']}.
-It may contain a timeline with multiple entries (e.g. 9:45, 9:50, 10:00 etc.) — these are NOT separate incidents, they are continuation entries within the SAME single incident.
-
 Extract the incident as a single JSON object with this exact structure:
-{{
-  "date": "YYYY-MM-DD",
-  "severity": 3,
-  "sapol_reference": "reference number or null",
-  "outcomes": ["list", "of", "outcomes"],
-  "primary": {{
-    "time": "time of the HIGHEST RISK behaviour",
-    "location": "location of the HIGHEST RISK behaviour",
-    "context": "full antecedent context — what led to the highest risk behaviour, including any earlier triggering events such as peer conflict or verbal exchanges",
-    "behaviour": "the HIGHEST RISK behaviour only — prioritise: absconding/elopement > physical aggression > property destruction > verbal aggression. If SAPOL were called or the student left school grounds, that IS the primary behaviour.",
-    "consequence": "staff response and outcome for the highest risk behaviour"
-  }},
-  "additional_entries": [
-    {{
-      "time": "time",
-      "location": "location",
-      "context": "antecedent or what happened before",
-      "behaviour": "what the student did at this point in the timeline",
-      "consequence": "staff response or what happened after",
-      "hypothesis": ""
-    }}
-  ],
-  "notes": "any other relevant context, TAC meetings, DCP notifications etc"
-}}
-
-Rules:
-- "primary" must contain the HIGHEST RISK / MOST CLINICALLY SIGNIFICANT behaviour, NOT necessarily the first chronological entry
-- Priority order for primary behaviour: absconding/leaving grounds/SAPOL involvement > physical aggression > property destruction > verbal aggression/swearing
-- If the student left school grounds or emergency services were called, that must be the primary behaviour
-- Earlier lower-level behaviours (e.g. swearing at a peer) belong in "additional_entries" as context, OR included in the primary context field as the trigger
-- All OTHER timeline entries go into "additional_entries" as an array in chronological order
-- If there is only one timeline entry, "additional_entries" should be []
-- severity: 1=minor, 2=low, 3=moderate, 4=serious, 5=extreme/crisis — if SAPOL were called this is at least 4
-- Extract SAPOL reference number if present (look for police reference, SAPOL ref, incident number etc)
-- Extract outcomes/intended outcomes if listed
-- Return ONLY the JSON object, no other text, no markdown code fences
-
-Document content:
-{ai_notes}"""
-
+{{"date":"YYYY-MM-DD","severity":3,"sapol_reference":"reference number or null","outcomes":["list","of","outcomes"],"primary":{{"time":"time","location":"location","context":"antecedent context","behaviour":"primary behaviour","consequence":"staff response"}},"additional_entries":[{{"time":"time","location":"location","context":"antecedent","behaviour":"behaviour","consequence":"consequence","hypothesis":""}}],"notes":"any other relevant context"}}
+Rules: severity 1-5; if SAPOL called then at least 4. Return ONLY valid JSON, no markdown fences.
+Document: {ai_notes}"""
                         response = client.chat.completions.create(
                             model="llama-3.3-70b-versatile",
                             messages=[{"role": "user", "content": prompt}],
-                            max_tokens=3000,
-                            temperature=0.1,
-                        )
-                        raw = response.choices[0].message.content.strip()
-                        raw = raw.replace("```json", "").replace("```", "").strip()
+                            max_tokens=3000, temperature=0.1)
+                        raw = response.choices[0].message.content.strip().replace("```json","").replace("```","").strip()
                         extracted = _json.loads(raw)
-
-                        # Guard: if AI returned a list despite instructions, take first item
                         if isinstance(extracted, list):
                             extracted = extracted[0] if extracted else {}
-
-                        if not extracted:
-                            st.info("No incident data could be extracted. Check the document content and try again.")
-                        else:
+                        if extracted:
                             n_additional = len(extracted.get("additional_entries", []))
-                            st.success(f"✅ Critical incident extracted — {1 + n_additional} timeline entries found. Review and edit below before saving.")
+                            st.success(f"✅ Extracted — {1 + n_additional} timeline entries found.")
                             st.session_state["ai_extracted_incident"] = extracted
-
                     except Exception as e:
                         st.error(f"AI extraction failed: {e}")
 
-    # ── Review & Edit ─────────────────────────────────────────────────────────
     if st.session_state.get("ai_extracted_incident"):
         inc = st.session_state["ai_extracted_incident"]
-
         st.markdown("---")
         st.markdown("#### Review Extracted Incident")
-        st.caption("Check all fields before saving. This will be saved as a single critical incident in the student's record.")
-
-        # Top-level metadata
         meta_col1, meta_col2, meta_col3 = st.columns(3)
-        with meta_col1:
-            inc["date"] = st.text_input("Incident Date (YYYY-MM-DD)", value=inc.get("date", ""), key="ai_inc_date")
-        with meta_col2:
-            inc["severity"] = st.slider("Severity", 1, 5, int(inc.get("severity", 3)), key="ai_inc_sev")
-        with meta_col3:
-            inc["sapol_reference"] = st.text_input("SAPOL Reference (if any)", value=inc.get("sapol_reference") or "", key="ai_inc_sapol")
-
-        inc["outcomes"] = st.text_area(
-            "Outcomes / Intended Actions",
-            value=", ".join(inc.get("outcomes", [])) if isinstance(inc.get("outcomes"), list) else inc.get("outcomes", ""),
-            key="ai_inc_outcomes",
-            height=60
-        )
+        with meta_col1: inc["date"] = st.text_input("Incident Date (YYYY-MM-DD)", value=inc.get("date", ""), key="ai_inc_date")
+        with meta_col2: inc["severity"] = st.slider("Severity", 1, 5, int(inc.get("severity", 3)), key="ai_inc_sev")
+        with meta_col3: inc["sapol_reference"] = st.text_input("SAPOL Reference", value=inc.get("sapol_reference") or "", key="ai_inc_sapol")
+        inc["outcomes"] = st.text_area("Outcomes", value=", ".join(inc.get("outcomes", [])) if isinstance(inc.get("outcomes"), list) else inc.get("outcomes", ""), key="ai_inc_outcomes", height=60)
         inc["notes"] = st.text_area("Additional Notes", value=inc.get("notes", ""), key="ai_inc_notes", height=60)
-
-        # Primary ABCH entry
-        st.markdown("##### Initial Entry (Primary)")
+        st.markdown("##### Initial Entry")
         primary = inc.get("primary", {})
         p_col1, p_col2 = st.columns(2)
         with p_col1:
             primary["time"] = st.text_input("Time", value=primary.get("time", ""), key="ai_p_time")
             primary["location"] = st.text_input("Location", value=primary.get("location", ""), key="ai_p_loc")
-            primary["context"] = st.text_area("Antecedent / Context", value=primary.get("context", ""), key="ai_p_ctx", height=100)
+            primary["context"] = st.text_area("Antecedent", value=primary.get("context", ""), key="ai_p_ctx", height=100)
         with p_col2:
             primary["behaviour"] = st.text_area("Behaviour", value=primary.get("behaviour", ""), key="ai_p_beh", height=100)
-            primary["consequence"] = st.text_area("Consequence / Staff Response", value=primary.get("consequence", ""), key="ai_p_con", height=100)
+            primary["consequence"] = st.text_area("Consequence", value=primary.get("consequence", ""), key="ai_p_con", height=100)
         inc["primary"] = primary
-
-        # Continuation entries
         additional = inc.get("additional_entries", [])
         if additional:
-            st.markdown(f"##### Continuation Entries ({len(additional)})")
             for idx, entry in enumerate(additional):
-                with st.expander(f"Entry {idx + 1} — {entry.get('time', '')} {entry.get('location', '')}", expanded=False):
+                with st.expander(f"Entry {idx + 1} — {entry.get('time', '')}"):
                     a_col1, a_col2 = st.columns(2)
                     with a_col1:
                         entry["time"] = st.text_input("Time", value=entry.get("time", ""), key=f"ai_a_time_{idx}")
                         entry["location"] = st.text_input("Location", value=entry.get("location", ""), key=f"ai_a_loc_{idx}")
-                        entry["context"] = st.text_area("Antecedent / Context", value=entry.get("context", ""), key=f"ai_a_ctx_{idx}", height=80)
+                        entry["context"] = st.text_area("Antecedent", value=entry.get("context", ""), key=f"ai_a_ctx_{idx}", height=80)
                     with a_col2:
                         entry["behaviour"] = st.text_area("Behaviour", value=entry.get("behaviour", ""), key=f"ai_a_beh_{idx}", height=80)
-                        entry["consequence"] = st.text_area("Consequence / Staff Response", value=entry.get("consequence", ""), key=f"ai_a_con_{idx}", height=80)
+                        entry["consequence"] = st.text_area("Consequence", value=entry.get("consequence", ""), key=f"ai_a_con_{idx}", height=80)
             inc["additional_entries"] = additional
-
         st.markdown("---")
         save_col, clear_col = st.columns(2)
-
         with save_col:
             if st.button("💾 Save as Critical Incident", type="primary", key="save_ai_extracted", use_container_width=True):
                 try:
-                    # Parse outcomes back to list if edited as string
                     outcomes_raw = inc.get("outcomes", "")
-                    if isinstance(outcomes_raw, str):
-                        outcomes_list = [o.strip() for o in outcomes_raw.split(",") if o.strip()]
-                    else:
-                        outcomes_list = outcomes_raw
-
+                    outcomes_list = [o.strip() for o in outcomes_raw.split(",") if o.strip()] if isinstance(outcomes_raw, str) else outcomes_raw
                     primary_data = inc.get("primary", {})
                     additional_data = inc.get("additional_entries", [])
                     sapol_ref = inc.get("sapol_reference", "") or None
-                    if sapol_ref == "":
-                        sapol_ref = None
-
+                    if sapol_ref == "": sapol_ref = None
                     record = {
-                        "student_id":              student_id,
-                        "severity":                int(inc.get("severity", 3)),
-                        "reported_by":             st.session_state.current_user.get("id"),
-                        "created_at":              f"{inc.get('date', str(date.today()))}T00:00:00",
-                        "primary_location":        primary_data.get("location", ""),
-                        "primary_context":         primary_data.get("context", ""),
-                        "primary_time":            primary_data.get("time", ""),
-                        "primary_behaviour":       primary_data.get("behaviour", ""),
-                        "primary_consequence":     primary_data.get("consequence", ""),
-                        "additional_entries":      additional_data,
-                        "outcomes":                outcomes_list,
-                        "sapol_reference":         sapol_ref,
-                        "admin_summary":           inc.get("notes", ""),
-                        "status":                  "historical",
-                        "audit_trail":             "[]",
-                        "include_audit_in_report": False,
+                        "student_id": student_id, "severity": int(inc.get("severity", 3)),
+                        "reported_by": st.session_state.current_user.get("id"),
+                        "created_at": f"{inc.get('date', str(date.today()))}T00:00:00",
+                        "primary_location": primary_data.get("location", ""),
+                        "primary_context": primary_data.get("context", ""),
+                        "primary_time": primary_data.get("time", ""),
+                        "primary_behaviour": primary_data.get("behaviour", ""),
+                        "primary_consequence": primary_data.get("consequence", ""),
+                        "additional_entries": additional_data, "outcomes": outcomes_list,
+                        "sapol_reference": sapol_ref, "admin_summary": inc.get("notes", ""),
+                        "status": "historical", "audit_trail": "[]", "include_audit_in_report": False,
                     }
-
                     supabase.table("critical_incidents").insert(record).execute()
-
-                    st.success(f"✅ Critical incident saved to {student['name']}'s record with {1 + len(additional_data)} timeline entries!")
+                    st.success(f"✅ Saved to {student['name']}'s record!")
                     st.session_state["ai_extracted_incident"] = None
-                    # Force fresh reload from Supabase so new record appears immediately
                     for _key in ["critical_incidents", "incidents"]:
                         if _key in st.session_state:
                             del st.session_state[_key]
                     st.rerun()
-
                 except Exception as e:
-                    st.error(f"Error saving incident: {e}")
-
+                    st.error(f"Error saving: {e}")
         with clear_col:
             if st.button("🗑️ Clear & Start Over", key="clear_ai", use_container_width=True):
                 st.session_state["ai_extracted_incident"] = None
@@ -3252,24 +2665,18 @@ def render_admin_portal():
         if st.button("⬅ Back to Landing"):
             go_to("landing")
         return
-    
     st.markdown("## 🔧 Admin Portal")
-    
     col1, col2 = st.columns([6, 1])
     with col1:
         if st.button("⬅ Back to Landing", key="back_admin"):
             go_to("landing")
-    
     st.markdown("---")
-    
     tab1, tab2, tab3, tab4 = st.tabs(["👥 Active Students", "📦 Archived Students", "📊 System Overview", "👨‍💼 Staff Management"])
-    
+
     with tab1:
         st.markdown("### Student Management")
-        
         active_students = [s for s in st.session_state.students if not s.get("archived", False)]
         st.markdown(f"**{len(active_students)} active students**")
-        
         if active_students:
             for prog in ["JP", "PY", "SY"]:
                 prog_students = [s for s in active_students if s.get("program") == prog]
@@ -3277,12 +2684,9 @@ def render_admin_portal():
                     st.markdown(f"**{prog}** ({len(prog_students)})")
                     for s in sorted(prog_students, key=lambda x: x.get("name","")):
                         sc1, sc2, sc3, sc4 = st.columns([3, 2, 2, 1])
-                        with sc1:
-                            st.markdown(f"**{s.get('name','Unknown')}**")
-                        with sc2:
-                            st.caption(f"EDID: {s.get('edid','—')}")
-                        with sc3:
-                            st.caption(f"Grade: {s.get('grade','—')} · DOB: {s.get('dob','—')}")
+                        with sc1: st.markdown(f"**{s.get('name','Unknown')}**")
+                        with sc2: st.caption(f"EDID: {s.get('edid','—')}")
+                        with sc3: st.caption(f"Grade: {s.get('grade','—')} · DOB: {s.get('dob','—')}")
                         with sc4:
                             if st.button("Archive", key=f"arch_{s['id']}", help="Archive student"):
                                 s["archived"] = True
@@ -3293,9 +2697,6 @@ def render_admin_portal():
                                 except Exception as e:
                                     st.error(f"Could not archive: {e}")
                     st.markdown("---")
-        else:
-            st.info("No active students. Add students below.")
-        
         with st.expander("➕ Add New Student", expanded=False):
             with st.form("add_student_form"):
                 col1, col2, col3, col4 = st.columns(4)
@@ -3312,23 +2713,17 @@ def render_admin_portal():
                 with col4:
                     st.write("")
                     new_placement_end = st.date_input("Placement End Date (Optional)", value=None)
-                
                 student_submitted = st.form_submit_button("Add Student", type="primary")
-            
             if student_submitted:
                 if not new_first_name or not new_last_name or not new_edid or not new_grade or not new_program:
                     st.error("Please complete all required fields marked with *")
                 else:
                     new_student = {
                         "id": f"stu_{uuid.uuid4().hex[:8]}",
-                        "first_name": new_first_name.strip(),
-                        "last_name": new_last_name.strip(),
+                        "first_name": new_first_name.strip(), "last_name": new_last_name.strip(),
                         "name": f"{new_first_name.strip()} {new_last_name.strip()}",
-                        "edid": new_edid.strip(),
-                        "grade": new_grade,
-                        "dob": new_dob.isoformat(),
-                        "program": new_program,
-                        "placement_start": new_placement_start.isoformat(),
+                        "edid": new_edid.strip(), "grade": new_grade, "dob": new_dob.isoformat(),
+                        "program": new_program, "placement_start": new_placement_start.isoformat(),
                         "placement_end": new_placement_end.isoformat() if new_placement_end else None,
                         "archived": False
                     }
@@ -3340,15 +2735,12 @@ def render_admin_portal():
                         st.error("❌ Failed to save student to database")
 
         st.markdown("### Current Students")
-        
         for program in ["JP", "PY", "SY"]:
             st.markdown(f"#### {PROGRAM_NAMES[program]}")
             program_students = [s for s in st.session_state.students if s["program"] == program and not s.get("archived", False)]
-            
             if not program_students:
                 st.caption("No students in this program")
                 continue
-            
             for student in program_students:
                 with st.container(border=True):
                     col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
@@ -3388,7 +2780,6 @@ def render_admin_portal():
                                 except Exception as e:
                                     st.error(f"Archive failed: {e}")
                             st.rerun()
-                
                 if st.session_state.get("editing_student") == student['id']:
                     with st.expander("✏️ Edit Student Details", expanded=True):
                         with st.form(f"edit_form_{student['id']}"):
@@ -3411,11 +2802,10 @@ def render_admin_portal():
                                 if st.form_submit_button("Cancel"):
                                     st.session_state.editing_student = None
                                     st.rerun()
-    
+
     with tab2:
         st.markdown("### 📦 Archived Students")
         archived_students = [s for s in st.session_state.students if s.get('archived', False)]
-        
         if not archived_students:
             st.info("No archived students.")
         else:
@@ -3476,24 +2866,20 @@ def render_admin_portal():
             active_students = len([s for s in st.session_state.students if not s.get('placement_end')])
             st.metric("Total Students", total_students)
             st.caption(f"{active_students} active")
-        with col2:
-            st.metric("Total Incidents", len(st.session_state.incidents))
+        with col2: st.metric("Total Incidents", len(st.session_state.incidents))
         with col3:
             critical = len([i for i in st.session_state.incidents if i.get("is_critical")])
             st.metric("Critical Incidents", critical)
-        with col4:
-            st.metric("Staff Members", len(st.session_state.staff))
-        
+        with col4: st.metric("Staff Members", len(st.session_state.staff))
         st.markdown("---")
         st.markdown("#### Students by Program")
         for prog in ["JP", "PY", "SY"]:
             count = len([s for s in st.session_state.students if s["program"] == prog])
             active = len([s for s in st.session_state.students if s["program"] == prog and not s.get('placement_end')])
             st.write(f"**{PROGRAM_NAMES[prog]}:** {count} total ({active} active)")
-    
+
     with tab4:
         st.markdown("### Staff Management")
-        
         with st.expander("➕ Add New Staff Member", expanded=False):
             with st.form("add_staff_form"):
                 col1, col2 = st.columns(2)
@@ -3505,10 +2891,8 @@ def render_admin_portal():
                     staff_role = st.selectbox("Role *", ["TSS", "Teacher", "Leader", "ADM"])
                     staff_program = st.selectbox("Program *", ["JP", "PY", "SY", "All Programs"])
                     staff_phone = st.text_input("Phone Number", placeholder="0412 345 678")
-                
                 staff_notes = st.text_area("Notes (Optional)")
                 submit_staff = st.form_submit_button("Add Staff Member", type="primary")
-                
                 if submit_staff:
                     if staff_name and staff_email and staff_password and staff_role:
                         if any(s.get("email", "").lower() == staff_email.lower() for s in st.session_state.staff):
@@ -3516,15 +2900,12 @@ def render_admin_portal():
                         else:
                             new_staff = {
                                 "id": f"staff_{uuid.uuid4().hex[:8]}",
-                                "name": staff_name,
-                                "email": staff_email.lower().strip(),
-                                "password": staff_password,
-                                "role": staff_role,
+                                "name": staff_name, "email": staff_email.lower().strip(),
+                                "password": staff_password, "role": staff_role,
                                 "program": staff_program if staff_program != "All Programs" else None,
                                 "phone": staff_phone if staff_phone else None,
                                 "notes": staff_notes if staff_notes else None,
-                                "receive_critical_emails": True,
-                                "created_date": date.today().isoformat()
+                                "receive_critical_emails": True, "created_date": date.today().isoformat()
                             }
                             if save_staff_to_db(new_staff):
                                 st.session_state.staff.append(new_staff)
@@ -3532,14 +2913,11 @@ def render_admin_portal():
                                 st.rerun()
                             else:
                                 st.error("❌ Failed to save staff member to database")
-        
         st.markdown("---")
         st.markdown("### Current Staff")
-        
         for role in ["ADM", "Leader", "Teacher", "TSS"]:
             role_names = {"ADM": "Administrators", "Leader": "Program Leaders", "Teacher": "Teachers", "TSS": "Support Staff"}
             role_staff = [s for s in st.session_state.staff if s.get("role") == role]
-            
             if role_staff:
                 st.markdown(f"#### {role_names[role]}")
                 for staff in role_staff:
@@ -3565,71 +2943,65 @@ def render_admin_portal():
                             if st.button("✏️", key=f"edit_staff_{staff['id']}", help="Edit staff"):
                                 st.session_state.editing_staff = staff['id']
                                 st.rerun()
-                        
-                        if st.session_state.get("editing_staff") == staff['id']:
-                            with st.expander("✏️ Edit Staff Details", expanded=True):
-                                with st.form(f"edit_staff_form_{staff['id']}"):
-                                    edit_col1, edit_col2 = st.columns(2)
-                                    with edit_col1:
-                                        edit_name = st.text_input("Name", value=staff['name'], key=f"edit_staff_name_{staff['id']}")
-                                        edit_email = st.text_input("Email", value=staff['email'], key=f"edit_staff_email_{staff['id']}")
-                                        edit_phone = st.text_input("Phone", value=staff.get('phone', ''), key=f"edit_staff_phone_{staff['id']}")
-                                    with edit_col2:
-                                        edit_role = st.selectbox("Role", ["TSS", "Teacher", "Leader", "ADM"],
-                                                                index=["TSS", "Teacher", "Leader", "ADM"].index(staff['role']),
-                                                                key=f"edit_staff_role_{staff['id']}")
-                                        _prog_options = ["JP", "PY", "SY", "All Programs"]
-                                        _prog_val = staff.get('program') if staff.get('program') in ["JP", "PY", "SY"] else "All Programs"
-                                        edit_program = st.selectbox("Program", _prog_options,
-                                                                   index=_prog_options.index(_prog_val),
-                                                                   key=f"edit_staff_program_{staff['id']}")
-                                        edit_receive_emails = st.checkbox("Receive critical incident emails",
-                                                                         value=staff.get('receive_critical_emails', True),
-                                                                         key=f"edit_staff_emails_{staff['id']}")
-                                    
-                                    edit_notes = st.text_area("Notes", value=staff.get('notes', ''), key=f"edit_staff_notes_{staff['id']}")
-                                    st.markdown("**Reset Password**")
-                                    new_password = st.text_input("New Password (leave blank to keep current)", 
-                                                                  type="password", key=f"new_pass_{staff['id']}")
-                                    
-                                    col_save, col_cancel, col_delete = st.columns([1, 1, 1])
-                                    with col_save:
-                                        if st.form_submit_button("💾 Save Changes", type="primary"):
-                                            staff['name'] = edit_name
-                                            staff['email'] = edit_email.lower().strip()
-                                            staff['phone'] = edit_phone if edit_phone else None
-                                            staff['role'] = edit_role
-                                            staff['program'] = edit_program if edit_program != "All Programs" else None
-                                            staff['receive_critical_emails'] = edit_receive_emails
-                                            staff['notes'] = edit_notes if edit_notes else None
-                                            if new_password:
-                                                staff['password'] = new_password
-                                                staff['password_hash'] = ""
-                                                if supabase:
-                                                    try:
-                                                        supabase.table('staff').update({
-                                                            'password': new_password, 'password_hash': None
-                                                        }).eq('id', staff['id']).execute()
-                                                    except Exception as e:
-                                                        st.error(f"Password update failed: {e}")
-                                            save_staff_to_db(staff)
+                    if st.session_state.get("editing_staff") == staff['id']:
+                        with st.expander("✏️ Edit Staff Details", expanded=True):
+                            with st.form(f"edit_staff_form_{staff['id']}"):
+                                edit_col1, edit_col2 = st.columns(2)
+                                with edit_col1:
+                                    edit_name = st.text_input("Name", value=staff['name'], key=f"edit_staff_name_{staff['id']}")
+                                    edit_email = st.text_input("Email", value=staff['email'], key=f"edit_staff_email_{staff['id']}")
+                                    edit_phone = st.text_input("Phone", value=staff.get('phone', ''), key=f"edit_staff_phone_{staff['id']}")
+                                with edit_col2:
+                                    edit_role = st.selectbox("Role", ["TSS", "Teacher", "Leader", "ADM"],
+                                        index=["TSS", "Teacher", "Leader", "ADM"].index(staff['role']),
+                                        key=f"edit_staff_role_{staff['id']}")
+                                    _prog_options = ["JP", "PY", "SY", "All Programs"]
+                                    _prog_val = staff.get('program') if staff.get('program') in ["JP", "PY", "SY"] else "All Programs"
+                                    edit_program = st.selectbox("Program", _prog_options,
+                                        index=_prog_options.index(_prog_val),
+                                        key=f"edit_staff_program_{staff['id']}")
+                                    edit_receive_emails = st.checkbox("Receive critical incident emails",
+                                        value=staff.get('receive_critical_emails', True),
+                                        key=f"edit_staff_emails_{staff['id']}")
+                                edit_notes = st.text_area("Notes", value=staff.get('notes', ''), key=f"edit_staff_notes_{staff['id']}")
+                                st.markdown("**Reset Password**")
+                                new_password = st.text_input("New Password (leave blank to keep current)",
+                                    type="password", key=f"new_pass_{staff['id']}")
+                                col_save, col_cancel, col_delete = st.columns([1, 1, 1])
+                                with col_save:
+                                    if st.form_submit_button("💾 Save Changes", type="primary"):
+                                        staff['name'] = edit_name
+                                        staff['email'] = edit_email.lower().strip()
+                                        staff['phone'] = edit_phone if edit_phone else None
+                                        staff['role'] = edit_role
+                                        staff['program'] = edit_program if edit_program != "All Programs" else None
+                                        staff['receive_critical_emails'] = edit_receive_emails
+                                        staff['notes'] = edit_notes if edit_notes else None
+                                        if new_password:
+                                            staff['password'] = new_password
+                                            staff['password_hash'] = ""
+                                            if supabase:
+                                                try:
+                                                    supabase.table('staff').update({'password': new_password, 'password_hash': None}).eq('id', staff['id']).execute()
+                                                except Exception as e:
+                                                    st.error(f"Password update failed: {e}")
+                                        save_staff_to_db(staff)
+                                        st.session_state.editing_staff = None
+                                        st.success("✅ Updated" + (" (password reset)" if new_password else ""))
+                                        st.rerun()
+                                with col_cancel:
+                                    if st.form_submit_button("❌ Cancel"):
+                                        st.session_state.editing_staff = None
+                                        st.rerun()
+                                with col_delete:
+                                    if st.form_submit_button("🗑️ Delete"):
+                                        if staff['role'] != 'ADM' or len([s for s in st.session_state.staff if s.get('role') == 'ADM']) > 1:
+                                            st.session_state.staff.remove(staff)
                                             st.session_state.editing_staff = None
-                                            st.success("✅ Updated" + (" (password reset)" if new_password else ""))
+                                            st.success("✅ Staff member removed")
                                             st.rerun()
-                                    with col_cancel:
-                                        if st.form_submit_button("❌ Cancel"):
-                                            st.session_state.editing_staff = None
-                                            st.rerun()
-                                    with col_delete:
-                                        if st.form_submit_button("🗑️ Delete"):
-                                            if staff['role'] != 'ADM' or len([s for s in st.session_state.staff if s.get('role') == 'ADM']) > 1:
-                                                st.session_state.staff.remove(staff)
-                                                st.session_state.editing_staff = None
-                                                st.success("✅ Staff member removed")
-                                                st.rerun()
-                                            else:
-                                                st.error("❌ Cannot delete the last administrator")
-        
+                                        else:
+                                            st.error("❌ Cannot delete the last administrator")
         st.markdown("---")
         st.markdown("### 📧 Email Notification Recipients")
         email_recipients = [s for s in st.session_state.staff if s.get('receive_critical_emails', True)]
@@ -3642,13 +3014,10 @@ def render_admin_portal():
 
 def main():
     init_state()
-    
+    page = st.session_state.current_page
     if not st.session_state.logged_in:
         render_login_page()
         return
-    
-    page = st.session_state.current_page
-    
     if page == "landing": render_landing_page()
     elif page == "program_students": render_program_students_page()
     elif page == "incident_log": render_incident_log_page()
