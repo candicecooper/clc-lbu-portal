@@ -1,5 +1,5 @@
 # ════════════════════════════════════════════════════════════════════════════
-# scatter_plot_tracker.py  ·  CLC-LBU Portal
+# 18_Scatter_Plot_Tracker.py  ·  CLC-LBU Portal
 # ACCEPT Program — Scatter Plot Tracker
 # ════════════════════════════════════════════════════════════════════════════
 import streamlit as st
@@ -8,11 +8,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import date, timedelta
 
-st.set_page_config(
-    page_title="Scatter Plot Tracker · CLC",
-    page_icon="📊",
-    layout="wide"
-)
+from auth import require_auth, logout_button
+require_auth(app_title="CLC LBU Staff Portal", app_icon="🏫")
+logout_button()
 
 # ── Colours ──────────────────────────────────────────────────────────────────
 TEAL  = "#1A6B8A"
@@ -98,19 +96,19 @@ def _init():
 _init()
 ss = st.session_state
 
-# ── Supabase (optional) ───────────────────────────────────────────────────────
+# ── Supabase ──────────────────────────────────────────────────────────────────
 def get_sb():
     try:
         from supabase import create_client
-        return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+        return create_client(st.secrets["supabase"]["url"], st.secrets["supabase"]["key"])
     except Exception:
         return None
 
 # ════════════════════════════════════════════════════════════════════════════
-# SIDEBAR — session management
+# SIDEBAR
 # ════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
-    st.markdown(f"### 📂 Sessions")
+    st.markdown("### 📂 Sessions")
     sb = get_sb()
     if sb:
         try:
@@ -129,14 +127,8 @@ with st.sidebar:
                 chosen = st.selectbox("Load session", ["— New —"] + list(opts.keys()))
                 if chosen != "— New —" and st.button("Load", use_container_width=True):
                     sid = opts[chosen]
-                    rec = (
-                        sb.table("scatter_plot_sessions")
-                        .select("*").eq("id", sid).single().execute().data
-                    )
-                    entries = (
-                        sb.table("scatter_plot_entries")
-                        .select("*").eq("session_id", sid).execute().data
-                    )
+                    rec = sb.table("scatter_plot_sessions").select("*").eq("id", sid).single().execute().data
+                    entries = sb.table("scatter_plot_entries").select("*").eq("session_id", sid).execute().data
                     ss.sp_student    = rec["student_name"]
                     ss.sp_term       = rec["term"]
                     ss.sp_week       = rec["week_number"]
@@ -154,7 +146,7 @@ with st.sidebar:
         except Exception as e:
             st.caption(f"⚠️ {e}")
     else:
-        st.caption("Add SUPABASE_URL / SUPABASE_KEY to secrets to enable save/load.")
+        st.caption("Supabase not configured.")
 
     st.markdown("---")
     if st.button("🆕 New Session", use_container_width=True):
@@ -183,22 +175,17 @@ t_entry, t_analysis = st.tabs(["📋  Data Entry", "📈  Analysis & Insights"])
 # ────────────────────────────────────────────────────────────────────────────
 with t_entry:
 
-    # ── Student info ──────────────────────────────────────────────────────
     c1, c2, c3, c4 = st.columns([3, 1, 1, 2])
     ss.sp_student    = c1.text_input("Student", ss.sp_student)
     ss.sp_term       = c2.text_input("Term", ss.sp_term)
     ss.sp_week       = int(c3.number_input("Week", 1, 20, int(ss.sp_week)))
     ss.sp_week_start = c4.date_input("Week commencing", ss.sp_week_start)
 
-    # ── Target behaviours ─────────────────────────────────────────────────
     with st.expander("🎯 Targeted Behaviours", expanded=True):
         behs = ss.sp_behaviours[:]
         for i in range(len(behs)):
             ca, cb = st.columns([9, 1])
-            behs[i] = ca.text_input(
-                f"Behaviour {i+1}", behs[i],
-                key=f"spt_beh_{i}", label_visibility="collapsed"
-            )
+            behs[i] = ca.text_input(f"Behaviour {i+1}", behs[i], key=f"spt_beh_{i}", label_visibility="collapsed")
             if cb.button("✕", key=f"spt_db_{i}") and len(behs) > 1:
                 behs.pop(i)
                 ss.sp_behaviours = behs
@@ -209,7 +196,6 @@ with t_entry:
             st.rerun()
         ss.sp_behaviours = behs
 
-    # ── Key ───────────────────────────────────────────────────────────────
     st.markdown(
         "<div class='key-box'>"
         "<b>Key:</b> &nbsp;"
@@ -220,12 +206,10 @@ with t_entry:
         unsafe_allow_html=True
     )
 
-    # ── Sync cells dict with current slot list ────────────────────────────
     for t, _ in ss.sp_slots:
         if t not in ss.sp_cells:
             ss.sp_cells[t] = {d: "" for d in DAYS}
 
-    # ── Build grid DataFrame ──────────────────────────────────────────────
     grid_rows = []
     for slot in ss.sp_slots:
         t_val, a_val = slot[0], slot[1]
@@ -236,7 +220,6 @@ with t_entry:
 
     df_grid = pd.DataFrame(grid_rows)
 
-    # Build column headers with dates
     col_cfg = {
         "Time":              st.column_config.TextColumn("Time", width=75),
         "Learning Activity": st.column_config.TextColumn("Learning Activity", width=190),
@@ -247,15 +230,11 @@ with t_entry:
         col_cfg[d] = st.column_config.SelectboxColumn(lbl, options=CELL_OPTS, width=95)
 
     edited = st.data_editor(
-        df_grid,
-        column_config=col_cfg,
-        use_container_width=True,
-        hide_index=True,
-        num_rows="dynamic",
-        key="sp_de"
+        df_grid, column_config=col_cfg,
+        use_container_width=True, hide_index=True,
+        num_rows="dynamic", key="sp_de"
     )
 
-    # Persist edits back to session state
     new_cells = {}
     new_slots  = []
     for _, row in edited.iterrows():
@@ -268,12 +247,11 @@ with t_entry:
     ss.sp_cells = new_cells
     ss.sp_slots = new_slots
 
-    # ── Daily totals strip ────────────────────────────────────────────────
     st.markdown("---")
     tot_cols = st.columns(len(DAYS) + 2)
-    tot_cols[0].markdown("**Daily totals**", help="Count of intervals where 1 or 2 was recorded")
+    tot_cols[0].markdown("**Daily totals**")
 
-    day_totals = {}
+    day_totals  = {}
     grand_total = 0
     for i, d in enumerate(DAYS):
         n = sum(1 for t in new_cells if new_cells[t].get(d, "") in ["1", "2"])
@@ -288,16 +266,11 @@ with t_entry:
         unsafe_allow_html=True
     )
 
-    # ── Antecedents ───────────────────────────────────────────────────────
     st.markdown("**Antecedents / Triggers**")
     ant_cols = st.columns(5)
     for i, d in enumerate(DAYS):
-        ss.sp_anteceds[d] = ant_cols[i].text_area(
-            d, ss.sp_anteceds.get(d, ""),
-            height=68, key=f"ant_{d}"
-        )
+        ss.sp_anteceds[d] = ant_cols[i].text_area(d, ss.sp_anteceds.get(d, ""), height=68, key=f"ant_{d}")
 
-    # ── Save ──────────────────────────────────────────────────────────────
     st.markdown("---")
     if st.button("💾 Save to Supabase", type="primary"):
         sb = get_sb()
@@ -330,13 +303,11 @@ with t_entry:
                 ]
                 if entries:
                     sb.table("scatter_plot_entries").insert(entries).execute()
-
                 st.success("✅ Session saved successfully!")
             except Exception as e:
                 st.error(f"Save failed: {e}")
         else:
-            st.warning("Supabase not configured — data lives in session only.")
-
+            st.warning("Supabase not configured.")
 
 # ────────────────────────────────────────────────────────────────────────────
 # TAB 2 — ANALYSIS
@@ -351,10 +322,9 @@ with t_analysis:
     slots_map = {s[0]: s[1] for s in ss.sp_slots}
     times     = [s[0] for s in ss.sp_slots]
 
-    SCORE   = {"1": 1, "2": 2, "X": 0, "": 0}   # weighted score
-    INCIDENT= {"1": 1, "2": 1, "X": 0, "": 0}   # did it happen?
+    SCORE    = {"1": 1, "2": 2, "X": 0, "": 0}
+    INCIDENT = {"1": 1, "2": 1, "X": 0, "": 0}
 
-    # Build analysis matrix
     matrix = []
     for t in times:
         row = {"Time": t, "Activity": slots_map.get(t, "")}
@@ -368,12 +338,11 @@ with t_analysis:
 
     df_m = pd.DataFrame(matrix)
 
-    # KPIs
-    total_inc  = int(df_m["Incidents"].sum())
-    total_scr  = int(df_m["Total"].sum())
-    busiest_d  = max(DAYS, key=lambda d: df_m[d].sum()) if total_inc > 0 else "—"
-    peak_row   = df_m.loc[df_m["Incidents"].idxmax()] if total_inc > 0 else None
-    peak_time  = f"{peak_row['Time']} — {peak_row['Activity']}" if peak_row is not None else "—"
+    total_inc = int(df_m["Incidents"].sum())
+    total_scr = int(df_m["Total"].sum())
+    busiest_d = max(DAYS, key=lambda d: df_m[d].sum()) if total_inc > 0 else "—"
+    peak_row  = df_m.loc[df_m["Incidents"].idxmax()] if total_inc > 0 else None
+    peak_time = f"{peak_row['Time']} — {peak_row['Activity']}" if peak_row is not None else "—"
 
     st.markdown(f"### Analysis — {ss.sp_student} &nbsp;|&nbsp; Term {ss.sp_term}, Week {ss.sp_week}")
 
@@ -384,7 +353,7 @@ with t_analysis:
         (k3, busiest_d,  "Highest-frequency day",     True),
         (k4, peak_time,  "Highest-risk time slot",    True),
     ]:
-        cls = "kpi kpi-amber" if amber else "kpi"
+        cls  = "kpi kpi-amber" if amber else "kpi"
         vcls = f"color:{AMBER}" if amber else f"color:{TEAL}"
         col.markdown(
             f"<div class='{cls}'><div class='val' style='{vcls};font-size:1.1rem'>{val}</div>"
@@ -398,12 +367,8 @@ with t_analysis:
 
     st.markdown("---")
 
-    # ── Heatmap ───────────────────────────────────────────────────────────
     heat_z    = df_m[DAYS].values
-    hover_txt = [
-        [cells.get(t, {}).get(d, "") or "—" for d in DAYS]
-        for t in times
-    ]
+    hover_txt = [[cells.get(t, {}).get(d, "") or "—" for d in DAYS] for t in times]
     y_labels  = [f"{t}  {slots_map.get(t,'')}" for t in times]
     x_labels  = [
         f"{d[:3]} {(ss.sp_week_start + timedelta(days=i)).strftime('%-d/%-m')}"
@@ -411,11 +376,8 @@ with t_analysis:
     ]
 
     fig_heat = go.Figure(go.Heatmap(
-        z=heat_z,
-        x=x_labels,
-        y=y_labels,
-        text=hover_txt,
-        texttemplate="%{text}",
+        z=heat_z, x=x_labels, y=y_labels,
+        text=hover_txt, texttemplate="%{text}",
         colorscale=[[0, "#EBF4F9"], [0.5, "#E8A020"], [1, "#C0392B"]],
         showscale=True,
         colorbar=dict(title="Score", tickvals=[0, 1, 2]),
@@ -423,15 +385,12 @@ with t_analysis:
     ))
     fig_heat.update_layout(
         title="Behaviour Frequency Heatmap — Time Slot × Day",
-        height=500,
-        margin=dict(l=10, r=10, t=50, b=10),
-        yaxis=dict(autorange="reversed"),
-        xaxis=dict(side="top"),
+        height=500, margin=dict(l=10, r=10, t=50, b=10),
+        yaxis=dict(autorange="reversed"), xaxis=dict(side="top"),
         font=dict(size=11),
     )
     st.plotly_chart(fig_heat, use_container_width=True)
 
-    # ── Bar charts ────────────────────────────────────────────────────────
     col_a, col_b = st.columns(2)
 
     with col_a:
@@ -445,10 +404,7 @@ with t_analysis:
             title="Incidents by Time Slot / Activity",
             labels={"Incidents": "Intervals with behaviour", "Label": ""},
         )
-        fig_slots.update_layout(
-            height=400, coloraxis_showscale=False,
-            margin=dict(l=10, r=10, t=50, b=10)
-        )
+        fig_slots.update_layout(height=400, coloraxis_showscale=False, margin=dict(l=10, r=10, t=50, b=10))
         st.plotly_chart(fig_slots, use_container_width=True)
 
     with col_b:
@@ -465,13 +421,9 @@ with t_analysis:
             color_continuous_scale=["#90CBE3", TEAL],
             title="Incidents by Day of Week",
         )
-        fig_days.update_layout(
-            height=400, coloraxis_showscale=False,
-            margin=dict(l=10, r=10, t=50, b=10)
-        )
+        fig_days.update_layout(height=400, coloraxis_showscale=False, margin=dict(l=10, r=10, t=50, b=10))
         st.plotly_chart(fig_days, use_container_width=True)
 
-    # ── Activity summary table ────────────────────────────────────────────
     st.markdown("### 📋 Activity-Level Summary")
     act_grp = (
         df_m[df_m["Incidents"] > 0][["Activity", "Incidents", "Total"]]
@@ -481,7 +433,6 @@ with t_analysis:
     )
     st.dataframe(act_grp, use_container_width=True, hide_index=True)
 
-    # ── Antecedents ───────────────────────────────────────────────────────
     if any(ss.sp_anteceds.get(d, "").strip() for d in DAYS):
         st.markdown("### 📝 Antecedents / Triggers")
         ant_cols = st.columns(5)
@@ -490,20 +441,15 @@ with t_analysis:
             ant_cols[i].markdown(f"**{d[:3]}**")
             ant_cols[i].caption(note or "—")
 
-    # ── Pattern insights ──────────────────────────────────────────────────
     st.markdown("### 💡 Pattern Insights")
     insights = []
 
-    # Consistent high-risk slots (3+ days in the week)
     for _, row in df_m[df_m["Incidents"] >= 3].iterrows():
-        insights.append((
-            "warn",
+        insights.append(("warn",
             f"⚠️ <b>{row['Time']} — {row['Activity']}</b> had behaviour in "
             f"{int(row['Incidents'])}/5 days this week. Consider schedule adjustments or "
-            "targeted environmental modifications at this time."
-        ))
+            "targeted environmental modifications at this time."))
 
-    # Morn vs arvo
     morning_times   = [t for t in times if t and int(t.split(":")[0]) < 12]
     afternoon_times = [t for t in times if t and int(t.split(":")[0]) >= 12]
     morn_inc = int(sum(df_m[df_m["Time"].isin(morning_times)]["Incidents"]))
@@ -520,7 +466,6 @@ with t_analysis:
                 f"({arvo_inc} afternoon vs {morn_inc} morning intervals). "
                 "Consider fatigue, hunger, or activity demand levels post-lunch."))
 
-    # High-frequency (2) cells
     double_slots = [
         f"{t} on {d[:3]}"
         for t in times for d in DAYS
@@ -532,15 +477,12 @@ with t_analysis:
             f"<b>{', '.join(double_slots[:6])}</b>. "
             "These are priority intervals for proactive support planning."))
 
-    # Days with zero incidents
     zero_days = [d for d in DAYS if day_totals.get(d, 0) == 0]
     if zero_days:
         insights.append(("ok",
             f"✅ No behaviour recorded on <b>{', '.join(zero_days)}</b>. "
-            "Reflect on what was different — staffing, schedule, sensory environment, activities — "
-            "and consider replicating those conditions."))
+            "Reflect on what was different and consider replicating those conditions."))
 
-    # Low overall
     if 0 < total_inc <= 3:
         insights.append(("ok",
             "📉 Low overall incident count this week. "
@@ -548,13 +490,11 @@ with t_analysis:
 
     if not insights:
         insights.append(("warn",
-            "📊 More data needed across the week for meaningful pattern analysis. "
-            "Ensure all intervals are recorded even when no behaviour occurs."))
+            "📊 More data needed across the week for meaningful pattern analysis."))
 
     for kind, text in insights:
         css = "insight" if kind == "warn" else "insight insight-ok"
         st.markdown(f"<div class='{css}'>{text}</div>", unsafe_allow_html=True)
 
-    # ── Export note ───────────────────────────────────────────────────────
     st.markdown("---")
     st.caption("💾 Save the session in the Data Entry tab to persist this record to Supabase.")
