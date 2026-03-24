@@ -290,7 +290,7 @@ Critical Incident Form completed and saved.
 
 
 def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level):
-    """Generate professional BAP matching CLC Safety & Risk Plan styling."""
+    """Generate professional BAP — fixed chart sizing and page layout."""
     try:
         from docx import Document
         from docx.shared import Pt, RGBColor, Cm
@@ -303,47 +303,59 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         import matplotlib.ticker as mticker
         import matplotlib.dates as mdates
         import numpy as np
+        import textwrap
 
-        # ── Brand colours matching Safety & Risk plan ─────────────────────────
-        TEAL_HEX    = "1A7A6E"
-        TEAL_LIGHT  = "D6EEEB"
-        AMBER_HEX   = "D97706"
-        AMBER_LIGHT = "FEF3C7"
-        GREY_DARK   = "2E4057"
-        WHITE       = "FFFFFF"
-        LIGHT_GREY  = "F2F6F6"
+        # ── Brand colours ─────────────────────────────────────────────────────
+        TEAL_HEX   = "1A7A6E"
+        TEAL_LIGHT = "D6EEEB"
+        AMBER_HEX  = "D97706"
+        AMBER_LIGHT= "FEF3C7"
+        GREY_DARK  = "2E4057"
+        WHITE      = "FFFFFF"
+        LIGHT_GREY = "F2F6F6"
 
+        # ── Chart constants — ALL charts use these so they're identical on page ──
+        FIG_W    = 14          # figure width  (inches)
+        FIG_H    = 3.2         # figure height (inches)  → 3.7cm in doc
+        FIG_DPI  = 130
+        DOC_W    = Cm(16.5)    # insertion width in docx
+        MAX_LABEL_CHARS = 38   # truncate long bar labels
+
+        def wrap_labels(labels, width=MAX_LABEL_CHARS):
+            """Wrap or truncate long axis labels."""
+            out = []
+            for lbl in labels:
+                if len(lbl) > width:
+                    out.append(lbl[:width-1] + "…")
+                else:
+                    out.append(lbl)
+            return out
+
+        # ── docx helpers ───────────────────────────────────────────────────────
         def rgb(h):
             h = h.lstrip("#")
-            return RGBColor(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+            return RGBColor(int(h[0:2],16), int(h[2:4],16), int(h[4:6],16))
 
         def set_bg(cell, hex_color):
-            tc = cell._tc
-            tcPr = tc.get_or_add_tcPr()
+            tc = cell._tc; tcPr = tc.get_or_add_tcPr()
             shd = OxmlElement('w:shd')
-            shd.set(qn('w:val'), 'clear')
-            shd.set(qn('w:color'), 'auto')
-            shd.set(qn('w:fill'), hex_color.lstrip("#"))
-            tcPr.append(shd)
+            shd.set(qn('w:val'),'clear'); shd.set(qn('w:color'),'auto')
+            shd.set(qn('w:fill'), hex_color.lstrip("#")); tcPr.append(shd)
 
         def set_borders(cell, color="1A7A6E", size="4"):
-            tc = cell._tc
-            tcPr = tc.get_or_add_tcPr()
+            tc = cell._tc; tcPr = tc.get_or_add_tcPr()
             tcB = OxmlElement('w:tcBorders')
-            for side in ['top', 'left', 'bottom', 'right']:
+            for side in ['top','left','bottom','right']:
                 b = OxmlElement(f'w:{side}')
-                b.set(qn('w:val'), 'single')
-                b.set(qn('w:sz'), size)
-                b.set(qn('w:space'), '0')
-                b.set(qn('w:color'), color.lstrip("#"))
+                b.set(qn('w:val'),'single'); b.set(qn('w:sz'),size)
+                b.set(qn('w:space'),'0'); b.set(qn('w:color'), color.lstrip("#"))
                 tcB.append(b)
             tcPr.append(tcB)
 
         def arun(para, text, bold=False, italic=False, size=18, color="000000"):
             run = para.add_run(text)
-            run.bold = bold
-            run.italic = italic
-            run.font.size = Pt(size / 2)
+            run.bold = bold; run.italic = italic
+            run.font.size = Pt(size/2)
             run.font.color.rgb = rgb(color)
             run.font.name = "Arial"
             return run
@@ -351,432 +363,476 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         def cpara(cell, text, bold=False, italic=False, size=18, color="000000",
                   align=WD_ALIGN_PARAGRAPH.LEFT, sb=40, sa=40):
             p = cell.add_paragraph()
-            p.paragraph_format.space_before = Pt(sb / 20)
-            p.paragraph_format.space_after = Pt(sa / 20)
+            p.paragraph_format.space_before = Pt(sb/20)
+            p.paragraph_format.space_after  = Pt(sa/20)
             p.alignment = align
-            if text:
-                arun(p, text, bold=bold, italic=italic, size=size, color=color)
+            if text: arun(p, text, bold=bold, italic=italic, size=size, color=color)
             return p
 
         def cbullet(cell, text, size=17, color="333333"):
             p = cell.add_paragraph(style='List Bullet')
             p.paragraph_format.space_before = Pt(1)
-            p.paragraph_format.space_after = Pt(1)
+            p.paragraph_format.space_after  = Pt(1)
             arun(p, text, size=size, color=color)
 
         def section_header(doc, text):
+            """Full-width dark grey section header bar."""
             tbl = doc.add_table(rows=1, cols=1)
             tbl.style = 'Table Grid'
             cell = tbl.rows[0].cells[0]
-            set_bg(cell, GREY_DARK)
-            set_borders(cell, TEAL_HEX)
+            set_bg(cell, GREY_DARK); set_borders(cell, TEAL_HEX)
             p = cell.paragraphs[0]
-            arun(p, text, bold=True, size=18, color=WHITE)
-            doc.add_paragraph()
+            p.paragraph_format.space_before = Pt(2)
+            p.paragraph_format.space_after  = Pt(2)
+            arun(p, text, bold=True, size=17, color=WHITE)
 
-        def chart_to_docx(doc, fig, width_cm=16):
+        def add_chart(doc, fig, caption_text):
+            """Save fig and insert into doc with consistent sizing and caption."""
             buf = BytesIO()
-            fig.savefig(buf, format='png', dpi=150, bbox_inches='tight',
-                        facecolor='white', edgecolor='none')
+            fig.savefig(buf, format='png', dpi=FIG_DPI,
+                        bbox_inches='tight', facecolor='white', edgecolor='none')
             buf.seek(0)
-            doc.add_picture(buf, width=Cm(width_cm))
-            doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
             plt.close(fig)
+            doc.add_picture(buf, width=DOC_W)
+            pic_para = doc.paragraphs[-1]
+            pic_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            pic_para.paragraph_format.space_before = Pt(2)
+            pic_para.paragraph_format.space_after  = Pt(0)
+            # Caption line
+            cap = doc.add_paragraph()
+            cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            cap.paragraph_format.space_before = Pt(1)
+            cap.paragraph_format.space_after  = Pt(6)
+            run = cap.add_run(caption_text)
+            run.font.size = Pt(7.5)
+            run.font.italic = True
+            run.font.color.rgb = rgb("555555")
+            run.font.name = "Arial"
 
+        def base_ax_style(ax):
+            """Apply consistent clean style to any axes."""
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.spines['left'].set_color('#cbd5e1')
+            ax.spines['bottom'].set_color('#cbd5e1')
+            ax.tick_params(colors='#334155', labelsize=7.5)
+            ax.grid(True, alpha=0.25, linestyle='--', color='#94a3b8')
+
+        # ── Build document ─────────────────────────────────────────────────────
         doc = Document()
         sec = doc.sections[0]
-        sec.page_width = Cm(21)
+        sec.page_width  = Cm(21)
         sec.page_height = Cm(29.7)
-        for attr in ('left_margin', 'right_margin', 'top_margin', 'bottom_margin'):
+        for attr in ('left_margin','right_margin','top_margin','bottom_margin'):
             setattr(sec, attr, Cm(1.8))
 
-        # ── TITLE BLOCK ───────────────────────────────────────────────────────
-        t = doc.add_table(rows=1, cols=1)
-        t.style = 'Table Grid'
+        # ═══════════════════════════════════════════════════════════════════════
+        # PAGE 1 — Title + Student Details + Key Findings
+        # ═══════════════════════════════════════════════════════════════════════
+        t = doc.add_table(rows=1, cols=1); t.style='Table Grid'
         tc = t.rows[0].cells[0]
-        set_bg(tc, TEAL_HEX)
-        set_borders(tc, TEAL_HEX)
-        p1 = tc.paragraphs[0]
-        p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        arun(p1, "BEHAVIOUR ANALYSIS PLAN", bold=True, size=30, color=WHITE)
-        cpara(tc, f"{student['name']}  |  Cowandilla Learning Centre  |  LBU {student.get('program', '')} Program",
-              size=18, color="FEF3C7", align=WD_ALIGN_PARAGRAPH.CENTER, sb=20, sa=40)
-        doc.add_paragraph()
+        set_bg(tc, TEAL_HEX); set_borders(tc, TEAL_HEX)
+        p1 = tc.paragraphs[0]; p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        arun(p1, "BEHAVIOUR ANALYSIS PLAN", bold=True, size=28, color=WHITE)
+        cpara(tc, f"{student['name']}  |  Cowandilla Learning Centre  |  LBU {student.get('program','')} Program",
+              size=17, color="FEF3C7", align=WD_ALIGN_PARAGRAPH.CENTER, sb=10, sa=30)
+        doc.add_paragraph().paragraph_format.space_after = Pt(4)
 
-        # ── STUDENT DETAILS TABLE ─────────────────────────────────────────────
-        det = doc.add_table(rows=3, cols=2)
-        det.style = 'Table Grid'
+        # Student details table
+        det = doc.add_table(rows=3, cols=2); det.style='Table Grid'
         hdr = det.rows[0].cells[0].merge(det.rows[0].cells[1])
-        set_bg(hdr, GREY_DARK)
-        set_borders(hdr, TEAL_HEX)
-        arun(hdr.paragraphs[0], "STUDENT DETAILS", bold=True, size=18, color=WHITE)
+        set_bg(hdr, GREY_DARK); set_borders(hdr, TEAL_HEX)
+        hdr.paragraphs[0].paragraph_format.space_before = Pt(2)
+        hdr.paragraphs[0].paragraph_format.space_after  = Pt(2)
+        arun(hdr.paragraphs[0], "STUDENT DETAILS", bold=True, size=16, color=WHITE)
 
-        details_l = [
-            ("Student", student['name']),
-            ("Program", PROGRAM_NAMES.get(student.get('program', ''), student.get('program', ''))),
-            ("Grade", student.get('grade', '—')),
-        ]
-        details_r = [
-            ("Analysis Date", datetime.now().strftime('%d %B %Y')),
-            ("Data Period", f"{full_df['date_parsed'].min().strftime('%d/%m/%Y')} – {full_df['date_parsed'].max().strftime('%d/%m/%Y')}"),
-            ("Risk Level", f"{risk_level} ({risk_score}/100)"),
-        ]
-        for ci, items in enumerate([details_l, details_r]):
+        PROGRAM_NAMES_LOCAL = {"JP":"Junior Primary","PY":"Primary Years","SY":"Senior Years"}
+        for ci, items in enumerate([
+            [("Student", student['name']),
+             ("Program", PROGRAM_NAMES_LOCAL.get(student.get('program',''), student.get('program',''))),
+             ("Grade",   student.get('grade','—'))],
+            [("Analysis Date", datetime.now().strftime('%d %B %Y')),
+             ("Data Period",   f"{full_df['date_parsed'].min().strftime('%d/%m/%Y')} – {full_df['date_parsed'].max().strftime('%d/%m/%Y')}"),
+             ("Risk Level",    f"{risk_level} ({risk_score}/100)")]
+        ]):
             c = det.rows[1].cells[ci]
-            set_bg(c, LIGHT_GREY)
-            set_borders(c, TEAL_HEX)
+            set_bg(c, LIGHT_GREY); set_borders(c, TEAL_HEX)
             c.paragraphs[0].clear()
             for label, val in items:
                 p = c.add_paragraph()
-                arun(p, f"{label}: ", bold=True, size=17, color=GREY_DARK)
-                arun(p, val, size=17)
+                p.paragraph_format.space_before = Pt(1)
+                p.paragraph_format.space_after  = Pt(1)
+                arun(p, f"{label}: ", bold=True, size=16, color=GREY_DARK)
+                arun(p, val, size=16)
 
-        summary_cell = det.rows[2].cells[0].merge(det.rows[2].cells[1])
-        set_bg(summary_cell, AMBER_LIGHT)
-        set_borders(summary_cell, AMBER_HEX)
-        p_s = summary_cell.paragraphs[0]
-        arun(p_s, "Summary: ", bold=True, size=17, color=AMBER_HEX)
-        arun(p_s,
-             f"Total incidents: {len(full_df)}  |  "
-             f"Critical: {len(full_df[full_df['incident_type'] == 'Critical'])}  |  "
-             f"Average severity: {full_df['severity'].mean():.1f}/5",
-             size=17)
-        doc.add_paragraph()
+        sum_cell = det.rows[2].cells[0].merge(det.rows[2].cells[1])
+        set_bg(sum_cell, AMBER_LIGHT); set_borders(sum_cell, AMBER_HEX)
+        p_s = sum_cell.paragraphs[0]
+        p_s.paragraph_format.space_before = Pt(3)
+        p_s.paragraph_format.space_after  = Pt(3)
+        arun(p_s, "Summary:  ", bold=True, size=16, color=AMBER_HEX)
+        arun(p_s, f"Total incidents: {len(full_df)}   |   "
+                  f"Critical: {len(full_df[full_df['incident_type']=='Critical'])}   |   "
+                  f"Average severity: {full_df['severity'].mean():.1f}/5", size=16)
 
-        # ── KEY FINDINGS BOX ─────────────────────────────────────────────────
-        ctx = doc.add_table(rows=1, cols=1)
-        ctx.style = 'Table Grid'
-        ctx_c = ctx.rows[0].cells[0]
-        set_bg(ctx_c, TEAL_LIGHT)
-        set_borders(ctx_c, TEAL_HEX)
-        ctx_c.paragraphs[0].clear()
-        cpara(ctx_c, "KEY FINDINGS", bold=True, size=18, color=TEAL_HEX, sb=40, sa=60)
+        doc.add_paragraph().paragraph_format.space_after = Pt(4)
+
+        # Key Findings box
+        kf = doc.add_table(rows=1, cols=1); kf.style='Table Grid'
+        kf_c = kf.rows[0].cells[0]
+        set_bg(kf_c, TEAL_LIGHT); set_borders(kf_c, TEAL_HEX)
+        kf_c.paragraphs[0].clear()
+        p_kf = kf_c.paragraphs[0]
+        p_kf.paragraph_format.space_before = Pt(3)
+        arun(p_kf, "KEY FINDINGS", bold=True, size=16, color=TEAL_HEX)
         for label, val in [
-            ("Primary behaviour of concern", top_beh),
+            ("Primary behaviour of concern",     top_beh),
             ("Most common trigger / antecedent", top_ant),
-            ("Hotspot location", top_loc),
-            ("Peak time of day", top_session),
+            ("Hotspot location",                 top_loc),
+            ("Peak time of day",                 top_session),
         ]:
-            p = ctx_c.add_paragraph()
-            arun(p, f"{label}: ", bold=True, size=16, color=GREY_DARK)
-            arun(p, val, size=16)
-        doc.add_paragraph()
+            p = kf_c.add_paragraph()
+            p.paragraph_format.space_before = Pt(2)
+            p.paragraph_format.space_after  = Pt(2)
+            arun(p, f"{label}:  ", bold=True, size=15, color=GREY_DARK)
+            arun(p, val, size=15)
 
         doc.add_page_break()
 
-        # ── VISUAL ANALYTICS ─────────────────────────────────────────────────
-        section_header(doc, "VISUAL ANALYTICS — INCIDENT PATTERNS")
+        # ═══════════════════════════════════════════════════════════════════════
+        # PAGE 2 — Charts 1, 2, 3  (Daily / Behaviours / Triggers)
+        # ═══════════════════════════════════════════════════════════════════════
+        section_header(doc, "VISUAL ANALYTICS — FREQUENCY PATTERNS")
+        p_sp = doc.add_paragraph(); p_sp.paragraph_format.space_after = Pt(4)
 
-        plt.rcParams.update({
-            'font.family': 'DejaVu Sans',
-            'axes.spines.top': False,
-            'axes.spines.right': False,
-        })
-
-        # Chart 1: Daily Frequency
+        # ── Chart 1: Daily Frequency ──────────────────────────────────────────
         daily = full_df.groupby(full_df["date_parsed"].dt.date).size().reset_index(name="count")
-        fig, ax = plt.subplots(figsize=(14, 4), dpi=120)
-        bar_colours_daily = ['#C0392B' if v >= 3 else '#1A7A6E' for v in daily["count"]]
-        bars = ax.bar(range(len(daily)), daily["count"], color=bar_colours_daily,
-                      width=0.7, edgecolor='white', linewidth=0.8)
+        fig, ax = plt.subplots(figsize=(FIG_W, FIG_H), dpi=FIG_DPI)
+        bar_colours = ['#C0392B' if v >= 3 else '#1A7A6E' for v in daily["count"]]
+        bars = ax.bar(range(len(daily)), daily["count"],
+                      color=bar_colours, width=0.7, edgecolor='white', linewidth=0.6)
         ax.set_xticks(range(len(daily)))
-        ax.set_xticklabels([d.strftime("%a\n%d/%m") for d in daily["date_parsed"]], fontsize=8)
-        ax.set_ylabel("Incidents", fontsize=10, fontweight='bold')
-        ax.set_title("Daily Incident Frequency  (teal = 1–2, red = 3+)", fontsize=11, fontweight='bold', pad=10)
+        ax.set_xticklabels([d.strftime("%a %d/%m") for d in daily["date_parsed"]],
+                           fontsize=7, rotation=35, ha='right')
+        ax.set_ylabel("Incidents", fontsize=8.5, fontweight='bold', color='#334155')
+        ax.set_title("1.  Daily Incident Frequency  —  teal = 1–2 incidents,  red = 3+",
+                     fontsize=9.5, fontweight='bold', color='#0f172a', pad=6, loc='left')
         ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
-        ax.grid(True, alpha=0.3, linestyle='--', axis='y')
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
         for bar, v in zip(bars, daily["count"]):
             if v > 0:
-                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.05,
-                        str(int(v)), ha='center', va='bottom', fontsize=9, fontweight='bold')
-        plt.tight_layout()
-        chart_to_docx(doc, fig)
-        p = doc.add_paragraph()
-        arun(p, "Daily incident frequency. Red bars = days with 3+ incidents — priority days for proactive planning.",
-             size=15, italic=True, color="555555")
-        doc.add_paragraph()
+                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.05,
+                        str(int(v)), ha='center', va='bottom', fontsize=8, fontweight='bold', color='#0f172a')
+        base_ax_style(ax)
+        plt.tight_layout(pad=0.4)
+        add_chart(doc, fig,
+            f"Daily totals across the data period. Red bars flag days with 3+ incidents — these are priority days for proactive planning.")
 
-        # Chart 2: Behaviour Types
+        # ── Chart 2: Behaviour Types ──────────────────────────────────────────
         beh_counts = full_df["behaviour_type"].value_counts().head(6)
-        fig, ax = plt.subplots(figsize=(12, 4), dpi=120)
-        chart_colours = ['#C0392B', '#E67E22', '#1A7A6E', '#2E4057', '#D97706', '#5D6D7E']
-        bars = ax.barh(beh_counts.index[::-1], beh_counts.values[::-1],
-                       color=chart_colours[:len(beh_counts)], edgecolor='white')
-        ax.set_xlabel("Number of incidents", fontsize=10, fontweight='bold')
-        ax.set_title("Behaviours of Concern — Frequency", fontsize=11, fontweight='bold', pad=10)
+        labels_beh = wrap_labels(list(beh_counts.index[::-1]))
+        chart_colours = ['#C0392B','#E67E22','#1A7A6E','#2E4057','#D97706','#5D6D7E']
+        fig, ax = plt.subplots(figsize=(FIG_W, FIG_H), dpi=FIG_DPI)
+        y_pos = range(len(labels_beh))
+        bars = ax.barh(y_pos, beh_counts.values[::-1],
+                       color=chart_colours[:len(beh_counts)], edgecolor='white', height=0.6)
+        ax.set_yticks(list(y_pos))
+        ax.set_yticklabels(labels_beh, fontsize=8)
+        ax.set_xlabel("Number of incidents", fontsize=8.5, fontweight='bold', color='#334155')
+        ax.set_title("2.  Behaviours of Concern — Frequency",
+                     fontsize=9.5, fontweight='bold', color='#0f172a', pad=6, loc='left')
         ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
-        ax.grid(True, alpha=0.3, linestyle='--', axis='x')
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
         for bar, v in zip(bars, beh_counts.values[::-1]):
-            ax.text(v + 0.1, bar.get_y() + bar.get_height() / 2,
-                    f"{int(v)} incidents", va='center', fontsize=9, fontweight='bold')
-        plt.tight_layout()
-        chart_to_docx(doc, fig)
-        p = doc.add_paragraph()
-        arun(p, f"Primary behaviour: {beh_counts.index[0]} "
-             f"({int(beh_counts.values[0])} of {len(full_df)} incidents, "
-             f"{int(beh_counts.values[0]/len(full_df)*100)}%).",
-             size=15, italic=True, color="555555")
-        doc.add_paragraph()
+            ax.text(v + 0.08, bar.get_y() + bar.get_height()/2,
+                    str(int(v)), va='center', fontsize=8, fontweight='bold', color='#0f172a')
+        base_ax_style(ax)
+        plt.tight_layout(pad=0.4)
+        add_chart(doc, fig,
+            f"Primary behaviour: {beh_counts.index[0]} "
+            f"({int(beh_counts.values[0])} of {len(full_df)} incidents, "
+            f"{int(beh_counts.values[0]/len(full_df)*100)}% of total).")
 
-        # Chart 3: Antecedents
+        # ── Chart 3: Triggers ─────────────────────────────────────────────────
         ant_counts = full_df["antecedent"].value_counts().head(6)
-        fig, ax = plt.subplots(figsize=(12, 4.5), dpi=120)
-        bars = ax.barh(ant_counts.index[::-1], ant_counts.values[::-1], color='#2E4057', edgecolor='white')
-        ax.set_xlabel("Number of incidents preceded by this trigger", fontsize=10, fontweight='bold')
-        ax.set_title("Most Common Triggers / Antecedents", fontsize=11, fontweight='bold', pad=10)
+        labels_ant = wrap_labels(list(ant_counts.index[::-1]))
+        fig, ax = plt.subplots(figsize=(FIG_W, FIG_H), dpi=FIG_DPI)
+        y_pos = range(len(labels_ant))
+        bars = ax.barh(y_pos, ant_counts.values[::-1],
+                       color='#2E4057', edgecolor='white', height=0.6)
+        ax.set_yticks(list(y_pos))
+        ax.set_yticklabels(labels_ant, fontsize=7.5)
+        ax.set_xlabel("Number of incidents preceded by this trigger",
+                      fontsize=8.5, fontweight='bold', color='#334155')
+        ax.set_title("3.  Most Common Triggers / Antecedents",
+                     fontsize=9.5, fontweight='bold', color='#0f172a', pad=6, loc='left')
         ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
-        ax.grid(True, alpha=0.3, linestyle='--', axis='x')
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
         for bar, v in zip(bars, ant_counts.values[::-1]):
-            ax.text(v + 0.1, bar.get_y() + bar.get_height() / 2,
-                    f"{int(v)}×", va='center', fontsize=9, fontweight='bold', color='#2E4057')
-        plt.tight_layout()
-        chart_to_docx(doc, fig)
-        p = doc.add_paragraph()
-        arun(p, f"Key trigger: '{top_ant}'. Pre-empting this trigger is the highest-leverage prevention strategy.",
-             size=15, italic=True, color="555555")
-        doc.add_paragraph()
+            ax.text(v + 0.08, bar.get_y() + bar.get_height()/2,
+                    f"{int(v)}×", va='center', fontsize=8, fontweight='bold', color='#2E4057')
+        base_ax_style(ax)
+        plt.tight_layout(pad=0.4)
+        add_chart(doc, fig,
+            f"Key trigger: '{wrap_labels([top_ant], width=60)[0]}'. "
+            "Pre-empting this trigger is the single highest-leverage prevention strategy.")
 
         doc.add_page_break()
-        section_header(doc, "VISUAL ANALYTICS — TIME AND LOCATION PATTERNS")
 
-        # Chart 4: Time of Day with real time ranges
+        # ═══════════════════════════════════════════════════════════════════════
+        # PAGE 3 — Charts 4, 5, 6  (Time of Day / Location / Severity)
+        # ═══════════════════════════════════════════════════════════════════════
+        section_header(doc, "VISUAL ANALYTICS — TIME, LOCATION & SEVERITY")
+        p_sp2 = doc.add_paragraph(); p_sp2.paragraph_format.space_after = Pt(4)
+
+        # ── Chart 4: Time of Day ──────────────────────────────────────────────
         SESSION_LABELS = {
-            'Morning':   'Morning\n(9:00am – 11:00am)',
-            'Middle':    'Middle\n(11:00am – 1:00pm)',
-            'Afternoon': 'Afternoon\n(1:00pm – 3:00pm)',
+            'Morning':   'Morning\n9:00am – 11:00am',
+            'Middle':    'Middle of day\n11:00am – 1:00pm',
+            'Afternoon': 'Afternoon\n1:00pm – 3:00pm',
         }
-        session_order_bap = ['Morning', 'Middle', 'Afternoon']
-        session_counts_bap = full_df["session"].value_counts().reindex(session_order_bap, fill_value=0)
-        session_display_bap = [SESSION_LABELS[s] for s in session_order_bap]
-        fig, ax = plt.subplots(figsize=(10, 4), dpi=120)
-        peak_idx = session_counts_bap.values.argmax()
-        bar_colours_session = ['#E67E22' if i == peak_idx else '#1A7A6E'
-                               for i in range(len(session_order_bap))]
-        bars = ax.bar(session_display_bap, session_counts_bap.values,
-                      color=bar_colours_session, edgecolor='white', linewidth=1.5, width=0.5)
-        ax.set_ylabel("Number of incidents", fontsize=10, fontweight='bold')
-        ax.set_title("Incidents by Time of Day  (orange = peak session)", fontsize=11, fontweight='bold', pad=10)
+        session_order = ['Morning', 'Middle', 'Afternoon']
+        session_counts = full_df["session"].value_counts().reindex(session_order, fill_value=0)
+        peak_idx = int(session_counts.values.argmax())
+        bar_colours_s = ['#E67E22' if i == peak_idx else '#1A7A6E'
+                         for i in range(len(session_order))]
+        fig, ax = plt.subplots(figsize=(FIG_W, FIG_H), dpi=FIG_DPI)
+        x_pos = [0, 1, 2]
+        bars = ax.bar(x_pos, session_counts.values,
+                      color=bar_colours_s, edgecolor='white', linewidth=1, width=0.45)
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels([SESSION_LABELS[s] for s in session_order],
+                           fontsize=8.5, linespacing=1.3)
+        ax.set_ylabel("Number of incidents", fontsize=8.5, fontweight='bold', color='#334155')
+        ax.set_title("4.  Incidents by Time of Day  —  orange = peak session",
+                     fontsize=9.5, fontweight='bold', color='#0f172a', pad=6, loc='left')
         ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
-        ax.grid(True, alpha=0.3, linestyle='--', axis='y')
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        for bar, v in zip(bars, session_counts_bap.values):
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.05,
-                    str(int(v)), ha='center', va='bottom', fontsize=12, fontweight='bold')
-        plt.tight_layout()
-        chart_to_docx(doc, fig)
-        peak_session_bap = session_order_bap[peak_idx]
-        p = doc.add_paragraph()
-        arun(p, f"Peak: {SESSION_LABELS[peak_session_bap].replace(chr(10), ' ')} — "
-             f"{int(session_counts_bap[peak_session_bap])} of {len(full_df)} incidents "
-             f"({int(session_counts_bap[peak_session_bap]/len(full_df)*100)}%). "
-             "Consider additional proactive support during this window.",
-             size=15, italic=True, color="555555")
-        doc.add_paragraph()
+        for bar, v in zip(bars, session_counts.values):
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.05,
+                    str(int(v)), ha='center', va='bottom', fontsize=11, fontweight='bold', color='#0f172a')
+        base_ax_style(ax)
+        plt.tight_layout(pad=0.4)
+        peak_name = session_order[peak_idx]
+        add_chart(doc, fig,
+            f"Peak: {SESSION_LABELS[peak_name].replace(chr(10),' ')} — "
+            f"{int(session_counts[peak_name])} of {len(full_df)} incidents "
+            f"({int(session_counts[peak_name]/len(full_df)*100)}%). "
+            "Additional proactive support is recommended during this window.")
 
-        # Chart 5: Location Hotspots
+        # ── Chart 5: Location Hotspots ────────────────────────────────────────
         loc_counts = full_df["location"].value_counts().head(6)
-        fig, ax = plt.subplots(figsize=(12, 4), dpi=120)
-        loc_colours = ['#C0392B' if i == 0 else '#1A7A6E' for i in range(len(loc_counts))]
-        bars = ax.barh(loc_counts.index[::-1], loc_counts.values[::-1],
-                       color=loc_colours[::-1], edgecolor='white')
-        ax.set_xlabel("Number of incidents in this location", fontsize=10, fontweight='bold')
-        ax.set_title("Location Hotspots  (red = highest frequency)", fontsize=11, fontweight='bold', pad=10)
+        labels_loc = wrap_labels(list(loc_counts.index[::-1]))
+        loc_colours = ['#C0392B' if i == len(loc_counts)-1 else '#1A7A6E'
+                       for i in range(len(loc_counts))]
+        fig, ax = plt.subplots(figsize=(FIG_W, FIG_H), dpi=FIG_DPI)
+        y_pos = range(len(labels_loc))
+        bars = ax.barh(y_pos, loc_counts.values[::-1],
+                       color=loc_colours, edgecolor='white', height=0.6)
+        ax.set_yticks(list(y_pos))
+        ax.set_yticklabels(labels_loc, fontsize=8.5)
+        ax.set_xlabel("Number of incidents in this location",
+                      fontsize=8.5, fontweight='bold', color='#334155')
+        ax.set_title("5.  Location Hotspots  —  red = highest frequency",
+                     fontsize=9.5, fontweight='bold', color='#0f172a', pad=6, loc='left')
         ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
-        ax.grid(True, alpha=0.3, linestyle='--', axis='x')
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
         for bar, v in zip(bars, loc_counts.values[::-1]):
-            ax.text(v + 0.05, bar.get_y() + bar.get_height() / 2,
-                    f"{int(v)} incidents", va='center', fontsize=9, fontweight='bold')
-        plt.tight_layout()
-        chart_to_docx(doc, fig)
-        p = doc.add_paragraph()
-        arun(p, f"Hotspot: {top_loc}. Environmental modification and proactive supervision in this area are priority strategies.",
-             size=15, italic=True, color="555555")
-        doc.add_paragraph()
+            ax.text(v + 0.08, bar.get_y() + bar.get_height()/2,
+                    f"{int(v)} incidents", va='center', fontsize=8, fontweight='bold', color='#0f172a')
+        base_ax_style(ax)
+        plt.tight_layout(pad=0.4)
+        add_chart(doc, fig,
+            f"Hotspot: {top_loc}. Environmental modification and targeted supervision in this area are a priority strategy.")
 
-        # Chart 6: Severity Trajectory
-        fig, ax = plt.subplots(figsize=(14, 4), dpi=120)
-        ax.axhspan(0, 2.5, color='#d1fae5', alpha=0.35, label='Within Window (Levels 1–2)')
-        ax.axhspan(2.5, 3.5, color='#fef3c7', alpha=0.35, label='Edge of Window (Level 3)')
-        ax.axhspan(3.5, 5.5, color='#fee2e2', alpha=0.35, label='Outside Window (Levels 4–5)')
-        sev_colours = {1: '#10b981', 2: '#3b82f6', 3: '#f59e0b', 4: '#ef4444', 5: '#7f1d1d'}
-        for sev in [1, 2, 3, 4, 5]:
+        # ── Chart 6: Severity Trajectory ─────────────────────────────────────
+        sev_colours = {1:'#10b981',2:'#3b82f6',3:'#f59e0b',4:'#ef4444',5:'#7f1d1d'}
+        sev_level_names = {1:'Level 1 (Minor)',2:'Level 2 (Low)',3:'Level 3 (Moderate)',
+                           4:'Level 4 (Serious)',5:'Level 5 (Critical)'}
+        fig, ax = plt.subplots(figsize=(FIG_W, FIG_H), dpi=FIG_DPI)
+        ax.axhspan(0.5, 2.5,  color='#d1fae5', alpha=0.30, zorder=0)
+        ax.axhspan(2.5, 3.5,  color='#fef3c7', alpha=0.30, zorder=0)
+        ax.axhspan(3.5, 5.5,  color='#fee2e2', alpha=0.30, zorder=0)
+        # Subtle zone labels
+        for y, lbl, col in [(1.5,'Within window','#059669'),
+                            (3.0,'Edge','#d97706'),
+                            (4.5,'Outside window','#dc2626')]:
+            ax.text(full_df['date_parsed'].min(), y, lbl,
+                    fontsize=6.5, color=col, alpha=0.6, va='center', style='italic')
+        for sev in [1,2,3,4,5]:
             mask = full_df['severity'] == sev
             if mask.any():
-                ax.scatter(full_df.loc[mask, 'date_parsed'], full_df.loc[mask, 'severity'],
-                           s=80, color=sev_colours[sev], alpha=0.8,
-                           label=f'Level {sev}', edgecolors='white', linewidth=0.8, zorder=5)
+                ax.scatter(full_df.loc[mask,'date_parsed'], full_df.loc[mask,'severity'],
+                           s=45, color=sev_colours[sev], alpha=0.85,
+                           label=sev_level_names[sev], edgecolors='white', linewidth=0.6, zorder=5)
         if len(full_df) >= 4:
             x_num = np.arange(len(full_df))
             z = np.polyfit(x_num, full_df['severity'], 1)
             p_poly = np.poly1d(z)
             trend_col = '#22c55e' if z[0] < 0 else '#ef4444'
             ax.plot(full_df['date_parsed'], p_poly(x_num),
-                    color=trend_col, linewidth=2.5, linestyle='--', label='Trend', zorder=4)
-        ax.set_xlabel("Date", fontsize=10, fontweight='bold')
-        ax.set_yticks([1, 2, 3, 4, 5])
-        ax.set_yticklabels(['Level 1\n(Minor)', 'Level 2\n(Low)', 'Level 3\n(Moderate)',
-                            'Level 4\n(Serious)', 'Level 5\n(Critical)'], fontsize=8)
+                    color=trend_col, linewidth=2, linestyle='--',
+                    label='Trend ↓ improving' if z[0]<0 else 'Trend ↑ worsening', zorder=4)
+        ax.set_xlabel("Date", fontsize=8.5, fontweight='bold', color='#334155')
+        ax.set_yticks([1,2,3,4,5])
+        ax.set_yticklabels(['1\nMinor','2\nLow','3\nModerate','4\nSerious','5\nCritical'], fontsize=7)
         ax.set_ylim(0.3, 5.7)
-        ax.set_title("Severity Trajectory — Window of Tolerance Analysis", fontsize=11, fontweight='bold', pad=10)
-        ax.legend(loc='upper right', frameon=True, fontsize=8, framealpha=0.9, ncol=2)
+        ax.set_title("6.  Severity Trajectory — Window of Tolerance",
+                     fontsize=9.5, fontweight='bold', color='#0f172a', pad=6, loc='left')
+        ax.legend(loc='upper right', frameon=True, fontsize=6.5,
+                  framealpha=0.85, ncol=3, borderpad=0.4, handlelength=1)
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
-        plt.xticks(rotation=30, ha='right', fontsize=8)
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        plt.tight_layout()
-        chart_to_docx(doc, fig)
+        plt.xticks(rotation=25, ha='right', fontsize=7.5)
+        base_ax_style(ax)
+        plt.tight_layout(pad=0.4)
         if len(full_df) >= 5:
-            recent_avg = full_df.tail(5)['severity'].mean()
-            early_avg = full_df.head(5)['severity'].mean()
-            direction = "improving (trending down)" if recent_avg < early_avg else \
-                        "worsening (trending up)" if recent_avg > early_avg else "stable"
+            r_avg = full_df.tail(5)['severity'].mean()
+            e_avg = full_df.head(5)['severity'].mean()
+            direction = "improving" if r_avg < e_avg else "worsening" if r_avg > e_avg else "stable"
         else:
             direction = "insufficient data for trend"
-        p = doc.add_paragraph()
-        arun(p, f"Severity trend: {direction}. Green = within window; yellow = edge; red = outside window (crisis).",
-             size=15, italic=True, color="555555")
-        doc.add_paragraph()
+        add_chart(doc, fig,
+            f"Severity trend: {direction}. Green zone = regulated (Levels 1–2); "
+            "yellow = edge (Level 3); red = crisis (Levels 4–5).")
 
         doc.add_page_break()
 
-        # ── SUMMARY ──────────────────────────────────────────────────────────
+        # ═══════════════════════════════════════════════════════════════════════
+        # PAGE 4 — Summary + Recommendations + Frameworks + Sign-off
+        # ═══════════════════════════════════════════════════════════════════════
         section_header(doc, "SUMMARY — EVIDENCE-BASED INTERPRETATION")
-        interp_tbl = doc.add_table(rows=1, cols=1)
-        interp_tbl.style = 'Table Grid'
+        p_sp3 = doc.add_paragraph(); p_sp3.paragraph_format.space_after = Pt(4)
+
+        interp_tbl = doc.add_table(rows=1, cols=1); interp_tbl.style='Table Grid'
         interp_c = interp_tbl.rows[0].cells[0]
-        set_bg(interp_c, TEAL_LIGHT)
-        set_borders(interp_c, TEAL_HEX)
+        set_bg(interp_c, TEAL_LIGHT); set_borders(interp_c, TEAL_HEX)
         interp_c.paragraphs[0].clear()
         total = len(full_df)
-        morning_pct = int(len(full_df[full_df['session'] == 'Morning']) / total * 100) if total else 0
-        middle_pct  = int(len(full_df[full_df['session'] == 'Middle']) / total * 100) if total else 0
-        arvo_pct    = int(len(full_df[full_df['session'] == 'Afternoon']) / total * 100) if total else 0
-        interp_text = (
+        m_pct = int(len(full_df[full_df['session']=='Morning'])  / total * 100) if total else 0
+        d_pct = int(len(full_df[full_df['session']=='Middle'])   / total * 100) if total else 0
+        a_pct = int(len(full_df[full_df['session']=='Afternoon'])/ total * 100) if total else 0
+        for line in [
             f"Based on {total} recorded incidents, {student['name']} experiences the most difficulty "
-            f"when '{top_ant}' occurs. This happens most frequently in {top_loc}, particularly during "
-            f"the {top_session} session "
-            f"(Morning {morning_pct}% / Middle {middle_pct}% / Afternoon {arvo_pct}%).\n\n"
+            f"when '{wrap_labels([top_ant], 70)[0]}' occurs. This happens most frequently in {top_loc}, "
+            f"particularly during the {top_session} session "
+            f"(Morning {m_pct}% / Middle of day {d_pct}% / Afternoon {a_pct}%).",
             f"The behaviour '{top_beh}' is the primary concern. From a trauma-informed perspective, "
-            f"this behaviour is {student['name']}'s way of communicating an unmet need or responding "
-            f"to feeling unsafe or overwhelmed — it is a stress response, not deliberate defiance.\n\n"
-            f"Risk level: {risk_level} ({risk_score}/100). "
-            f"All recommendations below prioritise the Berry Street Body and Relationship domains first."
-        )
-        for line in interp_text.split('\n\n'):
+            f"this is {student['name']}'s way of communicating an unmet need or responding to feeling "
+            f"unsafe or overwhelmed — a stress response, not deliberate defiance.",
+            f"Risk level: {risk_level} ({risk_score}/100). All recommendations below prioritise the "
+            f"Berry Street Body and Relationship domains first.",
+        ]:
             p = interp_c.add_paragraph()
             p.paragraph_format.space_before = Pt(3)
-            p.paragraph_format.space_after = Pt(3)
-            arun(p, line, size=17)
-        doc.add_paragraph()
+            p.paragraph_format.space_after  = Pt(3)
+            arun(p, line, size=16)
 
-        # ── RECOMMENDATIONS TABLE ─────────────────────────────────────────────
+        doc.add_paragraph().paragraph_format.space_after = Pt(5)
+
+        # Recommendations table — 5 rows, 2 cols
         section_header(doc, "EVIDENCE-BASED RECOMMENDATIONS")
-        rec_tbl = doc.add_table(rows=5, cols=2)
-        rec_tbl.style = 'Table Grid'
+        p_sp4 = doc.add_paragraph(); p_sp4.paragraph_format.space_after = Pt(4)
+
+        rec_tbl = doc.add_table(rows=5, cols=2); rec_tbl.style='Table Grid'
+        # Set column widths
+        for row in rec_tbl.rows:
+            row.cells[0].width = Cm(4.8)
+            row.cells[1].width = Cm(12.6)
+
         rec_headers = [
-            ("1. Body Domain — Regulation", TEAL_HEX),
-            ("2. Relationship Domain — Connection", GREY_DARK),
-            ("3. Stamina Domain — Persistence", AMBER_HEX),
-            ("4. CPI Principles — De-escalation", "C0392B"),
-            ("5. SMART Goal", "2E7D32"),
+            ("1. Body Domain\nRegulation",            TEAL_HEX),
+            ("2. Relationship Domain\nConnection",     GREY_DARK),
+            ("3. Stamina Domain\nPersistence",         AMBER_HEX),
+            ("4. CPI Principles\nDe-escalation",       "C0392B"),
+            ("5. SMART Goal",                          "2E7D32"),
         ]
         rec_content = [
-            [f"• Regulated start before {top_session} (breathing, movement break)",
-             f"• Visual schedule check-in before '{top_ant}'",
-             f"• Environmental modification in {top_loc}",
-             "• Sensory regulation opportunities built into schedule",
-             "• Proactive breaks before dysregulation — widen the window"],
-            ["• CPI Supportive Stance — low, slow voice; body at an angle",
-             "• One key adult maintains consistent connection",
-             "• Acknowledge feelings: 'I can see that feels really hard'",
-             "• Offer choices to maintain sense of control",
-             "• Never correct publicly — maintain dignity always"],
-            ["• Teach help-seeking using a visual cue card",
-             "• Practice requesting breaks in low-stakes moments",
-             "• Emotional literacy: name the feeling, not just the behaviour",
-             "• Celebrate effort and regulation, not just outcomes",
-             "• Break tasks into small, achievable steps"],
-            [f"• Intervene at first signs of escalation — before '{top_beh}' occurs",
-             "• Co-regulation: your calm becomes their calm",
-             "• Remove audience; offer a face-saving way out",
-             "• Reduce demands when dysregulated — this is not rewarding behaviour",
-             "• Post-incident: repair relationship before re-engaging with learning"],
-            [f"• Over 5 weeks, {student['name']} will use a help-seeking strategy in 4/5 observed opportunities.",
-             f"• Review date: {(datetime.now() + timedelta(weeks=5)).strftime('%d %B %Y')}",
-             "• Measure: staff tally sheet, incident frequency trend",
-             "• Success indicator: reduction in severity and frequency of peak-session incidents"],
+            [f"Regulated start before {top_session} (breathing, movement break)",
+             f"Visual schedule check-in before '{wrap_labels([top_ant],45)[0]}'",
+             f"Environmental modification in {top_loc}",
+             "Sensory regulation built into schedule",
+             "Proactive breaks before dysregulation — widen the window"],
+            ["CPI Supportive Stance — low, slow voice; body at an angle",
+             "One key adult maintains consistent connection",
+             "Acknowledge feelings: 'I can see that feels really hard'",
+             "Offer choices to maintain sense of control",
+             "Never correct publicly — maintain dignity always"],
+            ["Teach help-seeking using a visual cue card",
+             "Practice requesting breaks in low-stakes moments",
+             "Emotional literacy: name the feeling, not just the behaviour",
+             "Celebrate effort and regulation, not just outcomes",
+             "Break tasks into small, achievable steps"],
+            [f"Intervene at first signs — before '{wrap_labels([top_beh],40)[0]}' occurs",
+             "Co-regulation: your calm becomes their calm",
+             "Remove audience; offer a face-saving exit",
+             "Reduce demands when dysregulated — this is not rewarding behaviour",
+             "Post-incident: repair relationship before re-engaging with learning"],
+            [f"Over 5 weeks, {student['name']} will use a help-seeking strategy in 4/5 observed opportunities.",
+             f"Review date: {(datetime.now() + timedelta(weeks=5)).strftime('%d %B %Y')}",
+             "Measure: staff tally sheet, incident frequency trend",
+             "Success indicator: reduction in severity and frequency of peak-session incidents"],
         ]
         for row_idx, ((hdr_text, hdr_colour), content_lines) in enumerate(zip(rec_headers, rec_content)):
             row = rec_tbl.rows[row_idx]
             hdr_cell = row.cells[0]
-            set_bg(hdr_cell, hdr_colour)
-            set_borders(hdr_cell, TEAL_HEX)
+            set_bg(hdr_cell, hdr_colour); set_borders(hdr_cell, TEAL_HEX)
             hdr_cell.paragraphs[0].clear()
             p = hdr_cell.paragraphs[0]
             p.paragraph_format.space_before = Pt(4)
-            arun(p, hdr_text, bold=True, size=16, color=WHITE)
+            p.paragraph_format.space_after  = Pt(4)
+            arun(p, hdr_text, bold=True, size=15, color=WHITE)
             content_cell = row.cells[1]
             set_bg(content_cell, LIGHT_GREY if row_idx % 2 == 0 else WHITE)
             set_borders(content_cell, TEAL_HEX)
             content_cell.paragraphs[0].clear()
             for line in content_lines:
                 p = content_cell.add_paragraph()
-                p.paragraph_format.space_before = Pt(2)
-                p.paragraph_format.space_after = Pt(2)
-                arun(p, line, size=16)
-        doc.add_paragraph()
+                p.paragraph_format.space_before = Pt(1.5)
+                p.paragraph_format.space_after  = Pt(1.5)
+                arun(p, f"• {line}", size=15)
 
-        # ── FRAMEWORKS TABLE ──────────────────────────────────────────────────
+        doc.add_paragraph().paragraph_format.space_after = Pt(5)
+
+        # Frameworks — 4 columns in one row
         section_header(doc, "THEORETICAL FRAMEWORKS APPLIED")
-        fw_tbl = doc.add_table(rows=1, cols=4)
-        fw_tbl.style = 'Table Grid'
+        p_sp5 = doc.add_paragraph(); p_sp5.paragraph_format.space_after = Pt(4)
+
+        fw_tbl = doc.add_table(rows=1, cols=4); fw_tbl.style='Table Grid'
         for ci, (fw_name, fw_desc) in enumerate([
-            ("Applied Behaviour Analysis (ABA)",
-             "Understanding triggers, behaviour and consequences to identify function and reduce harmful behaviours."),
+            ("Applied Behaviour Analysis",
+             "Triggers, behaviour and consequences — understand function, reduce harmful patterns."),
             ("Trauma-Informed Practice",
-             "Behaviour is communication. Students cannot learn until they feel safe. Relationships are central."),
+             "Behaviour is communication. Safety and relationships must come before learning."),
             ("Berry Street Education Model",
-             "Sequential framework: Body → Relationship → Stamina → Engagement → Character."),
-            ("Crisis Prevention Institute (CPI)",
-             "De-escalation, supportive stance, maintaining dignity, early intervention, co-regulation."),
+             "Body → Relationship → Stamina → Engagement → Character. Sequential domains."),
+            ("Crisis Prevention Institute",
+             "De-escalation, supportive stance, dignity, early intervention, co-regulation."),
         ]):
             c = fw_tbl.rows[0].cells[ci]
             set_bg(c, TEAL_LIGHT if ci % 2 == 0 else AMBER_LIGHT)
             set_borders(c, TEAL_HEX)
             c.paragraphs[0].clear()
             p = c.paragraphs[0]
-            arun(p, fw_name + "\n", bold=True, size=15, color=GREY_DARK)
-            arun(p, fw_desc, size=14, color="444444")
-        doc.add_paragraph()
+            p.paragraph_format.space_before = Pt(3)
+            p.paragraph_format.space_after  = Pt(2)
+            arun(p, fw_name + "\n", bold=True, size=14, color=GREY_DARK)
+            arun(p, fw_desc, size=13, color="444444")
 
-        # ── SIGN-OFF ──────────────────────────────────────────────────────────
-        sign_tbl = doc.add_table(rows=2, cols=3)
-        sign_tbl.style = 'Table Grid'
-        for ci, lbl in enumerate(["Prepared by", "Reviewed by", "Next Review Date"]):
+        doc.add_paragraph().paragraph_format.space_after = Pt(5)
+
+        # Sign-off
+        sign_tbl = doc.add_table(rows=2, cols=3); sign_tbl.style='Table Grid'
+        for ci, lbl in enumerate(["Prepared by","Reviewed by","Next Review Date"]):
             c = sign_tbl.rows[0].cells[ci]
-            set_bg(c, GREY_DARK)
-            set_borders(c, TEAL_HEX)
+            set_bg(c, GREY_DARK); set_borders(c, TEAL_HEX)
             c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            arun(c.paragraphs[0], lbl, bold=True, size=16, color=WHITE)
+            c.paragraphs[0].paragraph_format.space_before = Pt(2)
+            c.paragraphs[0].paragraph_format.space_after  = Pt(2)
+            arun(c.paragraphs[0], lbl, bold=True, size=15, color=WHITE)
         for ci, val in enumerate([
-            "_____________________________\nDate: _______________",
-            "_____________________________\nDate: _______________",
+            "_________________________\nDate: _______________",
+            "_________________________\nDate: _______________",
             (datetime.now() + timedelta(weeks=5)).strftime('%d %B %Y'),
         ]):
             c = sign_tbl.rows[1].cells[ci]
-            set_bg(c, LIGHT_GREY)
-            set_borders(c, TEAL_HEX)
+            set_bg(c, LIGHT_GREY); set_borders(c, TEAL_HEX)
             for line in val.split('\n'):
-                cpara(c, line, size=16, sb=20, sa=20)
+                cpara(c, line, size=15, sb=15, sa=15)
 
         file_stream = BytesIO()
         doc.save(file_stream)
@@ -788,6 +844,7 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         st.error(f"BAP Error: {e}")
         st.error(traceback.format_exc())
         return None
+
 
 
 # ============================================
@@ -2658,6 +2715,381 @@ Document: {ai_notes}"""
                 st.session_state["ai_extracted_incident"] = None
                 st.rerun()
 
+
+def render_admin_portal():
+    if st.session_state.current_user.get("role") != "ADM":
+        st.error("⛔ Access Denied: Admin privileges required")
+        if st.button("⬅ Back to Landing"):
+            go_to("landing")
+        return
+    st.markdown("## 🔧 Admin Portal")
+    col1, col2 = st.columns([6, 1])
+    with col1:
+        if st.button("⬅ Back to Landing", key="back_admin"):
+            go_to("landing")
+    st.markdown("---")
+    tab1, tab2, tab3, tab4 = st.tabs(["👥 Active Students", "📦 Archived Students", "📊 System Overview", "👨‍💼 Staff Management"])
+
+    with tab1:
+        st.markdown("### Student Management")
+        active_students = [s for s in st.session_state.students if not s.get("archived", False)]
+        st.markdown(f"**{len(active_students)} active students**")
+        if active_students:
+            for prog in ["JP", "PY", "SY"]:
+                prog_students = [s for s in active_students if s.get("program") == prog]
+                if prog_students:
+                    st.markdown(f"**{prog}** ({len(prog_students)})")
+                    for s in sorted(prog_students, key=lambda x: x.get("name","")):
+                        sc1, sc2, sc3, sc4 = st.columns([3, 2, 2, 1])
+                        with sc1: st.markdown(f"**{s.get('name','Unknown')}**")
+                        with sc2: st.caption(f"EDID: {s.get('edid','—')}")
+                        with sc3: st.caption(f"Grade: {s.get('grade','—')} · DOB: {s.get('dob','—')}")
+                        with sc4:
+                            if st.button("Archive", key=f"arch_{s['id']}", help="Archive student"):
+                                s["archived"] = True
+                                try:
+                                    supabase.table("students").update({"archived": True}).eq("id", s["id"]).execute()
+                                    st.session_state.students = load_students_from_db()
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Could not archive: {e}")
+                    st.markdown("---")
+        else:
+            st.info("No active students. Add students below.")
+
+        with st.expander("➕ Add New Student", expanded=False):
+            with st.form("add_student_form"):
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    new_first_name = st.text_input("First Name *", placeholder="Boston")
+                    new_last_name  = st.text_input("Last Name *", placeholder="Murphy")
+                    new_grade      = st.selectbox("Grade *", ["R","Y1","Y2","Y3","Y4","Y5","Y6","Y7","Y8","Y9","Y10","Y11","Y12"])
+                with col2:
+                    new_edid = st.text_input("EDID *", placeholder="ED123456")
+                    new_dob  = st.date_input("Date of Birth *", value=date(2015, 1, 1))
+                with col3:
+                    new_program         = st.selectbox("Program *", ["JP", "PY", "SY"])
+                    new_placement_start = st.date_input("Placement Start Date *", value=date.today())
+                with col4:
+                    st.write("")
+                    new_placement_end = st.date_input("Placement End Date (Optional)", value=None)
+                student_submitted = st.form_submit_button("Add Student", type="primary")
+            if student_submitted:
+                if not new_first_name or not new_last_name or not new_edid or not new_grade or not new_program:
+                    st.error("Please complete all required fields marked with *")
+                else:
+                    new_student = {
+                        "id": f"stu_{uuid.uuid4().hex[:8]}",
+                        "first_name": new_first_name.strip(), "last_name": new_last_name.strip(),
+                        "name": f"{new_first_name.strip()} {new_last_name.strip()}",
+                        "edid": new_edid.strip(), "grade": new_grade, "dob": new_dob.isoformat(),
+                        "program": new_program, "placement_start": new_placement_start.isoformat(),
+                        "placement_end": new_placement_end.isoformat() if new_placement_end else None,
+                        "archived": False
+                    }
+                    if save_student_to_db(new_student):
+                        st.session_state.students = load_students_from_db()
+                        st.success(f"✅ Added {new_student['name']} to {new_program}")
+                        st.rerun()
+                    else:
+                        st.error("❌ Failed to save student to database")
+
+        st.markdown("### Current Students")
+        for program in ["JP", "PY", "SY"]:
+            st.markdown(f"#### {PROGRAM_NAMES[program]}")
+            program_students = [s for s in st.session_state.students if s["program"] == program and not s.get("archived", False)]
+            if not program_students:
+                st.caption("No students in this program"); continue
+            for student in program_students:
+                with st.container(border=True):
+                    col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
+                    with col1:
+                        st.markdown(f"**{student['name']}**")
+                        st.caption(f"Grade {student['grade']}")
+                        if student.get('edid'): st.caption(f"🆔 EDID: {student['edid']}")
+                    with col2:
+                        if student.get('placement_start'):
+                            start_date = datetime.fromisoformat(student['placement_start']).strftime('%d/%m/%Y')
+                            st.caption(f"📅 Start: {start_date}")
+                            start = datetime.fromisoformat(student['placement_start']).date()
+                            end   = datetime.fromisoformat(student['placement_end']).date() if student.get('placement_end') else date.today()
+                            st.caption(f"📊 {(end - start).days} days enrolled")
+                        else:
+                            st.caption("📅 Start: Not set")
+                    with col3:
+                        if student.get('placement_end'):
+                            end_date = datetime.fromisoformat(student['placement_end']).strftime('%d/%m/%Y')
+                            st.caption(f"📅 End: {end_date}")
+                            st.caption("🔴 Inactive")
+                        else:
+                            st.caption("📅 End: Ongoing")
+                            st.caption("🟢 Active")
+                    with col4:
+                        if st.button("✏️", key=f"edit_{student['id']}", help="Edit student"):
+                            st.session_state.editing_student = student['id']
+                            st.rerun()
+                        if st.button("📦 Archive", key=f"archive_{student['id']}"):
+                            student['archived'] = True
+                            if supabase:
+                                try:
+                                    supabase.table('students').update({'archived': True}).eq('id', student['id']).execute()
+                                    st.success(f"✅ {student['name']} archived")
+                                except Exception as e:
+                                    st.error(f"Archive failed: {e}")
+                            st.rerun()
+                if st.session_state.get("editing_student") == student['id']:
+                    with st.expander("✏️ Edit Student Details", expanded=True):
+                        with st.form(f"edit_form_{student['id']}"):
+                            edit_col1, edit_col2 = st.columns(2)
+                            with edit_col1:
+                                default_start = datetime.fromisoformat(student['placement_start']).date() if student.get('placement_start') else date.today()
+                                edit_start = st.date_input("Placement Start", value=default_start, key=f"edit_start_{student['id']}")
+                            with edit_col2:
+                                current_end = datetime.fromisoformat(student['placement_end']).date() if student.get('placement_end') else None
+                                edit_end = st.date_input("Placement End (None = Ongoing)", value=current_end, key=f"edit_end_{student['id']}")
+                            col_save, col_cancel = st.columns(2)
+                            with col_save:
+                                if st.form_submit_button("Save Changes", type="primary"):
+                                    student['placement_start'] = edit_start.isoformat()
+                                    student['placement_end']   = edit_end.isoformat() if edit_end else None
+                                    st.session_state.editing_student = None
+                                    st.success("✅ Updated")
+                                    st.rerun()
+                            with col_cancel:
+                                if st.form_submit_button("Cancel"):
+                                    st.session_state.editing_student = None
+                                    st.rerun()
+
+    with tab2:
+        st.markdown("### 📦 Archived Students")
+        archived_students = [s for s in st.session_state.students if s.get('archived', False)]
+        if not archived_students:
+            st.info("No archived students.")
+        else:
+            for program in ["JP", "PY", "SY"]:
+                prog_archived = [s for s in archived_students if s['program'] == program]
+                if not prog_archived: continue
+                st.markdown(f"#### {PROGRAM_NAMES[program]}")
+                for student in prog_archived:
+                    with st.container(border=True):
+                        col1, col2, col3 = st.columns([4, 3, 2])
+                        with col1:
+                            st.markdown(f"**{student['name']}**")
+                            st.caption(f"Grade {student['grade']} | EDID: {student.get('edid', 'N/A')}")
+                        with col2:
+                            if student.get('placement_start'):
+                                st.caption(f"📅 Placement: {datetime.fromisoformat(student['placement_start']).strftime('%d/%m/%Y')} – {datetime.fromisoformat(student['placement_end']).strftime('%d/%m/%Y') if student.get('placement_end') else 'ongoing'}")
+                            incident_count = len([i for i in st.session_state.incidents if i['student_id'] == student['id']])
+                            st.caption(f"📋 {incident_count} incidents on record")
+                        with col3:
+                            if st.button("♻️ Restore", key=f"restore_{student['id']}"):
+                                student['archived'] = False
+                                if supabase:
+                                    try:
+                                        supabase.table('students').update({'archived': False}).eq('id', student['id']).execute()
+                                        st.success(f"✅ {student['name']} restored")
+                                    except Exception as e:
+                                        st.error(f"Restore failed: {e}")
+                                st.rerun()
+                            if st.button("🗑️ Delete", key=f"permdelete_{student['id']}"):
+                                st.session_state[f"confirm_delete_{student['id']}"] = True
+                                st.rerun()
+                            if st.session_state.get(f"confirm_delete_{student['id']}"):
+                                st.warning(f"⚠️ Permanently delete {student['name']} and ALL their incident data?")
+                                col_yes, col_no = st.columns(2)
+                                with col_yes:
+                                    if st.button("Yes, delete", key=f"yes_delete_{student['id']}", type="primary"):
+                                        if supabase:
+                                            try:
+                                                supabase.table('incidents').delete().eq('student_id', student['id']).execute()
+                                                supabase.table('critical_incidents').delete().eq('student_id', student['id']).execute()
+                                                supabase.table('students').delete().eq('id', student['id']).execute()
+                                            except Exception as e:
+                                                st.error(f"Delete failed: {e}")
+                                        st.session_state.students = [s for s in st.session_state.students if s['id'] != student['id']]
+                                        st.session_state[f"confirm_delete_{student['id']}"] = False
+                                        st.rerun()
+                                with col_no:
+                                    if st.button("Cancel", key=f"no_delete_{student['id']}"):
+                                        st.session_state[f"confirm_delete_{student['id']}"] = False
+                                        st.rerun()
+
+    with tab3:
+        st.markdown("### System Overview")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            total_students  = len(st.session_state.students)
+            active_students = len([s for s in st.session_state.students if not s.get('placement_end')])
+            st.metric("Total Students", total_students)
+            st.caption(f"{active_students} active")
+        with col2: st.metric("Total Incidents", len(st.session_state.incidents))
+        with col3:
+            critical_cnt = len([i for i in st.session_state.incidents if i.get("is_critical")])
+            st.metric("Critical Incidents", critical_cnt)
+        with col4: st.metric("Staff Members", len(st.session_state.staff))
+        st.markdown("---")
+        st.markdown("#### Students by Program")
+        for prog in ["JP", "PY", "SY"]:
+            count  = len([s for s in st.session_state.students if s["program"] == prog])
+            active = len([s for s in st.session_state.students if s["program"] == prog and not s.get('placement_end')])
+            st.write(f"**{PROGRAM_NAMES[prog]}:** {count} total ({active} active)")
+
+    with tab4:
+        st.markdown("### Staff Management")
+        with st.expander("➕ Add New Staff Member", expanded=False):
+            with st.form("add_staff_form"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    staff_name     = st.text_input("Full Name *", placeholder="Jane Smith")
+                    staff_email    = st.text_input("Email Address *", placeholder="jane.smith@school.edu.au")
+                    staff_password = st.text_input("Initial Password *", type="password", value="demo123")
+                with col2:
+                    staff_role    = st.selectbox("Role *", ["TSS","Teacher","Leader","ADM"])
+                    staff_program = st.selectbox("Program *", ["JP","PY","SY","All Programs"])
+                    staff_phone   = st.text_input("Phone Number", placeholder="0412 345 678")
+                staff_notes  = st.text_area("Notes (Optional)")
+                submit_staff = st.form_submit_button("Add Staff Member", type="primary")
+                if submit_staff:
+                    if staff_name and staff_email and staff_password and staff_role:
+                        if any(s.get("email","").lower() == staff_email.lower() for s in st.session_state.staff):
+                            st.error(f"❌ Email {staff_email} already exists")
+                        else:
+                            new_staff = {
+                                "id": f"staff_{uuid.uuid4().hex[:8]}",
+                                "name": staff_name, "email": staff_email.lower().strip(),
+                                "password": staff_password, "role": staff_role,
+                                "program": staff_program if staff_program != "All Programs" else None,
+                                "phone": staff_phone if staff_phone else None,
+                                "notes": staff_notes if staff_notes else None,
+                                "receive_critical_emails": True,
+                                "created_date": date.today().isoformat()
+                            }
+                            if save_staff_to_db(new_staff):
+                                st.session_state.staff.append(new_staff)
+                                st.success(f"✅ Added {staff_name} to database")
+                                st.rerun()
+                            else:
+                                st.error("❌ Failed to save staff member to database")
+
+        st.markdown("---")
+        st.markdown("### Current Staff")
+        for role in ["ADM","Leader","Teacher","TSS"]:
+            role_names = {"ADM":"Administrators","Leader":"Program Leaders","Teacher":"Teachers","TSS":"Support Staff"}
+            role_staff = [s for s in st.session_state.staff if s.get("role") == role]
+            if role_staff:
+                st.markdown(f"#### {role_names[role]}")
+                for staff in role_staff:
+                    with st.container(border=True):
+                        col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
+                        with col1:
+                            st.markdown(f"**{staff['name']}**")
+                            st.caption(f"📧 {staff['email']}")
+                            if staff.get('phone'): st.caption(f"📱 {staff['phone']}")
+                        with col2:
+                            st.caption(f"**Role:** {staff['role']}")
+                            if staff.get('program'):
+                                st.caption(f"**Program:** {PROGRAM_NAMES[staff['program']]}")
+                            else:
+                                st.caption("**Program:** All Programs")
+                        with col3:
+                            receives_emails = staff.get('receive_critical_emails', True)
+                            st.caption("📬 Receives critical alerts" if receives_emails else "📪 No critical alerts")
+                            if staff.get('created_date'): st.caption(f"Added: {staff['created_date']}")
+                        with col4:
+                            if st.button("✏️", key=f"edit_staff_{staff['id']}", help="Edit staff"):
+                                st.session_state.editing_staff = staff['id']
+                                st.rerun()
+                    if st.session_state.get("editing_staff") == staff['id']:
+                        with st.expander("✏️ Edit Staff Details", expanded=True):
+                            with st.form(f"edit_staff_form_{staff['id']}"):
+                                edit_col1, edit_col2 = st.columns(2)
+                                with edit_col1:
+                                    edit_name  = st.text_input("Name", value=staff['name'], key=f"edit_staff_name_{staff['id']}")
+                                    edit_email = st.text_input("Email", value=staff['email'], key=f"edit_staff_email_{staff['id']}")
+                                    edit_phone = st.text_input("Phone", value=staff.get('phone',''), key=f"edit_staff_phone_{staff['id']}")
+                                with edit_col2:
+                                    edit_role = st.selectbox("Role", ["TSS","Teacher","Leader","ADM"],
+                                        index=["TSS","Teacher","Leader","ADM"].index(staff['role']),
+                                        key=f"edit_staff_role_{staff['id']}")
+                                    _prog_options = ["JP","PY","SY","All Programs"]
+                                    _prog_val = staff.get('program') if staff.get('program') in ["JP","PY","SY"] else "All Programs"
+                                    edit_program = st.selectbox("Program", _prog_options,
+                                        index=_prog_options.index(_prog_val),
+                                        key=f"edit_staff_program_{staff['id']}")
+                                    edit_receive_emails = st.checkbox("Receive critical incident emails",
+                                        value=staff.get('receive_critical_emails', True),
+                                        key=f"edit_staff_emails_{staff['id']}")
+                                edit_notes   = st.text_area("Notes", value=staff.get('notes',''), key=f"edit_staff_notes_{staff['id']}")
+                                new_password = st.text_input("New Password (leave blank to keep current)",
+                                    type="password", key=f"new_pass_{staff['id']}")
+                                col_save, col_cancel, col_delete = st.columns([1,1,1])
+                                with col_save:
+                                    if st.form_submit_button("💾 Save Changes", type="primary"):
+                                        staff['name']                    = edit_name
+                                        staff['email']                   = edit_email.lower().strip()
+                                        staff['phone']                   = edit_phone if edit_phone else None
+                                        staff['role']                    = edit_role
+                                        staff['program']                 = edit_program if edit_program != "All Programs" else None
+                                        staff['receive_critical_emails'] = edit_receive_emails
+                                        staff['notes']                   = edit_notes if edit_notes else None
+                                        if new_password:
+                                            staff['password']      = new_password
+                                            staff['password_hash'] = ""
+                                            if supabase:
+                                                try:
+                                                    supabase.table('staff').update({
+                                                        'password': new_password, 'password_hash': None
+                                                    }).eq('id', staff['id']).execute()
+                                                except Exception as e:
+                                                    st.error(f"Password update failed: {e}")
+                                        save_staff_to_db(staff)
+                                        st.session_state.editing_staff = None
+                                        st.success("✅ Updated" + (" (password reset)" if new_password else ""))
+                                        st.rerun()
+                                with col_cancel:
+                                    if st.form_submit_button("❌ Cancel"):
+                                        st.session_state.editing_staff = None
+                                        st.rerun()
+                                with col_delete:
+                                    if st.form_submit_button("🗑️ Delete"):
+                                        if staff['role'] != 'ADM' or len([s for s in st.session_state.staff if s.get('role') == 'ADM']) > 1:
+                                            st.session_state.staff.remove(staff)
+                                            st.session_state.editing_staff = None
+                                            st.success("✅ Staff member removed")
+                                            st.rerun()
+                                        else:
+                                            st.error("❌ Cannot delete the last administrator")
+
+        st.markdown("---")
+        st.markdown("### 📧 Email Notification Recipients")
+        email_recipients = [s for s in st.session_state.staff if s.get('receive_critical_emails', True)]
+        if email_recipients:
+            for recipient in email_recipients:
+                st.write(f"• **{recipient['name']}** ({recipient['email']}) - {recipient['role']}")
+        else:
+            st.warning("⚠️ No staff members set to receive critical incident emails!")
+
+
+def main():
+    init_state()
+    page = st.session_state.current_page
+    if not st.session_state.logged_in:
+        render_login_page()
+        return
+    if page == "landing":                  render_landing_page()
+    elif page == "program_students":       render_program_students_page()
+    elif page == "incident_log":           render_incident_log_page()
+    elif page == "critical_incident":      render_critical_incident_page()
+    elif page == "review_critical":        render_review_critical_page()
+    elif page == "leader_approve_critical":render_leader_approve_critical_page()
+    elif page == "student_analysis":       render_student_analysis_page()
+    elif page == "student_dashboard":      render_student_dashboard()
+    elif page == "admin_portal":           render_admin_portal()
+    else:                                  render_landing_page()
+
+
+if __name__ == "__main__":
+    main()
 
 def render_admin_portal():
     if st.session_state.current_user.get("role") != "ADM":
