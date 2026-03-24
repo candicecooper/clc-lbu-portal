@@ -181,7 +181,7 @@ if students:
     if selected_id != st.session_state.saa_student_id:
         st.session_state.saa_student_id   = selected_id
         st.session_state.saa_student_name = next((s["name"] for s in students if s["id"] == selected_id), "")
-        load_observations.clear()
+       
         st.rerun()
 else:
     st.warning("No students found. Add students via the Admin section of the Behaviour Support tool.")
@@ -279,7 +279,7 @@ with t_add:
                     f"✅ Saved — {obs_date.strftime('%-d %b')} · {activity.strip()} · "
                     f"**{rating_label}** · {GROUPING_LABELS[grouping]}"
                 )
-                load_observations.clear()
+                
                 st.rerun()
 
     # ── Recent observations ───────────────────────────────────────────────
@@ -312,7 +312,7 @@ with t_add:
             with rc2:
                 if st.button("🗑️", key=f"del_saa_{rid}", help="Delete"):
                     if delete_observation(rid):
-                        load_observations.clear()
+                        
                         st.rerun()
 
 
