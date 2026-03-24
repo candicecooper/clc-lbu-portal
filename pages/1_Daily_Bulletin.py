@@ -2,6 +2,7 @@ import streamlit as st
 from datetime import date, timedelta, datetime
 import database as db
 import json
+import time as _time
 
 st.set_page_config(
     page_title="CLC Daily Bulletin",
@@ -93,6 +94,9 @@ def init_state():
         "authenticated": False, "edit_mode": False,
         "selected_date": _default_date(), "page": "bulletin",
         "show_login": False, "show_inline_login": False,
+        # FIX 1: unique form ID — incremented each time a program-change form is opened
+        # prevents widget-key collisions when adding/editing multiple changes
+        "_pc_form_id": 0,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -401,7 +405,7 @@ def delete_notice(nid):
 
 # ── BULLETIN CHANGES (program changes new system) ─────────────
 def load_bulletin_changes(d):
-    """Load bulletin_changes for a given date — callable from anywhere in the app."""
+    """Load bulletin_changes for a given date."""
     try:
         res = _get_sb().table("bulletin_changes").select("*").eq("bulletin_date", str(d)).order("created_at").execute()
         rows = res.data or []
@@ -473,7 +477,6 @@ def _build_plain_text_bc(changes, for_date):
                 elif role == "Lunch Break" and person: detail = f" (covered by {person})"
                 elif person: detail = f" — {person}"
                 lines.append(f"      {start} – {end}: {role}{detail}")
-            # Note if rest of day is normal
             all_day_covered = len(blocks) >= 4
             if not all_day_covered and normal:
                 lines.append(f"      (remainder of day: normal {normal} duties)")
@@ -481,7 +484,7 @@ def _build_plain_text_bc(changes, for_date):
     return "\n".join(lines)
 
 def _build_html_sheet_bc(changes, for_date):
-    slot_list = PC_TIME_SLOTS_30  # 30-min for print — fits on A4
+    slot_list = PC_TIME_SLOTS_30
 
     def slot_td(val, person):
         bg = _slot_color_bg(val)
@@ -661,7 +664,6 @@ if params.get("display") == "true":
         if not filtered: return '<tr><td colspan="20" class="dt-em">None today</td></tr>'
         return "".join(["<tr>"+"".join([f"<td>{r.get(k,'')}</td>" for k in keys])+"</tr>" for r in filtered])
 
-    # Staff notices first
     d_notices = load_notices(for_date=today)
     if d_notices:
         n_parts = []
@@ -721,7 +723,6 @@ if params.get("display") == "true":
         nit = d_data.get("nit_booking","") or '<span class="dt-em">None today</span>'
         st.markdown(f'<div class="dp"><div class="dp-header green">📋 NIT</div><div class="dp-body"><p style="font-size:.62rem;color:#2d3d2d;margin:0;line-height:1.4;">{nit}</p></div></div>', unsafe_allow_html=True)
 
-    # Program Changes from bulletin_changes table
     bc_today = load_bulletin_changes(today)
     if bc_today:
         pc_parts = []
@@ -1065,41 +1066,61 @@ with page_tab:
             st.markdown('</div></div>', unsafe_allow_html=True)
 
     # ═══════════════════════════════════════════════════════
-    # TAB S4: Program Changes — REBUILT
+    # TAB S4: Program Changes — FIXED
     # ═══════════════════════════════════════════════════════
     with s4:
         _changes = load_bulletin_changes(current_date)
 
-        # ── View: render existing changes ────────────────────
-        def _render_change_view(ch, ci):
-            reason   = ch.get("reason","")
-            absent   = ch.get("staff_absent","")
-            has_trt  = ch.get("has_trt",False)
-            trt_name = ch.get("trt_name","")
+        # ── FIX 3: _render_change_view — visual separation + edit button sets new form_id ──
+        def _render_change_view(ch, ci, total):
+            reason     = ch.get("reason","")
+            absent     = ch.get("staff_absent","")
+            has_trt    = ch.get("has_trt",False)
+            trt_name   = ch.get("trt_name","")
             staff_rows = ch.get("staff_rows",[])
-            color    = "#dc2626" if reason == "Staff Absence" else "#0e7490"
+            color      = "#dc2626" if reason == "Staff Absence" else "#0e7490"
+            bg_tint    = "#fff5f5" if reason == "Staff Absence" else "#f0f9ff"
+            icon       = "🙅" if reason == "Staff Absence" else "📌"
 
-            header_md = f"{'🙅 ' if reason=='Staff Absence' else '📌 '}{reason}"
-            if absent:  header_md += f" — **{absent}**"
-            if has_trt and trt_name: header_md += f" · TRT: **{trt_name}**"
+            # ── Numbered separator header ──────────────────────
+            st.markdown(
+                f'<div style="display:flex;align-items:center;gap:.75rem;margin:1rem 0 .4rem;">'
+                f'<div style="background:{color};color:white;font-weight:800;font-size:.75rem;'
+                f'width:26px;height:26px;border-radius:50%;display:flex;align-items:center;'
+                f'justify-content:center;flex-shrink:0;">{ci+1}</div>'
+                f'<div style="font-size:.9rem;font-weight:700;color:{color};">'
+                f'{icon} {reason}'
+                + (f' — <span style="color:#1a2e44;">{absent}</span>' if absent else "")
+                + (f' &nbsp;<span style="background:{color}22;color:{color};font-size:.72rem;'
+                   f'font-weight:600;padding:.1rem .5rem;border-radius:10px;">TRT: {trt_name or "on site"}</span>'
+                   if has_trt else "")
+                + f'</div>'
+                + (f'<div style="flex:1;height:1px;background:{color}33;"></div>' if ci < total - 1 else "")
+                + f'</div>',
+                unsafe_allow_html=True
+            )
 
+            # ── Change card ────────────────────────────────────
             with st.container():
-                st.markdown(f"""<div style="background:white;border:1.5px solid #e0e8dc;
-                    border-left:5px solid {color};border-radius:10px;padding:.75rem 1rem;margin-bottom:.75rem;">
-                    <div style="font-weight:700;color:#1a2e44;margin-bottom:.4rem;">{header_md}</div>""",
-                    unsafe_allow_html=True)
+                st.markdown(
+                    f'<div style="background:{bg_tint};border:1.5px solid {color}44;'
+                    f'border-left:5px solid {color};border-radius:10px;padding:.85rem 1rem;margin-bottom:.5rem;">',
+                    unsafe_allow_html=True
+                )
 
-                # Visual timetable grid
+                # Timetable grid
                 tt_html = _timetable_grid_html(staff_rows, PC_TIME_SLOTS)
                 if tt_html:
                     st.markdown(tt_html, unsafe_allow_html=True)
                 else:
-                    # Fallback: show as block badges
+                    # Fallback block badges
                     for row in staff_rows:
-                        name = row.get("name",""); blocks = row.get("blocks",[])
+                        name   = row.get("name","")
+                        blocks = row.get("blocks",[])
                         if blocks:
-                            block_badges = " ".join([
-                                f'<span style="background:{_slot_color_bg(b.get("role",""))};color:{_slot_color_fg(b.get("role",""))};'
+                            badges = " ".join([
+                                f'<span style="background:{_slot_color_bg(b.get("role",""))};'
+                                f'color:{_slot_color_fg(b.get("role",""))};'
                                 f'padding:1px 7px;border-radius:8px;font-size:.72rem;font-weight:600;">'
                                 f'{b.get("start","")}&ndash;{b.get("end","")} {b.get("role","")}'
                                 f'{(" → "+b["person"]) if b.get("person") and b.get("role")=="Lunch Cover" else ""}'
@@ -1107,27 +1128,60 @@ with page_tab:
                                 f'</span>'
                                 for b in blocks if b.get("role") or b.get("start")
                             ])
-                            if block_badges:
-                                st.markdown(f'<div style="margin:3px 0;font-size:.82rem;"><b>{name}:</b> {block_badges}</div>', unsafe_allow_html=True)
+                            if badges:
+                                st.markdown(
+                                    f'<div style="margin:3px 0;font-size:.82rem;"><b>{name}:</b> {badges}</div>',
+                                    unsafe_allow_html=True
+                                )
+                    if not any(row.get("blocks") for row in staff_rows):
+                        st.markdown(
+                            '<div style="color:#9ab09a;font-size:.82rem;font-style:italic;">No timetable blocks recorded.</div>',
+                            unsafe_allow_html=True
+                        )
 
                 st.markdown("</div>", unsafe_allow_html=True)
+
                 if edit:
-                    dc1, dc2 = st.columns(2)
+                    dc1, dc2, dc3 = st.columns([2, 2, 6])
                     with dc1:
-                        if st.button("✏️ Edit", key=f"ch_edit_{ch.get('id',ci)}_{ci}", use_container_width=True):
+                        # FIX 2 & 4: generate a fresh form_id so edit form gets clean widget keys
+                        if st.button("✏️ Edit this change", key=f"ch_edit_{ch.get('id',ci)}_{ci}", use_container_width=True):
+                            st.session_state["_pc_form_id"] = int(_time.time() * 1000)
                             st.session_state["_pc_editing"] = dict(ch)
                             st.session_state["_pc_adding"]  = False
                             st.rerun()
                     with dc2:
                         if st.button("🗑️ Delete", key=f"ch_del_{ch.get('id',ci)}_{ci}", use_container_width=True):
                             delete_bulletin_change(ch["id"]); st.rerun()
+                    with dc3:
+                        st.markdown(
+                            f'<div style="padding-top:.45rem;font-size:.72rem;color:#9ab09a;">'
+                            f'Saved to database · click ✏️ to reopen and modify timetable</div>',
+                            unsafe_allow_html=True
+                        )
+
+            # ── Divider between changes ────────────────────────
+            if ci < total - 1:
+                st.markdown(
+                    '<div style="border-top:2px dashed #e0e8dc;margin:1rem 0;"></div>',
+                    unsafe_allow_html=True
+                )
 
         if not _changes:
-            st.markdown('<div style="text-align:center;padding:1.5rem;color:#9ab09a;font-size:.85rem;background:#f8fdf6;border-radius:10px;">📭 No program changes recorded for this day.</div>', unsafe_allow_html=True)
+            st.markdown(
+                '<div style="text-align:center;padding:1.5rem;color:#9ab09a;font-size:.85rem;'
+                'background:#f8fdf6;border-radius:10px;">📭 No program changes recorded for this day.</div>',
+                unsafe_allow_html=True
+            )
         else:
-            st.markdown(f"**{len(_changes)} change(s) recorded for {current_date.strftime('%-d %B')}:**")
+            st.markdown(
+                f'<div style="font-size:.82rem;font-weight:600;color:#4a8f33;margin-bottom:.25rem;">'
+                f'📊 {len(_changes)} change{"s" if len(_changes)!=1 else ""} recorded for {current_date.strftime("%-d %B")}:'
+                f'</div>',
+                unsafe_allow_html=True
+            )
             for _ci, _ch in enumerate(_changes):
-                _render_change_view(_ch, _ci)
+                _render_change_view(_ch, _ci, len(_changes))
 
         # ── Edit: add / edit form ─────────────────────────────
         if edit:
@@ -1135,52 +1189,118 @@ with page_tab:
 
             def _render_change_form(d, existing=None):
                 is_edit = existing is not None
-                pfx     = "_pcf"
-                rows_key= f"{pfx}_rows"
+
+                # FIX 1 & 2: use a unique form_id so widget keys never collide between
+                # different add/edit sessions (fixes stale state from previous form)
+                form_id  = st.session_state.get("_pc_form_id", 0)
+                pfx      = f"_pcf_{form_id}"
+                rows_key = f"{pfx}_rows"
+
                 existing_rows = []
                 if existing:
                     rr = existing.get("staff_rows",[])
                     existing_rows = json.loads(rr) if isinstance(rr,str) else (rr or [])
-                if rows_key not in st.session_state:
-                    st.session_state[rows_key] = existing_rows if existing_rows else [{"name":"","normal_prog":"","blocks":[]}]
 
-                st.markdown(f"#### {'✏️ Edit' if is_edit else '➕ Add'} Program Change")
-                st.markdown('<div style="background:#f8fdf6;border:1.5px solid #c8e0c8;border-radius:12px;padding:1rem 1.25rem;">', unsafe_allow_html=True)
+                # Initialise rows only on the first render of this form instance
+                if rows_key not in st.session_state:
+                    st.session_state[rows_key] = (
+                        existing_rows if existing_rows
+                        else [{"name":"","normal_prog":"","blocks":[]}]
+                    )
+
+                st.markdown(
+                    f'<div style="background:#f8fdf6;border:2px solid {"#c97b1a" if is_edit else "#6BBF4E"};'
+                    f'border-radius:12px;padding:1rem 1.25rem;margin-bottom:1rem;">',
+                    unsafe_allow_html=True
+                )
+                st.markdown(f"#### {'✏️ Editing' if is_edit else '➕ New'} Program Change")
 
                 # ── Reason ─────────────────────────────────────
                 reason_opts = ["Staff Absence","Site Need / Other"]
                 r_idx  = 1 if (existing or {}).get("reason","") == "Site Need / Other" else 0
-                reason = st.radio("Reason for change", reason_opts, index=r_idx, key=f"{pfx}_reason", horizontal=True)
+                reason = st.radio(
+                    "Reason for change", reason_opts, index=r_idx,
+                    key=f"{pfx}_reason", horizontal=True
+                )
 
                 staff_absent = ""; has_trt = False; trt_name = ""
                 if reason == "Staff Absence":
                     c1, c2 = st.columns(2)
-                    with c1: staff_absent = st.text_input("Absent staff member *", value=(existing or {}).get("staff_absent",""), key=f"{pfx}_absent", placeholder="e.g. Sarah Jones")
-                    with c2: has_trt      = st.checkbox("TRT coming in today?", value=bool((existing or {}).get("has_trt",False)), key=f"{pfx}_trt")
+                    with c1:
+                        staff_absent = st.text_input(
+                            "Absent staff member *",
+                            value=(existing or {}).get("staff_absent",""),
+                            key=f"{pfx}_absent",
+                            placeholder="e.g. Sarah Jones"
+                        )
+                    with c2:
+                        has_trt = st.checkbox(
+                            "TRT coming in today?",
+                            value=bool((existing or {}).get("has_trt",False)),
+                            key=f"{pfx}_trt"
+                        )
                     if has_trt:
-                        trt_name = st.text_input("TRT name", value=(existing or {}).get("trt_name",""), key=f"{pfx}_trt_name", placeholder="e.g. Michael Brown")
+                        trt_name = st.text_input(
+                            "TRT name",
+                            value=(existing or {}).get("trt_name",""),
+                            key=f"{pfx}_trt_name",
+                            placeholder="e.g. Michael Brown"
+                        )
                 else:
                     c1, c2 = st.columns(2)
-                    with c1: staff_absent = st.text_input("Who / what is the change for?", value=(existing or {}).get("staff_absent",""), key=f"{pfx}_absent2", placeholder="e.g. PY program, Caitie")
-                    with c2: has_trt      = st.checkbox("TRT / relief staff involved?", value=bool((existing or {}).get("has_trt",False)), key=f"{pfx}_trt2")
+                    with c1:
+                        staff_absent = st.text_input(
+                            "Who / what is the change for?",
+                            value=(existing or {}).get("staff_absent",""),
+                            key=f"{pfx}_absent2",
+                            placeholder="e.g. PY program, Caitie"
+                        )
+                    with c2:
+                        has_trt = st.checkbox(
+                            "TRT / relief staff involved?",
+                            value=bool((existing or {}).get("has_trt",False)),
+                            key=f"{pfx}_trt2"
+                        )
                     if has_trt:
-                        trt_name = st.text_input("Relief staff name", value=(existing or {}).get("trt_name",""), key=f"{pfx}_trt_name2")
+                        trt_name = st.text_input(
+                            "Relief staff name",
+                            value=(existing or {}).get("trt_name",""),
+                            key=f"{pfx}_trt_name2"
+                        )
 
                 st.markdown("---")
                 st.markdown("""
                 <div style="background:#e8f5e1;border-radius:8px;padding:.6rem .9rem;margin-bottom:.75rem;font-size:.82rem;color:#1a2e44;">
                 <strong>📋 Timetable rows</strong> — add one row per staff member whose day is affected.
-                For each row, add time blocks (e.g. 9:00–10:30: JP Cover).
-                You only need to enter the <em>changed</em> part of their day — the rest follows their normal timetable.
+                Fill in time blocks for the changed part of their day. The live preview updates as you go.
+                Click <strong>💾 Save Program Change</strong> when done.
                 </div>""", unsafe_allow_html=True)
 
                 rows = st.session_state[rows_key]
+
                 for ri, row in enumerate(rows):
-                    st.markdown(f'<div style="background:white;border:1.5px solid #d8ead2;border-radius:10px;padding:.85rem;margin-bottom:.6rem;">', unsafe_allow_html=True)
+                    st.markdown(
+                        f'<div style="background:white;border:1.5px solid #d8ead2;'
+                        f'border-radius:10px;padding:.85rem;margin-bottom:.6rem;">',
+                        unsafe_allow_html=True
+                    )
 
                     rc1, rc2, rc3 = st.columns([3,2,1])
-                    with rc1: row["name"]       = st.text_input("Staff / SSO name *", value=row.get("name",""), placeholder="e.g. Sarah Jones", key=f"{pfx}_r{ri}_name")
-                    with rc2: row["normal_prog"] = st.text_input("Normal program/role (optional)", value=row.get("normal_prog",""), placeholder="e.g. JP teacher", key=f"{pfx}_r{ri}_norm", help="Shown on timetable for context — unspecified time = normal duties")
+                    with rc1:
+                        row["name"] = st.text_input(
+                            "Staff / SSO name *",
+                            value=row.get("name",""),
+                            placeholder="e.g. Sarah Jones",
+                            key=f"{pfx}_r{ri}_name"
+                        )
+                    with rc2:
+                        row["normal_prog"] = st.text_input(
+                            "Normal program/role (optional)",
+                            value=row.get("normal_prog",""),
+                            placeholder="e.g. JP teacher",
+                            key=f"{pfx}_r{ri}_norm",
+                            help="Shown on timetable for context"
+                        )
                     with rc3:
                         st.markdown("<div style='padding-top:1.7rem;'>", unsafe_allow_html=True)
                         if ri > 0 and st.button("🗑 Row", key=f"{pfx}_r{ri}_dr"):
@@ -1200,7 +1320,12 @@ with page_tab:
                     with qp_cols[1]:
                         st.markdown("<div style='padding-top:1.7rem;'>", unsafe_allow_html=True)
                         if st.button("▶ Apply", key=f"{pfx}_r{ri}_apply_preset"):
-                            role_map = {"JP Cover (full day)":"JP Cover","PY Cover (full day)":"PY Cover","SY Cover (full day)":"SY Cover","NIT (full day)":"NIT"}
+                            role_map = {
+                                "JP Cover (full day)":"JP",
+                                "PY Cover (full day)":"PY",
+                                "SY Cover (full day)":"SY",
+                                "NIT (full day)":"NIT"
+                            }
                             if preset in role_map:
                                 row["blocks"] = [{"start":"9:00","end":"2:45","role":role_map[preset],"person":""}]
                                 st.rerun()
@@ -1211,20 +1336,47 @@ with page_tab:
                         st.markdown("**Time blocks:**")
                     for bi, block in enumerate(blocks):
                         bc1, bc2, bc3, bc4, bc5, bc6 = st.columns([1.5,1.5,2,2,0.5,0.5])
-                        with bc1: block["start"] = st.selectbox("Start", [""] + PC_TIME_SLOTS, index=(PC_TIME_SLOTS.index(block.get("start",""))+1 if block.get("start","") in PC_TIME_SLOTS else 0), key=f"{pfx}_r{ri}_b{bi}_s")
-                        with bc2: block["end"]   = st.selectbox("End",   [""] + PC_TIME_SLOTS, index=(PC_TIME_SLOTS.index(block.get("end",""))+1   if block.get("end","")   in PC_TIME_SLOTS else 0), key=f"{pfx}_r{ri}_b{bi}_e")
+                        with bc1:
+                            block["start"] = st.selectbox(
+                                "Start", [""] + PC_TIME_SLOTS,
+                                index=(PC_TIME_SLOTS.index(block.get("start",""))+1
+                                       if block.get("start","") in PC_TIME_SLOTS else 0),
+                                key=f"{pfx}_r{ri}_b{bi}_s"
+                            )
+                        with bc2:
+                            block["end"] = st.selectbox(
+                                "End", [""] + PC_TIME_SLOTS,
+                                index=(PC_TIME_SLOTS.index(block.get("end",""))+1
+                                       if block.get("end","") in PC_TIME_SLOTS else 0),
+                                key=f"{pfx}_r{ri}_b{bi}_e"
+                            )
                         with bc3:
                             try: ridx = ROLE_OPTIONS.index(block.get("role",""))
                             except: ridx = 0
-                            block["role"] = st.selectbox("Role", ROLE_OPTIONS, index=ridx, key=f"{pfx}_r{ri}_b{bi}_r")
+                            block["role"] = st.selectbox(
+                                "Role", ROLE_OPTIONS, index=ridx,
+                                key=f"{pfx}_r{ri}_b{bi}_r"
+                            )
                         with bc4:
                             role = block.get("role","")
                             if role == "Lunch Cover":
-                                block["person"] = st.text_input("Releasing (who)", value=block.get("person",""), key=f"{pfx}_r{ri}_b{bi}_p", placeholder="Staff member being given lunch break")
+                                block["person"] = st.text_input(
+                                    "Releasing (who)", value=block.get("person",""),
+                                    key=f"{pfx}_r{ri}_b{bi}_p",
+                                    placeholder="Staff member being given lunch break"
+                                )
                             elif role == "Lunch Break":
-                                block["person"] = st.text_input("Covered by (who)", value=block.get("person",""), key=f"{pfx}_r{ri}_b{bi}_p", placeholder="Staff member providing cover")
+                                block["person"] = st.text_input(
+                                    "Covered by (who)", value=block.get("person",""),
+                                    key=f"{pfx}_r{ri}_b{bi}_p",
+                                    placeholder="Staff member providing cover"
+                                )
                             else:
-                                block["person"] = st.text_input("Detail (optional)", value=block.get("person",""), key=f"{pfx}_r{ri}_b{bi}_p", placeholder="e.g. covering Annette")
+                                block["person"] = st.text_input(
+                                    "Detail (optional)", value=block.get("person",""),
+                                    key=f"{pfx}_r{ri}_b{bi}_p",
+                                    placeholder="e.g. covering Annette"
+                                )
                         with bc5:
                             st.markdown("<div style='padding-top:1.7rem;'>", unsafe_allow_html=True)
                             if st.button("✕", key=f"{pfx}_r{ri}_b{bi}_del"):
@@ -1237,26 +1389,42 @@ with page_tab:
                                     blocks[bi], blocks[bi+1] = blocks[bi+1], blocks[bi]; st.rerun()
                                 st.markdown("</div>", unsafe_allow_html=True)
 
-                    # Show timetable preview if blocks exist
+                    # ── Live timetable preview ────────────────
+                    # Always show preview area when there are blocks
                     if blocks:
                         ts_preview = blocks_to_slots(blocks)
                         if any(v.get("value","") for v in ts_preview.values()):
                             preview_html = _timetable_grid_html(
-                                [{"name": row.get("name","Preview"), "normal_prog": row.get("normal_prog",""), "time_slots": ts_preview}],
+                                [{"name": row.get("name","(Preview)"),
+                                  "normal_prog": row.get("normal_prog",""),
+                                  "time_slots": ts_preview}],
                                 PC_TIME_SLOTS
                             )
                             if preview_html:
-                                st.markdown("<small style='color:#7a907a;'>👁️ Preview:</small>", unsafe_allow_html=True)
+                                st.markdown(
+                                    '<div style="background:#f0f7eb;border-radius:8px;padding:.5rem .75rem;'
+                                    'margin:.4rem 0;border:1px solid #c8e0c8;">'
+                                    '<div style="font-size:.68rem;font-weight:600;color:#4a8f33;margin-bottom:3px;">'
+                                    '👁️ Live timetable preview — reflects what will be saved</div>',
+                                    unsafe_allow_html=True
+                                )
                                 st.markdown(preview_html, unsafe_allow_html=True)
+                                st.markdown("</div>", unsafe_allow_html=True)
+                        else:
+                            st.markdown(
+                                '<div style="font-size:.72rem;color:#c97b1a;padding:.3rem 0;">'
+                                '⚠️ Select a Role for each block to see the timetable preview.</div>',
+                                unsafe_allow_html=True
+                            )
 
                     ba1, ba2 = st.columns(2)
                     with ba1:
                         if st.button("➕ Add time block", key=f"{pfx}_r{ri}_ab", use_container_width=True):
-                            # Pre-fill start based on last block's end
                             last_end = blocks[-1].get("end","") if blocks else "9:00"
                             blocks.append({"start":last_end,"end":"","role":"","person":""}); st.rerun()
                     with ba2:
-                        if st.button("🗑️ Add lunch block", key=f"{pfx}_r{ri}_add_lunch", use_container_width=True, help="Add a quick lunch break / cover block"):
+                        if st.button("🍽️ Add lunch block", key=f"{pfx}_r{ri}_add_lunch",
+                                     use_container_width=True, help="Pre-fills a 12:00–12:30 Lunch Break block"):
                             blocks.append({"start":"12:00","end":"12:30","role":"Lunch Break","person":""}); st.rerun()
 
                     st.markdown("</div>", unsafe_allow_html=True)
@@ -1264,24 +1432,32 @@ with page_tab:
                 if st.button("➕ Add another staff member", key=f"{pfx}_ar", use_container_width=True):
                     rows.append({"name":"","normal_prog":"","blocks":[]}); st.rerun()
 
+                # ── Save / Cancel ─────────────────────────────
                 st.markdown("---")
                 sa1, sa2 = st.columns(2)
                 with sa1:
-                    if st.button("💾 Save Program Change", type="primary", key=f"{pfx}_save", use_container_width=True):
+                    if st.button("💾 Save Program Change", type="primary",
+                                 key=f"{pfx}_save", use_container_width=True):
                         if reason == "Staff Absence" and not staff_absent.strip():
                             st.warning("Please enter the absent staff member's name.")
                         else:
+                            # Capture all current rows (session state has live widget values)
+                            clean_rows = [
+                                r for r in rows
+                                if r.get("name","").strip() or r.get("blocks")
+                            ]
                             entry = {
-                                "id": (existing or {}).get("id"),
-                                "reason": reason,
+                                "id":           (existing or {}).get("id"),
+                                "reason":       reason,
                                 "staff_absent": staff_absent.strip(),
-                                "has_trt": has_trt,
-                                "trt_name": trt_name.strip() if has_trt else "",
-                                "staff_rows": [r for r in rows if r.get("name") or r.get("blocks")],
+                                "has_trt":      has_trt,
+                                "trt_name":     trt_name.strip() if has_trt else "",
+                                "staff_rows":   clean_rows,
                             }
                             saved = save_bulletin_change(d, entry)
                             if saved:
-                                st.success("✅ Saved!")
+                                st.success("✅ Saved! The timetable will now appear in the bulletin view below.")
+                                # Clean up this form instance's state
                                 for k in [k for k in st.session_state if k.startswith(pfx)]:
                                     del st.session_state[k]
                                 st.session_state["_pc_editing"] = None
@@ -1294,16 +1470,22 @@ with page_tab:
                         st.session_state["_pc_editing"] = None
                         st.session_state["_pc_adding"]  = False
                         st.rerun()
+
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            # ── Show form ─────────────────────────────────────
+            # ── Show form (add or edit) ───────────────────────
             _editing = st.session_state.get("_pc_editing")
             _adding  = st.session_state.get("_pc_adding", False)
+
             if not _editing and not _adding:
-                if st.button("➕ Add Program Change", type="primary", key="pc_add_new", use_container_width=True):
+                # FIX 2: generate fresh form_id when opening add form
+                if st.button("➕ Add Program Change", type="primary",
+                             key="pc_add_new", use_container_width=True):
+                    st.session_state["_pc_form_id"] = int(_time.time() * 1000)
                     st.session_state["_pc_adding"]  = True
                     st.session_state["_pc_editing"] = None
                     st.rerun()
+
             if _adding and not _editing:
                 _render_change_form(current_date, existing=None)
             elif _editing:
@@ -1312,22 +1494,39 @@ with page_tab:
         # ── Export ────────────────────────────────────────────
         if _changes:
             st.markdown("---")
-            st.markdown('<div style="background:white;border-radius:12px;border:1.5px solid #d8e8d4;padding:1.25rem 1.5rem;margin-bottom:1rem;"><div style="font-size:1rem;font-weight:700;color:#1a2e44;margin-bottom:.2rem;">📤 Share / Download Program Changes</div><div style="font-size:.8rem;color:#7a907a;">Plain text for SMS · Printable/PDF sheet for email or TRT</div></div>', unsafe_allow_html=True)
+            st.markdown(
+                '<div style="background:white;border-radius:12px;border:1.5px solid #d8e8d4;'
+                'padding:1.25rem 1.5rem;margin-bottom:1rem;">'
+                '<div style="font-size:1rem;font-weight:700;color:#1a2e44;margin-bottom:.2rem;">'
+                '📤 Share / Download Program Changes</div>'
+                '<div style="font-size:.8rem;color:#7a907a;">'
+                'Plain text for SMS · Printable/PDF sheet for email or TRT</div></div>',
+                unsafe_allow_html=True
+            )
 
             _plain = _build_plain_text_bc(_changes, current_date)
             _html  = _build_html_sheet_bc(_changes, current_date)
 
             ex1, ex2, ex3 = st.columns([1,1,2])
             with ex1:
-                st.download_button("📱 Download text (SMS/email)", data=_plain,
+                st.download_button(
+                    "📱 Download text (SMS/email)", data=_plain,
                     file_name=f"CLC_ProgramChanges_{current_date.strftime('%Y-%m-%d')}.txt",
-                    mime="text/plain", use_container_width=True, type="secondary")
+                    mime="text/plain", use_container_width=True, type="secondary"
+                )
             with ex2:
-                st.download_button("🖨️ Download printable sheet", data=_html,
+                st.download_button(
+                    "🖨️ Download printable sheet", data=_html,
                     file_name=f"CLC_ProgramChanges_{current_date.strftime('%Y-%m-%d')}.html",
-                    mime="text/html", use_container_width=True, type="secondary")
+                    mime="text/html", use_container_width=True, type="secondary"
+                )
             with ex3:
-                st.markdown('<div style="font-size:.75rem;color:#7a907a;padding-top:.5rem;">💡 <strong>Text file</strong> — paste into SMS or email &nbsp;·&nbsp; <strong>Printable sheet</strong> — open in browser, then Print or Save as PDF</div>', unsafe_allow_html=True)
+                st.markdown(
+                    '<div style="font-size:.75rem;color:#7a907a;padding-top:.5rem;">'
+                    '💡 <strong>Text file</strong> — paste into SMS or email &nbsp;·&nbsp; '
+                    '<strong>Printable sheet</strong> — open in browser, then Print or Save as PDF</div>',
+                    unsafe_allow_html=True
+                )
 
             with st.expander("👁️ Preview plain text"):
                 st.code(_plain, language=None)
