@@ -2361,41 +2361,127 @@ def render_student_analysis_page():
 
     st.markdown("---")
     st.markdown("### 🗑️ Delete an Incident")
-    st.caption("Use this to remove an incorrectly logged or duplicate incident from this student's record.")
-    all_incidents_for_student = [i for i in st.session_state.incidents if i["student_id"] == student_id]
-    if not all_incidents_for_student:
-        st.info("No regular incidents to delete.")
+    st.caption("Remove an incorrectly logged or duplicate incident from this student's full data set. This includes regular incidents AND critical incidents. Deletions are permanent and will affect all charts and analysis.")
+
+    # Build combined list: regular + critical incidents
+    reg_incidents = [i for i in st.session_state.incidents if i["student_id"] == student_id]
+    crit_incidents = [c for c in st.session_state.critical_incidents if c["student_id"] == student_id]
+
+    combined = []
+    for i in reg_incidents:
+        combined.append({
+            "id": i["id"],
+            "type": "regular",
+            "label": f"[REGULAR]  {i.get('date','?')}  {i.get('time','')[:5]}  |  {i.get('behaviour_type','—')}  |  Severity {i.get('severity','?')}  |  {i.get('location','—')}",
+            "date": i.get("date",""),
+        })
+    for c in crit_incidents:
+        primary = c.get("ABCH_primary", {}) if isinstance(c.get("ABCH_primary"), dict) else {}
+        created = (c.get("created_at","") or "")[:10]
+        combined.append({
+            "id": c["id"],
+            "type": "critical",
+            "label": f"[CRITICAL]  {created}  {primary.get('time','')[:5]}  |  {primary.get('behaviour','Behaviour not recorded')[:50]}  |  {primary.get('location','—')}",
+            "date": created,
+        })
+
+    if not combined:
+        st.info("No incidents on record for this student yet.")
     else:
-        delete_options = {
-            f"{i['date']}  {i.get('time','')[:5]}  |  {i.get('behaviour_type','—')}  |  "
-            f"Severity {i.get('severity','?')}  |  {i.get('location','—')}": i['id']
-            for i in sorted(all_incidents_for_student, key=lambda x: x['date'], reverse=True)
-        }
-        selected_label = st.selectbox("Select incident to delete", list(delete_options.keys()), key="delete_incident_select")
-        selected_id = delete_options[selected_label]
-        confirm_key = f"confirm_del_inc_{selected_id}"
-        if st.session_state.get(confirm_key):
-            st.warning(f"⚠️ Permanently delete this incident?\n\n**{selected_label}**\n\nThis cannot be undone.")
-            col_yes, col_no = st.columns(2)
-            with col_yes:
-                if st.button("✅ Yes, delete this incident", type="primary", key=f"yes_del_{selected_id}"):
-                    if supabase:
-                        try:
-                            supabase.table('incidents').delete().eq('id', selected_id).execute()
-                        except Exception as e:
-                            st.error(f"Delete failed: {e}")
-                    st.session_state.incidents = [i for i in st.session_state.incidents if i['id'] != selected_id]
-                    st.session_state[confirm_key] = False
-                    st.success("✅ Incident deleted successfully.")
-                    st.rerun()
-            with col_no:
-                if st.button("❌ Cancel", key=f"no_del_{selected_id}"):
-                    st.session_state[confirm_key] = False
-                    st.rerun()
-        else:
-            if st.button("🗑️ Delete selected incident", key="del_inc_btn"):
+        combined_sorted = sorted(combined, key=lambda x: x["date"], reverse=True)
+        delete_options = {item["label"]: item for item in combined_sorted}
+
+        selected_label = st.selectbox(
+            f"Select incident to delete ({len(combined)} total — {len(reg_incidents)} regular, {len(crit_incidents)} critical)",
+            list(delete_options.keys()),
+            key="delete_incident_select"
+        )
+        selected_item = delete_options[selected_label]
+        selected_id   = selected_item["id"]
+        selected_type = selected_item["type"]
+
+        type_badge = "🔴 CRITICAL INCIDENT FORM" if selected_type == "critical" else "🟡 Regular Incident"
+        st.markdown(
+            f'<div style="background:#fff5f5;border:1.5px solid #fca5a5;border-radius:8px;padding:.65rem 1rem;margin:.5rem 0;">'
+            f'<strong>Selected:</strong> {type_badge}<br>'
+            f'<span style="font-size:.82rem;color:#374151;">{selected_label}</span>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+
+        confirm_key  = f"confirm_del_inc_{selected_id}"
+        confirm2_key = f"confirm2_del_inc_{selected_id}"
+
+        if not st.session_state.get(confirm_key):
+            # Step 1 — first confirmation button
+            if selected_type == "critical":
+                st.warning("⚠️ This is a **Critical Incident ABCH form**. Deleting it will permanently remove the full incident record, all ABCH entries, workflow history, and audit trail from the dataset.")
+            else:
+                st.warning("⚠️ Deleting this incident will permanently remove it from all charts, analysis, and exports.")
+            if st.button("🗑️ I want to delete this — proceed to confirmation", key="del_inc_btn", use_container_width=True):
                 st.session_state[confirm_key] = True
                 st.rerun()
+
+        elif not st.session_state.get(confirm2_key):
+            # Step 2 — second confirmation with checkbox
+            st.error(
+                f"**Step 1 of 2 — Are you sure?**\n\n"
+                f"You are about to permanently delete:\n\n"
+                f"> {selected_label}\n\n"
+                f"This will be **removed from the data set immediately** and cannot be recovered."
+            )
+            confirm_check = st.checkbox(
+                f"I understand this will permanently remove this {'critical incident form' if selected_type == 'critical' else 'incident'} from {student['name']}'s record.",
+                key=f"confirm_chk_{selected_id}"
+            )
+            col_yes, col_no = st.columns(2)
+            with col_yes:
+                if st.button("⚠️ Confirm — proceed to final step", type="primary",
+                             key=f"confirm2_btn_{selected_id}", use_container_width=True,
+                             disabled=not confirm_check):
+                    st.session_state[confirm2_key] = True
+                    st.rerun()
+            with col_no:
+                if st.button("❌ Cancel — keep this incident", key=f"cancel1_{selected_id}", use_container_width=True):
+                    st.session_state[confirm_key] = False
+                    st.rerun()
+
+        else:
+            # Step 3 — final irreversible delete
+            st.error(
+                f"**Step 2 of 2 — FINAL CONFIRMATION**\n\n"
+                f"Click the red button below to permanently delete this record from the database. "
+                f"There is no undo."
+            )
+            col_final, col_back = st.columns(2)
+            with col_final:
+                if st.button("🔴 YES — permanently delete this incident", type="primary",
+                             key=f"final_del_{selected_id}", use_container_width=True):
+                    deleted = False
+                    if supabase:
+                        try:
+                            table = "critical_incidents" if selected_type == "critical" else "incidents"
+                            supabase.table(table).delete().eq("id", selected_id).execute()
+                            deleted = True
+                        except Exception as e:
+                            st.error(f"Delete failed: {e}")
+                    else:
+                        deleted = True  # mock mode
+                    if deleted:
+                        if selected_type == "regular":
+                            st.session_state.incidents = [i for i in st.session_state.incidents if i["id"] != selected_id]
+                        else:
+                            st.session_state.critical_incidents = [c for c in st.session_state.critical_incidents if c["id"] != selected_id]
+                        # Clear confirm keys
+                        for k in [confirm_key, confirm2_key, f"confirm_chk_{selected_id}"]:
+                            st.session_state.pop(k, None)
+                        st.success("✅ Incident permanently deleted and removed from the data set.")
+                        st.rerun()
+            with col_back:
+                if st.button("❌ Cancel — keep this incident", key=f"cancel2_{selected_id}", use_container_width=True):
+                    for k in [confirm_key, confirm2_key]:
+                        st.session_state.pop(k, None)
+                    st.rerun()
 
     st.markdown("---")
     st.markdown("### 📄 Export Data & Reports")
@@ -2493,23 +2579,98 @@ def render_student_dashboard():
     st.markdown("### 📊 Visual Summary")
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("#### Daily Trend (Last 30 Days)")
+        st.markdown("#### 📅 Daily Incident Count (Last 30 Days)")
         if not full_df.empty:
             thirty_days_ago = datetime.utcnow() - timedelta(days=30)
             recent_df = full_df[full_df["date_parsed"] >= thirty_days_ago]
-            daily = recent_df.groupby(recent_df["date_parsed"].dt.date).size().reset_index(name="count")
-            fig = go.Figure()
-            fig.add_trace(go.Bar(x=daily["date_parsed"], y=daily["count"], marker=dict(color='#334155')))
-            fig.update_layout(height=250, showlegend=False, plot_bgcolor='white', paper_bgcolor='white', margin=dict(l=20, r=20, t=20, b=20))
-            st.plotly_chart(fig, use_container_width=True)
+            if recent_df.empty:
+                st.info("No incidents in the last 30 days.")
+            else:
+                # Group by date — use string labels so Plotly never renders nanosecond axes
+                daily = (
+                    recent_df
+                    .assign(_d=recent_df["date_parsed"].dt.date)
+                    .groupby("_d")
+                    .size()
+                    .reset_index(name="count")
+                )
+                daily["label"] = daily["_d"].apply(lambda d: d.strftime("%a %-d %b"))
+                max_count = int(daily["count"].max())
+                colours = ["#ef4444" if v >= 3 else "#1A7A7A" for v in daily["count"]]
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    x=daily["label"], y=daily["count"],
+                    marker=dict(color=colours, line=dict(color="white", width=1)),
+                    text=daily["count"], textposition="outside",
+                    textfont=dict(size=11, family="Arial", color="#1a2e44"),
+                    hovertemplate="<b>%{x}</b><br>%{y} incident(s)<extra></extra>"
+                ))
+                fig.update_layout(
+                    height=270, showlegend=False,
+                    plot_bgcolor="#f8fafc", paper_bgcolor="white",
+                    margin=dict(l=10, r=10, t=10, b=10),
+                    xaxis=dict(
+                        type="category",
+                        tickfont=dict(size=10, color="#334155"),
+                        showline=True, linecolor="#cbd5e1",
+                        tickangle=-35 if len(daily) > 8 else 0,
+                    ),
+                    yaxis=dict(
+                        tickmode="linear", tick0=0, dtick=1,
+                        range=[0, max_count + 1],
+                        gridcolor="#e2e8f0", showline=True, linecolor="#cbd5e1",
+                        tickfont=dict(size=10, color="#334155"),
+                        title=dict(text="Incidents", font=dict(size=11, color="#334155")),
+                    ),
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                st.caption("🟥 Red = 3+ incidents that day  ·  🟦 Teal = 1–2 incidents")
+        else:
+            st.info("No incident data to display.")
     with col2:
-        st.markdown("#### Top 5 Behaviours")
+        st.markdown("#### 🎯 Top Behaviours")
         if not full_df.empty and "behaviour_type" in full_df.columns:
-            beh_counts = full_df["behaviour_type"].value_counts().head(5)
-            fig = go.Figure()
-            fig.add_trace(go.Bar(y=beh_counts.index, x=beh_counts.values, orientation='h', marker=dict(color='#475569')))
-            fig.update_layout(height=250, showlegend=False, plot_bgcolor='white', paper_bgcolor='white', margin=dict(l=20, r=20, t=20, b=20))
-            st.plotly_chart(fig, use_container_width=True)
+            # Filter out blank/section-header antecedents that start with "---"
+            beh_series = full_df["behaviour_type"].dropna()
+            beh_series = beh_series[beh_series.str.strip() != ""]
+            beh_counts = beh_series.value_counts().head(5)
+            if beh_counts.empty:
+                st.info("No behaviour data recorded yet.")
+            else:
+                max_beh = int(beh_counts.max())
+                # Colours — most frequent gets teal highlight
+                beh_colours = ["#1A7A7A" if i == 0 else "#64748b" for i in range(len(beh_counts))]
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    y=list(beh_counts.index[::-1]),
+                    x=list(beh_counts.values[::-1]),
+                    orientation="h",
+                    marker=dict(color=beh_colours[::-1], line=dict(color="white", width=1)),
+                    text=[str(v) for v in beh_counts.values[::-1]],
+                    textposition="outside",
+                    textfont=dict(size=11, family="Arial", color="#1a2e44"),
+                    hovertemplate="<b>%{y}</b><br>%{x} incident(s)<extra></extra>"
+                ))
+                fig.update_layout(
+                    height=270, showlegend=False,
+                    plot_bgcolor="#f8fafc", paper_bgcolor="white",
+                    margin=dict(l=10, r=30, t=10, b=10),
+                    xaxis=dict(
+                        tickmode="linear", tick0=0, dtick=1,
+                        range=[0, max_beh + 1],
+                        gridcolor="#e2e8f0", showline=True, linecolor="#cbd5e1",
+                        tickfont=dict(size=10, color="#334155"),
+                        title=dict(text="Number of incidents", font=dict(size=11, color="#334155")),
+                    ),
+                    yaxis=dict(
+                        tickfont=dict(size=10, color="#334155"),
+                        showline=True, linecolor="#cbd5e1",
+                        automargin=True,
+                    ),
+                )
+                st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No behaviour data recorded yet.")
     st.markdown("---")
     col1, col2 = st.columns(2)
     with col1:
