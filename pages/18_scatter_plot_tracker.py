@@ -190,7 +190,7 @@ if students:
         st.session_state.spt_student_id   = selected_id
         st.session_state.spt_student_name = next((s["name"] for s in students if s["id"] == selected_id), "")
         st.session_state.spt_reload = True
-        load_observations.clear()
+        
         st.rerun()
 else:
     st.warning("No students found. Add students via the Admin section of the Behaviour Support tool.")
@@ -282,7 +282,7 @@ with t_add:
             }
             if save_observation(row):
                 st.success(f"✅ Saved — {obs_date.strftime('%-d %b')} · {actual_time} · **{actual_value}**")
-                load_observations.clear()
+               
                 st.rerun()
 
     # ── Recent observations ───────────────────────────────────────────────
@@ -309,7 +309,7 @@ with t_add:
             with rc2:
                 if st.button("🗑️", key=f"del_obs_{rid}", help="Delete this observation"):
                     if delete_observation(rid):
-                        load_observations.clear()
+                        
                         st.rerun()
 
 
