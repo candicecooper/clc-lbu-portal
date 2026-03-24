@@ -858,7 +858,7 @@ with page_tab:
             if st.button("🔐 Staff Login", type="secondary", use_container_width=True):
                 st.session_state.show_inline_login = not st.session_state.get("show_inline_login", False); st.rerun()
     with ctrl_cols[4]:
-        st.markdown('<a href="/?display=true" target="_blank" style="display:block;text-align:center;background:#1a2e44;color:white;font-weight:600;font-size:.8rem;padding:.45rem .75rem;border-radius:8px;text-decoration:none;white-space:nowrap;">📺 Staff Room</a>', unsafe_allow_html=True)
+        st.markdown('<a href="https://clcdailybulletin.streamlit.app/?display=true" target="_blank" style="display:block;text-align:center;background:#1a2e44;color:white;font-weight:600;font-size:.8rem;padding:.45rem .75rem;border-radius:8px;text-decoration:none;white-space:nowrap;">📺 Staff Room</a>', unsafe_allow_html=True)
 
     if not st.session_state.authenticated and st.session_state.get("show_inline_login", False):
         with st.container():
