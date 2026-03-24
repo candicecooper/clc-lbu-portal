@@ -1483,7 +1483,7 @@ def render_landing_page():
         """, unsafe_allow_html=True)
     with col_logout:
         st.markdown("<div style='height:1.2rem'></div>", unsafe_allow_html=True)
-        if st.button("Sign Out", key="logout_btn"):
+        if st.button("Sign Out", key="logout_btn_landing"):
             st.session_state.logged_in = False
             st.session_state.current_page = "login"
             st.rerun()
