@@ -1342,14 +1342,15 @@ with page_tab:
                     if blocks:
                         st.markdown("**Time blocks:**")
                     for bi, block in enumerate(blocks):
-                        # Initialise widget state from block data on first render.
-                        # This is the key fix: if the widget key doesn't yet exist in
-                        # session state (new block, or form version just bumped), seed it
-                        # from the saved block dict so the correct value shows immediately.
                         s_key  = f"{pfx}_r{ri}_b{bi}_s"
                         e_key  = f"{pfx}_r{ri}_b{bi}_e"
                         r_key  = f"{pfx}_r{ri}_b{bi}_r"
                         p_key  = f"{pfx}_r{ri}_b{bi}_p"
+
+                        # Seed session state from block dict ONLY on first render of this
+                        # key (new block, first load, or after a delete/swap cleared stale
+                        # keys).  This means the correct value is always shown on row 12+
+                        # without index= overriding session state.
                         if s_key not in st.session_state:
                             st.session_state[s_key] = block.get("start","")
                         if e_key not in st.session_state:
@@ -1361,48 +1362,60 @@ with page_tab:
 
                         bc1, bc2, bc3, bc4, bc5, bc6 = st.columns([1.5,1.5,2,2,0.5,0.5])
                         with bc1:
-                            st.selectbox("Start", [""] + PC_TIME_SLOTS, key=s_key)
+                            block["start"] = st.selectbox("Start", [""] + PC_TIME_SLOTS, key=s_key)
                         with bc2:
-                            st.selectbox("End", [""] + PC_TIME_SLOTS, key=e_key)
+                            block["end"]   = st.selectbox("End",   [""] + PC_TIME_SLOTS, key=e_key)
                         with bc3:
-                            st.selectbox("Role", ROLE_OPTIONS, key=r_key)
+                            block["role"]  = st.selectbox("Role",  ROLE_OPTIONS,          key=r_key)
                         with bc4:
-                            # Read role from widget state (not from block dict) so the
-                            # label stays correct even on rows 12+
+                            # Use live widget-state role so the label is always current
                             live_role = st.session_state.get(r_key, "")
                             if live_role == "Lunch Cover":
-                                st.text_input("Releasing (who)", key=p_key,
-                                              placeholder="Staff member getting lunch break")
+                                block["person"] = st.text_input(
+                                    "Releasing (who)", key=p_key,
+                                    placeholder="Staff member getting lunch break")
                             elif live_role == "Lunch Break":
-                                st.text_input("Covered by (who)", key=p_key,
-                                              placeholder="Staff member providing cover")
+                                block["person"] = st.text_input(
+                                    "Covered by (who)", key=p_key,
+                                    placeholder="Staff member providing cover")
                             else:
-                                st.text_input("Detail (optional)", key=p_key,
-                                              placeholder="e.g. covering Annette")
+                                block["person"] = st.text_input(
+                                    "Detail (optional)", key=p_key,
+                                    placeholder="e.g. covering Annette")
                         with bc5:
                             st.markdown("<div style='padding-top:1.7rem;'>", unsafe_allow_html=True)
                             if st.button("✕", key=f"{pfx}_r{ri}_b{bi}_del"):
-                                blocks.pop(bi); st.rerun()
+                                blocks.pop(bi)
+                                # Clear widget-state keys for this block AND every block
+                                # after it — their indices shift down by 1 so stale keys
+                                # must be removed and re-seeded from the updated block dicts.
+                                for old_bi in range(bi, len(blocks) + 1):
+                                    for sfx in ("_s","_e","_r","_p"):
+                                        st.session_state.pop(f"{pfx}_r{ri}_b{old_bi}{sfx}", None)
+                                st.rerun()
                             st.markdown("</div>", unsafe_allow_html=True)
                         with bc6:
                             if bi < len(blocks)-1:
                                 st.markdown("<div style='padding-top:1.7rem;'>", unsafe_allow_html=True)
                                 if st.button("↓", key=f"{pfx}_r{ri}_b{bi}_dn", help="Move down"):
-                                    blocks[bi], blocks[bi+1] = blocks[bi+1], blocks[bi]; st.rerun()
+                                    # Swap block dicts AND their widget-state keys so display
+                                    # stays in sync after the index shift.
+                                    blocks[bi], blocks[bi+1] = blocks[bi+1], blocks[bi]
+                                    for sfx in ("_s","_e","_r","_p"):
+                                        ka = f"{pfx}_r{ri}_b{bi}{sfx}"
+                                        kb = f"{pfx}_r{ri}_b{bi+1}{sfx}"
+                                        va = st.session_state.get(ka)
+                                        vb = st.session_state.get(kb)
+                                        if va is not None: st.session_state[kb] = va
+                                        if vb is not None: st.session_state[ka] = vb
+                                    st.rerun()
                                 st.markdown("</div>", unsafe_allow_html=True)
 
                     # ── Live timetable preview ────────────────
-                    # Read from widget state keys directly (not from block dicts) so
-                    # the preview is always accurate regardless of how many rows exist.
                     if blocks:
-                        preview_blocks = []
-                        for bi in range(len(blocks)):
-                            ps = st.session_state.get(f"{pfx}_r{ri}_b{bi}_s","")
-                            pe = st.session_state.get(f"{pfx}_r{ri}_b{bi}_e","")
-                            pr = st.session_state.get(f"{pfx}_r{ri}_b{bi}_r","")
-                            pp = st.session_state.get(f"{pfx}_r{ri}_b{bi}_p","")
-                            preview_blocks.append({"start":ps,"end":pe,"role":pr,"person":pp})
-                        ts_preview = blocks_to_slots(preview_blocks)
+                        # Block dicts are kept in sync with widgets (via the return-value
+                        # assignments above), so blocks_to_slots(blocks) is authoritative.
+                        ts_preview = blocks_to_slots(blocks)
                         if any(v.get("value","") for v in ts_preview.values()):
                             preview_html = _timetable_grid_html(
                                 [{"name": st.session_state.get(f"{pfx}_r{ri}_name", row.get("name","(Preview)")),
@@ -1430,8 +1443,21 @@ with page_tab:
                     ba1, ba2 = st.columns(2)
                     with ba1:
                         if st.button("➕ Add time block", key=f"{pfx}_r{ri}_ab", use_container_width=True):
-                            last_end = blocks[-1].get("end","") if blocks else "9:00"
-                            blocks.append({"start":last_end,"end":"","role":"","person":""}); st.rerun()
+                            # Read last_end from WIDGET STATE (block dicts are now kept in sync,
+                            # but belt-and-suspenders: fall back to block dict if key missing).
+                            last_bi  = len(blocks) - 1
+                            last_end = (
+                                st.session_state.get(f"{pfx}_r{ri}_b{last_bi}_e","") or
+                                (blocks[last_bi].get("end","") if last_bi >= 0 else "9:00")
+                            )
+                            new_bi = len(blocks)
+                            blocks.append({"start":last_end,"end":"","role":"","person":""})
+                            # Seed new block's widget state so Start pre-fills correctly
+                            st.session_state[f"{pfx}_r{ri}_b{new_bi}_s"] = last_end
+                            st.session_state[f"{pfx}_r{ri}_b{new_bi}_e"] = ""
+                            st.session_state[f"{pfx}_r{ri}_b{new_bi}_r"] = ""
+                            st.session_state[f"{pfx}_r{ri}_b{new_bi}_p"] = ""
+                            st.rerun()
                     with ba2:
                         if st.button("🍽️ Add lunch block", key=f"{pfx}_r{ri}_add_lunch",
                                      use_container_width=True, help="Pre-fills a 12:00–12:30 Lunch Break block"):
