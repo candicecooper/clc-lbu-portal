@@ -50,11 +50,12 @@ st.markdown(f"""
 
 .vc {{
     background:#fff; border-radius:10px; border:2px solid #dde6ee;
-    padding:.6rem .45rem; text-align:center;
+    padding:.85rem .6rem; text-align:center; min-height:120px;
+    display:flex; flex-direction:column; justify-content:center;
 }}
-.vc .em {{ font-size:1.7rem; line-height:1; margin-bottom:.3rem; }}
-.vc .ti {{ font-size:.74rem; font-weight:700; color:{NAVY}; }}
-.vc .su {{ font-size:.62rem; color:#718096; margin-top:.1rem; }}
+.vc .em {{ font-size:2.4rem; line-height:1; margin-bottom:.45rem; }}
+.vc .ti {{ font-size:.88rem; font-weight:700; color:{NAVY}; line-height:1.25; }}
+.vc .su {{ font-size:.73rem; color:#718096; margin-top:.25rem; }}
 
 .fw {{
     display:inline-block; padding:.1rem .42rem; border-radius:20px;
@@ -330,7 +331,7 @@ if active == "Cards":
         filtered = [c for c in filtered if search.lower() in c["ti"].lower() or search.lower() in c["sub"].lower()]
 
     selected_ids = set(st.session_state.vst_selected_cards)
-    cols_per_row = 5
+    cols_per_row = 4
     rows = [filtered[i:i+cols_per_row] for i in range(0, len(filtered), cols_per_row)]
 
     for row in rows:
