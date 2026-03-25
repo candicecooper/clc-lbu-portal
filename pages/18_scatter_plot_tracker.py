@@ -629,19 +629,31 @@ with t_analysis:
     # One analysis section per behaviour
     an_tabs = st.tabs([f"Behaviour {i+1}: {b[:40]}" for i,b in enumerate(behaviours)] + ["Combined"])
 
+    # Build ordered time slot list for y-axis (schedule order, top = earliest)
+    sched_times = [s["time"] for s in schedule]
+    def _sort_key(t):
+        try: h,m = str(t).split(":"); return int(h)*60+int(m)
+        except: return 999
+    sched_times_sorted = sorted(set(sched_times), key=_sort_key)
+    # Map time -> "HH:MM  Activity" label
+    time_labels = {
+        s["time"]: f"{s['time']}  {s['activity']}" for s in schedule
+    }
+
     for bi, abtab in enumerate(an_tabs[:-1]):
         with abtab:
-            b_filt = filt[filt.get("behaviour_index", pd.Series(dtype=object)) == bi] \
+            b_filt = filt[filt["behaviour_index"] == bi].copy() \
                 if "behaviour_index" in filt.columns \
-                else filt[filt.get("behaviour_label","") == behaviours[bi]]
+                else filt[filt.get("behaviour_label","") == behaviours[bi]].copy()
 
             if b_filt.empty:
-                st.info("No observations for this behaviour in the selected range."); continue
+                st.info("No observations for this behaviour in the selected range.")
+                continue
 
-            inc = b_filt[b_filt["value"].isin(["1","2"])]
-            n1  = (b_filt["value"]=="1").sum()
-            n2  = (b_filt["value"]=="2").sum()
-            nx  = (b_filt["value"]=="X").sum()
+            inc = b_filt[b_filt["value"].isin(["1","2"])].copy()
+            n1  = int((b_filt["value"]=="1").sum())
+            n2  = int((b_filt["value"]=="2").sum())
+            nx  = int((b_filt["value"]=="X").sum())
 
             k1,k2,k3,k4 = st.columns(4)
             k1.markdown(f"<div class='kpi'><div class='val'>{len(b_filt)}</div><div class='lbl'>Total recorded</div></div>", unsafe_allow_html=True)
@@ -649,44 +661,221 @@ with t_analysis:
             k3.markdown(f"<div class='kpi kpi-a'><div class='val'>{n2}</div><div class='lbl'>Multiple (2)</div></div>", unsafe_allow_html=True)
             k4.markdown(f"<div class='kpi'><div class='val'>{n1+n2}</div><div class='lbl'>Incident intervals</div></div>", unsafe_allow_html=True)
 
-            if inc.empty: continue
+            if inc.empty:
+                st.info("No incidents (1 or 2) recorded for this behaviour in the selected range.")
+                continue
 
-            # Daily frequency
-            daily = inc.groupby(inc["obs_date_dt"].dt.date).size().reset_index(name="count")
-            fig1 = go.Figure(go.Bar(
-                x=[str(d) for d in daily["obs_date_dt"]],
-                y=daily["count"],
-                marker_color=[AMBER if v>=3 else TEAL for v in daily["count"]],
-                text=daily["count"], textposition="outside",
-            ))
-            fig1.update_layout(title="Daily Incident Intervals", height=250, showlegend=False,
-                plot_bgcolor="#f8fafc", paper_bgcolor="white",
-                yaxis=dict(tickformat="d",gridcolor="#e2e8f0"), margin=dict(l=10,r=10,t=45,b=10))
-            st.plotly_chart(fig1, use_container_width=True)
+            st.markdown("---")
 
-            # By time slot
-            sc = inc.groupby("time_slot").size().reset_index(name="count")
-            sc["sort_k"] = sc["time_slot"].apply(
-                lambda t: int(str(t).split(":")[0])*60+int(str(t).split(":")[1]) if ":"in str(t) else 999)
-            sc = sc.sort_values("sort_k")
-            sc["label"] = sc["time_slot"].apply(
-                lambda t: f"{t}  {next((s['activity'] for s in schedule if s['time']==t),'')}")
-            fig2 = px.bar(sc, x="count", y="label", orientation="h",
-                color="count", color_continuous_scale=["#90CBE3",TEAL],
-                title="By Time Slot", labels={"count":"Intervals","label":""})
-            fig2.update_layout(height=max(240,len(sc)*24),coloraxis_showscale=False,
-                plot_bgcolor="#f8fafc",paper_bgcolor="white",
-                margin=dict(l=10,r=10,t=45,b=10),xaxis=dict(tickformat="d"))
-            st.plotly_chart(fig2, use_container_width=True)
+            # ── MAIN SCATTER PLOT ────────────────────────────────────────────
+            # X = date, Y = time slot (reversed so earliest is at top)
+            # Size = weight (1 → small, 2 → large)
+            # Colour = value
 
-            # By day
-            dc = inc.groupby("day_of_week").size().reindex(DAYS, fill_value=0)
-            fig3 = go.Figure(go.Bar(x=dc.index, y=dc.values, marker_color=TEAL,
-                text=dc.values, textposition="outside"))
-            fig3.update_layout(title="By Day", height=240, showlegend=False,
-                plot_bgcolor="#f8fafc",paper_bgcolor="white",
-                yaxis=dict(tickformat="d",gridcolor="#e2e8f0"),margin=dict(l=10,r=10,t=45,b=10))
-            st.plotly_chart(fig3, use_container_width=True)
+            inc["date_str"]    = inc["obs_date_dt"].dt.strftime("%a %-d %b")
+            inc["date_order"]  = inc["obs_date_dt"].dt.date  # for sorting
+            inc["time_label"]  = inc["time_slot"].map(time_labels).fillna(inc["time_slot"])
+            inc["size_val"]    = inc["value"].map({"1": 18, "2": 32}).fillna(18)
+            inc["colour_val"]  = inc["value"].map({"1": "#3b82f6", "2": "#ef4444"}).fillna("#3b82f6")
+            inc["hover_label"] = (
+                inc["date_str"] + "<br>" +
+                inc["time_label"] + "<br>" +
+                inc["value"].map({"1":"Single occurrence","2":"Multiple occurrences"}).fillna(inc["value"]) +
+                inc["day_of_week"].apply(lambda d: f"<br>{d}")
+            )
+
+            # Y-axis order: schedule order, earliest at top
+            all_time_slots = inc["time_slot"].unique().tolist()
+            ordered_slots  = [t for t in sched_times_sorted if t in all_time_slots]
+            ordered_slots += [t for t in all_time_slots if t not in ordered_slots]
+            ordered_labels = [time_labels.get(t, t) for t in ordered_slots]
+
+            # Split into 1s and 2s for separate traces (different colour + size)
+            inc1 = inc[inc["value"]=="1"]
+            inc2 = inc[inc["value"]=="2"]
+
+            fig_scatter = go.Figure()
+
+            if not inc1.empty:
+                fig_scatter.add_trace(go.Scatter(
+                    x=inc1["date_str"],
+                    y=inc1["time_label"],
+                    mode="markers",
+                    name="1 — single occurrence",
+                    marker=dict(
+                        size=16,
+                        color="#3b82f6",
+                        opacity=0.85,
+                        line=dict(color="white", width=1.5),
+                        symbol="circle",
+                    ),
+                    hovertemplate="%{customdata}<extra></extra>",
+                    customdata=inc1["hover_label"],
+                ))
+
+            if not inc2.empty:
+                fig_scatter.add_trace(go.Scatter(
+                    x=inc2["date_str"],
+                    y=inc2["time_label"],
+                    mode="markers",
+                    name="2 — multiple occurrences",
+                    marker=dict(
+                        size=26,
+                        color="#ef4444",
+                        opacity=0.85,
+                        line=dict(color="white", width=2),
+                        symbol="circle",
+                    ),
+                    hovertemplate="%{customdata}<extra></extra>",
+                    customdata=inc2["hover_label"],
+                ))
+
+            # X-axis: sorted by date
+            date_order = sorted(inc["date_str"].unique(),
+                                key=lambda s: inc.loc[inc["date_str"]==s, "date_order"].min())
+
+            fig_scatter.update_layout(
+                title=dict(
+                    text=f"Scatter Plot — {behaviours[bi]}",
+                    font=dict(size=14, color="#0f172a"),
+                    x=0,
+                ),
+                height=max(420, len(ordered_labels) * 28 + 120),
+                xaxis=dict(
+                    title="Date",
+                    categoryorder="array",
+                    categoryarray=date_order,
+                    showgrid=True,
+                    gridcolor="#e2e8f0",
+                    tickfont=dict(size=11),
+                    side="top",           # dates along the top, like a timetable
+                ),
+                yaxis=dict(
+                    title="",
+                    categoryorder="array",
+                    categoryarray=ordered_labels[::-1],  # earliest at top
+                    showgrid=True,
+                    gridcolor="#e2e8f0",
+                    tickfont=dict(size=11),
+                    automargin=True,
+                ),
+                plot_bgcolor="white",
+                paper_bgcolor="white",
+                legend=dict(
+                    orientation="h", yanchor="bottom", y=1.02,
+                    xanchor="left", x=0, font=dict(size=11),
+                ),
+                margin=dict(l=10, r=20, t=80, b=20),
+                hovermode="closest",
+            )
+
+            # Highlight cells that appear on multiple days (hotspots)
+            hotspot_slots = inc.groupby("time_label")["date_order"].nunique()
+            hotspot_slots = hotspot_slots[hotspot_slots >= 3].index.tolist()
+            for hs in hotspot_slots:
+                fig_scatter.add_hrect(
+                    y0=hs, y1=hs,
+                    fillcolor=AMBER, opacity=0.08,
+                    layer="below", line_width=0,
+                )
+
+            st.plotly_chart(fig_scatter, use_container_width=True)
+            st.caption(
+                "● Small blue = single occurrence (1)  &nbsp;·&nbsp;  "
+                "● Large red = multiple occurrences (2)  &nbsp;·&nbsp;  "
+                "Dates run left to right along the top, time slots run top to bottom."
+            )
+
+            st.markdown("---")
+
+            # ── FREQUENCY SUMMARY CHARTS ─────────────────────────────────────
+            col_a, col_b = st.columns(2)
+
+            with col_a:
+                # Daily frequency bar
+                daily = inc.groupby(inc["obs_date_dt"].dt.date).size().reset_index(name="count")
+                daily["date_str"] = pd.to_datetime(daily["obs_date_dt"]).dt.strftime("%-d %b")
+                fig_daily = go.Figure(go.Bar(
+                    x=daily["date_str"], y=daily["count"],
+                    marker_color=[AMBER if v>=3 else TEAL for v in daily["count"]],
+                    text=daily["count"], textposition="outside",
+                ))
+                fig_daily.update_layout(
+                    title="Incidents per day",
+                    height=260, showlegend=False,
+                    plot_bgcolor="#f8fafc", paper_bgcolor="white",
+                    yaxis=dict(tickformat="d", gridcolor="#e2e8f0"),
+                    margin=dict(l=10,r=10,t=45,b=10),
+                )
+                st.plotly_chart(fig_daily, use_container_width=True)
+
+            with col_b:
+                # By day of week
+                dow = inc.groupby("day_of_week").size().reindex(DAYS, fill_value=0)
+                fig_dow = go.Figure(go.Bar(
+                    x=dow.index, y=dow.values, marker_color=TEAL,
+                    text=dow.values, textposition="outside",
+                ))
+                fig_dow.update_layout(
+                    title="Incidents by day of week",
+                    height=260, showlegend=False,
+                    plot_bgcolor="#f8fafc", paper_bgcolor="white",
+                    yaxis=dict(tickformat="d", gridcolor="#e2e8f0"),
+                    margin=dict(l=10,r=10,t=45,b=10),
+                )
+                st.plotly_chart(fig_dow, use_container_width=True)
+
+            # Hotspot time slots table
+            slot_counts = inc.groupby("time_label")["value"].agg(
+                total="count",
+                single=lambda x: (x=="1").sum(),
+                multiple=lambda x: (x=="2").sum(),
+                days=lambda x: inc.loc[x.index, "day_of_week"].nunique(),
+            ).reset_index().sort_values("total", ascending=False)
+            slot_counts.columns = ["Time Slot","Total intervals","Single (1)","Multiple (2)","Days affected"]
+            st.markdown("**Hotspot summary by time slot:**")
+            st.dataframe(slot_counts, use_container_width=True, hide_index=True)
+
+            # Pattern insights
+            st.markdown("**💡 Pattern insights:**")
+            if not slot_counts.empty:
+                top = slot_counts.iloc[0]
+                if top["Total intervals"] >= 3:
+                    st.markdown(
+                        f'<div class="ins">⚠️ <b>{top["Time Slot"].strip()}</b> — '
+                        f'{int(top["Total intervals"])} incident intervals across '
+                        f'{int(top["Days affected"])} day(s). '
+                        "Consider proactive strategies or environmental changes at this time.</div>",
+                        unsafe_allow_html=True
+                    )
+            morn = inc["time_slot"].apply(
+                lambda t: int(str(t).split(":")[0]) < 12 if ":" in str(t) else False
+            ).sum()
+            arvo = len(inc) - morn
+            if len(inc) >= 4:
+                if morn > arvo * 1.5:
+                    st.markdown(
+                        f'<div class="ins">🌅 Incidents concentrated in the <b>morning</b> '                        f'({morn} vs {arvo} afternoon). Review arrival routine and morning transitions.</div>',
+                        unsafe_allow_html=True
+                    )
+                elif arvo > morn * 1.5:
+                    st.markdown(
+                        f'<div class="ins">🌇 Incidents concentrated in the <b>afternoon</b> '                        f'({arvo} vs {morn} morning). Consider fatigue and post-lunch demand levels.</div>',
+                        unsafe_allow_html=True
+                    )
+            if n2 > 0 and (n1+n2) > 0:
+                pct = round(n2/(n1+n2)*100)
+                if pct > 30:
+                    st.markdown(
+                        f'<div class="ins">🔴 {pct}% of intervals were <b>multiple occurrences (2)</b>. '                        f'These are high-priority intervals for targeted support.</div>',
+                        unsafe_allow_html=True
+                    )
+            zero_days = [d for d in DAYS if dow.get(d,0) == 0]
+            if zero_days and len(inc) >= 3:
+                st.markdown(
+                    f'<div class="ins ins-ok">✅ No incidents on <b>{", ".join(zero_days)}</b>. '                    f'Reflect on what conditions were different and consider replicating them.</div>',
+                    unsafe_allow_html=True
+                )
 
     # Combined tab
     with an_tabs[-1]:
