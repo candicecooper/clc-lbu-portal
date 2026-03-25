@@ -296,6 +296,48 @@ with hc3:
         key="spt_b2"
     )
 
+# ── Add new student (without leaving the tool) ───────────────────────────
+with st.expander("➕ Add a new student"):
+    with st.form("spt_add_student_form"):
+        ns1, ns2, ns3 = st.columns([2, 2, 1])
+        with ns1:
+            ns_first = st.text_input("First name *", placeholder="e.g. Alex")
+            ns_edid  = st.text_input("EDID *", placeholder="e.g. ED123456")
+        with ns2:
+            ns_last    = st.text_input("Last name *", placeholder="e.g. Smith")
+            ns_program = st.selectbox("Program *", ["JP", "PY", "SY"])
+        with ns3:
+            ns_grade = st.selectbox("Grade", ["R","Y1","Y2","Y3","Y4","Y5","Y6","Y7","Y8","Y9","Y10","Y11","Y12"])
+            ns_dob   = st.date_input("Date of birth", value=None)
+        ns_submitted = st.form_submit_button("Save Student", type="primary", use_container_width=True)
+
+    if ns_submitted:
+        if not ns_first.strip() or not ns_last.strip() or not ns_edid.strip():
+            st.error("Please fill in first name, last name and EDID.")
+        else:
+            sb = get_sb()
+            if sb:
+                try:
+                    full_name = f"{ns_first.strip()} {ns_last.strip()}"
+                    sb.table("students").insert({
+                        "first_name":      ns_first.strip(),
+                        "last_name":       ns_last.strip(),
+                        "name":            full_name,
+                        "edid":            ns_edid.strip(),
+                        "program":         ns_program,
+                        "grade":           ns_grade,
+                        "dob":             ns_dob.isoformat() if ns_dob else None,
+                        "placement_start": date.today().isoformat(),
+                        "archived":        False,
+                    }).execute()
+                    load_students_cached.clear()
+                    st.success(f"✅ {full_name} added — select them from the dropdown above.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Could not save student: {e}")
+            else:
+                st.error("Supabase not configured.")
+
 # Student change
 if selected_id != ss.spt_student_id:
     ss.spt_student_id   = selected_id
