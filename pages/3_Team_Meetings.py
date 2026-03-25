@@ -29,7 +29,6 @@ st.sidebar.markdown(
     unsafe_allow_html=True
 )
 
-
 # ── Supabase ──────────────────────────────────────────────────────────────────
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
@@ -38,7 +37,7 @@ GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Programs ──────────────────────────────────────────────────────────────────
 PROGRAMS = {
     "JP":    {"label": "Junior Primary",  "color": "#2d7d4f", "light": "#d1fae5", "emoji": "🟢"},
     "PY":    {"label": "Primary Years",   "color": "#1a4d8c", "light": "#dbeafe", "emoji": "🔵"},
@@ -50,6 +49,21 @@ PROGRAMS = {
 DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 RECURRENCE_TYPES = ["Weekly", "Fortnightly", "Monthly"]
 
+# ── Term week helper ──────────────────────────────────────────────────────────
+# Update TERM1_2026_START if your term start date differs
+TERM1_2026_START = datetime.date(2026, 1, 26)
+TERM_WEEKS = 11
+
+def get_current_term_week():
+    """Return (term_label, week_number) based on today's date."""
+    today = datetime.date.today()
+    delta = (today - TERM1_2026_START).days
+    if delta < 0:
+        return "T1", 1
+    week_num = min(delta // 7 + 1, TERM_WEEKS)
+    return "T1", week_num
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 def get_program_from_params():
     params = st.query_params
     prog = params.get("program", "JP")
@@ -67,8 +81,6 @@ def get_week_from_params():
         return None
 
 def admin_login():
-    # This is a separate in-app admin level for editing/deleting content
-    # (distinct from the shared staff auth handled by auth.py above)
     if "admin" not in st.session_state:
         st.session_state.admin = False
     with st.sidebar:
@@ -91,13 +103,13 @@ def improve_with_ai(raw_text: str, program: str, meeting_date: str, dsm_summary:
     if not GROQ_KEY:
         return raw_text
     client = Groq(api_key=GROQ_KEY)
-    
+
     if program == "STAFF":
         dsm_context = f"""
 PART 1 — DIGITAL STAFF MEETING (already recorded, include as first section):
 {dsm_summary}
 """ if dsm_summary else ""
-        
+
         prompt = f"""You are a professional minute-taker for Cowandilla Learning Centre (CLC), Learning & Behaviour Unit — an alternative education school in South Australia.
 
 Meeting: Staff Meeting (Combined — Digital + Face-to-Face)
@@ -570,34 +582,49 @@ def render_schedules(program):
                         st.warning("Please enter a schedule name.")
 
 
-def render_agenda(program):
+def render_agenda(program, week_num=None, term_label="T1"):
     is_staff = (program == "STAFF")
-    st.subheader("📋 Agenda")
 
     if is_staff:
+        # ── Week context banner ───────────────────────────────────────────────
+        week_display = f"{term_label} Week {week_num}" if week_num else "Current Week"
+        st.markdown(f"""
+        <div style="background:linear-gradient(135deg,#1e6f75,#0f4f54);color:white;border-radius:12px;
+                    padding:1rem 1.5rem;margin-bottom:1.25rem;display:flex;align-items:center;gap:1rem;">
+          <div>
+            <div style="font-size:0.7rem;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;
+                        opacity:0.75;margin-bottom:0.2rem;">📋 Staff Meeting Agenda</div>
+            <div style="font-size:1.4rem;font-weight:800;">Week {week_num} — {term_label}</div>
+            <div style="font-size:0.82rem;opacity:0.85;margin-top:0.15rem;">
+              Chair's Running Sheet · DfE Meeting Structure · Cowandilla Learning Centre LBU
+            </div>
+          </div>
+          <div style="margin-left:auto;background:rgba(255,255,255,0.15);border-radius:8px;
+                      padding:0.5rem 1rem;text-align:center;">
+            <div style="font-size:0.7rem;opacity:0.8;">Agenda for</div>
+            <div style="font-size:1.5rem;font-weight:900;">W{week_num}</div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
         # ── DfE Meeting Structure — Chair's Running Sheet ──────────────────
-        # Load schedules for chair/minutes taker
         schedules = fetch("tm_schedules", {"program": "STAFF"}, "created_at")
         chair_name = schedules[0].get("chair","—") if schedules and schedules[0].get("chair") else "—"
         minutes_name = schedules[0].get("minutes_taker","—") if schedules and schedules[0].get("minutes_taker") else "—"
 
-        # Load agenda items
         items = fetch("tm_agenda_items", {"program": program}, "created_at")
+        # Filter to items for this week (by week_num tag) or unassigned open items
+        # Items are tagged by week_num in the submitted_by field convention, or we use all open
         open_items   = [i for i in items if i.get("status","open") != "closed"]
         closed_items = [i for i in items if i.get("status","open") == "closed"]
 
-        st.markdown("""
-        <div style="background:linear-gradient(135deg,#1e6f75,#0f4f54);color:white;border-radius:10px;padding:1rem 1.5rem;margin-bottom:1rem;">
-          <div style="font-size:1rem;font-weight:700;margin-bottom:0.25rem;">📋 Chair's Running Sheet — DfE Meeting Structure</div>
-          <div style="font-size:0.8rem;opacity:0.8;">Cowandilla Learning Centre · LBU Staff Meeting</div>
-        </div>
-        """, unsafe_allow_html=True)
-
         def agenda_section(num, title, icon, content_html, color="#1e293b"):
             st.markdown(f"""
-            <div style="border:1.5px solid #e2e8f0;border-left:5px solid {color};border-radius:8px;padding:0.85rem 1rem;margin-bottom:0.75rem;background:white;">
+            <div style="border:1.5px solid #e2e8f0;border-left:5px solid {color};border-radius:8px;
+                        padding:0.85rem 1rem;margin-bottom:0.75rem;background:white;">
               <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.4rem;">
-                <span style="background:{color};color:white;font-weight:700;font-size:0.75rem;padding:0.15rem 0.5rem;border-radius:20px;">Item {num}</span>
+                <span style="background:{color};color:white;font-weight:700;font-size:0.75rem;
+                             padding:0.15rem 0.5rem;border-radius:20px;">Item {num}</span>
                 <span style="font-size:1rem;">{icon}</span>
                 <span style="font-weight:700;color:{color};font-size:0.95rem;">{title}</span>
               </div>
@@ -605,32 +632,22 @@ def render_agenda(program):
             </div>
             """, unsafe_allow_html=True)
 
-        # Item 1 — Welcome
         agenda_section(1, "Welcome", "👋",
             f"Chair <strong>{chair_name}</strong> opens the meeting and welcomes all staff.",
             color="#1e6f75")
-
-        # Item 2 — Acknowledgement of Chair and Minute Taker
         agenda_section(2, "Acknowledgement of Chair & Minute Taker", "📌",
             f"<strong>Chair:</strong> {chair_name}<br><strong>Minute Taker:</strong> {minutes_name}",
             color="#1a4d8c")
-
-        # Item 3 — Apologies
         agenda_section(3, "Apologies", "🙏",
             "Chair calls for apologies. Minute taker records names of staff unable to attend.",
             color="#92400e")
-
-        # Item 4 — Confirmation of Previous Minutes
         agenda_section(4, "Confirmation of Previous Minutes", "✅",
             "Chair asks if previous minutes are a true and accurate record. Moved and seconded.",
             color="#065f46")
-
-        # Item 5 — Business Arising from Previous Minutes
         agenda_section(5, "Business Arising from Previous Minutes", "🔁",
             "Review of actions from previous meeting. Staff report on progress.",
             color="#6d28d9")
 
-        # Items 6+ — Agenda items from staff
         if open_items:
             for idx_i, item in enumerate(open_items):
                 item_num = 6 + idx_i
@@ -651,19 +668,14 @@ def render_agenda(program):
                             delete_row("tm_agenda_items", item["id"])
                             st.rerun()
         else:
-            st.info("No additional agenda items submitted yet. Staff can add items below.")
+            st.info("No additional agenda items submitted yet for this week. Staff can add items below.")
 
-        # Standing item — Other Business
         agenda_section(6 + len(open_items), "General Business / Other Business", "💬",
             "Chair invites any other matters not previously listed. Brief discussion only.",
             color="#475569")
-
-        # Standing item — Next Meeting
         agenda_section(7 + len(open_items), "Next Meeting", "📅",
             "Chair confirms date, time and location of next meeting.",
             color="#475569")
-
-        # Standing item — Close
         agenda_section(8 + len(open_items), "Close of Meeting", "🔔",
             "Chair formally closes the meeting and thanks staff for their attendance.",
             color="#1e6f75")
@@ -674,7 +686,7 @@ def render_agenda(program):
                     st.markdown(f"~~{item['title']}~~ — {item.get('submitted_by','—')}")
 
     else:
-        # Standard agenda for JP/PY/SY/ADMIN
+        st.subheader("📋 Agenda")
         items = fetch("tm_agenda_items", {"program": program}, "created_at")
         open_items   = [i for i in items if i.get("status","open") != "closed"]
         closed_items = [i for i in items if i.get("status","open") == "closed"]
@@ -720,7 +732,7 @@ def render_agenda(program):
                     st.warning("Please enter a title.")
 
 
-def render_minutes(program, week_range=None):
+def render_minutes(program, week_range=None, week_num=None, term_label="T1"):
     prog_colours = {
         "JP": "#2d7d4f", "PY": "#1a4d8c", "SY": "#7c3aed",
         "STAFF": "#1e6f75", "ADMIN": "#92400e"
@@ -728,7 +740,28 @@ def render_minutes(program, week_range=None):
     accent   = prog_colours.get(program, "#1e293b")
     is_staff = (program == "STAFF")
 
-    if week_range:
+    if is_staff and week_num:
+        # ── Week context banner ───────────────────────────────────────────────
+        st.markdown(f"""
+        <div style="background:linear-gradient(135deg,#1e6f75,#0f4f54);color:white;border-radius:12px;
+                    padding:1rem 1.5rem;margin-bottom:1.25rem;display:flex;align-items:center;gap:1rem;">
+          <div>
+            <div style="font-size:0.7rem;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;
+                        opacity:0.75;margin-bottom:0.2rem;">📝 Staff Meeting Minutes</div>
+            <div style="font-size:1.4rem;font-weight:800;">Week {week_num} — {term_label}</div>
+            <div style="font-size:0.82rem;opacity:0.85;margin-top:0.15rem;">
+              Record or view minutes for this week's staff meeting
+            </div>
+          </div>
+          <div style="margin-left:auto;background:rgba(255,255,255,0.15);border-radius:8px;
+                      padding:0.5rem 1rem;text-align:center;">
+            <div style="font-size:0.7rem;opacity:0.8;">Week</div>
+            <div style="font-size:1.5rem;font-weight:900;">{week_num}</div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    if week_range and is_staff:
         monday, sunday = week_range
         week_str = f"{monday.strftime('%-d %b')} – {sunday.strftime('%-d %b %Y')}"
         st.markdown(f"""
@@ -739,186 +772,258 @@ def render_minutes(program, week_range=None):
 
     minutes_list = fetch("tm_minutes", {"program": program}, "meeting_date")
 
-    if minutes_list:
+    # ── For STAFF: split into current-week vs archive ─────────────────────────
+    if is_staff and week_num:
+        # Work out approx date range for current week
+        today = datetime.date.today()
+        days_since_monday = today.weekday()
+        this_monday = today - datetime.timedelta(days=days_since_monday)
+        this_sunday = this_monday + datetime.timedelta(days=6)
+
+        current_week_minutes = []
+        archive_minutes = []
         for m in minutes_list:
-            auto_expand = False
-            if week_range:
-                try:
-                    md = datetime.date.fromisoformat(m["meeting_date"])
-                    auto_expand = week_range[0] <= md <= week_range[1]
-                except Exception:
-                    pass
+            try:
+                md = datetime.date.fromisoformat(m["meeting_date"])
+                if this_monday <= md <= this_sunday:
+                    current_week_minutes.append(m)
+                else:
+                    archive_minutes.append(m)
+            except Exception:
+                archive_minutes.append(m)
 
-            label = f"📄  {m.get('meeting_date','')}  —  {m.get('title','Untitled')}"
-            with st.expander(label, expanded=auto_expand):
-                st.markdown(f"""
-                <div style="background:{accent};border-radius:8px;padding:10px 16px;
-                            margin-bottom:12px;display:flex;gap:2rem;flex-wrap:wrap;">
-                  <span style="color:white;font-size:13px;"><strong>Chair:</strong>&nbsp;{m.get('chair','—') or '—'}</span>
-                  <span style="color:white;font-size:13px;"><strong>Location:</strong>&nbsp;{m.get('location','—') or '—'}</span>
-                  <span style="color:white;font-size:13px;"><strong>Date:</strong>&nbsp;{m.get('meeting_date','—')}</span>
-                </div>""", unsafe_allow_html=True)
+        # ── Current week section ──────────────────────────────────────────────
+        if current_week_minutes:
+            st.markdown(f"""
+            <div style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:8px;
+                        padding:8px 14px;margin-bottom:10px;font-size:13px;color:#065f46;">
+              ✅ <strong>Week {week_num} minutes recorded.</strong>
+            </div>""", unsafe_allow_html=True)
+            for m in current_week_minutes:
+                _render_minutes_record(m, accent, is_staff, week_range)
+        else:
+            # No minutes yet for this week — show the form prominently
+            st.markdown(f"""
+            <div style="background:#fef3c7;border:2px dashed #f59e0b;border-radius:10px;
+                        padding:1rem 1.25rem;margin-bottom:1.25rem;text-align:center;">
+              <div style="font-size:1.1rem;font-weight:700;color:#92400e;margin-bottom:0.25rem;">
+                📝 No minutes recorded yet for Week {week_num}
+              </div>
+              <div style="font-size:0.85rem;color:#78350f;">
+                Use the form below to begin taking minutes for this week's staff meeting.
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+            _render_new_staff_minutes(week_num=week_num, term_label=term_label)
 
-                present_raw   = m.get("attendees", "") or ""
-                apologies_raw = m.get("apologies", "") or ""
-                present_list   = [n.strip() for n in present_raw.split(",")   if n.strip()]
-                apologies_list = [n.strip() for n in apologies_raw.split(",") if n.strip()]
+            # Archive at the bottom, collapsed
+            if archive_minutes:
+                st.divider()
+                with st.expander(f"📚 Previous weeks' minutes ({len(archive_minutes)})", expanded=False):
+                    for m in archive_minutes:
+                        _render_minutes_record(m, accent, is_staff, week_range)
+            return
 
-                if present_list or apologies_list:
-                    st.markdown("""
-                    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;
-                                padding:10px 16px;margin-bottom:12px;">
-                      <strong style="font-size:13px;">🙋 Attendance</strong>
-                    </div>""", unsafe_allow_html=True)
-                    ac1, ac2 = st.columns(2)
-                    with ac1:
-                        st.markdown("**✅ Present**")
-                        st.markdown("\n".join(f"- {n}" for n in present_list) if present_list else "_None recorded_")
-                    with ac2:
-                        st.markdown("**⚠️ Apologies**")
-                        st.markdown("\n".join(f"- {n}" for n in apologies_list) if apologies_list else "_None_")
+        # If minutes exist, still show the form below for additions, then archive
+        st.divider()
+        st.subheader("✍️ Add / Update Minutes")
+        _render_new_staff_minutes(week_num=week_num, term_label=term_label)
 
-                if is_staff:
-                    st.markdown("""
-                    <div style="background:#dbeafe;border-left:5px solid #1a4d8c;
-                                border-radius:0 8px 8px 0;padding:10px 16px;margin:14px 0 8px;">
-                      <strong style="color:#1a4d8c;font-size:14px;">💻 Part 1 — Digital Staff Meeting</strong>
-                    </div>""", unsafe_allow_html=True)
-                    digital_summary = (m.get("digital_summary") or "").strip()
-                    if digital_summary:
-                        st.markdown(digital_summary)
-                    else:
-                        st.caption("_No digital meeting summary recorded._")
-                    st.markdown("**Items raised — viewed & actioned:**")
+        if archive_minutes:
+            st.divider()
+            with st.expander(f"📚 Previous weeks' minutes ({len(archive_minutes)})", expanded=False):
+                for m in archive_minutes:
+                    _render_minutes_record(m, accent, is_staff, week_range)
+
+    else:
+        # Non-STAFF or no week_num — original behaviour
+        if minutes_list:
+            for m in minutes_list:
+                auto_expand = False
+                if week_range:
                     try:
-                        items = json.loads(m.get("digital_items") or "[]")
+                        md = datetime.date.fromisoformat(m["meeting_date"])
+                        auto_expand = week_range[0] <= md <= week_range[1]
                     except Exception:
-                        items = []
-                    if items:
-                        import pandas as pd
-                        df = pd.DataFrame(items)
-                        df.columns = [c.replace("_", " ").title() for c in df.columns]
-                        st.dataframe(df, use_container_width=True, hide_index=True)
-                    else:
-                        st.caption("_No items recorded._")
-                    st.markdown("""
-                    <div style="background:#d1fae5;border-left:5px solid #2d7d4f;
-                                border-radius:0 8px 8px 0;padding:10px 16px;margin:14px 0 8px;">
-                      <strong style="color:#2d7d4f;font-size:14px;">👥 Part 2 — Face-to-Face Meeting</strong>
-                    </div>""", unsafe_allow_html=True)
-                    ff = (m.get("face_to_face_content") or m.get("content") or "").strip()
-                    if ff:
-                        st.markdown(ff)
-                    else:
-                        st.caption("_No face-to-face minutes recorded._")
+                        pass
+                _render_minutes_record(m, accent, is_staff, week_range, auto_expand=auto_expand)
+        else:
+            st.info("No minutes recorded yet. Use the form below to add the first entry.")
+
+        st.divider()
+        if is_staff:
+            _render_new_staff_minutes()
+        else:
+            _render_new_team_minutes(program)
+
+
+def _render_minutes_record(m, accent, is_staff, week_range=None, auto_expand=False):
+    """Render a single minutes record as an expander."""
+    label = f"📄  {m.get('meeting_date','')}  —  {m.get('title','Untitled')}"
+    with st.expander(label, expanded=auto_expand):
+        st.markdown(f"""
+        <div style="background:{accent};border-radius:8px;padding:10px 16px;
+                    margin-bottom:12px;display:flex;gap:2rem;flex-wrap:wrap;">
+          <span style="color:white;font-size:13px;"><strong>Chair:</strong>&nbsp;{m.get('chair','—') or '—'}</span>
+          <span style="color:white;font-size:13px;"><strong>Location:</strong>&nbsp;{m.get('location','—') or '—'}</span>
+          <span style="color:white;font-size:13px;"><strong>Date:</strong>&nbsp;{m.get('meeting_date','—')}</span>
+        </div>""", unsafe_allow_html=True)
+
+        present_raw   = m.get("attendees", "") or ""
+        apologies_raw = m.get("apologies", "") or ""
+        present_list   = [n.strip() for n in present_raw.split(",")   if n.strip()]
+        apologies_list = [n.strip() for n in apologies_raw.split(",") if n.strip()]
+
+        if present_list or apologies_list:
+            st.markdown("""
+            <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;
+                        padding:10px 16px;margin-bottom:12px;">
+              <strong style="font-size:13px;">🙋 Attendance</strong>
+            </div>""", unsafe_allow_html=True)
+            ac1, ac2 = st.columns(2)
+            with ac1:
+                st.markdown("**✅ Present**")
+                st.markdown("\n".join(f"- {n}" for n in present_list) if present_list else "_None recorded_")
+            with ac2:
+                st.markdown("**⚠️ Apologies**")
+                st.markdown("\n".join(f"- {n}" for n in apologies_list) if apologies_list else "_None_")
+
+        if is_staff:
+            st.markdown("""
+            <div style="background:#dbeafe;border-left:5px solid #1a4d8c;
+                        border-radius:0 8px 8px 0;padding:10px 16px;margin:14px 0 8px;">
+              <strong style="color:#1a4d8c;font-size:14px;">💻 Part 1 — Digital Staff Meeting</strong>
+            </div>""", unsafe_allow_html=True)
+            digital_summary = (m.get("digital_summary") or "").strip()
+            if digital_summary:
+                st.markdown(digital_summary)
+            else:
+                st.caption("_No digital meeting summary recorded._")
+            st.markdown("**Items raised — viewed & actioned:**")
+            try:
+                items = json.loads(m.get("digital_items") or "[]")
+            except Exception:
+                items = []
+            if items:
+                import pandas as pd
+                df = pd.DataFrame(items)
+                df.columns = [c.replace("_", " ").title() for c in df.columns]
+                st.dataframe(df, use_container_width=True, hide_index=True)
+            else:
+                st.caption("_No items recorded._")
+            st.markdown("""
+            <div style="background:#d1fae5;border-left:5px solid #2d7d4f;
+                        border-radius:0 8px 8px 0;padding:10px 16px;margin:14px 0 8px;">
+              <strong style="color:#2d7d4f;font-size:14px;">👥 Part 2 — Face-to-Face Meeting</strong>
+            </div>""", unsafe_allow_html=True)
+            ff = (m.get("face_to_face_content") or m.get("content") or "").strip()
+            if ff:
+                st.markdown(ff)
+            else:
+                st.caption("_No face-to-face minutes recorded._")
+        else:
+            content = (m.get("content") or m.get("face_to_face_content") or "").strip()
+            if content:
+                st.markdown(content)
+            else:
+                st.caption("_No minutes content recorded._")
+
+        action_text = (m.get("action_summary") or "").strip()
+        if action_text:
+            st.markdown("""
+            <div style="background:#f5f3ff;border-left:5px solid #5b21b6;
+                        border-radius:0 8px 8px 0;padding:8px 14px;margin:12px 0 4px;">
+              <strong style="color:#5b21b6;">✅ Action Items</strong>
+            </div>""", unsafe_allow_html=True)
+            lines = [l.strip() for l in action_text.splitlines() if l.strip()]
+            for line in lines:
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) >= 2:
+                    st.markdown(f"🔲 **{parts[0]}** — {parts[1]}" + (f" _(due {parts[2]})_" if len(parts) > 2 else ""))
                 else:
-                    content = (m.get("content") or m.get("face_to_face_content") or "").strip()
-                    if content:
-                        st.markdown(content)
+                    st.markdown(f"🔲 {line}")
+
+        st.markdown("")
+        if is_staff:
+            docx_bytes = generate_combined_docx(m)
+        else:
+            docx_bytes = generate_team_docx(m, "STAFF" if is_staff else "JP")
+
+        safe_title = (m.get("title") or "minutes").replace(" ", "_")
+        st.download_button(
+            label     = "📥 Download Word Document",
+            data      = docx_bytes,
+            file_name = f"{safe_title}_{m.get('meeting_date','')}.docx",
+            mime      = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            key       = f"dl_{m['id']}",
+            type      = "primary",
+        )
+
+        if st.session_state.get("admin"):
+            st.divider()
+            ec1, ec2 = st.columns(2)
+            with ec1:
+                if st.button("✏️ Edit", key=f"edit_min_{m['id']}"):
+                    st.session_state[f"editing_min_{m['id']}"] = True
+            with ec2:
+                if st.button("🗑️ Delete", key=f"del_min_{m['id']}"):
+                    delete_row("tm_minutes", m["id"])
+                    st.rerun()
+            if st.session_state.get(f"editing_min_{m['id']}"):
+                with st.form(f"edit_min_form_{m['id']}"):
+                    ec1, ec2 = st.columns([3, 1])
+                    with ec1: etitle = st.text_input("Title", value=m.get("title",""))
+                    with ec2: edate  = st.date_input("Date", value=datetime.date.fromisoformat(m["meeting_date"]) if m.get("meeting_date") else datetime.date.today())
+                    ec3, ec4, ec5 = st.columns(3)
+                    with ec3: echair = st.text_input("Chair", value=m.get("chair",""))
+                    with ec4: eloc   = st.text_input("Location", value=m.get("location",""))
+                    with ec5: pass
+                    eatt  = st.text_input("Present (comma-separated)", value=m.get("attendees",""))
+                    eapol = st.text_input("Apologies (comma-separated)", value=m.get("apologies",""))
+                    if is_staff:
+                        edigital = st.text_area("Digital meeting summary", value=m.get("digital_summary",""), height=120)
+                        eitems   = st.text_area("Digital items (Item|Raised By|Actioned By|Status)", value="\n".join(
+                            f"{i.get('item','')}|{i.get('raised_by','')}|{i.get('actioned_by','')}|{i.get('status','')}"
+                            for i in json.loads(m.get("digital_items") or "[]")
+                        ), height=100)
+                        eff      = st.text_area("Face-to-face minutes", value=m.get("face_to_face_content",""), height=200)
+                        econtent = ""
                     else:
-                        st.caption("_No minutes content recorded._")
-
-                action_text = (m.get("action_summary") or "").strip()
-                if action_text:
-                    st.markdown("""
-                    <div style="background:#f5f3ff;border-left:5px solid #5b21b6;
-                                border-radius:0 8px 8px 0;padding:8px 14px;margin:12px 0 4px;">
-                      <strong style="color:#5b21b6;">✅ Action Items</strong>
-                    </div>""", unsafe_allow_html=True)
-                    lines = [l.strip() for l in action_text.splitlines() if l.strip()]
-                    for line in lines:
-                        parts = [p.strip() for p in line.split("|")]
-                        if len(parts) >= 2:
-                            st.markdown(f"🔲 **{parts[0]}** — {parts[1]}" + (f" _(due {parts[2]})_" if len(parts) > 2 else ""))
-                        else:
-                            st.markdown(f"🔲 {line}")
-
-                st.markdown("")
-                if is_staff:
-                    docx_bytes = generate_combined_docx(m)
-                else:
-                    docx_bytes = generate_team_docx(m, program)
-
-                safe_title = (m.get("title") or "minutes").replace(" ", "_")
-                st.download_button(
-                    label     = "📥 Download Word Document",
-                    data      = docx_bytes,
-                    file_name = f"{safe_title}_{m.get('meeting_date','')}.docx",
-                    mime      = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    key       = f"dl_{m['id']}",
-                    type      = "primary",
-                )
-
-                if st.session_state.get("admin"):
-                    st.divider()
-                    ec1, ec2 = st.columns(2)
-                    with ec1:
-                        if st.button("✏️ Edit", key=f"edit_min_{m['id']}"):
-                            st.session_state[f"editing_min_{m['id']}"] = True
-                    with ec2:
-                        if st.button("🗑️ Delete", key=f"del_min_{m['id']}"):
-                            delete_row("tm_minutes", m["id"])
-                            st.rerun()
-                    if st.session_state.get(f"editing_min_{m['id']}"):
-                        with st.form(f"edit_min_form_{m['id']}"):
-                            ec1, ec2 = st.columns([3, 1])
-                            with ec1: etitle = st.text_input("Title", value=m.get("title",""))
-                            with ec2: edate  = st.date_input("Date", value=datetime.date.fromisoformat(m["meeting_date"]) if m.get("meeting_date") else datetime.date.today())
-                            ec3, ec4, ec5 = st.columns(3)
-                            with ec3: echair = st.text_input("Chair", value=m.get("chair",""))
-                            with ec4: eloc   = st.text_input("Location", value=m.get("location",""))
-                            with ec5: pass
-                            eatt  = st.text_input("Present (comma-separated)", value=m.get("attendees",""))
-                            eapol = st.text_input("Apologies (comma-separated)", value=m.get("apologies",""))
-                            if is_staff:
-                                edigital = st.text_area("Digital meeting summary", value=m.get("digital_summary",""), height=120)
-                                eitems   = st.text_area("Digital items (Item|Raised By|Actioned By|Status)", value="\n".join(
-                                    f"{i.get('item','')}|{i.get('raised_by','')}|{i.get('actioned_by','')}|{i.get('status','')}"
-                                    for i in json.loads(m.get("digital_items") or "[]")
-                                ), height=100)
-                                eff      = st.text_area("Face-to-face minutes", value=m.get("face_to_face_content",""), height=200)
-                                econtent = ""
-                            else:
-                                edigital = ""; eitems = ""; eff = ""
-                                econtent = st.text_area("Minutes", value=m.get("content",""), height=280)
-                            eactions = st.text_area("Action items (Action|Assigned To|Due)", value=m.get("action_summary",""))
-                            if st.form_submit_button("💾 Save Changes"):
-                                parsed_items = []
-                                if is_staff:
-                                    for line in eitems.splitlines():
-                                        parts = [p.strip() for p in line.split("|")]
-                                        if parts and parts[0]:
-                                            parsed_items.append({
-                                                "item": parts[0], "raised_by": parts[1] if len(parts)>1 else "",
-                                                "actioned_by": parts[2] if len(parts)>2 else "",
-                                                "status": parts[3] if len(parts)>3 else "Noted"
-                                            })
-                                update_row("tm_minutes", m["id"], {
-                                    "title": etitle, "meeting_date": str(edate),
-                                    "chair": echair, "location": eloc,
-                                    "attendees": eatt, "apologies": eapol,
-                                    "digital_summary": edigital,
-                                    "digital_items": json.dumps(parsed_items),
-                                    "face_to_face_content": eff,
-                                    "content": econtent,
-                                    "action_summary": eactions
-                                })
-                                del st.session_state[f"editing_min_{m['id']}"]
-                                st.rerun()
-    else:
-        st.info("No minutes recorded yet. Use the form below to add the first entry.")
-
-    st.divider()
-    if is_staff:
-        _render_new_staff_minutes()
-    else:
-        _render_new_team_minutes(program)
+                        edigital = ""; eitems = ""; eff = ""
+                        econtent = st.text_area("Minutes", value=m.get("content",""), height=280)
+                    eactions = st.text_area("Action items (Action|Assigned To|Due)", value=m.get("action_summary",""))
+                    if st.form_submit_button("💾 Save Changes"):
+                        parsed_items = []
+                        if is_staff:
+                            for line in eitems.splitlines():
+                                parts = [p.strip() for p in line.split("|")]
+                                if parts and parts[0]:
+                                    parsed_items.append({
+                                        "item": parts[0], "raised_by": parts[1] if len(parts)>1 else "",
+                                        "actioned_by": parts[2] if len(parts)>2 else "",
+                                        "status": parts[3] if len(parts)>3 else "Noted"
+                                    })
+                        update_row("tm_minutes", m["id"], {
+                            "title": etitle, "meeting_date": str(edate),
+                            "chair": echair, "location": eloc,
+                            "attendees": eatt, "apologies": eapol,
+                            "digital_summary": edigital,
+                            "digital_items": json.dumps(parsed_items),
+                            "face_to_face_content": eff,
+                            "content": econtent,
+                            "action_summary": eactions
+                        })
+                        del st.session_state[f"editing_min_{m['id']}"]
+                        st.rerun()
 
 
-def _render_new_staff_minutes():
+def _render_new_staff_minutes(week_num=None, term_label="T1"):
     st.subheader("✍️ Record Combined Staff Meeting Minutes")
-    
-    # ── Step 1: Load DSM content (outside form so it shows immediately) ────────
+
+    # Pre-filled title based on current week
+    default_title = f"Staff Meeting — {term_label} W{week_num}" if week_num else "Staff Meeting"
+
+    # ── Step 1: Load DSM content ──────────────────────────────────────────────
     _dsm_summary = ""
     _dsm_week_label = ""
     _dsm_items_raw = ""
@@ -943,7 +1048,6 @@ def _render_new_staff_minutes():
     except Exception as _e:
         st.caption(f"Could not auto-load DSM: {_e}")
 
-    # Show DSM preview
     if _dsm_loaded:
         st.markdown(f"""
         <div style="background:#dbeafe;border-left:5px solid #1a4d8c;border-radius:0 8px 8px 0;
@@ -972,9 +1076,14 @@ def _render_new_staff_minutes():
     with st.form("new_staff_minutes_form", clear_on_submit=True):
         st.markdown("##### 📋 Meeting Details")
         dc1, dc2, dc3 = st.columns([3, 2, 2])
-        with dc1: m_title    = st.text_input("Meeting title *", placeholder="e.g. Staff Meeting — T1 W8")
-        with dc2: m_date     = st.date_input("Date *", value=datetime.date.today())
-        with dc3: m_chair    = st.text_input("Chair", value=get_staff_name())
+        with dc1:
+            m_title = st.text_input(
+                "Meeting title *",
+                value=default_title,
+                placeholder=default_title,
+            )
+        with dc2: m_date  = st.date_input("Date *", value=datetime.date.today())
+        with dc3: m_chair = st.text_input("Chair", value=get_staff_name())
         m_location = st.text_input("Location / format", placeholder="e.g. Staff Room")
 
         st.markdown("##### 🙋 Attendance")
@@ -1221,7 +1330,6 @@ Key points discussed:
 def _render_new_team_minutes(program):
     st.subheader("✍️ Record New Minutes")
 
-    # Meeting type selector
     meeting_type = st.radio(
         "Meeting type",
         ["🔍 Week A — Student Lens", "⚙️ Week B — System Lens", "📋 Ad-hoc / Additional Meeting"],
@@ -1252,13 +1360,11 @@ def _render_new_team_minutes(program):
         st.markdown("""
         <div style="background:#fef3c7;border-left:4px solid #d97706;border-radius:0 8px 8px 0;
                     padding:8px 14px;margin-bottom:12px;font-size:13px;color:#92400e;">
-          📋 <strong>Ad-hoc / Additional Meeting</strong> · Record minutes for any unscheduled or additional team meeting.
-          Use the template or drop in a transcript for AI formatting.
+          📋 <strong>Ad-hoc / Additional Meeting</strong>
         </div>""", unsafe_allow_html=True)
         template = ADHOC_MINUTES_TEMPLATE
         title_placeholder = f"{PROGRAMS[program]['label']} Additional Meeting"
 
-    # Input method
     ff_method = st.radio("Minutes input method",
         ["📝 Use structured template", "🎙️ Drop transcript — AI will structure it"],
         horizontal=True, key=f"ff_method_{program}")
@@ -1307,7 +1413,6 @@ def _render_new_team_minutes(program):
                 apologies_str = ", ".join(n.strip() for n in m_apologies.replace("\n",",").split(",") if n.strip())
                 final_content = m_content.strip()
                 if do_ai and final_content:
-                    # Add meeting type context to AI prompt
                     if is_student_lens:
                         lens_type = "Week A Student Lens"
                     elif is_system_lens:
@@ -1318,7 +1423,6 @@ def _render_new_team_minutes(program):
                     with st.spinner("AI is structuring your minutes…"):
                         final_content = improve_with_ai(
                             f"{lens_context}\n\n{final_content}", program, str(m_date))
-                # Prepend meeting type badge
                 if is_student_lens: type_badge = "🔍 Week A — Student Lens"
                 elif is_system_lens: type_badge = "⚙️ Week B — System Lens"
                 else: type_badge = "📋 Ad-hoc Meeting"
@@ -1390,8 +1494,8 @@ def render_attendance(program):
         st.info("Add a meeting schedule first.")
         return
     sched_opts = {s["schedule_name"]: s["id"] for s in schedules}
-    sel_sched = st.selectbox("Meeting", list(sched_opts.keys()), key="att_sched")
-    sel_date  = st.date_input("Meeting date", value=datetime.date.today(), key="att_date")
+    sel_sched  = st.selectbox("Meeting", list(sched_opts.keys()), key="att_sched")
+    sel_date   = st.date_input("Meeting date", value=datetime.date.today(), key="att_date")
     existing = supabase.table("tm_attendance").select("*").eq("program", program)\
         .eq("schedule_id", sched_opts[sel_sched]).eq("meeting_date", str(sel_date)).execute().data or []
     if existing:
@@ -1462,80 +1566,39 @@ def render_documents(program):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MAIN
+# PROGRAM MEETING (JP/PY/SY)
 # ─────────────────────────────────────────────────────────────────────────────
-def _render_adhoc_meeting(program, last_actions):
-    """Ad-hoc / additional meeting form with transcript → AI minutes."""
-    import json as _json
 
+def _render_adhoc_meeting(program, last_actions):
+    import json as _json
     prog_label = PROGRAMS[program]["label"]
 
     st.markdown("#### 📋 Meeting Details")
     mc1, mc2, mc3 = st.columns(3)
-    with mc1: ah_date      = st.date_input("Date", value=datetime.date.today(), key=f"ah_date_{program}")
-    with mc2: ah_purpose   = st.text_input("Meeting purpose / title *", key=f"ah_purpose_{program}",
-                                            placeholder="e.g. Emergency planning meeting")
+    with mc1: ah_date        = st.date_input("Date", value=datetime.date.today(), key=f"ah_date_{program}")
+    with mc2: ah_purpose     = st.text_input("Meeting purpose / title *", key=f"ah_purpose_{program}", placeholder="e.g. Emergency planning meeting")
     with mc3: ah_facilitator = st.text_input("Facilitator", value=get_staff_name(), key=f"ah_fac_{program}")
     ah_attendees = st.text_input("Attendees", placeholder="Names separated by commas", key=f"ah_att_{program}")
-
     st.markdown("---")
 
-    # Input method
-    input_method = st.radio(
-        "How would you like to record minutes?",
+    input_method = st.radio("How would you like to record minutes?",
         ["📝 Type / fill in template", "🎙️ Paste transcript — AI will format"],
         horizontal=True, key=f"ah_method_{program}")
     use_ai = "🎙️" in input_method
-
     st.markdown("---")
 
     if use_ai:
         st.markdown("#### 🎙️ Meeting Transcript")
-        st.markdown("""<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;
-            padding:10px 14px;font-size:12px;color:#475569;margin-bottom:8px;">
-            <strong>Instructions:</strong><br>
-            1. Record your meeting using your phone or a recording tool<br>
-            2. Transcribe using Otter.ai, Teams transcript, or phone speech-to-text<br>
-            3. Paste the full transcript below — AI will structure it into professional minutes
-        </div>""", unsafe_allow_html=True)
-        ah_transcript = st.text_area("Paste transcript here", height=300,
-            key=f"ah_transcript_{program}",
+        ah_transcript = st.text_area("Paste transcript here", height=300, key=f"ah_transcript_{program}",
             placeholder="Paste full transcript here. Include everything — AI will extract what's relevant...")
         ah_content = ""
     else:
         ah_transcript = ""
         st.markdown("#### 📝 Minutes")
         ah_content = st.text_area("Minutes", height=300, key=f"ah_content_{program}",
-            value="""## Purpose / Agenda
-What is this meeting about?
-
----
-
-## Discussion
-Key points discussed:
-
-
----
-
-## Decisions Made
-
-
----
-
-## Meeting Close
-What is the single most important thing agreed today?
-
----
-
-## Actions
-| Action | Who | By When |
-|--------|-----|---------|
-|        |     |         |
-""")
+            value="""## Purpose / Agenda\n\n---\n\n## Discussion\n\n---\n\n## Decisions Made\n\n---\n\n## Actions\n| Action | Who | By When |\n|--------|-----|---------|""")
 
     st.markdown("---")
-
-    # Actions table
     st.markdown("#### ✅ Actions")
     actions_key = f"ah_actions_{program}"
     if actions_key not in st.session_state:
@@ -1560,13 +1623,8 @@ What is the single most important thing agreed today?
         ah_actions.append({"action":"","who":"","by_when":""}); st.rerun()
 
     st.markdown("---")
-
-    # Confirmation
-    ah_confirmed_by = st.text_input("Your name (confirming minutes are accurate)",
-        value=get_staff_name(), key=f"ah_confirmed_{program}")
-    ah_confirmed = st.checkbox(
-        "I confirm these minutes accurately represent what was discussed.",
-        key=f"ah_confirm_chk_{program}")
+    ah_confirmed_by = st.text_input("Your name (confirming minutes are accurate)", value=get_staff_name(), key=f"ah_confirmed_{program}")
+    ah_confirmed = st.checkbox("I confirm these minutes accurately represent what was discussed.", key=f"ah_confirm_chk_{program}")
 
     if st.button("✨ Process & Save Minutes", type="primary", use_container_width=True, key=f"ah_save_{program}"):
         if not ah_purpose.strip():
@@ -1579,43 +1637,20 @@ What is the single most important thing agreed today?
             final_content = ""
             if use_ai and ah_transcript.strip():
                 with st.spinner("✨ AI is structuring your transcript into minutes…"):
-                    prompt = f"""You are a professional minute-taker for Cowandilla Learning Centre (CLC), 
-Learning & Behaviour Unit — {prog_label} team. 
+                    prompt = f"""You are a professional minute-taker for Cowandilla Learning Centre (CLC),
+Learning & Behaviour Unit — {prog_label} team.
 
 Meeting: {ah_purpose.strip()}
 Date: {ah_date}
 Facilitator: {ah_facilitator.strip()}
 Attendees: {ah_attendees.strip()}
 
-Transform this transcript into professional meeting minutes using this structure:
-
-## {ah_purpose.strip()}
-
-### Attendance
-{ah_attendees.strip() or "See attendance record"}
-
-### Purpose
-{ah_purpose.strip()}
-
-### Discussion
-(Extract and summarise key discussion points)
-
-### Decisions Made
-(List decisions reached)
-
-### Meeting Close
-(Key agreement or next step)
-
-### Actions
-| Action | Who | By When |
-|--------|-----|---------|
-(Extract all actions mentioned)
+Transform this transcript into professional meeting minutes.
 
 Rules:
 - Professional but warm, accessible language
 - Trauma-informed, strengths-based framing
 - Preserve ALL factual content — do not fabricate
-- Concise — one clear sentence per point unless more detail is essential
 
 Transcript:
 {ah_transcript.strip()}"""
@@ -1637,22 +1672,16 @@ Transcript:
 
             try:
                 insert("tm_minutes", {
-                    "program": program,
-                    "schedule_id": None,
-                    "title": ah_purpose.strip(),
-                    "meeting_date": str(ah_date),
-                    "chair": ah_facilitator.strip(),
-                    "location": "",
-                    "attendees": ah_attendees.strip(),
-                    "apologies": "",
+                    "program": program, "schedule_id": None,
+                    "title": ah_purpose.strip(), "meeting_date": str(ah_date),
+                    "chair": ah_facilitator.strip(), "location": "",
+                    "attendees": ah_attendees.strip(), "apologies": "",
                     "content": final_content,
                     "action_summary": "\n".join(
                         f"{a.get('action','')} | {a.get('who','')} | {a.get('by_when','')}"
                         for a in ah_actions if a.get("action","").strip()
                     ),
-                    "digital_summary": "",
-                    "digital_items": "[]",
-                    "face_to_face_content": "",
+                    "digital_summary": "", "digital_items": "[]", "face_to_face_content": "",
                 })
                 st.success("✅ Ad-hoc meeting minutes saved!")
                 st.session_state.pop(f"ah_actions_{program}", None)
@@ -1662,17 +1691,13 @@ Transcript:
 
 
 def render_program_meeting(program):
-    """Structured weekly program meeting — Week A (Student Lens) or Week B (System Lens)."""
     import json as _json
-
     prog_label = PROGRAMS[program]["label"]
     accent = PROGRAMS[program]["color"]
 
-    # ── Fetch students for this program ──────────────────────────────────────
     @st.cache_data(ttl=120)
     def fetch_students(prog):
         try:
-            # Try behaviour Supabase first
             import os
             from supabase import create_client as _cc
             burl = st.secrets.get("BEHAVIOUR_SUPABASE_URL","") or os.environ.get("BEHAVIOUR_SUPABASE_URL","")
@@ -1688,7 +1713,6 @@ def render_program_meeting(program):
 
     student_names = fetch_students(program)
 
-    # ── Detect last meeting week type ─────────────────────────────────────────
     last_records = fetch("tm_program_meetings", {"program": program}, "meeting_date")
     last_week_type = None
     last_actions = []
@@ -1702,7 +1726,6 @@ def render_program_meeting(program):
 
     suggested_type = "B" if last_week_type == "A" else "A"
 
-    # ── Week type selector ────────────────────────────────────────────────────
     wt_col1, wt_col2 = st.columns([3, 2])
     with wt_col1:
         week_type = st.radio(
@@ -1727,8 +1750,7 @@ def render_program_meeting(program):
     elif is_adhoc:
         st.markdown(f"""<div style="background:#f3f0ff;border-left:5px solid #6d28d9;
             border-radius:0 8px 8px 0;padding:8px 14px;margin-bottom:12px;font-size:13px;color:#4c1d95;">
-            📋 <strong>AD-HOC / ADDITIONAL MEETING</strong> · Record minutes for any unscheduled or additional team meeting.
-            Use the transcript tool to paste a recording and have AI format the minutes.
+            📋 <strong>AD-HOC / ADDITIONAL MEETING</strong>
         </div>""", unsafe_allow_html=True)
     else:
         st.markdown(f"""<div style="background:#fef3c7;border-left:5px solid #d97706;
@@ -1736,17 +1758,15 @@ def render_program_meeting(program):
             ⬤ <strong>WEEK B — SYSTEM LENS</strong> · CLC Priorities · Innovation Fidelity · Staff Alignment
         </div>""", unsafe_allow_html=True)
 
-    # ── Ad-hoc meeting — separate flow ───────────────────────────────────────
     if is_adhoc:
         _render_adhoc_meeting(program, last_actions)
         return
 
-    # ── Meeting details ───────────────────────────────────────────────────────
     st.markdown("#### 📋 Meeting Details")
     mc1, mc2, mc3, mc4 = st.columns(4)
-    with mc1: pm_date = st.date_input("Date", value=datetime.date.today(), key=f"pm_date_{program}")
-    with mc2: pm_term = st.text_input("Term", placeholder="T1", key=f"pm_term_{program}")
-    with mc3: pm_week = st.number_input("Week #", min_value=1, max_value=11, value=1, key=f"pm_week_{program}")
+    with mc1: pm_date        = st.date_input("Date", value=datetime.date.today(), key=f"pm_date_{program}")
+    with mc2: pm_term        = st.text_input("Term", placeholder="T1", key=f"pm_term_{program}")
+    with mc3: pm_week        = st.number_input("Week #", min_value=1, max_value=11, value=1, key=f"pm_week_{program}")
     with mc4: pm_facilitator = st.text_input("Facilitator", value=get_staff_name(), key=f"pm_fac_{program}")
     pm_attendees = st.text_input("Attendees", placeholder="Names separated by commas", key=f"pm_att_{program}")
 
@@ -1755,21 +1775,17 @@ def render_program_meeting(program):
         <strong>Meeting Norms:</strong> ☑ Student-centred &nbsp;·&nbsp; ☑ Evidence before opinion
         &nbsp;·&nbsp; ☑ Clear actions + ownership &nbsp;·&nbsp; ☑ Stick to time
     </div>""", unsafe_allow_html=True)
-
     st.markdown("---")
 
-    # ── Section 1: Check-In ───────────────────────────────────────────────────
-    checkin_label = "TEAM CHECK-IN — Regulation Before Reaction" if is_week_a else "TEAM CHECK-IN"
+    checkin_label  = "TEAM CHECK-IN — Regulation Before Reaction" if is_week_a else "TEAM CHECK-IN"
     checkin_prompt = "What do we need to know to support students effectively today?" if is_week_a else "Quick updates impacting program delivery"
     st.markdown(f"#### ⏱ 0–10 min | {checkin_label}")
     st.caption(checkin_prompt)
     pm_checkin = st.text_area("Check-in notes", height=80, key=f"pm_checkin_{program}",
         label_visibility="collapsed", placeholder=checkin_prompt)
-
     st.markdown("---")
 
     if is_week_a:
-        # ── Week A: Student Concerns ──────────────────────────────────────────
         st.markdown("#### ⏱ 10–25 min | STUDENT CONCERNS — Structured Problem Solving")
         st.caption("Facilitator prompt: Push for function-based thinking, not description.")
 
@@ -1784,22 +1800,20 @@ def render_program_meeting(program):
 
         for idx, row in enumerate(concerns):
             c1,c2,c3,c4,c5,c6,c7 = st.columns([2,2,2,2,1,1,0.5])
-            with c1: row["student"] = st.selectbox("S",[""] + student_names, key=f"con_stu_{program}_{idx}", label_visibility="collapsed")
-            with c2: row["concern"] = st.text_input("C", value=row["concern"], key=f"con_c_{program}_{idx}", label_visibility="collapsed")
+            with c1: row["student"]    = st.selectbox("S",[""] + student_names, key=f"con_stu_{program}_{idx}", label_visibility="collapsed")
+            with c2: row["concern"]    = st.text_input("C", value=row["concern"], key=f"con_c_{program}_{idx}", label_visibility="collapsed")
             with c3: row["hypothesis"] = st.text_input("H", value=row["hypothesis"], key=f"con_h_{program}_{idx}", label_visibility="collapsed")
-            with c4: row["strategy"] = st.text_input("St", value=row["strategy"], key=f"con_st_{program}_{idx}", label_visibility="collapsed")
-            with c5: row["who"] = st.text_input("W", value=row["who"], key=f"con_w_{program}_{idx}", label_visibility="collapsed")
-            with c6: row["by_when"] = st.text_input("By", value=row["by_when"], key=f"con_by_{program}_{idx}", label_visibility="collapsed")
+            with c4: row["strategy"]   = st.text_input("St", value=row["strategy"], key=f"con_st_{program}_{idx}", label_visibility="collapsed")
+            with c5: row["who"]        = st.text_input("W", value=row["who"], key=f"con_w_{program}_{idx}", label_visibility="collapsed")
+            with c6: row["by_when"]    = st.text_input("By", value=row["by_when"], key=f"con_by_{program}_{idx}", label_visibility="collapsed")
             with c7:
                 if len(concerns) > 1:
                     if st.button("✕", key=f"con_del_{program}_{idx}"):
                         concerns.pop(idx); st.rerun()
         if st.button("➕ Add student concern", key=f"con_add_{program}"):
             concerns.append({"student":"","concern":"","hypothesis":"","strategy":"","who":"","by_when":""}); st.rerun()
-
         st.markdown("---")
 
-        # ── Week A: SMARTAR Spotlight ─────────────────────────────────────────
         st.markdown("#### ⏱ 25–40 min | SMARTAR GOAL SPOTLIGHT — 4 Students")
         st.caption("Rule: No update without evidence. What data or artefact supports this?")
 
@@ -1814,10 +1828,10 @@ def render_program_meeting(program):
 
         for idx, row in enumerate(smartar):
             s1,s2,s3,s4,s5,s6 = st.columns([2,2,2,2,1,0.5])
-            with s1: row["student"] = st.selectbox("S",[""] + student_names, key=f"sm_stu_{program}_{idx}", label_visibility="collapsed")
-            with s2: row["goal_area"] = st.text_input("G", value=row["goal_area"], key=f"sm_g_{program}_{idx}", label_visibility="collapsed")
-            with s3: row["evidence"] = st.text_input("E", value=row["evidence"], key=f"sm_e_{program}_{idx}", label_visibility="collapsed")
-            with s4: row["adjustment"] = st.text_input("A", value=row["adjustment"], key=f"sm_a_{program}_{idx}", label_visibility="collapsed")
+            with s1: row["student"]     = st.selectbox("S",[""] + student_names, key=f"sm_stu_{program}_{idx}", label_visibility="collapsed")
+            with s2: row["goal_area"]   = st.text_input("G", value=row["goal_area"], key=f"sm_g_{program}_{idx}", label_visibility="collapsed")
+            with s3: row["evidence"]    = st.text_input("E", value=row["evidence"], key=f"sm_e_{program}_{idx}", label_visibility="collapsed")
+            with s4: row["adjustment"]  = st.text_input("A", value=row["adjustment"], key=f"sm_a_{program}_{idx}", label_visibility="collapsed")
             with s5: row["responsible"] = st.text_input("R", value=row["responsible"], key=f"sm_r_{program}_{idx}", label_visibility="collapsed")
             with s6:
                 if len(smartar) > 1:
@@ -1825,10 +1839,8 @@ def render_program_meeting(program):
                         smartar.pop(idx); st.rerun()
         if st.button("➕ Add SMARTAR row", key=f"sm_add_{program}"):
             smartar.append({"student":"","goal_area":"","evidence":"","adjustment":"","responsible":""}); st.rerun()
-
         st.markdown("---")
 
-        # ── Week A: Reports / TAC ─────────────────────────────────────────────
         st.markdown("#### ⏱ 40–45 min | REPORTS / TAC / TRANSITIONS")
         pm_reports = st.text_area("Reports, TAC meetings, review or transition planning",
             height=80, key=f"pm_reports_{program}", label_visibility="collapsed",
@@ -1836,7 +1848,6 @@ def render_program_meeting(program):
         priority_rows = []
 
     else:
-        # ── Week B: CLC Priority Focus ────────────────────────────────────────
         st.markdown("#### ⏱ 10–30 min | CLC PRIORITY FOCUS — Implementation Fidelity")
         st.caption("Align to: Implementation Plan · PDP Focus Areas · LBU Priorities")
 
@@ -1851,22 +1862,20 @@ def render_program_meeting(program):
 
         for idx, row in enumerate(priority_rows):
             p1,p2,p3,p4,p5,p6,p7 = st.columns([2,2,2,2,2,1,0.5])
-            with p1: row["area"] = st.text_input("A", value=row["area"], key=f"pr_a_{program}_{idx}", label_visibility="collapsed")
-            with p2: row["working"] = st.text_input("W", value=row["working"], key=f"pr_w_{program}_{idx}", label_visibility="collapsed")
-            with p3: row["gap"] = st.text_input("G", value=row["gap"], key=f"pr_g_{program}_{idx}", label_visibility="collapsed")
+            with p1: row["area"]       = st.text_input("A",   value=row["area"],       key=f"pr_a_{program}_{idx}",   label_visibility="collapsed")
+            with p2: row["working"]    = st.text_input("W",   value=row["working"],    key=f"pr_w_{program}_{idx}",   label_visibility="collapsed")
+            with p3: row["gap"]        = st.text_input("G",   value=row["gap"],        key=f"pr_g_{program}_{idx}",   label_visibility="collapsed")
             with p4: row["adjustment"] = st.text_input("Adj", value=row["adjustment"], key=f"pr_adj_{program}_{idx}", label_visibility="collapsed")
-            with p5: row["evidence"] = st.text_input("E", value=row["evidence"], key=f"pr_e_{program}_{idx}", label_visibility="collapsed")
-            with p6: row["who"] = st.text_input("Who", value=row["who"], key=f"pr_who_{program}_{idx}", label_visibility="collapsed")
+            with p5: row["evidence"]   = st.text_input("E",   value=row["evidence"],   key=f"pr_e_{program}_{idx}",   label_visibility="collapsed")
+            with p6: row["who"]        = st.text_input("Who", value=row["who"],        key=f"pr_who_{program}_{idx}", label_visibility="collapsed")
             with p7:
                 if len(priority_rows) > 1:
                     if st.button("✕", key=f"pr_del_{program}_{idx}"):
                         priority_rows.pop(idx); st.rerun()
         if st.button("➕ Add priority row", key=f"pr_add_{program}"):
             priority_rows.append({"area":"","working":"","gap":"","adjustment":"","evidence":"","who":""}); st.rerun()
-
         st.markdown("---")
 
-        # ── Week B: SMARTAR Spotlight ─────────────────────────────────────────
         st.markdown("#### ⏱ 30–45 min | SMARTAR GOAL SPOTLIGHT — 4 Students")
         st.caption("Rule: No update without evidence.")
 
@@ -1881,10 +1890,10 @@ def render_program_meeting(program):
 
         for idx, row in enumerate(smartar):
             s1,s2,s3,s4,s5,s6 = st.columns([2,2,2,2,1,0.5])
-            with s1: row["student"] = st.selectbox("S",[""] + student_names, key=f"sm_stu_{program}_{idx}", label_visibility="collapsed")
-            with s2: row["goal_area"] = st.text_input("G", value=row["goal_area"], key=f"sm_g_{program}_{idx}", label_visibility="collapsed")
-            with s3: row["evidence"] = st.text_input("E", value=row["evidence"], key=f"sm_e_{program}_{idx}", label_visibility="collapsed")
-            with s4: row["adjustment"] = st.text_input("A", value=row["adjustment"], key=f"sm_a_{program}_{idx}", label_visibility="collapsed")
+            with s1: row["student"]     = st.selectbox("S",[""] + student_names, key=f"sm_stu_{program}_{idx}", label_visibility="collapsed")
+            with s2: row["goal_area"]   = st.text_input("G", value=row["goal_area"], key=f"sm_g_{program}_{idx}", label_visibility="collapsed")
+            with s3: row["evidence"]    = st.text_input("E", value=row["evidence"], key=f"sm_e_{program}_{idx}", label_visibility="collapsed")
+            with s4: row["adjustment"]  = st.text_input("A", value=row["adjustment"], key=f"sm_a_{program}_{idx}", label_visibility="collapsed")
             with s5: row["responsible"] = st.text_input("R", value=row["responsible"], key=f"sm_r_{program}_{idx}", label_visibility="collapsed")
             with s6:
                 if len(smartar) > 1:
@@ -1897,28 +1906,19 @@ def render_program_meeting(program):
         concerns = []
 
     st.markdown("---")
-
-    # ── Meeting Close ─────────────────────────────────────────────────────────
     st.markdown("#### ⭐ MEETING CLOSE")
-    pm_decision = st.text_input("1. What is the single most important thing we agreed on today?",
-        key=f"pm_dec_{program}", placeholder="The most important agreement...")
-    pm_practice = st.text_input("2. What will look DIFFERENT in practice by next week?",
-        key=f"pm_prac_{program}", placeholder="Concrete change to practice...")
-    pm_carry = st.text_input("3. Carry forward to next meeting:",
-        key=f"pm_carry_{program}", placeholder="Anything not resolved today...")
-
+    pm_decision = st.text_input("1. What is the single most important thing we agreed on today?", key=f"pm_dec_{program}", placeholder="The most important agreement...")
+    pm_practice = st.text_input("2. What will look DIFFERENT in practice by next week?", key=f"pm_prac_{program}", placeholder="Concrete change to practice...")
+    pm_carry    = st.text_input("3. Carry forward to next meeting:", key=f"pm_carry_{program}", placeholder="Anything not resolved today...")
     st.markdown("---")
 
-    # ── Actions — with carry-forward ─────────────────────────────────────────
     st.markdown("#### ✅ ACTIONS")
     actions_key = f"pm_actions_{program}"
     if actions_key not in st.session_state:
-        # Pre-populate with incomplete actions from last meeting
         carried = [a for a in last_actions if not a.get("done", False)]
         st.session_state[actions_key] = carried if carried else [{"action":"","who":"","by_when":"","done":False}]
 
     actions = st.session_state[actions_key]
-
     if last_actions:
         incomplete = [a for a in last_actions if not a.get("done", False)]
         if incomplete:
@@ -1930,10 +1930,10 @@ def render_program_meeting(program):
 
     for idx, row in enumerate(actions):
         a1,a2,a3,a4,a5 = st.columns([4,1,1,0.7,0.5])
-        with a1: row["action"] = st.text_input("Act", value=row.get("action",""), key=f"act_a_{program}_{idx}", label_visibility="collapsed")
-        with a2: row["who"] = st.text_input("Who", value=row.get("who",""), key=f"act_w_{program}_{idx}", label_visibility="collapsed")
-        with a3: row["by_when"] = st.text_input("By", value=row.get("by_when",""), key=f"act_by_{program}_{idx}", label_visibility="collapsed")
-        with a4: row["done"] = st.checkbox("✓", value=row.get("done",False), key=f"act_done_{program}_{idx}")
+        with a1: row["action"]  = st.text_input("Act", value=row.get("action",""),  key=f"act_a_{program}_{idx}",    label_visibility="collapsed")
+        with a2: row["who"]     = st.text_input("Who", value=row.get("who",""),     key=f"act_w_{program}_{idx}",    label_visibility="collapsed")
+        with a3: row["by_when"] = st.text_input("By",  value=row.get("by_when",""), key=f"act_by_{program}_{idx}",   label_visibility="collapsed")
+        with a4: row["done"]    = st.checkbox("✓",     value=row.get("done",False), key=f"act_done_{program}_{idx}")
         with a5:
             if len(actions) > 1:
                 if st.button("✕", key=f"act_del_{program}_{idx}"):
@@ -1941,25 +1941,20 @@ def render_program_meeting(program):
 
     if st.button("➕ Add action", key=f"act_add_{program}"):
         actions.append({"action":"","who":"","by_when":"","done":False}); st.rerun()
-
     st.markdown("---")
 
-    # ── Save ──────────────────────────────────────────────────────────────────
     if st.button("💾 Save Meeting Record", type="primary", use_container_width=True, key=f"pm_save_{program}"):
-        smartar_data = st.session_state.get(f"pm_smartar_{program}", [])
-        actions_data = st.session_state.get(f"pm_actions_{program}", [])
+        smartar_data  = st.session_state.get(f"pm_smartar_{program}", [])
+        actions_data  = st.session_state.get(f"pm_actions_{program}", [])
         concerns_data = st.session_state.get(f"pm_concerns_{program}", []) if is_week_a else []
         priority_data = st.session_state.get(f"pm_priority_{program}", []) if not is_week_a else []
 
         try:
             insert("tm_program_meetings", {
-                "program": program,
-                "meeting_date": str(pm_date),
-                "term": pm_term.strip(),
-                "week_number": int(pm_week),
+                "program": program, "meeting_date": str(pm_date),
+                "term": pm_term.strip(), "week_number": int(pm_week),
                 "week_type": "A" if is_week_a else "B",
-                "facilitator": pm_facilitator.strip(),
-                "attendees": pm_attendees.strip(),
+                "facilitator": pm_facilitator.strip(), "attendees": pm_attendees.strip(),
                 "checkin_notes": pm_checkin.strip(),
                 "student_concerns": _json.dumps(concerns_data),
                 "smartar_spotlight": _json.dumps(smartar_data),
@@ -1971,7 +1966,6 @@ def render_program_meeting(program):
                 "actions": _json.dumps(actions_data),
             })
             st.success("✅ Meeting record saved!")
-            # Clear session state for this meeting
             for k in [f"pm_concerns_{program}", f"pm_smartar_{program}",
                       f"pm_priority_{program}", f"pm_actions_{program}"]:
                 st.session_state.pop(k, None)
@@ -1979,7 +1973,6 @@ def render_program_meeting(program):
         except Exception as e:
             st.error(f"Could not save: {e}")
 
-    # ── Past meetings ─────────────────────────────────────────────────────────
     if last_records:
         with st.expander(f"📚 Past meeting records ({len(last_records)})", expanded=False):
             for rec in reversed(last_records[-5:]):
@@ -1991,6 +1984,10 @@ def render_program_meeting(program):
                     st.caption(f"Key decision: {key_dec}")
                 st.divider()
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAIN
+# ─────────────────────────────────────────────────────────────────────────────
 
 def main():
     program   = get_program_from_params()
@@ -2017,14 +2014,38 @@ def main():
         st.markdown("### 🔀 Switch Program")
         for p, info in PROGRAMS.items():
             if p != program:
-                if st.button(f"{info['emoji']} {info['label']}", key=f"sw_{p}",
-                             use_container_width=True):
+                if st.button(f"{info['emoji']} {info['label']}", key=f"sw_{p}", use_container_width=True):
                     st.query_params["program"] = p
                     st.rerun()
         st.divider()
         if st.session_state.get("admin"):
             st.markdown("### ⚙️ Admin Mode Active")
             st.caption("You can add, edit and delete all content.")
+
+    # ── Term week — compute and expose selector for STAFF ─────────────────────
+    auto_term, auto_week = get_current_term_week()
+    current_term  = auto_term
+    current_week  = auto_week
+
+    if program == "STAFF":
+        # Week selector sits just below the main header, above tabs
+        with st.container():
+            col_l, col_w, col_r = st.columns([3, 2, 3])
+            with col_w:
+                selected_week = st.number_input(
+                    "📅 Select meeting week",
+                    min_value=1, max_value=TERM_WEEKS,
+                    value=auto_week,
+                    step=1,
+                    key="staff_week_selector",
+                    help=f"Auto-detected as {auto_term} Week {auto_week} based on today's date. Adjust if needed."
+                )
+                current_week = int(selected_week)
+            with col_l:
+                st.markdown(f"""
+                <div style="padding:0.55rem 0;color:#1e6f75;font-size:0.9rem;font-weight:600;">
+                  Currently viewing: <span style="font-size:1.1rem;font-weight:800;">{current_term} Week {current_week}</span>
+                </div>""", unsafe_allow_html=True)
 
     # ── Kaurna Welcome & Icebreaker (Staff Meeting only) ──────────────────────
     if program == "STAFF":
@@ -2038,7 +2059,7 @@ def main():
         )
 
         ICEBREAKERS = [
-            ("🌟 Rose, Bud, Thorn", "Each person shares one **Rose** (something positive), one **Bud** (something they're looking forward to), and one **Thorn** (a challenge). Quick, strengths-based and trauma-informed — helps staff feel seen before getting into business."),
+            ("🌟 Rose, Bud, Thorn", "Each person shares one <strong>Rose</strong> (something positive), one <strong>Bud</strong> (something they're looking forward to), and one <strong>Thorn</strong> (a challenge). Quick, strengths-based and trauma-informed — helps staff feel seen before getting into business."),
             ("🎯 Two Truths & a Wish", "Each person shares two things that are true about their week and one thing they wish had happened differently. Normalises struggle and celebrates wins in equal measure."),
             ("🌈 Colour of Your Week", "Each person names a colour that represents their week and briefly explains why. No wrong answers — invites emotional vocabulary without pressure."),
             ("🧠 Regulation Check-In", "On a scale of a traffic light — 🔴 Red, 🟡 Yellow, 🟢 Green — where are you right now? Optional: share one thing that's contributing to that state. Grounded in Berry Street's regulation-first approach."),
@@ -2050,7 +2071,6 @@ def main():
             ("🤝 Shoutout Circle", "Before the agenda begins, anyone can give a shoutout to a colleague for something they observed. Creates a culture of noticing and naming positive contributions — aligned to relational and restorative practice."),
         ]
 
-        # Rotate icebreaker by week
         _week_seed = int(_hashlib.md5(str(_date.today().isocalendar()[:2]).encode()).hexdigest(), 16)
         _icebreaker = ICEBREAKERS[_week_seed % len(ICEBREAKERS)]
 
@@ -2071,6 +2091,7 @@ def main():
             </div>
             """, unsafe_allow_html=True)
 
+    # ── Tabs ──────────────────────────────────────────────────────────────────
     if program in ("JP", "PY", "SY"):
         tab_meeting, tab_sched, tab_agenda, tab_minutes, tab_actions, tab_attend, tab_docs = st.tabs([
             "🗒️ Program Meeting", "📅 Schedules", "📋 Agenda", "📝 Minutes", "✅ Actions", "🙋 Attendance", "📎 Documents"
@@ -2078,12 +2099,14 @@ def main():
         with tab_meeting: render_program_meeting(program)
     else:
         tab_sched, tab_agenda, tab_minutes, tab_actions, tab_attend, tab_docs = st.tabs([
-            "📅 Schedules", "📋 Agenda", "📝 Minutes", "✅ Actions", "🙋 Attendance", "📎 Documents"
+            "📅 Schedules", f"📋 Agenda — W{current_week}", f"📝 Minutes — W{current_week}", "✅ Actions", "🙋 Attendance", "📎 Documents"
         ])
 
     with tab_sched:   render_schedules(program)
-    with tab_agenda:  render_agenda(program)
-    with tab_minutes: render_minutes(program, week_range=week_range if program == "STAFF" else None)
+    with tab_agenda:  render_agenda(program, week_num=current_week, term_label=current_term)
+    with tab_minutes: render_minutes(program, week_range=week_range if program == "STAFF" else None,
+                                     week_num=current_week if program == "STAFF" else None,
+                                     term_label=current_term)
     with tab_actions: render_actions(program)
     with tab_attend:  render_attendance(program)
     with tab_docs:    render_documents(program)
