@@ -2806,12 +2806,12 @@ Document: {doc_text}"""
 
     # ── Tab 2: Upload ─────────────────────────────────────────────────────────
     with _hist_tab_upload:
-        st.caption("Upload the original Word or PDF critical incident document. Text will be extracted automatically.")
+        st.caption("Upload the original Word, LibreOffice or PDF critical incident document. Text will be extracted automatically.")
         uploaded_doc = st.file_uploader(
-            "Choose a .docx or .pdf file",
-            type=["docx", "pdf"],
+            "Choose a .docx, .odt or .pdf file",
+            type=["docx", "odt", "pdf"],
             key="ai_hist_upload",
-            help="Accepts .docx (Word) and .pdf files"
+            help="Accepts .docx (Word), .odt (LibreOffice) and .pdf files"
         )
         if uploaded_doc is not None:
             st.success(f"📄 **{uploaded_doc.name}** ready — click Extract below.")
@@ -2832,6 +2832,28 @@ Document: {doc_text}"""
                             st.error("PDF support requires PyMuPDF. Ask your admin to run: pip install pymupdf")
                         except Exception as pdf_err:
                             st.error(f"PDF read error: {pdf_err}")
+                    elif fname.endswith(".odt"):
+                        # .odt — OpenDocument Text (LibreOffice)
+                        try:
+                            import zipfile, xml.etree.ElementTree as _ET, io as _io
+                            raw_bytes = uploaded_doc.read()
+                            with zipfile.ZipFile(_io.BytesIO(raw_bytes)) as zf:
+                                with zf.open("content.xml") as cx:
+                                    tree = _ET.parse(cx)
+                            ns = {
+                                "text": "urn:oasis:names:tc:opendocument:xmlns:text:1.0",
+                                "table": "urn:oasis:names:tc:opendocument:xmlns:table:1.0",
+                            }
+                            lines = []
+                            for elem in tree.iter():
+                                tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+                                if tag in ("p", "h", "span") and elem.text and elem.text.strip():
+                                    lines.append(elem.text.strip())
+                                if elem.tail and elem.tail.strip():
+                                    lines.append(elem.tail.strip())
+                            extracted_text = "\n".join(lines)
+                        except Exception as odt_err:
+                            st.error(f"ODT read error: {odt_err}")
                     else:
                         # .docx
                         from docx import Document as DocxDocument
