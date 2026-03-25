@@ -338,11 +338,47 @@ with st.expander("➕ Add a new student"):
             else:
                 st.error("Supabase not configured.")
 
-# Student change
+# Student change — auto-load behaviours from existing data
 if selected_id != ss.spt_student_id:
     ss.spt_student_id   = selected_id
     ss.spt_student_name = next((s["name"] for s in students if s["id"]==selected_id),"")
     ss.spt_schedule     = None
+    ss.spt_beh1         = ""
+    ss.spt_beh2         = ""
+
+    # Try to load behaviours from this student's most recent observation
+    sb = get_sb()
+    if sb:
+        try:
+            recent = (
+                sb.table("scatter_plot_observations")
+                .select("behaviour_index, behaviour_label, target_behaviours")
+                .eq("student_id", selected_id)
+                .order("created_at", desc=True)
+                .limit(20)
+                .execute()
+            )
+            if recent.data:
+                # Build behaviour list from stored behaviour_label per index
+                beh_map = {}
+                for row in recent.data:
+                    bi  = row.get("behaviour_index", 0) or 0
+                    lbl = (row.get("behaviour_label") or "").strip()
+                    if lbl and bi not in beh_map:
+                        beh_map[bi] = lbl
+                # Fall back to target_behaviours string if no individual labels
+                if not beh_map:
+                    tb = (recent.data[0].get("target_behaviours") or "").strip()
+                    if " | " in tb:
+                        parts = [p.strip() for p in tb.split(" | ") if p.strip()]
+                        beh_map = {i: p for i, p in enumerate(parts)}
+                    elif tb:
+                        beh_map = {0: tb}
+                ss.spt_beh1 = beh_map.get(0, "")
+                ss.spt_beh2 = beh_map.get(1, "")
+        except Exception:
+            pass  # silently ignore — user can enter behaviours manually
+
     st.rerun()
 
 student_id   = ss.spt_student_id
