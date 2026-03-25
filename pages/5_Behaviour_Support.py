@@ -1472,11 +1472,58 @@ def render_landing_page():
             with col_alert4:
                 if st.button("Approve Now", key="goto_leader_approve", use_container_width=True):
                     go_to("leader_approve_critical")
+
     st.markdown("---")
-    col1, col2, col3 = st.columns(3)
-    with col1: st.metric("Students", len(st.session_state.students))
-    with col2: st.metric("Total Incidents", len(st.session_state.incidents))
-    with col3: st.metric("Critical", len([i for i in st.session_state.incidents if i.get("is_critical")]))
+
+    # ── PATCH 1: Whole-of-site totals (incidents + critical_incidents) ────────
+    _all_incidents  = st.session_state.incidents
+    _all_critical   = st.session_state.critical_incidents
+    _total_q        = len(_all_incidents)
+    _total_c        = len(_all_critical)
+    _total_combined = _total_q + _total_c
+    _active_students = len([s for s in st.session_state.students if not s.get("archived", False)])
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Active Students", _active_students)
+    with col2:
+        st.metric("Total Incidents", _total_combined,
+                  help="Quick/regular incidents + critical incident ABCH forms")
+    with col3:
+        st.metric("Critical Incidents", _total_c,
+                  help="Completed ABCH critical incident forms")
+    with col4:
+        _escalation = f"{int(_total_c/_total_combined*100)}%" if _total_combined else "—"
+        st.metric("Escalation Rate", _escalation,
+                  help="% of all incidents that are critical")
+
+    # ── Per-program breakdown ─────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### Program Overview")
+    prog_col1, prog_col2, prog_col3 = st.columns(3)
+    for _prog, _pcol, _color in [
+        ("JP", prog_col1, "#1A7A7A"),
+        ("PY", prog_col2, "#D97706"),
+        ("SY", prog_col3, "#2E4057"),
+    ]:
+        _prog_students  = [s for s in st.session_state.students
+                           if s.get("program") == _prog and not s.get("archived", False)]
+        _prog_stu_ids   = {s["id"] for s in _prog_students}
+        _prog_incidents = [i for i in _all_incidents if i.get("student_id") in _prog_stu_ids]
+        _prog_critical  = [c for c in _all_critical  if c.get("student_id") in _prog_stu_ids]
+        _prog_total     = len(_prog_incidents) + len(_prog_critical)
+        with _pcol:
+            st.markdown(
+                f"<div style='border-left:4px solid {_color};padding:.4rem .75rem;"
+                f"background:#f8fafc;border-radius:0 6px 6px 0;margin-bottom:.4rem;'>"
+                f"<div style='font-weight:700;color:{_color};font-size:.95rem;'>{_prog} — {PROGRAM_NAMES.get(_prog, _prog)}</div>"
+                f"<div style='font-size:.82rem;color:#475569;'>👥 {len(_prog_students)} students</div>"
+                f"<div style='font-size:.82rem;color:#475569;'>📋 {_prog_total} incidents total</div>"
+                f"<div style='font-size:.82rem;color:#ef4444;'>🚨 {len(_prog_critical)} critical</div>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+
     st.markdown("---")
     st.markdown("### Select Program")
     col1, col2, col3 = st.columns(3)
@@ -2363,7 +2410,6 @@ def render_student_analysis_page():
     st.markdown("### 🗑️ Delete an Incident")
     st.caption("Remove an incorrectly logged or duplicate incident from this student's full data set. This includes regular incidents AND critical incidents. Deletions are permanent and will affect all charts and analysis.")
 
-    # Build combined list: regular + critical incidents
     reg_incidents = [i for i in st.session_state.incidents if i["student_id"] == student_id]
     crit_incidents = [c for c in st.session_state.critical_incidents if c["student_id"] == student_id]
 
@@ -2413,7 +2459,6 @@ def render_student_analysis_page():
         confirm2_key = f"confirm2_del_inc_{selected_id}"
 
         if not st.session_state.get(confirm_key):
-            # Step 1 — first confirmation button
             if selected_type == "critical":
                 st.warning("⚠️ This is a **Critical Incident ABCH form**. Deleting it will permanently remove the full incident record, all ABCH entries, workflow history, and audit trail from the dataset.")
             else:
@@ -2423,7 +2468,6 @@ def render_student_analysis_page():
                 st.rerun()
 
         elif not st.session_state.get(confirm2_key):
-            # Step 2 — second confirmation with checkbox
             st.error(
                 f"**Step 1 of 2 — Are you sure?**\n\n"
                 f"You are about to permanently delete:\n\n"
@@ -2447,7 +2491,6 @@ def render_student_analysis_page():
                     st.rerun()
 
         else:
-            # Step 3 — final irreversible delete
             st.error(
                 f"**Step 2 of 2 — FINAL CONFIRMATION**\n\n"
                 f"Click the red button below to permanently delete this record from the database. "
@@ -2466,13 +2509,12 @@ def render_student_analysis_page():
                         except Exception as e:
                             st.error(f"Delete failed: {e}")
                     else:
-                        deleted = True  # mock mode
+                        deleted = True
                     if deleted:
                         if selected_type == "regular":
                             st.session_state.incidents = [i for i in st.session_state.incidents if i["id"] != selected_id]
                         else:
                             st.session_state.critical_incidents = [c for c in st.session_state.critical_incidents if c["id"] != selected_id]
-                        # Clear confirm keys
                         for k in [confirm_key, confirm2_key, f"confirm_chk_{selected_id}"]:
                             st.session_state.pop(k, None)
                         st.success("✅ Incident permanently deleted and removed from the data set.")
@@ -2586,7 +2628,6 @@ def render_student_dashboard():
             if recent_df.empty:
                 st.info("No incidents in the last 30 days.")
             else:
-                # Group by date — use string labels so Plotly never renders nanosecond axes
                 daily = (
                     recent_df
                     .assign(_d=recent_df["date_parsed"].dt.date)
@@ -2630,7 +2671,6 @@ def render_student_dashboard():
     with col2:
         st.markdown("#### 🎯 Top Behaviours")
         if not full_df.empty and "behaviour_type" in full_df.columns:
-            # Filter out blank/section-header antecedents that start with "---"
             beh_series = full_df["behaviour_type"].dropna()
             beh_series = beh_series[beh_series.str.strip() != ""]
             beh_counts = beh_series.value_counts().head(5)
@@ -2638,7 +2678,6 @@ def render_student_dashboard():
                 st.info("No behaviour data recorded yet.")
             else:
                 max_beh = int(beh_counts.max())
-                # Colours — most frequent gets teal highlight
                 beh_colours = ["#1A7A7A" if i == 0 else "#64748b" for i in range(len(beh_counts))]
                 fig = go.Figure()
                 fig.add_trace(go.Bar(
@@ -2710,46 +2749,117 @@ def render_student_dashboard():
         if st.button("⬅ Back", use_container_width=True, key="dash_back_btn"):
             go_to("program_students", selected_program=student["program"])
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # PATCH 2: HISTORICAL CRITICAL INCIDENTS — tabbed: Paste / Upload
+    # ══════════════════════════════════════════════════════════════════════════
     st.markdown("---")
     st.markdown("### 📋 Historical Critical Incidents")
-    st.caption("Paste the content of a Word document below. AI will extract the critical incident and structure it automatically.")
-    ai_notes = st.text_area("Paste Word document content here",
-        placeholder="Paste the full text of your ABCH Word document here...",
-        height=300, key="ai_hist_notes")
-    if st.button("🤖 Extract Incident with AI", type="primary", key="ai_extract_btn", use_container_width=True):
-        if not ai_notes.strip():
-            st.warning("Please paste your document content first.")
-        else:
-            GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
-            if not GROQ_KEY:
-                st.error("Groq API key not configured.")
-            else:
-                with st.spinner("AI is reading your document..."):
-                    try:
-                        from groq import Groq as GroqClient
-                        import json as _json
-                        client = GroqClient(api_key=GROQ_KEY)
-                        prompt = f"""You are a behaviour support data analyst for Cowandilla Learning Centre, Learning & Behaviour Unit.
-The following document describes ONE critical incident involving student: {student['name']}.
+    st.caption("Upload or paste an existing Word/PDF critical incident document. AI will extract and structure the incident automatically.")
+
+    _hist_tab_paste, _hist_tab_upload = st.tabs(["📋 Paste Text", "📤 Upload File (.docx / .pdf)"])
+
+    # ── shared AI extraction helper ───────────────────────────────────────────
+    def _run_ai_extraction(doc_text: str, student_name: str):
+        GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
+        if not GROQ_KEY:
+            st.error("Groq API key not configured.")
+            return
+        with st.spinner("AI is reading your document..."):
+            try:
+                from groq import Groq as GroqClient
+                import json as _json
+                client = GroqClient(api_key=GROQ_KEY)
+                prompt = f"""You are a behaviour support data analyst for Cowandilla Learning Centre, Learning & Behaviour Unit.
+The following document describes ONE critical incident involving student: {student_name}.
 Extract the incident as a single JSON object with this exact structure:
 {{"date":"YYYY-MM-DD","severity":3,"sapol_reference":"reference number or null","outcomes":["list","of","outcomes"],"primary":{{"time":"time","location":"location","context":"antecedent context","behaviour":"primary behaviour","consequence":"staff response"}},"additional_entries":[{{"time":"time","location":"location","context":"antecedent","behaviour":"behaviour","consequence":"consequence","hypothesis":""}}],"notes":"any other relevant context"}}
 Rules: severity 1-5; if SAPOL called then at least 4. Return ONLY valid JSON, no markdown fences.
-Document: {ai_notes}"""
-                        response = client.chat.completions.create(
-                            model="llama-3.3-70b-versatile",
-                            messages=[{"role": "user", "content": prompt}],
-                            max_tokens=3000, temperature=0.1)
-                        raw = response.choices[0].message.content.strip().replace("```json","").replace("```","").strip()
-                        extracted = _json.loads(raw)
-                        if isinstance(extracted, list):
-                            extracted = extracted[0] if extracted else {}
-                        if extracted:
-                            n_additional = len(extracted.get("additional_entries", []))
-                            st.success(f"✅ Extracted — {1 + n_additional} timeline entries found.")
-                            st.session_state["ai_extracted_incident"] = extracted
-                    except Exception as e:
-                        st.error(f"AI extraction failed: {e}")
+Document: {doc_text}"""
+                response = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=3000, temperature=0.1)
+                raw = response.choices[0].message.content.strip().replace("```json","").replace("```","").strip()
+                extracted = _json.loads(raw)
+                if isinstance(extracted, list):
+                    extracted = extracted[0] if extracted else {}
+                if extracted:
+                    n_additional = len(extracted.get("additional_entries", []))
+                    st.success(f"✅ Extracted — {1 + n_additional} timeline entries found.")
+                    st.session_state["ai_extracted_incident"] = extracted
+            except Exception as e:
+                st.error(f"AI extraction failed: {e}")
 
+    # ── Tab 1: Paste ──────────────────────────────────────────────────────────
+    with _hist_tab_paste:
+        st.caption("Copy all text from your Word document (Ctrl+A → Ctrl+C) and paste it below.")
+        ai_notes = st.text_area(
+            "Paste Word document content here",
+            placeholder="Paste the full text of your ABCH Word document here...",
+            height=300, key="ai_hist_notes")
+        if st.button("🤖 Extract Incident with AI", type="primary",
+                     key="ai_extract_btn_paste", use_container_width=True):
+            if not ai_notes.strip():
+                st.warning("Please paste your document content first.")
+            else:
+                _run_ai_extraction(ai_notes, student['name'])
+
+    # ── Tab 2: Upload ─────────────────────────────────────────────────────────
+    with _hist_tab_upload:
+        st.caption("Upload the original Word or PDF critical incident document. Text will be extracted automatically.")
+        uploaded_doc = st.file_uploader(
+            "Choose a .docx or .pdf file",
+            type=["docx", "pdf"],
+            key="ai_hist_upload",
+            help="Accepts .docx (Word) and .pdf files"
+        )
+        if uploaded_doc is not None:
+            st.success(f"📄 **{uploaded_doc.name}** ready — click Extract below.")
+            if st.button("🤖 Extract Incident with AI", type="primary",
+                         key="ai_extract_btn_upload", use_container_width=True):
+                extracted_text = ""
+                try:
+                    fname = uploaded_doc.name.lower()
+                    if fname.endswith(".pdf"):
+                        try:
+                            import fitz  # PyMuPDF
+                            raw_bytes = uploaded_doc.read()
+                            pdf_doc = fitz.open(stream=raw_bytes, filetype="pdf")
+                            pages = [page.get_text() for page in pdf_doc]
+                            pdf_doc.close()
+                            extracted_text = "\n".join(pages)
+                        except ImportError:
+                            st.error("PDF support requires PyMuPDF. Ask your admin to run: pip install pymupdf")
+                        except Exception as pdf_err:
+                            st.error(f"PDF read error: {pdf_err}")
+                    else:
+                        # .docx
+                        from docx import Document as DocxDocument
+                        import io as _io
+                        doc_obj = DocxDocument(_io.BytesIO(uploaded_doc.read()))
+                        lines = [p.text.strip() for p in doc_obj.paragraphs if p.text.strip()]
+                        for tbl in doc_obj.tables:
+                            for row in tbl.rows:
+                                for cell in row.cells:
+                                    cell_txt = " ".join(
+                                        p.text.strip() for p in cell.paragraphs if p.text.strip()
+                                    )
+                                    if cell_txt:
+                                        lines.append(cell_txt)
+                        extracted_text = "\n".join(lines)
+                except Exception as ext_err:
+                    st.error(f"File extraction error: {ext_err}")
+
+                if extracted_text.strip():
+                    with st.expander("🔍 View extracted text (optional)", expanded=False):
+                        st.text_area("Extracted content",
+                                     extracted_text[:3000] + ("\n…[truncated for display]" if len(extracted_text) > 3000 else ""),
+                                     height=200, disabled=True, key="extracted_preview")
+                    _run_ai_extraction(extracted_text, student['name'])
+                elif not extracted_text:
+                    st.warning("Could not extract any text from the file. Try pasting the text manually using the Paste tab.")
+
+    # ── Review & save extracted incident ─────────────────────────────────────
     if st.session_state.get("ai_extracted_incident"):
         inc = st.session_state["ai_extracted_incident"]
         st.markdown("---")
@@ -3023,23 +3133,32 @@ def render_admin_portal():
 
     with tab3:
         st.markdown("### System Overview")
+        # ── PATCH 1 (admin): corrected whole-of-site totals ───────────────────
+        _all_inc  = st.session_state.incidents
+        _all_crit = st.session_state.critical_incidents
+        _all_stu  = st.session_state.students
+        _active_stu = len([s for s in _all_stu if not s.get('placement_end')])
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            total_students  = len(st.session_state.students)
-            active_students = len([s for s in st.session_state.students if not s.get('placement_end')])
-            st.metric("Total Students", total_students)
-            st.caption(f"{active_students} active")
-        with col2: st.metric("Total Incidents", len(st.session_state.incidents))
+            st.metric("Total Students", len(_all_stu))
+            st.caption(f"{_active_stu} active (no end date)")
+        with col2:
+            st.metric("Total Incidents", len(_all_inc) + len(_all_crit),
+                      help="Regular incidents + critical incident ABCH forms")
         with col3:
-            critical_cnt = len([i for i in st.session_state.incidents if i.get("is_critical")])
-            st.metric("Critical Incidents", critical_cnt)
-        with col4: st.metric("Staff Members", len(st.session_state.staff))
+            st.metric("Critical Incidents", len(_all_crit),
+                      help="Completed ABCH critical incident forms")
+        with col4:
+            st.metric("Staff Members", len(st.session_state.staff))
         st.markdown("---")
         st.markdown("#### Students by Program")
         for prog in ["JP", "PY", "SY"]:
-            count  = len([s for s in st.session_state.students if s["program"] == prog])
-            active = len([s for s in st.session_state.students if s["program"] == prog and not s.get('placement_end')])
-            st.write(f"**{PROGRAM_NAMES[prog]}:** {count} total ({active} active)")
+            _p_stu     = [s for s in _all_stu if s["program"] == prog]
+            _p_active  = [s for s in _p_stu if not s.get('placement_end')]
+            _p_ids     = {s["id"] for s in _p_stu}
+            _p_inc     = len([i for i in _all_inc  if i.get("student_id") in _p_ids])
+            _p_crit    = len([c for c in _all_crit if c.get("student_id") in _p_ids])
+            st.write(f"**{PROGRAM_NAMES[prog]}:** {len(_p_stu)} students ({len(_p_active)} active) · {_p_inc + _p_crit} incidents ({_p_crit} critical)")
 
     with tab4:
         st.markdown("### Staff Management")
