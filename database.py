@@ -7,6 +7,49 @@ from supabase import create_client, Client
 from datetime import datetime, timezone, date, timedelta
 import uuid
 import hashlib
+import time
+import json
+
+# ── Retry wrapper ─────────────────────────────────────────────────────────────
+def _execute(query, retries: int = 3, base_delay: float = 0.4):
+    """
+    Call query.execute() with automatic retry on transient network errors.
+
+    Catches httpx.ReadError (errno 11 EAGAIN), httpx.ConnectError,
+    httpx.RemoteProtocolError and httpx.TimeoutException — all of which are
+    momentary socket/buffer blips between Render and Supabase that resolve
+    on a re-attempt.  Uses exponential back-off:
+      attempt 1 → wait 0.4 s, attempt 2 → wait 0.8 s, attempt 3 → wait 1.6 s.
+
+    If every retry fails the exception is re-raised so the caller's
+    try/except can show a graceful message instead of crashing the page.
+    Non-transient exceptions (e.g. bad SQL, auth failures) are raised
+    immediately without retrying.
+    """
+    try:
+        import httpx as _httpx
+        _transient = (
+            _httpx.ReadError,
+            _httpx.ConnectError,
+            _httpx.RemoteProtocolError,
+            _httpx.TimeoutException,
+        )
+    except ImportError:
+        # httpx not installed — fall through, no retry on network errors
+        _transient = ()
+
+    last_exc = None
+    for attempt in range(1, retries + 1):
+        try:
+            return query.execute()
+        except _transient as exc:
+            last_exc = exc
+            if attempt < retries:
+                time.sleep(base_delay * (2 ** (attempt - 1)))
+        except Exception:
+            raise   # non-transient — propagate immediately
+    raise last_exc
+
 
 STORAGE_BUCKET = "notice-attachments"
 
@@ -58,33 +101,38 @@ def get_or_create_current_edition() -> dict:
     """
     client = get_client()
     today  = date.today()
-    # Wed=2, Thu=3, Fri=4, Sat=5, Sun=6 → use next Monday
     if today.weekday() >= 2:
         monday = today - timedelta(days=today.weekday()) + timedelta(weeks=1)
     else:
         monday = today - timedelta(days=today.weekday())
     correct_label = week_label(monday)
     try:
-        result = client.table("weekly_editions") \
-            .select("*") \
-            .eq("week_start", monday.isoformat()) \
-            .single() \
-            .execute()
+        result = _execute(
+            client.table("weekly_editions")
+                .select("*")
+                .eq("week_start", monday.isoformat())
+                .single()
+        )
         row = result.data
         if row and row.get("week_label") != correct_label:
-            client.table("weekly_editions").update({"week_label": correct_label}).eq("id", row["id"]).execute()
+            _execute(
+                client.table("weekly_editions")
+                    .update({"week_label": correct_label})
+                    .eq("id", row["id"])
+            )
             row["week_label"] = correct_label
         return row
     except:
         pass
-    # Create it
     try:
-        result = client.table("weekly_editions").insert({
-            "week_start": monday.isoformat(),
-            "week_label": week_label(monday),
-            "status": "draft",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }).execute()
+        result = _execute(
+            client.table("weekly_editions").insert({
+                "week_start": monday.isoformat(),
+                "week_label": week_label(monday),
+                "status": "draft",
+                "created_at": datetime.now(timezone.utc).isoformat()
+            })
+        )
         return result.data[0] if result.data else None
     except Exception as e:
         st.error(f"Error creating edition: {e}")
@@ -93,8 +141,10 @@ def get_or_create_current_edition() -> dict:
 def get_edition(edition_id) -> dict:
     try:
         client = get_client()
-        result = client.table("weekly_editions") \
-            .select("*").eq("id", edition_id).single().execute()
+        result = _execute(
+            client.table("weekly_editions")
+                .select("*").eq("id", edition_id).single()
+        )
         return result.data
     except:
         return None
@@ -104,17 +154,22 @@ def get_current_published_edition() -> dict:
     try:
         client = get_client()
         current_monday = get_current_monday()
-        result = client.table("weekly_editions") \
-            .select("*") \
-            .eq("status", "published") \
-            .eq("week_start", current_monday.isoformat()) \
-            .limit(1) \
-            .execute()
+        result = _execute(
+            client.table("weekly_editions")
+                .select("*")
+                .eq("status", "published")
+                .eq("week_start", current_monday.isoformat())
+                .limit(1)
+        )
         row = result.data[0] if result.data else None
         if row:
             fresh = week_label(current_monday)
             if row.get("week_label") != fresh:
-                client.table("weekly_editions").update({"week_label": fresh}).eq("id", row["id"]).execute()
+                _execute(
+                    client.table("weekly_editions")
+                        .update({"week_label": fresh})
+                        .eq("id", row["id"])
+                )
                 row["week_label"] = fresh
         return row
     except:
@@ -124,10 +179,11 @@ def get_all_editions() -> list:
     """All editions ordered newest first."""
     try:
         client = get_client()
-        result = client.table("weekly_editions") \
-            .select("*") \
-            .order("week_start", desc=True) \
-            .execute()
+        result = _execute(
+            client.table("weekly_editions")
+                .select("*")
+                .order("week_start", desc=True)
+        )
         return result.data or []
     except Exception as e:
         st.error(f"Error loading editions: {e}")
@@ -136,11 +192,13 @@ def get_all_editions() -> list:
 def publish_edition(edition_id, published_by: str) -> bool:
     try:
         client = get_client()
-        client.table("weekly_editions").update({
-            "status": "published",
-            "published_at": datetime.now(timezone.utc).isoformat(),
-            "published_by": published_by
-        }).eq("id", edition_id).execute()
+        _execute(
+            client.table("weekly_editions").update({
+                "status": "published",
+                "published_at": datetime.now(timezone.utc).isoformat(),
+                "published_by": published_by
+            }).eq("id", edition_id)
+        )
         return True
     except Exception as e:
         st.error(f"Error publishing edition: {e}")
@@ -150,11 +208,13 @@ def unpublish_edition(edition_id) -> bool:
     """Revert a published edition back to draft so admin can amend it."""
     try:
         client = get_client()
-        client.table("weekly_editions").update({
-            "status": "draft",
-            "published_at": None,
-            "published_by": None
-        }).eq("id", edition_id).execute()
+        _execute(
+            client.table("weekly_editions").update({
+                "status": "draft",
+                "published_at": None,
+                "published_by": None
+            }).eq("id", edition_id)
+        )
         return True
     except Exception as e:
         st.error(f"Error reopening edition: {e}")
@@ -163,53 +223,55 @@ def unpublish_edition(edition_id) -> bool:
 def sync_to_staff_minutes(edition_id) -> tuple:
     """Build formatted minutes from a published digital staff meeting and merge
     with any face-to-face minutes for the same week into one record in tm_minutes.
-    Digital content appears first, followed by face-to-face minutes.
     Returns (success: bool, message: str)."""
     import re as _re
     try:
         client = get_client()
 
-        # ── Fetch edition ─────────────────────────────────────────────────────
-        ed = client.table("weekly_editions").select("*").eq("id", edition_id).single().execute().data
+        ed = _execute(
+            client.table("weekly_editions").select("*").eq("id", edition_id).single()
+        ).data
         if not ed:
             return False, "Edition not found."
 
-        week_start     = ed.get("week_start", "")          # e.g. "2026-03-09"
+        week_start     = ed.get("week_start", "")
         week_label_str = ed.get("week_label", "")
         published_by   = ed.get("published_by", "Admin")
 
-        # Use date.fromisoformat (safe on Python 3.7+, unlike datetime.fromisoformat for dates)
         from datetime import date as _date
         monday   = _date.fromisoformat(week_start)
-        week_end = (monday + timedelta(days=6)).isoformat()  # e.g. "2026-03-15"
+        week_end = (monday + timedelta(days=6)).isoformat()
 
-        # ── Fetch digital meeting data ────────────────────────────────────────
-        agenda_rows = client.table("agenda_items").select("*") \
-            .eq("edition_id", edition_id).order("created_at").execute().data or []
+        agenda_rows = _execute(
+            client.table("agenda_items").select("*")
+                .eq("edition_id", edition_id).order("created_at")
+        ).data or []
 
-        notices = client.table("notices").select("*") \
-            .eq("edition_id", edition_id).order("created_at").execute().data or []
+        notices = _execute(
+            client.table("notices").select("*")
+                .eq("edition_id", edition_id).order("created_at")
+        ).data or []
 
         notice_ids = [n["id"] for n in notices]
         all_notice_actions = []
         if notice_ids:
-            all_notice_actions = client.table("notice_actions").select("*") \
-                .in_("notice_id", notice_ids).execute().data or []
+            all_notice_actions = _execute(
+                client.table("notice_actions").select("*").in_("notice_id", notice_ids)
+            ).data or []
         actions_by_notice = {}
         for a in all_notice_actions:
             actions_by_notice.setdefault(a["notice_id"], []).append(a["action_text"])
 
-        # ── Fetch attendance for STAFF program this week ──────────────────────
-        attendance_rows = client.table("tm_attendance").select("*") \
-            .eq("program", "STAFF") \
-            .gte("meeting_date", week_start) \
-            .lte("meeting_date", week_end) \
-            .execute().data or []
+        attendance_rows = _execute(
+            client.table("tm_attendance").select("*")
+                .eq("program", "STAFF")
+                .gte("meeting_date", week_start)
+                .lte("meeting_date", week_end)
+        ).data or []
 
         present   = sorted([r["staff_name"] for r in attendance_rows if r.get("status") == "present"])
         apologies = sorted([r["staff_name"] for r in attendance_rows if r.get("status") in ("absent", "apology")])
 
-        # ── Section labels ────────────────────────────────────────────────────
         SECTION_LABELS = {
             "pac":        "PAC",
             "whs":        "WHS",
@@ -219,14 +281,12 @@ def sync_to_staff_minutes(edition_id) -> tuple:
             "timetable":  "Timetable",
         }
 
-        # ── Group agenda items by section ─────────────────────────────────────
         by_sec = {}
         for it in agenda_rows:
             if it.get("content", "").startswith("TIMETABLE_PATH::"):
                 continue
             by_sec.setdefault(it.get("section", ""), []).append(it)
 
-        # ── Deduplicate notices by title (catches double-submit) ──────────────
         seen_titles = set()
         unique_notices = []
         for n in notices:
@@ -235,7 +295,6 @@ def sync_to_staff_minutes(edition_id) -> tuple:
                 seen_titles.add(t)
                 unique_notices.append(n)
 
-        # ── Build the digital section ─────────────────────────────────────────
         pub_date = monday.strftime("%-d %B %Y")
         lines = [
             "## 💻 Digital Staff Meeting",
@@ -246,7 +305,6 @@ def sync_to_staff_minutes(edition_id) -> tuple:
             "",
         ]
 
-        # Attendance (if recorded)
         if present or apologies:
             lines.append("**Attendance**")
             if present:
@@ -255,7 +313,6 @@ def sync_to_staff_minutes(edition_id) -> tuple:
                 lines.append(f"- Apologies: {', '.join(apologies)}")
             lines.append("")
 
-        # Standing agenda items
         if by_sec:
             lines.append("**Standing Agenda Items**")
             lines.append("")
@@ -266,7 +323,6 @@ def sync_to_staff_minutes(edition_id) -> tuple:
                     lines.append(f"- {it.get('content', '')}")
                 lines.append("")
 
-        # Notices & updates
         if unique_notices:
             lines.append("**Notices & Updates**")
             lines.append("")
@@ -287,29 +343,27 @@ def sync_to_staff_minutes(edition_id) -> tuple:
 
         digital_section = "\n".join(lines)
 
-        # Action summary for digital section
         action_summary = " · ".join(
             f"{a} (re: {n['title']})"
             for n in unique_notices
             for a in actions_by_notice.get(n["id"], [])
         )
 
-        # ── Find existing STAFF minutes for this week ─────────────────────────
-        all_staff_mins = client.table("tm_minutes").select("*") \
-            .eq("program", "STAFF") \
-            .gte("meeting_date", week_start) \
-            .lte("meeting_date", week_end) \
-            .execute().data or []
+        all_staff_mins = _execute(
+            client.table("tm_minutes").select("*")
+                .eq("program", "STAFF")
+                .gte("meeting_date", week_start)
+                .lte("meeting_date", week_end)
+        ).data or []
 
-        digital_tag    = "<!-- digital-staff-meeting -->"
-        digital_recs   = [m for m in all_staff_mins if digital_tag in m.get("content", "")]
-        f2f_recs       = [m for m in all_staff_mins if digital_tag not in m.get("content", "")]
+        digital_tag  = "<!-- digital-staff-meeting -->"
+        digital_recs = [m for m in all_staff_mins if digital_tag in m.get("content", "")]
+        f2f_recs     = [m for m in all_staff_mins if digital_tag not in m.get("content", "")]
 
-        # ── Build face-to-face section ────────────────────────────────────────
         f2f_section        = ""
         f2f_action_summary = ""
         if f2f_recs:
-            f2f_parts = []
+            f2f_parts    = []
             f2f_act_parts = []
             for m in f2f_recs:
                 f2f_parts.append(m.get("content", "").strip())
@@ -322,7 +376,6 @@ def sync_to_staff_minutes(edition_id) -> tuple:
             )
             f2f_action_summary = " · ".join(f2f_act_parts)
 
-        # ── Assemble final merged content ─────────────────────────────────────
         final_content = digital_tag + "\n" + digital_section + f2f_section
         final_actions = " · ".join(filter(None, [action_summary, f2f_action_summary]))
         merged_title  = f"Staff Meeting — {week_label_str}"
@@ -336,19 +389,17 @@ def sync_to_staff_minutes(edition_id) -> tuple:
             "action_summary": final_actions,
         }
 
-        # ── Upsert merged record, delete redundant standalone records ─────────
         if digital_recs:
-            client.table("tm_minutes").update(row).eq("id", digital_recs[0]["id"]).execute()
+            _execute(client.table("tm_minutes").update(row).eq("id", digital_recs[0]["id"]))
             for dup in digital_recs[1:]:
-                client.table("tm_minutes").delete().eq("id", dup["id"]).execute()
+                _execute(client.table("tm_minutes").delete().eq("id", dup["id"]))
             msg = "Staff minutes updated in Team Meetings app."
         else:
-            client.table("tm_minutes").insert(row).execute()
+            _execute(client.table("tm_minutes").insert(row))
             msg = "Staff minutes created in Team Meetings app."
 
-        # Remove standalone face-to-face records (content preserved in merged)
         for m in f2f_recs:
-            client.table("tm_minutes").delete().eq("id", m["id"]).execute()
+            _execute(client.table("tm_minutes").delete().eq("id", m["id"]))
 
         return True, msg
 
@@ -357,10 +408,11 @@ def sync_to_staff_minutes(edition_id) -> tuple:
 
 
 def seed_term_weeks() -> int:
-    """Pre-create draft editions for all SA 2026 school term weeks that don't yet exist.
-    Returns count of new rows inserted."""
+    """Pre-create draft editions for all SA 2026 school term weeks that don't yet exist."""
     client = get_client()
-    existing = {row["week_start"] for row in (client.table("weekly_editions").select("week_start").execute().data or [])}
+    existing = {row["week_start"] for row in (_execute(
+        client.table("weekly_editions").select("week_start")
+    ).data or [])}
     inserted = 0
     for term_num, term_start, total_weeks in SA_TERMS_2026:
         for w in range(total_weeks):
@@ -368,26 +420,27 @@ def seed_term_weeks() -> int:
             iso = monday.isoformat()
             if iso not in existing:
                 try:
-                    client.table("weekly_editions").insert({
+                    _execute(client.table("weekly_editions").insert({
                         "week_start": iso,
                         "week_label": week_label(monday),
                         "status": "draft",
                         "created_at": datetime.now(timezone.utc).isoformat()
-                    }).execute()
+                    }))
                     inserted += 1
                 except:
-                    pass  # already exists (race condition)
+                    pass
     return inserted
 
 # ── Notices ───────────────────────────────────────────────────────────────────
 def get_notices_for_edition(edition_id) -> list:
     try:
         client = get_client()
-        result = client.table("notices") \
-            .select("*") \
-            .eq("edition_id", edition_id) \
-            .order("created_at", desc=False) \
-            .execute()
+        result = _execute(
+            client.table("notices")
+                .select("*")
+                .eq("edition_id", edition_id)
+                .order("created_at", desc=False)
+        )
         return result.data or []
     except Exception as e:
         st.error(f"Error loading notices: {e}")
@@ -396,8 +449,9 @@ def get_notices_for_edition(edition_id) -> list:
 def get_notice(notice_id) -> dict:
     try:
         client = get_client()
-        result = client.table("notices") \
-            .select("*").eq("id", notice_id).single().execute()
+        result = _execute(
+            client.table("notices").select("*").eq("id", notice_id).single()
+        )
         return result.data
     except:
         return None
@@ -409,7 +463,7 @@ def create_notice(edition_id, title, content, category, author, audience,
                   uploaded_files=None) -> object:
     try:
         client = get_client()
-        result = client.table("notices").insert({
+        result = _execute(client.table("notices").insert({
             "edition_id": edition_id,
             "title": title,
             "content": content,
@@ -422,25 +476,24 @@ def create_notice(edition_id, title, content, category, author, audience,
             "has_comments": has_comments,
             "comment_prompt": comment_prompt if has_comments else None,
             "created_at": datetime.now(timezone.utc).isoformat()
-        }).execute()
+        }))
 
         if not result.data:
             return None
         notice_id = result.data[0]["id"]
 
         if has_actions and actions:
-            client.table("notice_actions").insert([
+            _execute(client.table("notice_actions").insert([
                 {"notice_id": notice_id, "action_text": a, "sort_order": i}
                 for i, a in enumerate(actions)
-            ]).execute()
+            ]))
 
         if has_poll and poll_options:
-            client.table("poll_options").insert([
+            _execute(client.table("poll_options").insert([
                 {"notice_id": notice_id, "option_text": o, "sort_order": i}
                 for i, o in enumerate(poll_options)
-            ]).execute()
+            ]))
 
-        # Handle file uploads
         if uploaded_files:
             for uf in uploaded_files:
                 upload_attachment(notice_id, uf)
@@ -464,16 +517,16 @@ def upload_attachment(notice_id, uploaded_file) -> bool:
             return False
         file_b64 = base64.b64encode(file_bytes).decode("utf-8")
         content_type = uploaded_file.type or "application/octet-stream"
-        result = client.table("notice_attachments").insert({
+        result = _execute(client.table("notice_attachments").insert({
             "notice_id": notice_id,
             "file_name": uploaded_file.name,
             "file_size": len(file_bytes),
             "file_type": content_type,
             "storage_path": f"inline:{file_b64}",
             "created_at": datetime.now(timezone.utc).isoformat()
-        }).execute()
+        }))
         if not result.data:
-            st.error(f"❌ DB insert returned no data for {uploaded_file.name}. Result: {result}")
+            st.error(f"❌ DB insert returned no data for {uploaded_file.name}.")
             return False
         return True
     except Exception as e:
@@ -483,10 +536,12 @@ def upload_attachment(notice_id, uploaded_file) -> bool:
 def get_attachments(notice_id) -> list:
     try:
         client = get_client()
-        result = client.table("notice_attachments") \
-            .select("id, notice_id, file_name, file_size, file_type, storage_path, created_at") \
-            .eq("notice_id", notice_id) \
-            .order("created_at").execute()
+        result = _execute(
+            client.table("notice_attachments")
+                .select("id, notice_id, file_name, file_size, file_type, storage_path, created_at")
+                .eq("notice_id", notice_id)
+                .order("created_at")
+        )
         return result.data or []
     except:
         return []
@@ -500,19 +555,20 @@ def get_attachment_bytes(storage_path: str):
     try:
         if storage_path.startswith("inline:"):
             return base64.b64decode(storage_path[7:])
-        # Legacy: try storage bucket
         client = get_client()
         return client.storage.from_(STORAGE_BUCKET).download(storage_path)
-    except Exception as e:
+    except Exception:
         return None
 
 # ── Actions ───────────────────────────────────────────────────────────────────
 def get_actions(notice_id) -> list:
     try:
         client = get_client()
-        result = client.table("notice_actions") \
-            .select("*").eq("notice_id", notice_id) \
-            .order("sort_order").execute()
+        result = _execute(
+            client.table("notice_actions")
+                .select("*").eq("notice_id", notice_id)
+                .order("sort_order")
+        )
         return result.data or []
     except:
         return []
@@ -521,9 +577,11 @@ def get_actions(notice_id) -> list:
 def get_poll_options(notice_id) -> list:
     try:
         client = get_client()
-        result = client.table("poll_options") \
-            .select("*").eq("notice_id", notice_id) \
-            .order("sort_order").execute()
+        result = _execute(
+            client.table("poll_options")
+                .select("*").eq("notice_id", notice_id)
+                .order("sort_order")
+        )
         return result.data or []
     except:
         return []
@@ -531,8 +589,10 @@ def get_poll_options(notice_id) -> list:
 def get_poll_votes(notice_id) -> dict:
     try:
         client = get_client()
-        result = client.table("poll_votes") \
-            .select("option_id").eq("notice_id", notice_id).execute()
+        result = _execute(
+            client.table("poll_votes")
+                .select("option_id").eq("notice_id", notice_id)
+        )
         counts = {}
         for row in (result.data or []):
             oid = row["option_id"]
@@ -544,9 +604,11 @@ def get_poll_votes(notice_id) -> dict:
 def has_voted(notice_id, staff_name) -> bool:
     try:
         client = get_client()
-        result = client.table("poll_votes") \
-            .select("id").eq("notice_id", notice_id) \
-            .eq("staff_name", staff_name).execute()
+        result = _execute(
+            client.table("poll_votes")
+                .select("id").eq("notice_id", notice_id)
+                .eq("staff_name", staff_name)
+        )
         return len(result.data or []) > 0
     except:
         return False
@@ -554,12 +616,12 @@ def has_voted(notice_id, staff_name) -> bool:
 def record_poll_vote(notice_id, option_id, staff_name):
     try:
         client = get_client()
-        client.table("poll_votes").insert({
+        _execute(client.table("poll_votes").insert({
             "notice_id": notice_id,
             "option_id": option_id,
             "staff_name": staff_name,
             "created_at": datetime.now(timezone.utc).isoformat()
-        }).execute()
+        }))
     except Exception as e:
         st.error(f"Error recording vote: {e}")
 
@@ -567,31 +629,33 @@ def record_poll_vote(notice_id, option_id, staff_name):
 def record_read(notice_id, staff_name):
     try:
         client = get_client()
-        client.table("notice_responses").upsert({
+        _execute(client.table("notice_responses").upsert({
             "notice_id": notice_id,
             "staff_name": staff_name,
             "read_at": datetime.now(timezone.utc).isoformat()
-        }, on_conflict="notice_id,staff_name").execute()
+        }, on_conflict="notice_id,staff_name"))
     except:
         pass
 
 def record_acknowledgement(notice_id, staff_name):
     try:
         client = get_client()
-        client.table("notice_responses").upsert({
+        _execute(client.table("notice_responses").upsert({
             "notice_id": notice_id,
             "staff_name": staff_name,
             "acknowledged_at": datetime.now(timezone.utc).isoformat()
-        }, on_conflict="notice_id,staff_name").execute()
+        }, on_conflict="notice_id,staff_name"))
     except Exception as e:
         st.error(f"Error recording acknowledgement: {e}")
 
 def has_acknowledged(notice_id, staff_name) -> bool:
     try:
         client = get_client()
-        result = client.table("notice_responses") \
-            .select("acknowledged_at").eq("notice_id", notice_id) \
-            .eq("staff_name", staff_name).execute()
+        result = _execute(
+            client.table("notice_responses")
+                .select("acknowledged_at").eq("notice_id", notice_id)
+                .eq("staff_name", staff_name)
+        )
         return any(r.get("acknowledged_at") for r in (result.data or []))
     except:
         return False
@@ -599,9 +663,11 @@ def has_acknowledged(notice_id, staff_name) -> bool:
 def get_responses(notice_id) -> list:
     try:
         client = get_client()
-        result = client.table("notice_responses") \
-            .select("*").eq("notice_id", notice_id) \
-            .order("staff_name").execute()
+        result = _execute(
+            client.table("notice_responses")
+                .select("*").eq("notice_id", notice_id)
+                .order("staff_name")
+        )
         return result.data or []
     except:
         return []
@@ -610,27 +676,28 @@ def get_responses(notice_id) -> list:
 def record_comment(notice_id, staff_name, comment_text):
     try:
         client = get_client()
-        client.table("notice_comments").insert({
+        _execute(client.table("notice_comments").insert({
             "notice_id": notice_id,
             "staff_name": staff_name,
             "comment_text": comment_text,
             "created_at": datetime.now(timezone.utc).isoformat()
-        }).execute()
+        }))
     except Exception as e:
         st.error(f"Error saving comment: {e}")
 
 def get_comments(notice_id) -> list:
     try:
         client = get_client()
-        result = client.table("notice_comments") \
-            .select("*").eq("notice_id", notice_id) \
-            .order("created_at").execute()
+        result = _execute(
+            client.table("notice_comments")
+                .select("*").eq("notice_id", notice_id)
+                .order("created_at")
+        )
         return result.data or []
     except:
         return []
 
 # ── Staff List & Authentication ───────────────────────────────────────────────
-
 def hash_pin(pin: str) -> str:
     """SHA-256 hash of the PIN string."""
     return hashlib.sha256(pin.strip().encode()).hexdigest()
@@ -638,10 +705,12 @@ def hash_pin(pin: str) -> str:
 def get_staff_list() -> list:
     try:
         client = get_client()
-        result = client.table("staff_list") \
-            .select("id, name, email, role, active, created_at") \
-            .eq("active", True) \
-            .order("name").execute()
+        result = _execute(
+            client.table("staff_list")
+                .select("id, name, email, role, active, created_at")
+                .eq("active", True)
+                .order("name")
+        )
         return result.data or []
     except:
         return []
@@ -652,23 +721,20 @@ def get_staff_names() -> list:
     return [s["name"] for s in staff]
 
 def verify_pin(name: str, pin: str) -> object:
-    """
-    Returns the staff record if name + PIN are correct, else None.
-    Also returns record if no PIN has been set yet (first login).
-    """
+    """Returns the staff record if name + PIN are correct, else None."""
     try:
         client = get_client()
-        result = client.table("staff_list") \
-            .select("*") \
-            .eq("name", name) \
-            .eq("active", True) \
-            .execute()
+        result = _execute(
+            client.table("staff_list")
+                .select("*")
+                .eq("name", name)
+                .eq("active", True)
+        )
         rows = result.data or []
         if not rows:
             return None
         staff = rows[0]
         stored_hash = staff.get("pin_hash")
-        # No PIN set yet — block login, admin must set one first
         if not stored_hash:
             return None
         if stored_hash == hash_pin(pin):
@@ -681,14 +747,14 @@ def verify_pin(name: str, pin: str) -> object:
 def add_staff_member(name: str, email: str, pin: str, role: str = "staff") -> bool:
     try:
         client = get_client()
-        client.table("staff_list").insert({
+        _execute(client.table("staff_list").insert({
             "name": name,
             "email": email,
             "role": role,
             "pin_hash": hash_pin(pin) if pin.strip() else None,
             "active": True,
             "created_at": datetime.now(timezone.utc).isoformat()
-        }).execute()
+        }))
         return True
     except Exception as e:
         st.error(f"Error adding staff: {e}")
@@ -697,9 +763,11 @@ def add_staff_member(name: str, email: str, pin: str, role: str = "staff") -> bo
 def set_staff_pin(staff_id: int, new_pin: str) -> bool:
     try:
         client = get_client()
-        client.table("staff_list").update({
-            "pin_hash": hash_pin(new_pin)
-        }).eq("id", staff_id).execute()
+        _execute(
+            client.table("staff_list")
+                .update({"pin_hash": hash_pin(new_pin)})
+                .eq("id", staff_id)
+        )
         return True
     except Exception as e:
         st.error(f"Error setting PIN: {e}")
@@ -708,8 +776,11 @@ def set_staff_pin(staff_id: int, new_pin: str) -> bool:
 def remove_staff_member(staff_id: int) -> bool:
     try:
         client = get_client()
-        client.table("staff_list").update({"active": False}) \
-            .eq("id", staff_id).execute()
+        _execute(
+            client.table("staff_list")
+                .update({"active": False})
+                .eq("id", staff_id)
+        )
         return True
     except:
         return False
@@ -717,8 +788,10 @@ def remove_staff_member(staff_id: int) -> bool:
 def is_admin(name: str) -> bool:
     try:
         client = get_client()
-        result = client.table("staff_list") \
-            .select("role").eq("name", name).eq("active", True).execute()
+        result = _execute(
+            client.table("staff_list")
+                .select("role").eq("name", name).eq("active", True)
+        )
         rows = result.data or []
         return rows[0].get("role") == "admin" if rows else False
     except:
@@ -739,15 +812,20 @@ def get_edition_ack_summary(edition_id) -> dict:
 def get_agenda_items(edition_id) -> list:
     try:
         client = get_client()
-        result = client.table("agenda_items")             .select("*")             .eq("edition_id", edition_id)             .order("created_at")             .execute()
+        result = _execute(
+            client.table("agenda_items")
+                .select("*")
+                .eq("edition_id", edition_id)
+                .order("created_at")
+        )
         return result.data or []
-    except Exception as e:
+    except Exception:
         return []
 
 def delete_agenda_item(item_id) -> bool:
     try:
         client = get_client()
-        client.table("agenda_items").delete().eq("id", item_id).execute()
+        _execute(client.table("agenda_items").delete().eq("id", item_id))
         return True
     except Exception as e:
         st.error(f"Error deleting agenda item: {e}")
@@ -756,13 +834,13 @@ def delete_agenda_item(item_id) -> bool:
 def save_agenda_item(edition_id, section: str, author: str, content: str) -> bool:
     try:
         client = get_client()
-        client.table("agenda_items").insert({
+        _execute(client.table("agenda_items").insert({
             "edition_id": edition_id,
             "section": section,
             "author": author,
             "content": content,
             "created_at": datetime.now(timezone.utc).isoformat()
-        }).execute()
+        }))
         return True
     except Exception as e:
         st.error(f"Error saving agenda item: {e}")
@@ -772,8 +850,10 @@ def save_agenda_item(edition_id, section: str, author: str, content: str) -> boo
 def get_agenda_acks(edition_id, section: str) -> list:
     try:
         client = get_client()
-        result = client.table("agenda_acks") \
-            .select("*").eq("edition_id", edition_id).eq("section", section).execute()
+        result = _execute(
+            client.table("agenda_acks")
+                .select("*").eq("edition_id", edition_id).eq("section", section)
+        )
         return result.data or []
     except:
         return []
@@ -781,9 +861,11 @@ def get_agenda_acks(edition_id, section: str) -> list:
 def has_agenda_acked(edition_id, section: str, staff_name: str) -> bool:
     try:
         client = get_client()
-        result = client.table("agenda_acks") \
-            .select("id").eq("edition_id", edition_id) \
-            .eq("section", section).eq("staff_name", staff_name).execute()
+        result = _execute(
+            client.table("agenda_acks")
+                .select("id").eq("edition_id", edition_id)
+                .eq("section", section).eq("staff_name", staff_name)
+        )
         return len(result.data or []) > 0
     except:
         return False
@@ -791,12 +873,12 @@ def has_agenda_acked(edition_id, section: str, staff_name: str) -> bool:
 def record_agenda_ack(edition_id, section: str, staff_name: str) -> bool:
     try:
         client = get_client()
-        client.table("agenda_acks").upsert({
+        _execute(client.table("agenda_acks").upsert({
             "edition_id": edition_id,
             "section": section,
             "staff_name": staff_name,
             "acked_at": datetime.now(timezone.utc).isoformat()
-        }, on_conflict="edition_id,section,staff_name").execute()
+        }, on_conflict="edition_id,section,staff_name"))
         return True
     except Exception as e:
         st.error(f"Error recording acknowledgement: {e}")
@@ -806,9 +888,11 @@ def record_agenda_ack(edition_id, section: str, staff_name: str) -> bool:
 def get_agenda_comments(edition_id, section: str) -> list:
     try:
         client = get_client()
-        result = client.table("agenda_comments") \
-            .select("*").eq("edition_id", edition_id).eq("section", section) \
-            .order("created_at").execute()
+        result = _execute(
+            client.table("agenda_comments")
+                .select("*").eq("edition_id", edition_id).eq("section", section)
+                .order("created_at")
+        )
         return result.data or []
     except:
         return []
@@ -816,13 +900,13 @@ def get_agenda_comments(edition_id, section: str) -> list:
 def save_agenda_comment(edition_id, section: str, author: str, content: str) -> bool:
     try:
         client = get_client()
-        client.table("agenda_comments").insert({
+        _execute(client.table("agenda_comments").insert({
             "edition_id": edition_id,
             "section": section,
             "author": author,
             "content": content,
             "created_at": datetime.now(timezone.utc).isoformat()
-        }).execute()
+        }))
         return True
     except Exception as e:
         st.error(f"Error saving comment: {e}")
@@ -832,9 +916,11 @@ def save_agenda_comment(edition_id, section: str, author: str, content: str) -> 
 def get_agenda_poll_options(edition_id, section: str) -> list:
     try:
         client = get_client()
-        result = client.table("agenda_poll_options") \
-            .select("*").eq("edition_id", edition_id).eq("section", section) \
-            .order("sort_order").execute()
+        result = _execute(
+            client.table("agenda_poll_options")
+                .select("*").eq("edition_id", edition_id).eq("section", section)
+                .order("sort_order")
+        )
         return result.data or []
     except:
         return []
@@ -842,8 +928,10 @@ def get_agenda_poll_options(edition_id, section: str) -> list:
 def get_agenda_poll_votes(edition_id, section: str) -> dict:
     try:
         client = get_client()
-        result = client.table("agenda_poll_votes") \
-            .select("option_id").eq("edition_id", edition_id).eq("section", section).execute()
+        result = _execute(
+            client.table("agenda_poll_votes")
+                .select("option_id").eq("edition_id", edition_id).eq("section", section)
+        )
         counts = {}
         for r in (result.data or []):
             oid = r["option_id"]
@@ -855,9 +943,11 @@ def get_agenda_poll_votes(edition_id, section: str) -> dict:
 def has_agenda_voted(edition_id, section: str, staff_name: str) -> bool:
     try:
         client = get_client()
-        result = client.table("agenda_poll_votes") \
-            .select("id").eq("edition_id", edition_id) \
-            .eq("section", section).eq("staff_name", staff_name).execute()
+        result = _execute(
+            client.table("agenda_poll_votes")
+                .select("id").eq("edition_id", edition_id)
+                .eq("section", section).eq("staff_name", staff_name)
+        )
         return len(result.data or []) > 0
     except:
         return False
@@ -867,7 +957,7 @@ def save_agenda_poll_option(edition_id, section: str, question: str, options: li
         client = get_client()
         rows = [{"edition_id": edition_id, "section": section, "question": question,
                  "option_text": o, "sort_order": i} for i, o in enumerate(options)]
-        client.table("agenda_poll_options").insert(rows).execute()
+        _execute(client.table("agenda_poll_options").insert(rows))
         return True
     except Exception as e:
         st.error(f"Error creating poll: {e}")
@@ -876,49 +966,47 @@ def save_agenda_poll_option(edition_id, section: str, question: str, options: li
 def record_agenda_vote(edition_id, section: str, option_id, staff_name: str) -> bool:
     try:
         client = get_client()
-        client.table("agenda_poll_votes").insert({
+        _execute(client.table("agenda_poll_votes").insert({
             "edition_id": edition_id,
             "section": section,
             "option_id": option_id,
             "staff_name": staff_name,
             "created_at": datetime.now(timezone.utc).isoformat()
-        }).execute()
+        }))
         return True
     except Exception as e:
         st.error(f"Error recording vote: {e}")
         return False
 
-# ── Global Timetable (persistent, not tied to any edition) ────────────────────
+# ── Global Timetable ──────────────────────────────────────────────────────────
 def get_global_timetable() -> dict:
-    """Get the current global timetable record."""
     try:
         client = get_client()
-        result = client.table("global_settings") \
-            .select("*").eq("key", "current_timetable") \
-            .limit(1).execute()
+        result = _execute(
+            client.table("global_settings")
+                .select("*").eq("key", "current_timetable")
+                .limit(1)
+        )
         return result.data[0] if result.data else None
     except:
         return None
 
 def save_global_timetable(filename: str, file_b64: str, uploaded_by: str) -> bool:
-    """Save the current timetable as a global setting (upsert)."""
-    import base64
     try:
         client = get_client()
-        client.table("global_settings").upsert({
+        _execute(client.table("global_settings").upsert({
             "key": "current_timetable",
             "value": file_b64,
             "meta": filename,
             "updated_by": uploaded_by,
             "updated_at": datetime.now(timezone.utc).isoformat()
-        }, on_conflict="key").execute()
+        }, on_conflict="key"))
         return True
     except Exception as e:
         st.error(f"Failed to save timetable: {e}")
         return False
 
 def get_global_timetable_bytes() -> bytes:
-    """Get the current timetable as raw bytes."""
     import base64
     record = get_global_timetable()
     if record and record.get("value"):
@@ -931,11 +1019,10 @@ def get_global_timetable_bytes() -> bytes:
 # ── Agenda Attachments ────────────────────────────────────────────────────────
 def save_agenda_attachment(edition_id, section: str, filename: str, file_bytes: bytes,
                            mime_type: str, uploaded_by: str) -> bool:
-    """Save a file attachment for a standing agenda section (base64 in DB)."""
     import base64 as b64lib
     try:
         client = get_client()
-        client.table("agenda_attachments").insert({
+        _execute(client.table("agenda_attachments").insert({
             "edition_id": edition_id,
             "section": section,
             "filename": filename,
@@ -944,31 +1031,33 @@ def save_agenda_attachment(edition_id, section: str, filename: str, file_bytes: 
             "mime_type": mime_type,
             "uploaded_by": uploaded_by,
             "created_at": datetime.now(timezone.utc).isoformat()
-        }).execute()
+        }))
         return True
     except Exception as e:
         st.error(f"Error saving attachment: {e}")
         return False
 
 def get_agenda_attachments(edition_id, section: str) -> list:
-    """Get all attachments for a section (returns metadata only, not file_data)."""
     try:
         client = get_client()
-        result = client.table("agenda_attachments") \
-            .select("id,edition_id,section,filename,file_size,mime_type,uploaded_by,created_at") \
-            .eq("edition_id", edition_id).eq("section", section) \
-            .order("created_at").execute()
+        result = _execute(
+            client.table("agenda_attachments")
+                .select("id,edition_id,section,filename,file_size,mime_type,uploaded_by,created_at")
+                .eq("edition_id", edition_id).eq("section", section)
+                .order("created_at")
+        )
         return result.data or []
     except:
         return []
 
 def get_agenda_attachment_bytes(attachment_id) -> tuple:
-    """Returns (filename, mime_type, bytes) for download."""
     import base64 as b64lib
     try:
         client = get_client()
-        result = client.table("agenda_attachments") \
-            .select("filename,mime_type,file_data").eq("id", attachment_id).single().execute()
+        result = _execute(
+            client.table("agenda_attachments")
+                .select("filename,mime_type,file_data").eq("id", attachment_id).single()
+        )
         row = result.data
         if row:
             return row["filename"], row["mime_type"], b64lib.b64decode(row["file_data"])
@@ -979,7 +1068,7 @@ def get_agenda_attachment_bytes(attachment_id) -> tuple:
 def delete_agenda_attachment(attachment_id) -> bool:
     try:
         client = get_client()
-        client.table("agenda_attachments").delete().eq("id", attachment_id).execute()
+        _execute(client.table("agenda_attachments").delete().eq("id", attachment_id))
         return True
     except:
         return False
@@ -992,39 +1081,70 @@ def delete_agenda_attachment(attachment_id) -> bool:
 get_supabase = get_client
 
 def get_bulletin(bulletin_date: date):
-    sb = get_supabase()
-    result = sb.table("bulletins").select("*").eq("date", str(bulletin_date)).execute()
-    return result.data[0] if result.data else None
+    try:
+        sb = get_supabase()
+        result = _execute(
+            sb.table("bulletins").select("*").eq("date", str(bulletin_date))
+        )
+        return result.data[0] if result.data else None
+    except Exception as e:
+        st.warning(f"⚠️ Could not load bulletin (network issue, retrying may help): {e}")
+        return None
 
 def save_bulletin(bulletin_date: date, data: dict):
-    sb = get_supabase()
-    existing = get_bulletin(bulletin_date)
-    data["date"] = str(bulletin_date)
-    data["updated_at"] = datetime.utcnow().isoformat()
-    if existing:
-        sb.table("bulletins").update(data).eq("date", str(bulletin_date)).execute()
-    else:
-        data["created_at"] = datetime.utcnow().isoformat()
-        sb.table("bulletins").insert(data).execute()
+    try:
+        sb = get_supabase()
+        existing = get_bulletin(bulletin_date)
+        data["date"] = str(bulletin_date)
+        data["updated_at"] = datetime.utcnow().isoformat()
+        if existing:
+            _execute(sb.table("bulletins").update(data).eq("date", str(bulletin_date)))
+        else:
+            data["created_at"] = datetime.utcnow().isoformat()
+            _execute(sb.table("bulletins").insert(data))
+    except Exception as e:
+        st.error(f"❌ Could not save bulletin: {e}")
 
 def get_bulletins_range(start: date, end: date):
-    sb = get_supabase()
-    result = sb.table("bulletins").select("date, fun_fact").gte("date", str(start)).lte("date", str(end)).order("date", desc=True).execute()
-    return result.data
+    try:
+        sb = get_supabase()
+        result = _execute(
+            sb.table("bulletins")
+                .select("date, fun_fact")
+                .gte("date", str(start))
+                .lte("date", str(end))
+                .order("date", desc=True)
+        )
+        return result.data
+    except Exception as e:
+        st.warning(f"⚠️ Could not load bulletin range: {e}")
+        return []
 
 def search_bulletins(keyword: str):
-    sb = get_supabase()
-    # Search across text fields using ilike on fun_fact and nit_booking; broader search via full list
-    result = sb.table("bulletins").select("date, fun_fact, nit_booking").order("date", desc=True).execute()
-    kw = keyword.lower()
-    matches = []
-    for row in result.data:
-        row_str = json.dumps(row).lower()
-        if kw in row_str:
-            matches.append(row)
-    return matches
+    try:
+        sb = get_supabase()
+        result = _execute(
+            sb.table("bulletins")
+                .select("date, fun_fact, nit_booking")
+                .order("date", desc=True)
+        )
+        kw = keyword.lower()
+        matches = []
+        for row in result.data:
+            if kw in json.dumps(row).lower():
+                matches.append(row)
+        return matches
+    except Exception as e:
+        st.warning(f"⚠️ Search unavailable: {e}")
+        return []
 
 def get_all_bulletin_dates():
-    sb = get_supabase()
-    result = sb.table("bulletins").select("date").order("date", desc=True).execute()
-    return [row["date"] for row in result.data]
+    try:
+        sb = get_supabase()
+        result = _execute(
+            sb.table("bulletins").select("date").order("date", desc=True)
+        )
+        return [row["date"] for row in result.data]
+    except Exception as e:
+        st.warning(f"⚠️ Could not load bulletin dates: {e}")
+        return []
