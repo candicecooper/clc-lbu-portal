@@ -858,162 +858,298 @@ def render_minutes(program, week_range=None, week_num=None, term_label="T1"):
 
 
 def _render_minutes_record(m, accent, is_staff, week_range=None, auto_expand=False):
-    """Render a single minutes record as an expander."""
+    """Render a single minutes record as an expander with structured view and inline editing."""
+    mid = m["id"]
+    is_editing = st.session_state.get(f"editing_min_{mid}", False)
     label = f"📄  {m.get('meeting_date','')}  —  {m.get('title','Untitled')}"
-    with st.expander(label, expanded=auto_expand):
-        st.markdown(f"""
-        <div style="background:{accent};border-radius:8px;padding:10px 16px;
-                    margin-bottom:12px;display:flex;gap:2rem;flex-wrap:wrap;">
-          <span style="color:white;font-size:13px;"><strong>Chair:</strong>&nbsp;{m.get('chair','—') or '—'}</span>
-          <span style="color:white;font-size:13px;"><strong>Location:</strong>&nbsp;{m.get('location','—') or '—'}</span>
-          <span style="color:white;font-size:13px;"><strong>Date:</strong>&nbsp;{m.get('meeting_date','—')}</span>
-        </div>""", unsafe_allow_html=True)
 
-        present_raw   = m.get("attendees", "") or ""
-        apologies_raw = m.get("apologies", "") or ""
-        present_list   = [n.strip() for n in present_raw.split(",")   if n.strip()]
-        apologies_list = [n.strip() for n in apologies_raw.split(",") if n.strip()]
+    with st.expander(label, expanded=auto_expand or is_editing):
 
-        if present_list or apologies_list:
-            st.markdown("""
-            <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;
-                        padding:10px 16px;margin-bottom:12px;">
-              <strong style="font-size:13px;">🙋 Attendance</strong>
+        # ── EDIT MODE ─────────────────────────────────────────────────────────
+        if is_editing:
+            st.markdown(f"""
+            <div style="background:#fef3c7;border:2px solid #f59e0b;border-radius:10px;
+                        padding:0.75rem 1.25rem;margin-bottom:1rem;">
+              <strong style="color:#92400e;">✏️ Editing minutes — make your changes below and save.</strong>
             </div>""", unsafe_allow_html=True)
-            ac1, ac2 = st.columns(2)
-            with ac1:
-                st.markdown("**✅ Present**")
-                st.markdown("\n".join(f"- {n}" for n in present_list) if present_list else "_None recorded_")
-            with ac2:
-                st.markdown("**⚠️ Apologies**")
-                st.markdown("\n".join(f"- {n}" for n in apologies_list) if apologies_list else "_None_")
 
-        if is_staff:
-            st.markdown("""
-            <div style="background:#dbeafe;border-left:5px solid #1a4d8c;
-                        border-radius:0 8px 8px 0;padding:10px 16px;margin:14px 0 8px;">
-              <strong style="color:#1a4d8c;font-size:14px;">💻 Part 1 — Digital Staff Meeting</strong>
-            </div>""", unsafe_allow_html=True)
-            digital_summary = (m.get("digital_summary") or "").strip()
-            if digital_summary:
-                st.markdown(digital_summary)
-            else:
-                st.caption("_No digital meeting summary recorded._")
-            st.markdown("**Items raised — viewed & actioned:**")
-            try:
-                items = json.loads(m.get("digital_items") or "[]")
-            except Exception:
-                items = []
-            if items:
-                import pandas as pd
-                df = pd.DataFrame(items)
-                df.columns = [c.replace("_", " ").title() for c in df.columns]
-                st.dataframe(df, use_container_width=True, hide_index=True)
-            else:
-                st.caption("_No items recorded._")
-            st.markdown("""
-            <div style="background:#d1fae5;border-left:5px solid #2d7d4f;
-                        border-radius:0 8px 8px 0;padding:10px 16px;margin:14px 0 8px;">
-              <strong style="color:#2d7d4f;font-size:14px;">👥 Part 2 — Face-to-Face Meeting</strong>
-            </div>""", unsafe_allow_html=True)
-            ff = (m.get("face_to_face_content") or m.get("content") or "").strip()
-            if ff:
-                st.markdown(ff)
-            else:
-                st.caption("_No face-to-face minutes recorded._")
-        else:
-            content = (m.get("content") or m.get("face_to_face_content") or "").strip()
-            if content:
-                st.markdown(content)
-            else:
-                st.caption("_No minutes content recorded._")
+            with st.form(f"edit_min_form_{mid}"):
 
-        action_text = (m.get("action_summary") or "").strip()
-        if action_text:
-            st.markdown("""
-            <div style="background:#f5f3ff;border-left:5px solid #5b21b6;
-                        border-radius:0 8px 8px 0;padding:8px 14px;margin:12px 0 4px;">
-              <strong style="color:#5b21b6;">✅ Action Items</strong>
-            </div>""", unsafe_allow_html=True)
-            lines = [l.strip() for l in action_text.splitlines() if l.strip()]
-            for line in lines:
-                parts = [p.strip() for p in line.split("|")]
-                if len(parts) >= 2:
-                    st.markdown(f"🔲 **{parts[0]}** — {parts[1]}" + (f" _(due {parts[2]})_" if len(parts) > 2 else ""))
+                # ── Meeting details ───────────────────────────────────────────
+                st.markdown("##### 📋 Meeting Details")
+                ed1, ed2 = st.columns([3, 1])
+                with ed1:
+                    etitle = st.text_input("Meeting title", value=m.get("title", ""))
+                with ed2:
+                    edate = st.date_input(
+                        "Date",
+                        value=datetime.date.fromisoformat(m["meeting_date"])
+                        if m.get("meeting_date") else datetime.date.today()
+                    )
+                ec1, ec2, ec3 = st.columns(3)
+                with ec1: echair = st.text_input("Chair", value=m.get("chair", "") or "")
+                with ec2: eloc   = st.text_input("Location", value=m.get("location", "") or "")
+                with ec3: pass
+
+                # ── Attendance ────────────────────────────────────────────────
+                st.markdown("##### 🙋 Attendance")
+                ea1, ea2 = st.columns(2)
+                with ea1:
+                    eatt  = st.text_area("Present (comma-separated)", value=m.get("attendees", "") or "", height=80)
+                with ea2:
+                    eapol = st.text_area("Apologies (comma-separated)", value=m.get("apologies", "") or "", height=80)
+
+                if is_staff:
+                    # ── Part 1: Digital Staff Meeting ─────────────────────────
+                    st.markdown("""
+                    <div style="background:#dbeafe;border-left:5px solid #1a4d8c;border-radius:0 8px 8px 0;
+                                padding:10px 16px;margin:16px 0 8px;">
+                      <strong style="color:#1a4d8c;font-size:14px;">💻 Part 1 — Digital Staff Meeting</strong>
+                      <div style="font-size:0.78rem;color:#1e40af;margin-top:3px;">
+                        Edit the digital meeting summary or leave blank if nothing was published this week.
+                      </div>
+                    </div>""", unsafe_allow_html=True)
+
+                    edigital = st.text_area(
+                        "Digital meeting summary",
+                        value=m.get("digital_summary", "") or "",
+                        height=130,
+                        placeholder="Paste or summarise the digital staff meeting content for this week. Leave blank if no digital meeting was published.",
+                    )
+
+                    st.markdown("**Items raised** (one per line: `Item | Raised By | Actioned By | Status`)")
+                    existing_items = []
+                    try:
+                        existing_items = json.loads(m.get("digital_items") or "[]")
+                    except Exception:
+                        pass
+                    eitems_default = "\n".join(
+                        f"{i.get('item','')}|{i.get('raised_by','')}|{i.get('actioned_by','')}|{i.get('status','Noted')}"
+                        for i in existing_items
+                    )
+                    eitems = st.text_area(
+                        "Digital items",
+                        value=eitems_default,
+                        height=90,
+                        placeholder="e.g. Timetable update | Candice Cooper | All staff | Noted",
+                    )
+
+                    # ── Part 2: Face-to-Face ──────────────────────────────────
+                    st.markdown("""
+                    <div style="background:#d1fae5;border-left:5px solid #2d7d4f;border-radius:0 8px 8px 0;
+                                padding:10px 16px;margin:16px 0 8px;">
+                      <strong style="color:#2d7d4f;font-size:14px;">👥 Part 2 — Face-to-Face Meeting Minutes</strong>
+                      <div style="font-size:0.78rem;color:#166534;margin-top:3px;">
+                        Edit the face-to-face minutes directly. AI-generated content can be amended here.
+                      </div>
+                    </div>""", unsafe_allow_html=True)
+
+                    eff = st.text_area(
+                        "Face-to-face minutes",
+                        value=m.get("face_to_face_content", "") or m.get("content", "") or "",
+                        height=380,
+                        placeholder="Face-to-face meeting minutes go here...",
+                    )
+                    econtent = ""
+
                 else:
-                    st.markdown(f"🔲 {line}")
+                    edigital = ""; eitems = ""; eff = ""
+                    st.markdown("##### 📝 Minutes")
+                    econtent = st.text_area("Minutes", value=m.get("content", "") or "", height=320)
 
-        st.markdown("")
-        if is_staff:
-            docx_bytes = generate_combined_docx(m)
-        else:
-            docx_bytes = generate_team_docx(m, "STAFF" if is_staff else "JP")
+                # ── Action items ──────────────────────────────────────────────
+                st.markdown("""
+                <div style="background:#f5f3ff;border-left:5px solid #5b21b6;border-radius:0 8px 8px 0;
+                            padding:8px 14px;margin:16px 0 8px;">
+                  <strong style="color:#5b21b6;font-size:13px;">✅ Action Items</strong>
+                  <span style="font-size:0.75rem;color:#6d28d9;margin-left:8px;">One per line: Action | Assigned To | Due</span>
+                </div>""", unsafe_allow_html=True)
+                eactions = st.text_area(
+                    "Action items",
+                    value=m.get("action_summary", "") or "",
+                    height=90,
+                    label_visibility="collapsed",
+                    placeholder="Update student profiles | Candice Cooper | Week 10",
+                )
 
-        safe_title = (m.get("title") or "minutes").replace(" ", "_")
-        st.download_button(
-            label     = "📥 Download Word Document",
-            data      = docx_bytes,
-            file_name = f"{safe_title}_{m.get('meeting_date','')}.docx",
-            mime      = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            key       = f"dl_{m['id']}",
-            type      = "primary",
-        )
+                st.markdown("---")
+                sb1, sb2 = st.columns(2)
+                with sb1:
+                    save_clicked = st.form_submit_button(
+                        "💾 Save Changes", type="primary", use_container_width=True
+                    )
+                with sb2:
+                    cancel_clicked = st.form_submit_button(
+                        "✕ Cancel", use_container_width=True
+                    )
 
-        if st.session_state.get("admin"):
-            st.divider()
-            ec1, ec2 = st.columns(2)
-            with ec1:
-                if st.button("✏️ Edit", key=f"edit_min_{m['id']}"):
-                    st.session_state[f"editing_min_{m['id']}"] = True
-            with ec2:
-                if st.button("🗑️ Delete", key=f"del_min_{m['id']}"):
-                    delete_row("tm_minutes", m["id"])
-                    st.rerun()
-            if st.session_state.get(f"editing_min_{m['id']}"):
-                with st.form(f"edit_min_form_{m['id']}"):
-                    ec1, ec2 = st.columns([3, 1])
-                    with ec1: etitle = st.text_input("Title", value=m.get("title",""))
-                    with ec2: edate  = st.date_input("Date", value=datetime.date.fromisoformat(m["meeting_date"]) if m.get("meeting_date") else datetime.date.today())
-                    ec3, ec4, ec5 = st.columns(3)
-                    with ec3: echair = st.text_input("Chair", value=m.get("chair",""))
-                    with ec4: eloc   = st.text_input("Location", value=m.get("location",""))
-                    with ec5: pass
-                    eatt  = st.text_input("Present (comma-separated)", value=m.get("attendees",""))
-                    eapol = st.text_input("Apologies (comma-separated)", value=m.get("apologies",""))
+                if save_clicked:
+                    parsed_items = []
                     if is_staff:
-                        edigital = st.text_area("Digital meeting summary", value=m.get("digital_summary",""), height=120)
-                        eitems   = st.text_area("Digital items (Item|Raised By|Actioned By|Status)", value="\n".join(
-                            f"{i.get('item','')}|{i.get('raised_by','')}|{i.get('actioned_by','')}|{i.get('status','')}"
-                            for i in json.loads(m.get("digital_items") or "[]")
-                        ), height=100)
-                        eff      = st.text_area("Face-to-face minutes", value=m.get("face_to_face_content",""), height=200)
-                        econtent = ""
+                        for line in eitems.splitlines():
+                            parts = [p.strip() for p in line.split("|")]
+                            if parts and parts[0]:
+                                parsed_items.append({
+                                    "item":        parts[0],
+                                    "raised_by":   parts[1] if len(parts) > 1 else "",
+                                    "actioned_by": parts[2] if len(parts) > 2 else "",
+                                    "status":      parts[3] if len(parts) > 3 else "Noted",
+                                })
+                    update_row("tm_minutes", mid, {
+                        "title":               etitle.strip(),
+                        "meeting_date":        str(edate),
+                        "chair":               echair.strip(),
+                        "location":            eloc.strip(),
+                        "attendees":           eatt.strip(),
+                        "apologies":           eapol.strip(),
+                        "digital_summary":     edigital.strip(),
+                        "digital_items":       json.dumps(parsed_items),
+                        "face_to_face_content": eff.strip(),
+                        "content":             econtent.strip() if not is_staff else "",
+                        "action_summary":      eactions.strip(),
+                    })
+                    st.session_state[f"editing_min_{mid}"] = False
+                    st.success("✅ Changes saved!")
+                    st.rerun()
+
+                if cancel_clicked:
+                    st.session_state[f"editing_min_{mid}"] = False
+                    st.rerun()
+
+        # ── VIEW MODE ─────────────────────────────────────────────────────────
+        else:
+            # Meeting details bar
+            st.markdown(f"""
+            <div style="background:{accent};border-radius:8px;padding:10px 16px;
+                        margin-bottom:12px;display:flex;gap:2rem;flex-wrap:wrap;">
+              <span style="color:white;font-size:13px;"><strong>Chair:</strong>&nbsp;{m.get('chair','—') or '—'}</span>
+              <span style="color:white;font-size:13px;"><strong>Location:</strong>&nbsp;{m.get('location','—') or '—'}</span>
+              <span style="color:white;font-size:13px;"><strong>Date:</strong>&nbsp;{m.get('meeting_date','—')}</span>
+            </div>""", unsafe_allow_html=True)
+
+            # Attendance
+            present_raw    = m.get("attendees",  "") or ""
+            apologies_raw  = m.get("apologies",  "") or ""
+            present_list   = [n.strip() for n in present_raw.split(",")  if n.strip()]
+            apologies_list = [n.strip() for n in apologies_raw.split(",") if n.strip()]
+
+            if present_list or apologies_list:
+                st.markdown("""
+                <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;
+                            padding:10px 16px;margin-bottom:12px;">
+                  <strong style="font-size:13px;">🙋 Attendance</strong>
+                </div>""", unsafe_allow_html=True)
+                ac1, ac2 = st.columns(2)
+                with ac1:
+                    st.markdown("**✅ Present**")
+                    st.markdown("\n".join(f"- {n}" for n in present_list) if present_list else "_None recorded_")
+                with ac2:
+                    st.markdown("**⚠️ Apologies**")
+                    st.markdown("\n".join(f"- {n}" for n in apologies_list) if apologies_list else "_None_")
+
+            if is_staff:
+                # ── Part 1: Digital Staff Meeting ─────────────────────────────
+                st.markdown("""
+                <div style="background:#dbeafe;border-left:5px solid #1a4d8c;
+                            border-radius:0 8px 8px 0;padding:10px 16px;margin:14px 0 8px;">
+                  <strong style="color:#1a4d8c;font-size:14px;">💻 Part 1 — Digital Staff Meeting</strong>
+                </div>""", unsafe_allow_html=True)
+
+                digital_summary = (m.get("digital_summary") or "").strip()
+                if digital_summary:
+                    st.markdown(digital_summary)
+                else:
+                    st.markdown("""
+                    <div style="background:#f1f5f9;border:1.5px dashed #94a3b8;border-radius:8px;
+                                padding:10px 16px;margin:6px 0 12px;color:#64748b;font-size:13px;">
+                      📭 <em>Nothing was added to the Digital Staff Meeting this week.</em>
+                    </div>""", unsafe_allow_html=True)
+
+                try:
+                    dig_items = json.loads(m.get("digital_items") or "[]")
+                except Exception:
+                    dig_items = []
+
+                if dig_items:
+                    st.markdown("**Items raised — viewed & actioned:**")
+                    import pandas as pd
+                    df = pd.DataFrame(dig_items)
+                    df.columns = [c.replace("_", " ").title() for c in df.columns]
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+                elif digital_summary:
+                    # Only show this when there IS a summary but no table rows
+                    st.caption("_No individual items recorded._")
+
+                # ── Part 2: Face-to-Face ───────────────────────────────────────
+                st.markdown("""
+                <div style="background:#d1fae5;border-left:5px solid #2d7d4f;
+                            border-radius:0 8px 8px 0;padding:10px 16px;margin:14px 0 8px;">
+                  <strong style="color:#2d7d4f;font-size:14px;">👥 Part 2 — Face-to-Face Meeting Minutes</strong>
+                </div>""", unsafe_allow_html=True)
+
+                ff = (m.get("face_to_face_content") or m.get("content") or "").strip()
+                if ff:
+                    st.markdown(ff)
+                else:
+                    st.markdown("""
+                    <div style="background:#f1f5f9;border:1.5px dashed #94a3b8;border-radius:8px;
+                                padding:10px 16px;margin:6px 0 12px;color:#64748b;font-size:13px;">
+                      📝 <em>No face-to-face minutes recorded yet. Use ✏️ Edit to add them.</em>
+                    </div>""", unsafe_allow_html=True)
+
+            else:
+                content = (m.get("content") or m.get("face_to_face_content") or "").strip()
+                if content:
+                    st.markdown(content)
+                else:
+                    st.caption("_No minutes content recorded._")
+
+            # Action items
+            action_text = (m.get("action_summary") or "").strip()
+            if action_text:
+                st.markdown("""
+                <div style="background:#f5f3ff;border-left:5px solid #5b21b6;
+                            border-radius:0 8px 8px 0;padding:8px 14px;margin:12px 0 4px;">
+                  <strong style="color:#5b21b6;">✅ Action Items</strong>
+                </div>""", unsafe_allow_html=True)
+                lines = [l.strip() for l in action_text.splitlines() if l.strip()]
+                for line in lines:
+                    parts = [p.strip() for p in line.split("|")]
+                    if len(parts) >= 2:
+                        st.markdown(f"🔲 **{parts[0]}** — {parts[1]}" + (f" _(due {parts[2]})_" if len(parts) > 2 else ""))
                     else:
-                        edigital = ""; eitems = ""; eff = ""
-                        econtent = st.text_area("Minutes", value=m.get("content",""), height=280)
-                    eactions = st.text_area("Action items (Action|Assigned To|Due)", value=m.get("action_summary",""))
-                    if st.form_submit_button("💾 Save Changes"):
-                        parsed_items = []
-                        if is_staff:
-                            for line in eitems.splitlines():
-                                parts = [p.strip() for p in line.split("|")]
-                                if parts and parts[0]:
-                                    parsed_items.append({
-                                        "item": parts[0], "raised_by": parts[1] if len(parts)>1 else "",
-                                        "actioned_by": parts[2] if len(parts)>2 else "",
-                                        "status": parts[3] if len(parts)>3 else "Noted"
-                                    })
-                        update_row("tm_minutes", m["id"], {
-                            "title": etitle, "meeting_date": str(edate),
-                            "chair": echair, "location": eloc,
-                            "attendees": eatt, "apologies": eapol,
-                            "digital_summary": edigital,
-                            "digital_items": json.dumps(parsed_items),
-                            "face_to_face_content": eff,
-                            "content": econtent,
-                            "action_summary": eactions
-                        })
-                        del st.session_state[f"editing_min_{m['id']}"]
+                        st.markdown(f"🔲 {line}")
+
+            # Download + Edit/Delete buttons
+            st.markdown("")
+            btn1, btn2, btn3 = st.columns([3, 1, 1])
+
+            if is_staff:
+                docx_bytes = generate_combined_docx(m)
+            else:
+                docx_bytes = generate_team_docx(m, "STAFF" if is_staff else "JP")
+
+            safe_title = (m.get("title") or "minutes").replace(" ", "_")
+            with btn1:
+                st.download_button(
+                    label     = "📥 Download Word Document",
+                    data      = docx_bytes,
+                    file_name = f"{safe_title}_{m.get('meeting_date','')}.docx",
+                    mime      = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key       = f"dl_{mid}",
+                    type      = "primary",
+                    use_container_width=True,
+                )
+            with btn2:
+                # Edit available to all authenticated staff for STAFF minutes; admin-only for others
+                if is_staff or st.session_state.get("admin"):
+                    if st.button("✏️ Edit", key=f"edit_min_{mid}", use_container_width=True):
+                        st.session_state[f"editing_min_{mid}"] = True
+                        st.rerun()
+            with btn3:
+                if st.session_state.get("admin"):
+                    if st.button("🗑️ Delete", key=f"del_min_{mid}", use_container_width=True):
+                        delete_row("tm_minutes", mid)
                         st.rerun()
 
 
