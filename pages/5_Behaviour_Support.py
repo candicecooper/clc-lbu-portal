@@ -135,7 +135,7 @@ CLINICAL_BEHAVIOUR_MAP = {
 }
 
 def get_clinical_behaviour(raw: str) -> str:
-    """Return clinical/professional terminology for a behaviour label."""
+    """Return professional terminology for a behaviour label."""
     if not raw:
         return raw
     mapped = CLINICAL_BEHAVIOUR_MAP.get(raw)
@@ -283,7 +283,7 @@ def format_hypothesis(hyp):
         return "Unknown"
 
 def generate_strong_clinical_hypothesis(full_df, top_ant, top_beh, top_loc, top_session, student_name):
-    """Return a dict with a detailed evidence-based functional hypothesis in clinical language."""
+    """Return a dict with a detailed evidence-based functional hypothesis."""
     import pandas as _pd
     total = len(full_df)
     if total == 0:
@@ -340,7 +340,7 @@ def generate_strong_clinical_hypothesis(full_df, top_ant, top_beh, top_loc, top_
         f"this behaviour constitutes a stress response — a communicative act signalling an unmet "
         f"need within the {bsem_domain} — rather than wilful non-compliance. "
         f"A mean incident severity of {avg_sev}/5 with a {crit_pct}% critical escalation rate "
-        f"indicates that antecedent-stage intervention is the highest clinical priority. "
+        f"indicates that antecedent-stage intervention is the highest priority. "
         f"Proactive, function-based supports targeted at {ant_category} are recommended."
     )
 
@@ -348,7 +348,7 @@ def generate_strong_clinical_hypothesis(full_df, top_ant, top_beh, top_loc, top_
         "Behavioural Function":     hyp_function,
         "Primary Antecedent":       ant_category.capitalize(),
         "BSEM Domain Priority":     bsem_domain.capitalize(),
-        "Clinical Behaviour Label": beh_clinical,
+        "Behaviour Label": beh_clinical,
         "Peak Context":             f"{top_session} session · {top_loc}",
         "Risk Indicator":           f"Mean severity {avg_sev}/5 · {crit_pct}% critical escalation",
     }
@@ -2403,29 +2403,92 @@ def render_student_analysis_page():
     st.markdown("---")
 
     st.markdown("### 📅 Daily Incident Frequency")
+    st.caption("Each bar = one school day with at least one incident. Only days with incidents are shown.")
+
+    # Build a combined daily frame with string labels so Plotly uses category axis
+    # (avoids date interpolation that would show weekend gaps / empty days)
+    _all_daily = pd.concat([
+        quick_only_df.assign(_type="Regular") if not quick_only_df.empty else pd.DataFrame(),
+        crit_only_df.assign(_type="Critical") if not crit_only_df.empty else pd.DataFrame(),
+    ], ignore_index=True)
+
     fig1 = go.Figure()
-    if not quick_only_df.empty:
-        daily_quick = quick_only_df.groupby(quick_only_df["date_parsed"].dt.date).size().reset_index(name="count")
-        fig1.add_trace(go.Bar(x=daily_quick["date_parsed"], y=daily_quick["count"], name='Regular',
-            marker=dict(color='#3b82f6', line=dict(color='white', width=1)),
-            text=daily_quick["count"], textposition='inside',
-            textfont=dict(color='white', size=11, family='Arial Black'),
-            hovertemplate='<b>Date:</b> %{x|%a %d/%m}<br><b>Regular:</b> %{y}<extra></extra>'))
-    if not crit_only_df.empty:
-        daily_crit = crit_only_df.groupby(crit_only_df["date_parsed"].dt.date).size().reset_index(name="count")
-        fig1.add_trace(go.Bar(x=daily_crit["date_parsed"], y=daily_crit["count"], name='Critical',
-            marker=dict(color='#ef4444', line=dict(color='white', width=1)),
-            text=daily_crit["count"], textposition='inside',
-            textfont=dict(color='white', size=11, family='Arial Black'),
-            hovertemplate='<b>Date:</b> %{x|%a %d/%m}<br><b>Critical:</b> %{y}<extra></extra>'))
-    fig1.update_layout(height=350, barmode='stack',
-        xaxis_title="<b>Date</b>", yaxis_title="<b>Incident Count</b>",
-        plot_bgcolor='#f8fafc', paper_bgcolor='white',
-        font=dict(color='#0f172a', size=12, family='Arial'),
-        yaxis=dict(tickmode='linear', tick0=0, dtick=1, gridcolor='#e2e8f0', showline=True, linewidth=2, linecolor='#cbd5e1'),
-        xaxis=dict(showline=True, linewidth=2, linecolor='#cbd5e1', gridcolor='#e2e8f0', tickformat='%a\n%d/%m'),
+    if not _all_daily.empty:
+        _all_daily["_date"] = _all_daily["date_parsed"].dt.date
+        # Day label: "Mon 03 Mar" — unambiguous, no year clutter
+        _all_daily["_label"] = _all_daily["date_parsed"].apply(
+            lambda d: d.strftime("%a %-d %b")
+        )
+        # Keep chronological order of unique labels
+        label_order = (
+            _all_daily[["_date","_label"]]
+            .drop_duplicates()
+            .sort_values("_date")["_label"]
+            .tolist()
+        )
+        _day_regular = (
+            _all_daily[_all_daily["_type"] == "Regular"]
+            .groupby("_label").size().reindex(label_order, fill_value=0)
+        ) if "Regular" in _all_daily["_type"].values else pd.Series(0, index=label_order)
+        _day_critical = (
+            _all_daily[_all_daily["_type"] == "Critical"]
+            .groupby("_label").size().reindex(label_order, fill_value=0)
+        ) if "Critical" in _all_daily["_type"].values else pd.Series(0, index=label_order)
+
+        # Weekend shading: flag labels that are Sat/Sun
+        _date_map = (_all_daily[["_date","_label"]].drop_duplicates()
+                     .set_index("_label")["_date"])
+        _is_weekend = {lbl: _date_map[lbl].weekday() >= 5 for lbl in label_order}
+
+        fig1.add_trace(go.Bar(
+            x=label_order, y=list(_day_regular),
+            name="Regular",
+            marker=dict(color=[
+                "#94a3b8" if _is_weekend.get(l) else "#3b82f6" for l in label_order
+            ], line=dict(color="white", width=1)),
+            text=[str(v) if v else "" for v in _day_regular],
+            textposition="inside",
+            textfont=dict(color="white", size=11, family="Arial Black"),
+            hovertemplate="<b>%{x}</b><br>Regular: %{y}<extra></extra>"
+        ))
+        fig1.add_trace(go.Bar(
+            x=label_order, y=list(_day_critical),
+            name="Critical",
+            marker=dict(color=[
+                "#cbd5e1" if _is_weekend.get(l) else "#ef4444" for l in label_order
+            ], line=dict(color="white", width=1)),
+            text=[str(v) if v else "" for v in _day_critical],
+            textposition="inside",
+            textfont=dict(color="white", size=11, family="Arial Black"),
+            hovertemplate="<b>%{x}</b><br>Critical: %{y}<extra></extra>"
+        ))
+
+        # Annotate any weekend bars so it's obvious
+        for lbl in label_order:
+            if _is_weekend.get(lbl):
+                fig1.add_annotation(
+                    x=lbl, y=0, text="weekend", showarrow=False,
+                    yanchor="bottom", font=dict(size=8, color="#94a3b8"),
+                    yshift=4
+                )
+
+    fig1.update_layout(
+        height=380, barmode="stack",
+        xaxis_title="<b>Date (school days only)</b>", yaxis_title="<b>Incident Count</b>",
+        plot_bgcolor="#f8fafc", paper_bgcolor="white",
+        font=dict(color="#0f172a", size=12, family="Arial"),
+        yaxis=dict(tickmode="linear", tick0=0, dtick=1, gridcolor="#e2e8f0",
+                   showline=True, linewidth=2, linecolor="#cbd5e1"),
+        xaxis=dict(
+            type="category",
+            tickangle=-40 if len(label_order) > 10 else -25,
+            tickfont=dict(size=10 if len(label_order) > 15 else 11, color="#334155"),
+            showline=True, linewidth=2, linecolor="#cbd5e1",
+        ),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        hovermode='x unified')
+        bargap=0.25,
+        margin=dict(b=60),
+    )
     st.plotly_chart(fig1, use_container_width=True)
     if not quick_only_df.empty and not crit_only_df.empty:
         escalation_rate = (len(crit_only_df) / len(quick_only_df)) * 100 if len(quick_only_df) > 0 else 0
@@ -2613,7 +2676,7 @@ def render_student_analysis_page():
     # ══════════════════════════════════════════════════════════════════════════
     # CLINICAL HYPOTHESIS
     # ══════════════════════════════════════════════════════════════════════════
-    st.markdown("### 🔬 Clinical Analysis & Functional Hypothesis")
+    st.markdown("### 🔬 Behaviour Analysis & Functional Hypothesis")
     hyp_data = generate_strong_clinical_hypothesis(
         full_df, top_ant, top_beh, top_loc, top_session, student["name"]
     )
@@ -2644,7 +2707,7 @@ def render_student_analysis_page():
 
     st.markdown("<div style='height:.4rem'></div>", unsafe_allow_html=True)
     dc4, dc5, dc6 = st.columns(3)
-    _card(dc4, "Clinical Behaviour Label",  top_beh_clinical,                          "#f0fdf4","#22c55e","#15803d")
+    _card(dc4, "Behaviour Label",  top_beh_clinical,                          "#f0fdf4","#22c55e","#15803d")
     _card(dc5, "Primary Antecedent",        detail.get("Primary Antecedent","—"),       "#fdf4ff","#8b5cf6","#7c3aed")
     _card(dc6, "Risk Indicator",            detail.get("Risk Indicator","—"),           "#fff7ed","#f97316","#c2410c")
 
