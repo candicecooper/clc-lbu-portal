@@ -141,11 +141,15 @@ def load_all_obs(student_id: str) -> pd.DataFrame:
 
 def upsert_obs(student_id, student_name, sel_date, sel_day, sel_time, activity,
                value, beh_index, beh_label, behaviours_str, existing_id=None) -> bool:
-    """Insert a new observation or update an existing one."""
+    """Insert a new observation or update an existing one.
+    Falls back to a minimal row if the behaviour_index/label columns don't exist yet.
+    Stores any error in session state so it survives st.rerun()."""
     sb = get_sb()
     if not sb:
-        st.warning("Supabase not configured.")
+        st.session_state["_spt_last_error"] = "Supabase not configured — check secrets."
         return False
+
+    # Full row including new columns
     row = {
         "student_id":        student_id,
         "student_name":      student_name,
@@ -154,11 +158,15 @@ def upsert_obs(student_id, student_name, sel_date, sel_day, sel_time, activity,
         "time_slot":         sel_time,
         "activity":          activity,
         "value":             value,
-        "behaviour_index":   beh_index,       # 0 or 1
-        "behaviour_label":   beh_label,       # the text of this behaviour
+        "behaviour_index":   beh_index,
+        "behaviour_label":   beh_label,
         "target_behaviours": behaviours_str,
         "created_by":        get_staff_name(),
     }
+    # Minimal row — used as fallback if new columns not yet added via SQL
+    row_minimal = {k: v for k, v in row.items()
+                   if k not in ("behaviour_index", "behaviour_label")}
+
     try:
         if existing_id:
             sb.table("scatter_plot_observations").update(
@@ -166,9 +174,28 @@ def upsert_obs(student_id, student_name, sel_date, sel_day, sel_time, activity,
             ).eq("id", existing_id).execute()
         else:
             sb.table("scatter_plot_observations").insert(row).execute()
+        st.session_state.pop("_spt_last_error", None)
         return True
     except Exception as e:
-        st.error(f"Save failed: {e}")
+        err_str = str(e)
+        # If error is about missing columns, retry with minimal row
+        if "behaviour_index" in err_str or "behaviour_label" in err_str or "column" in err_str.lower():
+            try:
+                if existing_id:
+                    sb.table("scatter_plot_observations").update(
+                        {"value": value}
+                    ).eq("id", existing_id).execute()
+                else:
+                    sb.table("scatter_plot_observations").insert(row_minimal).execute()
+                st.session_state["_spt_last_error"] = (
+                    "⚠️ Saved without behaviour tracking — run scatter_v4_schema.sql "
+                    "in Supabase to enable full 2-behaviour support."
+                )
+                return True
+            except Exception as e2:
+                st.session_state["_spt_last_error"] = f"Save failed: {e2}"
+                return False
+        st.session_state["_spt_last_error"] = f"Save failed: {err_str}"
         return False
 
 
@@ -331,6 +358,17 @@ with t_record:
         if st.button("Today", use_container_width=True, key="spt_today"):
             ss.spt_week_start = this_week; st.rerun()
 
+    # Show any persistent save error (survives rerun)
+    _err = st.session_state.get("_spt_last_error")
+    if _err:
+        if _err.startswith("⚠️"):
+            st.warning(_err)
+        else:
+            st.error(_err)
+        if st.button("Dismiss", key="spt_dismiss_err"):
+            st.session_state.pop("_spt_last_error", None)
+            st.rerun()
+
     # Load week data
     week_df = load_week_obs(student_id, week_start, week_end)
 
@@ -411,21 +449,21 @@ with t_record:
             )
         with rc2:
             if st.button("1", key=f"spt_b{bi}_1", use_container_width=True, type="primary"):
-                upsert_obs(student_id, student_name, sel_date, sel_day,
+                ok = upsert_obs(student_id, student_name, sel_date, sel_day,
                            sel_time, sel_activity, "1", bi, beh,
                            " | ".join(behaviours),
                            existing_id=existing["id"] if existing else None)
-                st.rerun()
+                st.rerun()  # always rerun — error stored in session state if failed
         with rc3:
             if st.button("2", key=f"spt_b{bi}_2", use_container_width=True):
-                upsert_obs(student_id, student_name, sel_date, sel_day,
+                ok = upsert_obs(student_id, student_name, sel_date, sel_day,
                            sel_time, sel_activity, "2", bi, beh,
                            " | ".join(behaviours),
                            existing_id=existing["id"] if existing else None)
                 st.rerun()
         with rc4:
             if st.button("X", key=f"spt_b{bi}_x", use_container_width=True):
-                upsert_obs(student_id, student_name, sel_date, sel_day,
+                ok = upsert_obs(student_id, student_name, sel_date, sel_day,
                            sel_time, sel_activity, "X", bi, beh,
                            " | ".join(behaviours),
                            existing_id=existing["id"] if existing else None)
