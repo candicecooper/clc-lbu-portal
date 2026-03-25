@@ -122,6 +122,40 @@ ANTECEDENTS = [
     "Other - unstructured time",
     "Other - access denied"
 ]
+# ── Clinical behaviour terminology ───────────────────────────────────────────
+CLINICAL_BEHAVIOUR_MAP = {
+    "Verbal Refusal":       "Non-compliance with adult directives",
+    "Elopement":            "Unsanctioned departure from a supervised area (elopement)",
+    "Property Destruction": "Deliberate destruction or damage of property",
+    "Aggression (Peer)":    "Physical aggression directed toward a peer",
+    "Aggression (Adult)":   "Physical aggression directed toward an adult",
+    "Self-Harm":            "Self-injurious behaviour",
+    "Verbal Aggression":    "Antisocial verbal outbursts directed toward others",
+    "Other":                "Unclassified behaviour of concern",
+}
+
+def get_clinical_behaviour(raw: str) -> str:
+    """Return clinical/professional terminology for a behaviour label."""
+    if not raw:
+        return raw
+    mapped = CLINICAL_BEHAVIOUR_MAP.get(raw)
+    if mapped:
+        return mapped
+    lower = raw.lower()
+    if any(w in lower for w in ["hit","kick","punch","push","threw","throw","attack","physical"]):
+        return "Physical aggression"
+    if any(w in lower for w in ["yell","scream","shout","growl","swear","curse","verbal","shout"]):
+        return "Antisocial verbal outburst directed toward others"
+    if any(w in lower for w in ["run","elope","left","fled","exit","bolt","absconding"]):
+        return "Unsanctioned departure from a supervised area"
+    if any(w in lower for w in ["destroy","damage","broke","smash","threw object"]):
+        return "Deliberate destruction or damage of property"
+    if any(w in lower for w in ["refuse","refus","non-compli","defian","wouldn't","won't"]):
+        return "Non-compliance with adult directives"
+    if any(w in lower for w in ["self","harm","bite self","scratch self","hit self","head bang"]):
+        return "Self-injurious behaviour"
+    return raw
+
 INTERVENTIONS = ["CPI Supportive stance", "Offered break", "Reduced demand", "Provided choices",
                 "Removed audience", "Visual supports", "Co-regulation", "Prompted coping skill", "Redirection"]
 LOCATIONS = ["JP Classroom", "PY Classroom", "SY Classroom", "Playground", "Library", "Office", "Student Gate", "Toilets"]
@@ -247,6 +281,79 @@ def format_hypothesis(hyp):
         return hyp
     else:
         return "Unknown"
+
+def generate_strong_clinical_hypothesis(full_df, top_ant, top_beh, top_loc, top_session, student_name):
+    """Return a dict with a detailed evidence-based functional hypothesis in clinical language."""
+    import pandas as _pd
+    total = len(full_df)
+    if total == 0:
+        return {"summary": "Insufficient data to generate hypothesis.", "detail": {}}
+
+    ant_lower = str(top_ant).lower()
+    beh_clinical = get_clinical_behaviour(top_beh)
+
+    escape_kw  = ["instruction","demand","task","transition","work","difficult","non-preferred",
+                  "literacy","maths","wait","routine","independently","interrupted","finish","teacher coming"]
+    access_kw  = ["attention","denied","device","preferred","competition","feedback","tangible",
+                  "item","toy","food","want","access"]
+    sensory_kw = ["sensory","noise","loud","bright","crowded","medication","hungry","thirsty",
+                  "movement","no medication"]
+
+    escape_score  = sum(1 for w in escape_kw  if w in ant_lower)
+    access_score  = sum(1 for w in access_kw  if w in ant_lower)
+    sensory_score = sum(1 for w in sensory_kw if w in ant_lower)
+
+    if sensory_score > 0 and sensory_score >= escape_score and sensory_score >= access_score:
+        function_verb = "escape or reduce"
+        function_item = "sensory discomfort or physiological dysregulation"
+        bsem_domain   = "Body domain (regulation)"
+        hyp_function  = "To escape / sensory"
+    elif escape_score >= access_score:
+        function_verb = "escape or avoid"
+        function_item = "the instructional demand, task, or transition"
+        bsem_domain   = "Stamina domain (task persistence)"
+        hyp_function  = "To avoid / activity"
+    else:
+        function_verb = "gain access to"
+        function_item = "a preferred item, activity, or adult/peer attention"
+        bsem_domain   = "Relationship domain (connection)"
+        hyp_function  = "To get / attention or tangible"
+
+    if "peer"       in ant_lower: ant_category = "peer-related interactions"
+    elif "transition" in ant_lower: ant_category = "transitional demands"
+    elif "instruction" in ant_lower or "demand" in ant_lower: ant_category = "instructional demands"
+    elif "sensory"  in ant_lower or "noise" in ant_lower: ant_category = "sensory-environmental factors"
+    elif "engagement" in ant_lower or "task" in ant_lower: ant_category = "academic engagement demands"
+    else: ant_category = "contextual antecedent triggers"
+
+    has_type = "incident_type" in full_df.columns
+    crit_cnt = int(len(full_df[full_df["incident_type"] == "Critical"])) if has_type else 0
+    crit_pct = int(crit_cnt / total * 100) if total else 0
+    avg_sev  = round(float(full_df["severity"].mean()), 1) if "severity" in full_df.columns else 0
+
+    summary = (
+        f"Based on analysis of {total} recorded incidents, it is hypothesised that "
+        f"{student_name}'s {beh_clinical.lower()} functions primarily to {function_verb} "
+        f"{function_item}. The behaviour is most consistently preceded by {ant_category}, "
+        f"occurring predominantly during the {top_session.lower()} session "
+        f"in {top_loc}. From a trauma-informed and Berry Street Education Model perspective, "
+        f"this behaviour constitutes a stress response — a communicative act signalling an unmet "
+        f"need within the {bsem_domain} — rather than wilful non-compliance. "
+        f"A mean incident severity of {avg_sev}/5 with a {crit_pct}% critical escalation rate "
+        f"indicates that antecedent-stage intervention is the highest clinical priority. "
+        f"Proactive, function-based supports targeted at {ant_category} are recommended."
+    )
+
+    detail = {
+        "Behavioural Function":     hyp_function,
+        "Primary Antecedent":       ant_category.capitalize(),
+        "BSEM Domain Priority":     bsem_domain.capitalize(),
+        "Clinical Behaviour Label": beh_clinical,
+        "Peak Context":             f"{top_session} session · {top_loc}",
+        "Risk Indicator":           f"Mean severity {avg_sev}/5 · {crit_pct}% critical escalation",
+    }
+    return {"summary": summary, "detail": detail}
+
 
 def show_severity_guide():
     with st.expander("📊 Behaviour Severity Continuum Guide", expanded=False):
@@ -466,10 +573,10 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         p_kf.paragraph_format.space_before = Pt(3)
         arun(p_kf, "KEY FINDINGS", bold=True, size=16, color=TEAL_HEX)
         for label, val in [
-            ("Primary behaviour of concern",     top_beh),
+            ("Primary behaviour of concern",     get_clinical_behaviour(top_beh)),
             ("Most common trigger / antecedent", top_ant),
             ("Hotspot location",                 top_loc),
-            ("Peak time of day",                 top_session),
+            ("Peak time of day",                 f"{top_session} (before 11am / 11am–13:30 / after 13:31)"),
         ]:
             p = kf_c.add_paragraph()
             p.paragraph_format.space_before = Pt(2)
@@ -554,9 +661,9 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         p_sp2 = doc.add_paragraph(); p_sp2.paragraph_format.space_after = Pt(4)
 
         SESSION_LABELS = {
-            'Morning':   'Morning\n9:00am – 11:00am',
-            'Middle':    'Middle of day\n11:00am – 1:00pm',
-            'Afternoon': 'Afternoon\n1:00pm – 3:00pm',
+            'Morning':   'Morning\nBefore 11:00am',
+            'Middle':    'Middle of day\n11:00am – 1:30pm',
+            'Afternoon': 'Afternoon\n1:31pm – 2:45pm',
         }
         session_order = ['Morning', 'Middle', 'Afternoon']
         session_counts = full_df["session"].value_counts().reindex(session_order, fill_value=0)
@@ -773,6 +880,105 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             p.paragraph_format.space_after  = Pt(2)
             arun(p, fw_name + "\n", bold=True, size=14, color=GREY_DARK)
             arun(p, fw_desc, size=13, color="444444")
+
+        doc.add_paragraph().paragraph_format.space_after = Pt(5)
+
+        section_header(doc, "TEACHING LENS — RECOMMENDATIONS")
+        p_tl = doc.add_paragraph(); p_tl.paragraph_format.space_after = Pt(4)
+
+        tl_tbl = doc.add_table(rows=2, cols=2); tl_tbl.style = 'Table Grid'
+        tl_data = [
+            ("📚 Curriculum & Pedagogy", [
+                f"Deliver clear, single-step instructions with visual supports — avoid multi-part directives during the {top_session} session.",
+                f"Scaffold tasks into small, achievable components with explicit success criteria before engaging in '{wrap_labels([top_ant],50)[0]}'-type activities.",
+                "Embed student choice within the curriculum (topic, modality, sequence) to maintain agency and reduce escape-motivated behaviour.",
+                "Apply strength-based entry points — begin all tasks at a mastery level before incrementally increasing demand.",
+                "Use pre-teaching and content priming before transitions or cognitively demanding tasks.",
+                "Implement flexible, low-stakes assessment to reduce evaluation-related anxiety as a trigger.",
+            ]),
+            ("🗂️ Structure & Routines", [
+                f"Display a visual daily schedule and review it collaboratively at the start of the {top_session} session.",
+                "Provide 2-minute transition warnings using both verbal and visual cues before all activity changes.",
+                f"Strategic seating in {top_loc} — close to support adult, away from high-traffic and peer-conflict areas.",
+                "Explicitly teach and practise a Help Card or Break Card system during calm, low-demand times.",
+                "Use errorless learning techniques — engineer early task success before fading prompts.",
+                "Deliver all corrections privately to preserve dignity and avoid public escalation.",
+            ]),
+            ("📈 SMART Teaching Goal", [
+                f"Over 5 school weeks, {student['name']} will independently use a help-seeking strategy in 4/5 observed opportunities during the {top_session} session.",
+                "Measurement: daily staff tally sheet. Baseline data collected in Week 1 before intervention commences in Week 2.",
+                f"Mid-point review at Week 3; end-point review at Week 5 against baseline frequency of {get_clinical_behaviour(top_beh).lower()}.",
+            ]),
+            ("🎯 Implementation Notes", [
+                "All strategies should be implemented consistently by all staff across all settings.",
+                "Data collection must be maintained to evaluate effectiveness and adjust strategies as needed.",
+                "Strategies are grounded in Applied Behaviour Analysis (ABA) and Berry Street Education Model frameworks.",
+                "Review Teaching Goal progress at the next scheduled case review meeting.",
+            ]),
+        ]
+        for row_idx, (hdr_text, items) in enumerate(tl_data):
+            row = tl_tbl.rows[row_idx // 2].cells[row_idx % 2] if row_idx < 4 else None
+            if row_idx < 4:
+                set_bg(row, TEAL_LIGHT if row_idx % 2 == 0 else AMBER_LIGHT)
+                set_borders(row, TEAL_HEX)
+                row.paragraphs[0].clear()
+                p = row.paragraphs[0]
+                p.paragraph_format.space_before = Pt(2)
+                arun(p, hdr_text + "\n", bold=True, size=15, color=GREY_DARK)
+                for item in items:
+                    pi = row.add_paragraph()
+                    pi.paragraph_format.space_before = Pt(1)
+                    pi.paragraph_format.space_after  = Pt(1)
+                    arun(pi, f"• {item}", size=13)
+
+        doc.add_paragraph().paragraph_format.space_after = Pt(5)
+
+        section_header(doc, "SUPPORT LENS — RECOMMENDATIONS")
+        p_sl = doc.add_paragraph(); p_sl.paragraph_format.space_after = Pt(4)
+
+        sl_tbl = doc.add_table(rows=2, cols=2); sl_tbl.style = 'Table Grid'
+        sl_data = [
+            ("🧠 Regulation & Sensory", [
+                f"Incorporate a sensory diet before the {top_session} session — movement break, heavy work, or proprioceptive input to prepare the nervous system.",
+                "Co-regulate with a key adult using CPI Supportive Stance (low, slow, sideways) as the default interaction posture.",
+                f"Develop a personalised Window of Tolerance profile for {student['name']} — document early warning signs, escalation cues, and effective de-escalation strategies.",
+                "Teach and embed regulation tools during calm states; cue their use proactively at Level 2 before escalation occurs.",
+                "Monitor medication timing and note correlations with incident frequency in the peak session.",
+            ]),
+            ("🛡️ Antecedent Prevention", [
+                f"Conduct an environmental audit of {top_loc} — review and modify sensory load, spatial arrangement, and proximity to triggers.",
+                "Implement pre-correction immediately before high-risk contexts — calm reminder of expectations and available supports.",
+                f"Conduct Functional Communication Training (FCT) — teach a socially appropriate replacement behaviour serving the same function as {get_clinical_behaviour(top_beh).lower()}.",
+                "Apply structured peer interaction protocols — pre-assign groupings and roles; avoid unstructured proximity where peer triggers are present.",
+                "Develop a Crisis Safety Plan with Level 3+ protocols, staff roles, and a post-incident restorative repair sequence.",
+            ]),
+            ("🔄 Post-Incident Repair", [
+                "Restore the relationship before re-engaging with academic demands — never return to tasks while the student remains dysregulated.",
+                "Conduct a brief, non-punitive restorative conversation once regulated — focus on impact and repair.",
+                "Complete a structured staff debrief after every Level 3+ incident.",
+                "Maintain proactive, strengths-focused communication with parent/carer — not solely incident-driven contact.",
+            ]),
+            ("📅 Case Management", [
+                f"Schedule a formal case review within {'2 weeks' if risk_score >= 60 else '4 weeks' if risk_score >= 30 else '6 weeks'} — review BAP, update strategies, and set new SMART goals.",
+                "Consult with allied health professionals (OT, Speech, Psych) if sensory, communication, or mental health factors are contributing.",
+                f"Ensure all staff working with {student['name']} are briefed on the current BAP and implementing strategies consistently.",
+                "Formally update the Behaviour Support Plan each term, or after any critical incident.",
+            ]),
+        ]
+        for row_idx, (hdr_text, items) in enumerate(sl_data):
+            if row_idx < 4:
+                row = sl_tbl.rows[row_idx // 2].cells[row_idx % 2]
+                set_bg(row, LIGHT_GREY if row_idx % 2 == 0 else WHITE)
+                set_borders(row, TEAL_HEX)
+                row.paragraphs[0].clear()
+                p = row.paragraphs[0]
+                p.paragraph_format.space_before = Pt(2)
+                arun(p, hdr_text + "\n", bold=True, size=15, color=GREY_DARK)
+                for item in items:
+                    pi = row.add_paragraph()
+                    pi.paragraph_format.space_before = Pt(1)
+                    pi.paragraph_format.space_after  = Pt(1)
+                    arun(pi, f"• {item}", size=13)
 
         doc.add_paragraph().paragraph_format.space_after = Pt(5)
 
@@ -1370,7 +1576,14 @@ def get_student(sid):
     return next((s for s in st.session_state.students if s["id"] == sid), None)
 
 def get_session_from_time(t):
-    return "Morning" if t.hour < 11 else "Middle" if t.hour < 13 else "Afternoon"
+    """Morning = before 11:00 | Middle = 11:00–13:30 | Afternoon = 13:31+"""
+    total_mins = t.hour * 60 + t.minute
+    if total_mins < 11 * 60:
+        return "Morning"
+    elif total_mins <= 13 * 60 + 30:
+        return "Middle"
+    else:
+        return "Afternoon"
 
 def generate_mock_incidents(n=70):
     incidents = []
@@ -2163,8 +2376,17 @@ def render_student_analysis_page():
         full_df["time"] = full_df["time"].fillna("09:00:00")
     full_df["hour"] = pd.to_datetime(full_df["time"], format="%H:%M:%S", errors="coerce").dt.hour.fillna(9).astype(int)
     full_df["day_of_week"] = full_df["date_parsed"].dt.day_name()
-    if "session" not in full_df.columns:
-        full_df["session"] = full_df["hour"].apply(lambda h: "Morning" if h < 11 else "Middle" if h < 13 else "Afternoon")
+    # Always recompute session using precise time boundaries
+    def _session_precise(t_str):
+        try:
+            parts = str(t_str).split(":")
+            tm = int(parts[0]) * 60 + int(parts[1])
+            if tm < 11 * 60: return "Morning"
+            elif tm <= 13 * 60 + 30: return "Middle"
+            else: return "Afternoon"
+        except:
+            return "Morning"
+    full_df["session"] = full_df["time"].apply(_session_precise)
 
     quick_only_df = full_df[full_df['incident_type'] == 'Quick'].copy() if 'Quick' in full_df['incident_type'].values else pd.DataFrame()
     crit_only_df = full_df[full_df['incident_type'] == 'Critical'].copy() if 'Critical' in full_df['incident_type'].values else pd.DataFrame()
@@ -2336,9 +2558,9 @@ def render_student_analysis_page():
 
     st.markdown("### ⏰ Time of Day Patterns")
     SESSION_DISPLAY = {
-        'Morning':   'Morning<br>(9:00am – 11:00am)',
-        'Middle':    'Middle<br>(11:00am – 1:00pm)',
-        'Afternoon': 'Afternoon<br>(1:00pm – 3:00pm)',
+        'Morning':   'Morning<br>(Before 11:00am)',
+        'Middle':    'Middle of day<br>(11:00am – 1:30pm)',
+        'Afternoon': 'Afternoon<br>(1:31pm – 2:45pm)',
     }
     session_order = ['Morning', 'Middle', 'Afternoon']
     quick_session_counts = [len(quick_only_df[quick_only_df["session"] == s]) if not quick_only_df.empty and 'session' in quick_only_df.columns else 0 for s in session_order]
@@ -2372,11 +2594,12 @@ def render_student_analysis_page():
     st.plotly_chart(fig7, use_container_width=True)
     st.markdown("---")
 
-    st.markdown("### 🧠 Summary")
+    # ── Derived metrics (used in multiple sections below) ─────────────────────
     top_beh     = full_df["behaviour_type"].mode()[0] if len(full_df) > 0 else "Unknown"
     top_ant     = full_df["antecedent"].mode()[0] if len(full_df) > 0 else "Unknown"
     top_loc     = full_df["location"].mode()[0] if len(full_df) > 0 else "Unknown"
     top_session = full_df["session"].mode()[0] if len(full_df) > 0 else "Unknown"
+    top_beh_clinical = get_clinical_behaviour(top_beh)
 
     recent = full_df.tail(7)
     risk_score = min(100, int(
@@ -2385,26 +2608,262 @@ def render_student_analysis_page():
         (len(full_df[full_df["incident_type"] == "Critical"]) / len(full_df) * 50)
     ))
     risk_level = "LOW" if risk_score < 30 else "MODERATE" if risk_score < 60 else "HIGH"
+    risk_color = "#10b981" if risk_level == "LOW" else "#f59e0b" if risk_level == "MODERATE" else "#ef4444"
 
-    st.info(f"""
-**Key Patterns Identified:**
-- Primary behaviour: **{top_beh}**
-- Main trigger: **{top_ant}**
-- Hotspot location: **{top_loc}**
-- Peak time: **{top_session}**
-- Risk Level: **{risk_level}** ({risk_score}/100)
+    # ══════════════════════════════════════════════════════════════════════════
+    # CLINICAL HYPOTHESIS
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("### 🔬 Clinical Analysis & Functional Hypothesis")
+    hyp_data = generate_strong_clinical_hypothesis(
+        full_df, top_ant, top_beh, top_loc, top_session, student["name"]
+    )
+    st.markdown(
+        "<div style='background:#f0fdf4;border:1.5px solid #16a34a;border-radius:10px;"
+        "padding:1rem 1.25rem;margin-bottom:1rem;'>"
+        "<div style='font-weight:700;color:#15803d;font-size:1rem;margin-bottom:.5rem;'>"
+        "📋 Functional Hypothesis Statement</div>"
+        f"<p style='color:#1e293b;font-size:.88rem;line-height:1.65;margin:0;'>{hyp_data['summary']}</p>"
+        "</div>",
+        unsafe_allow_html=True
+    )
 
-**Berry Street Focus:** Body (regulation) and Relationship (connection) domains are foundation.
-    """)
+    detail = hyp_data["detail"]
+    dc1, dc2, dc3 = st.columns(3)
+    def _card(col, title, val, bg, border, tc):
+        col.markdown(
+            f"<div style='background:{bg};border-left:3px solid {border};"
+            f"padding:.55rem .75rem;border-radius:0 6px 6px 0;height:100%;'>"
+            f"<div style='font-size:.7rem;font-weight:700;color:{tc};text-transform:uppercase;"
+            f"letter-spacing:.04em;'>{title}</div>"
+            f"<div style='font-size:.84rem;color:#1e293b;margin-top:.2rem;line-height:1.4;'>{val}</div></div>",
+            unsafe_allow_html=True
+        )
+    _card(dc1, "Behavioural Function",    detail.get("Behavioural Function","—"),    "#eff6ff","#3b82f6","#1d4ed8")
+    _card(dc2, "BSEM Domain Priority",    detail.get("BSEM Domain Priority","—"),    "#fef9c3","#eab308","#a16207")
+    _card(dc3, "Risk Level",              f"{risk_level} ({risk_score}/100)",         f"{risk_color}22",risk_color,risk_color)
 
-    st.success(f"""
-**Evidence-Based Recommendations:**
+    st.markdown("<div style='height:.4rem'></div>", unsafe_allow_html=True)
+    dc4, dc5, dc6 = st.columns(3)
+    _card(dc4, "Clinical Behaviour Label",  top_beh_clinical,                          "#f0fdf4","#22c55e","#15803d")
+    _card(dc5, "Primary Antecedent",        detail.get("Primary Antecedent","—"),       "#fdf4ff","#8b5cf6","#7c3aed")
+    _card(dc6, "Risk Indicator",            detail.get("Risk Indicator","—"),           "#fff7ed","#f97316","#c2410c")
 
-**1. Body Domain:** Regulated start before {top_session}, breathing exercises, movement breaks
-**2. Relationship Domain:** Key adult check-in, acknowledgment of feelings, co-regulation
-**3. Stamina Domain:** Teach help-seeking, practice requesting breaks
-**4. SMART Goal:** Over 5 weeks, use help-seeking strategy in 4/5 opportunities
-    """)
+    st.markdown("---")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ANTECEDENT CATEGORY BREAKDOWN CHART
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("### 📂 Antecedent Category Analysis")
+    st.caption("Incidents grouped by antecedent category to identify the primary trigger domain.")
+
+    def _cat(ant):
+        a = str(ant).lower()
+        if a.startswith("---"): return None
+        if "peer" in a: return "Peer"
+        if "transition" in a: return "Transition"
+        if "instruction" in a or "demand" in a or "following" in a: return "Instructions"
+        if any(w in a for w in ["engagement","task","wait","routine","interrupt","finish",
+                                  "literacy","maths","learning","work independently","difficult"]): return "Engagement"
+        if any(w in a for w in ["sensory","noise","loud","bright","crowded","medication",
+                                  "hungry","thirsty","movement break"]): return "Sensory"
+        return "Other"
+
+    full_df["_ant_cat"] = full_df["antecedent"].apply(_cat)
+    quick_cat  = full_df[full_df.get("incident_type", "Quick") == "Quick"]["_ant_cat"].dropna() if "incident_type" in full_df.columns else full_df["_ant_cat"].dropna()
+    crit_cat   = full_df[full_df.get("incident_type", "Quick") == "Critical"]["_ant_cat"].dropna() if "incident_type" in full_df.columns else pd.Series(dtype=str)
+
+    cat_order  = ["Peer","Transition","Instructions","Engagement","Sensory","Other"]
+    cat_colors = {"Peer":"#3b82f6","Transition":"#f59e0b","Instructions":"#ef4444",
+                  "Engagement":"#8b5cf6","Sensory":"#10b981","Other":"#64748b"}
+
+    fig_cat = go.Figure()
+    q_counts = quick_cat.value_counts() if len(quick_cat) else pd.Series(dtype=int)
+    c_counts = crit_cat.value_counts()  if len(crit_cat)  else pd.Series(dtype=int)
+    for cat in cat_order:
+        qv = int(q_counts.get(cat, 0))
+        cv = int(c_counts.get(cat, 0))
+        if qv + cv == 0: continue
+        fig_cat.add_trace(go.Bar(x=[cat], y=[qv], name="Regular",
+            marker=dict(color=cat_colors[cat], opacity=0.7),
+            text=[qv] if qv else [""], textposition="inside",
+            textfont=dict(color="white", size=10), showlegend=(cat == cat_order[0])))
+        fig_cat.add_trace(go.Bar(x=[cat], y=[cv], name="Critical",
+            marker=dict(color=cat_colors[cat]),
+            text=[cv] if cv else [""], textposition="inside",
+            textfont=dict(color="white", size=10, family="Arial Black"),
+            showlegend=(cat == cat_order[0])))
+    fig_cat.update_layout(
+        height=340, barmode="stack",
+        xaxis_title="<b>Antecedent Category</b>", yaxis_title="<b>Incidents</b>",
+        plot_bgcolor="#f8fafc", paper_bgcolor="white",
+        font=dict(color="#0f172a", size=12, family="Arial"),
+        yaxis=dict(tickmode="linear", tick0=0, dtick=1, gridcolor="#e2e8f0",
+                   showline=True, linewidth=2, linecolor="#cbd5e1"),
+        xaxis=dict(showline=True, linewidth=2, linecolor="#cbd5e1"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(t=20, b=10)
+    )
+    st.plotly_chart(fig_cat, use_container_width=True)
+
+    all_cats = pd.concat([quick_cat, crit_cat]) if len(crit_cat) else quick_cat
+    if len(all_cats):
+        top_cat     = all_cats.value_counts().index[0]
+        top_cat_pct = int(all_cats.value_counts().iloc[0] / len(all_cats) * 100)
+        st.caption(f"📌 **{top_cat}** is the dominant antecedent category ({top_cat_pct}% of all incidents) — "
+                   f"this is the highest-priority domain for proactive, antecedent-stage intervention.")
+
+    # Hypothesis function bar
+    st.markdown("#### 🎯 Behavioural Function Distribution")
+    if "hypothesis_function" in full_df.columns:
+        fn_counts = full_df["hypothesis_function"].dropna().value_counts()
+        if not fn_counts.empty:
+            fig_fn = go.Figure()
+            fig_fn.add_trace(go.Bar(
+                y=list(fn_counts.index), x=list(fn_counts.values), orientation="h",
+                marker=dict(color=["#3b82f6","#ef4444","#10b981","#f59e0b","#8b5cf6"][:len(fn_counts)]),
+                text=list(fn_counts.values), textposition="outside",
+                textfont=dict(size=11, family="Arial Black", color="#1e293b")
+            ))
+            fig_fn.update_layout(
+                height=max(180, len(fn_counts)*55), showlegend=False,
+                xaxis_title="<b>Incidents</b>",
+                plot_bgcolor="#f8fafc", paper_bgcolor="white",
+                font=dict(color="#0f172a", size=11, family="Arial"),
+                xaxis=dict(tickmode="linear", tick0=0, dtick=1, gridcolor="#e2e8f0",
+                           showline=True, linewidth=2, linecolor="#cbd5e1"),
+                yaxis=dict(showline=True, linewidth=2, linecolor="#cbd5e1", automargin=True),
+                margin=dict(t=10, b=10, l=10, r=30)
+            )
+            st.plotly_chart(fig_fn, use_container_width=True)
+
+    st.markdown("---")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # TEACHING LENS
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("### 🎓 Teaching Lens — Recommendations")
+    st.caption("Strategies for educators to embed within the learning environment and curriculum delivery.")
+
+    tc1, tc2 = st.columns(2)
+    with tc1:
+        st.markdown(
+            "<div style='background:#eff6ff;border-radius:10px;padding:1rem 1.1rem;"
+            "border:1px solid #bfdbfe;height:100%;'>"
+            "<div style='font-weight:700;color:#1d4ed8;font-size:.93rem;margin-bottom:.6rem;'>"
+            "📚 Curriculum & Pedagogy</div>"
+            "<ul style='margin:0;padding-left:1.2rem;font-size:.84rem;color:#1e293b;line-height:1.85;'>"
+            f"<li>Deliver <strong>clear, single-step instructions</strong> supported by visual cues — avoid multi-part verbal directives, particularly during the {top_session} session</li>"
+            f"<li><strong>Scaffold tasks</strong> into small, achievable components with explicit success criteria before engaging in activities preceded by <em>{top_ant[:55]}...</em>-type triggers</li>"
+            "<li>Embed <strong>student choice</strong> within the curriculum (topic, modality, sequence) to maintain agency and reduce escape-motivated responding</li>"
+            "<li>Apply <strong>strength-based entry points</strong> — begin all tasks at a mastery level prior to incrementally increasing demand</li>"
+            "<li>Use <strong>pre-teaching and content priming</strong> before transitions or cognitively demanding activities</li>"
+            "<li>Implement <strong>flexible, low-stakes assessment</strong> to reduce evaluation-related anxiety as a trigger</li>"
+            "</ul></div>",
+            unsafe_allow_html=True
+        )
+    with tc2:
+        st.markdown(
+            "<div style='background:#f0fdf4;border-radius:10px;padding:1rem 1.1rem;"
+            "border:1px solid #bbf7d0;height:100%;'>"
+            "<div style='font-weight:700;color:#15803d;font-size:.93rem;margin-bottom:.6rem;'>"
+            "🗂️ Classroom Structure & Routines</div>"
+            "<ul style='margin:0;padding-left:1.2rem;font-size:.84rem;color:#1e293b;line-height:1.85;'>"
+            f"<li>Display a <strong>visual daily schedule</strong> with explicit markers for session changes — review it collaboratively at the start of the {top_session} session</li>"
+            "<li>Provide <strong>2-minute transition warnings</strong> before every activity change, using both verbal and visual cues</li>"
+            f"<li><strong>Strategic seating in {top_loc}</strong> — proximity to the support adult, away from high-traffic zones and peer conflict areas</li>"
+            "<li>Explicitly teach and practise a <strong>Help Card / Break Card system</strong> during calm, low-demand moments</li>"
+            "<li>Use <strong>errorless learning techniques</strong> — engineer early task success before fading support</li>"
+            "<li>Deliver all corrections <strong>privately and with dignity</strong> — provide face-saving exit options to avoid public escalation</li>"
+            "</ul></div>",
+            unsafe_allow_html=True
+        )
+
+    st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div style='background:#fef9c3;border-radius:10px;padding:.85rem 1.1rem;"
+        "border:1px solid #fde68a;margin-top:.35rem;'>"
+        "<div style='font-weight:700;color:#92400e;font-size:.93rem;margin-bottom:.4rem;'>📈 SMART Teaching Goal</div>"
+        f"<p style='margin:0;font-size:.84rem;color:#1e293b;line-height:1.6;'>"
+        f"Over the next <strong>5 school weeks</strong>, {student['name']} will independently use a help-seeking "
+        f"strategy (Help Card or calm verbal request) in <strong>4 out of 5 observed opportunities</strong> "
+        f"during the {top_session} session, as measured by a daily staff tally sheet. "
+        f"Baseline data will be collected in Week 1 before intervention commences in Week 2. "
+        f"Review at Week 3 (mid-point) and Week 5 (end-point) against the baseline frequency of {top_beh_clinical.lower()}."
+        f"</p></div>",
+        unsafe_allow_html=True
+    )
+
+    st.markdown("---")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SUPPORT LENS
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("### 🤝 Support Lens — Recommendations")
+    st.caption("Therapeutic and behavioural support strategies for the care team, allied health, and leadership.")
+
+    sc1, sc2 = st.columns(2)
+    with sc1:
+        st.markdown(
+            "<div style='background:#fdf4ff;border-radius:10px;padding:1rem 1.1rem;"
+            "border:1px solid #e9d5ff;height:100%;'>"
+            "<div style='font-weight:700;color:#7c3aed;font-size:.93rem;margin-bottom:.6rem;'>"
+            "🧠 Regulation & Sensory Strategies</div>"
+            "<ul style='margin:0;padding-left:1.2rem;font-size:.84rem;color:#1e293b;line-height:1.85;'>"
+            f"<li><strong>Sensory diet</strong> incorporated before the {top_session} session — movement break, heavy work activity, or proprioceptive input to prepare the nervous system for learning demands</li>"
+            "<li><strong>Co-regulation with a key adult</strong> — calm, attuned, and predictable adult presence; CPI Supportive Stance (low, slow, sideways) as the default interaction posture</li>"
+            f"<li>Develop a personalised <strong>Window of Tolerance profile</strong> for {student['name']} — document early warning signs, escalation cues, and individually effective de-escalation strategies</li>"
+            "<li><strong>Teach and embed regulation tools</strong> during calm states (breathing, grounding); cue their use proactively at Yellow/Level 2 — before escalation to Level 3+</li>"
+            "<li>If relevant, <strong>monitor medication timing</strong> and note correlations with incident frequency during the identified peak session</li>"
+            "</ul></div>",
+            unsafe_allow_html=True
+        )
+    with sc2:
+        st.markdown(
+            "<div style='background:#fff7ed;border-radius:10px;padding:1rem 1.1rem;"
+            "border:1px solid #fed7aa;height:100%;'>"
+            "<div style='font-weight:700;color:#c2410c;font-size:.93rem;margin-bottom:.6rem;'>"
+            "🛡️ Antecedent Prevention & Environment</div>"
+            "<ul style='margin:0;padding-left:1.2rem;font-size:.84rem;color:#1e293b;line-height:1.85;'>"
+            f"<li><strong>Environmental audit of {top_loc}</strong> — assess and modify sensory load (noise, lighting, crowding) and spatial arrangement to reduce ambient triggers</li>"
+            "<li><strong>Pre-correction</strong> immediately before known high-risk contexts — brief, calm reminder of expectations and available supports prior to entering the trigger environment</li>"
+            f"<li><strong>Functional Communication Training (FCT)</strong> — teach an efficient, socially appropriate replacement behaviour that serves the same function as {top_beh_clinical.lower()}, explicitly and systematically</li>"
+            "<li><strong>Structured peer interaction protocols</strong> — pre-assign groupings and roles where peer triggers are identified; avoid unstructured proximity</li>"
+            "<li>Develop a <strong>Crisis Safety Plan</strong> with Level 3+ protocols, designated staff roles, de-escalation sequence, and post-incident restorative repair procedure</li>"
+            "</ul></div>",
+            unsafe_allow_html=True
+        )
+
+    st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
+    sc3, sc4 = st.columns(2)
+    with sc3:
+        st.markdown(
+            "<div style='background:#fef2f2;border-radius:10px;padding:1rem 1.1rem;"
+            "border:1px solid #fecaca;height:100%;'>"
+            "<div style='font-weight:700;color:#dc2626;font-size:.93rem;margin-bottom:.6rem;'>"
+            "🔄 Post-Incident Repair & Restoration</div>"
+            "<ul style='margin:0;padding-left:1.2rem;font-size:.84rem;color:#1e293b;line-height:1.85;'>"
+            "<li><strong>Restore the relationship before re-engaging</strong> with academic demands — never return to learning tasks while the student remains dysregulated</li>"
+            "<li>Conduct a <strong>brief, non-punitive restorative conversation</strong> once fully regulated — focus on what happened, who was affected, and how to repair</li>"
+            "<li>Complete a structured <strong>staff debrief</strong> after every Level 3+ incident — review antecedents, early warning signs, and response effectiveness</li>"
+            "<li>Maintain <strong>proactive, strengths-focused communication</strong> with parent/carer — not solely incident-driven contact</li>"
+            "</ul></div>",
+            unsafe_allow_html=True
+        )
+    with sc4:
+        review_window = "2 weeks" if risk_level == "HIGH" else "4 weeks" if risk_level == "MODERATE" else "6 weeks"
+        st.markdown(
+            "<div style='background:#f0fdf4;border-radius:10px;padding:1rem 1.1rem;"
+            "border:1px solid #bbf7d0;height:100%;'>"
+            "<div style='font-weight:700;color:#15803d;font-size:.93rem;margin-bottom:.6rem;'>"
+            "📅 Case Management</div>"
+            "<ul style='margin:0;padding-left:1.2rem;font-size:.84rem;color:#1e293b;line-height:1.85;'>"
+            f"<li>Schedule a <strong>formal case review within {review_window}</strong> — review BAP, update function-based strategies, and set new SMART goals based on current data trends</li>"
+            "<li>Consult with relevant <strong>allied health professionals</strong> (OT, Speech Pathologist, Psychologist) if sensory, communication, or mental health factors are contributing</li>"
+            f"<li>Ensure <strong>all staff working with {student['name']}</strong> are fully briefed on the current BAP and implementing strategies consistently across all settings</li>"
+            "<li>Review and formally update the <strong>Behaviour Support Plan</strong> at minimum each term, or following any critical incident</li>"
+            "</ul></div>",
+            unsafe_allow_html=True
+        )
 
     st.markdown("---")
     st.markdown("### 🗑️ Delete an Incident")
