@@ -17,11 +17,11 @@ TEAL  = "#1A6B8A"
 AMBER = "#D4860A"
 GREEN = "#2E7D32"
 
-st.markdown(f"""
+st.markdown("""
 <style>
 [data-testid="stAppViewContainer"] { background:#f5f8fa; }
 .clc-header {
-    background:linear-gradient(135deg,{TEAL} 0%,{TEAL}BB 100%);
+    background:linear-gradient(135deg,#1A6B8A 0%,#1A6B8ABB 100%);
     color:white; padding:.85rem 1.5rem; border-radius:10px; margin-bottom:1rem;
 }
 .clc-header h2 { margin:0; font-size:1.25rem; }
@@ -29,7 +29,7 @@ st.markdown(f"""
 .grid-wrap { overflow-x:auto; border:1px solid #e2e8f0; border-radius:8px; margin-bottom:.6rem; }
 .sg { width:100%; border-collapse:collapse; font-size:.8rem; }
 .sg th {
-    background:{TEAL}; color:white; padding:.38rem .45rem;
+    background:#1A6B8A; color:white; padding:.38rem .45rem;
     text-align:center; font-size:.7rem; font-weight:600; white-space:nowrap;
 }
 .sg th.lh { text-align:left; min-width:50px; }
@@ -43,24 +43,24 @@ st.markdown(f"""
 .cx  { background:#f3f4f6; color:#9ca3af; font-weight:600; }
 .c0  { background:#f0fdf4; color:#15803d; font-weight:600; font-size:.72rem; }
 .ce  { background:white; color:#e2e8f0; font-size:.65rem; }
-.kpi { background:white; border-left:4px solid {TEAL}; border-radius:6px;
+.kpi { background:white; border-left:4px solid #1A6B8A; border-radius:6px;
         padding:.45rem .75rem; text-align:center; margin-bottom:.4rem; }
-.kpi .val { font-size:1.4rem; font-weight:700; color:{TEAL}; }
+.kpi .val { font-size:1.4rem; font-weight:700; color:#1A6B8A; }
 .kpi .lbl { font-size:.67rem; color:#666; }
-.kpi-a { border-color:{AMBER}; }
-.kpi-a .val { color:{AMBER}; }
-.kpi-g { border-color:{GREEN}; }
-.kpi-g .val { color:{GREEN}; }
+.kpi-a { border-color:#D4860A; }
+.kpi-a .val { color:#D4860A; }
+.kpi-g { border-color:#2E7D32; }
+.kpi-g .val { color:#2E7D32; }
 .period-badge {
-    display:inline-block; background:#EBF4F9; border:1px solid {TEAL}44;
+    display:inline-block; background:#EBF4F9; border:1px solid #1A6B8A44;
     border-radius:20px; padding:.2rem .75rem; font-size:.78rem;
-    font-weight:600; color:{TEAL}; margin-bottom:.5rem;
+    font-weight:600; color:#1A6B8A; margin-bottom:.5rem;
 }
 .period-active {
     background:#f0fdf4; border:2px solid #22c55e; border-radius:10px;
     padding:.6rem 1rem; margin-bottom:.75rem;
 }
-.ins { background:#FEF9EC; border-left:4px solid {AMBER}; border-radius:6px;
+.ins { background:#FEF9EC; border-left:4px solid #D4860A; border-radius:6px;
         padding:.45rem .85rem; font-size:.82rem; margin-bottom:.3rem; }
 .ins-ok { background:#F0FAF4; border-left:4px solid #2EA056; }
 .stu-card {
