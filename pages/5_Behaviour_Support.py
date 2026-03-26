@@ -1519,6 +1519,8 @@ def init_state():
     if "ci_draft_id" not in ss: ss.ci_draft_id = None
     if "ci_last_saved" not in ss: ss.ci_last_saved = None
     if "show_critical_prompt" not in ss: ss.show_critical_prompt = False
+    if "incident_prefill" not in ss: ss.incident_prefill = None
+    if "last_saved_incident" not in ss: ss.last_saved_incident = None
 
 def login_user(email: str, password: str) -> bool:
     email = (email or "").strip().lower()
@@ -1801,9 +1803,14 @@ def render_incident_log_page():
     col1, col2 = st.columns([3, 1])
     with col1:
         if st.button("⬅ Back to Students", key="back_log_top"):
+            # Clear prefill state when navigating away
+            st.session_state.incident_prefill = None
+            st.session_state.last_saved_incident = None
             go_to("program_students", selected_program=student["program"])
     with col2:
         if st.button("🏠 Program Landing", key="home_log"):
+            st.session_state.incident_prefill = None
+            st.session_state.last_saved_incident = None
             go_to("landing")
     show_severity_guide()
     if st.session_state.show_critical_prompt:
@@ -1818,21 +1825,94 @@ def render_incident_log_page():
             go_to("critical_incident", current_incident_id=st.session_state.current_incident_id)
         st.markdown("---")
         st.stop()
+
+    # ── "Log Another" success banner (shown above the form after a non-critical save) ──
+    _last = st.session_state.get("last_saved_incident")
+    if _last:
+        _prev_time = _last.get("time","")[:5]
+        _prev_beh  = _last.get("behaviour_type","")
+        _prev_sev  = _last.get("severity", 1)
+        st.markdown(
+            f"<div style='background:#f0fdf4;border:1.5px solid #22c55e;border-radius:8px;"
+            f"padding:.65rem 1rem;margin-bottom:.75rem;display:flex;align-items:center;gap:.5rem;'>"
+            f"<span style='font-size:1.1rem;'>✅</span>"
+            f"<span style='font-size:.88rem;color:#166534;'>"
+            f"<strong>Incident saved</strong> — {_prev_beh}, Severity {_prev_sev}, at {_prev_time}. "
+            f"Use <strong>Log Another</strong> to repeat with the same details, or edit any field below."
+            f"</span></div>",
+            unsafe_allow_html=True
+        )
+        btn_col1, btn_col2 = st.columns([2, 1])
+        with btn_col2:
+            if st.button("🗑️ Clear prefill", key="clear_prefill_btn", use_container_width=True,
+                         help="Reset all form fields to blank defaults"):
+                st.session_state.incident_prefill = None
+                st.session_state.last_saved_incident = None
+                st.rerun()
+
+    # ── Pre-populate defaults from prefill (set by "Log Another") ─────────────
+    _pf = st.session_state.get("incident_prefill") or {}
+
+    def _loc_idx():
+        v = _pf.get("location", "")
+        opts = [""] + LOCATIONS
+        return opts.index(v) if v in opts else 0
+
+    def _beh_idx():
+        v = _pf.get("behaviour_type", "")
+        opts = [""] + BEHAVIOUR_TYPES
+        return opts.index(v) if v in opts else 0
+
+    def _ant_idx():
+        v = _pf.get("antecedent", "")
+        opts = [""] + ANTECEDENTS
+        return opts.index(v) if v in opts else 0
+
+    def _int_defaults():
+        stored = _pf.get("intervention", [])
+        return [i for i in (stored if isinstance(stored, list) else []) if i in INTERVENTIONS]
+
+    # ── Form ──────────────────────────────────────────────────────────────────
+    # Label changes to show "Repeat Log" mode when prefill is active
+    _form_label = "📋 Repeat Incident (editing pre-filled details)" if _pf else "📋 New Incident"
+    if _pf:
+        st.markdown(
+            "<div style='background:#fef9c3;border:1px solid #fde68a;border-radius:6px;"
+            "padding:.4rem .8rem;margin-bottom:.4rem;font-size:.82rem;color:#92400e;'>"
+            "🔁 <strong>Pre-filled from previous incident.</strong> "
+            "Adjust the time and any other details that have changed, then submit.</div>",
+            unsafe_allow_html=True
+        )
+
     with st.form("incident_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
-            inc_date = st.date_input("Date *", date.today(), key="inc_date")
-            inc_time = st.time_input("Time *", datetime.now().time(), key="inc_time")
-            location = st.selectbox("Location *", [""] + LOCATIONS, key="inc_loc")
+            inc_date = st.date_input("Date *", value=date.today(), key="inc_date")
+            inc_time = st.time_input(
+                "Time * ← update this",
+                value=datetime.now().time(),
+                key="inc_time",
+                help="Time defaults to now — adjust if the incident was earlier"
+            )
+            location = st.selectbox("Location *", [""] + LOCATIONS, index=_loc_idx(), key="inc_loc")
         with col2:
-            behaviour = st.selectbox("Behaviour Type *", [""] + BEHAVIOUR_TYPES, key="inc_beh")
-            antecedent = st.selectbox("Antecedent/Trigger *", [""] + ANTECEDENTS, key="inc_ant")
-            interventions = st.multiselect("Interventions Used *", INTERVENTIONS, key="inc_ints")
-        duration = st.number_input("Duration (minutes) *", min_value=1, value=1, key="inc_dur")
-        severity = st.slider("Severity Level *", 1, 5, 1, key="inc_sev")
-        description = st.text_area("Brief Description (Optional)", placeholder="Factual, objective description...", key="inc_desc")
-        manual_critical = st.checkbox("This incident requires a Critical Incident ABCH Form (regardless of severity)", key="manual_crit")
-        submitted = st.form_submit_button("Submit Incident", type="primary")
+            behaviour = st.selectbox("Behaviour Type *", [""] + BEHAVIOUR_TYPES, index=_beh_idx(), key="inc_beh")
+            antecedent = st.selectbox("Antecedent/Trigger *", [""] + ANTECEDENTS, index=_ant_idx(), key="inc_ant")
+            interventions = st.multiselect("Interventions Used *", INTERVENTIONS, default=_int_defaults(), key="inc_ints")
+        duration = st.number_input("Duration (minutes) *", min_value=1,
+                                   value=int(_pf.get("duration_minutes", 1)), key="inc_dur")
+        severity = st.slider("Severity Level *", 1, 5,
+                             value=int(_pf.get("severity", 1)), key="inc_sev")
+        description = st.text_area("Brief Description (Optional)",
+                                   value="",
+                                   placeholder="Factual, objective description...", key="inc_desc")
+        manual_critical = st.checkbox(
+            "This incident requires a Critical Incident ABCH Form (regardless of severity)", key="manual_crit"
+        )
+        _submit_label = "🔁 Submit Repeat Incident" if _pf else "Submit Incident"
+        submitted = st.form_submit_button(_submit_label, type="primary", use_container_width=True)
+
+    # ── Submit handler ────────────────────────────────────────────────────────
     if submitted:
         if not location or not behaviour or not antecedent or not interventions:
             st.error("Please complete all required fields marked with *")
@@ -1852,11 +1932,26 @@ def render_incident_log_page():
             }
             if save_incident_to_db(rec):
                 st.session_state.incidents.append(rec)
-                st.success("✅ Incident logged successfully and saved to database")
                 if is_critical:
+                    # Critical path — clear prefill state, go to ABCH form
+                    st.session_state.incident_prefill    = None
+                    st.session_state.last_saved_incident = None
                     st.session_state.current_incident_id = new_id
                     st.session_state.show_critical_prompt = True
-                    st.session_state.last_incident_info = {"severity": severity, "manual": manual_critical}
+                    st.session_state.last_incident_info  = {"severity": severity, "manual": manual_critical}
+                    st.rerun()
+                else:
+                    # Non-critical — store for "Log Another" banner and offer repeat
+                    st.session_state.last_saved_incident = rec
+                    # Pre-populate NEXT form with this incident's repeatable fields
+                    st.session_state.incident_prefill = {
+                        "location":         location,
+                        "behaviour_type":   behaviour,
+                        "antecedent":       antecedent,
+                        "intervention":     interventions,
+                        "duration_minutes": duration,
+                        "severity":         severity,
+                    }
                     st.rerun()
             else:
                 st.error("❌ Failed to save incident to database. Please try again.")
@@ -3046,6 +3141,181 @@ def render_student_analysis_page():
                     for k in [confirm_key, confirm2_key]:
                         st.session_state.pop(k, None)
                     st.rerun()
+
+    st.markdown("---")
+    st.markdown("### 🔁 Re-log as New Incident")
+    st.caption(
+        "Quickly re-log a previously recorded behaviour as a new incident. "
+        "Pre-fills with the existing record so you only need to update the date, time, "
+        "severity, or description. Useful when the same behaviour occurs regularly."
+    )
+
+    # ── Build selectable list of regular incidents only (re-log doesn't apply to critical forms) ──
+    _relog_incidents = sorted(
+        [i for i in st.session_state.incidents if i["student_id"] == student_id],
+        key=lambda x: x.get("date", ""), reverse=True
+    )
+
+    if not _relog_incidents:
+        st.info("No regular incidents on record yet — log the first one above.")
+    else:
+        # Selectbox label: date · time · behaviour · severity
+        def _relog_label(inc):
+            t = (inc.get("time") or "")[:5]
+            return (
+                f"{inc.get('date','?')}  {t}  |  "
+                f"{inc.get('behaviour_type','—')}  |  "
+                f"Sev {inc.get('severity','?')}  |  "
+                f"{inc.get('location','—')}"
+            )
+
+        _relog_options = {_relog_label(i): i for i in _relog_incidents}
+        _selected_label = st.selectbox(
+            f"Select incident to use as template ({len(_relog_incidents)} regular incidents)",
+            list(_relog_options.keys()),
+            key="relog_select"
+        )
+        _src_inc = _relog_options[_selected_label]
+
+        # Preview card
+        st.markdown(
+            f"<div style='background:#eff6ff;border:1.5px solid #93c5fd;border-radius:8px;"
+            f"padding:.6rem 1rem;margin:.35rem 0 .7rem;font-size:.83rem;color:#1e3a5f;'>"
+            f"<strong>Template:</strong> {_src_inc.get('behaviour_type','—')} on "
+            f"{_src_inc.get('date','?')} at {(_src_inc.get('time') or '')[:5]}  ·  "
+            f"Severity {_src_inc.get('severity','?')}  ·  {_src_inc.get('location','—')}<br>"
+            f"<span style='color:#64748b;'>Antecedent: {_src_inc.get('antecedent','—')}</span>"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+
+        with st.expander("✏️ Adjust & Submit New Incident", expanded=False):
+            st.caption("All fields are pre-filled from the template. Change only what is different this time.")
+
+            # ── Parse existing time for the time_input default ──
+            try:
+                _default_time = datetime.strptime(
+                    (_src_inc.get("time") or "09:00:00")[:8], "%H:%M:%S"
+                ).time()
+            except Exception:
+                _default_time = datetime.now().time()
+
+            rl_col1, rl_col2 = st.columns(2)
+            with rl_col1:
+                rl_date = st.date_input(
+                    "Date *", value=date.today(), key="rl_date"
+                )
+                rl_time = st.time_input(
+                    "Time *", value=_default_time, key="rl_time"
+                )
+                rl_location = st.selectbox(
+                    "Location *",
+                    LOCATIONS,
+                    index=LOCATIONS.index(_src_inc["location"]) if _src_inc.get("location") in LOCATIONS else 0,
+                    key="rl_location"
+                )
+            with rl_col2:
+                rl_behaviour = st.selectbox(
+                    "Behaviour Type *",
+                    BEHAVIOUR_TYPES,
+                    index=BEHAVIOUR_TYPES.index(_src_inc["behaviour_type"]) if _src_inc.get("behaviour_type") in BEHAVIOUR_TYPES else 0,
+                    key="rl_behaviour"
+                )
+                # Filter section headers out of antecedents for selectbox
+                _valid_ants = [a for a in ANTECEDENTS if not a.startswith("---")]
+                _ant_default = _src_inc.get("antecedent", _valid_ants[0])
+                if _ant_default not in _valid_ants:
+                    _ant_default = _valid_ants[0]
+                rl_antecedent = st.selectbox(
+                    "Antecedent/Trigger *",
+                    _valid_ants,
+                    index=_valid_ants.index(_ant_default),
+                    key="rl_antecedent"
+                )
+                # Pre-select existing interventions
+                _existing_ints = _src_inc.get("intervention", [])
+                if isinstance(_existing_ints, str):
+                    _existing_ints = [_existing_ints]
+                _valid_existing_ints = [v for v in _existing_ints if v in INTERVENTIONS]
+                rl_interventions = st.multiselect(
+                    "Interventions Used *",
+                    INTERVENTIONS,
+                    default=_valid_existing_ints,
+                    key="rl_interventions"
+                )
+
+            rl_duration = st.number_input(
+                "Duration (minutes) *",
+                min_value=1,
+                value=int(_src_inc.get("duration_minutes") or 1),
+                key="rl_duration"
+            )
+            rl_severity = st.slider(
+                "Severity Level *", 1, 5,
+                value=int(_src_inc.get("severity") or 1),
+                key="rl_severity"
+            )
+            rl_description = st.text_area(
+                "Notes / Description (Optional)",
+                value="",
+                placeholder="Add any notes specific to this occurrence...",
+                height=80,
+                key="rl_description"
+            )
+
+            # Warn if severity ≥ 3 — needs a critical form after
+            if rl_severity >= 3:
+                st.warning(
+                    f"⚠️ Severity {rl_severity} — if this incident reaches Level 3+, "
+                    "a Critical Incident ABCH Form will be required after saving."
+                )
+
+            rl_submit = st.button(
+                "✅ Save as New Incident", type="primary",
+                key="rl_submit_btn", use_container_width=True
+            )
+
+            if rl_submit:
+                if not rl_interventions:
+                    st.error("Please select at least one intervention.")
+                else:
+                    _new_id  = str(uuid.uuid4())
+                    _is_crit = rl_severity >= 3
+                    _hyp     = generate_hypothesis_ai(rl_antecedent, rl_behaviour, "")
+                    _new_rec = {
+                        "id":               _new_id,
+                        "student_id":       student_id,
+                        "student_name":     student["name"],
+                        "date":             rl_date.isoformat(),
+                        "time":             rl_time.strftime("%H:%M:%S"),
+                        "day":              rl_date.strftime("%A"),
+                        "session":          get_session_from_time(rl_time),
+                        "location":         rl_location,
+                        "behaviour_type":   rl_behaviour,
+                        "antecedent":       rl_antecedent,
+                        "intervention":     rl_interventions,
+                        "severity":         rl_severity,
+                        "reported_by":      st.session_state.current_user.get("id", "unknown"),
+                        "duration_minutes": rl_duration,
+                        "description":      rl_description or f"Re-logged from incident on {_src_inc.get('date','?')}",
+                        "is_critical":      _is_crit,
+                        "hypothesis_function": _hyp["function"],
+                        "hypothesis_item":     _hyp["item"],
+                    }
+                    if save_incident_to_db(_new_rec):
+                        st.session_state.incidents.append(_new_rec)
+                        st.success(
+                            f"✅ New incident saved for {student['name']} on {rl_date.strftime('%d/%m/%Y')}."
+                        )
+                        if _is_crit:
+                            st.warning(
+                                "⚠️ Severity 3+ — please complete a Critical Incident ABCH Form "
+                                "for this event. Use the '📝 Log Incident' button and select "
+                                "'Complete Critical Form' after submitting."
+                            )
+                        st.rerun()
+                    else:
+                        st.error("❌ Failed to save — please try again.")
 
     st.markdown("---")
     st.markdown("### 📄 Export Data & Reports")
