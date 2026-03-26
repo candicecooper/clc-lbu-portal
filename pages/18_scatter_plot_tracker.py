@@ -105,7 +105,7 @@ def load_students_cached():
     sb = get_sb()
     if not sb: return []
     try:
-        res = sb.table("students").select("id,name,program").eq("archived",False).order("name").execute()
+        res = sb.table("scatter_students").select("id,name,year_level,program").order("name").execute()
         return res.data or []
     except Exception:
         return []
@@ -357,12 +357,14 @@ if tracked:
                 st.caption(f"Last: {stu['last_date']}")
             with sc4:
                 if st.button("Select", key=f"panel_sel_{stu['student_id']}", use_container_width=True):
-                    ss.spt_student_id   = stu["student_id"]
-                    ss.spt_student_name = stu["student_name"]
-                    ss.spt_schedule     = None
-                    ss.spt_period_id    = None
-                    ss.spt_beh1         = behs[0] if len(behs) > 0 else ""
-                    ss.spt_beh2         = behs[1] if len(behs) > 1 else ""
+                    ss.spt_student_id      = stu["student_id"]
+                    ss.spt_student_name    = stu["student_name"]
+                    ss.spt_schedule        = None
+                    ss.spt_period_id       = None
+                    ss.spt_beh1            = ""
+                    ss.spt_beh2            = ""
+                    ss.spt_show_choice     = True
+                    ss.spt_show_new_period = False
                     st.rerun()
 
 
@@ -370,7 +372,7 @@ if tracked:
 # STUDENT SELECTOR
 # ════════════════════════════════════════════════════════════════════════════
 students     = load_students_cached()
-student_opts = {s["id"]: f"{s['name']}  ({s.get('program','')})" for s in students}
+student_opts = {s["id"]: s["name"] + "  (" + s.get("program","") + ")" for s in students}
 ids     = list(student_opts.keys())
 cur_idx = ids.index(ss.spt_student_id) if ss.spt_student_id in ids else 0
 
@@ -392,46 +394,34 @@ with hc3:
 # Add new student
 with st.expander("➕ Add a new student"):
     with st.form("spt_add_student_form"):
-        ns1, ns2, ns3 = st.columns([2, 2, 1])
+        ns1, ns2 = st.columns(2)
         with ns1:
-            ns_first = st.text_input("First name *", placeholder="e.g. Alex")
-            ns_edid  = st.text_input("EDID *", placeholder="e.g. ED123456")
+            ns_name = st.text_input("Full name *", placeholder="e.g. Alex Smith")
         with ns2:
-            ns_last    = st.text_input("Last name *", placeholder="e.g. Smith")
             ns_program = st.selectbox("Program *", ["JP","PY","SY"])
-        with ns3:
-            ns_grade = st.selectbox("Grade", ["R","Y1","Y2","Y3","Y4","Y5","Y6","Y7","Y8","Y9","Y10","Y11","Y12"])
-            ns_dob   = st.date_input("Date of birth", value=None)
+        ns_grade = st.selectbox("Year level", ["R","Y1","Y2","Y3","Y4","Y5","Y6","Y7","Y8","Y9","Y10","Y11","Y12"])
         if st.form_submit_button("Save Student", type="primary", use_container_width=True):
-            if not ns_first.strip() or not ns_last.strip() or not ns_edid.strip():
-                st.error("Please fill in first name, last name and EDID.")
+            if not ns_name.strip():
+                st.error("Please enter the student's name.")
             else:
                 sb = get_sb()
                 if sb:
                     try:
-                        full_name = f"{ns_first.strip()} {ns_last.strip()}"
-                        grade_str = ns_grade
                         grade_int = 0
                         try:
-                            grade_int = int(grade_str.replace("Y","").replace("R","0"))
+                            grade_int = int(ns_grade.replace("Y","").replace("R","0"))
                         except Exception:
                             grade_int = 0
-                        sb.table("students").insert({
-                            "first_name":      ns_first.strip(),
-                            "last_name":       ns_last.strip(),
-                            "name":            full_name,
-                            "edid":            ns_edid.strip(),
-                            "program":         ns_program,
-                            "year_level":      grade_int,
-                            "dob":             ns_dob.isoformat() if ns_dob else None,
-                            "placement_start": date.today().isoformat(),
-                            "archived":        False,
+                        sb.table("scatter_students").insert({
+                            "name":        ns_name.strip(),
+                            "year_level":  grade_int,
+                            "program":     ns_program,
                         }).execute()
                         load_students_cached.clear()
-                        st.success(f"✅ {full_name} added — select them from the dropdown.")
+                        st.success("✅ " + ns_name.strip() + " added — select them from the dropdown.")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Could not save student: {e}")
+                        st.error("Could not save student: " + str(e))
 
 # Student change — show explicit choice screen
 if selected_id != ss.spt_student_id:
