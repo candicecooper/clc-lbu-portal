@@ -142,34 +142,108 @@ st.markdown(f"""
 # ════════════════════════════════════════════════════════════════════════════
 students     = load_students_cached()
 if not students:
-    st.warning("No students found. Add students via the Behaviour Support tool first.")
-    st.stop()
+    st.info("No students found yet — add one below.")
 
 student_opts = {s["id"]: f"{s['name']}  ({s.get('program','')})" for s in students}
 ids     = list(student_opts.keys())
 cur_idx = ids.index(st.session_state.saa_student_id) if st.session_state.saa_student_id in ids else 0
 
-hc1, hc2 = st.columns([2, 3])
-with hc1:
-    selected_id = st.selectbox(
-        "Student", ids, index=cur_idx,
-        format_func=lambda x: student_opts[x],
-        key="saa_stu_sel"
-    )
-with hc2:
-    st.session_state.saa_behaviours = st.text_input(
-        "Target behaviour(s)",
-        value=st.session_state.saa_behaviours,
-        placeholder="e.g. Roaming instead of participating in learning",
-        key="saa_beh_input"
-    )
+if students:
+    hc1, hc2 = st.columns([2, 3])
+    with hc1:
+        selected_id = st.selectbox(
+            "Student", ids, index=cur_idx,
+            format_func=lambda x: student_opts[x],
+            key="saa_stu_sel"
+        )
+    with hc2:
+        st.session_state.saa_behaviours = st.text_input(
+            "Target behaviour(s)",
+            value=st.session_state.saa_behaviours,
+            placeholder="e.g. Roaming instead of participating in learning",
+            key="saa_beh_input"
+        )
+else:
+    selected_id = None
 
-if selected_id != st.session_state.saa_student_id:
+# ── Add new student ───────────────────────────────────────────────────────
+with st.expander("➕ Add a new student"):
+    with st.form("saa_add_student_form"):
+        ns1, ns2, ns3 = st.columns([2, 2, 1])
+        with ns1:
+            ns_first = st.text_input("First name *", placeholder="e.g. Alex")
+            ns_edid  = st.text_input("EDID *", placeholder="e.g. ED123456")
+        with ns2:
+            ns_last    = st.text_input("Last name *", placeholder="e.g. Smith")
+            ns_program = st.selectbox("Program *", ["JP", "PY", "SY"])
+        with ns3:
+            ns_grade = st.selectbox("Grade", ["R","Y1","Y2","Y3","Y4","Y5","Y6","Y7","Y8","Y9","Y10","Y11","Y12"])
+            ns_dob   = st.date_input("Date of birth", value=None)
+        ns_submitted = st.form_submit_button("Save Student", type="primary", use_container_width=True)
+
+    if ns_submitted:
+        if not ns_first.strip() or not ns_last.strip() or not ns_edid.strip():
+            st.error("Please fill in first name, last name and EDID.")
+        else:
+            sb = get_sb()
+            if sb:
+                try:
+                    full_name = f"{ns_first.strip()} {ns_last.strip()}"
+                    grade_int = 0
+                    try:
+                        grade_int = int(ns_grade.replace("Y","").replace("R","0"))
+                    except Exception:
+                        grade_int = 0
+                    sb.table("students").insert({
+                        "first_name":      ns_first.strip(),
+                        "last_name":       ns_last.strip(),
+                        "name":            full_name,
+                        "edid":            ns_edid.strip(),
+                        "program":         ns_program,
+                        "grade":           ns_grade,
+                        "year_level":      grade_int,
+                        "dob":             ns_dob.isoformat() if ns_dob else None,
+                        "placement_start": date.today().isoformat(),
+                        "archived":        False,
+                    }).execute()
+                    load_students_cached.clear()
+                    st.success(f"✅ {full_name} added — select them from the dropdown above.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Could not save student: {e}")
+            else:
+                st.error("Supabase not configured.")
+
+# ── Student change — auto-load behaviours from existing data ──────────────
+if selected_id and selected_id != st.session_state.saa_student_id:
     st.session_state.saa_student_id   = selected_id
     st.session_state.saa_student_name = next((s["name"] for s in students if s["id"]==selected_id),"")
+    st.session_state.saa_behaviours   = ""
+
+    # Try to restore target behaviours from most recent observation
+    sb = get_sb()
+    if sb:
+        try:
+            recent = (
+                sb.table("schedule_analysis_observations")
+                .select("target_behaviours")
+                .eq("student_id", selected_id)
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if recent.data:
+                tb = (recent.data[0].get("target_behaviours") or "").strip()
+                if tb:
+                    st.session_state.saa_behaviours = tb
+        except Exception:
+            pass
     st.rerun()
 
-student_id   = st.session_state.saa_student_id
+if not selected_id:
+    st.stop()
+
+student_id   = st.session_state.saa_student_id or selected_id
 student_name = st.session_state.saa_student_name or student_opts.get(student_id,"")
 obs_df       = load_obs(student_id)
 
