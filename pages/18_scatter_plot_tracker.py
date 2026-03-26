@@ -410,12 +410,23 @@ with st.expander("➕ Add a new student"):
                 if sb:
                     try:
                         full_name = f"{ns_first.strip()} {ns_last.strip()}"
+                        grade_str = ns_grade
+                        grade_int = 0
+                        try:
+                            grade_int = int(grade_str.replace("Y","").replace("R","0"))
+                        except Exception:
+                            grade_int = 0
                         sb.table("students").insert({
-                            "first_name": ns_first.strip(), "last_name": ns_last.strip(),
-                            "name": full_name, "edid": ns_edid.strip(),
-                            "program": ns_program, "grade": ns_grade,
-                            "dob": ns_dob.isoformat() if ns_dob else None,
-                            "placement_start": date.today().isoformat(), "archived": False,
+                            "first_name":      ns_first.strip(),
+                            "last_name":       ns_last.strip(),
+                            "name":            full_name,
+                            "edid":            ns_edid.strip(),
+                            "program":         ns_program,
+                            "grade":           grade_str,
+                            "year_level":      grade_int,
+                            "dob":             ns_dob.isoformat() if ns_dob else None,
+                            "placement_start": date.today().isoformat(),
+                            "archived":        False,
                         }).execute()
                         load_students_cached.clear()
                         st.success(f"✅ {full_name} added — select them from the dropdown.")
