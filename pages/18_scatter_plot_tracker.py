@@ -423,52 +423,183 @@ with st.expander("➕ Add a new student"):
                     except Exception as e:
                         st.error(f"Could not save student: {e}")
 
-# Student change — auto-load behaviours and most recent period
+# Student change — show explicit choice screen
 if selected_id != ss.spt_student_id:
-    ss.spt_student_id   = selected_id
-    ss.spt_student_name = next((s["name"] for s in students if s["id"]==selected_id),"")
-    ss.spt_schedule     = None
-    ss.spt_period_id    = None
-    ss.spt_beh1         = ""
-    ss.spt_beh2         = ""
+    ss.spt_student_id      = selected_id
+    ss.spt_student_name    = next((s["name"] for s in students if s["id"]==selected_id),"")
+    ss.spt_schedule        = None
+    ss.spt_period_id       = None
+    ss.spt_beh1            = ""
+    ss.spt_beh2            = ""
+    ss.spt_show_choice     = True
+    ss.spt_show_new_period = False
+    st.rerun()
+
+# ── CHOICE SCREEN ─────────────────────────────────────────────────────────
+if ss.get("spt_show_choice"):
+    stu_name_c = ss.spt_student_name or student_opts.get(selected_id,"")
 
     sb = get_sb()
+    existing_periods = []
     if sb:
         try:
-            # Load most recent period
-            periods = (sb.table("scatter_tracking_periods")
-                       .select("*").eq("student_id", selected_id)
-                       .order("start_date", desc=True).limit(1).execute())
-            if periods.data:
-                p = periods.data[0]
-                ss.spt_period_id = p["id"]
-                ss.spt_beh1      = p.get("behaviour_1","")
-                ss.spt_beh2      = p.get("behaviour_2","")
-            else:
-                # Fall back to most recent observation labels
-                recent = (sb.table("scatter_plot_observations")
-                          .select("behaviour_index,behaviour_label,target_behaviours")
-                          .eq("student_id", selected_id)
-                          .order("created_at", desc=True).limit(20).execute())
-                if recent.data:
-                    beh_map = {}
-                    for row in recent.data:
-                        bi  = int(row.get("behaviour_index",0) or 0)
-                        lbl = (row.get("behaviour_label") or "").strip()
-                        if lbl and bi not in beh_map:
-                            beh_map[bi] = lbl
-                    if not beh_map:
-                        tb = (recent.data[0].get("target_behaviours") or "").strip()
-                        if " | " in tb:
-                            parts = [p.strip() for p in tb.split(" | ") if p.strip()]
-                            beh_map = {i: p for i,p in enumerate(parts)}
-                        elif tb:
-                            beh_map = {0: tb}
-                    ss.spt_beh1 = beh_map.get(0,"")
-                    ss.spt_beh2 = beh_map.get(1,"")
+            pr = (sb.table("scatter_tracking_periods")
+                  .select("*").eq("student_id", selected_id)
+                  .order("start_date", desc=True).execute())
+            existing_periods = pr.data or []
         except Exception:
             pass
-    st.rerun()
+
+    period_count = len(existing_periods)
+    st.markdown(
+        f'<div style="background:white;border:2px solid #1A6B8A;border-radius:12px;'
+        f'padding:1.25rem 1.5rem;margin-bottom:1rem;">'
+        f'<div style="font-size:1.05rem;font-weight:700;color:#1A6B8A;margin-bottom:.25rem;">'
+        f'📋 {stu_name_c}</div>'
+        f'<div style="font-size:.85rem;color:#64748b;">'
+        + (f"This student has {period_count} tracking period(s) on record." if existing_periods
+           else "No tracking data on record yet.")
+        + '</div></div>',
+        unsafe_allow_html=True
+    )
+
+    if existing_periods:
+        st.markdown("**Existing tracking periods:**")
+        for i, p in enumerate(existing_periods):
+            active_tag = " ✅ Active" if not p.get("end_date") else ""
+            start_str  = pd.to_datetime(p["start_date"]).strftime("%-d %b %Y")
+            end_str    = pd.to_datetime(p["end_date"]).strftime("%-d %b %Y") if p.get("end_date") else "ongoing"
+            b1  = p.get("behaviour_1","")
+            b2  = p.get("behaviour_2","")
+            lbl = p.get("label") or ("Period " + str(len(existing_periods)-i))
+            beh_text = b1 + (" · " + b2 if b2 else "")
+            st.markdown(
+                f'<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;'
+                f'padding:.5rem .9rem;margin-bottom:.3rem;font-size:.83rem;">'
+                f'<b>{lbl}</b>{active_tag} &nbsp;'
+                f'<span style="color:#64748b;">{start_str} – {end_str}</span><br>'
+                f'<span style="color:#334155;">{beh_text}</span>'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+
+        st.markdown("---")
+        st.markdown("**What would you like to do?**")
+
+        active_p = next((p for p in existing_periods if not p.get("end_date")), existing_periods[0])
+        b1_a = active_p.get("behaviour_1","")
+        b2_a = active_p.get("behaviour_2","")
+        preview = b1_a + (" · " + b2_a if b2_a else "")
+
+        ch1, ch2 = st.columns(2)
+        with ch1:
+            cont_label = "▶  Continue current tracking  —  " + preview[:55]
+            if st.button(cont_label, type="primary", use_container_width=True, key="choice_continue"):
+                ss.spt_period_id   = active_p["id"]
+                ss.spt_beh1        = b1_a
+                ss.spt_beh2        = b2_a
+                ss.spt_show_choice = False
+                st.rerun()
+        with ch2:
+            if st.button("🔄  Start new tracking period — behaviours have changed",
+                         use_container_width=True, key="choice_new"):
+                ss.spt_show_choice     = False
+                ss.spt_show_new_period = True
+                st.rerun()
+
+        if len(existing_periods) > 1:
+            st.markdown("**Or view a specific historical period:**")
+            period_opts_c = {}
+            for i, p in enumerate(existing_periods):
+                b1t = p.get("behaviour_1","")
+                b2t = p.get("behaviour_2","")
+                lbl_t = p.get("label") or ("Period " + str(len(existing_periods)-i))
+                sd_t  = pd.to_datetime(p["start_date"]).strftime("%-d %b %y")
+                ed_t  = pd.to_datetime(p["end_date"]).strftime("%-d %b %y") if p.get("end_date") else "now"
+                period_opts_c[p["id"]] = lbl_t + " — " + b1t + (" · "+b2t if b2t else "") + " (" + sd_t + "–" + ed_t + ")"
+
+            vc1, vc2 = st.columns([4,1])
+            with vc1:
+                view_pid = st.selectbox("Select period to view", list(period_opts_c.keys()),
+                                        format_func=lambda x: period_opts_c[x],
+                                        key="choice_view_sel")
+            with vc2:
+                st.markdown("<div style='padding-top:1.8rem;'>", unsafe_allow_html=True)
+                if st.button("View", use_container_width=True, key="choice_view_btn"):
+                    vp = next((p for p in existing_periods if p["id"]==view_pid), None)
+                    if vp:
+                        ss.spt_period_id = vp["id"]
+                        ss.spt_beh1      = vp.get("behaviour_1","")
+                        ss.spt_beh2      = vp.get("behaviour_2","")
+                    ss.spt_show_choice = False
+                    st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
+
+    else:
+        st.markdown("**Enter the behaviour(s) you want to track:**")
+        with st.form("choice_new_student_form"):
+            cf1, cf2 = st.columns(2)
+            with cf1: nb1 = st.text_input("Behaviour 1 *", placeholder="e.g. Roaming instead of participating")
+            with cf2: nb2 = st.text_input("Behaviour 2 (optional)", placeholder="e.g. Verbal outbursts")
+            nl = st.text_input("Label (optional)", placeholder="e.g. Term 1 Week 3")
+            if st.form_submit_button("✅ Start Tracking", type="primary", use_container_width=True):
+                if not nb1.strip():
+                    st.error("Please enter at least Behaviour 1.")
+                else:
+                    sb2 = get_sb()
+                    if sb2:
+                        try:
+                            res = sb2.table("scatter_tracking_periods").insert({
+                                "student_id":   selected_id,
+                                "student_name": stu_name_c,
+                                "start_date":   date.today().isoformat(),
+                                "behaviour_1":  nb1.strip(),
+                                "behaviour_2":  nb2.strip(),
+                                "label":        nl.strip(),
+                            }).execute()
+                            if res.data:
+                                ss.spt_period_id = res.data[0]["id"]
+                        except Exception as e:
+                            st.error("Could not create period: " + str(e))
+                    ss.spt_beh1        = nb1.strip()
+                    ss.spt_beh2        = nb2.strip()
+                    ss.spt_show_choice = False
+                    st.rerun()
+
+    st.stop()
+
+# ── NEW PERIOD FORM ───────────────────────────────────────────────────────
+if ss.get("spt_show_new_period"):
+    stu_name_np = ss.spt_student_name or student_opts.get(selected_id,"")
+    st.markdown("### 🔄 New Tracking Period — " + stu_name_np)
+    st.caption("Your existing data is preserved. A new period begins today.")
+    with st.form("new_period_from_choice"):
+        np1, np2, np3 = st.columns([2.5, 2.5, 2])
+        with np1: np_beh1  = st.text_input("Behaviour 1 *", placeholder="e.g. Hitting peers")
+        with np2: np_beh2  = st.text_input("Behaviour 2 (optional)")
+        with np3: np_label = st.text_input("Label (optional)", placeholder="e.g. Term 2 Week 3")
+        cc1, cc2 = st.columns(2)
+        with cc1: do_start  = st.form_submit_button("✅ Start New Period", type="primary", use_container_width=True)
+        with cc2: do_cancel = st.form_submit_button("← Go back", use_container_width=True)
+    if do_cancel:
+        ss.spt_show_new_period = False
+        ss.spt_show_choice     = True
+        st.rerun()
+    if do_start:
+        if not np_beh1.strip():
+            st.error("Please enter at least Behaviour 1.")
+        else:
+            new_p = create_period(selected_id, ss.spt_student_name,
+                                  np_beh1.strip(), np_beh2.strip(), np_label.strip())
+            if new_p:
+                ss.spt_period_id       = new_p["id"]
+                ss.spt_beh1            = np_beh1.strip()
+                ss.spt_beh2            = np_beh2.strip()
+                ss.spt_show_new_period = False
+                load_tracked_students.clear()
+                st.success("✅ New tracking period started.")
+                st.rerun()
+    st.stop()
 
 student_id   = ss.spt_student_id
 student_name = ss.spt_student_name or student_opts.get(student_id,"")
