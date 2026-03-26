@@ -462,7 +462,7 @@ elif active == "First-Then":
         for j, act in enumerate(act_row):
             with acols[j]:
                 st.markdown(f"<div style='text-align:center;font-size:1.2rem'>{act['em']}</div><div style='font-size:.62rem;text-align:center;font-weight:600;color:#4a5568'>{act['lb']}</div>", unsafe_allow_html=True)
-                slot_choice = st.selectbox("Slot", ["--"] + labels[:panels], key=f"act_s_{act['id']}_{j}", label_visibility="collapsed")
+                slot_choice = st.selectbox("Slot", ["--"] + labels[:panels], key=f"act_s_{j}", label_visibility="collapsed")
                 if slot_choice != "--":
                     idx = labels.index(slot_choice)
                     st.session_state.vst_ft_slots[idx] = act
