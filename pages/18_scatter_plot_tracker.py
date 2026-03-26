@@ -19,75 +19,75 @@ GREEN = "#2E7D32"
 
 st.markdown(f"""
 <style>
-[data-testid="stAppViewContainer"] {{ background:#f5f8fa; }}
-.clc-header {{
+[data-testid="stAppViewContainer"] { background:#f5f8fa; }
+.clc-header {
     background:linear-gradient(135deg,{TEAL} 0%,{TEAL}BB 100%);
     color:white; padding:.85rem 1.5rem; border-radius:10px; margin-bottom:1rem;
-}}
-.clc-header h2 {{ margin:0; font-size:1.25rem; }}
-.clc-header p  {{ margin:.2rem 0 0; opacity:.85; font-size:.78rem; }}
-.grid-wrap {{ overflow-x:auto; border:1px solid #e2e8f0; border-radius:8px; margin-bottom:.6rem; }}
-.sg {{ width:100%; border-collapse:collapse; font-size:.8rem; }}
-.sg th {{
+}
+.clc-header h2 { margin:0; font-size:1.25rem; }
+.clc-header p  { margin:.2rem 0 0; opacity:.85; font-size:.78rem; }
+.grid-wrap { overflow-x:auto; border:1px solid #e2e8f0; border-radius:8px; margin-bottom:.6rem; }
+.sg { width:100%; border-collapse:collapse; font-size:.8rem; }
+.sg th {
     background:{TEAL}; color:white; padding:.38rem .45rem;
     text-align:center; font-size:.7rem; font-weight:600; white-space:nowrap;
-}}
-.sg th.lh {{ text-align:left; min-width:50px; }}
-.sg th.la {{ text-align:left; min-width:110px; }}
-.sg td {{ padding:.25rem .35rem; border:1px solid #e2e8f0; text-align:center; vertical-align:middle; }}
-.sg td.tl {{ text-align:left; font-weight:600; color:#334155; font-size:.73rem;
-             white-space:nowrap; background:#f8fafc; }}
-.sg td.al {{ text-align:left; color:#64748b; font-size:.7rem; background:#f8fafc; }}
-.c1  {{ background:#dbeafe; color:#1d4ed8; font-weight:700; }}
-.c2  {{ background:#fee2e2; color:#b91c1c; font-weight:700; }}
-.cx  {{ background:#f3f4f6; color:#9ca3af; font-weight:600; }}
-.c0  {{ background:#f0fdf4; color:#15803d; font-weight:600; font-size:.72rem; }}
-.ce  {{ background:white; color:#e2e8f0; font-size:.65rem; }}
-.kpi {{ background:white; border-left:4px solid {TEAL}; border-radius:6px;
-        padding:.45rem .75rem; text-align:center; margin-bottom:.4rem; }}
-.kpi .val {{ font-size:1.4rem; font-weight:700; color:{TEAL}; }}
-.kpi .lbl {{ font-size:.67rem; color:#666; }}
-.kpi-a {{ border-color:{AMBER}; }}
-.kpi-a .val {{ color:{AMBER}; }}
-.kpi-g {{ border-color:{GREEN}; }}
-.kpi-g .val {{ color:{GREEN}; }}
-.period-badge {{
+}
+.sg th.lh { text-align:left; min-width:50px; }
+.sg th.la { text-align:left; min-width:110px; }
+.sg td { padding:.25rem .35rem; border:1px solid #e2e8f0; text-align:center; vertical-align:middle; }
+.sg td.tl { text-align:left; font-weight:600; color:#334155; font-size:.73rem;
+             white-space:nowrap; background:#f8fafc; }
+.sg td.al { text-align:left; color:#64748b; font-size:.7rem; background:#f8fafc; }
+.c1  { background:#dbeafe; color:#1d4ed8; font-weight:700; }
+.c2  { background:#fee2e2; color:#b91c1c; font-weight:700; }
+.cx  { background:#f3f4f6; color:#9ca3af; font-weight:600; }
+.c0  { background:#f0fdf4; color:#15803d; font-weight:600; font-size:.72rem; }
+.ce  { background:white; color:#e2e8f0; font-size:.65rem; }
+.kpi { background:white; border-left:4px solid {TEAL}; border-radius:6px;
+        padding:.45rem .75rem; text-align:center; margin-bottom:.4rem; }
+.kpi .val { font-size:1.4rem; font-weight:700; color:{TEAL}; }
+.kpi .lbl { font-size:.67rem; color:#666; }
+.kpi-a { border-color:{AMBER}; }
+.kpi-a .val { color:{AMBER}; }
+.kpi-g { border-color:{GREEN}; }
+.kpi-g .val { color:{GREEN}; }
+.period-badge {
     display:inline-block; background:#EBF4F9; border:1px solid {TEAL}44;
     border-radius:20px; padding:.2rem .75rem; font-size:.78rem;
     font-weight:600; color:{TEAL}; margin-bottom:.5rem;
-}}
-.period-active {{
+}
+.period-active {
     background:#f0fdf4; border:2px solid #22c55e; border-radius:10px;
     padding:.6rem 1rem; margin-bottom:.75rem;
-}}
-.ins {{ background:#FEF9EC; border-left:4px solid {AMBER}; border-radius:6px;
-        padding:.45rem .85rem; font-size:.82rem; margin-bottom:.3rem; }}
-.ins-ok {{ background:#F0FAF4; border-left:4px solid #2EA056; }}
-.stu-card {{
+}
+.ins { background:#FEF9EC; border-left:4px solid {AMBER}; border-radius:6px;
+        padding:.45rem .85rem; font-size:.82rem; margin-bottom:.3rem; }
+.ins-ok { background:#F0FAF4; border-left:4px solid #2EA056; }
+.stu-card {
     background:white; border:1px solid #e2e8f0; border-radius:8px;
     padding:.55rem .9rem; margin-bottom:.35rem;
     display:flex; align-items:center; justify-content:space-between;
-}}
+}
 </style>
 """, unsafe_allow_html=True)
 
 DEFAULT_SCHEDULE = [
-    {{"time":"9:00",  "activity":"De-escalation activity"}},
-    {{"time":"9:15",  "activity":"Interoception"}},
-    {{"time":"9:20",  "activity":"Activity"}},
-    {{"time":"10:00", "activity":"Breakfast"}},
-    {{"time":"10:05", "activity":"Fitness"}},
-    {{"time":"10:20", "activity":"Quiet Time"}},
-    {{"time":"10:30", "activity":"Activity"}},
-    {{"time":"11:00", "activity":"Recess"}},
-    {{"time":"11:30", "activity":"Quiet Time"}},
-    {{"time":"11:40", "activity":"Activity"}},
-    {{"time":"12:30", "activity":"Activity"}},
-    {{"time":"12:50", "activity":"Lunch eating"}},
-    {{"time":"13:00", "activity":"Lunch"}},
-    {{"time":"13:30", "activity":"Quiet Time"}},
-    {{"time":"13:45", "activity":"I.C.T."}},
-    {{"time":"14:30", "activity":"Home"}},
+    {"time":"9:00",  "activity":"De-escalation activity"},
+    {"time":"9:15",  "activity":"Interoception"},
+    {"time":"9:20",  "activity":"Activity"},
+    {"time":"10:00", "activity":"Breakfast"},
+    {"time":"10:05", "activity":"Fitness"},
+    {"time":"10:20", "activity":"Quiet Time"},
+    {"time":"10:30", "activity":"Activity"},
+    {"time":"11:00", "activity":"Recess"},
+    {"time":"11:30", "activity":"Quiet Time"},
+    {"time":"11:40", "activity":"Activity"},
+    {"time":"12:30", "activity":"Activity"},
+    {"time":"12:50", "activity":"Lunch eating"},
+    {"time":"13:00", "activity":"Lunch"},
+    {"time":"13:30", "activity":"Quiet Time"},
+    {"time":"13:45", "activity":"I.C.T."},
+    {"time":"14:30", "activity":"Home"},
 ]
 DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday"]
 
@@ -304,7 +304,7 @@ def save_schedule(student_id, schedule):
     sb = get_sb()
     if not sb: return
     try:
-        data = {{"student_id": student_id, "schedule": json.dumps(schedule)}}
+        data = {"student_id": student_id, "schedule": json.dumps(schedule)}
         ex = sb.table("scatter_plot_schedules").select("id").eq("student_id", student_id).execute()
         if ex.data:
             sb.table("scatter_plot_schedules").update(data).eq("student_id", student_id).execute()
@@ -370,7 +370,7 @@ if tracked:
 # STUDENT SELECTOR
 # ════════════════════════════════════════════════════════════════════════════
 students     = load_students_cached()
-student_opts = {{s["id"]: f"{{s['name']}}  ({{s.get('program','')}})" for s in students}}
+student_opts = {s["id"]: f"{s['name']}  ({s.get('program','')})" for s in students}
 ids     = list(student_opts.keys())
 cur_idx = ids.index(ss.spt_student_id) if ss.spt_student_id in ids else 0
 
@@ -409,19 +409,19 @@ with st.expander("➕ Add a new student"):
                 sb = get_sb()
                 if sb:
                     try:
-                        full_name = f"{{ns_first.strip()}} {{ns_last.strip()}}"
-                        sb.table("students").insert({{
+                        full_name = f"{ns_first.strip()} {ns_last.strip()}"
+                        sb.table("students").insert({
                             "first_name": ns_first.strip(), "last_name": ns_last.strip(),
                             "name": full_name, "edid": ns_edid.strip(),
                             "program": ns_program, "grade": ns_grade,
                             "dob": ns_dob.isoformat() if ns_dob else None,
                             "placement_start": date.today().isoformat(), "archived": False,
-                        }}).execute()
+                        }).execute()
                         load_students_cached.clear()
-                        st.success(f"✅ {{full_name}} added — select them from the dropdown.")
+                        st.success(f"✅ {full_name} added — select them from the dropdown.")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Could not save student: {{e}}")
+                        st.error(f"Could not save student: {e}")
 
 # Student change — auto-load behaviours and most recent period
 if selected_id != ss.spt_student_id:
@@ -451,7 +451,7 @@ if selected_id != ss.spt_student_id:
                           .eq("student_id", selected_id)
                           .order("created_at", desc=True).limit(20).execute())
                 if recent.data:
-                    beh_map = {{}}
+                    beh_map = {}
                     for row in recent.data:
                         bi  = int(row.get("behaviour_index",0) or 0)
                         lbl = (row.get("behaviour_label") or "").strip()
@@ -461,9 +461,9 @@ if selected_id != ss.spt_student_id:
                         tb = (recent.data[0].get("target_behaviours") or "").strip()
                         if " | " in tb:
                             parts = [p.strip() for p in tb.split(" | ") if p.strip()]
-                            beh_map = {{i: p for i,p in enumerate(parts)}}
+                            beh_map = {i: p for i,p in enumerate(parts)}
                         elif tb:
-                            beh_map = {{0: tb}}
+                            beh_map = {0: tb}
                     ss.spt_beh1 = beh_map.get(0,"")
                     ss.spt_beh2 = beh_map.get(1,"")
         except Exception:
@@ -520,7 +520,7 @@ if periods:
 
     # Period selector (to view historical periods)
     if len(periods) > 1:
-        period_labels = {{
+        period_labels = {
             p["id"]: (
                 f"{'✅ ' if not p.get('end_date') else ''}"
                 f"{p.get('label') or ('Period ' + str(len(periods)-i))}"
@@ -531,7 +531,7 @@ if periods:
                 + ")"
             )
             for i, p in enumerate(periods)
-        }}
+        }
         pc1, pc2 = st.columns([4, 1])
         with pc1:
             chosen_period_id = st.selectbox(
@@ -630,8 +630,8 @@ with t_record:
     # Load week data (filtered to current period)
     week_df = load_week_obs(student_id, week_start, week_end, ss.spt_period_id)
 
-    # Build cell lookup: {{beh_index: {{time_slot: {{day: {{id, value}}}}}}}}
-    cell_data = {{i: {{}} for i in range(len(behaviours))}}
+    # Build cell lookup: {beh_index: {time_slot: {day: {id, value}}}}
+    cell_data = {i: {} for i in range(len(behaviours))}
     if not week_df.empty:
         for _, row in week_df.iterrows():
             t   = row.get("time_slot","")
@@ -640,8 +640,8 @@ with t_record:
             rid = row.get("id","")
             val = row.get("value","")
             if not t or not d or bi not in cell_data: continue
-            if t not in cell_data[bi]: cell_data[bi][t] = {{}}
-            cell_data[bi][t][d] = {{"id": rid, "value": val}}
+            if t not in cell_data[bi]: cell_data[bi][t] = {}
+            cell_data[bi][t][d] = {"id": rid, "value": val}
 
     # Legend
     st.markdown(
@@ -661,9 +661,9 @@ with t_record:
     )
 
     # Grids — one tab per behaviour
-    beh_tabs = st.tabs([f"Behaviour {{i+1}}: {{b[:35]}}{{\'…\' if len(b)>35 else \'\'}}"
+    beh_tabs = st.tabs([f"Behaviour {i+1}: {b[:35] + ('…' if len(b)>35 else '')}"
                         for i, b in enumerate(behaviours)])
-    day_dates = {{DAYS[i]: (week_start + timedelta(days=i)).strftime("%-d/%m") for i in range(5)}}
+    day_dates = {DAYS[i]: (week_start + timedelta(days=i)).strftime("%-d/%m") for i in range(5)}
     today_day = DAYS[date.today().weekday()] if date.today().weekday() < 5 else None
 
     for bi, btab in enumerate(beh_tabs):
@@ -672,28 +672,28 @@ with t_record:
             for d in DAYS:
                 is_td = (d == today_day and is_this)
                 bg    = 'background:#1a4d8a;' if is_td else ''
-                th   += (f'<th style="{{bg}}">{d[:3]}<br>'
+                th   += (f'<th style="{bg}">{d[:3]}<br>'
                          f'<span style="font-weight:400;font-size:.62rem;">{day_dates[d]}</span></th>')
 
             rows_html = ""
             for slot in schedule:
                 t   = slot["time"]
                 act = slot["activity"]
-                rows_html += f'<tr><td class="tl">{{t}}</td><td class="al">{{act}}</td>'
+                rows_html += f'<tr><td class="tl">{t}</td><td class="al">{act}</td>'
                 for d in DAYS:
-                    cell = cell_data.get(bi,{{}}).get(t,{{}}).get(d)
+                    cell = cell_data.get(bi,{}).get(t,{}).get(d)
                     if cell:
                         v   = cell["value"]
-                        cls = {{"1":"c1","2":"c2","X":"cx","0":"c0"}}.get(v,"ce")
+                        cls = {"1":"c1","2":"c2","X":"cx","0":"c0"}.get(v,"ce")
                         disp = "✓" if v == "0" else v
-                        rows_html += f'<td class="{{cls}}">{{disp}}</td>'
+                        rows_html += f'<td class="{cls}">{disp}</td>'
                     else:
                         rows_html += '<td class="ce">·</td>'
                 rows_html += "</tr>"
 
             st.markdown(
                 f'<div class="grid-wrap"><table class="sg">'
-                f'<thead><tr>{{th}}</tr></thead><tbody>{{rows_html}}</tbody></table></div>',
+                f'<thead><tr>{th}</tr></thead><tbody>{rows_html}</tbody></table></div>',
                 unsafe_allow_html=True
             )
 
@@ -710,11 +710,11 @@ with t_record:
                     ].shape[0]
                     grand += n
                     tc[i].markdown(
-                        f"<div class='kpi'><div class='val'>{{n}}</div><div class='lbl'>{{d[:3]}}</div></div>",
+                        f"<div class='kpi'><div class='val'>{n}</div><div class='lbl'>{d[:3]}</div></div>",
                         unsafe_allow_html=True
                     )
                 tc[5].markdown(
-                    f"<div class='kpi kpi-a'><div class='val'>{{grand}}</div>"
+                    f"<div class='kpi kpi-a'><div class='val'>{grand}</div>"
                     f"<div class='lbl'>Incidents</div></div>", unsafe_allow_html=True
                 )
 
@@ -737,19 +737,19 @@ with t_record:
     sel_date     = week_start + timedelta(days=DAYS.index(sel_day))
 
     for bi, beh in enumerate(behaviours):
-        existing = cell_data.get(bi,{{}}).get(sel_time,{{}}).get(sel_day)
+        existing = cell_data.get(bi,{}).get(sel_time,{}).get(sel_day)
         cur_val  = existing["value"] if existing else ""
 
-        val_styles = {{
+        val_styles = {
             "1": "background:#dbeafe;color:#1d4ed8",
             "2": "background:#fee2e2;color:#b91c1c",
             "X": "background:#f3f4f6;color:#6b7280",
             "0": "background:#f0fdf4;color:#15803d",
-        }}
+        }
         cur_disp  = "✓" if cur_val == "0" else cur_val
         cur_badge = (
             f'<span style="padding:.1rem .45rem;border-radius:8px;font-weight:700;'
-            f'{{val_styles.get(cur_val,"")}};font-size:.75rem;">{{cur_disp}}</span>'
+            f'{val_styles.get(cur_val,"")};font-size:.75rem;">{cur_disp}</span>'
             if cur_val else '<span style="color:#ccc;font-size:.72rem;">—</span>'
         )
 
@@ -757,36 +757,36 @@ with t_record:
         with rc1:
             st.markdown(
                 f'<div style="padding:.55rem 0 .2rem;font-size:.82rem;font-weight:600;color:#334155;">'
-                f'B{{bi+1}}: {{beh[:50]}}{{"…" if len(beh)>50 else ""}} &nbsp;{{cur_badge}}</div>',
+                f'B{bi+1}: {beh[:50]}{"…" if len(beh)>50 else ""} &nbsp;{cur_badge}</div>',
                 unsafe_allow_html=True
             )
         with rc2:
-            if st.button("1", key=f"spt_b{{bi}}_1", use_container_width=True, type="primary"):
+            if st.button("1", key=f"spt_b{bi}_1", use_container_width=True, type="primary"):
                 upsert_obs(student_id, student_name, sel_date, sel_day, sel_time,
                            sel_activity, "1", bi, beh, " | ".join(behaviours),
                            ss.spt_period_id, existing["id"] if existing else None)
                 st.rerun()
         with rc3:
-            if st.button("2", key=f"spt_b{{bi}}_2", use_container_width=True):
+            if st.button("2", key=f"spt_b{bi}_2", use_container_width=True):
                 upsert_obs(student_id, student_name, sel_date, sel_day, sel_time,
                            sel_activity, "2", bi, beh, " | ".join(behaviours),
                            ss.spt_period_id, existing["id"] if existing else None)
                 st.rerun()
         with rc4:
-            if st.button("X", key=f"spt_b{{bi}}_x", use_container_width=True):
+            if st.button("X", key=f"spt_b{bi}_x", use_container_width=True):
                 upsert_obs(student_id, student_name, sel_date, sel_day, sel_time,
                            sel_activity, "X", bi, beh, " | ".join(behaviours),
                            ss.spt_period_id, existing["id"] if existing else None)
                 st.rerun()
         with rc5:
-            if st.button("✓", key=f"spt_b{{bi}}_0", use_container_width=True,
+            if st.button("✓", key=f"spt_b{bi}_0", use_container_width=True,
                          help="Observed — no behaviour"):
                 upsert_obs(student_id, student_name, sel_date, sel_day, sel_time,
                            sel_activity, "0", bi, beh, " | ".join(behaviours),
                            ss.spt_period_id, existing["id"] if existing else None)
                 st.rerun()
         with rc6:
-            if cur_val and st.button("✕", key=f"spt_b{{bi}}_clr", use_container_width=True,
+            if cur_val and st.button("✕", key=f"spt_b{bi}_clr", use_container_width=True,
                                      help="Clear this cell"):
                 if existing:
                     delete_obs(existing["id"])
@@ -801,10 +801,10 @@ with t_record:
                 beh = behaviours[bi] if bi < len(behaviours) else row.get("behaviour_label","?")
                 val = row.get("value","")
                 disp = "✓ (no behaviour)" if val=="0" else val
-                entries.append({{
-                    "label": f"B{{bi+1}} · {{row['day_of_week']}} {{row['time_slot']}} — {{disp}}  ({{beh[:25]}})",
+                entries.append({
+                    "label": f"B{bi+1} · {row['day_of_week']} {row['time_slot']} — {disp}  ({beh[:25]})",
                     "id":    row["id"],
-                }})
+                })
         if not entries:
             st.caption("No entries this week.")
         else:
@@ -827,20 +827,20 @@ with t_record:
         for i, slot in enumerate(sched):
             sc1, sc2, sc3, sc4, sc5 = st.columns([1.5,3,0.55,0.55,0.55])
             with sc1:
-                nt = st.text_input("Time",     slot["time"],     key=f"st_{{i}}", label_visibility="collapsed")
+                nt = st.text_input("Time",     slot["time"],     key=f"st_{i}", label_visibility="collapsed")
             with sc2:
-                na = st.text_input("Activity", slot["activity"], key=f"sa_{{i}}", label_visibility="collapsed")
+                na = st.text_input("Activity", slot["activity"], key=f"sa_{i}", label_visibility="collapsed")
             with sc3:
-                if i > 0 and st.button("↑", key=f"su_{{i}}"):
+                if i > 0 and st.button("↑", key=f"su_{i}"):
                     sched[i], sched[i-1] = sched[i-1], sched[i]; changed = True
             with sc4:
-                if i < len(sched)-1 and st.button("↓", key=f"sd_{{i}}"):
+                if i < len(sched)-1 and st.button("↓", key=f"sd_{i}"):
                     sched[i], sched[i+1] = sched[i+1], sched[i]; changed = True
             with sc5:
-                if st.button("✕", key=f"sx_{{i}}"):
+                if st.button("✕", key=f"sx_{i}"):
                     sched.pop(i); changed = True
             if nt != slot["time"] or na != slot["activity"]:
-                sched[i] = {{"time":nt,"activity":na}}; changed = True
+                sched[i] = {"time":nt,"activity":na}; changed = True
             if changed:
                 ss.spt_schedule = sched; save_schedule(student_id, sched); st.rerun()
 
@@ -852,7 +852,7 @@ with t_record:
             st.markdown("<div style='padding-top:1.8rem;'>", unsafe_allow_html=True)
             if st.button("Add", key="sched_add", use_container_width=True):
                 if new_t.strip():
-                    sched.append({{"time":new_t.strip(),"activity":new_a.strip()}})
+                    sched.append({"time":new_t.strip(),"activity":new_a.strip()})
                     ss.spt_schedule = sched; save_schedule(student_id, sched); st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
         if st.button("↺ Reset to default schedule", key="sched_reset"):
@@ -864,7 +864,7 @@ with t_record:
 # TAB 2 — ANALYSIS (incidents only: values 1 and 2, excludes 0 and X)
 # ════════════════════════════════════════════════════════════════════════════
 with t_analysis:
-    st.markdown(f"#### {{student_name}} — Scatter Plot Analysis")
+    st.markdown(f"#### {student_name} — Scatter Plot Analysis")
     st.caption("Analysis includes only values 1 (single) and 2 (multiple). "
                "✓ (observed, no behaviour) and X (evacuation) are excluded from charts.")
 
@@ -897,10 +897,10 @@ with t_analysis:
     n_inc = n1 + n2
 
     k1,k2,k3,k4 = st.columns(4)
-    k1.markdown(f"<div class='kpi'><div class='val'>{{n_inc}}</div><div class='lbl'>Incident intervals</div></div>", unsafe_allow_html=True)
-    k2.markdown(f"<div class='kpi'><div class='val'>{{n1}}</div><div class='lbl'>Single (1)</div></div>", unsafe_allow_html=True)
-    k3.markdown(f"<div class='kpi kpi-a'><div class='val'>{{n2}}</div><div class='lbl'>Multiple (2)</div></div>", unsafe_allow_html=True)
-    k4.markdown(f"<div class='kpi kpi-g'><div class='val'>{{n0}}</div><div class='lbl'>✓ No behaviour observed</div></div>", unsafe_allow_html=True)
+    k1.markdown(f"<div class='kpi'><div class='val'>{n_inc}</div><div class='lbl'>Incident intervals</div></div>", unsafe_allow_html=True)
+    k2.markdown(f"<div class='kpi'><div class='val'>{n1}</div><div class='lbl'>Single (1)</div></div>", unsafe_allow_html=True)
+    k3.markdown(f"<div class='kpi kpi-a'><div class='val'>{n2}</div><div class='lbl'>Multiple (2)</div></div>", unsafe_allow_html=True)
+    k4.markdown(f"<div class='kpi kpi-g'><div class='val'>{n0}</div><div class='lbl'>✓ No behaviour observed</div></div>", unsafe_allow_html=True)
 
     if inc_filt.empty:
         st.success("🎉 No incidents recorded in this period — only 'no behaviour' observations.")
@@ -909,13 +909,13 @@ with t_analysis:
     st.markdown("---")
 
     # Build time label map from schedule
-    time_labels = {{s["time"]: f"{{s['time']}}  {{s['activity']}}" for s in schedule}}
+    time_labels = {s["time"]: f"{s['time']}  {s['activity']}" for s in schedule}
     def _sort_t(t):
         try: h,m = str(t).split(":"); return int(h)*60+int(m)
         except: return 999
 
     # Per-behaviour scatter plots
-    an_tabs = st.tabs([f"Behaviour {{i+1}}: {{b[:40]}}" for i,b in enumerate(behaviours)] + ["Combined"])
+    an_tabs = st.tabs([f"Behaviour {i+1}: {b[:40]}" for i,b in enumerate(behaviours)] + ["Combined"])
 
     for bi, abtab in enumerate(an_tabs[:-1]):
         with abtab:
@@ -928,15 +928,15 @@ with t_analysis:
             if b_inc.empty:
                 st.info("No incidents for this behaviour in the selected range.")
                 if not b_zero.empty:
-                    st.success(f"✅ {{len(b_zero)}} 'no behaviour observed' records — great compliance tracking!")
+                    st.success(f"✅ {len(b_zero)} 'no behaviour observed' records — great compliance tracking!")
                 continue
 
             bv1 = int((b_inc["value"]=="1").sum())
             bv2 = int((b_inc["value"]=="2").sum())
             kc1,kc2,kc3 = st.columns(3)
-            kc1.markdown(f"<div class='kpi'><div class='val'>{{bv1+bv2}}</div><div class='lbl'>Incident intervals</div></div>", unsafe_allow_html=True)
-            kc2.markdown(f"<div class='kpi'><div class='val'>{{bv1}}</div><div class='lbl'>Single (1)</div></div>", unsafe_allow_html=True)
-            kc3.markdown(f"<div class='kpi kpi-a'><div class='val'>{{bv2}}</div><div class='lbl'>Multiple (2)</div></div>", unsafe_allow_html=True)
+            kc1.markdown(f"<div class='kpi'><div class='val'>{bv1+bv2}</div><div class='lbl'>Incident intervals</div></div>", unsafe_allow_html=True)
+            kc2.markdown(f"<div class='kpi'><div class='val'>{bv1}</div><div class='lbl'>Single (1)</div></div>", unsafe_allow_html=True)
+            kc3.markdown(f"<div class='kpi kpi-a'><div class='val'>{bv2}</div><div class='lbl'>Multiple (2)</div></div>", unsafe_allow_html=True)
 
             st.markdown("---")
 
@@ -946,7 +946,7 @@ with t_analysis:
             b_inc["time_label"] = b_inc["time_slot"].map(time_labels).fillna(b_inc["time_slot"])
             b_inc["hover"]      = (
                 b_inc["date_str"] + "<br>" + b_inc["time_label"] + "<br>" +
-                b_inc["value"].map({{"1":"Single occurrence","2":"Multiple occurrences"}}).fillna(b_inc["value"]) +
+                b_inc["value"].map({"1":"Single occurrence","2":"Multiple occurrences"}).fillna(b_inc["value"]) +
                 "<br>" + b_inc["day_of_week"]
             )
 
@@ -964,18 +964,18 @@ with t_analysis:
                     x=inc1["date_str"], y=inc1["time_label"], mode="markers",
                     name="1 — single", marker=dict(size=16, color="#3b82f6", opacity=.85,
                     line=dict(color="white",width=1.5)),
-                    hovertemplate="%{{customdata}}<extra></extra>", customdata=inc1["hover"],
+                    hovertemplate="%{customdata}<extra></extra>", customdata=inc1["hover"],
                 ))
             if not inc2.empty:
                 fig.add_trace(go.Scatter(
                     x=inc2["date_str"], y=inc2["time_label"], mode="markers",
                     name="2 — multiple", marker=dict(size=26, color="#ef4444", opacity=.85,
                     line=dict(color="white",width=2)),
-                    hovertemplate="%{{customdata}}<extra></extra>", customdata=inc2["hover"],
+                    hovertemplate="%{customdata}<extra></extra>", customdata=inc2["hover"],
                 ))
 
             fig.update_layout(
-                title=dict(text=f"Scatter Plot — {{behaviours[bi]}}", font=dict(size=14,color="#0f172a"), x=0),
+                title=dict(text=f"Scatter Plot — {behaviours[bi]}", font=dict(size=14,color="#0f172a"), x=0),
                 height=max(420, len(ordered_labels)*28+120),
                 xaxis=dict(title="Date", categoryorder="array", categoryarray=date_order,
                            showgrid=True, gridcolor="#e2e8f0", tickfont=dict(size=11), side="top"),
@@ -1028,7 +1028,7 @@ with t_analysis:
         if "behaviour_index" in inc_filt.columns:
             inc_filt2 = inc_filt.copy()
             inc_filt2["Behaviour"] = inc_filt2["behaviour_index"].apply(
-                lambda i: f"B{{int(i)+1}}: {{behaviours[int(i)][:35]}}" if int(i)<len(behaviours) else f"B{{int(i)+1}}"
+                lambda i: f"B{int(i)+1}: {behaviours[int(i)][:35]}" if int(i)<len(behaviours) else f"B{int(i)+1}"
             )
         else:
             inc_filt2 = inc_filt.copy()
@@ -1037,10 +1037,10 @@ with t_analysis:
         inc_filt2["date_str"]   = inc_filt2["obs_date_dt"].dt.strftime("%a %-d %b")
         inc_filt2["date_order"] = inc_filt2["obs_date_dt"].dt.date
         inc_filt2["time_label"] = inc_filt2["time_slot"].map(time_labels).fillna(inc_filt2["time_slot"])
-        inc_filt2["size_val"]   = inc_filt2["value"].map({{"1":16,"2":26}}).fillna(16)
+        inc_filt2["size_val"]   = inc_filt2["value"].map({"1":16,"2":26}).fillna(16)
 
         fig_c = go.Figure()
-        colours = {{"B1":"#3b82f6","B2":"#ef4444"}}
+        colours = {"B1":"#3b82f6","B2":"#ef4444"}
         for b_label in inc_filt2["Behaviour"].unique():
             sub  = inc_filt2[inc_filt2["Behaviour"]==b_label]
             idx  = list(inc_filt2["Behaviour"].unique()).index(b_label)
@@ -1050,7 +1050,7 @@ with t_analysis:
                 if s.empty: continue
                 fig_c.add_trace(go.Scatter(
                     x=s["date_str"], y=s["time_label"], mode="markers",
-                    name=f"{{b_label}} ({{'single' if val=='1' else 'multiple'}})",
+                    name=f"{b_label} ({'single' if val=='1' else 'multiple'})",
                     marker=dict(size=sz, color=col, opacity=.75,
                                 line=dict(color="white",width=1.5),
                                 symbol="circle" if val=="1" else "circle-open"),
@@ -1077,9 +1077,9 @@ with t_analysis:
     st.markdown("---")
     dl = filt.copy()
     dl["obs_date"] = dl["obs_date_dt"].dt.strftime("%-d/%m/%Y")
-    dl["value_desc"] = dl["value"].map({{"1":"Single","2":"Multiple","X":"Evacuation","0":"No behaviour observed"}})
+    dl["value_desc"] = dl["value"].map({"1":"Single","2":"Multiple","X":"Evacuation","0":"No behaviour observed"})
     csv = dl[["obs_date","day_of_week","time_slot","activity","value","value_desc",
               "behaviour_index","behaviour_label","target_behaviours","created_by"]].to_csv(index=False)
     st.download_button("📥 Download CSV", csv,
-        file_name=f"ScatterPlot_{{student_name.replace(' ','_')}}_{{date_from}}_{{date_to}}.csv",
+        file_name=f"ScatterPlot_{student_name.replace(' ','_')}_{date_from}_{date_to}.csv",
         mime="text/csv", use_container_width=True)
