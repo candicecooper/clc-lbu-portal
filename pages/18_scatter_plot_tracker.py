@@ -422,7 +422,6 @@ with st.expander("➕ Add a new student"):
                             "name":            full_name,
                             "edid":            ns_edid.strip(),
                             "program":         ns_program,
-                            "grade":           grade_str,
                             "year_level":      grade_int,
                             "dob":             ns_dob.isoformat() if ns_dob else None,
                             "placement_start": date.today().isoformat(),
