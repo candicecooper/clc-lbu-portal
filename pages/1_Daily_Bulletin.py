@@ -220,18 +220,36 @@ def _t2m(ts):
         return -1
 
 def blocks_to_slots(blocks, slot_list=None):
-    """Convert [{start, end, role, person}] to {slot:{value,person}} for grid rendering."""
+    """Convert [{start, end, role, person}] to {slot:{value,person}} for grid rendering.
+
+    End times are treated as INCLUSIVE so that a block entered as "12:00 → 12:30"
+    fills the 12:00, 12:15, AND 12:30 timetable columns — matching user expectation
+    that "End: 12:30" means "still in this role at the 12:30 mark."
+
+    When two blocks share a boundary (e.g. A ends at 12:30, B starts at 12:30),
+    the LATER-starting block wins that slot (B), so transitions are always shown
+    correctly — the new role takes over at its stated start time.
+    """
     if slot_list is None:
         slot_list = PC_TIME_SLOTS
     result = {s: {"value":"","person":""} for s in slot_list}
     for slot in slot_list:
         sm = _t2m(slot)
+        best        = None
+        best_bs     = -1
         for block in (blocks or []):
             bs = _t2m(block.get("start",""))
             be = _t2m(block.get("end",""))
-            if bs >= 0 and be > bs and bs <= sm < be:
-                result[slot] = {"value": block.get("role",""), "person": block.get("person","")}
-                break
+            if bs < 0 or be <= bs:
+                continue          # invalid block — skip
+            # Inclusive interval [bs, be]: slot is covered if bs ≤ sm ≤ be.
+            # Among all matching blocks, prefer the one with the latest start
+            # so that when two blocks share a boundary the incoming block wins.
+            if bs <= sm <= be and bs > best_bs:
+                best    = block
+                best_bs = bs
+        if best:
+            result[slot] = {"value": best.get("role",""), "person": best.get("person","")}
     return result
 
 def _pc_row_html(label, normal_prog, ts, slot_list=None, dark=False):
