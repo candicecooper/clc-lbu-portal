@@ -203,22 +203,32 @@ def _slot_color_bg(val): return ROLE_COLORS.get(val, "#f9fafb")
 def _slot_color_fg(val): return ROLE_COLORS_DARK.get(val, "#374151")
 
 # ── TIMETABLE RENDERING HELPERS ───────────────────────────────
+def _t2m(ts):
+    """Convert a school-day time string like '9:00' or '1:30' to minutes.
+    School runs 9:00 am – 2:45 pm.  Hours 1–8 are treated as 13–20 so that
+    PM comparisons work correctly (e.g. '1:15' → 795, not 75).
+    Without this fix, any block whose END time is in the afternoon (1:xx–8:xx)
+    fails the be > bs guard and is silently dropped from the timetable.
+    """
+    try:
+        h, m = str(ts).strip().split(":")
+        h, m = int(h), int(m)
+        if h < 9:          # 1:xx – 8:xx are afternoon in school context
+            h += 12
+        return h * 60 + m
+    except Exception:
+        return -1
+
 def blocks_to_slots(blocks, slot_list=None):
     """Convert [{start, end, role, person}] to {slot:{value,person}} for grid rendering."""
     if slot_list is None:
         slot_list = PC_TIME_SLOTS
-    def t2m(ts):
-        try:
-            h, m = str(ts).strip().split(":")
-            return int(h)*60 + int(m)
-        except:
-            return -1
     result = {s: {"value":"","person":""} for s in slot_list}
     for slot in slot_list:
-        sm = t2m(slot)
+        sm = _t2m(slot)
         for block in (blocks or []):
-            bs = t2m(block.get("start",""))
-            be = t2m(block.get("end",""))
+            bs = _t2m(block.get("start",""))
+            be = _t2m(block.get("end",""))
             if bs >= 0 and be > bs and bs <= sm < be:
                 result[slot] = {"value": block.get("role",""), "person": block.get("person","")}
                 break
@@ -1368,7 +1378,6 @@ with page_tab:
                         with bc3:
                             block["role"]  = st.selectbox("Role",  ROLE_OPTIONS,          key=r_key)
                         with bc4:
-                            # Use live widget-state role so the label is always current
                             live_role = st.session_state.get(r_key, "")
                             if live_role == "Lunch Cover":
                                 block["person"] = st.text_input(
@@ -1386,9 +1395,6 @@ with page_tab:
                             st.markdown("<div style='padding-top:1.7rem;'>", unsafe_allow_html=True)
                             if st.button("✕", key=f"{pfx}_r{ri}_b{bi}_del"):
                                 blocks.pop(bi)
-                                # Clear widget-state keys for this block AND every block
-                                # after it — their indices shift down by 1 so stale keys
-                                # must be removed and re-seeded from the updated block dicts.
                                 for old_bi in range(bi, len(blocks) + 1):
                                     for sfx in ("_s","_e","_r","_p"):
                                         st.session_state.pop(f"{pfx}_r{ri}_b{old_bi}{sfx}", None)
@@ -1398,8 +1404,6 @@ with page_tab:
                             if bi < len(blocks)-1:
                                 st.markdown("<div style='padding-top:1.7rem;'>", unsafe_allow_html=True)
                                 if st.button("↓", key=f"{pfx}_r{ri}_b{bi}_dn", help="Move down"):
-                                    # Swap block dicts AND their widget-state keys so display
-                                    # stays in sync after the index shift.
                                     blocks[bi], blocks[bi+1] = blocks[bi+1], blocks[bi]
                                     for sfx in ("_s","_e","_r","_p"):
                                         ka = f"{pfx}_r{ri}_b{bi}{sfx}"
@@ -1411,10 +1415,48 @@ with page_tab:
                                     st.rerun()
                                 st.markdown("</div>", unsafe_allow_html=True)
 
+                        # ── Per-block start≥end warning ───────────
+                        # Shown inline under each block row so the user can see
+                        # immediately which block is broken, without waiting to save.
+                        live_s = st.session_state.get(s_key, "")
+                        live_e = st.session_state.get(e_key, "")
+                        live_r = st.session_state.get(r_key, "")
+                        if live_s and live_e and live_r:
+                            if _t2m(live_s) >= _t2m(live_e):
+                                st.markdown(
+                                    f'<div style="background:#fee2e2;border:1.5px solid #fca5a5;'
+                                    f'border-radius:6px;padding:.35rem .75rem;margin:.2rem 0 .4rem;'
+                                    f'font-size:.75rem;color:#991b1b;">'
+                                    f'⛔ Block {bi+1}: <strong>Start ({live_s}) is the same as or after End ({live_e})</strong> '
+                                    f'— this block will be skipped on the timetable. '
+                                    f'Swap the times or delete this block.'
+                                    f'</div>',
+                                    unsafe_allow_html=True
+                                )
+
                     # ── Live timetable preview ────────────────
                     if blocks:
-                        # Block dicts are kept in sync with widgets (via the return-value
-                        # assignments above), so blocks_to_slots(blocks) is authoritative.
+                        # Collect any broken blocks so we can show a summary above the grid
+                        broken = []
+                        for bi2, block2 in enumerate(blocks):
+                            ls = st.session_state.get(f"{pfx}_r{ri}_b{bi2}_s", block2.get("start",""))
+                            le = st.session_state.get(f"{pfx}_r{ri}_b{bi2}_e", block2.get("end",""))
+                            lr = st.session_state.get(f"{pfx}_r{ri}_b{bi2}_r", block2.get("role",""))
+                            if ls and le and lr and _t2m(ls) >= _t2m(le):
+                                broken.append(bi2 + 1)
+
+                        if broken:
+                            st.markdown(
+                                f'<div style="background:#fff7ed;border:1.5px solid #fed7aa;'
+                                f'border-radius:6px;padding:.4rem .85rem;margin:.3rem 0;">'
+                                f'⚠️ <strong>Block{"s" if len(broken)>1 else ""} '
+                                f'{", ".join(str(b) for b in broken)} '
+                                f'{"have" if len(broken)>1 else "has"} start ≥ end</strong> and '
+                                f'will not appear on the timetable. Fix the times above.'
+                                f'</div>',
+                                unsafe_allow_html=True
+                            )
+
                         ts_preview = blocks_to_slots(blocks)
                         if any(v.get("value","") for v in ts_preview.values()):
                             preview_html = _timetable_grid_html(
@@ -1476,10 +1518,30 @@ with page_tab:
 
                 # ── Save / Cancel ─────────────────────────────
                 st.markdown("---")
+
+                # Pre-compute any broken blocks across ALL rows so we can block save
+                all_broken = []
+                for ri2, row2 in enumerate(st.session_state[rows_key]):
+                    for bi2 in range(len(row2.get("blocks", []))):
+                        ls2 = st.session_state.get(f"{pfx}_r{ri2}_b{bi2}_s", "")
+                        le2 = st.session_state.get(f"{pfx}_r{ri2}_b{bi2}_e", "")
+                        lr2 = st.session_state.get(f"{pfx}_r{ri2}_b{bi2}_r", "")
+                        if ls2 and le2 and lr2 and _t2m(ls2) >= _t2m(le2):
+                            rname = st.session_state.get(f"{pfx}_r{ri2}_name","") or f"Row {ri2+1}"
+                            all_broken.append(f"{rname} — Block {bi2+1} ({ls2}→{le2})")
+
+                if all_broken:
+                    st.error(
+                        "⛔ **Cannot save — the following blocks have Start ≥ End and would be lost:**\n\n"
+                        + "\n".join(f"- {b}" for b in all_broken)
+                        + "\n\nFix or delete these blocks before saving."
+                    )
+
                 sa1, sa2 = st.columns(2)
                 with sa1:
                     if st.button("💾 Save Program Change", type="primary",
-                                 key=f"{pfx}_save", use_container_width=True):
+                                 key=f"{pfx}_save", use_container_width=True,
+                                 disabled=bool(all_broken)):
                         if reason == "Staff Absence" and not staff_absent.strip():
                             st.warning("Please enter the absent staff member's name.")
                         else:
