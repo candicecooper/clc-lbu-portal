@@ -723,35 +723,179 @@ with t_record:
     with st.expander("⚙️ Manage Schedule"):
         st.caption("Schedule is saved per student.")
         sched = ss.spt_schedule
+
+        # ── ACTIVITY SUGGESTIONS LIST ─────────────────────────────────────
+        ACTIVITY_SUGGESTIONS = [
+            "Reading", "Writing", "Literacy", "Using a digital device",
+            "Break", "Playground", "Yard", "Maths task", "Literacy task",
+            "Independent task", "Spill out room / space", "Cooking", "Other",
+            "De-escalation activity", "Interoception", "Breakfast", "Fitness",
+            "Quiet Time", "Recess", "Lunch eating", "Lunch", "I.C.T.", "Home",
+        ]
+
+        # ── EXISTING SLOTS ────────────────────────────────────────────────
+        # Header row
+        h1,h2,h3 = st.columns([1.5,3,1.65])
+        with h1: st.caption("**Time**")
+        with h2: st.caption("**Activity**")
+        with h3: st.caption("**Reorder / Remove**")
+
         changed = False
         for i, slot in enumerate(sched):
-            sc1,sc2,sc3,sc4,sc5 = st.columns([1.5,3,.55,.55,.55])
-            with sc1: nt = st.text_input("T", slot["time"],     key=f"st_{i}", label_visibility="collapsed")
-            with sc2: na = st.text_input("A", slot["activity"], key=f"sa_{i}", label_visibility="collapsed")
+            sc1, sc2, sc3, sc4, sc5 = st.columns([1.5, 3, .55, .55, .55])
+            with sc1:
+                nt = st.text_input("T", slot["time"], key=f"st_{i}",
+                                   label_visibility="collapsed")
+            with sc2:
+                # Selectbox with custom option for autofill + text fallback
+                act_opts = ["— type below —"] + ACTIVITY_SUGGESTIONS
+                cur_act  = slot["activity"]
+                sel_idx  = (ACTIVITY_SUGGESTIONS.index(cur_act) + 1
+                            if cur_act in ACTIVITY_SUGGESTIONS else 0)
+                sel_act  = st.selectbox("A", act_opts, index=sel_idx,
+                                        key=f"ssel_{i}", label_visibility="collapsed")
+                if sel_act == "— type below —":
+                    na = st.text_input("Custom activity", value=cur_act,
+                                       key=f"sa_{i}", label_visibility="collapsed",
+                                       placeholder="Type activity name...")
+                else:
+                    na = sel_act
             with sc3:
-                if i > 0 and st.button("↑", key=f"su_{i}"): sched[i],sched[i-1]=sched[i-1],sched[i]; changed=True
+                if i > 0 and st.button("↑", key=f"su_{i}"):
+                    sched[i], sched[i-1] = sched[i-1], sched[i]; changed = True
             with sc4:
-                if i<len(sched)-1 and st.button("↓", key=f"sd_{i}"): sched[i],sched[i+1]=sched[i+1],sched[i]; changed=True
+                if i < len(sched)-1 and st.button("↓", key=f"sd_{i}"):
+                    sched[i], sched[i+1] = sched[i+1], sched[i]; changed = True
             with sc5:
-                if st.button("✕", key=f"sx_{i}"): sched.pop(i); changed=True
-            if nt!=slot["time"] or na!=slot["activity"]:
-                sched[i]={"time":nt,"activity":na}; changed=True
+                if st.button("✕", key=f"sx_{i}"):
+                    sched.pop(i); changed = True
+            if nt != slot["time"] or na != slot["activity"]:
+                sched[i] = {"time": nt, "activity": na}; changed = True
             if changed:
-                ss.spt_schedule=sched; save_schedule_by_name(student_name,sched); st.rerun()
+                ss.spt_schedule = sched
+                save_schedule_by_name(student_name, sched)
+                st.rerun()
+
         st.markdown("---")
-        nc1,nc2,nc3 = st.columns([1.5,3,1])
-        with nc1: new_t = st.text_input("Time",     placeholder="8:45", key="sched_nt")
-        with nc2: new_a = st.text_input("Activity", placeholder="Morning check-in", key="sched_na")
+
+        # ── ADD SINGLE SLOT ───────────────────────────────────────────────
+        st.markdown("**Add a single slot:**")
+        nc1, nc2, nc3 = st.columns([1.5, 3, 1])
+        with nc1:
+            new_t = st.text_input("Time", placeholder="e.g. 8:45", key="sched_nt")
+        with nc2:
+            add_act_opts  = ["— type below —"] + ACTIVITY_SUGGESTIONS
+            add_act_sel   = st.selectbox("Activity", add_act_opts, key="sched_na_sel")
+            if add_act_sel == "— type below —":
+                new_a = st.text_input("Custom", placeholder="Activity name",
+                                      key="sched_na", label_visibility="collapsed")
+            else:
+                new_a = add_act_sel
         with nc3:
             st.markdown("<div style='padding-top:1.8rem;'>", unsafe_allow_html=True)
-            if st.button("Add", key="sched_add", use_container_width=True):
+            if st.button("Add slot", key="sched_add", use_container_width=True):
                 if new_t.strip():
-                    sched.append({"time":new_t.strip(),"activity":new_a.strip()})
-                    ss.spt_schedule=sched; save_schedule_by_name(student_name,sched); st.rerun()
+                    sched.append({"time": new_t.strip(), "activity": new_a.strip()})
+                    ss.spt_schedule = sched
+                    save_schedule_by_name(student_name, sched)
+                    st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
-        if st.button("↺ Reset to default", key="sched_reset"):
-            ss.spt_schedule=DEFAULT_SCHEDULE.copy()
-            save_schedule_by_name(student_name,DEFAULT_SCHEDULE.copy()); st.rerun()
+
+        st.markdown("---")
+
+        # ── TIMELINE GENERATOR ────────────────────────────────────────────
+        st.markdown("**⚡ Generate a timeline automatically:**")
+        st.caption("Enter start time, end time and interval — slots will be created for you.")
+
+        tg1, tg2, tg3, tg4 = st.columns([1.5, 1.5, 1.5, 2])
+        with tg1:
+            tg_start = st.text_input("Start time", value="9:00",
+                                     placeholder="e.g. 9:00", key="tg_start")
+        with tg2:
+            tg_end   = st.text_input("End time",   value="15:00",
+                                     placeholder="e.g. 15:00", key="tg_end")
+        with tg3:
+            tg_freq  = st.selectbox("Interval", [5,10,15,20,30,45,60],
+                                    index=2, key="tg_freq",
+                                    format_func=lambda x: f"{x} min")
+        with tg4:
+            tg_act_opts = ["— type below —"] + ACTIVITY_SUGGESTIONS
+            tg_act_sel  = st.selectbox("Default activity (optional)",
+                                       tg_act_opts, key="tg_act_sel")
+            if tg_act_sel == "— type below —":
+                tg_act = st.text_input("Custom default activity",
+                                       placeholder="Leave blank for none",
+                                       key="tg_act_custom",
+                                       label_visibility="collapsed")
+            else:
+                tg_act = tg_act_sel
+
+        tg_replace = st.checkbox(
+            "Replace entire schedule with generated timeline",
+            value=False, key="tg_replace",
+            help="Unchecked = adds slots to existing schedule"
+        )
+
+        if st.button("⚡ Generate Timeline", key="tg_generate", type="primary"):
+            def _parse_time(ts):
+                ts = ts.strip()
+                try:
+                    h, m = ts.split(":")
+                    return int(h)*60 + int(m)
+                except Exception:
+                    return None
+
+            start_m = _parse_time(tg_start)
+            end_m   = _parse_time(tg_end)
+
+            if start_m is None or end_m is None:
+                st.error("Please enter valid times in HH:MM format (e.g. 9:00, 14:30).")
+            elif end_m <= start_m:
+                st.error("End time must be after start time.")
+            elif tg_freq <= 0:
+                st.error("Interval must be greater than 0.")
+            else:
+                new_slots = []
+                t = start_m
+                while t <= end_m:
+                    h = t // 60
+                    m = t % 60
+                    time_str = f"{h}:{m:02d}"
+                    new_slots.append({"time": time_str, "activity": tg_act.strip()})
+                    t += tg_freq
+
+                if tg_replace:
+                    sched = new_slots
+                else:
+                    # Merge — add slots that don't already exist
+                    existing_times = {s["time"] for s in sched}
+                    for ns in new_slots:
+                        if ns["time"] not in existing_times:
+                            sched.append(ns)
+                    # Sort by time
+                    def _slot_sort(s):
+                        try:
+                            h, m = s["time"].split(":")
+                            return int(h)*60+int(m)
+                        except Exception:
+                            return 999
+                    sched = sorted(sched, key=_slot_sort)
+
+                ss.spt_schedule = sched
+                save_schedule_by_name(student_name, sched)
+                count = len(new_slots)
+                st.success(
+                    f"✅ Generated {count} slots "
+                    f"({tg_start} – {tg_end}, every {tg_freq} min). "
+                    + ("Schedule replaced." if tg_replace else "Merged with existing.")
+                )
+                st.rerun()
+
+        st.markdown("---")
+        if st.button("↺ Reset to default schedule", key="sched_reset"):
+            ss.spt_schedule = DEFAULT_SCHEDULE.copy()
+            save_schedule_by_name(student_name, DEFAULT_SCHEDULE.copy())
+            st.rerun()
 
 
 # ════════════════════════════════════════════════════════════════════════════
