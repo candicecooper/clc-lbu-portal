@@ -515,6 +515,7 @@ schedule = ss.spt_schedule
 tb1, tb2, tb3 = st.columns([1.5, 3, 3])
 with tb1:
     if st.button("← Students", key="back_tracker", use_container_width=True):
+        ss["_sched_expander_open"] = False
         ss.spt_screen = "home"; st.rerun()
 with tb2:
     st.markdown(f"**{student_name}**")
@@ -720,7 +721,14 @@ with t_record:
                 st.markdown("</div>", unsafe_allow_html=True)
 
     # Manage schedule
-    with st.expander("⚙️ Manage Schedule"):
+    # Show any schedule generation message above expander
+    _sched_msg = ss.pop("_sched_msg", None) if "_sched_msg" in ss else None
+    if _sched_msg:
+        st.success(_sched_msg)
+
+    _sched_open = ss.get("_sched_expander_open", False)
+    with st.expander("⚙️ Manage Schedule", expanded=_sched_open):
+        ss["_sched_expander_open"] = True  # stays open while user is in it
         st.caption("Schedule is saved per student.")
         sched = ss.spt_schedule
 
@@ -884,11 +892,12 @@ with t_record:
                 ss.spt_schedule = sched
                 save_schedule_by_name(student_name, sched)
                 count = len(new_slots)
-                st.success(
-                    f"✅ Generated {count} slots "
-                    f"({tg_start} – {tg_end}, every {tg_freq} min). "
+                ss["_sched_msg"] = (
+                    "✅ Generated " + str(count) + " slots "
+                    "(" + tg_start + " – " + tg_end + ", every " + str(tg_freq) + " min). "
                     + ("Schedule replaced." if tg_replace else "Merged with existing.")
                 )
+                ss["_sched_expander_open"] = True
                 st.rerun()
 
         st.markdown("---")
