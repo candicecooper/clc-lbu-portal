@@ -96,6 +96,71 @@ def get_sb():
         return None
 
 
+BEHAVIOUR_CATEGORIES = [
+    "Physical — peer directed",
+    "Physical — adult directed",
+    "Self-injurious",
+    "Property / environment",
+    "Elopement / movement",
+    "Verbal",
+    "Refusal / non-compliance",
+    "Dysregulation / other",
+]
+GROUPINGS = {
+    "i":   "Independent",
+    "1:1": "One-to-one",
+    "sg":  "Small group",
+    "lg":  "Large group",
+    "U":   "Unstructured",
+    "P":   "Peer",
+}
+SETTINGS = ["Classroom","Kitchen","Yard","Playground","Spill-out","Transition","Other"]
+
+
+@st.cache_data(ttl=120)
+def load_behaviour_bank():
+    """Load all behaviours from Supabase bank."""
+    sb = get_sb()
+    if not sb: return {}
+    try:
+        res = sb.table("scatter_behaviour_bank").select("*").order("category").order("description").execute()
+        bank = {}
+        for row in (res.data or []):
+            cat = row["category"]
+            if cat not in bank:
+                bank[cat] = []
+            bank[cat].append({"id": row["id"], "description": row["description"],
+                               "is_custom": row.get("is_custom", False)})
+        return bank
+    except Exception:
+        return {}
+
+
+def add_custom_behaviour(category, description):
+    sb = get_sb()
+    if not sb: return False
+    try:
+        sb.table("scatter_behaviour_bank").insert({
+            "category": category, "description": description, "is_custom": True
+        }).execute()
+        load_behaviour_bank.clear()
+        return True
+    except Exception as e:
+        st.error("Could not save: " + str(e))
+        return False
+
+
+def delete_behaviour(beh_id):
+    sb = get_sb()
+    if not sb: return False
+    try:
+        sb.table("scatter_behaviour_bank").delete().eq("id", beh_id).execute()
+        load_behaviour_bank.clear()
+        return True
+    except Exception:
+        return False
+
+
 def load_all_student_summaries():
     """Return list of dicts per tracked student. Queries in pages to avoid Supabase 1000-row limit."""
     sb = get_sb()
@@ -234,10 +299,13 @@ def upsert_obs(student_name, sel_date, sel_day, sel_time, activity,
         "behaviour_label":    beh_label,
         "target_behaviours":  behaviours_str,
         "tracking_period_id": period_id,
+        "grouping":           "",
+        "setting":            "",
         "created_by":         get_staff_name(),
     }
     minimal = {k: v for k, v in row.items()
-               if k not in ("behaviour_index","behaviour_label","tracking_period_id")}
+               if k not in ("behaviour_index","behaviour_label","tracking_period_id",
+                             "grouping","setting")}
     try:
         if existing_id:
             sb.table("scatter_plot_observations").update(
@@ -325,6 +393,99 @@ st.markdown("""
   &nbsp;·&nbsp; CLC Learning &amp; Behaviour Unit</p>
 </div>
 """, unsafe_allow_html=True)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# BEHAVIOUR PICKER — shared by first period + new period screens
+# ════════════════════════════════════════════════════════════════════════════
+def _behaviour_picker_ui(prefix, bank, label):
+    """Render category → behaviour → tweak selector. Returns final behaviour string."""
+    cats = list(bank.keys()) if bank else BEHAVIOUR_CATEGORIES
+    cat = st.selectbox(f"Category — {label}", ["Select a category…"] + cats,
+                       key=f"{prefix}_cat")
+    if cat == "Select a category…":
+        return ""
+    behs  = bank.get(cat, [])
+    descs = [b["description"] for b in behs]
+    sel   = st.selectbox(f"Specific behaviour — {label}", ["Select…"] + descs,
+                         key=f"{prefix}_beh")
+    if sel == "Select…":
+        return ""
+    tweaked = st.text_input(
+        "Refine wording if needed:",
+        value=sel, key=f"{prefix}_tweak",
+        help="Edit to make it more specific to this student, e.g. add 'during transitions'"
+    )
+    return tweaked.strip()
+
+
+def _render_behaviour_picker(student_name, is_new_period=False):
+    bank = load_behaviour_bank()
+
+    st.markdown("#### Select behaviour(s) to track")
+    st.caption(
+        "Choose from the behaviour bank — pick the most specific description that matches "
+        "what you want to measure. You can refine the wording below the selector."
+    )
+
+    # B1
+    st.markdown("**Behaviour 1 * (required)**")
+    b1 = _behaviour_picker_ui("b1", bank, "Behaviour 1")
+
+    # B2
+    st.markdown("**Behaviour 2** *(optional)*")
+    b2 = _behaviour_picker_ui("b2", bank, "Behaviour 2")
+
+    # Program type
+    prog_type = st.radio(
+        "Program type", ["Group program", "Modified program"],
+        horizontal=True, key="picker_prog_type"
+    )
+
+    # Label
+    label = st.text_input("Period label (optional)", placeholder="e.g. Term 1 Week 4",
+                           key="picker_label")
+
+    # Add custom behaviour
+    with st.expander("➕ Add a custom behaviour to the bank"):
+        cc1, cc2 = st.columns([2, 3])
+        with cc1:
+            custom_cat = st.selectbox("Category", BEHAVIOUR_CATEGORIES, key="custom_cat")
+        with cc2:
+            custom_desc = st.text_input("Behaviour description", key="custom_desc",
+                                        placeholder="e.g. Bangs head on desk when given writing task")
+        if st.button("Add to bank", key="custom_add_btn", type="secondary"):
+            if custom_desc.strip():
+                if add_custom_behaviour(custom_cat, custom_desc.strip()):
+                    st.success("✅ Added to behaviour bank.")
+                    st.rerun()
+            else:
+                st.warning("Please enter a description.")
+
+    st.markdown("---")
+
+    if st.button("✅ Start Tracking", type="primary", use_container_width=True,
+                 key="picker_start_btn"):
+        if not b1:
+            st.error("Please select at least Behaviour 1.")
+            return
+
+        p = create_period(student_name, b1, b2, label)
+        if p:
+            sb2 = get_sb()
+            if sb2:
+                try:
+                    sb2.table("scatter_tracking_periods").update(
+                        {"program_type": prog_type}
+                    ).eq("id", p["id"]).execute()
+                except Exception:
+                    pass
+        ss.spt_beh1      = b1
+        ss.spt_beh2      = b2
+        ss.spt_period_id = p["id"] if p else None
+        ss.spt_prog_type = prog_type
+        ss.spt_screen    = "tracker"
+        st.rerun()
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -470,23 +631,8 @@ if ss.spt_screen == "choose":
                 st.markdown("</div>", unsafe_allow_html=True)
 
     else:
-        # No periods yet — ask for behaviours to start first period
-        st.markdown("**Enter the behaviour(s) to track:**")
-        with st.form("first_period_form"):
-            fp1, fp2 = st.columns(2)
-            with fp1: nb1 = st.text_input("Behaviour 1 *", placeholder="e.g. Roaming instead of participating")
-            with fp2: nb2 = st.text_input("Behaviour 2 (optional)", placeholder="e.g. Verbal outbursts")
-            nl = st.text_input("Label (optional)", placeholder="e.g. Term 1 Week 3")
-            if st.form_submit_button("✅ Start Tracking", type="primary", use_container_width=True):
-                if not nb1.strip():
-                    st.error("Please enter at least Behaviour 1.")
-                else:
-                    p = create_period(student_name, nb1.strip(), nb2.strip(), nl.strip())
-                    ss.spt_beh1      = nb1.strip()
-                    ss.spt_beh2      = nb2.strip()
-                    ss.spt_period_id = p["id"] if p else None
-                    ss.spt_screen    = "tracker"
-                    st.rerun()
+        # No periods yet — use behaviour bank picker
+        _render_behaviour_picker(student_name, is_new_period=False)
 
     # ── DELETE ALL DATA FOR THIS STUDENT ──────────────────────────────────
     st.markdown("---")
@@ -542,38 +688,9 @@ if ss.spt_screen == "choose":
 # ════════════════════════════════════════════════════════════════════════════
 if ss.spt_screen == "new_period":
     st.markdown("### 🔄 New Tracking Period — " + ss.spt_name)
-    st.caption("Existing data is preserved. This starts a fresh period from today.")
-    with st.form("new_period_form"):
-        np1, np2 = st.columns(2)
-        with np1: np_beh1  = st.text_input("Behaviour 1 *", placeholder="e.g. Hitting peers")
-        with np2: np_beh2  = st.text_input("Behaviour 2 (optional)")
-        np_prog_type = st.radio("Program type", ["Group program", "Modified program"],
-                                horizontal=True, key="np_prog_radio")
-        np_label = st.text_input("Label (optional)", placeholder="e.g. Term 2 Week 3")
-        bc1, bc2 = st.columns(2)
-        with bc1: do_start  = st.form_submit_button("✅ Start", type="primary", use_container_width=True)
-        with bc2: do_back   = st.form_submit_button("← Back", use_container_width=True)
-    if do_back:
-        ss.spt_screen = "choose"; st.rerun()
-    if do_start:
-        if not np_beh1.strip():
-            st.error("Please enter at least Behaviour 1.")
-        else:
-            p = create_period(ss.spt_name, np_beh1.strip(), np_beh2.strip(), np_label.strip())
-            if p and get_sb():
-                try:
-                    get_sb().table("scatter_tracking_periods").update(
-                        {"program_type": np_prog_type}
-                    ).eq("id", p["id"]).execute()
-                    p["program_type"] = np_prog_type
-                except Exception:
-                    pass
-            ss.spt_beh1        = np_beh1.strip()
-            ss.spt_beh2        = np_beh2.strip()
-            ss.spt_period_id   = p["id"] if p else None
-            ss.spt_prog_type   = np_prog_type
-            ss.spt_screen      = "tracker"
-            st.rerun()
+    st.caption("Existing data is preserved. A new period begins today.")
+    if st.button("← Back", key="np_back"): ss.spt_screen = "choose"; st.rerun()
+    _render_behaviour_picker(ss.spt_name, is_new_period=True)
     st.stop()
 
 
@@ -663,10 +780,12 @@ with t_record:
             bi  = int(row.get("behaviour_index",0) or 0)
             val = row.get("value","")
             rid = row.get("id","")
+            grp = row.get("grouping","") or ""
+            stt = row.get("setting","")  or ""
             if not t or not d: continue
             if bi not in cell_data: cell_data[bi] = {}
             if t not in cell_data[bi]: cell_data[bi][t] = {}
-            cell_data[bi][t][d] = {"id": rid, "value": val}
+            cell_data[bi][t][d] = {"id": rid, "value": val, "grouping": grp, "setting": stt}
 
     # Legend
     st.markdown(
@@ -797,13 +916,22 @@ with t_record:
         "0": "background:#f0fdf4;color:#15803d;",
     }
     for bi, beh in enumerate(behaviours if behaviours else [""]):
-        existing = cell_data.get(bi,{}).get(sel_time,{}).get(sel_day)
-        cur_val  = existing["value"] if existing else ""
-        cur_disp = "✓" if cur_val=="0" else (cur_val or "—")
-        vstyle   = val_styles.get(cur_val,"color:#9ca3af;")
+        existing  = cell_data.get(bi,{}).get(sel_time,{}).get(sel_day)
+        cur_val   = existing["value"] if existing else ""
+        cur_grp   = existing.get("grouping","") if existing else ""
+        cur_set   = existing.get("setting","")  if existing else ""
+        cur_disp  = "✓" if cur_val=="0" else (cur_val or "—")
+        vstyle    = val_styles.get(cur_val,"color:#9ca3af;")
+        ctx_hint  = ""
+        if cur_val in ("1","2") and (cur_grp or cur_set):
+            ctx_hint = " &nbsp;<span style='font-size:.7rem;color:#64748b;font-weight:400;'>"
+            if cur_grp: ctx_hint += GROUPINGS.get(cur_grp, cur_grp)
+            if cur_grp and cur_set: ctx_hint += " · "
+            if cur_set: ctx_hint += cur_set
+            ctx_hint += "</span>"
         cur_badge = (
             f'<span style="font-size:.75rem;font-weight:700;padding:.1rem .45rem;'
-            f'border-radius:8px;{vstyle}">{cur_disp}</span>'
+            f'border-radius:8px;{vstyle}">{cur_disp}</span>{ctx_hint}'
         )
         lbl = (f"B{bi+1}: {beh[:45]}" if beh else "Record")
         rc1, rc2, rc3, rc4, rc5, rc6 = st.columns([3.5, .75, .75, .75, .75, .6])
@@ -831,6 +959,61 @@ with t_record:
                     if existing:
                         delete_obs(existing["id"])
                         st.rerun()
+
+        # ── Context buttons — only shown when a behaviour (1 or 2) is recorded ──
+        if cur_val in ("1","2"):
+            ctx_key_base = f"ctx_{bi}_{sel_time}_{sel_day}"
+            ctx_c1, ctx_c2 = st.columns(2)
+            with ctx_c1:
+                st.markdown(
+                    '<div style="font-size:.7rem;font-weight:600;color:#64748b;'
+                    'margin:.2rem 0 .15rem;">GROUPING <span style="font-weight:400;">(tap to record)</span></div>',
+                    unsafe_allow_html=True
+                )
+                grp_cols = st.columns(len(GROUPINGS))
+                for gi, (grp_k, grp_v) in enumerate(GROUPINGS.items()):
+                    is_grp_sel = (cur_grp == grp_k)
+                    if grp_cols[gi].button(
+                        grp_k, key=f"{ctx_key_base}_g{gi}",
+                        use_container_width=True,
+                        type="primary" if is_grp_sel else "secondary"
+                    ):
+                        # Update the grouping on the existing observation
+                        sb_ctx = get_sb()
+                        if sb_ctx and existing:
+                            try:
+                                new_grp = "" if is_grp_sel else grp_k  # tap again to deselect
+                                sb_ctx.table("scatter_plot_observations").update(
+                                    {"grouping": new_grp}
+                                ).eq("id", existing["id"]).execute()
+                                st.rerun()
+                            except Exception:
+                                pass
+            with ctx_c2:
+                st.markdown(
+                    '<div style="font-size:.7rem;font-weight:600;color:#64748b;'
+                    'margin:.2rem 0 .15rem;">SETTING <span style="font-weight:400;">(tap to record)</span></div>',
+                    unsafe_allow_html=True
+                )
+                set_cols = st.columns(len(SETTINGS))
+                for si, setting in enumerate(SETTINGS):
+                    is_set_sel = (cur_set == setting)
+                    if set_cols[si].button(
+                        setting[:8], key=f"{ctx_key_base}_s{si}",
+                        use_container_width=True,
+                        type="primary" if is_set_sel else "secondary",
+                        help=setting
+                    ):
+                        sb_ctx2 = get_sb()
+                        if sb_ctx2 and existing:
+                            try:
+                                new_set = "" if is_set_sel else setting
+                                sb_ctx2.table("scatter_plot_observations").update(
+                                    {"setting": new_set}
+                                ).eq("id", existing["id"]).execute()
+                                st.rerun()
+                            except Exception:
+                                pass
 
     # ── End-of-day support type ───────────────────────────────────────────
     st.markdown("---")
@@ -1247,6 +1430,61 @@ with t_analysis:
                     plot_bgcolor="#f8fafc",paper_bgcolor="white",
                     yaxis=dict(tickformat="d",gridcolor="#e2e8f0"),margin=dict(l=10,r=10,t=40,b=10))
                 st.plotly_chart(fig3, use_container_width=True)
+
+    # ── Grouping and Setting charts (shown when context data exists) ─────
+    all_with_ctx = inc_filt[
+        (inc_filt.get("grouping", pd.Series(dtype=str)).fillna("") != "") |
+        (inc_filt.get("setting",  pd.Series(dtype=str)).fillna("") != "")
+    ] if ("grouping" in inc_filt.columns or "setting" in inc_filt.columns) else pd.DataFrame()
+
+    if not all_with_ctx.empty:
+        st.markdown("---")
+        st.markdown("### 🔍 Context Analysis — Grouping & Setting")
+        ctx_c1, ctx_c2 = st.columns(2)
+
+        with ctx_c1:
+            grp_data = all_with_ctx[all_with_ctx.get("grouping","").fillna("") != ""]                 if "grouping" in all_with_ctx.columns else pd.DataFrame()
+            if not grp_data.empty:
+                grp_counts = grp_data["grouping"].map(
+                    lambda x: GROUPINGS.get(x, x)
+                ).value_counts().reset_index()
+                grp_counts.columns = ["Grouping","Count"]
+                fig_grp = px.bar(
+                    grp_counts, x="Count", y="Grouping", orientation="h",
+                    color="Count", color_continuous_scale=["#90CBE3", TEAL],
+                    title="Incidents by Grouping",
+                    labels={"Count":"Incident intervals","Grouping":""}
+                )
+                fig_grp.update_layout(
+                    height=280, coloraxis_showscale=False,
+                    plot_bgcolor="#f8fafc", paper_bgcolor="white",
+                    margin=dict(l=10,r=10,t=45,b=10),
+                    xaxis=dict(tickformat="d")
+                )
+                st.plotly_chart(fig_grp, use_container_width=True)
+            else:
+                st.info("No grouping data recorded yet. Tap a grouping button after recording 1 or 2.")
+
+        with ctx_c2:
+            set_data = all_with_ctx[all_with_ctx.get("setting","").fillna("") != ""]                 if "setting" in all_with_ctx.columns else pd.DataFrame()
+            if not set_data.empty:
+                set_counts = set_data["setting"].value_counts().reset_index()
+                set_counts.columns = ["Setting","Count"]
+                fig_set = px.bar(
+                    set_counts, x="Count", y="Setting", orientation="h",
+                    color="Count", color_continuous_scale=["#90CBE3", AMBER],
+                    title="Incidents by Setting",
+                    labels={"Count":"Incident intervals","Setting":""}
+                )
+                fig_set.update_layout(
+                    height=280, coloraxis_showscale=False,
+                    plot_bgcolor="#f8fafc", paper_bgcolor="white",
+                    margin=dict(l=10,r=10,t=45,b=10),
+                    xaxis=dict(tickformat="d")
+                )
+                st.plotly_chart(fig_set, use_container_width=True)
+            else:
+                st.info("No setting data recorded yet. Tap a setting button after recording 1 or 2.")
 
     with an_tabs[-1]:
         if inc_filt.empty:
