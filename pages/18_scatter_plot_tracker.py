@@ -547,6 +547,8 @@ if ss.spt_screen == "new_period":
         np1, np2 = st.columns(2)
         with np1: np_beh1  = st.text_input("Behaviour 1 *", placeholder="e.g. Hitting peers")
         with np2: np_beh2  = st.text_input("Behaviour 2 (optional)")
+        np_prog_type = st.radio("Program type", ["Group program", "Modified program"],
+                                horizontal=True, key="np_prog_radio")
         np_label = st.text_input("Label (optional)", placeholder="e.g. Term 2 Week 3")
         bc1, bc2 = st.columns(2)
         with bc1: do_start  = st.form_submit_button("✅ Start", type="primary", use_container_width=True)
@@ -558,10 +560,19 @@ if ss.spt_screen == "new_period":
             st.error("Please enter at least Behaviour 1.")
         else:
             p = create_period(ss.spt_name, np_beh1.strip(), np_beh2.strip(), np_label.strip())
-            ss.spt_beh1      = np_beh1.strip()
-            ss.spt_beh2      = np_beh2.strip()
-            ss.spt_period_id = p["id"] if p else None
-            ss.spt_screen    = "tracker"
+            if p and get_sb():
+                try:
+                    get_sb().table("scatter_tracking_periods").update(
+                        {"program_type": np_prog_type}
+                    ).eq("id", p["id"]).execute()
+                    p["program_type"] = np_prog_type
+                except Exception:
+                    pass
+            ss.spt_beh1        = np_beh1.strip()
+            ss.spt_beh2        = np_beh2.strip()
+            ss.spt_period_id   = p["id"] if p else None
+            ss.spt_prog_type   = np_prog_type
+            ss.spt_screen      = "tracker"
             st.rerun()
     st.stop()
 
@@ -587,7 +598,13 @@ with tb1:
         ss["_sched_expander_open"] = False
         ss.spt_screen = "home"; st.rerun()
 with tb2:
-    st.markdown(f"**{student_name}**")
+    prog_badge = ss.get("spt_prog_type","")
+    badge_html = (
+        f'<span style="background:#dbeafe;color:#1d4ed8;font-size:.7rem;'
+        f'font-weight:600;padding:.1rem .5rem;border-radius:10px;margin-left:.5rem;">{prog_badge}</span>'
+        if prog_badge else ""
+    )
+    st.markdown(f"**{student_name}**" + badge_html, unsafe_allow_html=True)
     if behaviours:
         st.caption("  ·  ".join([f"B{i+1}: {b[:40]}" for i,b in enumerate(behaviours)]))
 with tb3:
@@ -708,60 +725,167 @@ with t_record:
                     tc[i].markdown(f"<div class='kpi'><div class='val'>{n}</div><div class='lbl'>{d[:3]}</div></div>", unsafe_allow_html=True)
                 tc[5].markdown(f"<div class='kpi kpi-a'><div class='val'>{grand}</div><div class='lbl'>Incidents</div></div>", unsafe_allow_html=True)
 
-    # Quick entry strip
+    # ── INTERACTIVE ENTRY PANEL ──────────────────────────────────────────
     st.markdown("---")
-    st.markdown("**➕ Record an observation**")
+    st.markdown("**➕ Tap a time slot and day to record**")
+
     slot_times     = [s["time"] for s in schedule]
     today_day_name = DAYS[date.today().weekday()] if date.today().weekday() < 5 else DAYS[0]
 
-    qc1, qc2 = st.columns([2.5, 2])
-    with qc1:
-        sel_time = st.selectbox("Time slot", slot_times, key="q_time")
-    with qc2:
-        sel_day = st.selectbox("Day", DAYS,
-            index=DAYS.index(today_day_name) if today_day_name in DAYS else 0,
-            key="q_day")
+    # Initialise selected cell state
+    if "sel_time" not in ss: ss.sel_time = slot_times[0] if slot_times else ""
+    if "sel_day"  not in ss: ss.sel_day  = today_day_name
+    if ss.sel_time not in slot_times and slot_times: ss.sel_time = slot_times[0]
+    if ss.sel_day  not in DAYS: ss.sel_day = DAYS[0]
 
-    sel_activity = next((s["activity"] for s in schedule if s["time"]==sel_time),"")
+    # ── Time slot buttons (compact row) ──────────────────────────────────
+    st.markdown('<div style="font-size:.72rem;font-weight:600;color:#64748b;margin-bottom:.2rem;">TIME SLOT</div>', unsafe_allow_html=True)
+    # Show in rows of 8 to avoid wrapping issues
+    chunk_size = 8
+    for chunk_start in range(0, len(slot_times), chunk_size):
+        chunk = slot_times[chunk_start:chunk_start+chunk_size]
+        cols  = st.columns(len(chunk))
+        for ci, t in enumerate(chunk):
+            is_sel = (t == ss.sel_time)
+            # Show if any data exists for this slot this week
+            has_any = any(
+                cell_data.get(bi,{}).get(t,{})
+                for bi in range(len(behaviours) if behaviours else 1)
+            )
+            label = t
+            style = ("primary" if is_sel else "secondary")
+            if cols[ci].button(label, key=f"tsel_{t}", use_container_width=True, type=style):
+                ss.sel_time = t
+                st.rerun()
+
+    st.markdown("")
+
+    # ── Day buttons ───────────────────────────────────────────────────────
+    st.markdown('<div style="font-size:.72rem;font-weight:600;color:#64748b;margin-bottom:.2rem;">DAY</div>', unsafe_allow_html=True)
+    day_cols = st.columns(5)
+    for di, d in enumerate(DAYS):
+        is_sel  = (d == ss.sel_day)
+        d_date  = week_start + timedelta(days=di)
+        d_label = d[:3] + " " + d_date.strftime("%-d/%m")
+        is_today = (d == today_day_name and is_this)
+        style = ("primary" if is_sel else "secondary")
+        extra = " ◉" if is_today and not is_sel else ""
+        if day_cols[di].button(d_label + extra, key=f"dsel_{d}", use_container_width=True, type=style):
+            ss.sel_day = d
+            st.rerun()
+
+    # ── Current selection context ─────────────────────────────────────────
+    sel_time     = ss.sel_time
+    sel_day      = ss.sel_day
+    sel_activity = next((s["activity"] for s in schedule if s["time"]==sel_time), "")
     sel_date     = week_start + timedelta(days=DAYS.index(sel_day))
 
+    st.markdown(
+        f'<div style="background:#EBF4F9;border:1.5px solid #1A6B8A;border-radius:8px;'
+        f'padding:.45rem 1rem;margin:.4rem 0 .6rem;font-size:.85rem;">'
+        f'<b style="color:#1A6B8A;">Recording:</b> {sel_time}'
+        + (f' — {sel_activity}' if sel_activity else '')
+        + f' &nbsp;·&nbsp; <b>{sel_day}</b> {sel_date.strftime("%-d %b")}</div>',
+        unsafe_allow_html=True
+    )
+
+    # ── Value buttons — one row per behaviour ─────────────────────────────
+    val_styles = {
+        "1": "background:#dbeafe;color:#1d4ed8;",
+        "2": "background:#fee2e2;color:#b91c1c;",
+        "X": "background:#f3f4f6;color:#6b7280;",
+        "0": "background:#f0fdf4;color:#15803d;",
+    }
     for bi, beh in enumerate(behaviours if behaviours else [""]):
         existing = cell_data.get(bi,{}).get(sel_time,{}).get(sel_day)
         cur_val  = existing["value"] if existing else ""
-        val_styles = {"1":"background:#dbeafe;color:#1d4ed8","2":"background:#fee2e2;color:#b91c1c",
-                      "X":"background:#f3f4f6;color:#6b7280","0":"background:#f0fdf4;color:#15803d"}
-        cur_disp  = "✓" if cur_val=="0" else cur_val
-        cur_badge = (f'<span style="padding:.1rem .45rem;border-radius:8px;font-weight:700;'
-                     f'{val_styles.get(cur_val,"")};font-size:.75rem;">{cur_disp}</span>'
-                     if cur_val else '<span style="color:#ccc;font-size:.72rem;">—</span>')
-        rc1, rc2, rc3, rc4, rc5, rc6 = st.columns([4, 0.7, 0.7, 0.7, 0.7, 0.5])
+        cur_disp = "✓" if cur_val=="0" else (cur_val or "—")
+        vstyle   = val_styles.get(cur_val,"color:#9ca3af;")
+        cur_badge = (
+            f'<span style="font-size:.75rem;font-weight:700;padding:.1rem .45rem;'
+            f'border-radius:8px;{vstyle}">{cur_disp}</span>'
+        )
+        lbl = (f"B{bi+1}: {beh[:45]}" if beh else "Record")
+        rc1, rc2, rc3, rc4, rc5, rc6 = st.columns([3.5, .75, .75, .75, .75, .6])
         with rc1:
-            lbl = (f"B{bi+1}: {beh[:50]}" if beh else "Record observation")
-            st.markdown(f'<div style="padding:.55rem 0 .2rem;font-size:.82rem;font-weight:600;color:#334155;">{lbl} &nbsp;{cur_badge}</div>', unsafe_allow_html=True)
-        for col, val, key_sfx, btn_type in [
-            (rc2, "1", "1", "primary"),
-            (rc3, "2", "2", "secondary"),
-            (rc4, "X", "x", "secondary"),
-            (rc5, "0", "0", "secondary"),
-        ]:
+            st.markdown(
+                f'<div style="padding:.5rem 0 .1rem;font-size:.84rem;font-weight:600;color:#334155;">'
+                f'{lbl} &nbsp;{cur_badge}</div>',
+                unsafe_allow_html=True
+            )
+        for col, val, key_sfx in [(rc2,"1","1"),(rc3,"2","2"),(rc4,"X","x"),(rc5,"0","0")]:
             with col:
-                st.markdown("<div style='padding-top:1.8rem;'>", unsafe_allow_html=True)
                 disp = "✓" if val=="0" else val
-                if st.button(disp, key=f"btn_{bi}_{key_sfx}", use_container_width=True,
-                             type=btn_type if btn_type=="primary" else "secondary"):
+                if st.button(disp, key=f"vbtn_{bi}_{key_sfx}",
+                             use_container_width=True,
+                             type="primary" if val=="1" else "secondary"):
                     upsert_obs(student_name, sel_date, sel_day, sel_time,
                                sel_activity, val, bi, beh,
                                " | ".join(behaviours) if behaviours else beh,
                                ss.spt_period_id,
                                existing["id"] if existing else None)
                     st.rerun()
-                st.markdown("</div>", unsafe_allow_html=True)
         with rc6:
             if cur_val:
-                st.markdown("<div style='padding-top:1.8rem;'>", unsafe_allow_html=True)
                 if st.button("✕", key=f"clr_{bi}", use_container_width=True, help="Clear"):
-                    if existing: delete_obs(existing["id"]); st.rerun()
-                st.markdown("</div>", unsafe_allow_html=True)
+                    if existing:
+                        delete_obs(existing["id"])
+                        st.rerun()
+
+    # ── End-of-day support type ───────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("**📋 Daily support type** *(optional — record once per day)*")
+    SUPPORT_TYPES = [
+        "—", "1:1 SSO", "1:1 Teacher", "Small group", "Whole group", "Independent / no additional support"
+    ]
+    sup_day   = ss.sel_day
+    sup_date  = week_start + timedelta(days=DAYS.index(sup_day))
+
+    # Load existing support record for this day
+    sb_sup = get_sb()
+    existing_sup = None
+    if sb_sup:
+        try:
+            sup_res = (sb_sup.table("scatter_daily_support")
+                       .select("*")
+                       .eq("student_name", student_name)
+                       .eq("obs_date", str(sup_date))
+                       .limit(1).execute())
+            if sup_res.data:
+                existing_sup = sup_res.data[0]
+        except Exception:
+            pass
+
+    cur_sup = existing_sup["support_type"] if existing_sup else "—"
+    sup_idx = SUPPORT_TYPES.index(cur_sup) if cur_sup in SUPPORT_TYPES else 0
+
+    sup_c1, sup_c2 = st.columns([3, 2])
+    with sup_c1:
+        new_sup = st.selectbox(
+            f"Support on {sup_day} {sup_date.strftime('%-d %b')}",
+            SUPPORT_TYPES, index=sup_idx, key=f"sup_{sup_day}"
+        )
+    with sup_c2:
+        notes_val = existing_sup["notes"] if existing_sup else ""
+        sup_notes = st.text_input("Notes (optional)", value=notes_val,
+                                  key=f"sup_notes_{sup_day}", placeholder="e.g. Sarah covered 2nd half")
+    if new_sup != cur_sup or sup_notes != (existing_sup["notes"] if existing_sup else ""):
+        if new_sup != "—" or sup_notes.strip():
+            if sb_sup:
+                try:
+                    if existing_sup:
+                        sb_sup.table("scatter_daily_support").update(
+                            {"support_type": new_sup, "notes": sup_notes}
+                        ).eq("id", existing_sup["id"]).execute()
+                    else:
+                        sb_sup.table("scatter_daily_support").insert({
+                            "student_name": student_name,
+                            "obs_date":     str(sup_date),
+                            "support_type": new_sup,
+                            "notes":        sup_notes,
+                        }).execute()
+                except Exception:
+                    pass
 
     # Remove entry expander
     with st.expander("🗑️ Remove an entry from this week"):
@@ -818,11 +942,13 @@ with t_record:
 
         # ── ACTIVITY SUGGESTIONS LIST ─────────────────────────────────────
         ACTIVITY_SUGGESTIONS = [
-            "Reading", "Writing", "Literacy", "Using a digital device",
-            "Break", "Playground", "Yard", "Maths task", "Literacy task",
-            "Independent task", "Spill out room / space", "Cooking", "Other",
+            "Classroom", "Morning routine", "Preferred task",
+            "Reading", "Writing", "Literacy", "Maths task", "Literacy task",
+            "Independent task", "Using a digital device",
+            "Break", "Playground", "Yard", "Recess",
+            "Spill out room / space", "Cooking", "Other",
             "De-escalation activity", "Interoception", "Breakfast", "Fitness",
-            "Quiet Time", "Recess", "Lunch eating", "Lunch", "I.C.T.", "Home",
+            "Quiet Time", "Lunch eating", "Lunch", "I.C.T.", "Home",
         ]
 
         # ── EXISTING SLOTS ────────────────────────────────────────────────
@@ -995,16 +1121,38 @@ with t_record:
 # ANALYSIS & DOWNLOAD
 # ════════════════════════════════════════════════════════════════════════════
 with t_analysis:
-    st.markdown(f"#### {student_name} — Analysis")
-    st.caption("Only values 1 and 2 shown on charts. ✓ (no behaviour) and X excluded.")
+    st.markdown(f"#### {student_name} — Scatter Plot Analysis")
 
     all_obs = load_all_obs(student_name)
     if all_obs.empty:
         st.info("No observations recorded yet."); st.stop()
 
-    fc1, fc2 = st.columns(2)
-    with fc1: date_from = st.date_input("From", value=all_obs["obs_date_dt"].min().date(), key="af")
-    with fc2: date_to   = st.date_input("To",   value=all_obs["obs_date_dt"].max().date(), key="at")
+    # ── Date range with week labels ───────────────────────────────────────
+    min_date = all_obs["obs_date_dt"].min().date()
+    max_date = all_obs["obs_date_dt"].max().date()
+
+    # Build list of weeks that have data
+    week_starts_with_data = sorted(set(
+        (d - timedelta(days=d.weekday()))
+        for d in pd.date_range(min_date, max_date).date
+    ))
+
+    an_c1, an_c2, an_c3 = st.columns([2, 2, 3])
+    with an_c1:
+        date_from = st.date_input("From", value=min_date, key="af")
+    with an_c2:
+        date_to   = st.date_input("To",   value=max_date, key="at")
+    with an_c3:
+        # Week selector shortcut
+        week_opts = {ws: f"Week of {ws.strftime('%-d %b %Y')} – {(ws+timedelta(days=4)).strftime('%-d %b')}"
+                     for ws in week_starts_with_data}
+        if week_opts:
+            sel_week = st.selectbox("Jump to week", ["All data"] + list(week_opts.keys()),
+                                    format_func=lambda x: week_opts[x] if x != "All data" else "All data",
+                                    key="an_week_sel")
+            if sel_week != "All data":
+                date_from = sel_week
+                date_to   = sel_week + timedelta(days=4)
 
     filt = all_obs[
         (all_obs["obs_date_dt"].dt.date >= date_from) &
@@ -1139,11 +1287,147 @@ with t_analysis:
         st.plotly_chart(fig_c, use_container_width=True)
 
     st.markdown("---")
+
+    # ── SUPPORT TYPE SUMMARY ──────────────────────────────────────────────
+    sb_sup2 = get_sb()
+    sup_data = []
+    if sb_sup2:
+        try:
+            sup_res2 = (sb_sup2.table("scatter_daily_support")
+                        .select("*")
+                        .eq("student_name", student_name)
+                        .gte("obs_date", str(date_from))
+                        .lte("obs_date", str(date_to))
+                        .order("obs_date")
+                        .execute())
+            sup_data = sup_res2.data or []
+        except Exception:
+            pass
+    if sup_data:
+        st.markdown("**Support type recorded:**")
+        sup_df = pd.DataFrame(sup_data)
+        sup_df["obs_date"] = pd.to_datetime(sup_df["obs_date"]).dt.strftime("%-d %b %Y")
+        sup_df = sup_df[["obs_date","support_type","notes"]].rename(
+            columns={"obs_date":"Date","support_type":"Support Type","notes":"Notes"})
+        st.dataframe(sup_df, use_container_width=True, hide_index=True)
+        st.markdown("---")
+
+    # ── DOWNLOADS ─────────────────────────────────────────────────────────
     dl = filt.copy()
     dl["obs_date"] = dl["obs_date_dt"].dt.strftime("%-d/%m/%Y")
     dl["value_desc"] = dl["value"].map({"1":"Single","2":"Multiple","X":"Evacuation","0":"No behaviour"})
     csv = dl[["obs_date","day_of_week","time_slot","activity","value","value_desc",
               "behaviour_label","target_behaviours","created_by"]].to_csv(index=False)
-    st.download_button("📥 Download CSV", csv,
-        file_name=f"ScatterPlot_{student_name.replace(' ','_')}_{date_from}_{date_to}.csv",
-        mime="text/csv", use_container_width=True)
+
+    # Build formatted HTML report
+    prog_type = ss.get("spt_prog_type","")
+    behs_str  = "  ·  ".join([f"B{i+1}: {b}" for i,b in enumerate(behaviours)]) if behaviours else "—"
+    period_lbl = ""
+    if ss.spt_period_id:
+        try:
+            pr_res = get_sb().table("scatter_tracking_periods").select("label,start_date,end_date")                .eq("id", ss.spt_period_id).limit(1).execute()
+            if pr_res.data:
+                p = pr_res.data[0]
+                period_lbl = p.get("label") or ""
+                sd = pd.to_datetime(p["start_date"]).strftime("%-d %b %Y")
+                ed = pd.to_datetime(p["end_date"]).strftime("%-d %b %Y") if p.get("end_date") else "ongoing"
+                period_lbl = (period_lbl + " " if period_lbl else "") + f"({sd} – {ed})"
+        except Exception:
+            pass
+
+    inc_rows = filt[filt["value"].isin(["1","2"])].copy()
+    # Build grid table for report
+    all_dates_sorted = sorted(filt["obs_date_dt"].dt.date.unique())
+    date_labels = {d: pd.Timestamp(d).strftime("%a %-d %b") for d in all_dates_sorted}
+
+    def build_grid_html(behaviour_idx):
+        b_obs = filt[filt.get("behaviour_index", pd.Series(dtype=object)) == behaviour_idx]             if "behaviour_index" in filt.columns else filt
+        cell_lookup = {}
+        for _, row in b_obs.iterrows():
+            cell_lookup[(row["time_slot"], row.get("day_of_week",""))] = row["value"]
+
+        ths = "".join(f"<th style='background:#1A6B8A;color:white;padding:4px 8px;font-size:11px;'>{date_labels.get(d,str(d))}</th>"
+                      for d in all_dates_sorted)
+        rows_html = ""
+        for slot in schedule:
+            t = slot["time"]; act = slot["activity"]
+            tds = ""
+            for d in all_dates_sorted:
+                day_name = pd.Timestamp(d).strftime("%A")
+                v = cell_lookup.get((t, day_name), "")
+                bg = {"1":"#dbeafe","2":"#fee2e2","X":"#f3f4f6","0":"#f0fdf4"}.get(v,"white")
+                fg = {"1":"#1d4ed8","2":"#b91c1c","X":"#6b7280","0":"#15803d"}.get(v,"#ccc")
+                disp = "✓" if v=="0" else (v or "·")
+                tds += f"<td style='background:{bg};color:{fg};text-align:center;padding:3px 5px;font-size:11px;font-weight:700;border:1px solid #e2e8f0;'>{disp}</td>"
+            rows_html += (f"<tr><td style='padding:3px 8px;font-size:11px;font-weight:600;white-space:nowrap;border:1px solid #e2e8f0;'>{t}</td>"
+                          f"<td style='padding:3px 8px;font-size:11px;color:#64748b;border:1px solid #e2e8f0;'>{act}</td>{tds}</tr>")
+        return f"<table style='border-collapse:collapse;width:100%;margin-top:8px;'><thead><tr><th style='background:#1A6B8A;color:white;padding:4px 8px;font-size:11px;'>Time</th><th style='background:#1A6B8A;color:white;padding:4px 8px;font-size:11px;'>Activity</th>{ths}</tr></thead><tbody>{rows_html}</tbody></table>"
+
+    grids_html = ""
+    for bi, beh in enumerate(behaviours if behaviours else ["All observations"]):
+        grids_html += f"<h3 style='color:#1A6B8A;margin:20px 0 6px;font-size:14px;'>Behaviour {bi+1}: {beh}</h3>"
+        grids_html += build_grid_html(bi)
+
+    sup_table = ""
+    if sup_data:
+        sup_rows = "".join(
+            f"<tr><td style='padding:4px 8px;border:1px solid #e2e8f0;'>{r.get('obs_date','')}</td>"
+            f"<td style='padding:4px 8px;border:1px solid #e2e8f0;font-weight:600;'>{r.get('support_type','—')}</td>"
+            f"<td style='padding:4px 8px;border:1px solid #e2e8f0;color:#64748b;'>{r.get('notes','')}</td></tr>"
+            for r in sup_data
+        )
+        sup_table = (
+            "<h3 style='color:#1A6B8A;margin:20px 0 6px;font-size:14px;'>Support Type by Day</h3>"
+            "<table style='border-collapse:collapse;width:100%;'>"
+            "<thead><tr>"
+            "<th style='background:#1A6B8A;color:white;padding:4px 8px;font-size:11px;'>Date</th>"
+            "<th style='background:#1A6B8A;color:white;padding:4px 8px;font-size:11px;'>Support Type</th>"
+            "<th style='background:#1A6B8A;color:white;padding:4px 8px;font-size:11px;'>Notes</th>"
+            f"</tr></thead><tbody>{sup_rows}</tbody></table>"
+        )
+
+    html_report = f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<title>Scatter Plot Tracker — {student_name}</title>
+<style>
+@page {{ size: A4 landscape; margin: 12mm; }}
+body {{ font-family: Arial, sans-serif; color: #1a2e44; margin: 0; padding: 16px; }}
+@media print {{ body {{ padding: 0; }} .no-print {{ display:none; }} }}
+</style></head><body>
+<div style="background:linear-gradient(135deg,#1A6B8A,#1A6B8ABB);color:white;padding:16px 20px;border-radius:8px;margin-bottom:16px;">
+  <div style="font-size:20px;font-weight:700;margin-bottom:4px;">📊 Scatter Plot Tracker</div>
+  <div style="font-size:12px;opacity:.85;">Cowandilla Learning Centre · Learning &amp; Behaviour Unit</div>
+</div>
+<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:12px;">
+  <b>About this tool:</b> The Scatter Plot Tracker records the frequency of targeted behaviours across each time slot of the school day.
+  Each cell shows whether the behaviour occurred once (1), more than once (2), was not observed (✓), or could not be observed (X).
+  Patterns across time slots and days reveal when a student is most at risk and inform proactive scheduling decisions.
+</div>
+<table style="width:100%;border-collapse:collapse;margin-bottom:16px;font-size:12px;">
+<tr><td style="padding:4px 12px 4px 0;"><b>Student:</b> {student_name}</td>
+    <td style="padding:4px 12px 4px 0;"><b>Program:</b> {prog_type or "—"}</td></tr>
+<tr><td style="padding:4px 12px 4px 0;"><b>Behaviours:</b> {behs_str}</td>
+    <td style="padding:4px 12px 4px 0;"><b>Period:</b> {period_lbl or "—"}</td></tr>
+<tr><td style="padding:4px 12px 4px 0;"><b>Data range:</b> {date_from.strftime("%-d %b %Y") if hasattr(date_from,"strftime") else str(date_from)} – {date_to.strftime("%-d %b %Y") if hasattr(date_to,"strftime") else str(date_to)}</td>
+    <td style="padding:4px 12px 4px 0;"><b>Total incidents:</b> {n1+n2} ({n1} single, {n2} multiple)</td></tr>
+</table>
+<div class="no-print" style="margin-bottom:12px;">
+  <button onclick="window.print()" style="background:#1A6B8A;color:white;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;">🖨️ Print / Save as PDF</button>
+</div>
+{grids_html}
+{sup_table}
+<div style="margin-top:20px;font-size:10px;color:#9ca3af;border-top:1px solid #e2e8f0;padding-top:8px;">
+  Generated {date.today().strftime("%-d %B %Y")} · Cowandilla Learning Centre LBU · Scatter Plot Tracker
+</div>
+</body></html>"""
+
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        st.download_button("📥 Download raw data (CSV)", csv,
+            file_name=f"ScatterPlot_{student_name.replace(' ','_')}_{date_from}_{date_to}.csv",
+            mime="text/csv", use_container_width=True)
+    with dl2:
+        st.download_button("📄 Download formatted report (HTML)", html_report,
+            file_name=f"ScatterPlotReport_{student_name.replace(' ','_')}_{date_from}_{date_to}.html",
+            mime="text/html", use_container_width=True)
+    st.caption("💡 Open the HTML report in your browser and use Print → Save as PDF for a formatted printable version.")
