@@ -50,7 +50,6 @@ DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 RECURRENCE_TYPES = ["Weekly", "Fortnightly", "Monthly"]
 
 # ── Term week helper ──────────────────────────────────────────────────────────
-# Update TERM1_2026_START if your term start date differs
 TERM1_2026_START = datetime.date(2026, 1, 26)
 TERM_WEEKS = 11
 
@@ -586,7 +585,6 @@ def render_agenda(program, week_num=None, term_label="T1"):
     is_staff = (program == "STAFF")
 
     if is_staff:
-        # ── Week context banner ───────────────────────────────────────────────
         week_display = f"{term_label} Week {week_num}" if week_num else "Current Week"
         st.markdown(f"""
         <div style="background:linear-gradient(135deg,#1e6f75,#0f4f54);color:white;border-radius:12px;
@@ -607,14 +605,11 @@ def render_agenda(program, week_num=None, term_label="T1"):
         </div>
         """, unsafe_allow_html=True)
 
-        # ── DfE Meeting Structure — Chair's Running Sheet ──────────────────
         schedules = fetch("tm_schedules", {"program": "STAFF"}, "created_at")
         chair_name = schedules[0].get("chair","—") if schedules and schedules[0].get("chair") else "—"
         minutes_name = schedules[0].get("minutes_taker","—") if schedules and schedules[0].get("minutes_taker") else "—"
 
         items = fetch("tm_agenda_items", {"program": program}, "created_at")
-        # Filter to items for this week (by week_num tag) or unassigned open items
-        # Items are tagged by week_num in the submitted_by field convention, or we use all open
         open_items   = [i for i in items if i.get("status","open") != "closed"]
         closed_items = [i for i in items if i.get("status","open") == "closed"]
 
@@ -741,7 +736,6 @@ def render_minutes(program, week_range=None, week_num=None, term_label="T1"):
     is_staff = (program == "STAFF")
 
     if is_staff and week_num:
-        # ── Week context banner ───────────────────────────────────────────────
         st.markdown(f"""
         <div style="background:linear-gradient(135deg,#1e6f75,#0f4f54);color:white;border-radius:12px;
                     padding:1rem 1.5rem;margin-bottom:1.25rem;display:flex;align-items:center;gap:1rem;">
@@ -772,9 +766,7 @@ def render_minutes(program, week_range=None, week_num=None, term_label="T1"):
 
     minutes_list = fetch("tm_minutes", {"program": program}, "meeting_date")
 
-    # ── For STAFF: split into current-week vs archive ─────────────────────────
     if is_staff and week_num:
-        # Work out approx date range for current week
         today = datetime.date.today()
         days_since_monday = today.weekday()
         this_monday = today - datetime.timedelta(days=days_since_monday)
@@ -792,7 +784,6 @@ def render_minutes(program, week_range=None, week_num=None, term_label="T1"):
             except Exception:
                 archive_minutes.append(m)
 
-        # ── Current week section ──────────────────────────────────────────────
         if current_week_minutes:
             st.markdown(f"""
             <div style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:8px;
@@ -802,7 +793,6 @@ def render_minutes(program, week_range=None, week_num=None, term_label="T1"):
             for m in current_week_minutes:
                 _render_minutes_record(m, accent, is_staff, week_range)
         else:
-            # No minutes yet for this week — show the form prominently
             st.markdown(f"""
             <div style="background:#fef3c7;border:2px dashed #f59e0b;border-radius:10px;
                         padding:1rem 1.25rem;margin-bottom:1.25rem;text-align:center;">
@@ -816,7 +806,6 @@ def render_minutes(program, week_range=None, week_num=None, term_label="T1"):
             """, unsafe_allow_html=True)
             _render_new_staff_minutes(week_num=week_num, term_label=term_label)
 
-            # Archive at the bottom, collapsed
             if archive_minutes:
                 st.divider()
                 with st.expander(f"📚 Previous weeks' minutes ({len(archive_minutes)})", expanded=False):
@@ -824,7 +813,6 @@ def render_minutes(program, week_range=None, week_num=None, term_label="T1"):
                         _render_minutes_record(m, accent, is_staff, week_range)
             return
 
-        # If minutes exist, still show the form below for additions, then archive
         st.divider()
         st.subheader("✍️ Add / Update Minutes")
         _render_new_staff_minutes(week_num=week_num, term_label=term_label)
@@ -836,7 +824,6 @@ def render_minutes(program, week_range=None, week_num=None, term_label="T1"):
                     _render_minutes_record(m, accent, is_staff, week_range)
 
     else:
-        # Non-STAFF or no week_num — original behaviour
         if minutes_list:
             for m in minutes_list:
                 auto_expand = False
@@ -865,7 +852,6 @@ def _render_minutes_record(m, accent, is_staff, week_range=None, auto_expand=Fal
 
     with st.expander(label, expanded=auto_expand or is_editing):
 
-        # ── EDIT MODE ─────────────────────────────────────────────────────────
         if is_editing:
             st.markdown(f"""
             <div style="background:#fef3c7;border:2px solid #f59e0b;border-radius:10px;
@@ -875,7 +861,6 @@ def _render_minutes_record(m, accent, is_staff, week_range=None, auto_expand=Fal
 
             with st.form(f"edit_min_form_{mid}"):
 
-                # ── Meeting details ───────────────────────────────────────────
                 st.markdown("##### 📋 Meeting Details")
                 ed1, ed2 = st.columns([3, 1])
                 with ed1:
@@ -891,7 +876,6 @@ def _render_minutes_record(m, accent, is_staff, week_range=None, auto_expand=Fal
                 with ec2: eloc   = st.text_input("Location", value=m.get("location", "") or "")
                 with ec3: pass
 
-                # ── Attendance ────────────────────────────────────────────────
                 st.markdown("##### 🙋 Attendance")
                 ea1, ea2 = st.columns(2)
                 with ea1:
@@ -900,7 +884,6 @@ def _render_minutes_record(m, accent, is_staff, week_range=None, auto_expand=Fal
                     eapol = st.text_area("Apologies (comma-separated)", value=m.get("apologies", "") or "", height=80)
 
                 if is_staff:
-                    # ── Part 1: Digital Staff Meeting ─────────────────────────
                     st.markdown("""
                     <div style="background:#dbeafe;border-left:5px solid #1a4d8c;border-radius:0 8px 8px 0;
                                 padding:10px 16px;margin:16px 0 8px;">
@@ -934,7 +917,6 @@ def _render_minutes_record(m, accent, is_staff, week_range=None, auto_expand=Fal
                         placeholder="e.g. Timetable update | Candice Cooper | All staff | Noted",
                     )
 
-                    # ── Part 2: Face-to-Face ──────────────────────────────────
                     st.markdown("""
                     <div style="background:#d1fae5;border-left:5px solid #2d7d4f;border-radius:0 8px 8px 0;
                                 padding:10px 16px;margin:16px 0 8px;">
@@ -957,7 +939,6 @@ def _render_minutes_record(m, accent, is_staff, week_range=None, auto_expand=Fal
                     st.markdown("##### 📝 Minutes")
                     econtent = st.text_area("Minutes", value=m.get("content", "") or "", height=320)
 
-                # ── Action items ──────────────────────────────────────────────
                 st.markdown("""
                 <div style="background:#f5f3ff;border-left:5px solid #5b21b6;border-radius:0 8px 8px 0;
                             padding:8px 14px;margin:16px 0 8px;">
@@ -1016,9 +997,7 @@ def _render_minutes_record(m, accent, is_staff, week_range=None, auto_expand=Fal
                     st.session_state[f"editing_min_{mid}"] = False
                     st.rerun()
 
-        # ── VIEW MODE ─────────────────────────────────────────────────────────
         else:
-            # Meeting details bar
             st.markdown(f"""
             <div style="background:{accent};border-radius:8px;padding:10px 16px;
                         margin-bottom:12px;display:flex;gap:2rem;flex-wrap:wrap;">
@@ -1027,7 +1006,6 @@ def _render_minutes_record(m, accent, is_staff, week_range=None, auto_expand=Fal
               <span style="color:white;font-size:13px;"><strong>Date:</strong>&nbsp;{m.get('meeting_date','—')}</span>
             </div>""", unsafe_allow_html=True)
 
-            # Attendance
             present_raw    = m.get("attendees",  "") or ""
             apologies_raw  = m.get("apologies",  "") or ""
             present_list   = [n.strip() for n in present_raw.split(",")  if n.strip()]
@@ -1048,7 +1026,6 @@ def _render_minutes_record(m, accent, is_staff, week_range=None, auto_expand=Fal
                     st.markdown("\n".join(f"- {n}" for n in apologies_list) if apologies_list else "_None_")
 
             if is_staff:
-                # ── Part 1: Digital Staff Meeting ─────────────────────────────
                 st.markdown("""
                 <div style="background:#dbeafe;border-left:5px solid #1a4d8c;
                             border-radius:0 8px 8px 0;padding:10px 16px;margin:14px 0 8px;">
@@ -1077,10 +1054,8 @@ def _render_minutes_record(m, accent, is_staff, week_range=None, auto_expand=Fal
                     df.columns = [c.replace("_", " ").title() for c in df.columns]
                     st.dataframe(df, use_container_width=True, hide_index=True)
                 elif digital_summary:
-                    # Only show this when there IS a summary but no table rows
                     st.caption("_No individual items recorded._")
 
-                # ── Part 2: Face-to-Face ───────────────────────────────────────
                 st.markdown("""
                 <div style="background:#d1fae5;border-left:5px solid #2d7d4f;
                             border-radius:0 8px 8px 0;padding:10px 16px;margin:14px 0 8px;">
@@ -1104,7 +1079,6 @@ def _render_minutes_record(m, accent, is_staff, week_range=None, auto_expand=Fal
                 else:
                     st.caption("_No minutes content recorded._")
 
-            # Action items
             action_text = (m.get("action_summary") or "").strip()
             if action_text:
                 st.markdown("""
@@ -1120,7 +1094,6 @@ def _render_minutes_record(m, accent, is_staff, week_range=None, auto_expand=Fal
                     else:
                         st.markdown(f"🔲 {line}")
 
-            # Download + Edit/Delete buttons
             st.markdown("")
             btn1, btn2, btn3 = st.columns([3, 1, 1])
 
@@ -1141,7 +1114,6 @@ def _render_minutes_record(m, accent, is_staff, week_range=None, auto_expand=Fal
                     use_container_width=True,
                 )
             with btn2:
-                # Edit available to all authenticated staff for STAFF minutes; admin-only for others
                 if is_staff or st.session_state.get("admin"):
                     if st.button("✏️ Edit", key=f"edit_min_{mid}", use_container_width=True):
                         st.session_state[f"editing_min_{mid}"] = True
@@ -1156,10 +1128,8 @@ def _render_minutes_record(m, accent, is_staff, week_range=None, auto_expand=Fal
 def _render_new_staff_minutes(week_num=None, term_label="T1"):
     st.subheader("✍️ Record Combined Staff Meeting Minutes")
 
-    # Pre-filled title based on current week
     default_title = f"Staff Meeting — {term_label} W{week_num}" if week_num else "Staff Meeting"
 
-    # ── Step 1: Load DSM content ──────────────────────────────────────────────
     _dsm_summary = ""
     _dsm_week_label = ""
     _dsm_items_raw = ""
@@ -1831,8 +1801,12 @@ def render_program_meeting(program):
     prog_label = PROGRAMS[program]["label"]
     accent = PROGRAMS[program]["color"]
 
+    # ── FIXED: fetch students from scatter_students on main Supabase,
+    #           with fallback to behaviour support DB if configured
     @st.cache_data(ttl=120)
     def fetch_students(prog):
+        names = []
+        # Try behaviour support students table first
         try:
             import os
             from supabase import create_client as _cc
@@ -1842,10 +1816,20 @@ def render_program_meeting(program):
                 bsb = _cc(burl, bkey)
                 res = bsb.table("students").select("id,name,year_level").eq("archived", False).execute()
                 if res.data:
-                    return [s["name"] for s in res.data]
+                    names = [s["name"] for s in res.data]
         except Exception:
             pass
-        return []
+        # Always also pull from scatter_students on the main Supabase project
+        try:
+            res2 = supabase.table("scatter_students").select("name").execute()
+            if res2.data:
+                scatter_names = [s["name"] for s in res2.data if s.get("name")]
+                for n in scatter_names:
+                    if n not in names:
+                        names.append(n)
+        except Exception:
+            pass
+        return sorted(names)
 
     student_names = fetch_students(program)
 
@@ -1925,6 +1909,9 @@ def render_program_meeting(program):
         st.markdown("#### ⏱ 10–25 min | STUDENT CONCERNS — Structured Problem Solving")
         st.caption("Facilitator prompt: Push for function-based thinking, not description.")
 
+        if student_names:
+            st.caption(f"💡 {len(student_names)} students loaded. Type any name — not on the list? Just type it in.")
+
         concerns_key = f"pm_concerns_{program}"
         if concerns_key not in st.session_state:
             st.session_state[concerns_key] = [{"student":"","concern":"","hypothesis":"","strategy":"","who":"","by_when":""}]
@@ -1936,12 +1923,13 @@ def render_program_meeting(program):
 
         for idx, row in enumerate(concerns):
             c1,c2,c3,c4,c5,c6,c7 = st.columns([2,2,2,2,1,1,0.5])
-            with c1: row["student"]    = st.selectbox("S",[""] + student_names, key=f"con_stu_{program}_{idx}", label_visibility="collapsed")
-            with c2: row["concern"]    = st.text_input("C", value=row["concern"], key=f"con_c_{program}_{idx}", label_visibility="collapsed")
-            with c3: row["hypothesis"] = st.text_input("H", value=row["hypothesis"], key=f"con_h_{program}_{idx}", label_visibility="collapsed")
-            with c4: row["strategy"]   = st.text_input("St", value=row["strategy"], key=f"con_st_{program}_{idx}", label_visibility="collapsed")
-            with c5: row["who"]        = st.text_input("W", value=row["who"], key=f"con_w_{program}_{idx}", label_visibility="collapsed")
-            with c6: row["by_when"]    = st.text_input("By", value=row["by_when"], key=f"con_by_{program}_{idx}", label_visibility="collapsed")
+            # ── FIXED: text_input so any student name can be typed ──
+            with c1: row["student"]    = st.text_input("Student", value=row.get("student",""), key=f"con_stu_{program}_{idx}", label_visibility="collapsed", placeholder="Student name")
+            with c2: row["concern"]    = st.text_input("C", value=row.get("concern",""), key=f"con_c_{program}_{idx}", label_visibility="collapsed")
+            with c3: row["hypothesis"] = st.text_input("H", value=row.get("hypothesis",""), key=f"con_h_{program}_{idx}", label_visibility="collapsed")
+            with c4: row["strategy"]   = st.text_input("St", value=row.get("strategy",""), key=f"con_st_{program}_{idx}", label_visibility="collapsed")
+            with c5: row["who"]        = st.text_input("W", value=row.get("who",""), key=f"con_w_{program}_{idx}", label_visibility="collapsed")
+            with c6: row["by_when"]    = st.text_input("By", value=row.get("by_when",""), key=f"con_by_{program}_{idx}", label_visibility="collapsed")
             with c7:
                 if len(concerns) > 1:
                     if st.button("✕", key=f"con_del_{program}_{idx}"):
@@ -1964,11 +1952,12 @@ def render_program_meeting(program):
 
         for idx, row in enumerate(smartar):
             s1,s2,s3,s4,s5,s6 = st.columns([2,2,2,2,1,0.5])
-            with s1: row["student"]     = st.selectbox("S",[""] + student_names, key=f"sm_stu_{program}_{idx}", label_visibility="collapsed")
-            with s2: row["goal_area"]   = st.text_input("G", value=row["goal_area"], key=f"sm_g_{program}_{idx}", label_visibility="collapsed")
-            with s3: row["evidence"]    = st.text_input("E", value=row["evidence"], key=f"sm_e_{program}_{idx}", label_visibility="collapsed")
-            with s4: row["adjustment"]  = st.text_input("A", value=row["adjustment"], key=f"sm_a_{program}_{idx}", label_visibility="collapsed")
-            with s5: row["responsible"] = st.text_input("R", value=row["responsible"], key=f"sm_r_{program}_{idx}", label_visibility="collapsed")
+            # ── FIXED: text_input so any student name can be typed ──
+            with s1: row["student"]     = st.text_input("Student", value=row.get("student",""), key=f"sm_stu_{program}_{idx}", label_visibility="collapsed", placeholder="Student name")
+            with s2: row["goal_area"]   = st.text_input("G", value=row.get("goal_area",""), key=f"sm_g_{program}_{idx}", label_visibility="collapsed")
+            with s3: row["evidence"]    = st.text_input("E", value=row.get("evidence",""), key=f"sm_e_{program}_{idx}", label_visibility="collapsed")
+            with s4: row["adjustment"]  = st.text_input("A", value=row.get("adjustment",""), key=f"sm_a_{program}_{idx}", label_visibility="collapsed")
+            with s5: row["responsible"] = st.text_input("R", value=row.get("responsible",""), key=f"sm_r_{program}_{idx}", label_visibility="collapsed")
             with s6:
                 if len(smartar) > 1:
                     if st.button("✕", key=f"sm_del_{program}_{idx}"):
@@ -1998,12 +1987,12 @@ def render_program_meeting(program):
 
         for idx, row in enumerate(priority_rows):
             p1,p2,p3,p4,p5,p6,p7 = st.columns([2,2,2,2,2,1,0.5])
-            with p1: row["area"]       = st.text_input("A",   value=row["area"],       key=f"pr_a_{program}_{idx}",   label_visibility="collapsed")
-            with p2: row["working"]    = st.text_input("W",   value=row["working"],    key=f"pr_w_{program}_{idx}",   label_visibility="collapsed")
-            with p3: row["gap"]        = st.text_input("G",   value=row["gap"],        key=f"pr_g_{program}_{idx}",   label_visibility="collapsed")
-            with p4: row["adjustment"] = st.text_input("Adj", value=row["adjustment"], key=f"pr_adj_{program}_{idx}", label_visibility="collapsed")
-            with p5: row["evidence"]   = st.text_input("E",   value=row["evidence"],   key=f"pr_e_{program}_{idx}",   label_visibility="collapsed")
-            with p6: row["who"]        = st.text_input("Who", value=row["who"],        key=f"pr_who_{program}_{idx}", label_visibility="collapsed")
+            with p1: row["area"]       = st.text_input("A",   value=row.get("area",""),       key=f"pr_a_{program}_{idx}",   label_visibility="collapsed")
+            with p2: row["working"]    = st.text_input("W",   value=row.get("working",""),    key=f"pr_w_{program}_{idx}",   label_visibility="collapsed")
+            with p3: row["gap"]        = st.text_input("G",   value=row.get("gap",""),        key=f"pr_g_{program}_{idx}",   label_visibility="collapsed")
+            with p4: row["adjustment"] = st.text_input("Adj", value=row.get("adjustment",""), key=f"pr_adj_{program}_{idx}", label_visibility="collapsed")
+            with p5: row["evidence"]   = st.text_input("E",   value=row.get("evidence",""),   key=f"pr_e_{program}_{idx}",   label_visibility="collapsed")
+            with p6: row["who"]        = st.text_input("Who", value=row.get("who",""),        key=f"pr_who_{program}_{idx}", label_visibility="collapsed")
             with p7:
                 if len(priority_rows) > 1:
                     if st.button("✕", key=f"pr_del_{program}_{idx}"):
@@ -2014,6 +2003,9 @@ def render_program_meeting(program):
 
         st.markdown("#### ⏱ 30–45 min | SMARTAR GOAL SPOTLIGHT — 4 Students")
         st.caption("Rule: No update without evidence.")
+
+        if student_names:
+            st.caption(f"💡 {len(student_names)} students loaded. Type any name — not on the list? Just type it in.")
 
         smartar_key = f"pm_smartar_{program}"
         if smartar_key not in st.session_state:
@@ -2026,11 +2018,12 @@ def render_program_meeting(program):
 
         for idx, row in enumerate(smartar):
             s1,s2,s3,s4,s5,s6 = st.columns([2,2,2,2,1,0.5])
-            with s1: row["student"]     = st.selectbox("S",[""] + student_names, key=f"sm_stu_{program}_{idx}", label_visibility="collapsed")
-            with s2: row["goal_area"]   = st.text_input("G", value=row["goal_area"], key=f"sm_g_{program}_{idx}", label_visibility="collapsed")
-            with s3: row["evidence"]    = st.text_input("E", value=row["evidence"], key=f"sm_e_{program}_{idx}", label_visibility="collapsed")
-            with s4: row["adjustment"]  = st.text_input("A", value=row["adjustment"], key=f"sm_a_{program}_{idx}", label_visibility="collapsed")
-            with s5: row["responsible"] = st.text_input("R", value=row["responsible"], key=f"sm_r_{program}_{idx}", label_visibility="collapsed")
+            # ── FIXED: text_input so any student name can be typed ──
+            with s1: row["student"]     = st.text_input("Student", value=row.get("student",""), key=f"sm_stu_{program}_{idx}", label_visibility="collapsed", placeholder="Student name")
+            with s2: row["goal_area"]   = st.text_input("G", value=row.get("goal_area",""), key=f"sm_g_{program}_{idx}", label_visibility="collapsed")
+            with s3: row["evidence"]    = st.text_input("E", value=row.get("evidence",""), key=f"sm_e_{program}_{idx}", label_visibility="collapsed")
+            with s4: row["adjustment"]  = st.text_input("A", value=row.get("adjustment",""), key=f"sm_a_{program}_{idx}", label_visibility="collapsed")
+            with s5: row["responsible"] = st.text_input("R", value=row.get("responsible",""), key=f"sm_r_{program}_{idx}", label_visibility="collapsed")
             with s6:
                 if len(smartar) > 1:
                     if st.button("✕", key=f"sm_del_{program}_{idx}"):
@@ -2158,13 +2151,11 @@ def main():
             st.markdown("### ⚙️ Admin Mode Active")
             st.caption("You can add, edit and delete all content.")
 
-    # ── Term week — compute and expose selector for STAFF ─────────────────────
     auto_term, auto_week = get_current_term_week()
     current_term  = auto_term
     current_week  = auto_week
 
     if program == "STAFF":
-        # Week selector sits just below the main header, above tabs
         with st.container():
             col_l, col_w, col_r = st.columns([3, 2, 3])
             with col_w:
@@ -2183,7 +2174,6 @@ def main():
                   Currently viewing: <span style="font-size:1.1rem;font-weight:800;">{current_term} Week {current_week}</span>
                 </div>""", unsafe_allow_html=True)
 
-    # ── Kaurna Welcome & Icebreaker (Staff Meeting only) ──────────────────────
     if program == "STAFF":
         import random as _random, hashlib as _hashlib
         from datetime import date as _date
@@ -2227,7 +2217,6 @@ def main():
             </div>
             """, unsafe_allow_html=True)
 
-    # ── Tabs ──────────────────────────────────────────────────────────────────
     if program in ("JP", "PY", "SY"):
         tab_meeting, tab_sched, tab_agenda, tab_minutes, tab_actions, tab_attend, tab_docs = st.tabs([
             "🗒️ Program Meeting", "📅 Schedules", "📋 Agenda", "📝 Minutes", "✅ Actions", "🙋 Attendance", "📎 Documents"
