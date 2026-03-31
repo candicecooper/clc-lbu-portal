@@ -97,28 +97,44 @@ def get_sb():
 
 
 def load_all_student_summaries():
-    """Return list of dicts with student_name, total obs, last date, behaviours."""
+    """Return list of dicts per tracked student. Queries in pages to avoid Supabase 1000-row limit."""
     sb = get_sb()
     if not sb: return []
     try:
-        res = (sb.table("scatter_plot_observations")
-               .select("student_name,behaviour_label,value,obs_date")
-               .order("obs_date", desc=True)
-               .execute())
-        if not res.data: return []
-        df = pd.DataFrame(res.data)
+        # Step 1: get all distinct student names using pagination
+        all_rows = []
+        page = 0
+        page_size = 1000
+        while True:
+            res = (sb.table("scatter_plot_observations")
+                   .select("student_name,behaviour_label,obs_date")
+                   .range(page * page_size, (page + 1) * page_size - 1)
+                   .execute())
+            if not res.data:
+                break
+            all_rows.extend(res.data)
+            if len(res.data) < page_size:
+                break
+            page += 1
+
+        if not all_rows:
+            return []
+
+        df = pd.DataFrame(all_rows)
+        df = df[df["student_name"].notna() & (df["student_name"].str.strip() != "")]
         df["obs_date"] = pd.to_datetime(df["obs_date"])
         out = []
         for name, grp in df.groupby("student_name"):
             behs = [b for b in grp["behaviour_label"].dropna().unique() if b][:2]
             out.append({
-                "name":      name,
-                "total":     len(grp),
-                "last_date": grp["obs_date"].max().strftime("%-d %b %Y"),
+                "name":       name,
+                "total":      len(grp),
+                "last_date":  grp["obs_date"].max().strftime("%-d %b %Y"),
                 "behaviours": behs,
             })
         return sorted(out, key=lambda x: x["name"])
-    except Exception:
+    except Exception as e:
+        st.error("Could not load student list: " + str(e))
         return []
 
 
@@ -342,19 +358,26 @@ if ss.spt_screen == "home":
     # Add / start new student
     st.markdown("### Start tracking a new student")
     with st.form("spt_new_stu_form"):
-        nc1, nc2 = st.columns(2)
-        with nc1:
-            new_name = st.text_input("Student name *", placeholder="e.g. Alex Smith")
-        with nc2:
-            new_prog = st.selectbox("Program", ["JP","PY","SY"])
+        new_name = st.text_input("Student name *", placeholder="e.g. Alex Smith")
+        st.caption("Use the exact name as entered — this is how data is linked across sessions.")
         if st.form_submit_button("Start Tracking →", type="primary", use_container_width=True):
             if not new_name.strip():
                 st.error("Please enter the student's name.")
             else:
-                ss.spt_name     = new_name.strip()
-                ss.spt_schedule = None
-                ss.spt_screen   = "choose"
-                st.rerun()
+                # Check if this name already has data
+                existing = next((s for s in summaries if s["name"].lower() == new_name.strip().lower()), None)
+                if existing:
+                    st.warning(
+                        f"⚠️ **{existing['name']}** already has {existing['total']} observations on record. "
+                        "Use the 'Open →' button above to access their existing data, "
+                        "or enter a different name."
+                    )
+                else:
+                    ss.spt_name     = new_name.strip()
+                    ss.spt_schedule = None
+                    ss.spt_period_id = None
+                    ss.spt_screen   = "choose"
+                    st.rerun()
     st.stop()
 
 
@@ -464,6 +487,52 @@ if ss.spt_screen == "choose":
                     ss.spt_period_id = p["id"] if p else None
                     ss.spt_screen    = "tracker"
                     st.rerun()
+
+    # ── DELETE ALL DATA FOR THIS STUDENT ──────────────────────────────────
+    st.markdown("---")
+    with st.expander("🗑️ Delete data for this student", expanded=False):
+        st.warning(
+            "⚠️ This permanently deletes observation data. "
+            "You can delete a specific date range or all data for this student."
+        )
+        del_tab1, del_tab2 = st.tabs(["Delete a date range", "Delete ALL data"])
+        with del_tab1:
+            dd1, dd2 = st.columns(2)
+            with dd1: del_from = st.date_input("From date", key="del_from")
+            with dd2: del_to   = st.date_input("To date",   key="del_to")
+            if st.button("🗑️ Delete observations in this range",
+                         key="del_range_btn", type="secondary"):
+                sb = get_sb()
+                if sb:
+                    try:
+                        sb.table("scatter_plot_observations").delete()                            .eq("student_name", student_name)                            .gte("obs_date", str(del_from))                            .lte("obs_date", str(del_to))                            .execute()
+                        st.success("✅ Deleted observations from "
+                                   + del_from.strftime("%-d %b") + " to "
+                                   + del_to.strftime("%-d %b %Y") + ".")
+                        st.rerun()
+                    except Exception as e:
+                        st.error("Delete failed: " + str(e))
+        with del_tab2:
+            st.error("This will delete ALL observations AND all tracking periods for " + student_name + ".")
+            confirm_name = st.text_input("Type the student's name to confirm:", key="del_confirm_name")
+            if st.button("🗑️ Delete ALL data permanently", key="del_all_btn", type="secondary"):
+                if confirm_name.strip().lower() != student_name.lower():
+                    st.error("Name doesn't match — please type the student's exact name.")
+                else:
+                    sb = get_sb()
+                    if sb:
+                        try:
+                            sb.table("scatter_plot_observations").delete()                                .eq("student_name", student_name).execute()
+                            sb.table("scatter_tracking_periods").delete()                                .eq("student_name", student_name).execute()
+                            try:
+                                sb.table("scatter_plot_schedules").delete()                                    .eq("student_id", student_name).execute()
+                            except Exception:
+                                pass
+                            st.success("✅ All data for " + student_name + " deleted.")
+                            ss.spt_screen = "home"
+                            st.rerun()
+                        except Exception as e:
+                            st.error("Delete failed: " + str(e))
 
     st.stop()
 
@@ -721,15 +790,30 @@ with t_record:
                 st.markdown("</div>", unsafe_allow_html=True)
 
     # Manage schedule
-    # Show any schedule generation message above expander
+    # Show any schedule generation message
     _sched_msg = ss.pop("_sched_msg", None) if "_sched_msg" in ss else None
     if _sched_msg:
         st.success(_sched_msg)
 
+    # Always show current schedule as a compact preview
+    _preview_sched = ss.spt_schedule or []
+    if _preview_sched:
+        _slots_text = "  ·  ".join(
+            f"{s['time']} {('— '+s['activity'][:18]) if s.get('activity') else ''}"
+            for s in _preview_sched[:8]
+        ) + (" ···" if len(_preview_sched) > 8 else "")
+        st.markdown(
+            f'<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;'
+            f'padding:.35rem .75rem;margin-bottom:.3rem;font-size:.72rem;color:#64748b;">'
+            f'<b style="color:#1A6B8A;">Schedule ({len(_preview_sched)} slots):</b> {_slots_text}'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+
     _sched_open = ss.get("_sched_expander_open", False)
-    with st.expander("⚙️ Manage Schedule", expanded=_sched_open):
-        ss["_sched_expander_open"] = True  # stays open while user is in it
-        st.caption("Schedule is saved per student.")
+    with st.expander("⚙️ Manage Schedule — edit, reorder, or generate", expanded=_sched_open):
+        ss["_sched_expander_open"] = True
+        st.caption("Schedule is saved per student. Changes apply immediately.")
         sched = ss.spt_schedule
 
         # ── ACTIVITY SUGGESTIONS LIST ─────────────────────────────────────
