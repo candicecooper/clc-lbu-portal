@@ -785,7 +785,8 @@ with t_record:
             if not t or not d: continue
             if bi not in cell_data: cell_data[bi] = {}
             if t not in cell_data[bi]: cell_data[bi][t] = {}
-            cell_data[bi][t][d] = {"id": rid, "value": val, "grouping": grp, "setting": stt}
+            act = row.get("activity","") or ""
+            cell_data[bi][t][d] = {"id": rid, "value": val, "grouping": grp, "setting": stt, "activity": act}
 
     # Legend
     st.markdown(
@@ -960,60 +961,63 @@ with t_record:
                         delete_obs(existing["id"])
                         st.rerun()
 
-        # ── Context buttons — only shown when a behaviour (1 or 2) is recorded ──
+        # ── Context buttons (activity / grouping / setting) ─────────────────
+        # Shown only when a behaviour (1 or 2) is recorded for this cell
         if cur_val in ("1","2"):
             ctx_key_base = f"ctx_{bi}_{sel_time}_{sel_day}"
-            ctx_c1, ctx_c2 = st.columns(2)
-            with ctx_c1:
+            cur_act_ctx  = existing.get("activity","") if existing else ""
+
+            def _ctx_row(label, options, cur_selected, col_key_sfx, update_field, shorten=8):
                 st.markdown(
-                    '<div style="font-size:.7rem;font-weight:600;color:#64748b;'
-                    'margin:.2rem 0 .15rem;">GROUPING <span style="font-weight:400;">(tap to record)</span></div>',
+                    f'<div style="font-size:.7rem;font-weight:600;color:#64748b;'
+                    f'margin:.3rem 0 .15rem;">{label} '
+                    f'<span style="font-weight:400;">(tap to record)</span></div>',
                     unsafe_allow_html=True
                 )
-                grp_cols = st.columns(len(GROUPINGS))
-                for gi, (grp_k, grp_v) in enumerate(GROUPINGS.items()):
-                    is_grp_sel = (cur_grp == grp_k)
-                    if grp_cols[gi].button(
-                        grp_k, key=f"{ctx_key_base}_g{gi}",
-                        use_container_width=True,
-                        type="primary" if is_grp_sel else "secondary"
-                    ):
-                        # Update the grouping on the existing observation
-                        sb_ctx = get_sb()
-                        if sb_ctx and existing:
-                            try:
-                                new_grp = "" if is_grp_sel else grp_k  # tap again to deselect
-                                sb_ctx.table("scatter_plot_observations").update(
-                                    {"grouping": new_grp}
-                                ).eq("id", existing["id"]).execute()
-                                st.rerun()
-                            except Exception:
-                                pass
-            with ctx_c2:
-                st.markdown(
-                    '<div style="font-size:.7rem;font-weight:600;color:#64748b;'
-                    'margin:.2rem 0 .15rem;">SETTING <span style="font-weight:400;">(tap to record)</span></div>',
-                    unsafe_allow_html=True
-                )
-                set_cols = st.columns(len(SETTINGS))
-                for si, setting in enumerate(SETTINGS):
-                    is_set_sel = (cur_set == setting)
-                    if set_cols[si].button(
-                        setting[:8], key=f"{ctx_key_base}_s{si}",
-                        use_container_width=True,
-                        type="primary" if is_set_sel else "secondary",
-                        help=setting
-                    ):
-                        sb_ctx2 = get_sb()
-                        if sb_ctx2 and existing:
-                            try:
-                                new_set = "" if is_set_sel else setting
-                                sb_ctx2.table("scatter_plot_observations").update(
-                                    {"setting": new_set}
-                                ).eq("id", existing["id"]).execute()
-                                st.rerun()
-                            except Exception:
-                                pass
+                n = len(options)
+                # Split into two rows if more than 7 options
+                chunks = [options[:7], options[7:]] if n > 7 else [options]
+                for chunk in chunks:
+                    cols = st.columns(len(chunk))
+                    for ci2, opt in enumerate(chunk):
+                        opt_key  = opt if isinstance(opt, str) else opt[0]
+                        opt_disp = opt if isinstance(opt, str) else opt[1]
+                        is_sel   = (cur_selected == opt_key)
+                        btn_lbl  = opt_disp[:shorten] if shorten else opt_disp
+                        if cols[ci2].button(
+                            btn_lbl, key=f"{ctx_key_base}_{col_key_sfx}_{ci2}",
+                            use_container_width=True,
+                            type="primary" if is_sel else "secondary",
+                            help=opt_disp if shorten else None
+                        ):
+                            sb_c = get_sb()
+                            if sb_c and existing:
+                                try:
+                                    new_val = "" if is_sel else opt_key
+                                    sb_c.table("scatter_plot_observations").update(
+                                        {update_field: new_val}
+                                    ).eq("id", existing["id"]).execute()
+                                    st.rerun()
+                                except Exception:
+                                    pass
+
+            # ── Activity ──────────────────────────────────────────────────
+            ACTIVITY_CTX = [
+                "Classroom", "Morning routine", "Preferred task",
+                "Reading", "Writing", "Literacy", "Maths task", "Literacy task",
+                "Independent task", "Using a digital device",
+                "Break", "Playground", "Yard", "Recess",
+                "Spill out room / space", "Cooking", "Other",
+            ]
+            _ctx_row("ACTIVITY", ACTIVITY_CTX, cur_act_ctx, "a", "activity", shorten=10)
+
+            # ── Grouping and Setting side by side ─────────────────────────
+            gc, sc = st.columns(2)
+            with gc:
+                grp_opts = [(k, v) for k, v in GROUPINGS.items()]
+                _ctx_row("GROUPING", grp_opts, cur_grp, "g", "grouping", shorten=None)
+            with sc:
+                _ctx_row("SETTING", SETTINGS, cur_set, "s", "setting", shorten=9)
 
     # ── End-of-day support type ───────────────────────────────────────────
     st.markdown("---")
