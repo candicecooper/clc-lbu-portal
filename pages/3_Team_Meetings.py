@@ -1943,27 +1943,26 @@ def render_program_meeting(program):
 
         smartar_key = f"pm_smartar_{program}"
         if smartar_key not in st.session_state:
-            st.session_state[smartar_key] = [{"student":"","goal_area":"","evidence":"","adjustment":"","responsible":""} for _ in range(4)]
+            st.session_state[smartar_key] = [{"notes": ""} for _ in range(4)]
 
         smartar = st.session_state[smartar_key]
-        sh_cols = st.columns([2,2,2,2,1,0.5])
-        for h, label in zip(sh_cols, ["Student","Goal Area","Current Level / Evidence","Next Adjustment","Responsible",""]):
-            h.markdown(f"**{label}**" if label else "")
-
         for idx, row in enumerate(smartar):
-            s1,s2,s3,s4,s5,s6 = st.columns([2,2,2,2,1,0.5])
-            # ── FIXED: text_input so any student name can be typed ──
-            with s1: row["student"]     = st.text_input("Student", value=row.get("student",""), key=f"sm_stu_{program}_{idx}", label_visibility="collapsed", placeholder="Student name")
-            with s2: row["goal_area"]   = st.text_input("G", value=row.get("goal_area",""), key=f"sm_g_{program}_{idx}", label_visibility="collapsed")
-            with s3: row["evidence"]    = st.text_input("E", value=row.get("evidence",""), key=f"sm_e_{program}_{idx}", label_visibility="collapsed")
-            with s4: row["adjustment"]  = st.text_input("A", value=row.get("adjustment",""), key=f"sm_a_{program}_{idx}", label_visibility="collapsed")
-            with s5: row["responsible"] = st.text_input("R", value=row.get("responsible",""), key=f"sm_r_{program}_{idx}", label_visibility="collapsed")
-            with s6:
+            col_text, col_del = st.columns([11, 0.5])
+            with col_text:
+                row["notes"] = st.text_area(
+                    f"Student {idx + 1}",
+                    value=row.get("notes", ""),
+                    key=f"sm_notes_{program}_{idx}",
+                    height=100,
+                    placeholder="Student name · Goal area · Current level / evidence · Next adjustment · Responsible",
+                )
+            with col_del:
+                st.markdown("<div style='margin-top:2rem;'></div>", unsafe_allow_html=True)
                 if len(smartar) > 1:
                     if st.button("✕", key=f"sm_del_{program}_{idx}"):
                         smartar.pop(idx); st.rerun()
         if st.button("➕ Add SMARTAR row", key=f"sm_add_{program}"):
-            smartar.append({"student":"","goal_area":"","evidence":"","adjustment":"","responsible":""}); st.rerun()
+            smartar.append({"notes": ""}); st.rerun()
         st.markdown("---")
 
         st.markdown("#### ⏱ 40–45 min | REPORTS / TAC / TRANSITIONS")
@@ -2009,27 +2008,26 @@ def render_program_meeting(program):
 
         smartar_key = f"pm_smartar_{program}"
         if smartar_key not in st.session_state:
-            st.session_state[smartar_key] = [{"student":"","goal_area":"","evidence":"","adjustment":"","responsible":""} for _ in range(4)]
+            st.session_state[smartar_key] = [{"notes": ""} for _ in range(4)]
 
         smartar = st.session_state[smartar_key]
-        sh_cols = st.columns([2,2,2,2,1,0.5])
-        for h, label in zip(sh_cols, ["Student","Goal Area","Current Level / Evidence","Next Adjustment","Responsible",""]):
-            h.markdown(f"**{label}**" if label else "")
-
         for idx, row in enumerate(smartar):
-            s1,s2,s3,s4,s5,s6 = st.columns([2,2,2,2,1,0.5])
-            # ── FIXED: text_input so any student name can be typed ──
-            with s1: row["student"]     = st.text_input("Student", value=row.get("student",""), key=f"sm_stu_{program}_{idx}", label_visibility="collapsed", placeholder="Student name")
-            with s2: row["goal_area"]   = st.text_input("G", value=row.get("goal_area",""), key=f"sm_g_{program}_{idx}", label_visibility="collapsed")
-            with s3: row["evidence"]    = st.text_input("E", value=row.get("evidence",""), key=f"sm_e_{program}_{idx}", label_visibility="collapsed")
-            with s4: row["adjustment"]  = st.text_input("A", value=row.get("adjustment",""), key=f"sm_a_{program}_{idx}", label_visibility="collapsed")
-            with s5: row["responsible"] = st.text_input("R", value=row.get("responsible",""), key=f"sm_r_{program}_{idx}", label_visibility="collapsed")
-            with s6:
+            col_text, col_del = st.columns([11, 0.5])
+            with col_text:
+                row["notes"] = st.text_area(
+                    f"Student {idx + 1}",
+                    value=row.get("notes", ""),
+                    key=f"sm_notes_{program}_{idx}",
+                    height=100,
+                    placeholder="Student name · Goal area · Current level / evidence · Next adjustment · Responsible",
+                )
+            with col_del:
+                st.markdown("<div style='margin-top:2rem;'></div>", unsafe_allow_html=True)
                 if len(smartar) > 1:
                     if st.button("✕", key=f"sm_del_{program}_{idx}"):
                         smartar.pop(idx); st.rerun()
         if st.button("➕ Add SMARTAR row", key=f"sm_add_{program}"):
-            smartar.append({"student":"","goal_area":"","evidence":"","adjustment":"","responsible":""}); st.rerun()
+            smartar.append({"notes": ""}); st.rerun()
 
         pm_reports = ""
         concerns = []
@@ -2073,7 +2071,13 @@ def render_program_meeting(program):
     st.markdown("---")
 
     if st.button("💾 Save Meeting Record", type="primary", use_container_width=True, key=f"pm_save_{program}"):
-        smartar_data  = st.session_state.get(f"pm_smartar_{program}", [])
+        smartar_raw   = st.session_state.get(f"pm_smartar_{program}", [])
+        # Normalise: support both old multi-field format and new single-notes format
+        smartar_data  = [
+            {"notes": r["notes"]} if "notes" in r
+            else {"notes": " · ".join(filter(None, [r.get("student",""), r.get("goal_area",""), r.get("evidence",""), r.get("adjustment",""), r.get("responsible","")]))}
+            for r in smartar_raw
+        ]
         actions_data  = st.session_state.get(f"pm_actions_{program}", [])
         concerns_data = st.session_state.get(f"pm_concerns_{program}", []) if is_week_a else []
         priority_data = st.session_state.get(f"pm_priority_{program}", []) if not is_week_a else []
