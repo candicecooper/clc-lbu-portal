@@ -979,7 +979,7 @@ with t_record:
             )
             label = t
             style = ("primary" if is_sel else "secondary")
-            if cols[ci].button(label, key=f"tsel_{t}", use_container_width=True, type=style):
+            if cols[ci].button(label, key=f"tsel_{chunk_start+ci}", use_container_width=True, type=style):
                 ss.sel_time = t
                 st.rerun()
 
