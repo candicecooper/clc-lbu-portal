@@ -116,6 +116,16 @@ GROUPINGS = {
 }
 SETTINGS = ["Classroom","Kitchen","Yard","Playground","Spill-out","Transition","Other"]
 
+ENG_LEVELS = {
+    "E": {"label":"Engaged",          "colour":"#16a34a","bg":"#dcfce7","desc":"On task, no additional support needed"},
+    "P": {"label":"Partial",          "colour":"#d97706","bg":"#fef3c7","desc":"On task with support"},
+    "N": {"label":"Not engaged",      "colour":"#dc2626","bg":"#fee2e2","desc":"Off task"},
+}
+ENG_SUPPORT = [
+    "—", "1:1 SSO", "1:1 Teacher", "Small group",
+    "Peer support", "Modified task", "Visual supports", "Sensory break",
+]
+
 
 @st.cache_data(ttl=120)
 def load_behaviour_bank():
@@ -330,6 +340,86 @@ def upsert_obs(student_name, sel_date, sel_day, sel_time, activity,
                 st.session_state["_spt_err"] = "Save failed: " + str(e2)
                 return False
         st.session_state["_spt_err"] = "Save failed: " + err
+        return False
+
+
+def load_week_eng(student_name, week_start, week_end):
+    sb = get_sb()
+    if not sb: return pd.DataFrame()
+    try:
+        res = (sb.table("scatter_engagement_observations")
+               .select("*")
+               .eq("student_name", student_name)
+               .gte("obs_date", str(week_start))
+               .lte("obs_date", str(week_end))
+               .execute())
+        df = pd.DataFrame(res.data) if res.data else pd.DataFrame()
+        if not df.empty:
+            df["obs_date_dt"] = pd.to_datetime(df["obs_date"])
+            df["day_of_week"] = df["obs_date_dt"].apply(
+                lambda x: DAYS[x.weekday()] if x.weekday() < 5 else "")
+        return df
+    except Exception as e:
+        st.error("Engagement load error: " + str(e))
+        return pd.DataFrame()
+
+
+def load_all_eng(student_name):
+    sb = get_sb()
+    if not sb: return pd.DataFrame()
+    try:
+        res = (sb.table("scatter_engagement_observations")
+               .select("*").eq("student_name", student_name)
+               .order("obs_date").order("time_slot").execute())
+        df = pd.DataFrame(res.data) if res.data else pd.DataFrame()
+        if not df.empty:
+            df["obs_date_dt"] = pd.to_datetime(df["obs_date"])
+            df["day_of_week"] = df["obs_date_dt"].apply(
+                lambda x: DAYS[x.weekday()] if x.weekday() < 5 else "")
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+def upsert_eng(student_name, sel_date, sel_day, sel_time, eng_level, support="—"):
+    sb = get_sb()
+    if not sb: return False
+    try:
+        # UPSERT — unique on student_name + obs_date + time_slot
+        existing = (sb.table("scatter_engagement_observations")
+                    .select("id")
+                    .eq("student_name", student_name)
+                    .eq("obs_date", sel_date.isoformat())
+                    .eq("time_slot", sel_time)
+                    .limit(1).execute())
+        row = {
+            "student_name": student_name,
+            "obs_date":     sel_date.isoformat(),
+            "day_of_week":  sel_day,
+            "time_slot":    sel_time,
+            "eng_level":    eng_level,
+            "support_type": support,
+            "created_by":   get_staff_name(),
+        }
+        if existing.data:
+            sb.table("scatter_engagement_observations").update(
+                {"eng_level": eng_level, "support_type": support}
+            ).eq("id", existing.data[0]["id"]).execute()
+        else:
+            sb.table("scatter_engagement_observations").insert(row).execute()
+        return True
+    except Exception as e:
+        st.error("Engagement save failed: " + str(e))
+        return False
+
+
+def delete_eng(student_name, sel_date, sel_time):
+    sb = get_sb()
+    if not sb: return False
+    try:
+        sb.table("scatter_engagement_observations").delete()            .eq("student_name", student_name)            .eq("obs_date", sel_date.isoformat())            .eq("time_slot", sel_time).execute()
+        return True
+    except Exception:
         return False
 
 
@@ -795,7 +885,6 @@ with t_record:
         '<span style="background:#dbeafe;color:#1d4ed8;padding:.1rem .5rem;border-radius:12px;font-weight:700;">1</span> one occurrence &nbsp;'
         '<span style="background:#fee2e2;color:#b91c1c;padding:.1rem .5rem;border-radius:12px;font-weight:700;">2</span> more than one &nbsp;'
         '<span style="background:#f3f4f6;color:#9ca3af;padding:.1rem .5rem;border-radius:12px;font-weight:700;">X</span> evacuation &nbsp;'
-        '<span style="background:#f0fdf4;color:#15803d;padding:.1rem .5rem;border-radius:12px;font-weight:600;">✓</span> no behaviour observed'
         '</div>', unsafe_allow_html=True
     )
 
@@ -824,8 +913,7 @@ with t_record:
                     cell = cell_data.get(bi,{}).get(t,{}).get(d)
                     if cell:
                         v   = cell["value"]
-                        cls = {"1":"c1","2":"c2","X":"cx","0":"c0"}.get(v,"ce")
-                        disp = "✓" if v == "0" else v
+                        cls = {"1":"c1","2":"c2","X":"cx"}.get(v,"ce")
                         rows_html += f'<td class="{cls}">{disp}</td>'
                     else:
                         rows_html += '<td class="ce">·</td>'
@@ -914,14 +1002,13 @@ with t_record:
         "1": "background:#dbeafe;color:#1d4ed8;",
         "2": "background:#fee2e2;color:#b91c1c;",
         "X": "background:#f3f4f6;color:#6b7280;",
-        "0": "background:#f0fdf4;color:#15803d;",
     }
     for bi, beh in enumerate(behaviours if behaviours else [""]):
         existing  = cell_data.get(bi,{}).get(sel_time,{}).get(sel_day)
         cur_val   = existing["value"] if existing else ""
         cur_grp   = existing.get("grouping","") if existing else ""
         cur_set   = existing.get("setting","")  if existing else ""
-        cur_disp  = "✓" if cur_val=="0" else (cur_val or "—")
+        cur_disp  = cur_val or "—"
         vstyle    = val_styles.get(cur_val,"color:#9ca3af;")
         ctx_hint  = ""
         if cur_val in ("1","2") and (cur_grp or cur_set):
@@ -935,16 +1022,16 @@ with t_record:
             f'border-radius:8px;{vstyle}">{cur_disp}</span>{ctx_hint}'
         )
         lbl = (f"B{bi+1}: {beh[:45]}" if beh else "Record")
-        rc1, rc2, rc3, rc4, rc5, rc6 = st.columns([3.5, .75, .75, .75, .75, .6])
+        rc1, rc2, rc3, rc4, rc5 = st.columns([3.5, .85, .85, .85, .6])
         with rc1:
             st.markdown(
                 f'<div style="padding:.5rem 0 .1rem;font-size:.84rem;font-weight:600;color:#334155;">'
                 f'{lbl} &nbsp;{cur_badge}</div>',
                 unsafe_allow_html=True
             )
-        for col, val, key_sfx in [(rc2,"1","1"),(rc3,"2","2"),(rc4,"X","x"),(rc5,"0","0")]:
+        for col, val, key_sfx in [(rc2,"1","1"),(rc3,"2","2"),(rc4,"X","x")]:
             with col:
-                disp = "✓" if val=="0" else val
+                disp = val
                 if st.button(disp, key=f"vbtn_{bi}_{key_sfx}",
                              use_container_width=True,
                              type="primary" if val=="1" else "secondary"):
@@ -954,7 +1041,7 @@ with t_record:
                                ss.spt_period_id,
                                existing["id"] if existing else None)
                     st.rerun()
-        with rc6:
+        with rc5:
             if cur_val:
                 if st.button("✕", key=f"clr_{bi}", use_container_width=True, help="Clear"):
                     if existing:
@@ -1001,15 +1088,34 @@ with t_record:
                                 except Exception:
                                     pass
 
-            # ── Activity ──────────────────────────────────────────────────
+            # ── Activity — compact dropdown ───────────────────────────────
             ACTIVITY_CTX = [
+                "—",
                 "Classroom", "Morning routine", "Preferred task",
                 "Reading", "Writing", "Literacy", "Maths task", "Literacy task",
                 "Independent task", "Using a digital device",
                 "Break", "Playground", "Yard", "Recess",
                 "Spill out room / space", "Cooking", "Other",
             ]
-            _ctx_row("ACTIVITY", ACTIVITY_CTX, cur_act_ctx, "a", "activity", shorten=10)
+            act_idx = ACTIVITY_CTX.index(cur_act_ctx) if cur_act_ctx in ACTIVITY_CTX else 0
+            st.markdown(
+                '<div style="font-size:.7rem;font-weight:600;color:#64748b;margin:.3rem 0 .1rem;">'
+                'ACTIVITY</div>', unsafe_allow_html=True
+            )
+            new_act = st.selectbox(
+                "Activity", ACTIVITY_CTX, index=act_idx,
+                key=f"{ctx_key_base}_act", label_visibility="collapsed"
+            )
+            if new_act != cur_act_ctx and new_act != "—":
+                sb_act = get_sb()
+                if sb_act and existing:
+                    try:
+                        sb_act.table("scatter_plot_observations").update(
+                            {"activity": new_act}
+                        ).eq("id", existing["id"]).execute()
+                        st.rerun()
+                    except Exception:
+                        pass
 
             # ── Grouping and Setting side by side ─────────────────────────
             gc, sc = st.columns(2)
@@ -1018,6 +1124,133 @@ with t_record:
                 _ctx_row("GROUPING", grp_opts, cur_grp, "g", "grouping", shorten=None)
             with sc:
                 _ctx_row("SETTING", SETTINGS, cur_set, "s", "setting", shorten=9)
+
+    # ════════════════════════════════════════════════════════════════════════
+    # ENGAGEMENT GRID
+    # ════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("### 🟢 Engagement Tracker")
+    st.caption(
+        "Record engagement level for each time slot. "
+        "**E** = Engaged (no extra support)  &nbsp;·&nbsp; "
+        "**P** = Partial (on task with support)  &nbsp;·&nbsp; "
+        "**N** = Not engaged (off task)"
+    )
+
+    eng_df = load_week_eng(student_name, week_start, week_end)
+
+    # Build engagement cell lookup: {time_slot: {day: {eng_level, support_type, id}}}
+    eng_data = {}
+    if not eng_df.empty:
+        for _, row in eng_df.iterrows():
+            t  = row.get("time_slot","")
+            d  = row.get("day_of_week","")
+            if not t or not d: continue
+            if t not in eng_data: eng_data[t] = {}
+            eng_data[t][d] = {
+                "eng_level":    row.get("eng_level",""),
+                "support_type": row.get("support_type","") or "—",
+            }
+
+    # ── Engagement HTML grid ──────────────────────────────────────────────
+    eth = '<th class="lh">Time</th><th class="la">Activity</th>'
+    for d in DAYS:
+        is_td = (d == today_day and is_this)
+        bg    = "background:#1a4d8a;" if is_td else ""
+        eth  += (f'<th style="{bg}">{d[:3]}<br>'
+                 f'<span style="font-weight:400;font-size:.62rem;">{day_dates[d]}</span></th>')
+
+    eng_rows_html = ""
+    for slot in schedule:
+        t   = slot["time"]
+        act = slot["activity"]
+        eng_rows_html += f'<tr><td class="tl">{t}</td><td class="al">{act}</td>'
+        for d in DAYS:
+            cell = eng_data.get(t,{}).get(d)
+            if cell:
+                lv  = cell["eng_level"]
+                sup = cell["support_type"]
+                cfg = ENG_LEVELS.get(lv, {})
+                bg  = cfg.get("bg","white")
+                fg  = cfg.get("colour","#334155")
+                # Show level + support abbreviation
+                sup_short = sup.replace("1:1 ","").replace("Visual supports","VS")                               .replace("Sensory break","Snsr").replace("Modified task","Mod")                               .replace("Peer support","Peer").replace("Small group","SG")
+                sup_html  = (f'<br><span style="font-size:.6rem;opacity:.75;">{sup_short}</span>'
+                             if sup and sup != "—" else "")
+                eng_rows_html += (f'<td style="background:{bg};color:{fg};font-weight:700;'
+                                  f'text-align:center;vertical-align:middle;padding:.2rem .3rem;">'
+                                  f'{lv}{sup_html}</td>')
+            else:
+                eng_rows_html += '<td class="ce">·</td>'
+        eng_rows_html += "</tr>"
+
+    st.markdown(
+        f'<div class="grid-wrap"><table class="sg">'
+        f'<thead><tr>{eth}</tr></thead><tbody>{eng_rows_html}</tbody></table></div>',
+        unsafe_allow_html=True
+    )
+
+    # ── Engagement entry strip ────────────────────────────────────────────
+    st.markdown("**Record engagement for the selected time slot and day:**")
+    st.markdown(
+        f'<div style="background:#f0fdf4;border:1.5px solid #16a34a;border-radius:8px;'
+        f'padding:.4rem 1rem;margin:.3rem 0 .5rem;font-size:.85rem;">'
+        f'<b style="color:#16a34a;">Recording:</b> {sel_time}'
+        + (f' — {sel_activity}' if sel_activity else '')
+        + f' &nbsp;·&nbsp; <b>{sel_day}</b> {sel_date.strftime("%-d %b")}'
+        + '</div>',
+        unsafe_allow_html=True
+    )
+
+    cur_eng  = eng_data.get(sel_time,{}).get(sel_day,{}).get("eng_level","")
+    cur_sup  = eng_data.get(sel_time,{}).get(sel_day,{}).get("support_type","—")
+
+    # E / P / N buttons
+    eng_cols = st.columns([3, 1, 1, 1, 0.7])
+    with eng_cols[0]:
+        st.markdown(
+            '<div style="padding:.55rem 0 .1rem;font-size:.84rem;font-weight:600;color:#334155;">'
+            'Engagement level</div>',
+            unsafe_allow_html=True
+        )
+    for ci, (lv, cfg) in enumerate(ENG_LEVELS.items()):
+        with eng_cols[ci+1]:
+            is_sel = (cur_eng == lv)
+            st.markdown("<div style='padding-top:1.75rem;'>", unsafe_allow_html=True)
+            if st.button(
+                lv, key=f"eng_{lv}_{sel_time}_{sel_day}",
+                use_container_width=True,
+                type="primary" if is_sel else "secondary",
+                help=cfg["desc"]
+            ):
+                if is_sel:
+                    # Deselect = clear
+                    delete_eng(student_name, sel_date, sel_time)
+                else:
+                    upsert_eng(student_name, sel_date, sel_day, sel_time, lv,
+                               cur_sup if cur_sup != "—" else "—")
+                st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
+    with eng_cols[4]:
+        if cur_eng:
+            st.markdown("<div style='padding-top:1.75rem;'>", unsafe_allow_html=True)
+            if st.button("✕", key=f"eng_clr_{sel_time}_{sel_day}",
+                         use_container_width=True, help="Clear engagement"):
+                delete_eng(student_name, sel_date, sel_time)
+                st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    # Support type — only when E or P recorded
+    if cur_eng in ("E","P"):
+        sup_idx = ENG_SUPPORT.index(cur_sup) if cur_sup in ENG_SUPPORT else 0
+        new_sup = st.selectbox(
+            "Support type", ENG_SUPPORT, index=sup_idx,
+            key=f"sup_sel_{sel_time}_{sel_day}",
+            help="What support enabled or maintained engagement?"
+        )
+        if new_sup != cur_sup:
+            upsert_eng(student_name, sel_date, sel_day, sel_time, cur_eng, new_sup)
+            st.rerun()
 
     # ── End-of-day support type ───────────────────────────────────────────
     st.markdown("---")
@@ -1082,7 +1315,7 @@ with t_record:
                 bi  = int(row.get("behaviour_index",0) or 0)
                 beh = behaviours[bi] if bi < len(behaviours) else row.get("behaviour_label","?")
                 val = row.get("value","")
-                disp = "✓ no behaviour" if val=="0" else val
+                disp = val
                 entries.append({
                     "label": f"B{bi+1} · {row['day_of_week']} {row['time_slot']} — {disp}  ({beh[:25]})",
                     "id":    row["id"],
@@ -1352,13 +1585,11 @@ with t_analysis:
     inc_filt  = filt[filt["value"].isin(["1","2"])].copy()
     n1   = int((filt["value"]=="1").sum())
     n2   = int((filt["value"]=="2").sum())
-    n0   = int((filt["value"]=="0").sum())
 
-    k1,k2,k3,k4 = st.columns(4)
+    k1,k2,k3 = st.columns(3)
     k1.markdown(f"<div class='kpi'><div class='val'>{n1+n2}</div><div class='lbl'>Incident intervals</div></div>", unsafe_allow_html=True)
     k2.markdown(f"<div class='kpi'><div class='val'>{n1}</div><div class='lbl'>Single (1)</div></div>", unsafe_allow_html=True)
     k3.markdown(f"<div class='kpi kpi-a'><div class='val'>{n2}</div><div class='lbl'>Multiple (2)</div></div>", unsafe_allow_html=True)
-    k4.markdown(f"<div class='kpi kpi-g'><div class='val'>{n0}</div><div class='lbl'>✓ No behaviour</div></div>", unsafe_allow_html=True)
 
     if inc_filt.empty:
         st.success("🎉 No incidents in this period."); st.stop()
@@ -1434,6 +1665,105 @@ with t_analysis:
                     plot_bgcolor="#f8fafc",paper_bgcolor="white",
                     yaxis=dict(tickformat="d",gridcolor="#e2e8f0"),margin=dict(l=10,r=10,t=40,b=10))
                 st.plotly_chart(fig3, use_container_width=True)
+
+    # ── Engagement analysis ──────────────────────────────────────────────
+    all_eng = load_all_eng(student_name)
+    if not all_eng.empty:
+        eng_filt = all_eng[
+            (all_eng["obs_date_dt"].dt.date >= date_from) &
+            (all_eng["obs_date_dt"].dt.date <= date_to)
+        ].copy()
+        if not eng_filt.empty:
+            st.markdown("---")
+            st.markdown("### 🟢 Engagement Analysis")
+
+            # KPIs
+            n_e = int((eng_filt["eng_level"]=="E").sum())
+            n_p = int((eng_filt["eng_level"]=="P").sum())
+            n_n = int((eng_filt["eng_level"]=="N").sum())
+            n_total = len(eng_filt)
+            ek1,ek2,ek3,ek4 = st.columns(4)
+            ek1.markdown(f"<div class='kpi'><div class='val'>{n_total}</div><div class='lbl'>Intervals recorded</div></div>", unsafe_allow_html=True)
+            ek2.markdown(f"<div class='kpi kpi-g'><div class='val'>{n_e}</div><div class='lbl'>Engaged (E)</div></div>", unsafe_allow_html=True)
+            ek3.markdown(f"<div class='kpi kpi-a'><div class='val'>{n_p}</div><div class='lbl'>Partial (P)</div></div>", unsafe_allow_html=True)
+            ek4.markdown(f"<div class='kpi'><div class='val'>{n_n}</div><div class='lbl'>Not engaged (N)</div></div>", unsafe_allow_html=True)
+
+            ec1, ec2 = st.columns(2)
+            with ec1:
+                # Engagement breakdown pie
+                eng_filt["Level"] = eng_filt["eng_level"].map(
+                    {k: v["label"] for k,v in ENG_LEVELS.items()}
+                ).fillna(eng_filt["eng_level"])
+                pie_df = eng_filt["Level"].value_counts().reset_index()
+                pie_df.columns = ["Level","Count"]
+                fig_pie = px.pie(
+                    pie_df, values="Count", names="Level",
+                    color="Level",
+                    color_discrete_map={
+                        "Engaged":"#16a34a",
+                        "Partial":"#d97706",
+                        "Not engaged":"#dc2626",
+                    },
+                    title="Engagement Breakdown", hole=0.4,
+                )
+                fig_pie.update_layout(height=290, margin=dict(l=10,r=10,t=50,b=10))
+                st.plotly_chart(fig_pie, use_container_width=True)
+
+            with ec2:
+                # Engagement by time slot
+                slot_eng = eng_filt.groupby(["time_slot","eng_level"]).size().reset_index(name="Count")
+                slot_eng["sort_k"] = slot_eng["time_slot"].apply(
+                    lambda t: int(str(t).split(":")[0])*60+int(str(t).split(":")[1]) if ":"in str(t) else 999
+                )
+                slot_eng["label_map"] = slot_eng["eng_level"].map(
+                    {k: v["label"] for k,v in ENG_LEVELS.items()}
+                )
+                fig_slot = px.bar(
+                    slot_eng.sort_values("sort_k"), x="Count", y="time_slot",
+                    orientation="h", color="label_map",
+                    color_discrete_map={
+                        "Engaged":"#16a34a","Partial":"#d97706","Not engaged":"#dc2626"
+                    },
+                    title="Engagement by Time Slot",
+                    labels={"time_slot":"","Count":"Intervals","label_map":"Level"},
+                    barmode="stack",
+                )
+                fig_slot.update_layout(
+                    height=max(280,len(slot_eng["time_slot"].unique())*22),
+                    coloraxis_showscale=False,
+                    plot_bgcolor="#f8fafc", paper_bgcolor="white",
+                    margin=dict(l=10,r=10,t=50,b=10),
+                    xaxis=dict(tickformat="d"),
+                    yaxis=dict(autorange="reversed"),
+                )
+                st.plotly_chart(fig_slot, use_container_width=True)
+
+            # Support type effectiveness
+            sup_data_eng = eng_filt[eng_filt["support_type"].notna() & (eng_filt["support_type"] != "—")]
+            if not sup_data_eng.empty:
+                sup_data_eng = sup_data_eng.copy()
+                sup_data_eng["Level"] = sup_data_eng["eng_level"].map(
+                    {k: v["label"] for k,v in ENG_LEVELS.items()}
+                )
+                sup_grp = sup_data_eng.groupby(["support_type","Level"]).size().reset_index(name="Count")
+                fig_sup = px.bar(
+                    sup_grp, x="Count", y="support_type", orientation="h",
+                    color="Level",
+                    color_discrete_map={
+                        "Engaged":"#16a34a","Partial":"#d97706","Not engaged":"#dc2626"
+                    },
+                    title="Engagement by Support Type",
+                    labels={"support_type":"","Count":"Intervals","Level":"Engagement"},
+                    barmode="stack",
+                )
+                fig_sup.update_layout(
+                    height=max(240,len(sup_grp["support_type"].unique())*32),
+                    plot_bgcolor="#f8fafc", paper_bgcolor="white",
+                    margin=dict(l=10,r=10,t=50,b=10),
+                    xaxis=dict(tickformat="d"),
+                )
+                st.plotly_chart(fig_sup, use_container_width=True)
+                st.caption("💡 This chart shows which support types are associated with engaged vs partial vs not-engaged intervals.")
 
     # ── Grouping and Setting charts (shown when context data exists) ─────
     all_with_ctx = inc_filt[
@@ -1557,7 +1887,7 @@ with t_analysis:
     # ── DOWNLOADS ─────────────────────────────────────────────────────────
     dl = filt.copy()
     dl["obs_date"] = dl["obs_date_dt"].dt.strftime("%-d/%m/%Y")
-    dl["value_desc"] = dl["value"].map({"1":"Single","2":"Multiple","X":"Evacuation","0":"No behaviour"})
+    dl["value_desc"] = dl["value"].map({"1":"Single","2":"Multiple","X":"Evacuation"})
     csv = dl[["obs_date","day_of_week","time_slot","activity","value","value_desc",
               "behaviour_label","target_behaviours","created_by"]].to_csv(index=False)
 
@@ -1597,9 +1927,9 @@ with t_analysis:
             for d in all_dates_sorted:
                 day_name = pd.Timestamp(d).strftime("%A")
                 v = cell_lookup.get((t, day_name), "")
-                bg = {"1":"#dbeafe","2":"#fee2e2","X":"#f3f4f6","0":"#f0fdf4"}.get(v,"white")
-                fg = {"1":"#1d4ed8","2":"#b91c1c","X":"#6b7280","0":"#15803d"}.get(v,"#ccc")
-                disp = "✓" if v=="0" else (v or "·")
+                bg = {"1":"#dbeafe","2":"#fee2e2","X":"#f3f4f6"}.get(v,"white")
+                fg = {"1":"#1d4ed8","2":"#b91c1c","X":"#6b7280"}.get(v,"#ccc")
+                disp = v or "·"
                 tds += f"<td style='background:{bg};color:{fg};text-align:center;padding:3px 5px;font-size:11px;font-weight:700;border:1px solid #e2e8f0;'>{disp}</td>"
             rows_html += (f"<tr><td style='padding:3px 8px;font-size:11px;font-weight:600;white-space:nowrap;border:1px solid #e2e8f0;'>{t}</td>"
                           f"<td style='padding:3px 8px;font-size:11px;color:#64748b;border:1px solid #e2e8f0;'>{act}</td>{tds}</tr>")
