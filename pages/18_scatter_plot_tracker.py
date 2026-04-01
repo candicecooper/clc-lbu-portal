@@ -1088,29 +1088,6 @@ with t_record:
                                 except Exception:
                                     pass
 
-            # ── Activity — free text ─────────────────────────────────────
-            st.markdown(
-                '<div style="font-size:.7rem;font-weight:600;color:#64748b;margin:.3rem 0 .1rem;">'
-                'ACTIVITY <span style="font-weight:400;">(type and press Enter)</span></div>',
-                unsafe_allow_html=True
-            )
-            new_act = st.text_input(
-                "Activity", value=cur_act_ctx or "",
-                key=f"{ctx_key_base}_act",
-                placeholder="e.g. Maths — independent task",
-                label_visibility="collapsed"
-            )
-            if new_act.strip() != (cur_act_ctx or ""):
-                sb_act = get_sb()
-                if sb_act and existing:
-                    try:
-                        sb_act.table("scatter_plot_observations").update(
-                            {"activity": new_act.strip()}
-                        ).eq("id", existing["id"]).execute()
-                        st.rerun()
-                    except Exception:
-                        pass
-
             # ── Grouping and Setting side by side ─────────────────────────
             gc, sc = st.columns(2)
             with gc:
