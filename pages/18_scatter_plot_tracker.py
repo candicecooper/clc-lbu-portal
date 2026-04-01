@@ -67,22 +67,22 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 DEFAULT_SCHEDULE = [
-    {"time":"9:00",  "activity":"De-escalation activity"},
-    {"time":"9:15",  "activity":"Interoception"},
-    {"time":"9:20",  "activity":"Activity"},
-    {"time":"10:00", "activity":"Breakfast"},
-    {"time":"10:05", "activity":"Fitness"},
-    {"time":"10:20", "activity":"Quiet Time"},
-    {"time":"10:30", "activity":"Activity"},
-    {"time":"11:00", "activity":"Recess"},
-    {"time":"11:30", "activity":"Quiet Time"},
-    {"time":"11:40", "activity":"Activity"},
-    {"time":"12:30", "activity":"Activity"},
-    {"time":"12:50", "activity":"Lunch eating"},
-    {"time":"13:00", "activity":"Lunch"},
-    {"time":"13:30", "activity":"Quiet Time"},
-    {"time":"13:45", "activity":"I.C.T."},
-    {"time":"14:30", "activity":"Home"},
+    {"time":"9:00",  "activity":""},
+    {"time":"9:15",  "activity":""},
+    {"time":"9:20",  "activity":""},
+    {"time":"10:00", "activity":""},
+    {"time":"10:05", "activity":""},
+    {"time":"10:20", "activity":""},
+    {"time":"10:30", "activity":""},
+    {"time":"11:00", "activity":""},
+    {"time":"11:30", "activity":""},
+    {"time":"11:40", "activity":""},
+    {"time":"12:30", "activity":""},
+    {"time":"12:50", "activity":""},
+    {"time":"13:00", "activity":""},
+    {"time":"13:30", "activity":""},
+    {"time":"13:45", "activity":""},
+    {"time":"14:30", "activity":""},
 ]
 DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday"]
 
@@ -899,7 +899,7 @@ with t_record:
 
     for bi, btab in enumerate(beh_tabs):
         with btab:
-            th = '<th class="lh">Time</th><th class="la">Activity</th>'
+            th = '<th class="lh">Time</th>'
             for d in DAYS:
                 is_td = (d == today_day and is_this)
                 bg = 'background:#1a4d8a;' if is_td else ''
@@ -908,7 +908,7 @@ with t_record:
             for slot in schedule:
                 t   = slot["time"]
                 act = slot["activity"]
-                rows_html += f'<tr><td class="tl">{t}</td><td class="al">{act}</td>'
+                rows_html += f'<tr><td class="tl">{t}</td>'
                 for d in DAYS:
                     cell = cell_data.get(bi,{}).get(t,{}).get(d)
                     if cell:
@@ -1124,7 +1124,7 @@ with t_record:
             }
 
     # ── Engagement HTML grid ──────────────────────────────────────────────
-    eth = '<th class="lh">Time</th><th class="la">Activity</th>'
+    eth = '<th class="lh">Time</th>'
     for d in DAYS:
         is_td = (d == today_day and is_this)
         bg    = "background:#1a4d8a;" if is_td else ""
@@ -1135,7 +1135,7 @@ with t_record:
     for slot in schedule:
         t   = slot["time"]
         act = slot["activity"]
-        eng_rows_html += f'<tr><td class="tl">{t}</td><td class="al">{act}</td>'
+        eng_rows_html += f'<tr><td class="tl">{t}</td>'
         for d in DAYS:
             cell = eng_data.get(t,{}).get(d)
             if cell:
@@ -1336,7 +1336,7 @@ with t_record:
         # Header row
         h1,h2,h3 = st.columns([1.5,3,1.65])
         with h1: st.caption("**Time**")
-        with h2: st.caption("**Activity**")
+        with h2: st.caption("**Label (optional)**")
         with h3: st.caption("**Reorder / Remove**")
 
         changed = False
