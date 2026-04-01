@@ -1331,16 +1331,6 @@ with t_record:
         st.caption("Schedule is saved per student. Changes apply immediately.")
         sched = ss.spt_schedule
 
-        # ── ACTIVITY SUGGESTIONS LIST ─────────────────────────────────────
-        ACTIVITY_SUGGESTIONS = [
-            "Classroom", "Morning routine", "Preferred task",
-            "Reading", "Writing", "Literacy", "Maths task", "Literacy task",
-            "Independent task", "Using a digital device",
-            "Break", "Playground", "Yard", "Recess",
-            "Spill out room / space", "Cooking", "Other",
-            "De-escalation activity", "Interoception", "Breakfast", "Fitness",
-            "Quiet Time", "Lunch eating", "Lunch", "I.C.T.", "Home",
-        ]
 
         # ── EXISTING SLOTS ────────────────────────────────────────────────
         # Header row
@@ -1356,19 +1346,9 @@ with t_record:
                 nt = st.text_input("T", slot["time"], key=f"st_{i}",
                                    label_visibility="collapsed")
             with sc2:
-                # Selectbox with custom option for autofill + text fallback
-                act_opts = ["— type below —"] + ACTIVITY_SUGGESTIONS
-                cur_act  = slot["activity"]
-                sel_idx  = (ACTIVITY_SUGGESTIONS.index(cur_act) + 1
-                            if cur_act in ACTIVITY_SUGGESTIONS else 0)
-                sel_act  = st.selectbox("A", act_opts, index=sel_idx,
-                                        key=f"ssel_{i}", label_visibility="collapsed")
-                if sel_act == "— type below —":
-                    na = st.text_input("Custom activity", value=cur_act,
-                                       key=f"sa_{i}", label_visibility="collapsed",
-                                       placeholder="Type activity name...")
-                else:
-                    na = sel_act
+                na = st.text_input("A", slot["activity"], key=f"sa_{i}",
+                                   label_visibility="collapsed",
+                                   placeholder="e.g. Quiet Time")
             with sc3:
                 if i > 0 and st.button("↑", key=f"su_{i}"):
                     sched[i], sched[i-1] = sched[i-1], sched[i]; changed = True
@@ -1393,13 +1373,8 @@ with t_record:
         with nc1:
             new_t = st.text_input("Time", placeholder="e.g. 8:45", key="sched_nt")
         with nc2:
-            add_act_opts  = ["— type below —"] + ACTIVITY_SUGGESTIONS
-            add_act_sel   = st.selectbox("Activity", add_act_opts, key="sched_na_sel")
-            if add_act_sel == "— type below —":
-                new_a = st.text_input("Custom", placeholder="Activity name",
-                                      key="sched_na", label_visibility="collapsed")
-            else:
-                new_a = add_act_sel
+            new_a = st.text_input("Activity", placeholder="e.g. Maths task",
+                                  key="sched_na")
         with nc3:
             st.markdown("<div style='padding-top:1.8rem;'>", unsafe_allow_html=True)
             if st.button("Add slot", key="sched_add", use_container_width=True):
@@ -1428,16 +1403,9 @@ with t_record:
                                     index=2, key="tg_freq",
                                     format_func=lambda x: f"{x} min")
         with tg4:
-            tg_act_opts = ["— type below —"] + ACTIVITY_SUGGESTIONS
-            tg_act_sel  = st.selectbox("Default activity (optional)",
-                                       tg_act_opts, key="tg_act_sel")
-            if tg_act_sel == "— type below —":
-                tg_act = st.text_input("Custom default activity",
-                                       placeholder="Leave blank for none",
-                                       key="tg_act_custom",
-                                       label_visibility="collapsed")
-            else:
-                tg_act = tg_act_sel
+            tg_act = st.text_input("Default activity (optional)",
+                                   placeholder="Leave blank for none",
+                                   key="tg_act_custom")
 
         tg_replace = st.checkbox(
             "Replace entire schedule with generated timeline",
