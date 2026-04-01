@@ -1088,30 +1088,24 @@ with t_record:
                                 except Exception:
                                     pass
 
-            # ── Activity — compact dropdown ───────────────────────────────
-            ACTIVITY_CTX = [
-                "—",
-                "Classroom", "Morning routine", "Preferred task",
-                "Reading", "Writing", "Literacy", "Maths task", "Literacy task",
-                "Independent task", "Using a digital device",
-                "Break", "Playground", "Yard", "Recess",
-                "Spill out room / space", "Cooking", "Other",
-            ]
-            act_idx = ACTIVITY_CTX.index(cur_act_ctx) if cur_act_ctx in ACTIVITY_CTX else 0
+            # ── Activity — free text ─────────────────────────────────────
             st.markdown(
                 '<div style="font-size:.7rem;font-weight:600;color:#64748b;margin:.3rem 0 .1rem;">'
-                'ACTIVITY</div>', unsafe_allow_html=True
+                'ACTIVITY <span style="font-weight:400;">(type and press Enter)</span></div>',
+                unsafe_allow_html=True
             )
-            new_act = st.selectbox(
-                "Activity", ACTIVITY_CTX, index=act_idx,
-                key=f"{ctx_key_base}_act", label_visibility="collapsed"
+            new_act = st.text_input(
+                "Activity", value=cur_act_ctx or "",
+                key=f"{ctx_key_base}_act",
+                placeholder="e.g. Maths — independent task",
+                label_visibility="collapsed"
             )
-            if new_act != cur_act_ctx and new_act != "—":
+            if new_act.strip() != (cur_act_ctx or ""):
                 sb_act = get_sb()
                 if sb_act and existing:
                     try:
                         sb_act.table("scatter_plot_observations").update(
-                            {"activity": new_act}
+                            {"activity": new_act.strip()}
                         ).eq("id", existing["id"]).execute()
                         st.rerun()
                     except Exception:
