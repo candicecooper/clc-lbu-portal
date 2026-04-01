@@ -442,24 +442,41 @@ def load_schedule_by_name(student_name):
                .select("schedule").eq("student_id", student_name).limit(1).execute())
         if res.data:
             raw = res.data[0]["schedule"]
-            return json.loads(raw) if isinstance(raw, str) else raw
-    except Exception:
-        pass
+            sched = json.loads(raw) if isinstance(raw, str) else raw
+            # Ensure each slot has the expected keys
+            return [{"time": s.get("time",""), "activity": s.get("activity","")}
+                    for s in sched if s.get("time")]
+    except Exception as e:
+        st.session_state["_sched_save_err"] = "Schedule load failed: " + str(e)
     return DEFAULT_SCHEDULE.copy()
 
 
 def save_schedule_by_name(student_name, schedule):
+    """Save schedule. Tries upsert first, falls back to update/insert."""
     sb = get_sb()
-    if not sb: return
+    if not sb:
+        st.session_state["_sched_save_err"] = "Supabase not configured — schedule not saved."
+        return
+    payload = {"student_id": student_name, "schedule": json.dumps(schedule)}
     try:
-        data = {"student_id": student_name, "schedule": json.dumps(schedule)}
-        ex = sb.table("scatter_plot_schedules").select("id").eq("student_id", student_name).execute()
-        if ex.data:
-            sb.table("scatter_plot_schedules").update(data).eq("student_id", student_name).execute()
-        else:
-            sb.table("scatter_plot_schedules").insert(data).execute()
+        # Try upsert with on_conflict (most reliable)
+        sb.table("scatter_plot_schedules").upsert(
+            payload, on_conflict="student_id"
+        ).execute()
+        st.session_state.pop("_sched_save_err", None)
+        return
     except Exception:
         pass
+    # Fallback: explicit select → update or insert
+    try:
+        ex = sb.table("scatter_plot_schedules").select("id")               .eq("student_id", student_name).execute()
+        if ex.data:
+            sb.table("scatter_plot_schedules").update(payload)              .eq("student_id", student_name).execute()
+        else:
+            sb.table("scatter_plot_schedules").insert(payload).execute()
+        st.session_state.pop("_sched_save_err", None)
+    except Exception as e:
+        st.session_state["_sched_save_err"] = "⚠️ Schedule not saved: " + str(e)
 
 
 # ── Session state ─────────────────────────────────────────────────────────────
@@ -1325,6 +1342,9 @@ with t_record:
             unsafe_allow_html=True
         )
 
+    if ss.get("_sched_save_err"):
+        st.error(ss["_sched_save_err"])
+
     _sched_open = ss.get("_sched_expander_open", False)
     with st.expander("⚙️ Manage Schedule — edit, reorder, or generate", expanded=_sched_open):
         ss["_sched_expander_open"] = True
@@ -1458,14 +1478,23 @@ with t_record:
                             return 999
                     sched = sorted(sched, key=_slot_sort)
 
-                ss.spt_schedule = sched
-                save_schedule_by_name(student_name, sched)
+                # Explicitly update session state FIRST so rerun sees new schedule
+                ss.spt_schedule = list(sched)
                 count = len(new_slots)
-                ss["_sched_msg"] = (
-                    "✅ Generated " + str(count) + " slots "
-                    "(" + tg_start + " – " + tg_end + ", every " + str(tg_freq) + " min). "
-                    + ("Schedule replaced." if tg_replace else "Merged with existing.")
-                )
+                # Save to Supabase
+                save_schedule_by_name(student_name, list(sched))
+                # Set message — will show above expander after rerun
+                err = ss.get("_sched_save_err","")
+                if err:
+                    ss["_sched_msg"] = "❌ " + err
+                else:
+                    ss["_sched_msg"] = (
+                        "✅ Generated " + str(count) + " slots "
+                        "(" + tg_start + " – " + tg_end + ", every "
+                        + str(tg_freq) + " min). "
+                        + ("Schedule replaced." if tg_replace else "Merged with existing.")
+                        + " Open the expander below to edit individual slots."
+                    )
                 ss["_sched_expander_open"] = True
                 st.rerun()
 
