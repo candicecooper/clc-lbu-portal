@@ -1909,33 +1909,28 @@ def render_program_meeting(program):
         st.markdown("#### ⏱ 10–25 min | STUDENT CONCERNS — Structured Problem Solving")
         st.caption("Facilitator prompt: Push for function-based thinking, not description.")
 
-        if student_names:
-            st.caption(f"💡 {len(student_names)} students loaded. Type any name — not on the list? Just type it in.")
-
         concerns_key = f"pm_concerns_{program}"
         if concerns_key not in st.session_state:
-            st.session_state[concerns_key] = [{"student":"","concern":"","hypothesis":"","strategy":"","who":"","by_when":""}]
+            st.session_state[concerns_key] = [{"notes": ""}]
 
         concerns = st.session_state[concerns_key]
-        header_cols = st.columns([2,2,2,2,1,1,0.5])
-        for h, label in zip(header_cols, ["Student","Concern / Behaviour","Hypothesis (Why?)","Strategy to Try","Who","By When",""]):
-            h.markdown(f"**{label}**" if label else "")
-
         for idx, row in enumerate(concerns):
-            c1,c2,c3,c4,c5,c6,c7 = st.columns([2,2,2,2,1,1,0.5])
-            # ── FIXED: text_input so any student name can be typed ──
-            with c1: row["student"]    = st.text_input("Student", value=row.get("student",""), key=f"con_stu_{program}_{idx}", label_visibility="collapsed", placeholder="Student name")
-            with c2: row["concern"]    = st.text_input("C", value=row.get("concern",""), key=f"con_c_{program}_{idx}", label_visibility="collapsed")
-            with c3: row["hypothesis"] = st.text_input("H", value=row.get("hypothesis",""), key=f"con_h_{program}_{idx}", label_visibility="collapsed")
-            with c4: row["strategy"]   = st.text_input("St", value=row.get("strategy",""), key=f"con_st_{program}_{idx}", label_visibility="collapsed")
-            with c5: row["who"]        = st.text_input("W", value=row.get("who",""), key=f"con_w_{program}_{idx}", label_visibility="collapsed")
-            with c6: row["by_when"]    = st.text_input("By", value=row.get("by_when",""), key=f"con_by_{program}_{idx}", label_visibility="collapsed")
-            with c7:
+            col_text, col_del = st.columns([11, 0.5])
+            with col_text:
+                row["notes"] = st.text_area(
+                    f"Student {idx + 1}",
+                    value=row.get("notes", ""),
+                    key=f"con_notes_{program}_{idx}",
+                    height=100,
+                    placeholder="Student name · Concern / behaviour · Hypothesis (why?) · Strategy to try · Who · By when",
+                )
+            with col_del:
+                st.markdown("<div style='margin-top:2rem;'></div>", unsafe_allow_html=True)
                 if len(concerns) > 1:
                     if st.button("✕", key=f"con_del_{program}_{idx}"):
                         concerns.pop(idx); st.rerun()
         if st.button("➕ Add student concern", key=f"con_add_{program}"):
-            concerns.append({"student":"","concern":"","hypothesis":"","strategy":"","who":"","by_when":""}); st.rerun()
+            concerns.append({"notes": ""}); st.rerun()
         st.markdown("---")
 
         st.markdown("#### ⏱ 25–40 min | SMARTAR GOAL SPOTLIGHT — 4 Students")
@@ -2079,7 +2074,12 @@ def render_program_meeting(program):
             for r in smartar_raw
         ]
         actions_data  = st.session_state.get(f"pm_actions_{program}", [])
-        concerns_data = st.session_state.get(f"pm_concerns_{program}", []) if is_week_a else []
+        concerns_raw  = st.session_state.get(f"pm_concerns_{program}", []) if is_week_a else []
+        concerns_data = [
+            {"notes": r["notes"]} if "notes" in r
+            else {"notes": " · ".join(filter(None, [r.get("student",""), r.get("concern",""), r.get("hypothesis",""), r.get("strategy",""), r.get("who",""), r.get("by_when","")]))}
+            for r in concerns_raw
+        ]
         priority_data = st.session_state.get(f"pm_priority_{program}", []) if not is_week_a else []
 
         try:
