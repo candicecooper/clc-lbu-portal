@@ -1195,10 +1195,14 @@ def save_incident_to_db(incident):
             "hypothesis_item": incident.get('hypothesis_item'),
             "is_critical": incident.get('is_critical', False)
         }
-        if 'id' not in incident or not incident['id']:
-            supabase.table('incidents').insert(data).execute()
-        else:
+        if incident.get('db_exists'):
+            # Editing an existing DB row — UPDATE
             supabase.table('incidents').update(data).eq('id', incident['id']).execute()
+        else:
+            # New incident — INSERT with client-generated UUID
+            if incident.get('id'):
+                data['id'] = incident['id']
+            supabase.table('incidents').insert(data).execute()
         return True
     except Exception as e:
         st.error(f"Error saving incident: {e}")
