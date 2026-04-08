@@ -2593,30 +2593,468 @@ def render_student_analysis_page():
         with col3: st.metric("Escalation Rate", f"{escalation_rate:.1f}%")
     st.markdown("---")
 
-    st.markdown("### 🎯 Behaviour Types")
-    all_behaviours = full_df["behaviour_type"].value_counts().head(6).index.tolist()
-    quick_beh_counts = [len(quick_only_df[quick_only_df["behaviour_type"] == b]) if not quick_only_df.empty else 0 for b in all_behaviours]
-    crit_beh_counts  = [len(crit_only_df[crit_only_df["behaviour_type"] == b]) if not crit_only_df.empty else 0 for b in all_behaviours]
-    fig2 = go.Figure()
-    fig2.add_trace(go.Bar(y=all_behaviours, x=quick_beh_counts, name='Regular', orientation='h',
-        marker=dict(color='#3b82f6'), text=quick_beh_counts, textposition='inside',
-        textfont=dict(color='white', size=11, family='Arial Black')))
-    fig2.add_trace(go.Bar(y=all_behaviours, x=crit_beh_counts, name='Critical', orientation='h',
-        marker=dict(color='#ef4444'), text=crit_beh_counts, textposition='inside',
-        textfont=dict(color='white', size=11, family='Arial Black')))
-    fig2.update_layout(height=350, barmode='stack', xaxis_title="<b>Incident Count</b>",
-        plot_bgcolor='#f8fafc', paper_bgcolor='white', font=dict(color='#0f172a', size=12, family='Arial'),
-        xaxis=dict(tickmode='linear', tick0=0, dtick=1, gridcolor='#e2e8f0', showline=True, linewidth=2, linecolor='#cbd5e1'),
-        yaxis=dict(showline=True, linewidth=2, linecolor='#cbd5e1'),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-    st.plotly_chart(fig2, use_container_width=True)
-    st.markdown("**Escalation Risk by Behaviour:**")
-    for i, beh in enumerate(all_behaviours):
-        total = quick_beh_counts[i] + crit_beh_counts[i]
-        if total > 0:
-            risk_pct = (crit_beh_counts[i] / total) * 100
-            risk_level_beh = "🔴 High Risk" if risk_pct > 50 else "🟡 Medium Risk" if risk_pct > 25 else "🟢 Low Risk"
-            st.markdown(f"• **{beh}**: {risk_pct:.0f}% escalate to critical — {risk_level_beh}")
+    # ══════════════════════════════════════════════════════════════════
+    # BEHAVIOUR PROFILE — comprehensive multi-panel analysis
+    # ══════════════════════════════════════════════════════════════════
+    st.markdown("### 🎯 Behaviour Profile")
+
+    _MIN_N      = 4
+    _MIN_TREND  = 3
+    _CRIT_SEV   = 3.0
+    _SEV_LABELS = ["L1 Minor", "L2 Low", "L3 Moderate", "L4 Serious", "L5 Critical"]
+
+    all_behaviours = full_df["behaviour_type"].value_counts().head(8).index.tolist()
+    all_behaviours = [b for b in all_behaviours if b and not str(b).startswith("---")]
+
+    if not all_behaviours:
+        st.info("No behaviour data recorded yet.")
+    else:
+        _n_total = len(full_df)
+        quick_beh_counts = [len(quick_only_df[quick_only_df["behaviour_type"] == b]) if not quick_only_df.empty else 0 for b in all_behaviours]
+        crit_beh_counts  = [len(crit_only_df[crit_only_df["behaviour_type"] == b]) if not crit_only_df.empty else 0 for b in all_behaviours]
+        total_beh_counts = [quick_beh_counts[i] + crit_beh_counts[i] for i in range(len(all_behaviours))]
+
+        beh_sev_means, beh_sev_stds = [], []
+        for b in all_behaviours:
+            b_rows = full_df[full_df["behaviour_type"] == b]["severity"]
+            beh_sev_means.append(round(float(b_rows.mean()), 2) if len(b_rows) > 0 else 0)
+            beh_sev_stds.append(round(float(b_rows.std()), 2) if len(b_rows) > 1 else 0)
+
+        # ── DATA SUFFICIENCY BANNER ────────────────────────────────────
+        _reliable_behs = [b for i, b in enumerate(all_behaviours) if total_beh_counts[i] >= _MIN_N]
+        _limited_behs  = [b for i, b in enumerate(all_behaviours) if 0 < total_beh_counts[i] < _MIN_N]
+        if _limited_behs and not _reliable_behs:
+            st.warning(
+                f"⚠️ **Limited data** — fewer than {_MIN_N} incidents per behaviour recorded. "
+                "Percentages and escalation rates are suppressed to avoid misleading conclusions. "
+                "Continue logging to build a reliable picture."
+            )
+        elif _limited_behs:
+            _lim_names = ", ".join(f"*{b}*" for b in _limited_behs[:3])
+            _more = f" and {len(_limited_behs)-3} more" if len(_limited_behs) > 3 else ""
+            st.info(
+                f"ℹ️ **Note:** {len(_limited_behs)} behaviour(s) have fewer than {_MIN_N} incidents: "
+                f"{_lim_names}{_more}. Escalation rates are suppressed for these until more data is recorded."
+            )
+
+        # ═══════════════════════════════════════════════════════════════
+        # PANEL A — Frequency Overview
+        # ═══════════════════════════════════════════════════════════════
+        st.markdown("#### A — Frequency Overview")
+        _pa1, _pa2 = st.columns([3, 2])
+        with _pa1:
+            fig_a1 = go.Figure()
+            fig_a1.add_trace(go.Bar(
+                y=all_behaviours, x=quick_beh_counts, name="Regular", orientation="h",
+                marker=dict(color="#3b82f6", opacity=0.85, line=dict(color="white", width=1)),
+                text=[str(v) if v else "" for v in quick_beh_counts], textposition="inside",
+                textfont=dict(color="white", size=11, family="Arial Black"),
+                hovertemplate="<b>%{y}</b><br>Regular: %{x}<extra></extra>"
+            ))
+            fig_a1.add_trace(go.Bar(
+                y=all_behaviours, x=crit_beh_counts, name="Critical (ABCH)", orientation="h",
+                marker=dict(color="#ef4444", opacity=0.9, line=dict(color="white", width=1)),
+                text=[str(v) if v else "" for v in crit_beh_counts], textposition="inside",
+                textfont=dict(color="white", size=11, family="Arial Black"),
+                hovertemplate="<b>%{y}</b><br>Critical: %{x}<extra></extra>"
+            ))
+            fig_a1.update_layout(
+                height=max(260, len(all_behaviours)*50+80), barmode="stack",
+                title=dict(text="Frequency — Regular vs Critical", font=dict(size=12)),
+                xaxis_title="<b>Number of incidents</b>",
+                plot_bgcolor="#f8fafc", paper_bgcolor="white",
+                font=dict(color="#0f172a", size=11, family="Arial"),
+                xaxis=dict(tickmode="linear", tick0=0, dtick=1, gridcolor="#e2e8f0",
+                           showline=True, linewidth=2, linecolor="#cbd5e1"),
+                yaxis=dict(showline=True, linewidth=2, linecolor="#cbd5e1", automargin=True),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                margin=dict(t=40, b=10, l=10, r=10)
+            )
+            st.plotly_chart(fig_a1, use_container_width=True)
+        with _pa2:
+            if _n_total >= 5:
+                _donut_cols = ["#3b82f6","#ef4444","#f59e0b","#10b981","#8b5cf6","#f97316","#64748b","#06b6d4"]
+                fig_donut = go.Figure(go.Pie(
+                    labels=all_behaviours, values=total_beh_counts, hole=0.5,
+                    marker=dict(colors=_donut_cols[:len(all_behaviours)], line=dict(color="white", width=2)),
+                    textinfo="percent+label", textfont=dict(size=9), sort=False,
+                    hovertemplate="<b>%{label}</b><br>%{value} incidents (%{percent})<extra></extra>",
+                ))
+                fig_donut.add_annotation(
+                    text=f"<b>{_n_total}</b><br>total", x=0.5, y=0.5, showarrow=False,
+                    font=dict(size=13, color="#1e293b")
+                )
+                fig_donut.update_layout(
+                    title=dict(text="Proportion of behaviour types", font=dict(size=12)),
+                    height=max(260, len(all_behaviours)*50+80), showlegend=False,
+                    paper_bgcolor="white", margin=dict(t=40, b=10, l=10, r=10)
+                )
+                st.plotly_chart(fig_donut, use_container_width=True)
+            else:
+                st.caption(f"Proportion chart requires 5+ total incidents ({_n_total} recorded so far).")
+
+        # ═══════════════════════════════════════════════════════════════
+        # PANEL B — Severity Profile
+        # ═══════════════════════════════════════════════════════════════
+        st.markdown("#### B — Severity Profile")
+        _pb1, _pb2 = st.columns(2)
+        with _pb1:
+            _sev_text, _sev_bar_cols = [], []
+            for i, m in enumerate(beh_sev_means):
+                if total_beh_counts[i] >= _MIN_N:
+                    _sev_text.append(f"{m:.1f}  (n={total_beh_counts[i]})")
+                    _sev_bar_cols.append("#ef4444" if m >= 4 else "#f59e0b" if m >= 3 else "#3b82f6" if m >= 2 else "#10b981")
+                else:
+                    _sev_text.append(f"n={total_beh_counts[i]} — limited")
+                    _sev_bar_cols.append("#cbd5e1")
+            fig_b1 = go.Figure(go.Bar(
+                y=all_behaviours, x=beh_sev_means, orientation="h",
+                marker=dict(color=_sev_bar_cols, line=dict(color="white", width=1)),
+                text=_sev_text, textposition="outside",
+                textfont=dict(size=9, color="#1e293b"),
+                hovertemplate="<b>%{y}</b><br>Mean severity: %{x:.2f}<extra></extra>"
+            ))
+            fig_b1.add_vline(x=3.0, line_dash="dot", line_color="#f59e0b", line_width=1.5,
+                             annotation_text="L3 threshold", annotation_font_size=9)
+            fig_b1.update_layout(
+                title=dict(text="Mean severity — grey = fewer than 4 incidents", font=dict(size=12)),
+                height=max(240, len(all_behaviours)*50+80),
+                xaxis=dict(range=[0, 6.5], tickmode="linear", tick0=0, dtick=1,
+                           gridcolor="#e2e8f0", showline=True, linewidth=2, linecolor="#cbd5e1"),
+                yaxis=dict(showline=True, linewidth=2, linecolor="#cbd5e1", automargin=True),
+                plot_bgcolor="#f8fafc", paper_bgcolor="white",
+                font=dict(color="#0f172a", size=11, family="Arial"),
+                showlegend=False, margin=dict(t=40, b=10, l=10, r=160)
+            )
+            st.plotly_chart(fig_b1, use_container_width=True)
+        with _pb2:
+            _beh_heat = [b for i, b in enumerate(all_behaviours) if total_beh_counts[i] >= 2]
+            if _beh_heat:
+                _heat_z, _heat_text = [], []
+                for b in _beh_heat:
+                    b_rows = full_df[full_df["behaviour_type"] == b]["severity"]
+                    rz = [int((b_rows == sv).sum()) for sv in [1,2,3,4,5]]
+                    rt = [str(n) if n > 0 else "" for n in rz]
+                    _heat_z.append(rz); _heat_text.append(rt)
+                fig_b2 = go.Figure(go.Heatmap(
+                    z=_heat_z, x=_SEV_LABELS, y=_beh_heat,
+                    text=_heat_text, texttemplate="%{text}",
+                    colorscale=[[0,"#f0fdf4"],[0.25,"#93c5fd"],[0.6,"#f59e0b"],[1,"#dc2626"]],
+                    showscale=True, colorbar=dict(title="n", thickness=12, len=0.7),
+                    hovertemplate="<b>%{y}</b><br>%{x}: %{z} incidents<extra></extra>"
+                ))
+                fig_b2.update_layout(
+                    title=dict(text="Severity spread across levels", font=dict(size=12)),
+                    height=max(240, len(_beh_heat)*48+100),
+                    plot_bgcolor="white", paper_bgcolor="white",
+                    font=dict(color="#0f172a", size=10, family="Arial"),
+                    xaxis=dict(side="top", tickangle=-20),
+                    margin=dict(t=60, b=10, l=10, r=80)
+                )
+                st.plotly_chart(fig_b2, use_container_width=True)
+            else:
+                st.caption("Severity heatmap requires 2+ incidents per behaviour.")
+
+        # ═══════════════════════════════════════════════════════════════
+        # PANEL C — Escalation Risk Table
+        # ═══════════════════════════════════════════════════════════════
+        st.markdown("#### C — Escalation Risk Summary")
+        _risk_rows = []
+        for i, beh in enumerate(all_behaviours):
+            total = total_beh_counts[i]; crit = crit_beh_counts[i]
+            sev_m = beh_sev_means[i]; std = beh_sev_stds[i]
+            if total >= _MIN_N:
+                pct = crit / total * 100
+                risk_icon = "🔴" if pct > 50 else "🟡" if pct > 25 else "🟢"
+                risk_lbl  = "High" if pct > 50 else "Medium" if pct > 25 else "Low"
+                _risk_rows.append({
+                    "Behaviour": beh, "Total (n)": total, "Regular": total-crit, "Critical": crit,
+                    "Escalation %": f"{pct:.0f}%", "Mean Sev": f"{sev_m:.1f}",
+                    "Sev StDev": f"{std:.1f}" if std > 0 else "—",
+                    "Risk Level": f"{risk_icon} {risk_lbl}",
+                })
+            else:
+                _risk_rows.append({
+                    "Behaviour": beh, "Total (n)": total, "Regular": total-crit, "Critical": crit,
+                    "Escalation %": "⚠️ Insufficient", "Mean Sev": f"{sev_m:.1f}" if total > 0 else "—",
+                    "Sev StDev": "—", "Risk Level": "⚪ Limited data",
+                })
+        if _risk_rows:
+            st.dataframe(
+                pd.DataFrame(_risk_rows), use_container_width=True, hide_index=True,
+                column_config={
+                    "Behaviour":    st.column_config.TextColumn("Behaviour", width="large"),
+                    "Total (n)":    st.column_config.NumberColumn("Total (n)", width="small"),
+                    "Regular":      st.column_config.NumberColumn("Regular", width="small"),
+                    "Critical":     st.column_config.NumberColumn("Critical", width="small"),
+                    "Escalation %": st.column_config.TextColumn("Escalation %", width="medium"),
+                    "Mean Sev":     st.column_config.TextColumn("Mean Sev", width="small"),
+                    "Sev StDev":    st.column_config.TextColumn("Sev StDev", help="Higher = more variable severity; lower = more consistent", width="small"),
+                    "Risk Level":   st.column_config.TextColumn("Risk Level", width="medium"),
+                }
+            )
+            st.caption(
+                "🔴 High = 51%+ escalate  ·  🟡 Medium = 26–50%  ·  🟢 Low = 0–25%  ·  "
+                "⚪ = fewer than 4 incidents — rate unreliable  ·  Sev StDev: spread of severity scores"
+            )
+
+        # ═══════════════════════════════════════════════════════════════
+        # PANEL D — Behaviour by Time of Day
+        # ═══════════════════════════════════════════════════════════════
+        st.markdown("#### D — Behaviour by Time of Day")
+        st.caption("Which behaviours peak in which session. Darker = more incidents.")
+        if "session" in full_df.columns:
+            _session_order = ["Morning", "Middle", "Afternoon"]
+            _bsdf_rows = []
+            for b in all_behaviours:
+                bdf = full_df[full_df["behaviour_type"] == b]
+                row = {"Behaviour": b}
+                for s in _session_order: row[s] = int((bdf["session"] == s).sum())
+                _bsdf_rows.append(row)
+            _bsdf = pd.DataFrame(_bsdf_rows)
+            _sess_z    = [[row[s] for s in _session_order] for _, row in _bsdf.iterrows()]
+            _sess_text = [[str(v) if v > 0 else "" for v in r] for r in _sess_z]
+            _sess_xlbl = ["Morning (before 11am)", "Middle of day (11am-1:30pm)", "Afternoon (1:31-2:45pm)"]
+            fig_d = go.Figure(go.Heatmap(
+                z=_sess_z, x=_sess_xlbl, y=_bsdf["Behaviour"].tolist(),
+                text=_sess_text, texttemplate="%{text}",
+                colorscale=[[0,"#f8fafc"],[0.3,"#bae6fd"],[0.65,"#f59e0b"],[1,"#ef4444"]],
+                showscale=True, colorbar=dict(title="n", thickness=12, len=0.7),
+                hovertemplate="<b>%{y}</b><br>%{x}: %{z} incidents<extra></extra>"
+            ))
+            fig_d.update_layout(
+                height=max(200, len(all_behaviours)*48+100),
+                plot_bgcolor="white", paper_bgcolor="white",
+                font=dict(color="#0f172a", size=11, family="Arial"),
+                xaxis=dict(side="top", tickfont=dict(size=10)),
+                yaxis=dict(automargin=True, tickfont=dict(size=10)),
+                margin=dict(t=60, b=10, l=10, r=80)
+            )
+            st.plotly_chart(fig_d, use_container_width=True)
+            if _n_total < 5:
+                st.caption("⚠️ Session patterns are preliminary with limited data — treat as directional only.")
+
+        # ═══════════════════════════════════════════════════════════════
+        # PANEL E — Behaviour by Location
+        # ═══════════════════════════════════════════════════════════════
+        st.markdown("#### E — Behaviour by Location")
+        st.caption("Where each behaviour occurs most frequently.")
+        if "location" in full_df.columns:
+            _top_locs = [l for l in full_df["location"].value_counts().head(6).index.tolist()
+                         if l and str(l).strip()]
+            if _top_locs:
+                _bloc_z, _bloc_text, _bloc_y = [], [], []
+                for b in all_behaviours:
+                    bdf = full_df[full_df["behaviour_type"] == b]
+                    rz = [int((bdf["location"] == loc).sum()) for loc in _top_locs]
+                    rt = [str(n) if n > 0 else "" for n in rz]
+                    if any(v > 0 for v in rz):
+                        _bloc_z.append(rz); _bloc_text.append(rt); _bloc_y.append(b)
+                if _bloc_y:
+                    fig_e = go.Figure(go.Heatmap(
+                        z=_bloc_z, x=_top_locs, y=_bloc_y,
+                        text=_bloc_text, texttemplate="%{text}",
+                        colorscale=[[0,"#f8fafc"],[0.3,"#a5b4fc"],[0.7,"#7c3aed"],[1,"#3b0764"]],
+                        showscale=True, colorbar=dict(title="n", thickness=12, len=0.7),
+                        hovertemplate="<b>%{y}</b><br>%{x}: %{z} incidents<extra></extra>"
+                    ))
+                    fig_e.update_layout(
+                        height=max(200, len(_bloc_y)*48+100),
+                        plot_bgcolor="white", paper_bgcolor="white",
+                        font=dict(color="#0f172a", size=10, family="Arial"),
+                        xaxis=dict(side="top", tickangle=-30, tickfont=dict(size=10)),
+                        yaxis=dict(automargin=True, tickfont=dict(size=10)),
+                        margin=dict(t=70, b=10, l=10, r=80)
+                    )
+                    st.plotly_chart(fig_e, use_container_width=True)
+                    if _n_total < 5:
+                        st.caption("⚠️ Location patterns are preliminary with limited data.")
+
+        # ═══════════════════════════════════════════════════════════════
+        # PANEL F — Behaviour × Antecedent Crosswalk
+        # ═══════════════════════════════════════════════════════════════
+        st.markdown("#### F — Behaviour x Antecedent Crosswalk")
+        st.caption(
+            "Which triggers precede which behaviours. "
+            "Identifies specific antecedent-behaviour pairs for targeted intervention. "
+            "Blank = zero incidents with that combination."
+        )
+        if "antecedent" in full_df.columns:
+            _top_ants = [
+                a for a in full_df[~full_df["antecedent"].str.startswith("---", na=True)]
+                ["antecedent"].value_counts().head(8).index.tolist()
+                if a and str(a).strip()
+            ]
+            def _shorten_ant(s, n=32):
+                return s[s.find(" - ")+3:] if " - " in s else s[:n]
+            _ant_labels = [_shorten_ant(a) for a in _top_ants]
+            if _top_ants:
+                _cross_z, _cross_text, _cross_y = [], [], []
+                for b in all_behaviours:
+                    bdf = full_df[full_df["behaviour_type"] == b]
+                    rz = [int((bdf["antecedent"] == ant).sum()) for ant in _top_ants]
+                    rt = [str(n) if n > 0 else "" for n in rz]
+                    if any(v > 0 for v in rz):
+                        _cross_z.append(rz); _cross_text.append(rt); _cross_y.append(b)
+                if _cross_y:
+                    fig_f = go.Figure(go.Heatmap(
+                        z=_cross_z, x=_ant_labels, y=_cross_y,
+                        text=_cross_text, texttemplate="%{text}",
+                        colorscale=[[0,"#f0fdf4"],[0.3,"#6ee7b7"],[0.65,"#0284c7"],[1,"#1e3a5f"]],
+                        showscale=True, colorbar=dict(title="n", thickness=12, len=0.7),
+                        hovertemplate="<b>Behaviour:</b> %{y}<br><b>Trigger:</b> %{x}<br>%{z} incidents<extra></extra>"
+                    ))
+                    fig_f.update_layout(
+                        height=max(240, len(_cross_y)*48+120),
+                        plot_bgcolor="white", paper_bgcolor="white",
+                        font=dict(color="#0f172a", size=10, family="Arial"),
+                        xaxis=dict(side="top", tickangle=-40, tickfont=dict(size=9), automargin=True),
+                        yaxis=dict(automargin=True, tickfont=dict(size=10)),
+                        margin=dict(t=110, b=10, l=10, r=80)
+                    )
+                    st.plotly_chart(fig_f, use_container_width=True)
+                    if _n_total < 8:
+                        st.caption("⚠️ Crosswalk is preliminary with limited data — treat each cell as directional only.")
+
+        # ═══════════════════════════════════════════════════════════════
+        # PANEL G — Behaviour Over Time
+        # ═══════════════════════════════════════════════════════════════
+        _beh_for_trend = [b for i, b in enumerate(all_behaviours) if total_beh_counts[i] >= _MIN_TREND]
+        if _beh_for_trend and len(full_df) >= 6:
+            st.markdown("#### G — Behaviour Frequency Over Time")
+            st.caption(
+                "Weekly incident count per behaviour. Only behaviours with 3+ incidents shown. "
+                "Diamond = single week of data, no trend line possible."
+            )
+            full_df["_week"] = full_df["date_parsed"].dt.to_period("W").apply(lambda p: p.start_time)
+            fig_g = go.Figure()
+            _line_cols = ["#3b82f6","#ef4444","#f59e0b","#10b981","#8b5cf6","#f97316"]
+            _any_g = False
+            for ci, b in enumerate(_beh_for_trend):
+                b_weekly = full_df[full_df["behaviour_type"] == b].groupby("_week").size().reset_index(name="n")
+                _col = _line_cols[ci % len(_line_cols)]
+                if len(b_weekly) >= 2:
+                    fig_g.add_trace(go.Scatter(
+                        x=b_weekly["_week"], y=b_weekly["n"], mode="lines+markers", name=b[:40],
+                        line=dict(color=_col, width=2),
+                        marker=dict(size=8, color=_col, line=dict(color="white", width=1.5)),
+                        hovertemplate=f"<b>{b[:35]}</b><br>Week of %{{x|%-d %b}}<br>%{{y}} incidents<extra></extra>"
+                    )); _any_g = True
+                else:
+                    fig_g.add_trace(go.Scatter(
+                        x=b_weekly["_week"], y=b_weekly["n"], mode="markers",
+                        name=b[:40] + " (1 week)",
+                        marker=dict(size=12, color=_col, symbol="diamond", line=dict(color="white", width=1.5)),
+                        hovertemplate=f"<b>{b[:35]}</b><br>%{{y}} incidents<extra></extra>"
+                    )); _any_g = True
+            if _any_g:
+                fig_g.update_layout(
+                    height=320, xaxis_title="<b>Week</b>", yaxis_title="<b>Incidents per week</b>",
+                    plot_bgcolor="#f8fafc", paper_bgcolor="white",
+                    font=dict(color="#0f172a", size=11, family="Arial"),
+                    yaxis=dict(tickmode="linear", tick0=0, dtick=1, gridcolor="#e2e8f0",
+                               showline=True, linewidth=2, linecolor="#cbd5e1", rangemode="tozero"),
+                    xaxis=dict(showline=True, linewidth=2, linecolor="#cbd5e1",
+                               tickformat="%-d %b", tickangle=-30),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                    margin=dict(t=10, b=40, l=10, r=10)
+                )
+                st.plotly_chart(fig_g, use_container_width=True)
+            full_df.drop(columns=["_week"], errors="ignore", inplace=True)
+
+        # ═══════════════════════════════════════════════════════════════
+        # PANEL H — Duration per behaviour
+        # ═══════════════════════════════════════════════════════════════
+        if "duration_minutes" in full_df.columns:
+            _dur_df = full_df[
+                full_df["duration_minutes"].notna() &
+                full_df["behaviour_type"].isin(all_behaviours)
+            ].copy()
+            _dur_df["duration_minutes"] = pd.to_numeric(_dur_df["duration_minutes"], errors="coerce")
+            _dur_df = _dur_df[_dur_df["duration_minutes"] > 0]
+            if len(_dur_df) >= 3:
+                st.markdown("#### H — Incident Duration by Behaviour")
+                st.caption("Average incident duration. Grey = fewer than 2 records — treat as indicative only.")
+                _dur_agg = (_dur_df.groupby("behaviour_type")["duration_minutes"]
+                            .agg(["mean","count"]).reset_index()
+                            .rename(columns={"mean":"avg","count":"n"})
+                            .sort_values("avg", ascending=True))
+                _dur_cols, _dur_text = [], []
+                for _, r in _dur_agg.iterrows():
+                    if r["n"] < 2:
+                        _dur_cols.append("#cbd5e1"); _dur_text.append(f"{r['avg']:.1f} min (n={int(r['n'])} — limited)")
+                    elif r["avg"] >= 15:
+                        _dur_cols.append("#ef4444"); _dur_text.append(f"{r['avg']:.1f} min (n={int(r['n'])})")
+                    elif r["avg"] >= 8:
+                        _dur_cols.append("#f59e0b"); _dur_text.append(f"{r['avg']:.1f} min (n={int(r['n'])})")
+                    else:
+                        _dur_cols.append("#3b82f6"); _dur_text.append(f"{r['avg']:.1f} min (n={int(r['n'])})")
+                fig_h = go.Figure(go.Bar(
+                    y=_dur_agg["behaviour_type"], x=_dur_agg["avg"].round(1), orientation="h",
+                    marker=dict(color=_dur_cols, line=dict(color="white", width=1)),
+                    text=_dur_text, textposition="outside",
+                    textfont=dict(size=9, color="#1e293b"),
+                    hovertemplate="<b>%{y}</b><br>Avg: %{x:.1f} min<extra></extra>"
+                ))
+                fig_h.update_layout(
+                    height=max(200, len(_dur_agg)*50+80),
+                    xaxis_title="<b>Average duration (minutes)</b>",
+                    plot_bgcolor="#f8fafc", paper_bgcolor="white",
+                    font=dict(color="#0f172a", size=11, family="Arial"),
+                    xaxis=dict(gridcolor="#e2e8f0", showline=True, linewidth=2, linecolor="#cbd5e1"),
+                    yaxis=dict(showline=True, linewidth=2, linecolor="#cbd5e1", automargin=True),
+                    showlegend=False, margin=dict(t=10, b=10, l=10, r=180)
+                )
+                st.plotly_chart(fig_h, use_container_width=True)
+                st.caption("🔴 Red = 15+ min  ·  🟡 Amber = 8–14 min  ·  🔵 Blue = under 8 min  ·  ⬜ Grey = insufficient records")
+
+        # ═══════════════════════════════════════════════════════════════
+        # PANEL I — Interventions by Behaviour
+        # ═══════════════════════════════════════════════════════════════
+        if "intervention" in full_df.columns:
+            _int_rows = []
+            for _, row in full_df.iterrows():
+                ints = row.get("intervention", [])
+                if isinstance(ints, str):
+                    try: ints = json.loads(ints)
+                    except: ints = [ints] if ints else []
+                beh = row.get("behaviour_type", "")
+                if beh and beh in all_behaviours:
+                    for iv in (ints if isinstance(ints, list) else [ints]):
+                        if iv and str(iv).strip():
+                            _int_rows.append({"behaviour": beh, "intervention": str(iv).strip()})
+            if len(_int_rows) >= 3:
+                st.markdown("#### I — Interventions by Behaviour Type")
+                st.caption("Which strategies were used for each behaviour. Helps assess whether responses are matched to the behaviour function.")
+                _int_df    = pd.DataFrame(_int_rows)
+                _int_pivot = _int_df.groupby(["behaviour","intervention"]).size().reset_index(name="n")
+                _top_ints  = _int_pivot.groupby("intervention")["n"].sum().nlargest(8).index.tolist()
+                _int_filt  = _int_pivot[_int_pivot["intervention"].isin(_top_ints)]
+                _int_behs  = [b for b in all_behaviours if b in _int_filt["behaviour"].values]
+                if _int_behs:
+                    _iz, _it = [], []
+                    for b in _int_behs:
+                        rz = [int(_int_filt[(_int_filt["behaviour"]==b) &
+                                             (_int_filt["intervention"]==iv)]["n"].sum()) for iv in _top_ints]
+                        rt = [str(n) if n > 0 else "" for n in rz]
+                        _iz.append(rz); _it.append(rt)
+                    fig_i = go.Figure(go.Heatmap(
+                        z=_iz, x=_top_ints, y=_int_behs,
+                        text=_it, texttemplate="%{text}",
+                        colorscale=[[0,"#f8fafc"],[0.4,"#bfdbfe"],[1,"#1d4ed8"]],
+                        showscale=True, colorbar=dict(title="Uses", thickness=12, len=0.7),
+                        hovertemplate="<b>%{y}</b><br>%{x}: %{z} times<extra></extra>"
+                    ))
+                    fig_i.update_layout(
+                        height=max(220, len(_int_behs)*48+120),
+                        plot_bgcolor="white", paper_bgcolor="white",
+                        font=dict(color="#0f172a", size=10, family="Arial"),
+                        xaxis=dict(side="top", tickangle=-35, automargin=True),
+                        margin=dict(t=90, b=10, l=10, r=80)
+                    )
+                    st.plotly_chart(fig_i, use_container_width=True)
+                    st.caption("Blank = intervention not used for that behaviour. Review whether high-frequency interventions match the identified behaviour function.")
+
     st.markdown("---")
 
     st.markdown("### 🔍 Trigger Analysis")
@@ -2636,13 +3074,20 @@ def render_student_analysis_page():
         yaxis=dict(showline=True, linewidth=2, linecolor='#cbd5e1'),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     st.plotly_chart(fig3, use_container_width=True)
-    st.markdown("**Critical Escalation Risk by Trigger:**")
-    for i, ant in enumerate(all_triggers):
-        total = quick_ant_counts[i] + crit_ant_counts[i]
-        if total > 0:
-            risk_pct = (crit_ant_counts[i] / total) * 100
-            color = "🔴" if risk_pct > 60 else "🟡" if risk_pct > 30 else "🟢"
-            st.markdown(f"{color} **{ant}**: {risk_pct:.0f}% lead to critical incidents ({crit_ant_counts[i]}/{total})")
+    _any_reliable_ant = any((quick_ant_counts[i] + crit_ant_counts[i]) >= 4
+                              for i in range(len(all_triggers)))
+    if _any_reliable_ant:
+        st.markdown("**Escalation Risk by Trigger** *(minimum 4 incidents required for % to display)*")
+        for i, ant in enumerate(all_triggers):
+            total = quick_ant_counts[i] + crit_ant_counts[i]
+            if total >= 4:
+                risk_pct = (crit_ant_counts[i] / total) * 100
+                color = "🔴" if risk_pct > 60 else "🟡" if risk_pct > 30 else "🟢"
+                st.markdown(f"{color} **{ant}** (n={total}): {risk_pct:.0f}% lead to critical incidents")
+            elif total > 0:
+                st.markdown(f"• **{ant}** (n={total}): ⚠️ *Insufficient data for reliable rate*")
+    else:
+        st.caption("⚠️ Trigger escalation rates not shown — minimum 4 incidents per trigger required.")
     st.markdown("---")
 
     st.markdown("### 📊 Severity Trajectory — Window of Tolerance Analysis")
@@ -2662,13 +3107,13 @@ def render_student_analysis_page():
                 marker=dict(size=12, color=sev_colours[sev_level], opacity=0.7,
                             line=dict(color='white', width=1.5)),
                 hovertemplate='<b>%{x|%a %d/%m}</b><br>Severity: %{y}<extra></extra>'))
-    if len(full_df) >= 3:
+    if len(full_df) >= 8:
         z = np.polyfit(range(len(full_df)), full_df["severity"], 1)
         p = np.poly1d(z)
         trend_color = '#22c55e' if z[0] < 0 else '#ef4444'
         fig4.add_trace(go.Scatter(x=full_df["date_parsed"], y=p(range(len(full_df))),
-            mode='lines', name='Trend',
-            line=dict(color=trend_color, width=3, dash='dash')))
+            mode='lines', name=f'Trend (n={len(full_df)})',
+            line=dict(color=trend_color, width=2, dash='dash')))
     fig4.update_layout(
         height=420, xaxis_title="<b>Date</b>", yaxis_title="<b>Severity Level</b>",
         yaxis=dict(
@@ -2742,14 +3187,38 @@ def render_student_analysis_page():
     st.markdown("---")
 
     st.markdown("### 📆 Day of Week Patterns")
-    day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    day_counts = full_df["day_of_week"].value_counts().reindex(day_order, fill_value=0)
-    fig7 = go.Figure()
-    fig7.add_trace(go.Bar(x=day_counts.index, y=day_counts.values, marker=dict(color='#64748b'),
-        text=day_counts.values, textposition='outside'))
-    fig7.update_layout(height=280, showlegend=False, yaxis_title="Total",
-        plot_bgcolor='white', paper_bgcolor='white', font=dict(color='#334155', size=11))
-    st.plotly_chart(fig7, use_container_width=True)
+    _school_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    day_counts = full_df["day_of_week"].value_counts().reindex(_school_days, fill_value=0)
+    _total_school = int(day_counts.sum())
+    if _total_school >= 3:
+        _day_avg = _total_school / 5
+        _day_colours = ["#ef4444" if v >= _day_avg * 1.5 else "#3b82f6" if v >= _day_avg * 0.8 else "#94a3b8"
+                        for v in day_counts.values]
+        fig7 = go.Figure()
+        fig7.add_trace(go.Bar(
+            x=day_counts.index, y=day_counts.values,
+            marker=dict(color=_day_colours, line=dict(color="white", width=1)),
+            text=day_counts.values, textposition="outside",
+            textfont=dict(size=12, color="#1e293b"),
+            hovertemplate="<b>%{x}</b><br>%{y} incident(s)<extra></extra>"
+        ))
+        fig7.add_hline(y=_day_avg, line_dash="dot", line_color="#94a3b8", line_width=1.5,
+                       annotation_text=f"Daily avg: {_day_avg:.1f}",
+                       annotation_position="right", annotation_font_size=10)
+        fig7.update_layout(
+            height=300, showlegend=False,
+            yaxis_title="<b>Total incidents</b>",
+            plot_bgcolor="#f8fafc", paper_bgcolor="white",
+            font=dict(color="#334155", size=11),
+            yaxis=dict(tickmode="linear", tick0=0, dtick=1, gridcolor="#e2e8f0",
+                       showline=True, linewidth=2, linecolor="#cbd5e1"),
+            xaxis=dict(showline=True, linewidth=2, linecolor="#cbd5e1"),
+            margin=dict(t=20, b=10)
+        )
+        st.plotly_chart(fig7, use_container_width=True)
+        st.caption("🔴 Red = significantly above average  ·  🔵 Blue = near average  ·  ⚫ Grey = below average  ·  Dashed line = daily mean")
+    else:
+        st.info("Day of week chart requires at least 3 recorded incidents across school days.")
     st.markdown("---")
 
     # ── Derived metrics (used in multiple sections below) ─────────────────────
