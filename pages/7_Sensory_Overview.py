@@ -1,4 +1,3 @@
-from theme import apply_clc_theme
 import streamlit as st
 from supabase import create_client
 import json
@@ -11,71 +10,81 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
-apply_clc_theme()
-
-from auth import require_auth, logout_button, get_staff_name
-require_auth("Sensory Overview", "🧠")
-logout_button("sidebar")
-
-# ── Back to Portal ─────────────────────────────────────────────────────────────
-st.sidebar.markdown(
-    f'''<a href="https://16cefb77.clc-portal.pages.dev/" target="_self" style="display:block;text-align:center;
-    background:#1A7A7A;color:white;font-weight:600;font-size:0.85rem;
-    padding:0.5rem;border-radius:8px;text-decoration:none;margin-bottom:0.5rem;">
-    🏠 Back to Staff Portal</a>''',
-    unsafe_allow_html=True
-)
-
 
 TEAL  = "#1A7A7A"
 AMBER = "#C8760A"
 
+st.markdown(f"""
+<style>
+    .stApp {{ background-color: #f5f7f7; }}
+    h1 {{ color: {TEAL}; }}
+    .section-header {{
+        background: {TEAL}; color: white;
+        padding: 8px 14px; border-radius: 6px;
+        font-weight: 700; font-size: 1rem; margin-bottom: 6px;
+    }}
+    .priority-card {{
+        padding: 10px 14px; border-radius: 6px; margin: 4px 0;
+        background: white; border-left: 5px solid #ccc;
+    }}
+    .priority-card.high {{ border-left-color: #c62828; }}
+    .priority-card.med  {{ border-left-color: #e65100; }}
+    .priority-card.low  {{ border-left-color: #2e7d32; }}
+    .priority-card .label {{ font-size: 0.75rem; font-weight: 700; color: #444; }}
+    .priority-card .pval  {{ font-size: 1.1rem; font-weight: 800; }}
+    .priority-card.high .pval {{ color: #c62828; }}
+    .priority-card.med  .pval {{ color: #e65100; }}
+    .priority-card.low  .pval {{ color: #2e7d32; }}
+    .priority-card .sub {{ font-size: 0.75rem; color: #666; }}
+    .student-badge {{
+        background: {TEAL}; color: white;
+        padding: 6px 14px; border-radius: 20px;
+        font-weight: 700; display: inline-block; margin-bottom: 8px;
+    }}
+    div[data-testid="stCheckbox"] label {{ font-size: 0.9rem; }}
+    .stTabs [data-baseweb="tab-list"] {{ gap: 4px; }}
+    .stTabs [data-baseweb="tab"] {{
+        background: #e0ecec; border-radius: 6px 6px 0 0;
+        color: {TEAL}; font-weight: 600;
+    }}
+    .stTabs [aria-selected="true"] {{ background: {TEAL} !important; color: white !important; }}
+    .new-student-box {{
+        background: #fff8e1; border: 2px dashed {AMBER};
+        border-radius: 8px; padding: 14px; margin-top: 8px;
+    }}
+    /* ── Persistent section toggle ── */
+    .sec-header {{
+        display: flex; align-items: center; justify-content: space-between;
+        background: white; border: 1px solid #d0e0e0;
+        border-radius: 8px; padding: 10px 16px; margin: 6px 0;
+        cursor: pointer; user-select: none;
+    }}
+    .sec-header:hover {{ background: #f0f8f8; }}
+    .sec-left {{ display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 0.95rem; color: #1a1a1a; }}
+    .sec-right {{ display: flex; align-items: center; gap: 10px; }}
+    .sec-pill {{
+        padding: 3px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 700;
+    }}
+    .sec-pill.high {{ background: #fde8e8; color: #c62828; }}
+    .sec-pill.med  {{ background: #fff3e0; color: #e65100; }}
+    .sec-pill.low  {{ background: #e8f5e9; color: #2e7d32; }}
+    .sec-body {{
+        background: white; border: 1px solid #d0e0e0; border-top: none;
+        border-radius: 0 0 8px 8px; padding: 14px 16px; margin-top: -8px; margin-bottom: 6px;
+    }}
+    div[data-testid="stButton"] button[kind="secondary"] {{
+        background: transparent; border: none; padding: 0;
+        font-size: 0.9rem; color: #555; text-align: left; width: 100%;
+    }}
+</style>
+""", unsafe_allow_html=True)
 
 # ── Supabase ───────────────────────────────────────────────────────────────────
-@st.cache_resource(ttl=60)
+@st.cache_resource
 def get_supabase():
-    """Connect to Behaviour Support Supabase (has students + sensory tables)."""
-    import os
-    try:
-        url = st.secrets.get("supabase", {}).get("url") or st.secrets.get("BEHAVIOUR_SUPABASE_URL", "")
-        key = st.secrets.get("supabase", {}).get("key") or st.secrets.get("BEHAVIOUR_SUPABASE_KEY", "")
-    except Exception:
-        url = os.environ.get("BEHAVIOUR_SUPABASE_URL", "")
-        key = os.environ.get("BEHAVIOUR_SUPABASE_KEY", "")
-    return create_client(url, key)
-
-@st.cache_resource(ttl=60)
-def get_supabase_main():
-    """Connect to main portal Supabase."""
-    import os
-    try:
-        url = st.secrets.get("SUPABASE_URL", "") or os.environ.get("SUPABASE_URL", "")
-        key = st.secrets.get("SUPABASE_KEY", "") or os.environ.get("SUPABASE_KEY", "")
-    except Exception:
-        url = os.environ.get("SUPABASE_URL", "")
-        key = os.environ.get("SUPABASE_KEY", "")
-    return create_client(url, key)
-
-@st.cache_resource  
-def get_main_supabase():
-    """Connect to main portal Supabase (fallback for students table)."""
-    import os
-    try:
-        url = st.secrets.get("SUPABASE_URL", "")
-        key = st.secrets.get("SUPABASE_KEY", "")
-    except Exception:
-        url = os.environ.get("SUPABASE_URL", "")
-        key = os.environ.get("SUPABASE_KEY", "")
-    return create_client(url, key)
+    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
 supabase = get_supabase()
-
-# ── Students table helper ──────────────────────────────────────────────────────
-# Students table lives in the Behaviour Support Supabase
-# If not accessible, fall back to main Supabase
-def _get_students_sb():
-    """Get supabase client that has the students table."""
-    return supabase  # Behaviour Support Supabase has students table
 
 # ── Section definitions ────────────────────────────────────────────────────────
 SECTIONS = {
@@ -226,22 +235,18 @@ def priority_card(section_name, info, icon=""):
 @st.cache_data(ttl=60)
 def load_students():
     """Load all active students from the shared students table."""
-    # Try behaviour Supabase first, then main Supabase
-    for sb in [supabase, get_supabase_main()]:
-        try:
-            res = sb.table("students").select("id,name,year_level,class") \
-                .eq("archived", False).order("name").execute()
-            if res.data is not None:
-                return res.data or []
-        except Exception:
-            continue
-    st.error("Could not load students from either database.")
-    return []
+    try:
+        res = supabase.table("students").select("id,name,edid,program,grade") \
+            .eq("archived", False).order("name").execute()
+        return res.data or []
+    except Exception as e:
+        st.error(f"Could not load students: {e}")
+        return []
 
 def load_all_overviews():
     try:
         res = supabase.table("sensory_overviews") \
-            .select("*, students(name,year_level,class)") \
+            .select("*, students(name,edid,program)") \
             .order("created_at", desc=True).execute()
         return res.data or []
     except Exception as e:
@@ -272,6 +277,8 @@ if "selected_student_id" not in st.session_state:
     st.session_state.selected_student_id = None
 if "preselect_student_id" not in st.session_state:
     st.session_state.preselect_student_id = None
+if "section_open" not in st.session_state:
+    st.session_state.section_open = {sec: False for sec in SECTIONS}
 
 # ── Header ─────────────────────────────────────────────────────────────────────
 st.markdown("<h1>🧠 Sensory Overview</h1>", unsafe_allow_html=True)
@@ -302,8 +309,9 @@ with tab_new:
         st.markdown("#### 👤 Student")
 
         students = load_students()
-        student_options = {s["id"]: f"{s['name']} ({s.get('class','?')} · {s.get('year_level','—')})" for s in students}
+        student_options = {s["id"]: f"{s['name']} ({s.get('program','?')} · {s.get('edid','—')})" for s in students}
 
+        # Determine default index for deep-link
         default_idx = 0
         all_ids = ["— Select a student —"] + list(student_options.keys())
         if st.session_state.preselect_student_id and st.session_state.preselect_student_id in student_options:
@@ -327,6 +335,7 @@ with tab_new:
                 unsafe_allow_html=True,
             )
 
+        # ── Add new student inline ─────────────────────────────────────────────
         with st.expander("➕ Student not in the list? Add them here"):
             st.markdown('<div class="new-student-box">', unsafe_allow_html=True)
             nc1, nc2 = st.columns(2)
@@ -350,14 +359,14 @@ with tab_new:
                         st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
+        # ── Other overview fields ──────────────────────────────────────────────
         oc1, oc2, oc3 = st.columns(3)
         with oc1:
             overview_date = st.date_input("Overview Date", value=date.today())
         with oc2:
             review_date   = st.date_input("Review Date")
         with oc3:
-            completed_by  = st.text_input("Completed by", value=get_staff_name(),
-                                           placeholder="Staff name")
+            completed_by  = st.text_input("Completed by", placeholder="Staff name")
 
     # ── Existing overviews for this student ────────────────────────────────────
     if selected_student_id:
@@ -385,6 +394,20 @@ with tab_new:
 
     # ── Checklist sections ─────────────────────────────────────────────────────
     st.markdown("#### Checklist — tick all items that apply")
+
+    # Expand / collapse all controls
+    ctrl1, ctrl2 = st.columns([1, 1])
+    with ctrl1:
+        if st.button("⬇️  Expand all sections", use_container_width=True):
+            for sec in SECTIONS:
+                st.session_state.section_open[sec] = True
+            st.rerun()
+    with ctrl2:
+        if st.button("⬆️  Collapse all sections", use_container_width=True):
+            for sec in SECTIONS:
+                st.session_state.section_open[sec] = False
+            st.rerun()
+
     for sec_name, meta in SECTIONS.items():
         icon  = meta["icon"]
         items = meta["items"]
@@ -392,17 +415,45 @@ with tab_new:
         checked_count = sum(1 for it in items if sec_resp.get(it, False))
         pct           = round((checked_count / len(items)) * 100) if items else 0
         _, css, emoji = priority_info(pct)
+        is_open       = st.session_state.section_open.get(sec_name, False)
+        chevron       = "🔽" if is_open else "▶️"
 
-        with st.expander(f"{icon} **{sec_name}** — {emoji}  ({checked_count}/{len(items)})", expanded=False):
-            cols = st.columns(2)
-            for i, item in enumerate(items):
-                with cols[i % 2]:
-                    val = st.checkbox(
-                        item,
-                        value=st.session_state.responses[sec_name].get(item, False),
-                        key=f"chk_{sec_name}_{item}",
-                    )
-                    st.session_state.responses[sec_name][item] = val
+        # Header row — clicking the button toggles open/closed
+        hdr_col, btn_col = st.columns([8, 1])
+        with hdr_col:
+            st.markdown(
+                f"""<div class="sec-header">
+                    <div class="sec-left">{icon} <span>{sec_name}</span></div>
+                    <div class="sec-right">
+                        <span class="sec-pill {css}">{emoji} {checked_count}/{len(items)}</span>
+                        <span style="color:#888;font-size:0.85rem;">{chevron}</span>
+                    </div>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+        with btn_col:
+            # Invisible toggle button aligned over the header
+            if st.button(
+                chevron,
+                key=f"toggle_{sec_name}",
+                help=f"{'Collapse' if is_open else 'Expand'} {sec_name}",
+                use_container_width=True,
+            ):
+                st.session_state.section_open[sec_name] = not is_open
+                st.rerun()
+
+        # Body — only rendered when open, state persists through checkbox reruns
+        if is_open:
+            with st.container(border=True):
+                cols = st.columns(2)
+                for i, item in enumerate(items):
+                    with cols[i % 2]:
+                        val = st.checkbox(
+                            item,
+                            value=st.session_state.responses[sec_name].get(item, False),
+                            key=f"chk_{sec_name}_{item}",
+                        )
+                        st.session_state.responses[sec_name][item] = val
 
     st.markdown("---")
 
