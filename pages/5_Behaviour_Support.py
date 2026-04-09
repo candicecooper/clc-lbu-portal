@@ -757,16 +757,17 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         add_chart(doc, fig,
             f"Hotspot: {top_loc}. Environmental modification and targeted supervision in this area are a priority strategy.")
 
-        sev_colours = {1:'#10b981',2:'#3b82f6',3:'#f59e0b',4:'#ef4444',5:'#7f1d1d'}
+        # WoT: green=within window (L1-2), yellow=coping (L3), red=outside window (L4-5)
+        sev_colours = {1:'#22c55e',2:'#22c55e',3:'#eab308',4:'#ef4444',5:'#7f1d1d'}
         sev_level_names = {1:'Level 1 (Minor)',2:'Level 2 (Low)',3:'Level 3 (Moderate)',
                            4:'Level 4 (Serious)',5:'Level 5 (Critical)'}
         fig, ax = plt.subplots(figsize=(FIG_W, FIG_H), dpi=FIG_DPI)
         ax.axhspan(0.5, 2.5,  color='#d1fae5', alpha=0.30, zorder=0)
         ax.axhspan(2.5, 3.5,  color='#fef3c7', alpha=0.30, zorder=0)
         ax.axhspan(3.5, 5.5,  color='#fee2e2', alpha=0.30, zorder=0)
-        for y, lbl, col in [(1.5,'Coping / within window','#059669'),
-                            (3.0,'Elevated','#d97706'),
-                            (4.5,'Outside window / crisis zone','#dc2626')]:
+        for y, lbl, col in [(1.5,'Within window (regulated)','#16a34a'),
+                            (3.0,'Coping','#ca8a04'),
+                            (4.5,'Outside window','#dc2626')]:
             ax.text(full_df['date_parsed'].min(), y, lbl,
                     fontsize=6.5, color=col, alpha=0.6, va='center', style='italic')
         for sev in [1,2,3,4,5]:
@@ -803,11 +804,10 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             direction = "insufficient data for trend"
         add_chart(doc, fig,
             f"Severity trajectory: {direction}. "
-            "Green zone (Levels 1–2) = Coping / within Window of Tolerance — "
-            "student is engaging, regulated, and responding to support. "
-            "Amber (Level 3) = Elevated / approaching edge of window. "
-            "Red (Levels 4–5) = Outside window / crisis zone — requires intensive support. "
-            "Incidents in the green zone are a positive indicator, not a concern.")
+            "Green zone (Levels 1–2) = Within window — student is regulated and engaged effectively. "
+            "Yellow (Level 3) = Coping — managing, but approaching the edge of the window. "
+            "Red (Levels 4–5) = Outside window — dysregulated / crisis zone — requires intensive support. "
+            "Incidents in the green zone indicate the student is within their Window of Tolerance — a positive indicator.")
 
         doc.add_page_break()
 
@@ -2522,7 +2522,9 @@ def render_student_analysis_page():
 
     if not quick_df.empty:
         quick_df["incident_type"] = "Quick"
-        quick_df["date_parsed"] = pd.to_datetime(quick_df["date"], utc=True).dt.tz_localize(None)
+        quick_df["date_parsed"] = pd.to_datetime(
+            quick_df["date"], utc=True, errors="coerce"
+        ).dt.tz_localize(None)
         if "location" in quick_df.columns:
             quick_df["location"] = quick_df["location"].apply(normalise_location)
         if "intervention" in quick_df.columns:
@@ -2530,7 +2532,12 @@ def render_student_analysis_page():
 
     if not crit_df.empty:
         crit_df["incident_type"] = "Critical"
-        crit_df["date_parsed"] = pd.to_datetime(crit_df.get("created_at", datetime.now().isoformat()), utc=True).dt.tz_localize(None)
+        _crit_dates_a = crit_df["created_at"] if "created_at" in crit_df.columns else pd.Series(
+            [datetime.now().isoformat()] * len(crit_df), index=crit_df.index
+        )
+        crit_df["date_parsed"] = pd.to_datetime(
+            _crit_dates_a, utc=True, errors="coerce"
+        ).dt.tz_localize(None)
         crit_df["severity"] = crit_df["severity"].fillna(5).astype(int) if "severity" in crit_df.columns else 5
         crit_df["antecedent"] = crit_df["ABCH_primary"].apply(lambda d: d.get("context","") if isinstance(d, dict) else "")
         # Keyword map: ABCH free-text → canonical clinical behaviour label
@@ -2853,37 +2860,118 @@ def render_student_analysis_page():
         # PANEL B — Severity Profile
         # ═══════════════════════════════════════════════════════════════
         st.markdown("#### B — Severity Profile")
-        _pb1, _pb2 = st.columns(2)
-        with _pb1:
-            _sev_text, _sev_bar_cols = [], []
-            for i, m in enumerate(beh_sev_means):
-                if total_beh_counts[i] >= _MIN_N:
-                    _sev_text.append(f"{m:.1f}  (n={total_beh_counts[i]})")
-                    _sev_bar_cols.append("#ef4444" if m >= 4 else "#f59e0b" if m >= 3 else "#3b82f6" if m >= 2 else "#10b981")
-                else:
-                    _sev_text.append(f"n={total_beh_counts[i]} — limited")
-                    _sev_bar_cols.append("#cbd5e1")
-            fig_b1 = go.Figure(go.Bar(
-                y=all_behaviours, x=beh_sev_means, orientation="h",
-                marker=dict(color=_sev_bar_cols, line=dict(color="white", width=1)),
-                text=_sev_text, textposition="outside",
+        st.caption(
+            "How incidents for each behaviour are distributed across Window of Tolerance zones. "
+            "🟢 Green = Within window (regulated)  ·  🟡 Yellow = Coping (approaching edge)  ·  "
+            "🔴 Red = Outside window. Grey bars = fewer than 2 incidents — treat as indicative only."
+        )
+        # WoT zone colour map
+        _WOT_COLS = {
+            1: "#22c55e",   # green  — within window
+            2: "#22c55e",   # green  — within window
+            3: "#eab308",   # yellow — coping
+            4: "#ef4444",   # red    — outside window
+            5: "#7f1d1d",   # dark red — crisis
+        }
+        _WOT_NAMES = {
+            1: "L1 — Within window",
+            2: "L2 — Within window",
+            3: "L3 — Coping",
+            4: "L4 — Outside window",
+            5: "L5 — Crisis",
+        }
+        # Build count matrix: behaviour × severity level
+        _sev_matrix = {}  # {beh: {sv: count}}
+        for b in all_behaviours:
+            b_rows = full_df[full_df["behaviour_type"] == b]["severity"]
+            _sev_matrix[b] = {sv: int((b_rows == sv).sum()) for sv in [1,2,3,4,5]}
+
+        fig_b = go.Figure()
+        # Add WoT background zones (shapes behind bars)
+        _chart_h = max(300, len(all_behaviours)*55+120)
+        # Add one trace per severity level
+        for sv in [1, 2, 3, 4, 5]:
+            _counts = [_sev_matrix[b][sv] for b in all_behaviours]
+            _texts  = [str(v) if v > 0 else "" for v in _counts]
+            if any(v > 0 for v in _counts):
+                fig_b.add_trace(go.Bar(
+                    y=all_behaviours, x=_counts,
+                    name=_WOT_NAMES[sv],
+                    orientation="h",
+                    marker=dict(
+                        color=_WOT_COLS[sv],
+                        line=dict(color="white", width=1.5),
+                        opacity=0.88
+                    ),
+                    text=_texts, textposition="inside",
+                    textfont=dict(color="white", size=11, family="Arial Black"),
+                    hovertemplate=f"<b>%{{y}}</b><br>{_WOT_NAMES[sv]}: %{{x}} incident(s)<extra></extra>"
+                ))
+
+        # Mean severity markers (diamond) overlaid
+        _reliable = [b for i, b in enumerate(all_behaviours) if total_beh_counts[i] >= _MIN_N]
+        if _reliable:
+            _means_x = [beh_sev_means[all_behaviours.index(b)] for b in _reliable]
+            fig_b.add_trace(go.Scatter(
+                y=_reliable, x=_means_x,
+                mode="markers+text",
+                name="Mean severity",
+                marker=dict(symbol="diamond", size=14, color="#1e293b",
+                            line=dict(color="white", width=1.5)),
+                text=[f"{v:.1f}" for v in _means_x],
+                textposition="middle right",
                 textfont=dict(size=9, color="#1e293b"),
                 hovertemplate="<b>%{y}</b><br>Mean severity: %{x:.2f}<extra></extra>"
             ))
-            fig_b1.add_vline(x=3.0, line_dash="dot", line_color="#f59e0b", line_width=1.5,
-                             annotation_text="L3 threshold", annotation_font_size=9)
-            fig_b1.update_layout(
-                title=dict(text="Mean severity — grey = fewer than 4 incidents", font=dict(size=12)),
-                height=max(240, len(all_behaviours)*50+80),
-                xaxis=dict(range=[0, 6.5], tickmode="linear", tick0=0, dtick=1,
-                           gridcolor="#e2e8f0", showline=True, linewidth=2, linecolor="#cbd5e1"),
-                yaxis=dict(showline=True, linewidth=2, linecolor="#cbd5e1", automargin=True),
-                plot_bgcolor="#f8fafc", paper_bgcolor="white",
-                font=dict(color="#0f172a", size=11, family="Arial"),
-                showlegend=False, margin=dict(t=40, b=10, l=10, r=160)
+
+        fig_b.add_vline(
+            x=2.5, line_dash="dash", line_color="#22c55e", line_width=1.5,
+            annotation_text="Edge of window", annotation_font_size=8,
+            annotation_font_color="#16a34a"
+        )
+        fig_b.add_vline(
+            x=3.5, line_dash="dash", line_color="#ef4444", line_width=1.5,
+            annotation_text="Outside window", annotation_font_size=8,
+            annotation_font_color="#dc2626"
+        )
+        fig_b.update_layout(
+            barmode="stack",
+            height=_chart_h,
+            title=dict(
+                text="Incident count per severity level — coloured by Window of Tolerance zone"
+                     " · ◆ = mean severity (requires 4+ incidents)",
+                font=dict(size=11)
+            ),
+            xaxis=dict(
+                title="<b>Number of incidents</b>",
+                tickmode="linear", tick0=0, dtick=1,
+                gridcolor="#e2e8f0", showline=True,
+                linewidth=2, linecolor="#cbd5e1"
+            ),
+            yaxis=dict(showline=True, linewidth=2,
+                       linecolor="#cbd5e1", automargin=True),
+            plot_bgcolor="#f8fafc", paper_bgcolor="white",
+            font=dict(color="#0f172a", size=11, family="Arial"),
+            legend=dict(
+                orientation="h", yanchor="bottom", y=1.04,
+                xanchor="left", x=0, font=dict(size=9)
+            ),
+            margin=dict(t=70, b=10, l=10, r=10)
+        )
+        st.plotly_chart(fig_b, use_container_width=True)
+
+        if not _reliable:
+            st.caption("⚠️ Mean severity markers require 4+ incidents per behaviour — not shown yet.")
+
+        # Data sufficiency note for behaviours with < 2 incidents
+        _too_few = [b for i, b in enumerate(all_behaviours) if total_beh_counts[i] < 2]
+        if _too_few:
+            st.caption(
+                f"⚠️ Behaviours with fewer than 2 incidents not shown in severity spread: "
+                + ", ".join(f"*{b}*" for b in _too_few)
             )
-            st.plotly_chart(fig_b1, use_container_width=True)
-        with _pb2:
+        _pb2 = None  # _pb2 no longer used — single chart replaces two columns
+        if _pb2:
             _beh_heat = [b for i, b in enumerate(all_behaviours) if total_beh_counts[i] >= 2]
             if _beh_heat:
                 _heat_z, _heat_text = [], []
@@ -2895,19 +2983,23 @@ def render_student_analysis_page():
                 # Severity spread — grouped bar chart, coloured by WoT zone
                 # Green (L1-2) = coping/within window, Amber (L3) = elevated,
                 # Red (L4-5) = outside window. Count drives bar length, not colour.
+                # WoT colour scheme (per CLC-LBU framework):
+                # Green  = Within window (L1-2) — student regulated and engaged
+                # Yellow = Coping (L3)          — managing but approaching edge
+                # Red    = Outside window (L4-5) — dysregulated / crisis
                 _SEV_COLOURS_WOT = {
-                    1: "#10b981",  # green — coping / within window
-                    2: "#3b82f6",  # blue  — within window, low concern
-                    3: "#f59e0b",  # amber — elevated / approaching edge
-                    4: "#ef4444",  # red   — outside window / serious
+                    1: "#22c55e",  # green  — within window
+                    2: "#22c55e",  # green  — within window
+                    3: "#eab308",  # yellow — coping / approaching edge
+                    4: "#ef4444",  # red    — outside window / serious
                     5: "#7f1d1d",  # dark red — crisis zone
                 }
                 _sev_names_wot = {
-                    1: "L1 Coping (within window)",
-                    2: "L2 Low concern (within window)",
-                    3: "L3 Elevated (approaching edge)",
-                    4: "L4 Serious (outside window)",
-                    5: "L5 Crisis (outside window)",
+                    1: "L1 Within window (regulated)",
+                    2: "L2 Within window (low concern)",
+                    3: "L3 Coping (approaching edge)",
+                    4: "L4 Outside window (serious)",
+                    5: "L5 Outside window (crisis)",
                 }
                 fig_b2 = go.Figure()
                 for sv in [1, 2, 3, 4, 5]:
@@ -2943,15 +3035,12 @@ def render_student_analysis_page():
                 )
                 st.plotly_chart(fig_b2, use_container_width=True)
                 st.caption(
-                    "🟢 Green (L1) = Coping — student within Window of Tolerance  ·  "
-                    "🔵 Blue (L2) = Low concern, still within window  ·  "
-                    "🟡 Amber (L3) = Elevated, approaching edge of window  ·  "
-                    "🔴 Red (L4–5) = Outside window / crisis zone. "
-                    "Green and blue bars represent incidents where the student was still coping — "
-                    "this is positive context, not a cause for concern."
+                    "🟢 Green (L1–2) = Within window — student is regulated and engaged effectively  ·  "
+                    "🟡 Yellow (L3) = Coping — managing, but approaching the edge of the window  ·  "
+                    "🔴 Red (L4–5) = Outside window — dysregulated / crisis zone. "
+                    "Green bars are a positive indicator: the student is within their Window of Tolerance."
                 )
-            else:
-                st.caption("Severity heatmap requires 2+ incidents per behaviour.")
+
 
         # ═══════════════════════════════════════════════════════════════
         # PANEL C — Escalation Risk Table
@@ -3292,20 +3381,22 @@ def render_student_analysis_page():
 
     st.markdown("### 📊 Severity Trajectory — Window of Tolerance Analysis")
     st.caption(
-        "The Window of Tolerance describes the zone in which a student can engage, learn, and respond to support. "
-        "🟢 Levels 1–2 = Coping / within window (positive — student is regulated and managing demands). "
-        "🟡 Level 3 = Elevated / approaching edge. "
-        "🔴 Levels 4–5 = Outside window / crisis zone. "
-        "A high proportion of Level 1–2 incidents means the student is largely within their window — this is a strength to build on."
+        "The Window of Tolerance is the zone in which a student can engage, learn, and respond to support. "
+        "🟢 Levels 1–2 = Within window — student is regulated and engaged effectively. "
+        "🟡 Level 3 = Coping — managing but approaching the edge of the window. "
+        "🔴 Levels 4–5 = Outside window — dysregulated / crisis zone. "
+        "A high proportion of green (L1–2) incidents means the student is largely within their window — this is a strength, not a concern."
     )
     fig4 = go.Figure()
-    fig4.add_hrect(y0=0, y1=2.5, fillcolor="#d1fae5", opacity=0.2,
-                   annotation_text="Coping / Within window (Levels 1–2)", annotation_position="top left", line_width=0)
-    fig4.add_hrect(y0=2.5, y1=3.5, fillcolor="#fef3c7", opacity=0.2,
-                   annotation_text="Elevated / Approaching edge (Level 3)", annotation_position="top left", line_width=0)
-    fig4.add_hrect(y0=3.5, y1=5.5, fillcolor="#fee2e2", opacity=0.2,
-                   annotation_text="Outside window / High-risk zone (Levels 4–5)", annotation_position="top left", line_width=0)
-    sev_colours = {1: '#10b981', 2: '#3b82f6', 3: '#f59e0b', 4: '#ef4444', 5: '#7f1d1d'}
+    # WoT zones: green=within window (L1-2), yellow=coping (L3), red=outside window (L4-5)
+    fig4.add_hrect(y0=0, y1=2.5, fillcolor="#dcfce7", opacity=0.25,
+                   annotation_text="Within window — regulated (L1–2)", annotation_position="top left", line_width=0)
+    fig4.add_hrect(y0=2.5, y1=3.5, fillcolor="#fef9c3", opacity=0.3,
+                   annotation_text="Coping — approaching edge (L3)", annotation_position="top left", line_width=0)
+    fig4.add_hrect(y0=3.5, y1=5.5, fillcolor="#fee2e2", opacity=0.25,
+                   annotation_text="Outside window — dysregulated (L4–5)", annotation_position="top left", line_width=0)
+    # WoT: green=within window, yellow=coping, red=outside window
+    sev_colours = {1: '#22c55e', 2: '#22c55e', 3: '#eab308', 4: '#ef4444', 5: '#7f1d1d'}
     for sev_level in [1, 2, 3, 4, 5]:
         sev_data = full_df[full_df['severity'] == sev_level]
         if len(sev_data) > 0:
@@ -3326,8 +3417,8 @@ def render_student_analysis_page():
         yaxis=dict(
             range=[0, 5.5], tickmode='array',
             tickvals=[1, 2, 3, 4, 5],
-            ticktext=['L1<br>Coping', 'L2<br>Low concern', 'L3<br>Elevated',
-                      'L4<br>Serious', 'L5<br>Crisis'],
+            ticktext=['L1<br>Within<br>window', 'L2<br>Within<br>window', 'L3<br>Coping',
+                      'L4<br>Outside<br>window', 'L5<br>Crisis'],
             gridcolor='#e2e8f0', showline=True, linewidth=2, linecolor='#cbd5e1'
         ),
         xaxis=dict(showline=True, linewidth=2, linecolor='#cbd5e1', gridcolor='#e2e8f0', tickformat='%a %d/%m'),
@@ -4046,11 +4137,18 @@ def render_student_dashboard():
     crit_df = pd.DataFrame(critical) if critical else pd.DataFrame()
     if not quick_df.empty:
         quick_df["incident_type"] = "Quick"
-        quick_df["date_parsed"] = pd.to_datetime(quick_df["date"], utc=True).dt.tz_localize(None)
+        quick_df["date_parsed"] = pd.to_datetime(
+            quick_df["date"], utc=True, errors="coerce"
+        ).dt.tz_localize(None)
     if not crit_df.empty:
         crit_df["incident_type"] = "Critical"
-        crit_df["date_parsed"] = pd.to_datetime(crit_df.get("created_at", datetime.now().isoformat()), utc=True).dt.tz_localize(None)
-        crit_df["severity"] = 5
+        _crit_dates = crit_df["created_at"] if "created_at" in crit_df.columns else pd.Series(
+            [datetime.now().isoformat()] * len(crit_df), index=crit_df.index
+        )
+        crit_df["date_parsed"] = pd.to_datetime(
+            _crit_dates, utc=True, errors="coerce"
+        ).dt.tz_localize(None)
+        crit_df["severity"] = crit_df["severity"].fillna(5).astype(int) if "severity" in crit_df.columns else 5
         crit_df["time"] = crit_df["ABCH_primary"].apply(
             lambda d: d.get("time", "09:00:00") if isinstance(d, dict) else "09:00:00"
         ) if "ABCH_primary" in crit_df.columns else "09:00:00"
@@ -4059,7 +4157,12 @@ def render_student_dashboard():
                 crit_df[_col] = crit_df["ABCH_primary"].apply(
                     lambda d: d.get(_col, "") if isinstance(d, dict) else ""
                 ) if "ABCH_primary" in crit_df.columns else ""
-    full_df = pd.concat([quick_df, crit_df], ignore_index=True).sort_values("date_parsed") if not quick_df.empty or not crit_df.empty else pd.DataFrame()
+    full_df = (
+        pd.concat([quick_df, crit_df], ignore_index=True)
+        .sort_values("date_parsed", na_position="last")
+        if not quick_df.empty or not crit_df.empty
+        else pd.DataFrame()
+    )
     total_incidents = len(full_df)
     critical_count = len(full_df[full_df.get("incident_type", pd.Series(dtype=str)) == "Critical"]) if "incident_type" in full_df.columns else len(crit_df)
     avg_severity = full_df["severity"].mean() if "severity" in full_df.columns else 0
