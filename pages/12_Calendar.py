@@ -669,10 +669,204 @@ with tab_list:
                 except: st.markdown(f"**{eds}**")
             render_event_row(ev, f"l{eds}")
 
+# ─── STUDENT TIMELINE RENDERER ───────────────────────────────────────────────────
+MTG_COLORS = {
+    "Entry Meeting":      "#0e7490",
+    "Review Meeting":     "#c2410c",
+    "Transition Meeting": "#7c3aed",
+    "TAC Meeting":        "#b45309",
+}
+MTG_EMOJIS = {
+    "Entry Meeting": "🚪", "Review Meeting": "🔍",
+    "Transition Meeting": "🔄", "TAC Meeting": "📎",
+}
+
+def sa_terms(yr):
+    if yr == 2026:
+        return [
+            {"name":"T1","full":"Term 1","start":date(2026,1,28),"end":date(2026,4,9), "color":"#e0f2fe"},
+            {"name":"T2","full":"Term 2","start":date(2026,4,28),"end":date(2026,7,3), "color":"#dcfce7"},
+            {"name":"T3","full":"Term 3","start":date(2026,7,20),"end":date(2026,9,25),"color":"#fef9c3"},
+            {"name":"T4","full":"Term 4","start":date(2026,10,12),"end":date(2026,12,11),"color":"#fce7f3"},
+        ]
+    return [
+        {"name":"T1","full":"Term 1","start":date(yr,2,1), "end":date(yr,4,10), "color":"#e0f2fe"},
+        {"name":"T2","full":"Term 2","start":date(yr,5,1), "end":date(yr,7,5),  "color":"#dcfce7"},
+        {"name":"T3","full":"Term 3","start":date(yr,7,20),"end":date(yr,9,26), "color":"#fef9c3"},
+        {"name":"T4","full":"Term 4","start":date(yr,10,13),"end":date(yr,12,12),"color":"#fce7f3"},
+    ]
+
+def render_student_timeline(students_data, yr):
+    year_start = date(yr, 1, 1)
+    year_end   = date(yr, 12, 31)
+    total_days = (year_end - year_start).days + 1
+    terms      = sa_terms(yr)
+
+    def pct(d):
+        if not d: return -1.0
+        if isinstance(d, str):
+            try: d = datetime.strptime(d[:10], "%Y-%m-%d").date()
+            except: return -1.0
+        return max(0.0, min(100.0, (d - year_start).days / total_days * 100.0))
+
+    today_pct = pct(today)
+
+    css = """<style>
+.tl-wrap{font-family:'Inter',sans-serif;margin:0.5rem 0 1.5rem;}
+.tl-axis{position:relative;height:44px;margin:0 0 6px 160px;}
+.tl-term-band{position:absolute;top:0;height:20px;border-radius:4px;border:1px solid rgba(0,0,0,0.08);}
+.tl-term-label{position:absolute;top:2px;font-size:0.67rem;font-weight:700;color:#555;text-align:center;overflow:hidden;}
+.tl-month-tick{position:absolute;top:20px;bottom:0;width:1px;background:#e5e7eb;}
+.tl-month-lbl{position:absolute;top:24px;font-size:0.59rem;color:#aaa;transform:translateX(-50%);white-space:nowrap;}
+.tl-today-marker{position:absolute;top:-6px;bottom:-6px;width:2px;background:#ef4444;border-radius:2px;z-index:20;}
+.tl-today-marker::before{content:'▼';position:absolute;top:-12px;left:-4px;font-size:9px;color:#ef4444;}
+.tl-student{position:relative;min-height:42px;margin-bottom:16px;}
+.tl-student-label{position:absolute;left:0;top:50%;transform:translateY(-50%);width:155px;display:flex;align-items:center;gap:5px;overflow:hidden;}
+.tl-prog-badge{flex-shrink:0;font-size:0.65rem;font-weight:800;padding:0.1rem 0.35rem;border-radius:5px;color:white;}
+.tl-sname{font-size:0.8rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.tl-school{font-size:0.67rem;color:#888;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.tl-row-area{position:relative;margin-left:160px;height:40px;}
+.tl-bg-track{position:absolute;top:11px;left:0;right:0;height:18px;background:#f3f4f6;border-radius:6px;}
+.tl-term-shade{position:absolute;top:11px;height:18px;opacity:0.55;}
+.tl-placement-bar{position:absolute;top:9px;height:22px;border-radius:6px;opacity:0.45;cursor:default;}
+.tl-transition-bar{position:absolute;top:6px;height:28px;border-radius:5px;opacity:0.82;cursor:default;}
+.tl-meeting-pin{position:absolute;top:0;transform:translateX(-50%);width:13px;height:13px;border-radius:50%;border:2.5px solid white;cursor:default;z-index:10;box-shadow:0 1px 4px rgba(0,0,0,0.25);}
+.tl-legend{display:flex;flex-wrap:wrap;gap:14px;font-size:0.74rem;margin-top:16px;padding:10px 14px;background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb;}
+.tl-legend-item{display:flex;align-items:center;gap:5px;color:#374151;}
+.tl-ls{width:18px;height:11px;border-radius:3px;flex-shrink:0;}
+.tl-lc{width:11px;height:11px;border-radius:50%;flex-shrink:0;}
+.tl-ll{width:2px;height:13px;border-radius:1px;flex-shrink:0;background:#ef4444;}
+</style>"""
+
+    # Axis
+    axis = '<div class="tl-axis">'
+    for t in terms:
+        sp = pct(t["start"]); ep = pct(t["end"]); wp = max(0.0, ep-sp)
+        axis += (f'<div class="tl-term-band" title="{t["full"]}" '
+                 f'style="left:{sp:.2f}%;width:{wp:.2f}%;background:{t["color"]};"></div>'
+                 f'<span class="tl-term-label" style="left:{sp:.2f}%;width:{wp:.2f}%;">{t["name"]}</span>')
+    for m in range(1, 13):
+        d = date(yr, m, 1); p = pct(d)
+        axis += (f'<div class="tl-month-tick" style="left:{p:.2f}%;"></div>'
+                 f'<span class="tl-month-lbl" style="left:{p:.2f}%;">{d.strftime("%b")}</span>')
+    axis += '</div>'
+
+    rows = ""
+    for init, data in students_data.items():
+        placements  = data.get("placements", [])
+        transitions = data.get("transitions", [])
+        meetings    = data.get("meetings", [])
+        prog        = data.get("program", "")
+        pc          = PROGRAM_COLORS.get(prog, {"color":"#374151","bg":"#f3f4f6"})
+        school      = placements[0].get("placement_school","") if placements else ""
+
+        rows += '<div class="tl-student">'
+        rows += (f'<div class="tl-student-label">'
+                 f'<span class="tl-prog-badge" style="background:{pc["color"]};">{prog or "—"}</span>'
+                 f'<div><div class="tl-sname" style="color:{pc["color"]};">{init}</div>'
+                 f'{"<div class=tl-school>"+school+"</div>" if school else ""}</div></div>')
+
+        rows += '<div class="tl-row-area"><div class="tl-bg-track"></div>'
+
+        # Term shading
+        for t in terms:
+            sp = pct(t["start"]); ep = pct(t["end"]); wp = max(0.0, ep-sp)
+            rows += f'<div class="tl-term-shade" style="left:{sp:.2f}%;width:{wp:.2f}%;background:{t["color"]};"></div>'
+
+        # Today
+        rows += f'<div class="tl-today-marker" style="left:{today_pct:.2f}%;"></div>'
+
+        # Placement bars
+        for pl in placements:
+            sp = pct(pl.get("start_date","")); ep = pct(pl.get("end_date",""))
+            if sp < 0 or ep < 0: continue
+            wp = max(0.4, ep-sp)
+            tip = f"{pl.get('placement_type','Placement')} · {pl.get('placement_school','')} · {fmt_date(pl.get('start_date',''))} to {fmt_date(pl.get('end_date',''))}"
+            rows += (f'<div class="tl-placement-bar" title="{tip}" '
+                     f'style="left:{sp:.2f}%;width:{wp:.2f}%;background:{pc["color"]};"></div>')
+
+        # Transition week bars
+        for tr in transitions:
+            try: wmon = datetime.strptime(tr.get("week_start_date","")[:10], "%Y-%m-%d").date()
+            except: continue
+            if not (year_start <= wmon <= year_end): continue
+            if not any(tr.get(f"{dk}_start") for dk in DAY_KEYS): continue
+            sp = pct(wmon); ep = pct(wmon + timedelta(days=4)); wp = max(0.3, ep-sp)
+            school_tr = tr.get("mainstream_school","mainstream")
+            tip = f"{tr.get('week_label','')} at {school_tr} · {wmon.strftime('%-d %b')}"
+            rows += (f'<div class="tl-transition-bar" title="{tip}" '
+                     f'style="left:{sp:.2f}%;width:{wp:.2f}%;background:{pc["color"]};"></div>')
+
+        # Meeting pins
+        for mtg in meetings:
+            try: md = datetime.strptime(str(mtg.get("event_date",""))[:10], "%Y-%m-%d").date()
+            except: continue
+            if not (year_start <= md <= year_end): continue
+            mp  = pct(md)
+            mc  = MTG_COLORS.get(mtg.get("event_type",""), "#374151")
+            em  = MTG_EMOJIS.get(mtg.get("event_type",""), "")
+            tip = f"{em} {mtg.get('event_type','')} · {fmt_date(md)}"
+            rows += (f'<div class="tl-meeting-pin" title="{tip}" '
+                     f'style="left:{mp:.2f}%;background:{mc};"></div>')
+
+        rows += '</div></div>'
+
+    legend = ('<div class="tl-legend">'
+              '<div class="tl-legend-item"><div class="tl-ls" style="background:#6b7280;opacity:0.45;"></div>Placement period</div>'
+              '<div class="tl-legend-item"><div class="tl-ls" style="background:#6b7280;opacity:0.82;"></div>Transition weeks at mainstream</div>'
+              '<div class="tl-legend-item"><div class="tl-lc" style="background:#0e7490;"></div>Entry Meeting</div>'
+              '<div class="tl-legend-item"><div class="tl-lc" style="background:#c2410c;"></div>Review Meeting</div>'
+              '<div class="tl-legend-item"><div class="tl-lc" style="background:#7c3aed;"></div>Transition Meeting</div>'
+              '<div class="tl-legend-item"><div class="tl-lc" style="background:#b45309;"></div>TAC Meeting</div>'
+              '<div class="tl-legend-item"><div class="tl-ll"></div>Today</div>'
+              '</div>')
+
+    return f'<div class="tl-wrap">{css}{axis}{rows}{legend}</div>'
+
 # ═══════════════ STUDENTS VIEW ════════════════════════════════════════════════
 with tab_students:
     st.markdown("### 👨‍🎓 Student Placements & Meetings")
-    st_place, st_trans, st_mtg = st.tabs(["📋 Placement Details", "🔄 Transition Schedule", "📅 Student Meetings"])
+    st_timeline, st_place, st_trans, st_mtg = st.tabs(["📊 Student Timeline", "📋 Placement Details", "🔄 Transition Schedule", "📅 Student Meetings"])
+
+
+    # ════ STUDENT TIMELINE ═════════════════════════════════════════════════════
+    with st_timeline:
+        tl_c1, tl_c2, _ = st.columns([2, 2, 4])
+        with tl_c1:
+            tl_year = st.selectbox("Year", [2025, 2026, 2027], index=1, key="tl_year")
+        with tl_c2:
+            tl_prog_filter = st.multiselect("Program", ["JP","PY","SY"], default=["JP","PY","SY"], key="tl_prog")
+
+        all_pl  = db_placements()
+        all_tr  = db_transitions()
+        all_mtg = [e for e in db_events(date(tl_year,1,1), date(tl_year,12,31)) if e.get("event_type") in STUDENT_MEETING_TYPES]
+
+        students_map = defaultdict(lambda: {"placements":[], "transitions":[], "meetings":[], "program":""})
+        for pl in all_pl:
+            init = pl.get("student_initials","")
+            if not init or pl.get("program","") not in tl_prog_filter: continue
+            students_map[init]["placements"].append(pl)
+            students_map[init]["program"] = pl.get("program","")
+        for tr in all_tr:
+            init = tr.get("student_initials","")
+            if not init or tr.get("program","") not in tl_prog_filter: continue
+            students_map[init]["transitions"].append(tr)
+            if not students_map[init]["program"]: students_map[init]["program"] = tr.get("program","")
+        for mtg in all_mtg:
+            init = mtg.get("student_initials","")
+            if not init or mtg.get("program","") not in tl_prog_filter: continue
+            students_map[init]["meetings"].append(mtg)
+            if not students_map[init]["program"]: students_map[init]["program"] = mtg.get("program","")
+
+        prog_order = {"JP":0,"PY":1,"SY":2,"":3}
+        sorted_students = dict(sorted(students_map.items(), key=lambda x: (prog_order.get(x[1]["program"],3), x[0])))
+
+        if not sorted_students:
+            st.markdown("<p style=color:#888;>No student data found. Add placements and log meetings in the other tabs to populate the timeline.</p>", unsafe_allow_html=True)
+        else:
+            count = len(sorted_students)
+            st.markdown(f"<div style=background:#f0fdf4;border-left:4px solid #15803d;border-radius:8px;padding:0.6rem 1rem;font-size:0.82rem;color:#14532d;margin-bottom:1rem;><b>{count} student{chr(115) if count!=1 else ""}</b> shown. Hover bars and dots for details. <b>Faint bar</b> = placement period &nbsp;|&nbsp; <b>Solid bar</b> = transition weeks at mainstream &nbsp;|&nbsp; <b>Dots</b> = meetings.</div>", unsafe_allow_html=True)
+            st.markdown(render_student_timeline(sorted_students, tl_year), unsafe_allow_html=True)
 
     # ════ PLACEMENT DETAILS ════════════════════════════════════════════════════
     with st_place:
