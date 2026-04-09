@@ -421,32 +421,49 @@ elif st.session_state.mp_step == 3:
 
     SYSTEM_PROMPT = """You are a professional minute-taker producing formal meeting minutes for Cowandilla Learning Centre (CLC) LBU, Adelaide SA.
 
-These minutes are the official record of the meeting and will be distributed to ALL attendees — including external parties such as DCP workers, parents/carers, BSE, allied health, and other agencies.
+These minutes are the OFFICIAL RECORD of the meeting, distributed to ALL attendees including external parties — DCP workers, parents/carers, BSE, allied health professionals, and other agencies.
 
-CRITICAL STANDARDS:
-- Write for ALL attendees, not just CLC staff. Assume some readers were not at the meeting.
-- Write in formal third person throughout (e.g. 'Ms Smith advised that…', 'The group resolved to…', 'It was noted that…')
-- Be thorough and complete — capture the substance of every discussion, not just dot points
-- Every decision must be recorded as a clear Resolution or Agreed Outcome
+YOUR JOB IS TO BE EXHAUSTIVE AND ATTRIBUTIVE:
+
+ATTRIBUTION — always name who said what:
+- Never write "it was discussed" or "it was noted" without naming who said it
+- Use: "Ms Smith advised that…", "Mr Brown stated that…", "The Principal, Ms Jones, reported that…"
+- When multiple people contributed to a topic, record each person's contribution separately
+- If someone asked a question, record who asked it and who answered
+- If someone expressed a concern, record who raised it and the exact substance of the concern
+
+THOROUGHNESS — capture everything of substance:
+- Do NOT summarise away important detail — if someone explained a situation in 4 sentences, capture those 4 sentences worth of content
+- Record specific figures, dates, names, and details mentioned (e.g. "the incident on 19 March 2026", "funding of approximately $15,000", "the fence on the eastern boundary")
+- If evidence was presented, record what the evidence showed and who presented it
+- If a position or recommendation was made, record it in full
+- Capture concerns raised, questions asked, and responses given
+- Note where there was agreement, disagreement, or uncertainty
+
+STRUCTURE:
+- One section per distinct topic — never merge two topics
+- Within each section: (1) context/background, (2) discussion with attribution, (3) resolution or outcome
+- Every Resolution must be explicitly labelled "Resolution:" and state exactly what was agreed
 - Every action must name the responsible person, the specific task, and the due date
-- Include context where needed so a reader unfamiliar with the situation understands the discussion
-- Do NOT use casual language, abbreviations without explanation, or staff-only shorthand
-- Do not fabricate anything — only record what was actually discussed in the transcript"""
+- Write for an external reader who was not present and may have no background on the situation"""
 
     def build_prompt():
         style_instruction = {
-            "formal": "Write in complete, formal sentences with clear paragraph structure. Each section should fully summarise the discussion, any positions raised, and the resolution or outcome reached.",
-            "concise": "Use clear structured bullet points under each heading. Each point should be a complete thought. Prioritise decisions, resolutions, and actions — but include enough context for external readers.",
-            "narrative": "Write in flowing formal prose that reads as a professional narrative record. Capture the tone and substance of the discussion so any reader can understand what occurred and what was agreed.",
+            "formal": "Write in complete formal sentences. Within each section write full paragraphs — one for context/background, one or more for the discussion (attributing each point to the speaker by name), and one clearly labelled Resolution or Outcome. Do not use dot points as the primary format.",
+            "concise": "Use bullet points, but each bullet must be a complete, attributed statement — e.g. '• Ms Smith (BSE) advised that the current ISP funding allocation is unclear and may not be directly benefiting the student.' Never use vague or unattributed bullets.",
+            "narrative": "Write in flowing formal prose. Narrate the discussion as it unfolded, attributing each contribution to its speaker. The reader should be able to follow the conversation and understand exactly what was said, by whom, and what was decided.",
         }.get(st.session_state.mp_style, "")
 
-        present_list  = m.get("present","").strip()
-        apology_list  = m.get("apologies","").strip()
-        next_mtg      = m.get("next_meeting","").strip()
-        subject       = m.get("subject","").strip()
+        present_list = m.get("present","").strip()
+        apology_list = m.get("apologies","").strip()
+        next_mtg     = m.get("next_meeting","").strip()
+        subject      = m.get("subject","").strip()
 
-        return f"""Produce formal, professional meeting minutes from the transcript below.
-These minutes are an official record to be distributed to ALL attendees including external parties.
+        return f"""Produce THOROUGH, ATTRIBUTED, formal meeting minutes from the transcript below.
+
+CRITICAL: These minutes must capture EVERYTHING of substance from the transcript.
+Do not summarise away detail. Do not omit concerns, questions, or explanations.
+Name who said EVERY significant thing. If you are not sure who said something, write "A participant noted that…"
 
 MEETING DETAILS:
 - Meeting type: {m['type']}
@@ -457,58 +474,59 @@ MEETING DETAILS:
 - Organisation: {m.get('organisation','')}
 - Chaired by: {m.get('chair','')}
 - Minutes recorded by: {m.get('minutes_by','')}
-- Present: {present_list if present_list else '(extract all names and roles from transcript)'}
+- Present: {present_list if present_list else '(extract ALL names and roles from transcript)'}
 - Apologies: {apology_list if apology_list else '(extract from transcript if mentioned)'}
 - Next meeting: {next_mtg}
 
-STYLE: {style_instruction}
+OUTPUT STYLE: {style_instruction}
 
 TRANSCRIPT:
-{st.session_state.mp_raw_text[:12000]}
+{st.session_state.mp_raw_text[:14000]}
 
 Return as JSON only (no markdown fences):
 {{
   "date": "full meeting date extracted from transcript if not already provided",
-  "start_time": "meeting start time if found in transcript",
-  "end_time": "meeting end time if found in transcript",
-  "location": "meeting location or platform if found",
-  "chair": "name of chair if found",
-  "minutes_by": "name of minute-taker if found",
-  "subject": "subject or reason for meeting extracted from transcript",
+  "start_time": "meeting start time",
+  "end_time": "meeting end time if mentioned",
+  "location": "meeting location or platform",
+  "chair": "name of chair",
+  "minutes_by": "name of minute-taker if mentioned",
+  "subject": "subject or reason for meeting",
   "present": [
-    {{"name": "full name", "role": "role or organisation e.g. Principal CLC, BSE, Kinship Carer, DCP Caseworker"}}
+    {{"name": "full name", "role": "role and organisation e.g. Principal, CLC; BSE, DfE; Kinship Carer; DCP Caseworker"}}
   ],
   "apologies": [
     {{"name": "full name", "role": "role if mentioned"}}
   ],
-  "opening": "Formal opening sentence: who chaired, date, time, location, and that a quorum was present",
+  "opening": "Formal opening: name of chair, date, time, location, who was present. 2-3 sentences.",
   "sections": [
     {{
-      "heading": "Clear section heading describing the topic",
-      "content": "Thorough formal summary of the discussion. Write enough that an external reader who was not present can fully understand: what was discussed, what positions were held, what evidence or information was presented, and what was agreed or resolved. Use \\n• for bullet points. Use \\nResolution: to clearly mark any agreed outcomes.",
+      "heading": "Specific topic heading — be descriptive e.g. 'Safety & Risk Plan Review' not just 'Safety'",
+      "content": "THOROUGH content for this section. Must include: (1) Who introduced this topic and why. (2) Each contribution attributed by name — e.g. 'Ms Cromer (BSE) stated that...', 'The kinship carer advised that...', 'Ms Smith (CLC) reported that...'. (3) Any concerns raised and by whom. (4) Any evidence or information presented and by whom. (5) The outcome — labelled Resolution: [what was agreed] OR Discussion only — no resolution reached at this meeting. Use \\n for new paragraphs. Use \\n• for bullet points within a section.",
       "is_actions": false
     }}
   ],
   "actions": [
     {{
       "who": "Full name of person responsible",
-      "action": "Specific action to be taken — written clearly for someone who was not at the meeting",
-      "due": "Due date, or 'Prior to next meeting' if not specified"
+      "action": "Specific action — written so someone not at the meeting understands exactly what is required",
+      "due": "Specific due date, or 'Prior to next meeting'"
     }}
   ],
-  "closing": "Formal closing: time the meeting closed, who closed it, and next meeting details if known",
-  "next_meeting": "Next meeting details if mentioned"
+  "closing": "Formal closing: time meeting closed, who closed it, thanks if given, next meeting date/time.",
+  "next_meeting": "Full next meeting details if mentioned"
 }}
 
-RULES — READ CAREFULLY:
-- Extract ALL attendees from the transcript including any external parties — name and role for each
-- If date/time/location were not provided in Meeting Details above, extract them from the transcript
-- Create one section per distinct topic — never clump two topics together
-- Each section must be thorough enough for an external reader to understand without having been present
-- Every decision = a clear Resolution statement within that section's content
-- Every action = an entry in the actions array with full name and specific task
-- If a topic was discussed but no decision reached, state explicitly: 'Discussion only — no resolution reached at this meeting'
-- Write for distribution: assume the minutes will be read by parents, DCP, external agencies, and other professionals"""
+MANDATORY RULES — failure to follow these is not acceptable:
+1. EVERY section must attribute statements to named individuals — never anonymous "it was noted"
+2. Each section must be long enough to fully capture the discussion — if the topic took 5 minutes to discuss, the section should reflect that depth
+3. Capture specific details: dates, names, figures, locations, document names mentioned in the transcript
+4. If someone raised a question or concern, record the question AND the response
+5. One section per topic — create as many sections as needed, never merge unrelated topics
+6. Resolution: must be stated explicitly in every section where a decision was made
+7. Actions: every action mentioned in the transcript must appear in the actions array
+8. Do NOT omit content because it seems minor — if it was discussed, it belongs in the minutes
+9. Write for an external reader (e.g. a DCP worker reading these 6 months later) who needs full context"""
 
     st.markdown("""
     <div class="hero" style="text-align:center;padding:2rem;">
@@ -537,8 +555,8 @@ RULES — READ CAREFULLY:
             st.session_state.mp_step = 2; st.rerun()
     with p2:
         if st.button("✨ Polish Minutes Now", type="primary", use_container_width=True):
-            with st.spinner("Reading transcript and writing polished minutes — this may take 20–40 seconds…"):
-                raw = groq_call(build_prompt(), 4500, SYSTEM_PROMPT)
+            with st.spinner("Reading transcript and writing detailed minutes — this may take 30–60 seconds…"):
+                raw = groq_call(build_prompt(), 6000, SYSTEM_PROMPT)
                 raw = raw.replace("```json","").replace("```","").strip()
                 if not raw.startswith("{"):
                     idx = raw.find("{")
@@ -744,7 +762,14 @@ elif st.session_state.mp_step == 4:
                 for a in st.session_state.mp_actions:
                     current_minutes += f"- {a.get('who','')}: {a.get('action','')} (due: {a.get('due','')})\n"
 
-            refine_prompt = f"""You are refining meeting minutes for Cowandilla Learning Centre (CLC) LBU.
+            refine_prompt = f"""You are refining formal meeting minutes for Cowandilla Learning Centre (CLC) LBU.
+These minutes are an official record distributed to all attendees including external parties.
+
+STANDARDS TO MAINTAIN:
+- Every statement must be attributed to a named person (e.g. "Ms Smith advised that...")
+- Sections must be thorough — capture full substance, not brief summaries
+- Decisions must be labelled "Resolution:" explicitly
+- Write in formal third person throughout
 
 CURRENT MINUTES:
 {current_minutes}
@@ -752,7 +777,7 @@ CURRENT MINUTES:
 USER INSTRUCTION:
 {user_instruction}
 
-Apply the instruction and return the updated minutes as JSON only (no markdown):
+Apply the instruction precisely and return the complete updated minutes as JSON only (no markdown):
 {{
   "opening": "updated opening text",
   "sections": [
@@ -766,10 +791,10 @@ Apply the instruction and return the updated minutes as JSON only (no markdown):
 }}
 
 RULES:
-- Only make the change the user asked for — preserve everything else exactly
+- Only make the change the user asked for — preserve everything else exactly as written
+- If adding new content, ensure it follows the same attribution and thoroughness standards
 - If the instruction adds a new action, add it to the actions array
-- If the instruction removes content, remove only that content
-- Maintain the same style ({st.session_state.mp_style}) throughout
+- Maintain {st.session_state.mp_style} style throughout
 - Return ALL sections, even unchanged ones"""
 
             with st.spinner("Applying changes…"):
@@ -804,10 +829,10 @@ RULES:
     st.markdown("**Quick actions:**")
     qa_cols = st.columns(4)
     quick_actions = [
-        ("📏 More concise",       "Make all sections more concise — remove any unnecessary words"),
-        ("🎩 More formal",        "Rewrite all sections in a more formal professional tone"),
-        ("✅ Extract all actions","Find any action items in the minutes text that aren't in the action register and add them"),
-        ("🔢 Add numbering",      "Add agenda item numbers to all section headings (1., 2., 3. etc.)"),
+        ("📏 More concise",        "Make all sections more concise — remove unnecessary words but keep all attributed statements and specific details"),
+        ("🎩 More formal",         "Rewrite all sections in a more formal professional tone, ensuring every statement is attributed to a named person"),
+        ("✅ Extract all actions", "Find any action items mentioned in the minutes text that are not yet in the action register and add them with the responsible person's name"),
+        ("🔍 Check thoroughness",  "Review every section and expand any that are too brief — add missing attribution (who said what), specific details mentioned, and ensure every Resolution is clearly labelled. Do not remove any existing content."),
     ]
     for i, (label, instruction) in enumerate(quick_actions):
         with qa_cols[i]:
