@@ -76,8 +76,36 @@ MOCK_STUDENTS = [
 ]
 
 PROGRAM_NAMES = {"JP": "Junior Primary", "PY": "Primary Years", "SY": "Senior Years"}
-BEHAVIOUR_TYPES = ["Verbal Refusal", "Elopement", "Property Destruction", "Aggression (Peer)",
-                   "Aggression (Adult)", "Self-Harm", "Verbal Aggression", "Other"]
+BEHAVIOUR_TYPES = [
+    "--- REFUSAL / WITHDRAWAL ---",
+    "Verbal refusal of instruction",
+    "Task refusal / passive non-compliance",
+    "Shutdown / complete withdrawal",
+    "Selective mutism / non-responsiveness",
+    "--- ESCAPE / EVASION ---",
+    "Unsanctioned departure (elopement)",
+    "Absconding from school grounds",
+    "Hiding or avoiding adult proximity",
+    "--- DISRUPTIVE BEHAVIOUR ---",
+    "Inappropriate vocalisation / noises",
+    "Disruptive verbal commentary",
+    "Interrupting / calling out",
+    "Property misuse or interference",
+    "--- AGGRESSION ---",
+    "Verbal aggression toward peer",
+    "Verbal aggression toward adult",
+    "Physical aggression toward peer",
+    "Physical aggression toward adult",
+    "Threatening behaviour",
+    "--- PROPERTY ---",
+    "Property destruction",
+    "Throwing objects",
+    "--- SELF-REGULATION ---",
+    "Self-injurious behaviour",
+    "Dysregulated emotional expression",
+    "--- OTHER ---",
+    "Other (specify in description)",
+]
 ANTECEDENTS = [
     "--- PEER ---",
     "Peer - negative peer feedback",
@@ -122,6 +150,19 @@ ANTECEDENTS = [
     "Other - unstructured time",
     "Other - access denied"
 ]
+# ── Location normalisation ────────────────────────────────────────────────────
+LOCATION_ALIASES = {
+    "JP Classroom": "JP Room", "JP classroom": "JP Room", "Junior Primary": "JP Room",
+    "PY Classroom": "PY Room", "PY classroom": "PY Room", "Primary Years": "PY Room",
+    "SY Classroom": "SY Room", "SY classroom": "SY Room", "Senior Years": "SY Room",
+    "Playground": "Yard", "playground": "Yard",
+}
+
+def normalise_location(loc: str) -> str:
+    """Map historical location aliases to canonical labels."""
+    return LOCATION_ALIASES.get(str(loc).strip(), str(loc).strip()) if loc else ""
+
+
 # ── Clinical behaviour terminology ───────────────────────────────────────────
 CLINICAL_BEHAVIOUR_MAP = {
     "Verbal Refusal":       "Non-compliance with adult directives",
@@ -158,7 +199,7 @@ def get_clinical_behaviour(raw: str) -> str:
 
 INTERVENTIONS = ["CPI Supportive stance", "Offered break", "Reduced demand", "Provided choices",
                 "Removed audience", "Visual supports", "Co-regulation", "Prompted coping skill", "Redirection"]
-LOCATIONS = ["JP Classroom", "PY Classroom", "SY Classroom", "Playground", "Library", "Office", "Student Gate", "Toilets"]
+LOCATIONS = ["JP Room", "PY Room", "SY Room", "Yard", "Playground", "Library", "Office", "Student Gate", "Toilets", "Transition area", "Other"]
 VALID_PAGES = ["login", "landing", "program_students", "incident_log", "critical_incident", "review_critical", "leader_approve_critical", "student_analysis", "student_dashboard", "admin_portal"]
 
 HYPOTHESIS_FUNCTIONS = ["To get", "To avoid"]
@@ -574,8 +615,8 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         arun(p_kf, "KEY FINDINGS", bold=True, size=16, color=TEAL_HEX)
         for label, val in [
             ("Primary behaviour of concern",     get_clinical_behaviour(top_beh)),
-            ("Most common trigger / antecedent", top_ant),
-            ("Hotspot location",                 top_loc),
+            ("Most common trigger / antecedent", top_ant[top_ant.find(" - ")+3:] if " - " in top_ant else top_ant),
+            ("Hotspot location",                 normalise_location(top_loc)),
             ("Peak time of day",                 f"{top_session} (before 11am / 11am–13:30 / after 13:31)"),
         ]:
             p = kf_c.add_paragraph()
@@ -982,8 +1023,9 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
 
         doc.add_paragraph().paragraph_format.space_after = Pt(5)
 
-        sign_tbl = doc.add_table(rows=2, cols=3); sign_tbl.style='Table Grid'
-        for ci, lbl in enumerate(["Prepared by","Reviewed by","Next Review Date"]):
+        # Sign-off table removed — reviewed and approved via portal workflow
+        if False:  # placeholder
+            lbl = ""
             c = sign_tbl.rows[0].cells[ci]
             set_bg(c, GREY_DARK); set_borders(c, TEAL_HEX)
             c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -1160,7 +1202,7 @@ def load_incidents_from_db(student_id=None):
                 "time": row['time'],
                 "day": row['day_of_week'],
                 "session": row['session'],
-                "location": row['location'],
+                "location": normalise_location(row.get("location", "")),
                 "behaviour_type": row['behaviour_type'],
                 "antecedent": row['antecedent'],
                 "intervention": row['intervention'],
@@ -2445,6 +2487,40 @@ def render_student_analysis_page():
         if st.button("🏠 Program Landing", key="home_analysis"):
             go_to("landing")
 
+    # ── Part-time schedule context ───────────────────────────────────────────
+    with st.expander("⏱️ Part-time / modified schedule context (optional — affects incident pattern interpretation)", expanded=False):
+        st.caption(
+            "If this student attends on a part-time or modified timetable, recording it here improves "
+            "the accuracy of analysis. Zero-incident days may reflect absence rather than regulation, "
+            "and time-of-day patterns only make sense in the context of which sessions the student is present for. "
+            "This context should be referenced in the functional hypothesis and any recommendations."
+        )
+        _pt_days = st.multiselect(
+            "Days present at school",
+            ["Monday","Tuesday","Wednesday","Thursday","Friday"],
+            default=["Monday","Tuesday","Wednesday","Thursday","Friday"],
+            key=f"pt_days_{student_id}"
+        )
+        _pt_sessions = st.multiselect(
+            "Sessions attended (if not full days)",
+            ["Full day","Morning only","Middle of day only","Afternoon only","Morning + Middle","Middle + Afternoon"],
+            default=["Full day"],
+            key=f"pt_sess_{student_id}"
+        )
+        _pt_notes = st.text_area(
+            "Schedule details",
+            placeholder="e.g. Attends Tue–Thu, mornings only. Transition to full days planned Term 2.",
+            height=65, key=f"pt_notes_{student_id}"
+        )
+        _parttime_active = len(_pt_days) < 5 or (len(_pt_sessions) > 0 and "Full day" not in _pt_sessions)
+        if _parttime_active:
+            st.info(
+                "⏱️ **Part-time schedule active.** "
+                "Zero-incident days in frequency charts may reflect absence rather than regulation. "
+                "Time-of-day analysis should be interpreted against the sessions attended only. "
+                "The functional hypothesis below should reference attendance pattern as context."
+            )
+
     quick = [i for i in st.session_state.incidents if i["student_id"] == student_id]
     crit = [c for c in st.session_state.critical_incidents if c["student_id"] == student_id]
 
@@ -2460,6 +2536,8 @@ def render_student_analysis_page():
     if not quick_df.empty:
         quick_df["incident_type"] = "Quick"
         quick_df["date_parsed"] = pd.to_datetime(quick_df["date"], utc=True).dt.tz_localize(None)
+        if "location" in quick_df.columns:
+            quick_df["location"] = quick_df["location"].apply(normalise_location)
         if "intervention" in quick_df.columns:
             quick_df["intervention_str"] = quick_df["intervention"].apply(lambda x: ", ".join(x) if isinstance(x, list) else str(x))
 
@@ -2508,7 +2586,7 @@ def render_student_analysis_page():
     st.markdown("---")
 
     st.markdown("### 📅 Daily Incident Frequency")
-    st.caption("Each bar = one school day with at least one incident. Only days with incidents are shown.")
+    st.caption("All school days in the data period are shown. Zero bars = no incidents that day. Non-incident days are important context.")
 
     # Build a combined daily frame with string labels so Plotly uses category axis
     # (avoids date interpolation that would show weekend gaps / empty days)
@@ -2524,13 +2602,18 @@ def render_student_analysis_page():
         _all_daily["_label"] = _all_daily["date_parsed"].apply(
             lambda d: d.strftime("%a %-d %b")
         )
-        # Keep chronological order of unique labels
-        label_order = (
-            _all_daily[["_date","_label"]]
-            .drop_duplicates()
-            .sort_values("_date")["_label"]
-            .tolist()
-        )
+        # Span ALL calendar days (not just incident days) so zero-incident days show
+        import datetime as _dt
+        _first_date = _all_daily["_date"].min()
+        _last_date  = _all_daily["_date"].max()
+        _all_days   = []
+        _d = _first_date
+        while _d <= _last_date:
+            _all_days.append(_d)
+            _d += _dt.timedelta(days=1)
+        _date_label_map = {d: d.strftime("%a %-d %b") for d in _all_days}
+        label_order = [_date_label_map[d] for d in _all_days]
+        _all_daily["_label"] = _all_daily["_date"].map(_date_label_map)
         _day_regular = (
             _all_daily[_all_daily["_type"] == "Regular"]
             .groupby("_label").size().reindex(label_order, fill_value=0)
@@ -2541,9 +2624,7 @@ def render_student_analysis_page():
         ) if "Critical" in _all_daily["_type"].values else pd.Series(0, index=label_order)
 
         # Weekend shading: flag labels that are Sat/Sun
-        _date_map = (_all_daily[["_date","_label"]].drop_duplicates()
-                     .set_index("_label")["_date"])
-        _is_weekend = {lbl: _date_map[lbl].weekday() >= 5 for lbl in label_order}
+        _is_weekend = {_date_label_map[d]: d.weekday() >= 5 for d in _all_days}
 
         fig1.add_trace(go.Bar(
             x=label_order, y=list(_day_regular),
@@ -3103,11 +3184,11 @@ def render_student_analysis_page():
     st.markdown("### 📊 Severity Trajectory — Window of Tolerance Analysis")
     fig4 = go.Figure()
     fig4.add_hrect(y0=0, y1=2.5, fillcolor="#d1fae5", opacity=0.2,
-                   annotation_text="Within Window (Levels 1–2 — regulated)", annotation_position="top left", line_width=0)
+                   annotation_text="Coping / Within window (Levels 1–2)", annotation_position="top left", line_width=0)
     fig4.add_hrect(y0=2.5, y1=3.5, fillcolor="#fef3c7", opacity=0.2,
-                   annotation_text="Edge of Window (Level 3)", annotation_position="top left", line_width=0)
+                   annotation_text="Elevated / Approaching edge (Level 3)", annotation_position="top left", line_width=0)
     fig4.add_hrect(y0=3.5, y1=5.5, fillcolor="#fee2e2", opacity=0.2,
-                   annotation_text="Outside Window (Levels 4–5 — crisis)", annotation_position="top left", line_width=0)
+                   annotation_text="Outside window / High-risk zone (Levels 4–5)", annotation_position="top left", line_width=0)
     sev_colours = {1: '#10b981', 2: '#3b82f6', 3: '#f59e0b', 4: '#ef4444', 5: '#7f1d1d'}
     for sev_level in [1, 2, 3, 4, 5]:
         sev_data = full_df[full_df['severity'] == sev_level]
@@ -3129,8 +3210,8 @@ def render_student_analysis_page():
         yaxis=dict(
             range=[0, 5.5], tickmode='array',
             tickvals=[1, 2, 3, 4, 5],
-            ticktext=['Level 1<br>(Minor)', 'Level 2<br>(Low)', 'Level 3<br>(Moderate)',
-                      'Level 4<br>(Serious)', 'Level 5<br>(Critical)'],
+            ticktext=['L1<br>Coping', 'L2<br>Low concern', 'L3<br>Elevated',
+                      'L4<br>Serious', 'L5<br>Crisis'],
             gridcolor='#e2e8f0', showline=True, linewidth=2, linecolor='#cbd5e1'
         ),
         xaxis=dict(showline=True, linewidth=2, linecolor='#cbd5e1', gridcolor='#e2e8f0', tickformat='%a %d/%m'),
