@@ -2765,6 +2765,26 @@ def render_student_analysis_page():
         margin=dict(b=60),
     )
     st.plotly_chart(fig1, use_container_width=True)
+    # ── Daily frequency insight ───────────────────────────────────────────
+    if not full_df.empty:
+        _fi_total_days = (full_df["date_parsed"].max() - full_df["date_parsed"].min()).days + 1
+        _fi_incident_days = full_df["date_parsed"].dt.date.nunique()
+        _fi_zero_days = _fi_total_days - _fi_incident_days
+        _fi_max_day = full_df.groupby(full_df["date_parsed"].dt.date).size().max()
+        _fi_avg_per_day = len(full_df) / max(_fi_incident_days, 1)
+        st.markdown(
+            f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;border-radius:6px;"
+            f"padding:.65rem 1rem;margin:.4rem 0;font-size:.84rem;color:#1e293b;'>"
+            f"<b>📊 What this shows:</b> Across the data period, incidents occurred on "
+            f"<b>{_fi_incident_days} of {_fi_total_days} school days</b> "
+            f"({_fi_zero_days} day(s) with no incidents recorded). "
+            f"On days where incidents did occur, there were on average <b>{_fi_avg_per_day:.1f} per day</b> "
+            f"(peak: {_fi_max_day}). "
+            + ("Clusters of consecutive incident days may indicate periods of elevated stress, "
+               "transitions, or environmental changes worth investigating." if _fi_incident_days > 3
+               else "Limited data — continue logging to identify patterns.") + "</div>",
+            unsafe_allow_html=True
+        )
     if not quick_only_df.empty and not crit_only_df.empty:
         escalation_rate = (len(crit_only_df) / len(quick_only_df)) * 100 if len(quick_only_df) > 0 else 0
         col1, col2, col3 = st.columns(3)
@@ -2856,6 +2876,26 @@ def render_student_analysis_page():
                 margin=dict(t=40, b=10, l=10, r=10)
             )
             st.plotly_chart(fig_a1, use_container_width=True)
+            if all_behaviours:
+                _pa_top = all_behaviours[0]
+                _pa_top_n = total_beh_counts[0]
+                _pa_top_pct = int(_pa_top_n / _n_total * 100) if _n_total else 0
+                _pa_crit_n = crit_beh_counts[0]
+                st.markdown(
+                    f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;"
+                    f"border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
+                    f"<b>📊 What this shows:</b> "
+                    f"The most frequently occurring behaviour is <b>{get_clinical_behaviour(_pa_top)}</b> "
+                    f"({_pa_top_n} incidents, {_pa_top_pct}% of total). "
+                    + (f"Of these, {_pa_crit_n} escalated to a critical incident — "
+                       f"a rate of {int(_pa_crit_n/_pa_top_n*100)}%. "
+                       if _pa_crit_n > 0 else "") +
+                    ("Multiple behaviour types present suggests a broad stress response pattern "
+                     "rather than a single function." if len(all_behaviours) >= 4
+                     else "Focus intervention on the primary behaviour type identified.") +
+                    "</div>",
+                    unsafe_allow_html=True
+                )
         with _pa2:
             if _n_total >= 5:
                 _donut_cols = ["#3b82f6","#ef4444","#f59e0b","#10b981","#8b5cf6","#f97316","#64748b","#06b6d4"]
@@ -2981,6 +3021,29 @@ def render_student_analysis_page():
             margin=dict(t=70, b=10, l=10, r=10)
         )
         st.plotly_chart(fig_b, use_container_width=True)
+        if all_behaviours:
+            _pb_coping_n = sum(
+                sum(_sev_matrix[b][sv] for sv in [1,2,3]) for b in all_behaviours
+            )
+            _pb_outside_n = sum(
+                sum(_sev_matrix[b][sv] for sv in [4,5]) for b in all_behaviours
+            )
+            _pb_coping_pct = int(_pb_coping_n / _n_total * 100) if _n_total else 0
+            st.markdown(
+                f"<div style='background:#f8fafc;border-left:4px solid #eab308;"
+                f"border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
+                f"<b>📊 What this shows:</b> "
+                f"<b>{_pb_coping_pct}% of incidents</b> ({_pb_coping_n}/{_n_total}) "
+                f"occurred within the Coping zone (L1–L3), meaning "
+                f"the student was attempting to manage distress rather than being fully dysregulated. "
+                + (f"The remaining {100-_pb_coping_pct}% ({_pb_outside_n} incidents) "
+                   f"reached the outside-window zone (L4–L5), indicating periods of significant "
+                   f"dysregulation that require immediate de-escalation and post-incident repair. "
+                   if _pb_outside_n > 0 else
+                   "No incidents reached the outside-window zone — all behaviour occurred within the Coping zone. ") +
+                "Interventions should be timed to the Coping zone — this is where they are most effective.</div>",
+                unsafe_allow_html=True
+            )
 
         if not _reliable:
             st.caption("⚠️ Mean severity markers require 4+ incidents per behaviour — not shown yet.")
@@ -3108,6 +3171,20 @@ def render_student_analysis_page():
                 "not a data error, just means more observations are needed before a reliable rate can be calculated  ·  "
                 "Sev StDev: spread of severity scores (higher = more variable)"
             )
+            _pch = [r for r in _risk_rows if r.get("Risk Level","").startswith("🔴")]
+            _pcm = [r for r in _risk_rows if r.get("Risk Level","").startswith("🟡")]
+            _pcp = []
+            if _pch: _pcp.append(f"{len(_pch)} behaviour(s) carry high escalation risk "
+                f"({", ".join(get_clinical_behaviour(r['Behaviour']) for r in _pch[:2])}). "
+                "Intervene early in the Coping zone for these behaviours.")
+            if _pcm: _pcp.append(f"{len(_pcm)} behaviour(s) have medium risk — apply co-regulation consistently.")
+            if not _pch and not _pcm: _pcp.append("No high escalation risk identified — maintain current proactive strategies.")
+            st.markdown(
+                "<div style='background:#f8fafc;border-left:4px solid #1A7A7A;"
+                "border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
+                "<b>📊 What this shows:</b> " + " ".join(_pcp) + "</div>",
+                unsafe_allow_html=True
+            )
 
         # ═══════════════════════════════════════════════════════════════
         # PANEL D — Behaviour by Time of Day
@@ -3142,6 +3219,23 @@ def render_student_analysis_page():
                 margin=dict(t=60, b=10, l=10, r=80)
             )
             st.plotly_chart(fig_d, use_container_width=True)
+            # D insight
+            if _bsdf_rows:
+                _pd_counts = {s: sum(r[s] for r in _bsdf_rows) for s in ["Morning","Middle","Afternoon"]}
+                _pd_peak = max(_pd_counts, key=_pd_counts.get)
+                _pd_peak_n = _pd_counts[_pd_peak]
+                _pd_peak_pct = int(_pd_peak_n / _n_total * 100) if _n_total else 0
+                _pd_labels = {"Morning":"morning (before 11am)","Middle":"middle of day (11am–1:30pm)","Afternoon":"afternoon (after 1:30pm)"}
+                st.markdown(
+                    f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;"
+                    f"border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
+                    f"<b>📊 What this shows:</b> Incidents peak during the "
+                    f"<b>{_pd_labels[_pd_peak]}</b> ({_pd_peak_pct}% of all incidents). "
+                    "This identifies the highest-risk window for proactive support. "
+                    "Consider scheduling regulation activities, check-ins, and low-demand tasks "
+                    f"just before this period begins.</div>",
+                    unsafe_allow_html=True
+                )
             if _n_total < 5:
                 st.caption("⚠️ Session patterns are preliminary with limited data — treat as directional only.")
 
@@ -3178,6 +3272,20 @@ def render_student_analysis_page():
                         margin=dict(t=70, b=10, l=10, r=80)
                     )
                     st.plotly_chart(fig_e, use_container_width=True)
+                    if _bloc_y:
+                        _pe_top_loc = _top_locs[0] if _top_locs else ""
+                        _pe_top_n = max(sum(r) for r in _bloc_z) if _bloc_z else 0
+                        st.markdown(
+                            f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;"
+                            f"border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
+                            f"<b>📊 What this shows:</b> "
+                            f"The highest-frequency incident location is <b>{normalise_location(_pe_top_loc)}</b>. "
+                            "Environmental modification, increased supervision, and pre-emptive "
+                            "regulation strategies in this space are the highest-priority prevention actions. "
+                            "Behaviour that clusters in one location often points to specific "
+                            "environmental triggers (crowding, noise, transitions in/out).</div>",
+                            unsafe_allow_html=True
+                        )
                     if _n_total < 5:
                         st.caption("⚠️ Location patterns are preliminary with limited data.")
 
@@ -3224,6 +3332,23 @@ def render_student_analysis_page():
                         margin=dict(t=110, b=10, l=10, r=80)
                     )
                     st.plotly_chart(fig_f, use_container_width=True)
+                    if _cross_y and _cross_z:
+                        _pf_flat = [(ri, ci, v) for ri, row in enumerate(_cross_z) for ci, v in enumerate(row) if v > 0]
+                        if _pf_flat:
+                            _pf_max_ri, _pf_max_ci, _pf_max_v = max(_pf_flat, key=lambda x: x[2])
+                            _pf_beh = get_clinical_behaviour(_cross_y[_pf_max_ri]) if _pf_max_ri < len(_cross_y) else ""
+                            _pf_ant = _ant_labels[_pf_max_ci] if _pf_max_ci < len(_ant_labels) else ""
+                            st.markdown(
+                                f"<div style='background:#f8fafc;border-left:4px solid #0284c7;"
+                                f"border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
+                                f"<b>📊 What this shows:</b> "
+                                "The darkest cells identify the most predictable trigger–behaviour sequences. "
+                                + (f"The strongest pairing: <b>{_pf_ant}</b> → <b>{_pf_beh}</b> ({_pf_max_v} times). "
+                                   if _pf_beh else "") +
+                                "Intervening before this trigger occurs is more effective than "
+                                "responding after the behaviour has started.</div>",
+                                unsafe_allow_html=True
+                            )
                     if _n_total < 8:
                         st.caption("⚠️ Crosswalk is preliminary with limited data — treat each cell as directional only.")
 
@@ -3271,6 +3396,17 @@ def render_student_analysis_page():
                     margin=dict(t=10, b=40, l=10, r=10)
                 )
                 st.plotly_chart(fig_g, use_container_width=True)
+                st.markdown(
+                    "<div style='background:#f8fafc;border-left:4px solid #1A7A7A;"
+                    "border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
+                    "<b>📊 What this shows:</b> "
+                    "Increasing trend lines indicate a behaviour is becoming more frequent — "
+                    "this signals that current supports may need review or intensification. "
+                    "Declining or stable trends are a positive indicator that strategies are having effect. "
+                    "Diamond markers indicate only one week of data for that behaviour — "
+                    "more observations are needed before conclusions can be drawn.</div>",
+                    unsafe_allow_html=True
+                )
             full_df.drop(columns=["_week"], errors="ignore", inplace=True)
 
         # ═══════════════════════════════════════════════════════════════
@@ -3318,6 +3454,20 @@ def render_student_analysis_page():
                 )
                 st.plotly_chart(fig_h, use_container_width=True)
                 st.caption("🔴 Red = 15+ min  ·  🟡 Amber = 8–14 min  ·  🔵 Blue = under 8 min  ·  ⬜ Grey = insufficient records")
+                if not _dur_agg.empty:
+                    _ph_longest = _dur_agg.iloc[-1]
+                    st.markdown(
+                        f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;"
+                        f"border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
+                        f"<b>📊 What this shows:</b> "
+                        f"Longer-duration incidents indicate more entrenched escalation — "
+                        f"the student takes longer to return to the Coping zone. "
+                        f"<b>{_ph_longest['behaviour_type']}</b> has the longest average duration "
+                        f"({_ph_longest['avg']:.1f} min), suggesting this behaviour requires "
+                        "the most intensive de-escalation support and the longest recovery time "
+                        "before re-engaging with learning tasks.</div>",
+                        unsafe_allow_html=True
+                    )
 
         # ═══════════════════════════════════════════════════════════════
         # PANEL I — Interventions by Behaviour
@@ -3366,10 +3516,31 @@ def render_student_analysis_page():
                     )
                     st.plotly_chart(fig_i, use_container_width=True)
                     st.caption("Blank = intervention not used for that behaviour. Review whether high-frequency interventions match the identified behaviour function.")
+                    st.markdown(
+                        "<div style='background:#f8fafc;border-left:4px solid #1A7A7A;"
+                        "border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
+                        "<b>📊 What this shows:</b> "
+                        "This chart reveals whether staff responses are matched to the behaviour function. "
+                        "For escape-motivated behaviours, demand reduction and offered breaks are appropriate — "
+                        "attention-seeking responses (e.g. removing audience) may inadvertently reinforce the behaviour. "
+                        "Consistent use of 2–3 well-matched strategies is more effective than "
+                        "applying many strategies inconsistently.</div>",
+                        unsafe_allow_html=True
+                    )
 
     st.markdown("---")
 
     st.markdown("### 🔍 Trigger Analysis")
+    st.markdown(
+        "<div style='background:#f8fafc;border-left:4px solid #1A7A7A;"
+        "border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;margin-bottom:.5rem;'>"
+        "<b>📊 What this shows:</b> "
+        "The antecedents most commonly recorded immediately before an incident. "
+        "The most frequent trigger is the highest-leverage point for intervention — "
+        "pre-empting what happens before the behaviour is more effective than responding after. "
+        "Triggers that frequently precede critical incidents require immediate proactive planning.</div>",
+        unsafe_allow_html=True
+    )
     all_triggers = full_df["antecedent"].value_counts().head(6).index.tolist()
     # Strip section headers and truncate to clinical label only (remove free-text names)
     def _clean_trigger_label(t):
@@ -3474,6 +3645,25 @@ def render_student_analysis_page():
         col1, col2 = st.columns(2)
         with col1: st.metric("Early period average", f"{early_avg:.1f}")
         with col2: st.metric("Recent period average", f"{recent_avg:.1f}")
+        _traj_dir = "reducing" if recent_avg < early_avg else "stable" if recent_avg == early_avg else "increasing"
+        _traj_colour = "#16a34a" if _traj_dir == "reducing" else "#64748b" if _traj_dir == "stable" else "#dc2626"
+        st.markdown(
+            f"<div style='background:#f8fafc;border-left:4px solid {_traj_colour};"
+            f"border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
+            f"<b>📊 What this shows:</b> "
+            f"Average severity is <b>{_traj_dir}</b> over the observed period. "
+            + ("This is a positive indicator — the student may be building capacity to cope, "
+               "or current strategies are having effect. Continue monitoring. "
+               if _traj_dir == "reducing" else
+               "Severity is holding steady — review whether current supports are maintaining "
+               "the student in the coping zone or whether intensity should increase. "
+               if _traj_dir == "stable" else
+               "Increasing severity warrants urgent review of current supports — "
+               "consider a case conference, updated safety plan, and sensory or environmental audit. ") +
+            "Points in the red zone (L4–L5) indicate the student moved outside their window "
+            "and require immediate post-incident repair before re-engaging with learning.</div>",
+            unsafe_allow_html=True
+        )
         if recent_avg < early_avg:
             st.caption("📉 Severity reducing over time — positive indicator.")
         elif recent_avg == early_avg:
@@ -3499,6 +3689,21 @@ def render_student_analysis_page():
         yaxis=dict(showline=True, linewidth=2, linecolor='#cbd5e1'),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     st.plotly_chart(fig5, use_container_width=True)
+    if all_locations:
+        _lh_top = normalise_location(all_locations[0])
+        _lh_top_n = quick_loc_counts[0] + crit_loc_counts[0]
+        _lh_pct = int(_lh_top_n / len(full_df) * 100) if len(full_df) else 0
+        st.markdown(
+            f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;"
+            f"border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
+            f"<b>📊 What this shows:</b> "
+            f"<b>{_lh_top}</b> is the highest-frequency incident location ({_lh_pct}% of all incidents). "
+            "This may reflect specific environmental conditions — crowding, noise levels, "
+            "supervision ratios, or transition demands — that warrant targeted modification. "
+            "Where a single location dominates, environmental audit and proactive supervision "
+            "strategies for that space should be the first priority.</div>",
+            unsafe_allow_html=True
+        )
     st.markdown("---")
 
     st.markdown("### ⏰ Time of Day Patterns")
@@ -3526,6 +3731,23 @@ def render_student_analysis_page():
         xaxis=dict(showline=True, linewidth=2, linecolor='#cbd5e1', tickfont=dict(size=11)),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     st.plotly_chart(fig6, use_container_width=True)
+    _tot_ses = {s: (quick_session_counts[i] + crit_session_counts[i]) for i, s in enumerate(session_order)}
+    _peak_ses = max(_tot_ses, key=_tot_ses.get)
+    _peak_ses_n = _tot_ses[_peak_ses]
+    _peak_ses_pct = int(_peak_ses_n / len(full_df) * 100) if len(full_df) else 0
+    _ses_display_map = {"Morning":"morning","Middle":"middle of day","Afternoon":"afternoon"}
+    st.markdown(
+        f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;"
+        f"border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
+        f"<b>📊 What this shows:</b> "
+        f"Incidents peak in the <b>{_ses_display_map[_peak_ses]}</b> "
+        f"({_peak_ses_pct}% of all incidents). "
+        "Scheduling structured regulation activities, check-ins, and predictable routines "
+        "just before this window opens is the single highest-leverage proactive strategy. "
+        "If the student is on a part-time schedule, note that absences during certain sessions "
+        "will affect these counts.</div>",
+        unsafe_allow_html=True
+    )
     st.markdown("---")
 
     st.markdown("### 📆 Day of Week Patterns")
@@ -3559,6 +3781,22 @@ def render_student_analysis_page():
         )
         st.plotly_chart(fig7, use_container_width=True)
         st.caption("🔴 Red = significantly above average  ·  🔵 Blue = near average  ·  ⚫ Grey = below average  ·  Dashed line = daily mean")
+        _dow_peak = day_counts.idxmax()
+        _dow_peak_n = int(day_counts.max())
+        _dow_has_data = day_counts[day_counts > 0]
+        _dow_low = _dow_has_data.idxmin() if len(_dow_has_data) > 1 else None
+        st.markdown(
+            f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;"
+            f"border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
+            f"<b>📊 What this shows:</b> "
+            f"<b>{_dow_peak}</b> has the highest incident count ({_dow_peak_n}). "
+            + (f"<b>{_dow_low}</b> has the fewest — consider what differs about that day's "
+               "structure, staffing, or routine and replicate those conditions on other days. "
+               if _dow_low and _dow_low != _dow_peak else "") +
+            "Day-of-week patterns can indicate timetable triggers such as specific subjects, "
+            "staff changes, or transitions on that day.</div>",
+            unsafe_allow_html=True
+        )
     else:
         st.info("Day of week chart requires at least 3 recorded incidents across school days.")
     st.markdown("---")
