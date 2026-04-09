@@ -4853,45 +4853,115 @@ def render_admin_portal():
         st.markdown("---")
         st.markdown("### 🔧 Data Correction Tool")
         st.caption(
-            "Bulk-rename a behaviour type across all incidents for a specific student. "
-            "Use this to correct historical records — e.g. change 'Other' to a specific behaviour type."
+            "Fix behaviour labels directly in Supabase for any student. "
+            "Queries the database live — no session state required. "
+            "Use this to bulk-correct 'Other' or any mislabelled behaviour."
         )
         _dc_students = {s["id"]: s["name"] for s in st.session_state.students}
-        _dc_stu = st.selectbox("Student", list(_dc_students.keys()),
-                               format_func=lambda x: _dc_students[x], key="dc_stu")
-        _dc_col1, _dc_col2 = st.columns(2)
-        with _dc_col1:
-            _dc_old = st.text_input("Current behaviour (exact match)", placeholder="Other", key="dc_old")
-        with _dc_col2:
-            _dc_new = st.selectbox("Replace with", [b for b in BEHAVIOUR_TYPES if not b.startswith("---")], key="dc_new")
-        _dc_preview = st.checkbox("Preview only (do not save)", value=True, key="dc_preview")
-        if st.button("🔧 Apply Correction", key="dc_apply", use_container_width=True):
-            if not _dc_old.strip():
-                st.error("Enter the current behaviour text to replace.")
-            elif not supabase:
-                st.error("Supabase not connected.")
-            else:
-                _affected = [i for i in st.session_state.incidents
-                             if i["student_id"] == _dc_stu
-                             and i.get("behaviour_type","").strip() == _dc_old.strip()]
-                if not _affected:
-                    st.warning(f"No incidents found for that student with behaviour: {_dc_old}")
-                elif _dc_preview:
-                    st.info(f"Preview: {len(_affected)} incident(s) would be updated from '{_dc_old}' → '{_dc_new}'.")
-                    for inc in _affected[:5]:
-                        st.caption(f"  • {inc['date']} {inc['time'][:5]} — currently: {inc['behaviour_type']}")
-                    if len(_affected) > 5: st.caption(f"  … and {len(_affected)-5} more.")
+        if not _dc_students:
+            st.info("No students loaded — reload the page.")
+        else:
+            _dc_stu = st.selectbox(
+                "Select student *",
+                list(_dc_students.keys()),
+                format_func=lambda x: _dc_students[x],
+                key="dc_stu"
+            )
+
+            # Load this student's current behaviour values LIVE from Supabase
+            _dc_live_vals = []
+            if st.button("🔍 Load current behaviour values from DB", key="dc_load", use_container_width=True):
+                if supabase:
+                    try:
+                        _dc_r = supabase.table("incidents").select(
+                            "id,behaviour_type,date,time"
+                        ).eq("student_id", _dc_stu).execute()
+                        st.session_state["dc_live_rows"] = _dc_r.data or []
+                    except Exception as _le:
+                        st.error(f"Load failed: {_le}")
+
+            _dc_rows = st.session_state.get("dc_live_rows", [])
+            if _dc_rows:
+                # Show unique behaviour values found
+                _dc_vals = sorted(set(
+                    r.get("behaviour_type","").strip()
+                    for r in _dc_rows
+                    if r.get("behaviour_type","").strip()
+                ))
+                st.info(
+                    f"Found **{len(_dc_rows)} incident(s)** for {_dc_students.get(_dc_stu,'this student')}. "
+                    f"Behaviour values in DB: {', '.join(f'**{v}**' for v in _dc_vals)}"
+                )
+
+                _dc_col1, _dc_col2 = st.columns(2)
+                with _dc_col1:
+                    _dc_old = st.selectbox(
+                        "Current behaviour to replace *",
+                        _dc_vals,
+                        key="dc_old_sel"
+                    )
+                with _dc_col2:
+                    _dc_new = st.selectbox(
+                        "Replace with *",
+                        [b for b in BEHAVIOUR_TYPES if not b.startswith("---")],
+                        key="dc_new_sel"
+                    )
+
+                # Show matching rows
+                _dc_matching = [r for r in _dc_rows
+                                if r.get("behaviour_type","").strip() == _dc_old]
+                if _dc_matching:
+                    st.markdown(
+                        f"<div style='background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;"
+                        f"padding:.5rem .85rem;margin:.4rem 0;font-size:.82rem;'>"
+                        f"<b>{len(_dc_matching)} incident(s)</b> will be changed from "
+                        f"<code>{_dc_old}</code> → <code>{_dc_new}</code>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+                    for r in _dc_matching[:8]:
+                        st.caption(f"  • {r.get('date','?')}  {str(r.get('time',''))[:5]}  — {r.get('behaviour_type','')}")
+                    if len(_dc_matching) > 8:
+                        st.caption(f"  … and {len(_dc_matching)-8} more")
+
+                    _dc_col3, _dc_col4 = st.columns(2)
+                    with _dc_col3:
+                        if st.button(
+                            f"✅ Apply — update {len(_dc_matching)} record(s)",
+                            type="primary", key="dc_apply", use_container_width=True
+                        ):
+                            if not supabase:
+                                st.error("Supabase not connected.")
+                            else:
+                                _updated = 0
+                                _errors  = 0
+                                for r in _dc_matching:
+                                    try:
+                                        supabase.table("incidents").update(
+                                            {"behaviour_type": _dc_new}
+                                        ).eq("id", r["id"]).execute()
+                                        _updated += 1
+                                    except Exception as _ue:
+                                        _errors += 1
+                                        st.error(f"Failed on {r['id']}: {_ue}")
+                                # Clear both session caches so fresh data loads
+                                for _k in ["incidents", "dc_live_rows"]:
+                                    if _k in st.session_state:
+                                        del st.session_state[_k]
+                                if _updated:
+                                    st.success(
+                                        f"✅ Updated {_updated} incident(s): "
+                                        f"'{_dc_old}' → '{_dc_new}'"
+                                        + (f" ({_errors} errors)" if _errors else "")
+                                    )
+                                    st.info("Reload the student's Analysis page to see the updated charts.")
+                    with _dc_col4:
+                        if st.button("🔄 Reload from DB", key="dc_reload", use_container_width=True):
+                            if "dc_live_rows" in st.session_state:
+                                del st.session_state["dc_live_rows"]
+                            st.rerun()
                 else:
-                    _updated = 0
-                    for inc in _affected:
-                        try:
-                            supabase.table("incidents").update({"behaviour_type": _dc_new}).eq("id", inc["id"]).execute()
-                            inc["behaviour_type"] = _dc_new
-                            _updated += 1
-                        except Exception as _de:
-                            st.error(f"Failed on {inc['id']}: {_de}")
-                    if "incidents" in st.session_state: del st.session_state["incidents"]
-                    st.success(f"✅ Updated {_updated} incident(s) from '{_dc_old}' → '{_dc_new}'.")
+                    st.info(f"No incidents found with behaviour_type = '{_dc_old}'.")
 
         st.markdown("---")
         st.markdown("### 🤖 Reclassify Historical Incident Behaviour Types")
