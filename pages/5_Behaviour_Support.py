@@ -757,14 +757,13 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         add_chart(doc, fig,
             f"Hotspot: {top_loc}. Environmental modification and targeted supervision in this area are a priority strategy.")
 
-        # WoT: green=within window (L1-2), yellow=coping (L3), red=outside window (L4-5)
-        sev_colours = {1:'#22c55e',2:'#22c55e',3:'#eab308',4:'#ef4444',5:'#7f1d1d'}
+        # WoT for incidents: yellow/orange=coping (L1-3), red=outside window (L4-5)
+        sev_colours = {1:'#eab308',2:'#eab308',3:'#f97316',4:'#ef4444',5:'#7f1d1d'}
         sev_level_names = {1:'Level 1 (Minor)',2:'Level 2 (Low)',3:'Level 3 (Moderate)',
                            4:'Level 4 (Serious)',5:'Level 5 (Critical)'}
         fig, ax = plt.subplots(figsize=(FIG_W, FIG_H), dpi=FIG_DPI)
-        ax.axhspan(0.5, 2.5,  color='#d1fae5', alpha=0.30, zorder=0)
-        ax.axhspan(2.5, 3.5,  color='#fef3c7', alpha=0.30, zorder=0)
-        ax.axhspan(3.5, 5.5,  color='#fee2e2', alpha=0.30, zorder=0)
+        ax.axhspan(0.5, 3.5,  color='#fef9c3', alpha=0.35, zorder=0)  # yellow — coping zone L1-3
+        ax.axhspan(3.5, 5.5,  color='#fee2e2', alpha=0.30, zorder=0)  # red — outside window L4-5
         for y, lbl, col in [(1.5,'Within window (regulated)','#16a34a'),
                             (3.0,'Coping','#ca8a04'),
                             (4.5,'Outside window','#dc2626')]:
@@ -804,10 +803,9 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             direction = "insufficient data for trend"
         add_chart(doc, fig,
             f"Severity trajectory: {direction}. "
-            "Green zone (Levels 1–2) = Within window — student is regulated and engaged effectively. "
-            "Yellow (Level 3) = Coping — managing, but approaching the edge of the window. "
-            "Red (Levels 4–5) = Outside window — dysregulated / crisis zone — requires intensive support. "
-            "Incidents in the green zone indicate the student is within their Window of Tolerance — a positive indicator.")
+            "Yellow zone (Levels 1–3) = Coping — behaviour is present; student is communicating or managing distress. "
+            "A critical incident does not automatically mean the student is outside their window. "
+            "Red (Levels 4–5) = Outside window — significant dysregulation, requires intensive support.")
 
         doc.add_page_break()
 
@@ -2861,22 +2859,27 @@ def render_student_analysis_page():
         # ═══════════════════════════════════════════════════════════════
         st.markdown("#### B — Severity Profile")
         st.caption(
-            "How incidents for each behaviour are distributed across Window of Tolerance zones. "
-            "🟢 Green = Within window (regulated)  ·  🟡 Yellow = Coping (approaching edge)  ·  "
-            "🔴 Red = Outside window. Grey bars = fewer than 2 incidents — treat as indicative only."
+            "Incident distribution by severity. All logged behaviours occur in the Coping zone or beyond — "
+            "if a student is within their Window of Tolerance (green), no incidents are being logged. "
+            "🟡 Yellow (L1–2) = Coping — behaviour present but student managing  ·  "
+            "🟠 Orange (L3) = Coping, approaching edge  ·  "
+            "🔴 Red (L4–5) = Outside window — significant dysregulation. "
+            "Critical incident status alone does not place a student outside their window."
         )
         # WoT zone colour map
+        # Clinical framework: if incident logged, student NOT in green.
+        # Yellow = Coping (L1-L3), Red = Outside window (L4-L5)
         _WOT_COLS = {
-            1: "#22c55e",   # green  — within window
-            2: "#22c55e",   # green  — within window
-            3: "#eab308",   # yellow — coping
+            1: "#eab308",   # yellow — coping (low level behaviour)
+            2: "#eab308",   # yellow — coping
+            3: "#f97316",   # orange — coping, approaching edge
             4: "#ef4444",   # red    — outside window
             5: "#7f1d1d",   # dark red — crisis
         }
         _WOT_NAMES = {
-            1: "L1 — Within window",
-            2: "L2 — Within window",
-            3: "L3 — Coping",
+            1: "L1 — Coping",
+            2: "L2 — Coping",
+            3: "L3 — Coping, approaching edge",
             4: "L4 — Outside window",
             5: "L5 — Crisis",
         }
@@ -2925,13 +2928,8 @@ def render_student_analysis_page():
             ))
 
         fig_b.add_vline(
-            x=2.5, line_dash="dash", line_color="#22c55e", line_width=1.5,
-            annotation_text="Edge of window", annotation_font_size=8,
-            annotation_font_color="#16a34a"
-        )
-        fig_b.add_vline(
             x=3.5, line_dash="dash", line_color="#ef4444", line_width=1.5,
-            annotation_text="Outside window", annotation_font_size=8,
+            annotation_text="Outside window threshold", annotation_font_size=8,
             annotation_font_color="#dc2626"
         )
         fig_b.update_layout(
@@ -3381,22 +3379,24 @@ def render_student_analysis_page():
 
     st.markdown("### 📊 Severity Trajectory — Window of Tolerance Analysis")
     st.caption(
-        "The Window of Tolerance is the zone in which a student can engage, learn, and respond to support. "
-        "🟢 Levels 1–2 = Within window — student is regulated and engaged effectively. "
-        "🟡 Level 3 = Coping — managing but approaching the edge of the window. "
-        "🔴 Levels 4–5 = Outside window — dysregulated / crisis zone. "
-        "A high proportion of green (L1–2) incidents means the student is largely within their window — this is a strength, not a concern."
+        "The Window of Tolerance is the zone of optimal regulation in which a student can engage, "
+        "learn, and respond to support. "
+        "If a behaviour is being logged, the student is not currently within their window — "
+        "behaviours occur in the Coping zone or beyond. "
+        "🟡 Levels 1–3 = Coping — behaviour is the student's way of communicating or managing distress. "
+        "🔴 Levels 4–5 = Outside window — significant dysregulation. "
+        "A critical incident does not automatically mean the student is outside their window."
     )
     fig4 = go.Figure()
-    # WoT zones: green=within window (L1-2), yellow=coping (L3), red=outside window (L4-5)
-    fig4.add_hrect(y0=0, y1=2.5, fillcolor="#dcfce7", opacity=0.25,
-                   annotation_text="Within window — regulated (L1–2)", annotation_position="top left", line_width=0)
-    fig4.add_hrect(y0=2.5, y1=3.5, fillcolor="#fef9c3", opacity=0.3,
-                   annotation_text="Coping — approaching edge (L3)", annotation_position="top left", line_width=0)
+    # WoT zones for behaviour incidents:
+    # Logged incidents = student is not in green. All start from Coping (yellow).
+    # Critical incident alone does NOT mean outside window.
+    fig4.add_hrect(y0=0, y1=3.5, fillcolor="#fef9c3", opacity=0.25,
+                   annotation_text="Coping zone (L1–L3) — behaviour present, student managing", annotation_position="top left", line_width=0)
     fig4.add_hrect(y0=3.5, y1=5.5, fillcolor="#fee2e2", opacity=0.25,
-                   annotation_text="Outside window — dysregulated (L4–5)", annotation_position="top left", line_width=0)
-    # WoT: green=within window, yellow=coping, red=outside window
-    sev_colours = {1: '#22c55e', 2: '#22c55e', 3: '#eab308', 4: '#ef4444', 5: '#7f1d1d'}
+                   annotation_text="Outside window (L4–L5) — significant dysregulation", annotation_position="top left", line_width=0)
+    # WoT for incidents: yellow=coping (L1-3), red=outside window (L4-5)
+    sev_colours = {1: '#eab308', 2: '#eab308', 3: '#f97316', 4: '#ef4444', 5: '#7f1d1d'}
     for sev_level in [1, 2, 3, 4, 5]:
         sev_data = full_df[full_df['severity'] == sev_level]
         if len(sev_data) > 0:
@@ -3417,7 +3417,7 @@ def render_student_analysis_page():
         yaxis=dict(
             range=[0, 5.5], tickmode='array',
             tickvals=[1, 2, 3, 4, 5],
-            ticktext=['L1<br>Within<br>window', 'L2<br>Within<br>window', 'L3<br>Coping',
+            ticktext=['L1<br>Coping', 'L2<br>Coping', 'L3<br>Approaching<br>edge',
                       'L4<br>Outside<br>window', 'L5<br>Crisis'],
             gridcolor='#e2e8f0', showline=True, linewidth=2, linecolor='#cbd5e1'
         ),
@@ -5065,6 +5065,76 @@ def render_admin_portal():
                             st.rerun()
                 else:
                     st.info(f"No incidents found with behaviour_type = '{_dc_old}'.")
+
+        st.markdown("---")
+        st.markdown("### 🎚️ Correct Critical Incident Severity")
+        st.caption(
+            "Fix the severity level on a specific critical incident. "
+            "Remember: a critical incident does not automatically mean L4/L5 — "
+            "most incidents sit in the Coping zone (L1–L3)."
+        )
+        _sv_students = {s["id"]: s["name"] for s in st.session_state.students}
+        _sv_stu = st.selectbox(
+            "Student *", list(_sv_students.keys()),
+            format_func=lambda x: _sv_students[x], key="sv_stu"
+        )
+        if st.button("🔍 Load critical incidents from DB", key="sv_load", use_container_width=True):
+            if supabase:
+                try:
+                    _sv_r = supabase.table("critical_incidents").select(
+                        "id,severity,created_at,primary_behaviour"
+                    ).eq("student_id", _sv_stu).execute()
+                    st.session_state["sv_live_rows"] = _sv_r.data or []
+                except Exception as _sve:
+                    st.error(f"Load failed: {_sve}")
+
+        _sv_rows = st.session_state.get("sv_live_rows", [])
+        if _sv_rows:
+            _sv_opts = {
+                r["id"]: (
+                    f"{(r.get('created_at') or '')[:10]}  "
+                    f"Sev {r.get('severity','?')}  ·  "
+                    f"{str(r.get('primary_behaviour',''))[:50]}"
+                )
+                for r in _sv_rows
+            }
+            _sv_sel = st.selectbox(
+                "Select incident *",
+                list(_sv_opts.keys()),
+                format_func=lambda x: _sv_opts[x],
+                key="sv_sel"
+            )
+            _sv_new = st.select_slider(
+                "New severity level *",
+                options=[1, 2, 3, 4, 5],
+                value=3,
+                key="sv_new"
+            )
+            _sv_zone = ("Coping zone" if _sv_new <= 3 else "Outside window")
+            _sv_zone_col = "#92400e" if _sv_new <= 3 else "#dc2626"
+            st.markdown(
+                f"<div style='background:#fef9c3;border-left:4px solid #eab308;"
+                f"border-radius:6px;padding:.5rem .9rem;font-size:.83rem;'>"  
+                f"Setting to <b>Level {_sv_new}</b> — "
+                f"<span style='color:{_sv_zone_col};font-weight:700;'>{_sv_zone}</span>"  
+                f"</div>",
+                unsafe_allow_html=True
+            )
+            if st.button(
+                f"✅ Update severity to Level {_sv_new}",
+                type="primary", key="sv_apply", use_container_width=True
+            ):
+                if supabase:
+                    try:
+                        supabase.table("critical_incidents").update(
+                            {"severity": _sv_new}
+                        ).eq("id", _sv_sel).execute()
+                        for _k in ["sv_live_rows","critical_incidents"]:
+                            if _k in st.session_state: del st.session_state[_k]
+                        st.success(f"✅ Severity updated to Level {_sv_new}.")
+                        st.info("Reload the student's Analysis page to see the updated trajectory chart.")
+                    except Exception as _sve2:
+                        st.error(f"Update failed: {_sve2}")
 
         st.markdown("---")
         st.markdown("### 🤖 Reclassify Historical Incident Behaviour Types")
