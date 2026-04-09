@@ -563,7 +563,7 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         tc = t.rows[0].cells[0]
         set_bg(tc, TEAL_HEX); set_borders(tc, TEAL_HEX)
         p1 = tc.paragraphs[0]; p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        arun(p1, "BEHAVIOUR ANALYSIS PLAN", bold=True, size=28, color=WHITE)
+        arun(p1, "BEHAVIOUR SUMMARY", bold=True, size=28, color=WHITE)
         cpara(tc, f"{student['name']}  |  Cowandilla Learning Centre  |  LBU {student.get('program','')} Program",
               size=17, color="FEF3C7", align=WD_ALIGN_PARAGRAPH.CENTER, sb=10, sa=30)
         doc.add_paragraph().paragraph_format.space_after = Pt(4)
@@ -764,9 +764,9 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         ax.axhspan(0.5, 2.5,  color='#d1fae5', alpha=0.30, zorder=0)
         ax.axhspan(2.5, 3.5,  color='#fef3c7', alpha=0.30, zorder=0)
         ax.axhspan(3.5, 5.5,  color='#fee2e2', alpha=0.30, zorder=0)
-        for y, lbl, col in [(1.5,'Within window','#059669'),
-                            (3.0,'Edge','#d97706'),
-                            (4.5,'Outside window','#dc2626')]:
+        for y, lbl, col in [(1.5,'Coping / within window','#059669'),
+                            (3.0,'Elevated','#d97706'),
+                            (4.5,'Outside window / crisis zone','#dc2626')]:
             ax.text(full_df['date_parsed'].min(), y, lbl,
                     fontsize=6.5, color=col, alpha=0.6, va='center', style='italic')
         for sev in [1,2,3,4,5]:
@@ -1023,24 +1023,7 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
 
         doc.add_paragraph().paragraph_format.space_after = Pt(5)
 
-        # Sign-off table removed — reviewed and approved via portal workflow
-        if False:  # placeholder
-            lbl = ""
-            c = sign_tbl.rows[0].cells[ci]
-            set_bg(c, GREY_DARK); set_borders(c, TEAL_HEX)
-            c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            c.paragraphs[0].paragraph_format.space_before = Pt(2)
-            c.paragraphs[0].paragraph_format.space_after  = Pt(2)
-            arun(c.paragraphs[0], lbl, bold=True, size=15, color=WHITE)
-        for ci, val in enumerate([
-            "_________________________\nDate: _______________",
-            "_________________________\nDate: _______________",
-            (datetime.now() + timedelta(weeks=5)).strftime('%d %B %Y'),
-        ]):
-            c = sign_tbl.rows[1].cells[ci]
-            set_bg(c, LIGHT_GREY); set_borders(c, TEAL_HEX)
-            for line in val.split('\n'):
-                cpara(c, line, size=15, sb=15, sa=15)
+        # Sign-off section removed — BAP approved via portal workflow
 
         file_stream = BytesIO()
         doc.save(file_stream)
@@ -2459,7 +2442,7 @@ def render_student_analysis_page():
     if not student:
         st.error("No student selected"); return
 
-    st.markdown(f"## 📊 Comprehensive Behaviour Analysis — {student['name']}")
+    st.markdown(f"## 📊 Behaviour Summary — {student['name']}")
     st.caption("Evidence-based analysis prepared by Learning and Behaviour Unit")
 
     if student.get('placement_start'):
@@ -2544,9 +2527,20 @@ def render_student_analysis_page():
     if not crit_df.empty:
         crit_df["incident_type"] = "Critical"
         crit_df["date_parsed"] = pd.to_datetime(crit_df.get("created_at", datetime.now().isoformat()), utc=True).dt.tz_localize(None)
-        crit_df["severity"] = 5
+        crit_df["severity"] = crit_df["severity"].fillna(5).astype(int) if "severity" in crit_df.columns else 5
         crit_df["antecedent"] = crit_df["ABCH_primary"].apply(lambda d: d.get("context","") if isinstance(d, dict) else "")
-        crit_df["behaviour_type"] = crit_df["ABCH_primary"].apply(lambda d: d.get("behaviour","") if isinstance(d, dict) else "")
+        def _clean_crit_beh(d):
+            """Extract a short behaviour label from ABCH free text."""
+            raw = d.get("behaviour","") if isinstance(d, dict) else ""
+            if not raw: return "Behaviour (see ABCH form)"
+            # If it matches a known type, use it directly
+            for known in BEHAVIOUR_TYPES:
+                if not known.startswith("---") and known.lower() in raw.lower():
+                    return known
+            # Otherwise truncate to a usable label
+            short = raw.strip()[:55].replace("\n"," ")
+            return short + ("…" if len(raw.strip()) > 55 else "")
+        crit_df["behaviour_type"] = crit_df["ABCH_primary"].apply(_clean_crit_beh)
         crit_df["time"] = crit_df["ABCH_primary"].apply(lambda d: d.get("time", "09:00:00") if isinstance(d, dict) else "09:00:00")
         for _col in ["location", "session"]:
             if _col not in crit_df.columns:
@@ -2695,7 +2689,12 @@ def render_student_analysis_page():
     _SEV_LABELS = ["L1 Minor", "L2 Low", "L3 Moderate", "L4 Serious", "L5 Critical"]
 
     all_behaviours = full_df["behaviour_type"].value_counts().head(8).index.tolist()
-    all_behaviours = [b for b in all_behaviours if b and not str(b).startswith("---")]
+    all_behaviours = [
+        b for b in all_behaviours
+        if b
+        and not str(b).startswith("---")
+        and len(str(b)) <= 80  # exclude raw ABCH narrative text
+    ]
 
     if not all_behaviours:
         st.info("No behaviour data recorded yet.")
@@ -2886,7 +2885,9 @@ def render_student_analysis_page():
             )
             st.caption(
                 "🔴 High = 51%+ escalate  ·  🟡 Medium = 26–50%  ·  🟢 Low = 0–25%  ·  "
-                "⚪ = fewer than 4 incidents — rate unreliable  ·  Sev StDev: spread of severity scores"
+                "⚪ Insufficient = fewer than 4 incidents logged for this behaviour — "
+                "not a data error, just means more observations are needed before a reliable rate can be calculated  ·  "
+                "Sev StDev: spread of severity scores (higher = more variable)"
             )
 
         # ═══════════════════════════════════════════════════════════════
@@ -3886,12 +3887,12 @@ def render_student_analysis_page():
             file_name=f"{student['name'].replace(' ', '_')}_Incident_Data_{datetime.now().strftime('%Y%m%d')}.csv",
             mime="text/csv", use_container_width=True)
     with col2:
-        with st.spinner("Generating Behaviour Analysis Plan..."):
+        with st.spinner("Generating Behaviour Summary..."):
             docx_file = generate_behaviour_analysis_plan_docx(
                 student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level)
         if docx_file:
-            st.download_button("📄 Behaviour Analysis Plan (Word)", docx_file,
-                file_name=f"BAP_{student['name'].replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.docx",
+            st.download_button("📄 Behaviour Summary (Word)", docx_file,
+                file_name=f"BehaviourSummary_{student['name'].replace(" ", "_")}_{datetime.now().strftime("%Y%m%d")}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True)
 
@@ -4725,6 +4726,49 @@ def render_admin_portal():
                             st.error("Supabase returned no confirmation. Check the staff ID exists in the database.")
                     except Exception as _e:
                         st.error(f"❌ Reset failed: {_e}")
+
+        st.markdown("---")
+        st.markdown("### 🔧 Data Correction Tool")
+        st.caption(
+            "Bulk-rename a behaviour type across all incidents for a specific student. "
+            "Use this to correct historical records — e.g. change 'Other' to a specific behaviour type."
+        )
+        _dc_students = {s["id"]: s["name"] for s in st.session_state.students}
+        _dc_stu = st.selectbox("Student", list(_dc_students.keys()),
+                               format_func=lambda x: _dc_students[x], key="dc_stu")
+        _dc_col1, _dc_col2 = st.columns(2)
+        with _dc_col1:
+            _dc_old = st.text_input("Current behaviour (exact match)", placeholder="Other", key="dc_old")
+        with _dc_col2:
+            _dc_new = st.selectbox("Replace with", [b for b in BEHAVIOUR_TYPES if not b.startswith("---")], key="dc_new")
+        _dc_preview = st.checkbox("Preview only (do not save)", value=True, key="dc_preview")
+        if st.button("🔧 Apply Correction", key="dc_apply", use_container_width=True):
+            if not _dc_old.strip():
+                st.error("Enter the current behaviour text to replace.")
+            elif not supabase:
+                st.error("Supabase not connected.")
+            else:
+                _affected = [i for i in st.session_state.incidents
+                             if i["student_id"] == _dc_stu
+                             and i.get("behaviour_type","").strip() == _dc_old.strip()]
+                if not _affected:
+                    st.warning(f"No incidents found for that student with behaviour: {_dc_old}")
+                elif _dc_preview:
+                    st.info(f"Preview: {len(_affected)} incident(s) would be updated from '{_dc_old}' → '{_dc_new}'.")
+                    for inc in _affected[:5]:
+                        st.caption(f"  • {inc['date']} {inc['time'][:5]} — currently: {inc['behaviour_type']}")
+                    if len(_affected) > 5: st.caption(f"  … and {len(_affected)-5} more.")
+                else:
+                    _updated = 0
+                    for inc in _affected:
+                        try:
+                            supabase.table("incidents").update({"behaviour_type": _dc_new}).eq("id", inc["id"]).execute()
+                            inc["behaviour_type"] = _dc_new
+                            _updated += 1
+                        except Exception as _de:
+                            st.error(f"Failed on {inc['id']}: {_de}")
+                    if "incidents" in st.session_state: del st.session_state["incidents"]
+                    st.success(f"✅ Updated {_updated} incident(s) from '{_dc_old}' → '{_dc_new}'.")
 
         st.markdown("---")
         st.markdown("### 🧪 Test a Login")
