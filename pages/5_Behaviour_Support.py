@@ -802,8 +802,12 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         else:
             direction = "insufficient data for trend"
         add_chart(doc, fig,
-            f"Severity trend: {direction}. Green zone = regulated (Levels 1–2); "
-            "yellow = edge (Level 3); red = crisis (Levels 4–5).")
+            f"Severity trajectory: {direction}. "
+            "Green zone (Levels 1–2) = Coping / within Window of Tolerance — "
+            "student is engaging, regulated, and responding to support. "
+            "Amber (Level 3) = Elevated / approaching edge of window. "
+            "Red (Levels 4–5) = Outside window / crisis zone — requires intensive support. "
+            "Incidents in the green zone are a positive indicator, not a concern.")
 
         doc.add_page_break()
 
@@ -2529,17 +2533,79 @@ def render_student_analysis_page():
         crit_df["date_parsed"] = pd.to_datetime(crit_df.get("created_at", datetime.now().isoformat()), utc=True).dt.tz_localize(None)
         crit_df["severity"] = crit_df["severity"].fillna(5).astype(int) if "severity" in crit_df.columns else 5
         crit_df["antecedent"] = crit_df["ABCH_primary"].apply(lambda d: d.get("context","") if isinstance(d, dict) else "")
+        # Keyword map: ABCH free-text → canonical clinical behaviour label
+        _CRIT_BEH_KEYWORDS = [
+            # (keyword list, canonical label) — checked in order; first match wins
+            (["self-harm","self harm","hurt himself","hurt herself","scratch","bite himself",
+              "bite herself","bang head","banged head","hit himself","hit herself"],
+             "Self-injurious behaviour"),
+            (["threw","throw","thrown","hurled","launched","flung","pushed chair",
+              "knocked over","flipped","tipped","toppled","pushed desk","flipped table",
+              "knocked chair"],
+             "Throwing objects"),
+            (["destroyed","broke","smashed","kicked wall","punched wall","ripped","torn",
+              "property damage","damaged"],
+             "Property destruction"),
+            (["hit peer","hit a peer","hit student","punch peer","punched peer",
+              "kicked peer","kicked a student","shoved peer","pushed peer","bit peer",
+              "grabbed peer","scratched peer","attacked peer","spat at peer"],
+             "Physical aggression toward peer"),
+            (["hit staff","hit teacher","hit adult","punch staff","punched teacher",
+              "kicked staff","kicked teacher","kicked adult","shoved staff","pushed staff",
+              "bit staff","grabbed staff","scratched staff","spat at staff","spat at teacher",
+              "hit the teacher","struck","swung at"],
+             "Physical aggression toward adult"),
+            (["growl","growled","snarl","snarled","scream at","screamed at","yell at",
+              "yelled at","swore at","sworn at","sworn towards","sworn toward",
+              "verbal abuse","verbally abused","name call","called names","insulted",
+              "threatened","said he would","said she would","told them he would",
+              "told them she would"],
+             "Verbal aggression toward peer"),
+            (["swore at teacher","swore at staff","swore at adult","yelled at teacher",
+              "yelled at staff","yelled at adult","screamed at teacher","screamed at staff",
+              "verbal abuse toward staff","abused staff","abused teacher","abused adult",
+              "threatened staff","threatened teacher","threatened adult"],
+             "Verbal aggression toward adult"),
+            (["ran from","ran out","left the room","left class","left the class",
+              "walked out","walked away","fled","ran away","elopement","eloped",
+              "absconded","left the building","left the school","left school grounds"],
+             "Unsanctioned departure (elopement)"),
+            (["refus","refused","refusing","won't","will not","not going to",
+              "declined to","passive","non-complian","non complian","wouldn't"],
+             "Task refusal / passive non-compliance"),
+            (["shut down","shutdown","withdrew","withdrawal","stopped responding",
+              "stopped talking","silent","mute","unresponsive","disengaged",
+              "curled up","head down","under desk"],
+             "Shutdown / complete withdrawal"),
+            (["noise","noises","sound","sounds","humming","clicking","tapping",
+              "inappropriate sound","disruptive sound","loud noise"],
+             "Inappropriate vocalisation / noises"),
+            (["verbal refus","said no","said 'no'","stated he would not",
+              "stated she would not","verbally refus"],
+             "Verbal refusal of instruction"),
+        ]
+
         def _clean_crit_beh(d):
-            """Extract a short behaviour label from ABCH free text."""
+            """Map ABCH free-text behaviour to a canonical clinical label."""
             raw = d.get("behaviour","") if isinstance(d, dict) else ""
-            if not raw: return "Behaviour (see ABCH form)"
-            # If it matches a known type, use it directly
+            if not raw or not raw.strip():
+                return "Behaviour (see ABCH form)"
+            raw_lower = raw.lower()
+            # 1. Direct match against known BEHAVIOUR_TYPES
             for known in BEHAVIOUR_TYPES:
-                if not known.startswith("---") and known.lower() in raw.lower():
+                if not known.startswith("---") and known.lower() == raw_lower.strip():
                     return known
-            # Otherwise truncate to a usable label
-            short = raw.strip()[:55].replace("\n"," ")
-            return short + ("…" if len(raw.strip()) > 55 else "")
+            # 2. Keyword map — first match wins
+            for keywords, label in _CRIT_BEH_KEYWORDS:
+                if any(kw in raw_lower for kw in keywords):
+                    return label
+            # 3. Partial known-type match
+            for known in BEHAVIOUR_TYPES:
+                if not known.startswith("---") and known.lower() in raw_lower:
+                    return known
+            # 4. Fallback — use truncated description tagged as narrative
+            short = raw.strip()[:50].replace("\n"," ")
+            return f"{short}…" if len(raw.strip()) > 50 else short
         crit_df["behaviour_type"] = crit_df["ABCH_primary"].apply(_clean_crit_beh)
         crit_df["time"] = crit_df["ABCH_primary"].apply(lambda d: d.get("time", "09:00:00") if isinstance(d, dict) else "09:00:00")
         for _col in ["location", "session"]:
@@ -2826,22 +2892,64 @@ def render_student_analysis_page():
                     rz = [int((b_rows == sv).sum()) for sv in [1,2,3,4,5]]
                     rt = [str(n) if n > 0 else "" for n in rz]
                     _heat_z.append(rz); _heat_text.append(rt)
-                fig_b2 = go.Figure(go.Heatmap(
-                    z=_heat_z, x=_SEV_LABELS, y=_beh_heat,
-                    text=_heat_text, texttemplate="%{text}",
-                    colorscale=[[0,"#f0fdf4"],[0.25,"#93c5fd"],[0.6,"#f59e0b"],[1,"#dc2626"]],
-                    showscale=True, colorbar=dict(title="n", thickness=12, len=0.7),
-                    hovertemplate="<b>%{y}</b><br>%{x}: %{z} incidents<extra></extra>"
-                ))
+                # Severity spread — grouped bar chart, coloured by WoT zone
+                # Green (L1-2) = coping/within window, Amber (L3) = elevated,
+                # Red (L4-5) = outside window. Count drives bar length, not colour.
+                _SEV_COLOURS_WOT = {
+                    1: "#10b981",  # green — coping / within window
+                    2: "#3b82f6",  # blue  — within window, low concern
+                    3: "#f59e0b",  # amber — elevated / approaching edge
+                    4: "#ef4444",  # red   — outside window / serious
+                    5: "#7f1d1d",  # dark red — crisis zone
+                }
+                _sev_names_wot = {
+                    1: "L1 Coping (within window)",
+                    2: "L2 Low concern (within window)",
+                    3: "L3 Elevated (approaching edge)",
+                    4: "L4 Serious (outside window)",
+                    5: "L5 Crisis (outside window)",
+                }
+                fig_b2 = go.Figure()
+                for sv in [1, 2, 3, 4, 5]:
+                    _sv_counts = [rz[sv-1] for rz in _heat_z]
+                    if any(v > 0 for v in _sv_counts):
+                        fig_b2.add_trace(go.Bar(
+                            y=_beh_heat, x=_sv_counts,
+                            name=_sev_names_wot[sv],
+                            orientation="h",
+                            marker=dict(color=_SEV_COLOURS_WOT[sv],
+                                        line=dict(color="white", width=1)),
+                            text=[str(v) if v > 0 else "" for v in _sv_counts],
+                            textposition="inside",
+                            textfont=dict(color="white", size=10, family="Arial Black"),
+                            hovertemplate=f"<b>%{{y}}</b><br>{_sev_names_wot[sv]}: %{{x}}<extra></extra>"
+                        ))
                 fig_b2.update_layout(
-                    title=dict(text="Severity spread across levels", font=dict(size=12)),
-                    height=max(240, len(_beh_heat)*48+100),
-                    plot_bgcolor="white", paper_bgcolor="white",
+                    title=dict(text="Severity spread — colour shows Window of Tolerance zone", font=dict(size=11)),
+                    height=max(260, len(_beh_heat)*55+120),
+                    barmode="stack",
+                    plot_bgcolor="#f8fafc", paper_bgcolor="white",
                     font=dict(color="#0f172a", size=10, family="Arial"),
-                    xaxis=dict(side="top", tickangle=-20),
-                    margin=dict(t=60, b=10, l=10, r=80)
+                    xaxis=dict(title="<b>Number of incidents</b>",
+                               tickmode="linear", tick0=0, dtick=1,
+                               gridcolor="#e2e8f0", showline=True,
+                               linewidth=2, linecolor="#cbd5e1"),
+                    yaxis=dict(showline=True, linewidth=2,
+                               linecolor="#cbd5e1", automargin=True),
+                    legend=dict(orientation="h", yanchor="bottom",
+                                y=1.02, xanchor="left", x=0,
+                                font=dict(size=9)),
+                    margin=dict(t=60, b=10, l=10, r=20)
                 )
                 st.plotly_chart(fig_b2, use_container_width=True)
+                st.caption(
+                    "🟢 Green (L1) = Coping — student within Window of Tolerance  ·  "
+                    "🔵 Blue (L2) = Low concern, still within window  ·  "
+                    "🟡 Amber (L3) = Elevated, approaching edge of window  ·  "
+                    "🔴 Red (L4–5) = Outside window / crisis zone. "
+                    "Green and blue bars represent incidents where the student was still coping — "
+                    "this is positive context, not a cause for concern."
+                )
             else:
                 st.caption("Severity heatmap requires 2+ incidents per behaviour.")
 
@@ -3183,6 +3291,13 @@ def render_student_analysis_page():
     st.markdown("---")
 
     st.markdown("### 📊 Severity Trajectory — Window of Tolerance Analysis")
+    st.caption(
+        "The Window of Tolerance describes the zone in which a student can engage, learn, and respond to support. "
+        "🟢 Levels 1–2 = Coping / within window (positive — student is regulated and managing demands). "
+        "🟡 Level 3 = Elevated / approaching edge. "
+        "🔴 Levels 4–5 = Outside window / crisis zone. "
+        "A high proportion of Level 1–2 incidents means the student is largely within their window — this is a strength to build on."
+    )
     fig4 = go.Figure()
     fig4.add_hrect(y0=0, y1=2.5, fillcolor="#d1fae5", opacity=0.2,
                    annotation_text="Coping / Within window (Levels 1–2)", annotation_position="top left", line_width=0)
@@ -4125,8 +4240,16 @@ def render_student_dashboard():
                 prompt = f"""You are a behaviour support data analyst for Cowandilla Learning Centre, Learning & Behaviour Unit.
 The following document describes ONE critical incident involving student: {student_name}.
 Extract the incident as a single JSON object with this exact structure:
-{{"date":"YYYY-MM-DD","severity":3,"sapol_reference":"reference number or null","outcomes":["list","of","outcomes"],"primary":{{"time":"time","location":"location","context":"antecedent context","behaviour":"primary behaviour","consequence":"staff response"}},"additional_entries":[{{"time":"time","location":"location","context":"antecedent","behaviour":"behaviour","consequence":"consequence","hypothesis":""}}],"notes":"any other relevant context"}}
-Rules: severity 1-5; if SAPOL called then at least 4. Return ONLY valid JSON, no markdown fences.
+{"date":"YYYY-MM-DD","severity":3,"sapol_reference":"reference number or null","outcomes":["list","of","outcomes"],"primary":{"time":"time","location":"location","context":"antecedent context","behaviour":"narrative description of what happened","behaviour_type":"CANONICAL LABEL — see list below","consequence":"staff response"},"additional_entries":[{"time":"time","location":"location","context":"antecedent","behaviour":"behaviour narrative","behaviour_type":"canonical label","consequence":"consequence","hypothesis":""}],"notes":"any other relevant context"}
+
+CANONICAL BEHAVIOUR TYPES — behaviour_type MUST be one of these exact strings:
+Verbal refusal of instruction | Task refusal / passive non-compliance | Shutdown / complete withdrawal | Selective mutism / non-responsiveness | Unsanctioned departure (elopement) | Absconding from school grounds | Hiding or avoiding adult proximity | Inappropriate vocalisation / noises | Disruptive verbal commentary | Interrupting / calling out | Property misuse or interference | Verbal aggression toward peer | Verbal aggression toward adult | Physical aggression toward peer | Physical aggression toward adult | Threatening behaviour | Property destruction | Throwing objects | Self-injurious behaviour | Dysregulated emotional expression | Other (specify in description)
+
+Rules:
+- severity 1-5 (1=minor/coping, 2=low, 3=elevated, 4=serious, 5=crisis); if SAPOL called then at least 4.
+- behaviour_type must exactly match one of the canonical labels above.
+- behaviour is the narrative/description; behaviour_type is the clinical classification.
+- Return ONLY valid JSON, no markdown fences, no extra text.
 Document: {doc_text}"""
                 response = client.chat.completions.create(
                     model="llama-3.3-70b-versatile",
@@ -4287,7 +4410,7 @@ Document: {doc_text}"""
                         "primary_location": primary_data.get("location", ""),
                         "primary_context": primary_data.get("context", ""),
                         "primary_time": primary_data.get("time", ""),
-                        "primary_behaviour": primary_data.get("behaviour", ""),
+                        "primary_behaviour": (primary_data.get("behaviour_type") or primary_data.get("behaviour", "")).strip(),
                         "primary_consequence": primary_data.get("consequence", ""),
                         "additional_entries": additional_data, "outcomes": outcomes_list,
                         "sapol_reference": sapol_ref, "admin_summary": inc.get("notes", ""),
@@ -4769,6 +4892,177 @@ def render_admin_portal():
                             st.error(f"Failed on {inc['id']}: {_de}")
                     if "incidents" in st.session_state: del st.session_state["incidents"]
                     st.success(f"✅ Updated {_updated} incident(s) from '{_dc_old}' → '{_dc_new}'.")
+
+        st.markdown("---")
+        st.markdown("### 🤖 Reclassify Historical Incident Behaviour Types")
+        st.caption(
+            "For historical critical incidents where the behaviour was saved as free text, "
+            "this tool reads the narrative and maps it to the correct clinical label. "
+            "Works on the critical_incidents table (primary_behaviour field). "
+            "Preview first, then apply."
+        )
+        _rc_students = {s["id"]: s["name"] for s in st.session_state.students}
+        _rc_stu = st.selectbox("Student", list(_rc_students.keys()),
+                               format_func=lambda x: _rc_students[x], key="rc_stu")
+        _rc_preview = st.checkbox("Preview only (do not save)", value=True, key="rc_preview_chk")
+        _use_ai = st.checkbox(
+            "Use AI (Groq) for ambiguous cases",
+            value=True, key="rc_use_ai",
+            help="Falls back to keyword matching if AI is unavailable"
+        )
+        if st.button("🔍 Scan & Reclassify", type="primary", key="rc_apply", use_container_width=True):
+            if not supabase:
+                st.error("Supabase not connected.")
+            else:
+                try:
+                    _rc_res = supabase.table("critical_incidents").select(
+                        "id,primary_behaviour,severity"
+                    ).eq("student_id", _rc_stu).execute()
+                    _rc_rows = _rc_res.data or []
+                except Exception as _rce:
+                    st.error(f"Load failed: {_rce}")
+                    _rc_rows = []
+
+                if not _rc_rows:
+                    st.info("No critical incidents found for this student.")
+                else:
+                    # Keyword map (same as _CRIT_BEH_KEYWORDS in analysis)
+                    _RC_KW = [
+                        (["self-harm","self harm","hurt himself","hurt herself","scratch","bite himself",
+                          "bite herself","bang head","banged head","hit himself","hit herself"],
+                         "Self-injurious behaviour"),
+                        (["threw","throw","thrown","hurled","launched","flung","pushed chair",
+                          "knocked over","flipped","tipped","toppled","pushed desk","flipped table",
+                          "knocked chair","tipped chair"],
+                         "Throwing objects"),
+                        (["destroyed","broke","smashed","kicked wall","punched wall","ripped","torn",
+                          "property damage","damaged"],
+                         "Property destruction"),
+                        (["hit peer","hit a peer","hit student","punch peer","punched peer",
+                          "kicked peer","kicked a student","shoved peer","pushed peer","bit peer",
+                          "grabbed peer","scratched peer","attacked peer","spat at peer"],
+                         "Physical aggression toward peer"),
+                        (["hit staff","hit teacher","hit adult","punch staff","punched teacher",
+                          "kicked staff","kicked teacher","kicked adult","shoved staff","pushed staff",
+                          "bit staff","grabbed staff","scratched staff","spat at staff","spat at teacher",
+                          "hit the teacher","struck","swung at"],
+                         "Physical aggression toward adult"),
+                        (["growl","growled","snarl","snarled","scream at","screamed at","yell at",
+                          "yelled at","swore at","sworn at","name call","called names","insulted",
+                          "threatened","verbal abuse","verbally abused"],
+                         "Verbal aggression toward peer"),
+                        (["swore at teacher","swore at staff","yelled at teacher","yelled at staff",
+                          "screamed at teacher","screamed at staff","abused staff","abused teacher",
+                          "threatened staff","threatened teacher"],
+                         "Verbal aggression toward adult"),
+                        (["ran from","ran out","left the room","left class","walked out","walked away",
+                          "fled","ran away","elopement","eloped","absconded","left the building",
+                          "left the school","left school grounds"],
+                         "Unsanctioned departure (elopement)"),
+                        (["refus","refused","refusing","won't","will not","not going to",
+                          "declined to","passive","non-complian","non complian","wouldn't"],
+                         "Task refusal / passive non-compliance"),
+                        (["shut down","shutdown","withdrew","withdrawal","stopped responding",
+                          "stopped talking","silent","mute","unresponsive","disengaged",
+                          "curled up","head down","under desk"],
+                         "Shutdown / complete withdrawal"),
+                        (["noise","noises","humming","clicking","tapping","inappropriate sound"],
+                         "Inappropriate vocalisation / noises"),
+                        (["verbal refus","said no","verbally refus","stated he would not",
+                          "stated she would not"],
+                         "Verbal refusal of instruction"),
+                    ]
+
+                    def _kw_classify(text):
+                        t = (text or "").lower()
+                        for kws, label in _RC_KW:
+                            if any(kw in t for kw in kws):
+                                return label
+                        return None
+
+                    _pending, _already_clean = [], []
+                    _known_types = set(b for b in BEHAVIOUR_TYPES if not b.startswith("---"))
+                    for row in _rc_rows:
+                        pb = (row.get("primary_behaviour") or "").strip()
+                        if pb in _known_types:
+                            _already_clean.append(pb)
+                        else:
+                            # Try keyword map
+                            _kw = _kw_classify(pb)
+                            _pending.append({"id": row["id"], "raw": pb, "suggested": _kw})
+
+                    st.markdown(f"**Scan results:** {len(_already_clean)} already use canonical labels · {len(_pending)} need reclassification")
+
+                    if _pending:
+                        # Use Groq AI for any that keyword-map couldn't resolve
+                        _ambiguous = [p for p in _pending if p["suggested"] is None]
+                        if _ambiguous and _use_ai:
+                            GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
+                            if GROQ_KEY:
+                                with st.spinner(f"AI classifying {len(_ambiguous)} ambiguous record(s)..."):
+                                    try:
+                                        from groq import Groq as _GC
+                                        import json as _jmod
+                                        _gc = _GC(api_key=GROQ_KEY)
+                                        _canonical_list = [b for b in BEHAVIOUR_TYPES if not b.startswith("---")]
+                                        for _amb in _ambiguous:
+                                            _ai_prompt = (
+                                                "You are classifying a school behaviour incident. "
+                                                "Map this behaviour description to the closest label from the list below. "
+                                                "Reply with ONLY the exact label text, nothing else.\n\n"
+                                                f"Behaviour description: {_amb['raw'][:300]}\n\n"
+                                                "Labels:\n" + "\n".join(f"- {l}" for l in _canonical_list)
+                                            )
+                                            _ai_r = _gc.chat.completions.create(
+                                                model="llama-3.3-70b-versatile",
+                                                messages=[{"role":"user","content":_ai_prompt}],
+                                                max_tokens=60, temperature=0
+                                            )
+                                            _ai_label = _ai_r.choices[0].message.content.strip().strip("-").strip()
+                                            if _ai_label in _known_types:
+                                                _amb["suggested"] = _ai_label
+                                                _amb["ai"] = True
+                                    except Exception as _ai_e:
+                                        st.warning(f"AI classification unavailable: {_ai_e}")
+
+                        st.markdown("**Proposed reclassifications:**")
+                        for p in _pending:
+                            _src_label = p.get("raw","")[:80]
+                            _tgt_label = p.get("suggested")
+                            _via = " (AI)" if p.get("ai") else " (keyword)" if _tgt_label else ""
+                            if _tgt_label:
+                                st.markdown(
+                                    f"<div style='background:#f0fdf4;border-left:3px solid #22c55e;"
+                                    f"border-radius:6px;padding:.35rem .75rem;margin:.2rem 0;font-size:.8rem;'>"  
+                                    f"<b>→ {_tgt_label}</b>{_via}<br>"
+                                    f"<span style='color:#64748b;'>{_src_label}</span></div>",
+                                    unsafe_allow_html=True
+                                )
+                            else:
+                                st.markdown(
+                                    f"<div style='background:#fff7ed;border-left:3px solid #f59e0b;"
+                                    f"border-radius:6px;padding:.35rem .75rem;margin:.2rem 0;font-size:.8rem;'>"  
+                                    f"⚠️ <b>Could not classify</b> — manual fix needed<br>"
+                                    f"<span style='color:#64748b;'>{_src_label}</span></div>",
+                                    unsafe_allow_html=True
+                                )
+
+                        if not _rc_preview:
+                            _applied = 0
+                            for p in _pending:
+                                if p.get("suggested"):
+                                    try:
+                                        supabase.table("critical_incidents").update(
+                                            {"primary_behaviour": p["suggested"]}
+                                        ).eq("id", p["id"]).execute()
+                                        _applied += 1
+                                    except Exception as _ue:
+                                        st.error(f"Update failed for {p['id']}: {_ue}")
+                            if "critical_incidents" in st.session_state:
+                                del st.session_state["critical_incidents"]
+                            st.success(f"✅ Applied {_applied} reclassification(s) to critical_incidents table.")
+                        else:
+                            st.info("Preview mode — tick off 'Preview only' and run again to apply.")
 
         st.markdown("---")
         st.markdown("### 🧪 Test a Login")
