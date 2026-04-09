@@ -1,14 +1,14 @@
 """
-CLC Safety & Risk Management Plan Builder
-==========================================
-Revised structure (aligned to CLC S&R Plan format):
+CLC Safety & Risk Management Plan Builder  v2
+Cowandilla Learning Centre – LBU Portal Tool
 
-- BOC column: observable behaviour + characterised by + function  (NO triggers — triggers → BSP)
-- Proactive strategies: environmental, supervision, structural only
-- Reactive procedures: tiered (early signs / on grounds / left grounds / returned / post-incident)
-- Contextual risks section captured separately at start
-- AI mode: upload existing docs → extract & contextualise
-- Manual mode: step-by-step builder from scratch
+Steps:
+1. Student details
+2. Source documents  — school safety plan AND/OR supporting docs (reports, BAP, incident data)
+3. AI synthesis     — extracts / generates CLC-contextualised risk rows
+4. Risk builder     — staff review, edit, add risks with AI prompts
+5. Review           — priority actions, review date
+6. Generate         — formatted .docx plan
 """
 
 import streamlit as st
@@ -31,1073 +31,1806 @@ AMBER       = "#D97706"
 AMBER_LIGHT = "#FEF3C7"
 GREY_DARK   = "#2E4057"
 GREY_LIGHT  = "#F2F6F6"
-RED_BG      = "#FCDCDC"
-RED_TXT     = "#7A1A1A"
-ORG_BG      = "#FEF0CC"
-ORG_TXT     = "#7A4000"
+RED_RISK    = "#C0392B"
+ORANGE_RISK = "#E67E22"
+YELLOW_RISK = "#F1C40F"
 
 # ── Risk matrix ────────────────────────────────────────────────────────────────
 LIKELIHOOD_OPTIONS  = ["A – Rare","B – Unlikely","C – Likely sometimes",
                        "D – Likely/frequently","E – Almost certain"]
 CONSEQUENCE_OPTIONS = ["1 – Insignificant","2 – Minor","3 – Moderate",
                        "4 – Major","5 – Catastrophic"]
+
 RISK_MATRIX = {
-    ("E","5"):"EXTREME",("E","4"):"EXTREME",("E","3"):"EXTREME",("E","2"):"HIGH",  ("E","1"):"HIGH",
-    ("D","5"):"EXTREME",("D","4"):"EXTREME",("D","3"):"HIGH",   ("D","2"):"HIGH",  ("D","1"):"MODERATE",
-    ("C","5"):"EXTREME",("C","4"):"EXTREME",("C","3"):"HIGH",   ("C","2"):"MODERATE",("C","1"):"LOW",
-    ("B","5"):"HIGH",   ("B","4"):"HIGH",   ("B","3"):"MODERATE",("B","2"):"LOW",  ("B","1"):"LOW",
-    ("A","5"):"HIGH",   ("A","4"):"HIGH",   ("A","3"):"MODERATE",("A","2"):"LOW",  ("A","1"):"LOW",
+    ("E","5"):"EXTREME",("E","4"):"EXTREME",("E","3"):"EXTREME",("E","2"):"HIGH",("E","1"):"HIGH",
+    ("D","5"):"EXTREME",("D","4"):"EXTREME",("D","3"):"HIGH",  ("D","2"):"HIGH",("D","1"):"MODERATE",
+    ("C","5"):"EXTREME",("C","4"):"EXTREME",("C","3"):"HIGH",  ("C","2"):"MODERATE",("C","1"):"LOW",
+    ("B","5"):"HIGH",   ("B","4"):"HIGH",   ("B","3"):"MODERATE",("B","2"):"LOW",("B","1"):"LOW",
+    ("A","5"):"HIGH",   ("A","4"):"HIGH",   ("A","3"):"MODERATE",("A","2"):"LOW",("A","1"):"LOW",
 }
-RISK_COLOURS = {"EXTREME":"#C0392B","HIGH":"#E67E22","MODERATE":"#d4a017","LOW":"#27AE60"}
+RISK_COLOURS = {"EXTREME":RED_RISK,"HIGH":ORANGE_RISK,"MODERATE":YELLOW_RISK,"LOW":"#27AE60"}
+
+# ── CLC standard risk categories (from revised plan) ──────────────────────────
+CLC_RISK_TEMPLATES = [
+    "Absconding from CLC grounds",
+    "Fence / boundary climbing following peer rejection or negative feedback",
+    "High-risk behaviour in the community during absconding (road safety)",
+    "Verbal aggression toward staff, peers, and/or family",
+    "Rapid behavioural escalation resulting in flight following peer interaction",
+    "Staff safety during community follow",
+    "Physical aggression toward staff or peers",
+    "Property damage",
+    "Parent / carer handover escalation",
+    "Self-harm or self-injurious behaviour",
+    "Elopement within CLC grounds",
+    "Tree / structure climbing at height",
+    "Other (describe)",
+]
 
 BLANK_RISK = {
-    "issue_title":        "",   # short label for sidebar
-    "boc_description":    "",   # narrative description of the behaviour
-    "characterised_by":   "",   # bullet-style: what does it look like?
-    "function":           "",   # function of the behaviour
-    "likelihood":         "D – Likely/frequently",
-    "consequence":        "4 – Major",
-    # Proactive strategies (environmental/supervisory ONLY — no triggers/relational)
-    "env_supervision":    "",   # environment & supervision strategies
-    "structural":         "",   # physical/structural strategies (gate, keys, radio, etc.)
-    "contextual_note":    "",   # medication/other current context affecting strategies
-    # Reactive procedures — tiered
-    "react_early":        "",   # early signs of dysregulation
-    "react_on_grounds":   "",   # has left program space but still on CLC grounds
-    "react_left_grounds": "",   # has left CLC grounds
-    "react_returned":     "",   # when student is returned
-    "react_post":         "",   # post-incident actions
-    "clc_notes":          "",   # additional CLC-specific notes
+    "issue_title": "", "issue_detail": "", "behaviour_descriptors": "",
+    "function": "", "likelihood": "D – Likely/frequently",
+    "consequence": "3 – Moderate", "proactive": "", "procedure": "",
+    "clc_notes": "", "from_school": False, "from_docs": False,
 }
 
-def compute_risk_level(likelihood: str, consequence: str) -> str:
-    l_key = likelihood[0] if likelihood else "D"
-    c_key = consequence[0] if consequence else "4"
-    return RISK_MATRIX.get((l_key, c_key), "HIGH")
+STEPS = ["1 · Student","2 · Documents","3 · AI Synthesis",
+         "4 · Build Risks","5 · Review","6 · Generate"]
 
-def risk_badge(level: str) -> str:
-    colour = RISK_COLOURS.get(level, "#888")
-    return f'<span style="background:{colour};color:white;padding:2px 10px;border-radius:12px;font-size:0.82em;font-weight:700">{level}</span>'
+# ══════════════════════════════════════════════════════════════════════════════
+# HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+def get_client():
+    key = st.secrets.get("GROQ_API_KEY", os.environ.get("GROQ_API_KEY",""))
+    if not key:
+        st.error("⚠️  GROQ_API_KEY not found in Render environment variables.")
+        st.stop()
+    return Groq(api_key=key)
+
+def extract_docx_text(uploaded_file) -> str:
+    """Extract plain text from an uploaded .docx or .pdf file."""
+    name = getattr(uploaded_file, "name", "").lower()
+    try:
+        if name.endswith(".pdf"):
+            try:
+                import fitz  # PyMuPDF — already installed for timetable
+                raw = uploaded_file.read()
+                doc = fitz.open(stream=raw, filetype="pdf")
+                lines = [page.get_text() for page in doc]
+                doc.close()
+                return "\n".join(lines)
+            except Exception as e:
+                return f"[PDF extraction error: {e}]"
+        else:
+            doc = DocxDocument(io.BytesIO(uploaded_file.read()))
+            lines = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        cell_text = " ".join(
+                            p.text.strip() for p in cell.paragraphs if p.text.strip()
+                        )
+                        if cell_text:
+                            lines.append(cell_text)
+            return "\n".join(lines)
+    except Exception as e:
+        return f"[Extraction error: {e}]"
+
+def groq_call(prompt: str, max_tokens: int = 2000) -> str:
+    client = get_client()
+    resp = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        max_tokens=max_tokens,
+        messages=[{"role":"user","content":prompt}]
+    )
+    return resp.choices[0].message.content.strip()
+
+def compute_risk_level(likelihood: str, consequence: str) -> str:
+    l = likelihood.split("–")[0].strip().split(" ")[0]
+    c = consequence.split("–")[0].strip().split(" ")[0]
+    return RISK_MATRIX.get((l,c),"HIGH")
+
+def risk_colour(level): return RISK_COLOURS.get(level,"#888")
 
 def init_state():
     defaults = {
         "step": 1,
-        "current_risk": 0,
+        "mode": "wizard",            # "wizard" or "express"
         "student": {
-            "name": "", "dob": "", "edsas": "", "program": "JP",
-            "home_school": "", "key_staff": "", "plan_date": str(date.today()),
-            "review_date": "", "sapol_ref": "", "status_note": "",
+            "name":"","dob":"","age":"","edsas":"","program":"JP",
+            "home_school":"","key_staff":"","clc_context":"",
+            "plan_date": str(date.today()),"medical_notes":"",
         },
-        "contextual_risks": "",   # CLC-specific contextual risk paragraph
+        "school_plan_text": "",
+        "support_docs": [],          # list of {name, text, doc_type}
         "risks": [],
+        "current_risk": 0,
+        "ai_context_cache": {},
+        "synthesis_done": False,
         "priority_actions": "",
-        "review_date_final": "",
-        "source_mode": None,      # "upload" or "manual"
-        "upload_extracted": False,
+        "review_date": "",
     }
-    for k, v in defaults.items():
+    for k,v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
-# ── Page config ────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Safety & Risk Plan Builder", page_icon="🛡️", layout="wide")
-init_state()
+# ══════════════════════════════════════════════════════════════════════════════
+# AI FUNCTIONS
+# ══════════════════════════════════════════════════════════════════════════════
 
-# ── Global CSS ─────────────────────────────────────────────────────────────────
+def ai_extract_from_school_plan(plan_text: str, student_name: str) -> list:
+    """Extract risk rows from a school safety plan."""
+    prompt = f"""You are analysing a Safety and Risk Management Plan from a mainstream school for {student_name}.
+
+CRITICAL RULES for CLC adaptation:
+- Identify what the student DOES that is risky — describe observable behaviours only
+- Do NOT describe triggers or function in the risk description — those belong in proactive strategies
+- Use language: "program option for students with educational exclusion" not "specialist setting"
+- Describe behaviour specifically: fence climbing, running onto roads, darting across traffic, verbal aggression — not vague terms like "challenging behaviour"
+
+Extract each risk row and return as a JSON array. Each object must have:
+- issue_title: specific behaviour name (e.g. "Absconding from school grounds")
+- issue_detail: 2-3 sentences describing what the student does — observable behaviour only
+- behaviour_descriptors: dot-point list of specific observable behaviours (as string, one per line starting with •)
+- function: function of behaviour if stated (e.g. "Avoidance – adult and peer")
+- likelihood: code A/B/C/D/E (default "D")
+- consequence: code 1/2/3/4/5 (default "3")
+- proactive: proactive strategies as string, one per line starting with •
+- procedure: reactive procedures as string with ### Subheadings and • bullets
+
+Return ONLY valid JSON array. No markdown fences, no preamble.
+
+PLAN TEXT:
+{plan_text[:8000]}"""
+    try:
+        raw = groq_call(prompt, 3000)
+        raw = raw.replace("```json","").replace("```","").strip()
+        risks = json.loads(raw)
+        for r in risks:
+            r["from_school"] = True
+            r["from_docs"]   = False
+            r["clc_notes"]   = ""
+            if "behaviour_descriptors" not in r:
+                r["behaviour_descriptors"] = ""
+        return risks
+    except Exception as e:
+        st.warning(f"School plan extraction issue ({e}). You can enter risks manually.")
+        return []
+
+
+def ai_synthesise_from_docs(support_docs: list, student: dict) -> list:
+    """Generate risk rows from a collection of uploaded support documents."""
+    combined = "\n\n".join(
+        f"=== {d['doc_type'].upper()}: {d['name']} ===\n{d['text'][:3000]}"
+        for d in support_docs
+    )
+    student_ctx = f"Student: {student['name']}, Age {student.get('age','')}, Program {student.get('program','')}"
+    prompt = f"""You are a behaviour support specialist analysing documents about {student['name']} to identify specific safety risks for a CLC Safety & Risk Management Plan.
+
+MOST IMPORTANT RULE: Only identify risks that are directly evidenced in the documents provided below.
+Do NOT include risks because they are common or because they appeared in another student's plan.
+Do NOT invent behaviours. Every risk must trace to specific content in the documents.
+
+CLC CONTEXT (apply only where relevant to evidenced risks):
+- CLC is a program option for students with educational exclusion in Adelaide SA
+- Small group setting; playground adjacent to carpark via climbable fence; busy roads nearby
+- TAC, CARL, DCP, IRMS processes apply; trauma-informed relational practice
+
+{student_ctx}
+Medical/context: {student.get('medical_notes','')}
+Staff notes: {student.get('clc_context','')}
+
+DOCUMENTS:
+{combined}
+
+Based ONLY on the above documents, identify the specific safety risks for {student['name']}.
+If the documents do not describe absconding — do not include it.
+If the documents do not describe aggression — do not include it.
+Only include what is actually described about this student.
+
+Return a JSON array. Each object:
+- issue_title: behaviour-focused title derived from documents
+- issue_detail: 2-3 sentences of what THIS student does — sourced from documents only
+- behaviour_descriptors: specific observable behaviours from documents, one per line starting with •
+- function: function of behaviour as evidenced
+- likelihood: A/B/C/D/E based on frequency described in documents
+- consequence: 1/2/3/4/5 based on severity described in documents
+- proactive: CLC-specific proactive strategies with ### subheadings and • bullets
+- procedure: reactive procedures with ### subheadings and • bullets
+
+Return ONLY valid JSON array. No markdown, no preamble."""
+    try:
+        raw = groq_call(prompt, 4000)
+        raw = raw.replace("```json","").replace("```","").strip()
+        risks = json.loads(raw)
+        for r in risks:
+            r["from_school"] = False
+            r["from_docs"]   = True
+            r["clc_notes"]   = ""
+            if "behaviour_descriptors" not in r:
+                r["behaviour_descriptors"] = ""
+        return risks
+    except Exception as e:
+        st.warning(f"Document synthesis issue ({e}). You can review and add risks manually.")
+        return []
+
+
+def ai_contextualise(risk: dict, student: dict) -> str:
+    """Generate CLC contextualisation advisory for a school-plan risk."""
+    prompt = f"""You are a behaviour support specialist helping CLC (Cowandilla Learning Centre) staff adapt a school safety plan risk for their specialist setting.
+
+CLC context:
+- Program option for students with educational exclusion (not "specialist centre")
+- Small group setting with frequent externalising behaviour from other students
+- Playground adjacent to carpark via climbable fence; Jenkins Rd, Marion Rd, Sir Donald Bradman Drive within 100m; South Road ~15 min on foot
+- All staff carry walkie talkies; program vehicle available; school mobile for SAPOL contact
+- TAC, CARL, DCP, IRMS processes apply
+- Trauma-informed, relational practice; movement-based interventions valued
+- Risk descriptions must focus on what the student DOES — not why (triggers go in proactive strategies)
+
+Student: {student.get('name','')}, Age {student.get('age','')}, Program {student.get('program','')}
+Key staff: {student.get('key_staff','')}
+CLC context: {student.get('clc_context','')}
+Medical notes: {student.get('medical_notes','')}
+
+SCHOOL RISK TO ADAPT:
+Title: {risk.get('issue_title','')}
+Detail: {risk.get('issue_detail','')}
+School proactive: {risk.get('proactive','')[:500]}
+School procedure: {risk.get('procedure','')[:500]}
+
+Write a SHORT advisory note (150-250 words) for the staff member that:
+1. Highlights what is DIFFERENT about this risk at CLC vs the school (environment, roads, peer cohort, staffing, processes)
+2. Asks 3 specific CLC-contextualising questions (e.g. "Has this been observed at CLC?", "Does the fence/carpark create additional risk?")
+3. Flags 2 CLC-specific additions the school plan likely missed
+
+Keep it practical and direct. Do not repeat school plan content verbatim."""
+    try:
+        return groq_call(prompt, 500)
+    except Exception as e:
+        return f"[AI unavailable: {e}]"
+
+
+def ai_generate_strategies(risk: dict, student: dict) -> dict:
+    """Generate CLC-specific proactive strategies and reactive procedures."""
+    prompt = f"""You are writing a CLC (Cowandilla Learning Centre) Safety & Risk Management Plan section.
+
+CLC context: program option for students with educational exclusion; small group with externalising peers; playground adjacent to carpark via climbable fence; Jenkins Rd, Marion Rd, Sir Donald Bradman Drive within 100m; South Road nearby; walkie talkies carried; TAC/CARL/DCP/IRMS processes; trauma-informed relational practice; movement = intervention.
+
+CRITICAL: Risk descriptions in this plan focus on what the student DOES — observable behaviour only.
+Triggers go in proactive strategies. Function is noted separately.
+
+Student: {student.get('name','')}, Age {student.get('age','')}, Program {student.get('program','')}
+Key staff: {student.get('key_staff','')}
+Risk: {risk.get('issue_title','')}
+Behaviour detail: {risk.get('issue_detail','')}
+Descriptors: {risk.get('behaviour_descriptors','')}
+Function: {risk.get('function','')}
+CLC staff notes: {risk.get('clc_notes','')}
+Medical/context: {student.get('medical_notes','')}
+
+Generate CLC-specific content. Return JSON only (no markdown):
+{{
+  "proactive": "### Category heading\\n• strategy\\n• strategy\\n\\n### Next category\\n• strategy",
+  "procedure": "### If [early warning / specific scenario]:\\n• step\\n• step\\n\\n### If [next scenario]:\\n• step\\n• step"
+}}
+
+Proactive section: 6-9 strategies, grouped under 2-3 subheadings (e.g. Environment & supervision / Relational strategies / Skill building)
+Procedure section: 4-6 subheaded scenarios, most critical first (e.g. early signs → on grounds → left grounds → post-incident)"""
+    try:
+        raw = groq_call(prompt, 1500)
+        raw = raw.replace("```json","").replace("```","").strip()
+        return json.loads(raw)
+    except Exception:
+        return {"proactive":"","procedure":""}
+
+
+def ai_generate_priority_actions(risks: list, student: dict) -> str:
+    """Generate a priority actions list from the complete risk set."""
+    risk_summary = "\n".join(f"- {r['issue_title']} ({compute_risk_level(r['likelihood'],r['consequence'])})"
+                             for r in risks if r.get('issue_title'))
+    prompt = f"""You are completing a CLC Safety & Risk Management Plan for {student.get('name','')}.
+
+Risks identified:
+{risk_summary}
+
+CLC context: {student.get('clc_context','')}
+Medical notes: {student.get('medical_notes','')}
+
+Generate a concise priority actions list (8-12 items) for what must happen after this plan is signed.
+Format: one action per line starting with •
+Include: TAC meeting, fence/environment audit, staff sign-off, BAP update, CARL/DCP notifications, medication considerations if relevant, review date.
+Order by urgency (URGENT items first).
+Return plain text only — no JSON, no headers."""
+    try:
+        return groq_call(prompt, 500)
+    except Exception:
+        return "• Schedule TAC meeting\n• Conduct fence/gate safety audit\n• Ensure all staff sign this plan"
+
+def ai_generate_full_plan(student: dict, school_plan_text: str, support_docs: list) -> dict:
+    """
+    Express path — generate a complete, ready-to-use plan directly from all documents.
+    Returns {"risks": [...], "priority_actions": "...", "review_date": "..."}.
+    """
+    combined_docs = ""
+    if school_plan_text:
+        combined_docs += f"=== SCHOOL SAFETY & RISK PLAN ===\n{school_plan_text[:5000]}\n\n"
+    for d in support_docs:
+        combined_docs += f"=== {d['doc_type'].upper()}: {d['name']} ===\n{d['text'][:2500]}\n\n"
+
+    # Warn if documents are very thin
+    if len(combined_docs.strip()) < 200:
+        return {"error": "Documents provided contain very little text. Please check the files uploaded and try again.", "risks": [], "priority_actions": "", "review_date": ""}
+
+    prompt = f"""You are an expert behaviour support specialist writing a Safety & Risk Management Plan for Cowandilla Learning Centre (CLC) LBU, Adelaide SA.
+
+IMPORTANT — SITE NAME: This plan is for COWANDILLA LEARNING CENTRE (CLC), the Learning and Behaviour Unit.
+This is NOT Cowandilla Primary School. These are two separate schools in the same suburb.
+Some students at CLC have Cowandilla Primary School as their home school — this is normal and correct.
+The plan must always read "Cowandilla Learning Centre" as the placement site regardless of home school.
+
+STUDENT DETAILS PROVIDED BY STAFF:
+Name: {student['name']}
+Age: {student.get('age','—')}  DOB: {student.get('dob','—')}  EDSAS: {student.get('edsas','—')}
+Program: {student.get('program','—')}  Home school: {student.get('home_school','—')}
+Key staff: {student.get('key_staff','—')}
+Additional context: {student.get('clc_context','')}
+Medical/background: {student.get('medical_notes','')}
+
+STUDENT DETAIL EXTRACTION TASK:
+If any of the above are blank or "—", search the documents and extract:
+- Full name (confirm or correct spelling)
+- Date of birth (DD/MM/YYYY format)
+- Age
+- EDSAS ID (numeric student ID, may be labelled EDSAS, student ID, or similar)
+- Home school (the school they normally attend — this will NOT be Cowandilla Learning Centre)
+Include extracted values in the student_details section of your response.
+
+═══════════════════════════════════════════════
+MOST IMPORTANT RULE:
+ONLY identify risks that are directly evidenced in the documents provided.
+DO NOT include risks because they are common or appeared in another student's plan.
+DO NOT invent behaviours. Every risk must trace to the provided documents.
+═══════════════════════════════════════════════
+
+CLC CONTEXT (apply only where relevant to evidenced risks):
+- Program option for students with educational exclusion — NOT a specialist centre
+- Small group setting with frequent externalising behaviour from other students
+- Playground adjacent to carpark via climbable fence; Marion Rd/Sir Donald Bradman Dr within 100m
+- All staff carry walkie talkies; program vehicle available; school mobile for SAPOL contact
+- TAC, CARL, DCP, IRMS, ED155/ED165 apply; trauma-informed relational practice
+
+RISK DESCRIPTION RULES:
+- Describe what THIS student DOES — observable behaviour only from the documents
+- Do NOT include triggers or function in the risk description
+- Use specific language from the documents (e.g. "threw chairs", "bit staff", "ran into traffic")
+- Rate based on actual severity and frequency described in the documents
+
+DOCUMENTS:
+{combined_docs[:14000]}
+
+Based ONLY on the above documents, generate a complete plan for {student['name']}.
+Include only risks clearly evidenced. Typically 3–6 risks.
+
+Return JSON only (no markdown fences):
+{{
+  "student_details": {{
+    "name": "confirmed full name from documents",
+    "dob": "date of birth DD/MM/YYYY from documents, or blank if not found",
+    "age": "age from documents, or blank",
+    "edsas": "EDSAS ID from documents, or blank",
+    "home_school": "home school from documents — NOT Cowandilla Learning Centre"
+  }},
+  "risks": [
+    {{
+      "issue_title": "specific behaviour-focused title",
+      "issue_detail": "2-3 sentences of what {student['name']} does — from documents only",
+      "behaviour_descriptors": "• specific descriptor\n• descriptor\n• descriptor",
+      "function": "function of behaviour from documents",
+      "likelihood": "A – Rare / B – Unlikely / C – Likely sometimes / D – Likely/frequently / E – Almost certain",
+      "consequence": "1 – Insignificant / 2 – Minor / 3 – Moderate / 4 – Major / 5 – Catastrophic",
+      "proactive": "### Category\n• strategy\n• strategy\n\n### Category\n• strategy",
+      "procedure": "### If early warning signs:\n• step\n\n### If [scenario]:\n• step\n\n### Post-incident:\n• step",
+      "clc_notes": "CLC-specific context if relevant to evidenced risks",
+      "from_school": false,
+      "from_docs": true
+    }}
+  ],
+  "priority_actions": "• action\n• action\n• action\n• action\n• action",
+  "review_date": "approx 8 weeks from today"
+}}
+
+Each risk: 6-8 proactive strategies across 2-3 subheadings; procedures in 3-5 scenario sections."""
+
+    try:
+        raw = groq_call(prompt, 4000)
+        raw = raw.replace("```json","").replace("```","").strip()
+        # Handle case where model wraps in extra text
+        if not raw.startswith("{"):
+            start = raw.find("{")
+            if start != -1:
+                raw = raw[start:]
+        result = json.loads(raw)
+        # Ensure all risk fields present
+        for r in result.get("risks", []):
+            for k, v in BLANK_RISK.items():
+                if k not in r:
+                    r[k] = v
+        # Back-fill any blank student details with what the AI found in the documents
+        extracted = result.get("student_details", {})
+        for field, key in [("dob","dob"),("age","age"),("edsas","edsas"),("home_school","home_school"),("name","name")]:
+            val = extracted.get(field,"").strip()
+            if val and val.lower() not in ("blank","not found","—","unknown","") and not student.get(key,"").strip():
+                student[key] = val
+        return result
+    except Exception as e:
+        return {"error": f"Generation failed: {e}. Try uploading richer documents or use the step-by-step builder.", "risks": [], "priority_actions": "", "review_date": ""}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE CONFIG & CSS
+# ══════════════════════════════════════════════════════════════════════════════
+st.set_page_config(
+    page_title="Safety & Risk Plan Builder | CLC LBU",
+    page_icon="🛡️", layout="wide", initial_sidebar_state="collapsed"
+)
+
 st.markdown(f"""
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-  html, body, [class*="css"] {{ font-family: 'Inter', sans-serif; }}
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap');
+  html, body, [class*="css"] {{ font-family: 'DM Sans', sans-serif; }}
 
-  .srp-header {{
-    background: linear-gradient(135deg, {TEAL} 0%, #0F4556 100%);
-    color: white; padding: 1.4rem 1.8rem; border-radius: 10px;
-    margin-bottom: 1.4rem;
-  }}
-  .srp-header h2 {{ margin: 0 0 .15rem; font-size: 1.35rem; font-weight: 700; }}
-  .srp-header p  {{ margin: 0; opacity: .85; font-size: .9rem; }}
+  .clc-header {{ background:{TEAL}; color:white; padding:18px 28px 14px; border-radius:10px; margin-bottom:24px; display:flex; justify-content:space-between; align-items:center; }}
+  .clc-header h1 {{ margin:0; font-size:1.3rem; font-weight:700; }}
+  .clc-header p  {{ margin:0; font-size:0.82rem; opacity:0.8; }}
+  .clc-badge {{ background:{AMBER}; color:white; font-size:0.72rem; font-weight:700; padding:4px 10px; border-radius:20px; }}
 
-  .step-bar {{
-    display: flex; gap: 4px; margin-bottom: 1.4rem;
-    background: {GREY_LIGHT}; border-radius: 8px; padding: 6px;
-  }}
-  .step-pill {{
-    flex: 1; text-align: center; padding: 6px 4px; border-radius: 6px;
-    font-size: .78rem; font-weight: 600; color: #888;
-  }}
-  .step-pill.active  {{ background: {TEAL}; color: white; }}
-  .step-pill.done    {{ background: {TEAL_LIGHT}; color: {TEAL}; }}
+  .step-bar {{ display:flex; gap:6px; margin-bottom:24px; }}
+  .step-item {{ flex:1; padding:7px 4px; text-align:center; font-size:11px; font-weight:600; border-radius:6px; background:#E8F5F3; color:#888; border:1.5px solid transparent; }}
+  .step-item.active {{ background:{TEAL}; color:white; border-color:{TEAL}; }}
+  .step-item.done   {{ background:{TEAL_LIGHT}; color:{TEAL}; border-color:{TEAL}; }}
 
-  .card {{
-    background: white; border-radius: 10px; padding: 1.2rem 1.4rem;
-    border: 1px solid #e2e8f0; margin-bottom: 1rem;
-  }}
-  .card-amber {{
-    background: {AMBER_LIGHT}; border-radius: 10px; padding: 1rem 1.2rem;
-    border: 1px solid #fbbf24; margin-bottom: 1rem;
-  }}
-  .card-teal {{
-    background: {TEAL_LIGHT}; border-radius: 10px; padding: 1rem 1.2rem;
-    border: 1px solid {TEAL}; margin-bottom: 1rem;
-  }}
-  .section-heading {{
-    color: {TEAL}; font-weight: 700; font-size: .95rem;
-    text-transform: uppercase; letter-spacing: .05em;
-    border-bottom: 2px solid {TEAL_LIGHT}; padding-bottom: 4px; margin-bottom: .8rem;
-  }}
-  .sub-heading {{
-    color: {GREY_DARK}; font-weight: 600; font-size: .88rem;
-    margin: 1rem 0 .3rem;
-  }}
-  .field-note {{
-    font-size: .78rem; color: #666; font-style: italic; margin-top: -0.4rem; margin-bottom: 0.5rem;
-  }}
-  .risk-chip {{
-    display: inline-block; border-radius: 6px; padding: 2px 10px;
-    font-size: .78rem; font-weight: 700; color: white; margin-left: 6px;
-  }}
-  .tier-label {{
-    font-size: .78rem; font-weight: 700; text-transform: uppercase;
-    letter-spacing: .05em; color: {TEAL}; margin: .9rem 0 .2rem;
-  }}
-  .tier-divider {{
-    border: none; border-top: 1px solid {TEAL_LIGHT}; margin: .8rem 0;
-  }}
-  .note-box {{
-    background: #fffbeb; border-left: 4px solid {AMBER}; padding: .8rem 1rem;
-    border-radius: 0 8px 8px 0; margin: .6rem 0; font-size: .86rem;
-  }}
-  .stTextArea textarea {{ font-size: .85rem !important; }}
-  .stTextInput input  {{ font-size: .88rem !important; }}
+  .sec-head {{ font-size:11px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:{TEAL}; margin:18px 0 8px; border-bottom:2px solid {TEAL_LIGHT}; padding-bottom:4px; }}
+  .card-amber {{ background:{AMBER_LIGHT}; border-left:4px solid {AMBER}; border-radius:6px; padding:12px 16px; margin-bottom:14px; font-size:13px; color:#5C3D00; }}
+  .card-teal  {{ background:{TEAL_LIGHT}; border:1px solid {TEAL}; border-radius:8px; padding:14px 16px; margin-bottom:14px; }}
+  .card-red   {{ background:#FDECEA; border-left:4px solid {RED_RISK}; border-radius:6px; padding:12px 16px; margin-bottom:14px; font-size:13px; }}
+  .ai-bubble  {{ background:#f0faf8; border:1.5px solid {TEAL}; border-radius:10px 10px 10px 2px; padding:12px 14px; margin:8px 0 14px; font-size:12.5px; line-height:1.7; color:#1A3530; }}
+  .ai-label   {{ font-size:10px; font-weight:700; color:{TEAL}; letter-spacing:.08em; margin-bottom:5px; }}
+  .risk-item  {{ padding:9px 12px; border-radius:6px; border:0.5px solid #ddd; background:white; cursor:pointer; margin-bottom:6px; }}
+  .risk-item.active {{ border-color:{TEAL}; background:{TEAL_LIGHT}; }}
+  .risk-title {{ font-size:13px; font-weight:600; color:{GREY_DARK}; }}
+  .risk-meta  {{ font-size:11px; color:#888; margin-top:2px; }}
+  .rbadge     {{ display:inline-block; font-size:10px; font-weight:700; padding:2px 7px; border-radius:3px; color:white; margin-left:6px; vertical-align:middle; }}
+  .doc-chip   {{ display:inline-block; background:{TEAL_LIGHT}; color:{TEAL}; font-size:11px; padding:3px 9px; border-radius:4px; margin:3px 3px 3px 0; }}
+  .doc-chip.amber {{ background:{AMBER_LIGHT}; color:#92400e; }}
+
+  div[data-testid="stExpander"] {{ border:1.5px solid {TEAL_LIGHT} !important; border-radius:8px !important; }}
+  .stButton > button {{ font-family:'DM Sans',sans-serif !important; font-weight:600 !important; border-radius:8px !important; }}
 </style>
 """, unsafe_allow_html=True)
 
-# ── Header ─────────────────────────────────────────────────────────────────────
-st.markdown("""
-<div class="srp-header">
-  <h2>🛡️ Safety &amp; Risk Management Plan Builder</h2>
-  <p>Cowandilla Learning Centre &nbsp;|&nbsp; Learning &amp; Behaviour Unit</p>
-</div>
-""", unsafe_allow_html=True)
+# ── Init & Header ─────────────────────────────────────────────────────────────
+init_state()
 
-# ── Step bar ───────────────────────────────────────────────────────────────────
-STEPS = ["1 · Student", "2 · Source", "3 · Context", "4 · Risks", "5 · Review", "6 · Generate"]
-def step_bar(current):
-    pills = ""
+st.markdown(f"""
+<div class="clc-header">
+  <div><h1>🛡️ Safety &amp; Risk Management Plan Builder</h1>
+  <p>Cowandilla Learning Centre — Learning &amp; Behaviour Unit</p></div>
+  <span class="clc-badge">v2 · PORTAL TOOL</span>
+</div>""", unsafe_allow_html=True)
+
+# ── Step bar ──────────────────────────────────────────────────────────────────
+if st.session_state.mode == "express":
+    express_steps = ["1 · Student","⚡ Upload & Generate"]
+    bar = '<div class="step-bar">'
+    for i, label in enumerate([1, 7], 0):
+        real_step = [1, 7][i]
+        cls = "active" if st.session_state.step == real_step else ("done" if st.session_state.step > real_step else "step-item")
+        tick = "✓ " if st.session_state.step > real_step else ""
+        bar += f'<div class="step-item {cls}">{tick}{express_steps[i]}</div>'
+    bar += "</div>"
+else:
+    bar = '<div class="step-bar">'
     for i, label in enumerate(STEPS, 1):
-        cls = "active" if i == current else ("done" if i < current else "step-pill")
-        pills += f'<div class="step-pill {cls}">{label}</div>'
-    st.markdown(f'<div class="step-bar">{pills}</div>', unsafe_allow_html=True)
-
-step_bar(st.session_state.step)
-
-# ══════════════════════════════════════════════════════════════════════════════
-# GROQ CLIENT
-# ══════════════════════════════════════════════════════════════════════════════
-def get_groq():
-    key = st.secrets.get("GROQ_API_KEY") or os.environ.get("GROQ_API_KEY", "")
-    return Groq(api_key=key) if key else None
-
-def groq_chat(prompt: str, system: str = "", max_tokens: int = 2000) -> str:
-    client = get_groq()
-    if not client:
-        return "⚠️ Groq API key not configured."
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
-    try:
-        resp = client.chat.completions.create(
-            model="llama-3.3-70b-versatile", messages=messages, max_tokens=max_tokens
-        )
-        return resp.choices[0].message.content.strip()
-    except Exception as e:
-        return f"⚠️ AI error: {e}"
-
-# ── Extract text from uploaded docx ───────────────────────────────────────────
-def extract_docx_text(uploaded_file) -> str:
-    try:
-        doc = DocxDocument(io.BytesIO(uploaded_file.read()))
-        lines = []
-        for para in doc.paragraphs:
-            if para.text.strip():
-                lines.append(para.text.strip())
-        for table in doc.tables:
-            for row in table.rows:
-                row_text = " | ".join(c.text.strip() for c in row.cells if c.text.strip())
-                if row_text:
-                    lines.append(row_text)
-        return "\n".join(lines)
-    except Exception as e:
-        return f"[Error reading document: {e}]"
+        cls = "active" if i == st.session_state.step else ("done" if i < st.session_state.step else "step-item")
+        tick = "✓ " if i < st.session_state.step else ""
+        bar += f'<div class="step-item {cls}">{tick}{label}</div>'
+    bar += "</div>"
+st.markdown(bar, unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 1 · STUDENT DETAILS
+# STEP 1 — Student Details
 # ══════════════════════════════════════════════════════════════════════════════
 if st.session_state.step == 1:
-    st.markdown('<div class="section-heading">Student Details</div>', unsafe_allow_html=True)
     s = st.session_state.student
 
+    st.markdown('<div class="sec-head">Student Details</div>', unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     with c1:
-        s["name"]        = st.text_input("Full Name *", s["name"])
-        s["dob"]         = st.text_input("Date of Birth (DD/MM/YYYY)", s["dob"])
-        s["edsas"]       = st.text_input("EDSAS ID", s["edsas"])
-        s["program"]     = st.selectbox("Program", ["JP – CLC LBU","MP – CLC LBU","SP – CLC LBU"],
-                                        index=["JP – CLC LBU","MP – CLC LBU","SP – CLC LBU"].index(s["program"])
-                                        if s["program"] in ["JP – CLC LBU","MP – CLC LBU","SP – CLC LBU"] else 0)
+        s["name"]  = st.text_input("Full name *", value=s["name"])
+        s["dob"]   = st.text_input("Date of birth * (DD/MM/YYYY)", value=s["dob"],
+                        help="Required — will appear on the generated plan")
+        s["age"]   = st.text_input("Age *", value=s["age"])
+        s["edsas"] = st.text_input("EDSAS ID *", value=s["edsas"],
+                        help="Required — enter the student's EDSAS number e.g. 10981999M")
     with c2:
-        s["home_school"]  = st.text_input("Home School", s["home_school"])
-        s["key_staff"]    = st.text_input("Key CLC Staff (comma separated)", s["key_staff"])
-        s["plan_date"]    = st.text_input("Plan Date", s["plan_date"])
-        s["review_date"]  = st.text_input("Review Date", s["review_date"])
+        s["program"] = st.selectbox("CLC Program *", ["JP","MP","SP","Other"],
+                            index=["JP","MP","SP","Other"].index(s["program"]) if s["program"] in ["JP","MP","SP","Other"] else 0)
+        s["home_school"] = st.text_input(
+            "Home school (student's mainstream school) *",
+            value=s["home_school"],
+            placeholder="e.g. Cowandilla Primary School, Mount Barker Primary",
+            help="Enter the student's HOME school — the school they are excluded from. "
+                 "This plan is always for CLC LBU regardless of which school is entered here.")
+        # Warning if they accidentally enter CLC itself
+        if s["home_school"].strip().lower() in ("cowandilla learning centre","clc","clc lbu"):
+            st.warning("⚠️ The home school should be the student's mainstream school, not CLC. "
+                       "This plan is automatically for Cowandilla Learning Centre LBU.")
+        s["key_staff"]  = st.text_input("Key CLC staff", value=s["key_staff"],
+                            help="e.g. Annette, Vinnie, Naomi")
+        s["plan_date"]  = st.text_input("Plan date", value=s["plan_date"])
 
-    s["sapol_ref"]    = st.text_input("SAPOL Reference (if applicable)", s["sapol_ref"])
-    s["status_note"]  = st.text_area("Status / Alert Note (e.g. medication transition, critical incident)", s["status_note"], height=80)
+    st.markdown('<div class="sec-head">CLC Context</div>', unsafe_allow_html=True)
+    s["clc_context"] = st.text_area(
+        "Brief context — what has been observed at CLC so far, known triggers, current concerns",
+        value=s["clc_context"], height=90,
+        help="This informs all AI-generated content throughout the builder.")
+
+    st.markdown('<div class="sec-head">Medical & Background Notes</div>', unsafe_allow_html=True)
+    s["medical_notes"] = st.text_area(
+        "Medical, disability, DCP, medication, or family context relevant to risk planning",
+        value=s["medical_notes"], height=90,
+        placeholder="e.g. ADHD — medication transition in progress. Possible ABI under investigation (MRI pending). Kinship care. DCP involved — Candice Blamey.")
+
+    # ── Mode selector ─────────────────────────────────────────────────────────
+    st.markdown('<div class="sec-head">How would you like to build this plan?</div>', unsafe_allow_html=True)
+
+    col_w, col_e = st.columns(2)
+    with col_w:
+        wizard_selected = st.session_state.mode == "wizard"
+        st.markdown(f"""
+        <div style="border:2px solid {'#1A7A6E' if wizard_selected else '#ddd'};border-radius:10px;
+        padding:16px 18px;background:{'#D6EEEB' if wizard_selected else 'white'};cursor:pointer;height:130px;">
+        <div style="font-size:1.3rem;margin-bottom:6px;">🧱</div>
+        <div style="font-weight:700;font-size:14px;color:#2E4057;">Build step-by-step</div>
+        <div style="font-size:12px;color:#666;margin-top:4px;line-height:1.5;">
+        Upload documents, review AI-extracted risks one by one, edit everything, then generate.
+        Best when you want full control over each risk row.</div>
+        </div>""", unsafe_allow_html=True)
+        if st.button("Select: Build step-by-step", use_container_width=True,
+                     type="primary" if wizard_selected else "secondary"):
+            st.session_state.mode = "wizard"; st.rerun()
+
+    with col_e:
+        express_selected = st.session_state.mode == "express"
+        st.markdown(f"""
+        <div style="border:2px solid {'#D97706' if express_selected else '#ddd'};border-radius:10px;
+        padding:16px 18px;background:{'#FEF3C7' if express_selected else 'white'};cursor:pointer;height:130px;">
+        <div style="font-size:1.3rem;margin-bottom:6px;">⚡</div>
+        <div style="font-weight:700;font-size:14px;color:#2E4057;">Generate directly from documents</div>
+        <div style="font-size:12px;color:#666;margin-top:4px;line-height:1.5;">
+        Upload reports, BAPs, and incident data — AI writes the complete, formatted plan in one step.
+        Best when you have good source documents.</div>
+        </div>""", unsafe_allow_html=True)
+        if st.button("Select: Generate from documents", use_container_width=True,
+                     type="primary" if express_selected else "secondary"):
+            st.session_state.mode = "express"; st.rerun()
 
     st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("Continue →", type="primary", use_container_width=True):
-        if not s["name"].strip():
-            st.error("Student name is required.")
+    if st.button("Continue →", type="primary"):
+        errors = []
+        if not s["name"].strip():      errors.append("Student name is required.")
+        if not s["dob"].strip():       errors.append("Date of birth is required.")
+        if not s["edsas"].strip():     errors.append("EDSAS ID is required.")
+        if not s["home_school"].strip(): errors.append("Home school is required.")
+        if errors:
+            for e in errors: st.error(e)
         else:
-            st.session_state.step = 2
+            st.session_state.step = 7 if st.session_state.mode == "express" else 2
             st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 2 · SOURCE — UPLOAD OR BUILD FROM SCRATCH
+# STEP 2 — Documents
 # ══════════════════════════════════════════════════════════════════════════════
 elif st.session_state.step == 2:
-    st.markdown('<div class="section-heading">Source Documents</div>', unsafe_allow_html=True)
+    student_name = st.session_state.student["name"]
 
-    st.markdown("""
-    <div class="note-box">
-    Choose how to build this plan. You can upload existing documents and let AI extract
-    and contextualise them for CLC, or build entirely from scratch using the step-by-step builder.
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown('<div class="sec-head">Existing School Safety Plan</div>', unsafe_allow_html=True)
+    st.markdown(f"""<div class="card-amber">
+    <strong>Does {student_name}'s home school have an existing Safety &amp; Risk Management Plan?</strong><br>
+    Upload it below and the AI will extract and adapt all risk rows for CLC's context.
+    </div>""", unsafe_allow_html=True)
 
-    tab_upload, tab_scratch = st.tabs(["📄 Upload existing documents", "✏️ Build from scratch"])
+    school_plan = st.file_uploader("Upload school safety plan (.docx or .pdf)", type=["docx","pdf"],
+                                    key="school_upload")
+    if school_plan:
+        text = extract_docx_text(school_plan)
+        st.session_state.school_plan_text = text
+        st.markdown(f'<div class="card-teal">✅ <strong>{school_plan.name}</strong> ready for extraction.</div>',
+                    unsafe_allow_html=True)
+        with st.expander("Preview extracted text"):
+            st.text(text[:1500] + ("…" if len(text) > 1500 else ""))
 
-    with tab_upload:
-        st.markdown('<div class="sub-heading">Upload any relevant documents</div>', unsafe_allow_html=True)
-        st.markdown('<p class="field-note">You can upload multiple files — school safety plan, BAP, incident reports, psychologist reports. The AI will read all of them and generate CLC-contextualised risk rows.</p>', unsafe_allow_html=True)
+    st.markdown('<div class="sec-head">Supporting Documents</div>', unsafe_allow_html=True)
+    st.markdown("""<div class="card-teal">
+    <strong>Upload any supporting documents for this student.</strong><br>
+    The AI will read all of them together and generate CLC-appropriate risk rows.<br>
+    <em>Accepted: behaviour support plans (BAP), psychological reports, ABCH incident reports,
+    team meeting notes, OT reports, SSS notes, paediatrician letters, school reports.</em>
+    </div>""", unsafe_allow_html=True)
 
-        uploaded_files = st.file_uploader(
-            "Upload documents (.docx, .pdf, .txt)",
-            type=["docx","txt"],
-            accept_multiple_files=True,
-            key="source_docs"
-        )
+    doc_type_options = [
+        "Behaviour Summary",
+        "ABCH / Incident Report",
+        "Psychological Report",
+        "OT / Sensory Report",
+        "SSS / BSE Notes",
+        "Paediatrician / Medical Report",
+        "School Report / Academic Summary",
+        "LC Referral",
+        "Exclusion Documentation",
+        "Exclusion Paperwork",
+        "Entry Meeting Notes",
+        "Entry Meeting Minutes",
+        "Team Meeting Notes",
+        "TAC Meeting Notes",
+        "Other",
+    ]
 
-        if uploaded_files:
-            st.success(f"{len(uploaded_files)} file(s) uploaded.")
+    uploaded_docs = st.file_uploader(
+        "Upload supporting documents (.docx or .pdf)", type=["docx","pdf"],
+        accept_multiple_files=True, key="support_upload"
+    )
 
-        extra_context = st.text_area(
-            "Anything else the AI should know? (verbal briefing, recent incident summary, etc.)",
-            height=100,
-            key="extra_context_upload"
-        )
+    if uploaded_docs:
+        st.markdown("**Classify each document:**")
+        new_docs = []
+        for fi, f in enumerate(uploaded_docs):
+            col_name, col_type = st.columns([2,2])
+            with col_name:
+                st.markdown(f"📄 `{f.name}`")
+            with col_type:
+                dtype = st.selectbox("Document type", doc_type_options,
+                                     key=f"dtype_{fi}_{f.name[:20]}")
+            text = extract_docx_text(f)
+            new_docs.append({"name": f.name, "text": text, "doc_type": dtype})
+        st.session_state.support_docs = new_docs
 
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("✨ Extract & generate risks from documents", type="primary", disabled=not uploaded_files):
-            with st.spinner("Reading documents and generating CLC-contextualised risks…"):
-                all_text = ""
-                for f in uploaded_files:
-                    if f.name.endswith(".docx"):
-                        all_text += f"\n\n=== {f.name} ===\n" + extract_docx_text(f)
-                    else:
-                        all_text += f"\n\n=== {f.name} ===\n" + f.read().decode("utf-8", errors="ignore")
+        chips = " ".join(f'<span class="doc-chip amber">{d["doc_type"]}</span>' for d in new_docs)
+        st.markdown(f"<div style='margin-top:8px;'>{chips}</div>", unsafe_allow_html=True)
 
-                student = st.session_state.student
-                system = """You are an expert in behaviour support and safety planning for students with complex needs in a specialised South Australian school program. You understand DfE Safety & Risk Plan requirements, trauma-informed practice, and the Berry Street Education Model."""
-
-                prompt = f"""
-A student named {student['name']} (DOB: {student['dob']}, Program: {student['program']}) at Cowandilla Learning Centre LBU has the following background documents:
-
-{all_text}
-
-Additional context: {extra_context}
-
-CLC is a small group setting (up to 10 students) with an adjacent carpark, climbable external fence, and nearby busy roads. Staff use walkie talkies and maintain line-of-sight supervision. Plans follow DfE Safety & Risk Plan format.
-
-IMPORTANT STRUCTURAL RULES:
-- The "Behaviour of Concern" (BOC) column contains ONLY: the observable behaviour, what it looks like (characterised by), and its function. NO triggers — triggers belong in the Behaviour Support Plan, not the Safety & Risk Plan.
-- Proactive strategies contain ONLY environmental, supervisory, and structural strategies (e.g. gate checks, staff positioning, walkie talkies, vehicle keys, visual schedules). NOT relational/skill-building strategies — those belong in the BSP.
-- Reactive procedures use a tiered structure: early signs / on grounds / left grounds / returned to CLC / post-incident.
-
-Extract or generate 2–5 risks. Return ONLY a JSON array. Each item must have these exact keys:
-issue_title, boc_description, characterised_by, function,
-likelihood (use "D – Likely/frequently" or similar), consequence (use "4 – Major" or similar),
-env_supervision, structural, contextual_note,
-react_early, react_on_grounds, react_left_grounds, react_returned, react_post,
-contextual_risks_paragraph (one paragraph of CLC-specific contextual factors to include at the top of the plan)
-
-Return ONLY valid JSON, no markdown, no explanation.
-"""
-                raw = groq_chat(prompt, system=system, max_tokens=4000)
-                try:
-                    raw_clean = raw.strip()
-                    if raw_clean.startswith("```"):
-                        raw_clean = "\n".join(raw_clean.split("\n")[1:])
-                    if raw_clean.endswith("```"):
-                        raw_clean = raw_clean.rsplit("```", 1)[0]
-                    data = json.loads(raw_clean)
-                    if isinstance(data, list) and data:
-                        ctx = data[0].pop("contextual_risks_paragraph", "")
-                        if ctx:
-                            st.session_state.contextual_risks = ctx
-                        st.session_state.risks = []
-                        for d in data:
-                            r = deepcopy(BLANK_RISK)
-                            for k in r:
-                                if k in d:
-                                    r[k] = d[k]
-                            st.session_state.risks.append(r)
-                        st.session_state.source_mode = "upload"
-                        st.session_state.upload_extracted = True
-                        st.session_state.step = 3
-                        st.rerun()
-                    else:
-                        st.error("AI returned unexpected format. Try again or use manual mode.")
-                except Exception as e:
-                    st.error(f"Could not parse AI response: {e}")
-                    st.code(raw[:1000])
-
-    with tab_scratch:
-        st.markdown("""
-        <div class="card-teal">
-        Build the plan step by step without uploading documents.
-        You can still use AI to generate strategies once you've described each risk.
-        </div>
-        """, unsafe_allow_html=True)
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("Build from scratch →", type="primary", use_container_width=True):
-            if not st.session_state.risks:
-                st.session_state.risks = [deepcopy(BLANK_RISK)]
-            st.session_state.source_mode = "manual"
-            st.session_state.step = 3
-            st.rerun()
-
+    # Summary of what we have
+    has_school = bool(st.session_state.school_plan_text)
+    has_docs   = bool(st.session_state.support_docs)
     st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("← Back to student details"):
-        st.session_state.step = 1
+
+    if has_school or has_docs:
+        summary = []
+        if has_school: summary.append("📋 School safety plan")
+        if has_docs:   summary.append(f"📄 {len(st.session_state.support_docs)} supporting document(s)")
+        chips = " ".join(f'<span class="doc-chip">{s}</span>' for s in summary)
+        st.markdown(f"**Ready to synthesise:** {chips}", unsafe_allow_html=True)
+
+    col_a, col_b, col_c = st.columns([1,1,2])
+    with col_a:
+        if st.button("← Back"):
+            st.session_state.step = 1; st.rerun()
+    with col_b:
+        if st.button("Skip — build manually →"):
+            st.session_state.step = 4; st.rerun()
+    with col_c:
+        btn_label = "Extract & synthesise with AI →" if (has_school or has_docs) else "No documents — build manually →"
+        if st.button(btn_label, type="primary"):
+            st.session_state.step = 3; st.rerun()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 3 — AI Synthesis
+# ══════════════════════════════════════════════════════════════════════════════
+elif st.session_state.step == 3:
+    st.markdown('<div class="sec-head">AI Synthesis</div>', unsafe_allow_html=True)
+
+    if st.session_state.synthesis_done:
+        n = len(st.session_state.risks)
+        st.success(f"✅ Synthesis complete — {n} risk(s) extracted and ready for review.")
+        col_a, col_b = st.columns([1,2])
+        with col_a:
+            if st.button("← Back to documents"):
+                st.session_state.synthesis_done = False
+                st.session_state.step = 2; st.rerun()
+        with col_b:
+            if st.button("Continue to Risk Builder →", type="primary"):
+                st.session_state.step = 4; st.rerun()
+    else:
+        has_school = bool(st.session_state.school_plan_text)
+        has_docs   = bool(st.session_state.support_docs)
+        student    = st.session_state.student
+
+        progress = st.progress(0)
+        status   = st.empty()
+
+        all_risks = []
+
+        if has_school:
+            status.info("📋 Extracting risks from school safety plan…")
+            progress.progress(15)
+            school_risks = ai_extract_from_school_plan(
+                st.session_state.school_plan_text, student["name"]
+            )
+            all_risks.extend(school_risks)
+            progress.progress(40)
+
+        if has_docs:
+            status.info(f"📄 Synthesising {len(st.session_state.support_docs)} supporting document(s)…")
+            doc_risks = ai_synthesise_from_docs(
+                st.session_state.support_docs, student
+            )
+            # Deduplicate by title similarity
+            existing_titles = {r["issue_title"].lower()[:30] for r in all_risks}
+            for r in doc_risks:
+                if r["issue_title"].lower()[:30] not in existing_titles:
+                    all_risks.append(r)
+                    existing_titles.add(r["issue_title"].lower()[:30])
+            progress.progress(75)
+
+        # Ensure BLANK_RISK keys present on all
+        status.info("✨ Finalising and formatting risk rows…")
+        clean = []
+        for r in all_risks:
+            merged = {**BLANK_RISK, **r}
+            clean.append(merged)
+        st.session_state.risks = clean
+        progress.progress(100)
+
+        status.success(f"✅ Done — {len(clean)} risk row(s) ready. Click Continue to review each one.")
+        st.session_state.synthesis_done = True
         st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 3 · CONTEXTUAL RISKS
-# ══════════════════════════════════════════════════════════════════════════════
-elif st.session_state.step == 3:
-    st.markdown('<div class="section-heading">CLC Contextual Risks</div>', unsafe_allow_html=True)
-
-    st.markdown("""
-    <div class="note-box">
-    <strong>What goes here:</strong> CLC-specific environmental and contextual factors that create risks
-    which cannot be fully addressed through standard school-based planning. This section appears at the top
-    of the plan before the risk table. Do not include triggers or behaviour descriptions here.
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown('<p class="field-note">Examples: physical environment (carpark, fence, roads), group composition, medication status, pending assessments, placement type.</p>', unsafe_allow_html=True)
-
-    st.session_state.contextual_risks = st.text_area(
-        "Current contextual risks — CLC setting",
-        st.session_state.contextual_risks,
-        height=220,
-        help="Write as dot points or prose. This will appear verbatim in the plan under 'Current Contextual Risks — CLC Setting'."
-    )
-
-    if st.session_state.source_mode == "manual" or not st.session_state.contextual_risks.strip():
-        st.markdown("<br>", unsafe_allow_html=True)
-        with st.expander("✨ Generate contextual risks with AI"):
-            ai_context_prompt = st.text_area(
-                "Describe the CLC situation in a few sentences (setting, environment, student profile, any current factors):",
-                height=100,
-                key="ctx_ai_prompt"
-            )
-            if st.button("Generate contextual risks paragraph", key="gen_ctx"):
-                with st.spinner("Generating…"):
-                    student = st.session_state.student
-                    result = groq_chat(
-                        f"""Write a concise dot-point paragraph of CLC-specific contextual risks for a Safety & Risk Plan.
-Student: {student['name']}, {student['program']} program. Context: {ai_context_prompt}
-CLC factors to consider: small group (up to 10), carpark adjacent to playground via climbable fence, busy roads nearby (Jenkins/Marion/Sir Donald Bradman Drive, proximity to South Road), staff use walkie talkies and maintain line-of-sight.
-Write 4–6 dot points. Do NOT include triggers, BOC descriptions, or strategies — contextual factors only.
-Format as plain text dot points starting with -""",
-                        system="You are an expert in DfE safety planning for students with complex needs."
-                    )
-                    st.session_state.contextual_risks = result
-                    st.rerun()
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("← Back", use_container_width=True):
-            st.session_state.step = 2
-            st.rerun()
-    with c2:
-        if st.button("Continue to Risk Builder →", type="primary", use_container_width=True):
-            st.session_state.step = 4
-            st.rerun()
-
-# ══════════════════════════════════════════════════════════════════════════════
-# STEP 4 · RISK BUILDER
+# STEP 4 — Risk Builder
 # ══════════════════════════════════════════════════════════════════════════════
 elif st.session_state.step == 4:
     student = st.session_state.student
     risks   = st.session_state.risks
 
-    left, right = st.columns([1, 2], gap="large")
+    left, right = st.columns([1,2], gap="large")
 
     with left:
-        st.markdown('<div class="section-heading">Risk Areas</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sec-head">Risk areas</div>', unsafe_allow_html=True)
 
         for i, r in enumerate(risks):
             level  = compute_risk_level(r["likelihood"], r["consequence"])
-            colour = RISK_COLOURS.get(level, "#888")
-            label  = r["issue_title"] or f"Risk {i+1} (unnamed)"
-            prefix = "▶ " if i == st.session_state.current_risk else ""
-            if st.button(f"{prefix}{label}", key=f"sel_{i}", use_container_width=True):
-                st.session_state.current_risk = i
-                st.rerun()
+            colour = risk_colour(level)
+            title  = r["issue_title"] or f"Risk {i+1} (unnamed)"
+            origin = "📋" if r.get("from_school") else ("📄" if r.get("from_docs") else "✏️")
+            active = i == st.session_state.current_risk
+            if st.button(f"{'▶ ' if active else ''}{origin} {title}", key=f"sel_{i}",
+                         use_container_width=True):
+                st.session_state.current_risk = i; st.rerun()
 
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("＋ Add risk", use_container_width=True):
+
+        # Quick-add from CLC standard templates
+        with st.expander("＋ Add from CLC risk library"):
+            template = st.selectbox("Select a common CLC risk", ["— choose —"] + CLC_RISK_TEMPLATES,
+                                    key="tpl_select")
+            if st.button("Add this risk", key="tpl_add") and template != "— choose —":
+                new_r = {**BLANK_RISK, "issue_title": template}
+                risks.append(new_r)
+                st.session_state.current_risk = len(risks) - 1
+                st.rerun()
+
+        if st.button("＋ Add blank risk", use_container_width=True):
             risks.append(deepcopy(BLANK_RISK))
-            st.session_state.current_risk = len(risks) - 1
-            st.rerun()
-
-        if len(risks) > 1:
-            if st.button("🗑 Remove current risk", use_container_width=True):
-                risks.pop(st.session_state.current_risk)
-                st.session_state.current_risk = max(0, st.session_state.current_risk - 1)
-                st.rerun()
+            st.session_state.current_risk = len(risks) - 1; st.rerun()
 
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("→ Continue to Review", type="primary", use_container_width=True):
+        if st.button("← Back to documents", use_container_width=True):
+            st.session_state.step = 2; st.rerun()
+        if risks and st.button("Continue to Review →", type="primary", use_container_width=True):
             if all(r["issue_title"].strip() == "" for r in risks):
-                st.error("Complete at least one risk before continuing.")
+                st.error("Please complete at least one risk.")
             else:
-                st.session_state.step = 5
-                st.rerun()
-
-        if st.button("← Back", use_container_width=True):
-            st.session_state.step = 3
-            st.rerun()
+                st.session_state.step = 5; st.rerun()
 
     with right:
         if not risks:
-            st.markdown('<div class="card-teal">Click <em>＋ Add risk</em> on the left to begin.</div>', unsafe_allow_html=True)
+            st.markdown('<div class="card-teal"><strong>No risks yet.</strong> Add one from the library or click <em>＋ Add blank risk</em>.</div>', unsafe_allow_html=True)
         else:
             idx = min(st.session_state.current_risk, len(risks)-1)
             r   = risks[idx]
-            level = compute_risk_level(r["likelihood"], r["consequence"])
+            level  = compute_risk_level(r["likelihood"], r["consequence"])
+            colour = risk_colour(level)
+            origin = "📋 from school plan" if r.get("from_school") else ("📄 from documents" if r.get("from_docs") else "✏️ manual entry")
 
-            st.markdown(f"""
-            <div style="display:flex;align-items:center;gap:12px;margin-bottom:1rem">
-              <div style="font-size:1.05rem;font-weight:700;color:{GREY_DARK}">Risk {idx+1}</div>
-              {risk_badge(level)}
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(f'<div class="sec-head">Risk {idx+1} of {len(risks)} &nbsp;·&nbsp; <span style="color:{colour};font-weight:700">{level}</span> &nbsp;·&nbsp; <span style="color:#888;font-weight:400;font-size:10px;">{origin}</span></div>', unsafe_allow_html=True)
 
-            # ── AI note for uploaded plans ─────────────────────────────────
-            if st.session_state.upload_extracted and st.session_state.source_mode == "upload":
-                st.markdown(f"""
-                <div class="card-amber">
-                <strong>⚡ AI-extracted risk</strong><br>
-                Review each field carefully. The AI has generated CLC-contextualised content
-                but you should verify and edit based on your knowledge of this student.
-                </div>
-                """, unsafe_allow_html=True)
+            # AI contextualisation advisory (school plan risks only)
+            if r.get("from_school") and r["issue_title"]:
+                cache_key = f"ctx_{idx}_{r['issue_title'][:20]}"
+                if cache_key not in st.session_state.ai_context_cache:
+                    with st.spinner("Generating CLC contextualisation prompts…"):
+                        st.session_state.ai_context_cache[cache_key] = ai_contextualise(r, student)
+                advice = st.session_state.ai_context_cache.get(cache_key,"")
+                if advice:
+                    st.markdown(f"""<div class="ai-bubble">
+                    <div class="ai-label">🤖 AI · CLC CONTEXTUALISATION PROMPTS</div>
+                    {advice.replace(chr(10),'<br>')}
+                    </div>""", unsafe_allow_html=True)
 
-            # ── BOC section ────────────────────────────────────────────────
-            st.markdown('<div class="section-heading">Behaviour of Concern (BOC)</div>', unsafe_allow_html=True)
-            st.markdown("""
-            <div class="note-box">
-            The BOC column contains the <strong>observable behaviour only</strong> — what it looks like,
-            how it is characterised, and its function. <strong>Do not include triggers here</strong> —
-            triggers belong in the Behaviour Support Plan.
-            </div>
-            """, unsafe_allow_html=True)
+            # ── Issue details ─────────────────────────────────────────────
+            st.markdown('<div class="sec-head">Issue / Behaviour</div>', unsafe_allow_html=True)
+            r["issue_title"] = st.text_input("Short title *", value=r["issue_title"], key=f"t_{idx}",
+                placeholder="e.g. Absconding from CLC grounds")
 
-            r["issue_title"] = st.text_input(
-                "Risk title (short label for sidebar)",
-                r["issue_title"], key=f"title_{idx}"
-            )
-            r["boc_description"] = st.text_area(
-                "Behaviour description",
-                r["boc_description"], height=100, key=f"boc_{idx}",
-                help="Describe the behaviour as it appears — what staff observe. No triggers."
-            )
-            r["characterised_by"] = st.text_area(
-                "Characterised by (dot points — what does it look like specifically?)",
-                r["characterised_by"], height=120, key=f"char_{idx}",
-                help="e.g. Running at speed, covering significant distances; climbing fence within seconds; non-responsive to verbal de-escalation while in flight"
-            )
-            st.markdown('<p class="field-note">Use dot points. Be observable and specific — speed, distance, duration, what staff see.</p>', unsafe_allow_html=True)
+            st.caption("⚠️  Describe what the student DOES — observable behaviour only. Triggers belong in proactive strategies.")
+            r["issue_detail"] = st.text_area("Behaviour description",
+                value=r["issue_detail"], key=f"d_{idx}", height=90,
+                placeholder="Describe the observable behaviour and what it looks like at CLC…")
 
-            r["function"] = st.text_input(
-                "Function of the behaviour",
-                r["function"], key=f"func_{idx}",
-                help="e.g. Avoidance — peer and adult; Escape from perceived social threat"
-            )
+            r["behaviour_descriptors"] = st.text_area(
+                "Specific behaviour descriptors (one per line, start with •)",
+                value=r["behaviour_descriptors"], key=f"bd_{idx}", height=90,
+                placeholder="• Running at speed away from supervised areas\n• Climbing boundary fence into carpark\n• Darting across Marion Road without checking for traffic")
 
-            # ── Risk rating ────────────────────────────────────────────────
-            st.markdown('<div class="section-heading">Risk Rating</div>', unsafe_allow_html=True)
-            c1, c2 = st.columns(2)
+            r["function"] = st.text_input("Function of behaviour",
+                value=r["function"], key=f"fn_{idx}",
+                placeholder="e.g. Avoidance – peer and adult")
+
+            st.markdown('<div class="sec-head">CLC-Specific Context for this Risk</div>', unsafe_allow_html=True)
+            r["clc_notes"] = st.text_area(
+                "Staff notes — what has been observed at CLC, environmental factors, relevant incidents",
+                value=r["clc_notes"], key=f"cn_{idx}", height=80,
+                placeholder="e.g. Confirmed fence climb and absconding 19/03/2026. Jenkins Rd, Marion Rd, Sir Donald Bradman Drive all within 100m. SAPOL ref 0732.")
+
+            # ── Risk rating ───────────────────────────────────────────────
+            st.markdown('<div class="sec-head">Risk Rating</div>', unsafe_allow_html=True)
+            c1, c2, c3 = st.columns(3)
             with c1:
                 r["likelihood"] = st.selectbox("Likelihood", LIKELIHOOD_OPTIONS,
                     index=LIKELIHOOD_OPTIONS.index(r["likelihood"]) if r["likelihood"] in LIKELIHOOD_OPTIONS else 3,
-                    key=f"lik_{idx}")
+                    key=f"lk_{idx}")
             with c2:
                 r["consequence"] = st.selectbox("Consequence", CONSEQUENCE_OPTIONS,
-                    index=CONSEQUENCE_OPTIONS.index(r["consequence"]) if r["consequence"] in CONSEQUENCE_OPTIONS else 3,
-                    key=f"con_{idx}")
-            level = compute_risk_level(r["likelihood"], r["consequence"])
-            st.markdown(f'**Risk level:** {risk_badge(level)}', unsafe_allow_html=True)
+                    index=CONSEQUENCE_OPTIONS.index(r["consequence"]) if r["consequence"] in CONSEQUENCE_OPTIONS else 2,
+                    key=f"cq_{idx}")
+            with c3:
+                lv = compute_risk_level(r["likelihood"], r["consequence"])
+                col = risk_colour(lv)
+                st.markdown(f"""<div style="background:{col};color:white;border-radius:8px;padding:18px 10px 12px;text-align:center;margin-top:4px;">
+                <div style="font-size:10px;font-weight:700;opacity:.9;letter-spacing:.08em;">RISK LEVEL</div>
+                <div style="font-size:1.6rem;font-weight:700;margin-top:2px;">{lv}</div>
+                </div>""", unsafe_allow_html=True)
 
-            # ── Proactive strategies ───────────────────────────────────────
-            st.markdown('<div class="section-heading">Proactive Strategies</div>', unsafe_allow_html=True)
-            st.markdown("""
-            <div class="note-box">
-            Proactive strategies in a Safety &amp; Risk Plan are <strong>environmental, supervisory, and
-            structural only</strong>. Relational strategies, skill-building, and social/emotional programs
-            belong in the Behaviour Support Plan — not here.
-            </div>
-            """, unsafe_allow_html=True)
+            # ── Strategies ────────────────────────────────────────────────
+            st.markdown('<div class="sec-head">Proactive Strategies</div>', unsafe_allow_html=True)
+            if st.button("✨ Generate CLC strategies with AI", key=f"gen_{idx}",
+                         disabled=not r["issue_title"].strip()):
+                with st.spinner("Generating…"):
+                    gen = ai_generate_strategies(r, student)
+                    if gen.get("proactive"): r["proactive"] = gen["proactive"]
+                    if gen.get("procedure"): r["procedure"] = gen["procedure"]
+                st.rerun()
 
-            r["env_supervision"] = st.text_area(
-                "Environment & supervision strategies",
-                r["env_supervision"], height=130, key=f"env_{idx}",
-                help="e.g. Gate latched at all times; staff maintain line-of-sight; minimum 1:1 supervision during unstructured time"
-            )
-            st.markdown('<p class="field-note">Gate/fence security, staff positioning, line-of-sight requirements, zone/time restrictions.</p>', unsafe_allow_html=True)
+            r["proactive"] = st.text_area(
+                "Proactive strategies (use ### Subheading and • bullets)",
+                value=r["proactive"], key=f"pr_{idx}", height=180,
+                placeholder="### Environment & supervision\n• Ensure gate is latched at all times\n• Staff maintain line-of-sight\n\n### Relational strategies\n• Daily co-regulation check-in…")
 
-            r["structural"] = st.text_area(
-                "Structural & operational strategies",
-                r["structural"], height=110, key=f"struct_{idx}",
-                help="e.g. All staff carry walkie talkies; vehicle keys in leaders office; school mobile for SAPOL; visual schedule posted"
-            )
-            st.markdown('<p class="field-note">Walkie talkies, vehicle key location, SAPOL contact readiness, visual schedules, peer grouping structure.</p>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-head">Reactive Procedures</div>', unsafe_allow_html=True)
+            st.caption("Use ### Subheadings to structure by scenario (e.g. ### If early warning signs: / ### If left grounds:)")
+            r["procedure"] = st.text_area(
+                "Step-by-step reactive procedures",
+                value=r["procedure"], key=f"pc_{idx}", height=220,
+                placeholder="### If early signs of dysregulation:\n• Offer co-regulation…\n\n### If Xavier has left grounds:\n• Staff 1 follow on foot…")
 
-            r["contextual_note"] = st.text_area(
-                "Current contextual factor affecting strategies (optional)",
-                r["contextual_note"], height=80, key=f"ctx_{idx}",
-                help="e.g. During medication wean period: reduce cognitive load, consider reduced hours, increase adult proximity"
-            )
-            st.markdown('<p class="field-note">Medication transition, pending assessments, current exclusion period, etc.</p>', unsafe_allow_html=True)
-
-            # ── Reactive procedures ────────────────────────────────────────
-            st.markdown('<div class="section-heading">Reactive Procedures (Tiered)</div>', unsafe_allow_html=True)
-            st.markdown("""
-            <div class="note-box">
-            Use a tiered structure matching escalation levels. Staff should be able to locate
-            the right tier quickly in a crisis — keep each tier concise and action-focused.
-            </div>
-            """, unsafe_allow_html=True)
-
-            st.markdown('<div class="tier-label">🟡 Early signs of dysregulation</div>', unsafe_allow_html=True)
-            r["react_early"] = st.text_area(
-                "What to do at first signs",
-                r["react_early"], height=110, key=f"re_early_{idx}",
-                help="Specific staff actions when early warning signs are observed — before escalation occurs"
-            )
-
-            st.markdown('<hr class="tier-divider">', unsafe_allow_html=True)
-            st.markdown('<div class="tier-label">🟠 Student has left the program space but remains on CLC grounds</div>', unsafe_allow_html=True)
-            r["react_on_grounds"] = st.text_area(
-                "Response — on CLC grounds",
-                r["react_on_grounds"], height=110, key=f"re_gnd_{idx}"
-            )
-
-            st.markdown('<hr class="tier-divider">', unsafe_allow_html=True)
-            st.markdown('<div class="tier-label">🔴 Student has left CLC grounds</div>', unsafe_allow_html=True)
-            r["react_left_grounds"] = st.text_area(
-                "Response — off CLC grounds (community follow protocol)",
-                r["react_left_grounds"], height=130, key=f"re_off_{idx}"
-            )
-
-            st.markdown('<hr class="tier-divider">', unsafe_allow_html=True)
-            st.markdown('<div class="tier-label">🟢 When student is returned to CLC</div>', unsafe_allow_html=True)
-            r["react_returned"] = st.text_area(
-                "Response — on return",
-                r["react_returned"], height=100, key=f"re_ret_{idx}"
-            )
-
-            st.markdown('<hr class="tier-divider">', unsafe_allow_html=True)
-            st.markdown('<div class="tier-label">📋 Post-incident actions</div>', unsafe_allow_html=True)
-            r["react_post"] = st.text_area(
-                "Post-incident requirements",
-                r["react_post"], height=110, key=f"re_post_{idx}",
-                help="e.g. ABCH Critical Incident Report, IRMS, CARL, DCP notification, staff debrief, plan review"
-            )
-
-            # ── AI generation ──────────────────────────────────────────────
             st.markdown("<br>", unsafe_allow_html=True)
-            with st.expander("✨ Generate strategies & procedures with AI"):
-                st.markdown('<p class="field-note">Fill in the BOC fields first, then generate. AI will produce CLC-contextualised content following the correct S&R Plan structure.</p>', unsafe_allow_html=True)
-                if st.button("Generate proactive strategies & tiered reactive procedures", key=f"gen_ai_{idx}", type="primary"):
-                    with st.spinner("Generating CLC-contextualised content…"):
-                        student = st.session_state.student
-                        sys_prompt = """You are an expert in DfE Safety & Risk Plan requirements for students with complex needs in specialised SA school programs. You understand trauma-informed practice and CPI low-arousal approaches."""
-                        user_prompt = f"""
-Generate proactive strategies and tiered reactive procedures for the following risk for a student at Cowandilla Learning Centre LBU:
-
-Student: {student['name']}, Age group: {student['program']}, Key staff: {student['key_staff']}
-CLC context: {st.session_state.contextual_risks}
-
-Risk title: {r['issue_title']}
-Behaviour description: {r['boc_description']}
-Characterised by: {r['characterised_by']}
-Function: {r['function']}
-Risk level: {compute_risk_level(r['likelihood'], r['consequence'])}
-
-CRITICAL RULES:
-1. Proactive strategies = ENVIRONMENTAL, SUPERVISORY, STRUCTURAL only. No relational strategies, no skill-building — those go in the BSP.
-2. Reactive procedures must use a TIERED structure: early signs / on grounds / left grounds / returned to CLC / post-incident.
-3. Be specific — name roles (Staff 1, Staff 2, Admin/Naomi), physical locations, exact actions.
-4. CLC physical context: carpark adjacent via climbable fence, Jenkins/Marion/Sir Donald Bradman Drive nearby, South Road ~15 min at pace. Staff use walkie talkies. Vehicle keys in leaders office. School mobile for SAPOL.
-
-Return ONLY a JSON object with these exact keys:
-env_supervision, structural, contextual_note,
-react_early, react_on_grounds, react_left_grounds, react_returned, react_post
-
-No markdown, no explanation, only valid JSON.
-"""
-                        raw = groq_chat(user_prompt, system=sys_prompt, max_tokens=2500)
-                        try:
-                            raw_clean = raw.strip()
-                            if raw_clean.startswith("```"):
-                                raw_clean = "\n".join(raw_clean.split("\n")[1:])
-                            if raw_clean.endswith("```"):
-                                raw_clean = raw_clean.rsplit("```", 1)[0]
-                            data = json.loads(raw_clean)
-                            for k in ["env_supervision","structural","contextual_note",
-                                      "react_early","react_on_grounds","react_left_grounds",
-                                      "react_returned","react_post"]:
-                                if k in data:
-                                    r[k] = data[k]
-                            st.success("Generated! Review and edit each field.")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Parse error: {e}")
-                            st.code(raw[:1000])
+            if st.button("🗑 Remove this risk", key=f"del_{idx}"):
+                risks.pop(idx)
+                st.session_state.current_risk = max(0, idx-1)
+                st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 5 · REVIEW
+# STEP 5 — Review
 # ══════════════════════════════════════════════════════════════════════════════
 elif st.session_state.step == 5:
-    st.markdown('<div class="section-heading">Review Plan</div>', unsafe_allow_html=True)
+    student = st.session_state.student
+    risks   = st.session_state.risks
 
-    if st.session_state.contextual_risks:
-        with st.expander("📋 Contextual Risks (CLC Setting)", expanded=False):
-            st.write(st.session_state.contextual_risks)
+    st.markdown('<div class="sec-head">Plan Summary</div>', unsafe_allow_html=True)
+    st.markdown(f"""<div class="card-teal">
+    <strong>{student['name']}</strong> &nbsp;|&nbsp; DOB: {student['dob']} &nbsp;|&nbsp;
+    Age: {student['age']} &nbsp;|&nbsp; EDSAS: {student['edsas']} &nbsp;|&nbsp;
+    Program: {student['program']} &nbsp;|&nbsp; Home school: {student['home_school']}<br>
+    <span style="font-size:0.85rem;color:#1A3530;">Key staff: {student['key_staff']} &nbsp;·&nbsp; Plan date: {student['plan_date']}</span>
+    </div>""", unsafe_allow_html=True)
 
-    for i, r in enumerate(st.session_state.risks):
+    if student.get("medical_notes"):
+        st.markdown(f'<div class="card-amber">⚕ <strong>Medical/context:</strong> {student["medical_notes"]}</div>',
+                    unsafe_allow_html=True)
+
+    st.markdown(f"**{len(risks)} risk(s) identified:**")
+    for i, r in enumerate(risks):
         level = compute_risk_level(r["likelihood"], r["consequence"])
-        with st.expander(f"Risk {i+1}: {r['issue_title'] or '(unnamed)'} — {level}", expanded=(i==0)):
+        col   = risk_colour(level)
+        title = r["issue_title"] or f"Unnamed risk {i+1}"
+        with st.expander(f"Risk {i+1}: {title}  [{level}]"):
             c1, c2 = st.columns(2)
             with c1:
-                st.markdown("**Behaviour of Concern**")
-                st.write(r["boc_description"] or "—")
-                st.markdown("**Characterised by**")
-                st.write(r["characterised_by"] or "—")
-                st.markdown("**Function**")
-                st.write(r["function"] or "—")
+                st.markdown(f"**Likelihood:** {r['likelihood']}")
+                st.markdown(f"**Consequence:** {r['consequence']}")
+                st.markdown(f"**Function:** {r['function'] or '—'}")
             with c2:
-                st.markdown("**Environment & supervision**")
-                st.write(r["env_supervision"] or "—")
-                st.markdown("**Structural strategies**")
-                st.write(r["structural"] or "—")
-            st.markdown("**Reactive procedures**")
-            for tier, label in [
-                ("react_early",        "🟡 Early signs"),
-                ("react_on_grounds",   "🟠 On CLC grounds"),
-                ("react_left_grounds", "🔴 Left grounds"),
-                ("react_returned",     "🟢 On return"),
-                ("react_post",         "📋 Post-incident"),
-            ]:
-                if r[tier]:
-                    st.markdown(f"*{label}:* {r[tier]}")
+                st.markdown(f"**Risk level:** <span style='color:{col};font-weight:700'>{level}</span>", unsafe_allow_html=True)
+                st.markdown(f"**CLC notes:** {r['clc_notes'] or '—'}")
+            if r.get("behaviour_descriptors"):
+                st.markdown("**Behaviour descriptors:**")
+                st.text(r["behaviour_descriptors"])
+            st.markdown("**Proactive:**")
+            st.text(r["proactive"] or "(none)")
+            st.markdown("**Procedure:**")
+            st.text(r["procedure"] or "(none)")
 
-    st.markdown("---")
-    st.markdown('<div class="section-heading">Priority Actions & Sign-off</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sec-head">Priority Actions</div>', unsafe_allow_html=True)
+    gen_col, _ = st.columns([1,2])
+    with gen_col:
+        if st.button("✨ Generate priority actions with AI"):
+            with st.spinner("Generating…"):
+                st.session_state.priority_actions = ai_generate_priority_actions(risks, student)
+            st.rerun()
+
     st.session_state.priority_actions = st.text_area(
-        "Priority actions following this plan (will appear in the document)",
-        st.session_state.priority_actions, height=180
-    )
-    st.session_state.review_date_final = st.text_input(
-        "Final review date",
-        st.session_state.review_date_final or st.session_state.student.get("review_date","")
-    )
+        "Priority actions arising from this plan (one per line, start with •)",
+        value=st.session_state.priority_actions, height=140,
+        placeholder="• Schedule TAC meeting within 5 school days\n• Conduct fence/gate risk audit…")
+
+    st.session_state.review_date = st.text_input("Review date",
+        value=st.session_state.review_date, placeholder="e.g. 19/05/2026")
 
     st.markdown("<br>", unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("← Edit risks", use_container_width=True):
-            st.session_state.step = 4
-            st.rerun()
-    with c2:
-        if st.button("→ Generate document", type="primary", use_container_width=True):
-            st.session_state.step = 6
-            st.rerun()
+    col_a, col_b, col_c = st.columns([1,1,2])
+    with col_a:
+        if st.button("← Back to risks"):
+            st.session_state.step = 4; st.rerun()
+    with col_c:
+        if st.button("✅ Generate Safety Plan (.docx)", type="primary", use_container_width=True):
+            if not risks or all(r["issue_title"].strip() == "" for r in risks):
+                st.error("Please complete at least one risk row.")
+            else:
+                st.session_state.step = 6; st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 6 · GENERATE DOCX
+# STEP 6 — Generate .docx
 # ══════════════════════════════════════════════════════════════════════════════
 elif st.session_state.step == 6:
-    st.markdown('<div class="section-heading">Generate Document</div>', unsafe_allow_html=True)
+    student          = st.session_state.student
+    risks            = st.session_state.risks
+    priority_actions = st.session_state.priority_actions
+    review_date      = st.session_state.review_date
 
-    def hex_to_rgb(hex_color):
-        h = hex_color.lstrip("#")
-        return tuple(int(h[i:i+2],16) for i in (0,2,4))
+    st.markdown('<div class="sec-head">Generating Document</div>', unsafe_allow_html=True)
 
-    def set_cell_bg(cell, hex_color):
-        tc   = cell._tc
-        tcPr = tc.get_or_add_tcPr()
-        shd  = OxmlElement("w:shd")
-        shd.set(qn("w:val"),   "clear")
-        shd.set(qn("w:color"), "auto")
-        shd.set(qn("w:fill"),  hex_color.lstrip("#"))
-        tcPr.append(shd)
+    # ── docx helpers ──────────────────────────────────────────────────────────
+    def rgb(h):
+        h = h.lstrip("#")
+        return RGBColor(int(h[0:2],16), int(h[2:4],16), int(h[4:6],16))
 
-    def set_cell_borders(cell, color="CCCCCC"):
-        tc   = cell._tc
-        tcPr = tc.get_or_add_tcPr()
-        bdr  = OxmlElement("w:tcBorders")
-        for side in ["top","left","bottom","right"]:
-            el = OxmlElement(f"w:{side}")
-            el.set(qn("w:val"),   "single")
-            el.set(qn("w:sz"),    "4")
-            el.set(qn("w:space"), "0")
-            el.set(qn("w:color"), color.lstrip("#"))
-            bdr.append(el)
-        tcPr.append(bdr)
+    def set_bg(cell, hex_color):
+        tc = cell._tc; tcPr = tc.get_or_add_tcPr()
+        shd = OxmlElement('w:shd')
+        shd.set(qn('w:val'),'clear'); shd.set(qn('w:color'),'auto')
+        shd.set(qn('w:fill'), hex_color.lstrip("#")); tcPr.append(shd)
 
-    def add_cell_text(cell, text, bold=False, italic=False, size=9,
-                      color="1A1A1A", align=WD_ALIGN_PARAGRAPH.LEFT):
-        cell.text = ""
-        para = cell.paragraphs[0]
-        para.alignment = align
-        run  = para.add_run(text)
-        run.bold   = bold
-        run.italic = italic
-        run.font.size = Pt(size)
-        run.font.color.rgb = RGBColor(*hex_to_rgb(color))
+    def set_borders(cell, color="1A7A6E", size="4"):
+        tc = cell._tc; tcPr = tc.get_or_add_tcPr()
+        tcB = OxmlElement('w:tcBorders')
+        for side in ['top','left','bottom','right']:
+            b = OxmlElement(f'w:{side}')
+            b.set(qn('w:val'),'single'); b.set(qn('w:sz'),size)
+            b.set(qn('w:space'),'0'); b.set(qn('w:color'), color.lstrip("#"))
+            tcB.append(b)
+        tcPr.append(tcB)
 
-    def add_para(cell, text, bold=False, italic=False, size=9, color="1A1A1A", space_after=2):
-        para = cell.add_paragraph()
-        para.paragraph_format.space_after = Pt(space_after)
-        run  = para.add_run(text)
-        run.bold   = bold
-        run.italic = italic
-        run.font.size = Pt(size)
-        run.font.color.rgb = RGBColor(*hex_to_rgb(color))
+    def arun(para, text, bold=False, italic=False, size=18, color="000000"):
+        run = para.add_run(text)
+        run.bold = bold; run.italic = italic
+        run.font.size = Pt(size/2)
+        run.font.color.rgb = rgb(color)
+        run.font.name = "Arial"
+        return run
 
-    def add_bullets(cell, text, size=9):
-        for line in text.split("\n"):
-            line = line.strip().lstrip("-•").strip()
-            if not line:
-                continue
-            para = cell.add_paragraph(style="List Bullet")
-            para.paragraph_format.space_after = Pt(1)
-            run  = para.add_run(line)
-            run.font.size = Pt(size)
-            run.font.color.rgb = RGBColor(*hex_to_rgb("1A1A1A"))
+    def cpara(cell, text, bold=False, italic=False, size=18, color="000000",
+               align=WD_ALIGN_PARAGRAPH.LEFT, sb=40, sa=40):
+        p = cell.add_paragraph()
+        p.paragraph_format.space_before = Pt(sb/20)
+        p.paragraph_format.space_after  = Pt(sa/20)
+        p.alignment = align
+        if text: arun(p, text, bold=bold, italic=italic, size=size, color=color)
+        return p
 
-    def add_tier(cell, label, text, size=9):
+    def cbullet(cell, text, size=17, color="333333"):
+        p = cell.add_paragraph(style='List Bullet')
+        p.paragraph_format.space_before = Pt(1)
+        p.paragraph_format.space_after  = Pt(1)
+        arun(p, text, size=size, color=color)
+
+    def render_content(cell, text: str):
+        """Parse ### subheadings and • bullets into formatted cell content."""
         if not text.strip():
+            cpara(cell, "(Not completed)", italic=True, color="888888")
             return
-        add_para(cell, label, bold=True, size=size, color="1A7A6E", space_after=1)
-        add_bullets(cell, text, size=size)
+        for line in text.splitlines():
+            line = line.strip()
+            if not line: continue
+            if line.startswith("###"):
+                p = cell.add_paragraph()
+                p.paragraph_format.space_before = Pt(5)
+                p.paragraph_format.space_after  = Pt(2)
+                arun(p, line.lstrip("# "), bold=True, color=TEAL.lstrip("#"), size=16)
+            elif line.startswith("•") or line.startswith("-"):
+                cbullet(cell, line.lstrip("•- "))
+            else:
+                p = cell.add_paragraph()
+                p.paragraph_format.space_before = Pt(2)
+                p.paragraph_format.space_after  = Pt(2)
+                arun(p, line, size=17)
 
-    def build_docx():
+    # ── Build document ────────────────────────────────────────────────────────
+    with st.spinner("Building your Safety & Risk Management Plan…"):
         doc = DocxDocument()
+        sec = doc.sections[0]
+        sec.page_width  = Cm(21)
+        sec.page_height = Cm(29.7)
+        for attr in ('left_margin','right_margin','top_margin','bottom_margin'):
+            setattr(sec, attr, Cm(1.5))
 
-        # Page margins
-        for section in doc.sections:
-            section.page_width  = Cm(21)
-            section.page_height = Cm(29.7)
-            for attr in ["left_margin","right_margin","top_margin","bottom_margin"]:
-                setattr(section, attr, Cm(1.8))
-
-        student = st.session_state.student
-        risks   = st.session_state.risks
-
-        # ── Title block ───────────────────────────────────────────────────
-        title_tbl = doc.add_table(rows=1, cols=1)
-        title_tbl.style = "Table Grid"
-        cell = title_tbl.cell(0,0)
-        set_cell_bg(cell, "1A7A6E")
-        set_cell_borders(cell, "1A7A6E")
-        cell.text = ""
-        for txt, sz, b in [
-            ("SAFETY & RISK MANAGEMENT PLAN", 16, True),
-            (f"{student['name']}  |  Cowandilla Learning Centre  |  LBU {student['program']}", 11, False)
-        ]:
-            p2 = cell.add_paragraph()
-            p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            r2 = p2.add_run(txt)
-            r2.bold = b
-            r2.font.size  = Pt(sz)
-            r2.font.color.rgb = RGBColor(255,255,255)
+        # Title
+        t = doc.add_table(rows=1, cols=1); t.style='Table Grid'
+        tc = t.rows[0].cells[0]; set_bg(tc, TEAL.lstrip("#")); set_borders(tc, TEAL.lstrip("#"))
+        p1 = tc.paragraphs[0]; p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        arun(p1, "SAFETY & RISK MANAGEMENT PLAN", bold=True, size=28, color="FFFFFF")
+        cpara(tc, f"{student['name']}  |  Cowandilla Learning Centre  |  LBU {student['program']} Program",
+              size=18, color="FEF3C7", align=WD_ALIGN_PARAGRAPH.CENTER, sb=20, sa=40)
 
         doc.add_paragraph()
 
-        # ── Student details table ─────────────────────────────────────────
-        det_tbl = doc.add_table(rows=2, cols=2)
-        det_tbl.style = "Table Grid"
+        # Student details
+        det = doc.add_table(rows=3, cols=2); det.style='Table Grid'
+        hdr = det.rows[0].cells[0].merge(det.rows[0].cells[1])
+        set_bg(hdr, GREY_DARK.lstrip("#")); set_borders(hdr, TEAL.lstrip("#"))
+        arun(hdr.paragraphs[0], "STUDENT DETAILS", bold=True, size=18, color="FFFFFF")
 
-        left_cell  = det_tbl.cell(0,0)
-        right_cell = det_tbl.cell(0,1)
-        for cell in [left_cell, right_cell]:
-            set_cell_borders(cell)
+        details_l = [("Full Name", student['name']), ("Date of Birth", student['dob'] or "—"),
+                     ("Age", student['age'] or "—"), ("EDSAS ID", student['edsas'] or "—")]
+        details_r = [("Home School", student['home_school'] or "—"),
+                     ("CLC Program", student['program']), ("Plan Date", student['plan_date'])]
 
-        left_items = [
-            ("Full Name:", student["name"]),
-            ("Date of Birth:", student["dob"]),
-            ("EDSAS ID:", student["edsas"]),
-            ("Program:", student["program"]),
-        ]
-        right_items = [
-            ("Home School:", student["home_school"]),
-            ("Key Staff:", student["key_staff"]),
-            ("Plan Date:", student["plan_date"]),
-            ("Review Date:", st.session_state.review_date_final or student["review_date"]),
-        ]
-        left_cell.text = ""
-        for label, val in left_items:
-            add_para(left_cell, f"{label}  {val}", size=9)
-        right_cell.text = ""
-        for label, val in right_items:
-            add_para(right_cell, f"{label}  {val}", size=9)
+        for ci, items in enumerate([details_l, details_r]):
+            c = det.rows[1].cells[ci]; set_bg(c,"F2F6F6"); set_borders(c, TEAL.lstrip("#"))
+            c.paragraphs[0].clear()
+            for label, val in items:
+                p = c.add_paragraph()
+                arun(p, f"{label}: ", bold=True, size=17, color=GREY_DARK.lstrip("#"))
+                arun(p, val, size=17)
 
-        # Status row
-        status_cell = det_tbl.cell(1,0)
-        det_tbl.cell(1,0).merge(det_tbl.cell(1,1))
-        set_cell_bg(status_cell, "FDF0DC")
-        set_cell_borders(status_cell)
-        status_cell.text = ""
-        if student["sapol_ref"]:
-            add_para(status_cell, f"SAPOL Reference: {student['sapol_ref']}", bold=True, size=9)
-        if student["status_note"]:
-            add_para(status_cell, f"⚠ {student['status_note']}", italic=True, size=9)
+        status_cell = det.rows[2].cells[0].merge(det.rows[2].cells[1])
+        set_bg(status_cell, AMBER_LIGHT.lstrip("#")); set_borders(status_cell, AMBER.lstrip("#"))
+        p = status_cell.paragraphs[0]
+        arun(p, "Key staff: ", bold=True, size=17, color=AMBER.lstrip("#"))
+        arun(p, student['key_staff'] or "—", size=17)
+        if student.get('medical_notes'):
+            p2 = status_cell.add_paragraph()
+            arun(p2, "Medical/context: ", bold=True, size=16, color="666666")
+            arun(p2, student['medical_notes'], size=16, italic=True)
+        if student.get('clc_context'):
+            p3 = status_cell.add_paragraph()
+            arun(p3, "CLC context: ", bold=True, size=16, color="666666")
+            arun(p3, student['clc_context'], size=16, italic=True)
 
         doc.add_paragraph()
 
-        # ── Contextual risks ──────────────────────────────────────────────
-        if st.session_state.contextual_risks.strip():
-            ctx_tbl = doc.add_table(rows=2, cols=1)
-            ctx_tbl.style = "Table Grid"
+        # Risk table heading
+        h = doc.add_paragraph()
+        arun(h, "IDENTIFIED RISKS AND MANAGEMENT STRATEGIES", bold=True, size=20, color=GREY_DARK.lstrip("#"))
+        n = doc.add_paragraph()
+        arun(n, "* Risk ratings use the Likelihood/Consequence matrix on page 2. Ratings reflect probability and severity without proactive strategies in place.",
+             italic=True, size=14, color="666666")
 
-            hdr_cell = ctx_tbl.cell(0,0)
-            set_cell_bg(hdr_cell, "1A7A6E")
-            set_cell_borders(hdr_cell, "1A7A6E")
-            add_cell_text(hdr_cell, "CURRENT CONTEXTUAL RISKS — CLC SETTING",
-                          bold=True, size=10, color="FFFFFF")
+        # Main risk table — 4 columns
+        main = doc.add_table(rows=1, cols=4); main.style='Table Grid'
+        col_widths = [Cm(5.2), Cm(2.0), Cm(7.2), Cm(8.6)]
+        for i, w in enumerate(col_widths):
+            for c in main.columns[i].cells: c.width = w
 
-            body_cell = ctx_tbl.cell(1,0)
-            set_cell_borders(body_cell)
-            body_cell.text = ""
-            add_bullets(body_cell, st.session_state.contextual_risks, size=9)
+        for i, h in enumerate(["Concerning Issue","Risk Level *","Proactive Strategies","Procedure to Follow"]):
+            c = main.rows[0].cells[i]; set_bg(c, TEAL.lstrip("#")); set_borders(c, TEAL.lstrip("#"))
+            p = c.paragraphs[0]; p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            arun(p, h, bold=True, size=17, color="FFFFFF")
 
-            doc.add_paragraph()
+        for r in risks:
+            if not r["issue_title"].strip(): continue
+            level   = compute_risk_level(r["likelihood"], r["consequence"])
+            lhex    = RISK_COLOURS.get(level,"#888").lstrip("#")
+            l_code  = r["likelihood"].split("–")[0].strip().split(" ")[0]
+            c_code  = r["consequence"].split("–")[0].strip().split(" ")[0]
+            row = main.add_row()
 
-        # ── Risk table ────────────────────────────────────────────────────
-        risk_tbl = doc.add_table(rows=1, cols=4)
-        risk_tbl.style = "Table Grid"
-
-        headers = [
-            "Concerning Behaviour of Concern",
-            "Risk",
-            "Proactive Strategies to Prevent/Reduce",
-            "Procedure to Follow if it Occurs"
-        ]
-        for j, hdr in enumerate(headers):
-            hc = risk_tbl.cell(0, j)
-            set_cell_bg(hc, "1A7A6E")
-            set_cell_borders(hc, "1A7A6E")
-            add_cell_text(hc, hdr, bold=True, size=9, color="FFFFFF")
-
-        for r in st.session_state.risks:
-            row  = risk_tbl.add_row()
-            level = compute_risk_level(r["likelihood"], r["consequence"])
-            level_bg = {"EXTREME":"FCDCDC","HIGH":"FEF0CC","MODERATE":"FEFACC","LOW":"E8F5E9"}.get(level,"FFFFFF")
-            level_col= {"EXTREME":"7A1A1A","HIGH":"7A4000","MODERATE":"5A5A00","LOW":"1B5E20"}.get(level,"333333")
-
-            # Col 0: BOC
-            boc_cell = row.cells[0]
-            set_cell_borders(boc_cell)
-            boc_cell.text = ""
-            add_para(boc_cell, r["issue_title"], bold=True, size=9)
-            if r["boc_description"]:
-                add_para(boc_cell, r["boc_description"], size=9, space_after=4)
-            if r["characterised_by"]:
-                add_para(boc_cell, "Characterised by:", bold=True, size=9, space_after=1)
-                add_bullets(boc_cell, r["characterised_by"], size=9)
+            # Col 0: Issue
+            c0 = row.cells[0]; set_bg(c0,"D6EEEB"); set_borders(c0, TEAL.lstrip("#"))
+            c0.paragraphs[0].clear()
+            p = c0.paragraphs[0]; arun(p, r["issue_title"], bold=True, size=17, color=GREY_DARK.lstrip("#"))
+            if r["issue_detail"]:
+                p2 = c0.add_paragraph(); p2.paragraph_format.space_before = Pt(4)
+                arun(p2, r["issue_detail"], size=16)
+            if r["behaviour_descriptors"]:
+                ph = c0.add_paragraph(); ph.paragraph_format.space_before = Pt(5)
+                arun(ph, "Characterised by:", bold=True, size=15, color=TEAL.lstrip("#"))
+                for bd_line in r["behaviour_descriptors"].splitlines():
+                    bl = bd_line.strip()
+                    if bl:
+                        bp = c0.add_paragraph(style='List Bullet')
+                        bp.paragraph_format.space_before = Pt(1)
+                        bp.paragraph_format.space_after  = Pt(1)
+                        arun(bp, bl.lstrip("•- "), size=15)
             if r["function"]:
-                add_para(boc_cell, f"Function: {r['function']}", italic=True, size=9)
+                pf = c0.add_paragraph(); pf.paragraph_format.space_before = Pt(5)
+                arun(pf, "Function: ", bold=True, size=15, color="555555")
+                arun(pf, r["function"], size=15, italic=True)
+            if r["clc_notes"]:
+                pn = c0.add_paragraph(); pn.paragraph_format.space_before = Pt(5)
+                arun(pn, "CLC: ", bold=True, size=14, color=AMBER.lstrip("#"))
+                arun(pn, r["clc_notes"], size=14, italic=True)
 
-            # Col 1: Risk rating
-            rat_cell = row.cells[1]
-            set_cell_bg(rat_cell, level_bg)
-            set_cell_borders(rat_cell, level_bg)
-            rat_cell.text = ""
-            l_key = r["likelihood"][0]
-            c_key = r["consequence"][0]
-            add_para(rat_cell, f"{l_key}{c_key}", bold=True, size=13, color=level_col)
-            add_para(rat_cell, level, bold=True, size=8, color=level_col)
-            rat_cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            # Col 1: Risk level
+            c1 = row.cells[1]; set_bg(c1, lhex); set_borders(c1, lhex)
+            p1 = c1.paragraphs[0]; p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            arun(p1, f"{l_code}{c_code}", bold=True, size=26, color="FFFFFF")
+            p2 = c1.add_paragraph(); p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            arun(p2, level, bold=True, size=14, color="FFFFFF")
 
             # Col 2: Proactive
-            pro_cell = row.cells[2]
-            set_cell_borders(pro_cell)
-            pro_cell.text = ""
-            if r["env_supervision"]:
-                add_para(pro_cell, "Environment & supervision", bold=True, size=9)
-                add_bullets(pro_cell, r["env_supervision"], size=9)
-            if r["structural"]:
-                add_para(pro_cell, "Operational & structural", bold=True, size=9)
-                add_bullets(pro_cell, r["structural"], size=9)
-            if r["contextual_note"]:
-                add_para(pro_cell, "Current contextual factor", bold=True, size=9)
-                add_bullets(pro_cell, r["contextual_note"], size=9)
+            c2 = row.cells[2]; set_borders(c2, TEAL.lstrip("#"))
+            c2.paragraphs[0].clear(); render_content(c2, r["proactive"])
 
-            # Col 3: Reactive (tiered)
-            res_cell = row.cells[3]
-            set_cell_borders(res_cell)
-            res_cell.text = ""
-            add_tier(res_cell, "If early signs of dysregulation are observed",         r["react_early"])
-            add_tier(res_cell, "If student has left program space but remains on CLC grounds", r["react_on_grounds"])
-            add_tier(res_cell, "If student has left CLC grounds",                      r["react_left_grounds"])
-            add_tier(res_cell, "When student is returned to CLC",                      r["react_returned"])
-            add_tier(res_cell, "Post-incident",                                        r["react_post"])
+            # Col 3: Procedure
+            c3 = row.cells[3]; set_borders(c3, TEAL.lstrip("#"))
+            c3.paragraphs[0].clear(); render_content(c3, r["procedure"])
 
-        # Set column widths
-        from docx.oxml.ns import qn as _qn
-        from docx.oxml    import OxmlElement as _OE
-        def set_col_width(tbl, widths_cm):
-            tblGrid = _OE("w:tblGrid")
-            for w in widths_cm:
-                gc = _OE("w:gridCol")
-                gc.set(_qn("w:w"), str(int(w * 567)))
-                tblGrid.append(gc)
-            tbl._tbl.insert(0, tblGrid)
-        set_col_width(risk_tbl, [5.5, 1.7, 5.9, 6.1])
+        # Footer note
+        fn_row = main.add_row()
+        fn_cell = fn_row.cells[0].merge(fn_row.cells[1]).merge(fn_row.cells[2]).merge(fn_row.cells[3])
+        set_bg(fn_cell,"F2F6F6"); set_borders(fn_cell, TEAL.lstrip("#"))
+        p = fn_cell.paragraphs[0]
+        arun(p, "* Risk ratings use the Likelihood/Consequence matrix on the following page.",
+             italic=True, size=13, color="666666")
 
         doc.add_paragraph()
 
-        # ── Priority actions ──────────────────────────────────────────────
-        if st.session_state.priority_actions.strip():
-            act_tbl = doc.add_table(rows=2, cols=1)
-            act_tbl.style = "Table Grid"
-            hc2 = act_tbl.cell(0,0)
-            set_cell_bg(hc2, "1A7A6E")
-            set_cell_borders(hc2, "1A7A6E")
-            add_cell_text(hc2, "PRIORITY ACTIONS", bold=True, size=10, color="FFFFFF")
-            bc2 = act_tbl.cell(1,0)
-            set_cell_borders(bc2)
-            bc2.text = ""
-            add_bullets(bc2, st.session_state.priority_actions, size=9)
+        # Priority actions
+        if priority_actions.strip():
+            pa_tbl = doc.add_table(rows=1, cols=1); pa_tbl.style='Table Grid'
+            pa = pa_tbl.rows[0].cells[0]
+            set_bg(pa, AMBER_LIGHT.lstrip("#")); set_borders(pa, AMBER.lstrip("#"))
+            pa.paragraphs[0].clear()
+            cpara(pa, "PRIORITY ACTIONS", bold=True, size=19, color=AMBER.lstrip("#"), sb=40, sa=60)
+            for line in priority_actions.splitlines():
+                line = line.strip()
+                if not line: continue
+                if line.startswith("•") or line.startswith("-"):
+                    cbullet(pa, line.lstrip("•- "))
+                else:
+                    cpara(pa, line, size=17)
             doc.add_paragraph()
 
-        # ── Sign-off ──────────────────────────────────────────────────────
-        sig_tbl = doc.add_table(rows=2, cols=3)
-        sig_tbl.style = "Table Grid"
-        for j, hdr in enumerate(["Prepared by", "Reviewed by / TAC sign-off", "Next Review Date"]):
-            hc3 = sig_tbl.cell(0, j)
-            set_cell_bg(hc3, "1A7A6E")
-            set_cell_borders(hc3, "1A7A6E")
-            add_cell_text(hc3, hdr, bold=True, size=9, color="FFFFFF")
-        vals = [
-            "_________________________________________\n\nDate: ____________________",
-            "All TAC members to sign and date",
-            st.session_state.review_date_final or "—"
-        ]
-        for j, val in enumerate(vals):
-            sc = sig_tbl.cell(1, j)
-            set_cell_borders(sc)
-            sc.text = ""
-            add_para(sc, val, size=9)
 
-        # ── Risk matrix ───────────────────────────────────────────────────
+        # ── Staff Acknowledgement sign-off ─────────────────────────────────
         doc.add_paragraph()
-        mat_tbl = doc.add_table(rows=7, cols=6)
-        mat_tbl.style = "Table Grid"
-        mat_headers = ["Likelihood \\ Consequence","1 – Insignificant","2 – Minor","3 – Moderate","4 – Major","5 – Catastrophic"]
-        for j, h in enumerate(mat_headers):
-            hc4 = mat_tbl.cell(0,j)
-            set_cell_bg(hc4, "1A7A6E")
-            set_cell_borders(hc4, "1A7A6E")
-            add_cell_text(hc4, h, bold=True, size=8, color="FFFFFF", align=WD_ALIGN_PARAGRAPH.CENTER)
-        mat_data = [
-            ("E – Almost Certain",  ["High","High","Extreme","Extreme","Extreme"]),
-            ("D – Likely/Frequently",["Moderate","High","High","Extreme","Extreme"]),
-            ("C – Likely Sometimes", ["Low","Moderate","High","Extreme","Extreme"]),
-            ("B – Unlikely",         ["Low","Low","Moderate","High","Extreme"]),
-            ("A – Rare",             ["Low","Low","Moderate","High","High"]),
+        sh = doc.add_paragraph()
+        arun(sh, "STAFF ACKNOWLEDGEMENT", bold=True, size=19, color=GREY_DARK.lstrip("#"))
+        sn = doc.add_paragraph()
+        arun(sn, "All staff working with this student must read this plan and sign below to confirm they understand the identified risks and their responsibilities.",
+             size=15, italic=True)
+        doc.add_paragraph()
+
+        # Sign-off table — header + 8 blank rows
+        SIGN_COLS = ["Staff Member Name", "Role", "Signature", "Date"]
+        SIGN_WIDTHS_CM = [5.5, 4.0, 5.5, 2.5]
+        stbl = doc.add_table(rows=9, cols=4); stbl.style='Table Grid'
+        from docx.shared import Cm as _Cm
+        for ci, w in enumerate(SIGN_WIDTHS_CM):
+            for cell in stbl.columns[ci].cells:
+                cell.width = _Cm(w)
+        # Header row
+        for ci, lbl in enumerate(SIGN_COLS):
+            c = stbl.rows[0].cells[ci]
+            set_bg(c, GREY_DARK.lstrip("#")); set_borders(c, TEAL.lstrip("#"))
+            c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            arun(c.paragraphs[0], lbl, bold=True, size=16, color="FFFFFF")
+        # 8 blank signing rows
+        for ri in range(1, 9):
+            row = stbl.rows[ri]
+            bg = "F2F6F6" if ri % 2 == 0 else "FFFFFF"
+            for ci in range(4):
+                c = row.cells[ci]
+                set_bg(c, bg); set_borders(c, "CCCCCC")
+                cpara(c, "", size=16, sb=60, sa=60)
+        doc.add_paragraph()
+
+        # Endorsement / review
+        eh = doc.add_paragraph()
+        arun(eh, "PLAN ENDORSEMENT", bold=True, size=19, color=GREY_DARK.lstrip("#"))
+        doc.add_paragraph()
+        sign_tbl = doc.add_table(rows=2, cols=3); sign_tbl.style='Table Grid'
+        for ci, lbl in enumerate(["Prepared by (CLC staff)","Endorsed by (Principal/Leader)","Next Review Date"]):
+            c = sign_tbl.rows[0].cells[ci]; set_bg(c, GREY_DARK.lstrip("#"))
+            set_borders(c, TEAL.lstrip("#"))
+            c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            arun(c.paragraphs[0], lbl, bold=True, size=16, color="FFFFFF")
+        for ci, val in enumerate(["Name: ___________________________\nSignature: ______________________\nDate: _______________",
+                                   "Name: ___________________________\nSignature: ______________________\nDate: _______________",
+                                   review_date or "TBC"]):
+            c = sign_tbl.rows[1].cells[ci]; set_bg(c,"F2F6F6"); set_borders(c, TEAL.lstrip("#"))
+            for line in val.split('\n'):
+                cpara(c, line, size=16, sb=20, sa=20)
+
+
+        doc.add_page_break()
+
+        # Risk matrix page
+        mh = doc.add_paragraph(); arun(mh, "LEVEL OF RISK — REFERENCE MATRIX", bold=True, size=22, color=GREY_DARK.lstrip("#"))
+
+        likelihoods = ["E – Almost Certain","D – Likely/Frequently","C – Likely Sometimes","B – Unlikely","A – Rare"]
+        cons_labels = ["1 Insignificant","2 Minor","3 Moderate","4 Major","5 Catastrophic"]
+        matrix_data = [["High","High","Extreme","Extreme","Extreme"],
+                       ["Moderate","High","High","Extreme","Extreme"],
+                       ["Low","Moderate","High","Extreme","Extreme"],
+                       ["Low","Low","Moderate","High","Extreme"],
+                       ["Low","Low","Moderate","High","High"]]
+        fill_m = {"Extreme":"C0392B","High":"E67E22","Moderate":"F1C40F","Low":"27AE60"}
+        text_m = {"Extreme":"FFFFFF","High":"FFFFFF","Moderate":"333333","Low":"FFFFFF"}
+
+        mx = doc.add_table(rows=len(likelihoods)+1, cols=len(cons_labels)+1); mx.style='Table Grid'
+        mx.rows[0].cells[0].paragraphs[0].clear()
+        set_bg(mx.rows[0].cells[0], GREY_DARK.lstrip("#"))
+        arun(mx.rows[0].cells[0].paragraphs[0], "Likelihood \\ Consequences", bold=True, size=13, color="FFFFFF")
+        for ci, cl in enumerate(cons_labels):
+            c = mx.rows[0].cells[ci+1]; set_bg(c, GREY_DARK.lstrip("#"))
+            c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            arun(c.paragraphs[0], cl, bold=True, size=13, color="FFFFFF")
+
+        for ri, (lh, row_data) in enumerate(zip(likelihoods, matrix_data)):
+            row = mx.rows[ri+1]
+            set_bg(row.cells[0],"F2F6F6")
+            arun(row.cells[0].paragraphs[0], lh, bold=True, size=13, color=GREY_DARK.lstrip("#"))
+            for ci, val in enumerate(row_data):
+                c = row.cells[ci+1]; fh = fill_m.get(val,"888888"); set_bg(c, fh)
+                c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                arun(c.paragraphs[0], val, bold=True, size=13, color=text_m.get(val,"FFFFFF"))
+
+        doc.add_paragraph()
+        lh = doc.add_paragraph(); arun(lh, "NOTES ON ANALYSING RISKS", bold=True, size=18, color=GREY_DARK.lstrip("#"))
+        note = doc.add_paragraph()
+        arun(note, "Assess the likelihood and consequence using the definitions below, then read the level from the matrix above.", size=16)
+        doc.add_paragraph()
+
+        legend = [
+            ("E – Almost Certain","5 – Catastrophic: Serious injury or near-miss; severe incident (traffic collision, weapon, suicidal behaviour); major level over significant period."),
+            ("D – Likely/Frequently","4 – Major: Injury or near-miss; distress to others; violence; critical incident report; repeated incidents."),
+            ("C – Likely Sometimes","3 – Moderate: Cross-agency involvement; incident reports; repeated suspension/take-home; complex welfare or health issues."),
+            ("B – Unlikely","2 – Minor: Impact on learning; team approach required; referral suggested; frequent repeats and take-home suspensions."),
+            ("A – Rare","1 – Insignificant: Managed within program; discussion with line manager; review at team meeting."),
         ]
-        level_styles = {
-            "Extreme":  ("FCDCDC","7A1A1A"),
-            "High":     ("FEF0CC","7A4000"),
-            "Moderate": ("FEFACC","5A5A00"),
-            "Low":      ("E8F5E9","1B5E20"),
-        }
-        for i, (lik, vals_row) in enumerate(mat_data, 1):
-            add_cell_text(mat_tbl.cell(i,0), lik, bold=True, size=8)
-            set_cell_borders(mat_tbl.cell(i,0))
-            for j, v in enumerate(vals_row, 1):
-                mc = mat_tbl.cell(i,j)
-                bg, col = level_styles.get(v, ("FFFFFF","333333"))
-                set_cell_bg(mc, bg)
-                set_cell_borders(mc, bg)
-                add_cell_text(mc, v, bold=True, size=8, color=col, align=WD_ALIGN_PARAGRAPH.CENTER)
+        leg_tbl = doc.add_table(rows=len(legend)+1, cols=2); leg_tbl.style='Table Grid'
+        for ci, lbl in enumerate(["Likelihood","Consequences"]):
+            c = leg_tbl.rows[0].cells[ci]; set_bg(c, GREY_DARK.lstrip("#")); set_borders(c, TEAL.lstrip("#"))
+            c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            arun(c.paragraphs[0], lbl, bold=True, size=15, color="FFFFFF")
+        for ri, (lk, cs) in enumerate(legend):
+            r0 = leg_tbl.rows[ri+1].cells[0]; r1 = leg_tbl.rows[ri+1].cells[1]
+            set_bg(r0,"F2F6F6"); arun(r0.paragraphs[0], lk, bold=True, size=14, color=GREY_DARK.lstrip("#"))
+            arun(r1.paragraphs[0], cs, size=14)
 
         buf = io.BytesIO()
-        doc.save(buf)
-        buf.seek(0)
-        return buf
+        doc.save(buf); buf.seek(0)
 
-    with st.spinner("Building your Safety & Risk Management Plan…"):
-        try:
-            docx_buf = build_docx()
-            student_name_safe = st.session_state.student["name"].replace(" ","_")
-            filename = f"Safety_Risk_Plan_{student_name_safe}_{date.today().strftime('%d%b%Y')}.docx"
+    # ── Download ──────────────────────────────────────────────────────────────
+    st.markdown(f"""<div class="card-teal">
+    ✅ <strong>Plan generated!</strong> {student['name']}'s Safety &amp; Risk Management Plan is ready —
+    {len([r for r in risks if r['issue_title'].strip()])} risk row(s), priority actions, risk matrix.
+    </div>""", unsafe_allow_html=True)
 
-            st.success("✅ Your Safety & Risk Management Plan is ready.")
-            st.markdown("""
-            <div class="card-teal">
-            <strong>Structure reminder:</strong><br>
-            This document contains the Safety &amp; Risk Plan only — BOC, risk ratings,
-            environmental/supervisory strategies, and tiered reactive procedures.<br><br>
-            <strong>Relational strategies, skill-building targets, scripted language, and peer
-            management protocols should be documented in the Behaviour Support Plan</strong>
-            (separate document).
-            </div>
-            """, unsafe_allow_html=True)
+    safe = student['name'].replace(" ","_").replace("/","")
+    fname = f"Safety_Risk_Plan_{safe}_CLC_{student['plan_date'].replace('/','')}.docx"
+    st.download_button("⬇️  Download Safety & Risk Plan (.docx)",
+                       data=buf, file_name=fname,
+                       mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                       type="primary", use_container_width=True)
 
-            st.download_button(
-                label="⬇️ Download Safety & Risk Plan (.docx)",
-                data=docx_buf,
-                file_name=filename,
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                type="primary",
-                use_container_width=True
-            )
+    st.markdown("<br>", unsafe_allow_html=True)
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("← Back to Review"):
+            st.session_state.step = 5; st.rerun()
+    with col_b:
+        if st.button("🔄 Start a new plan"):
+            for k in list(st.session_state.keys()): del st.session_state[k]
+            st.rerun()
 
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("← Back to review"):
-                st.session_state.step = 5
-                st.rerun()
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 7 — Express: Upload & Generate directly
+# ══════════════════════════════════════════════════════════════════════════════
+elif st.session_state.step == 7:
+    student = st.session_state.student
 
-            if st.button("🔄 Start new plan", use_container_width=True):
-                for key in list(st.session_state.keys()):
-                    del st.session_state[key]
-                st.rerun()
+    st.markdown(f"""<div class="card-amber">
+    ⚡ <strong>Express mode</strong> — Upload documents for <strong>{student['name']}</strong> and
+    the AI will write the complete, formatted Safety &amp; Risk Management Plan in one step.
+    No step-by-step review needed.
+    </div>""", unsafe_allow_html=True)
 
-        except Exception as e:
-            st.error(f"Error generating document: {e}")
-            import traceback
-            st.code(traceback.format_exc())
-            if st.button("← Back to review"):
-                st.session_state.step = 5
-                st.rerun()
+    # ── Document uploads ──────────────────────────────────────────────────────
+    st.markdown('<div class="sec-head">School Safety Plan (optional)</div>', unsafe_allow_html=True)
+    school_upload = st.file_uploader("Upload existing school safety plan (.docx or .pdf)",
+                                     type=["docx","pdf"], key="express_school")
+    if school_upload:
+        text = extract_docx_text(school_upload)
+        st.session_state.school_plan_text = text
+        st.markdown(f'<div class="card-teal">✅ <strong>{school_upload.name}</strong> ready.</div>',
+                    unsafe_allow_html=True)
+
+    st.markdown('<div class="sec-head">Supporting Documents</div>', unsafe_allow_html=True)
+    st.caption("BAPs, incident reports, psych reports, OT reports, SSS/BSE notes, paediatrician letters, school reports, TAC notes — upload as many as you have.")
+
+    doc_type_options = [
+        "Behaviour Summary",
+        "ABCH / Incident Report",
+        "Psychological Report",
+        "OT / Sensory Report",
+        "SSS / BSE Notes",
+        "Paediatrician / Medical Report",
+        "School Report / Academic Summary",
+        "LC Referral",
+        "Exclusion Documentation",
+        "Exclusion Paperwork",
+        "Entry Meeting Notes",
+        "Entry Meeting Minutes",
+        "Team Meeting Notes",
+        "TAC Meeting Notes",
+        "Other",
+    ]
+
+    uploaded_docs = st.file_uploader("Upload supporting documents (.docx or .pdf)",
+                                     type=["docx","pdf"], accept_multiple_files=True,
+                                     key="express_docs")
+    if uploaded_docs:
+        new_docs = []
+        for fi, f in enumerate(uploaded_docs):
+            col_n, col_t = st.columns([2,2])
+            with col_n:
+                st.markdown(f"📄 `{f.name}`")
+            with col_t:
+                dtype = st.selectbox("Type", doc_type_options, key=f"etype_{fi}_{f.name[:20]}")
+            new_docs.append({"name": f.name, "text": extract_docx_text(f), "doc_type": dtype})
+        st.session_state.support_docs = new_docs
+
+    # ── Summary of what's loaded ──────────────────────────────────────────────
+    has_school = bool(st.session_state.school_plan_text)
+    has_docs   = bool(st.session_state.support_docs)
+
+    if not has_school and not has_docs:
+        st.markdown('<div class="card-red">⚠️ Please upload at least one document before generating.</div>',
+                    unsafe_allow_html=True)
+
+    # ── Additional context ────────────────────────────────────────────────────
+    st.markdown('<div class="sec-head">Any additional context for the AI?</div>', unsafe_allow_html=True)
+    extra_context = st.text_area(
+        "Anything not in the documents that the AI should know about",
+        height=80,
+        placeholder="e.g. Xavier absconded from CLC grounds on 19/03/2026 — SAPOL ref 0732. Fence climb confirmed. Medication transition in progress from same date.",
+        key="express_extra")
+
+    if extra_context.strip():
+        student = {**st.session_state.student, "clc_context":
+                   st.session_state.student.get("clc_context","") + "\n" + extra_context}
+    else:
+        student = st.session_state.student
+
+    st.markdown('<div class="sec-head">Review date</div>', unsafe_allow_html=True)
+    st.session_state.review_date = st.text_input("Review date",
+        value=st.session_state.review_date, placeholder="e.g. 19/05/2026",
+        key="express_review_date")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    col_a, col_b = st.columns([1,2])
+    with col_a:
+        if st.button("← Back"):
+            st.session_state.step = 1; st.rerun()
+    with col_b:
+        ready = has_school or has_docs
+        if st.button("⚡ Generate complete plan now", type="primary",
+                     use_container_width=True, disabled=not ready):
+            st.session_state.step = 8; st.rerun()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 8 — Express: AI generation + docx build + download
+# ══════════════════════════════════════════════════════════════════════════════
+elif st.session_state.step == 8:
+    student = st.session_state.student
+
+    st.markdown('<div class="sec-head">⚡ Generating your plan…</div>', unsafe_allow_html=True)
+
+    # Only run generation once — cache result in session state
+    if "express_result" not in st.session_state:
+        prog = st.progress(0)
+        status = st.empty()
+
+        status.info("📄 Reading all documents and planning risk rows…")
+        prog.progress(20)
+
+        result = ai_generate_full_plan(
+            student,
+            st.session_state.school_plan_text,
+            st.session_state.support_docs,
+        )
+        prog.progress(70)
+
+        if result.get("error"):
+            st.error(f"AI generation failed: {result['error']}")
+            if st.button("← Try again"):
+                st.session_state.step = 7; st.rerun()
+            st.stop()
+
+        st.session_state.risks            = result.get("risks", [])
+        st.session_state.priority_actions = result.get("priority_actions", "")
+        if not st.session_state.review_date:
+            st.session_state.review_date  = result.get("review_date", "")
+        st.session_state.express_result   = True
+
+        status.info("🏗️ Building formatted document…")
+        prog.progress(85)
+
+    risks            = st.session_state.risks
+    priority_actions = st.session_state.priority_actions
+    review_date      = st.session_state.review_date
+
+    # ── Show what was generated ───────────────────────────────────────────────
+    n_risks = len([r for r in risks if r.get("issue_title","").strip()])
+    st.markdown(f"""<div class="card-teal">
+    ✅ <strong>AI generated {n_risks} risk rows</strong> from your documents.
+    The complete plan is ready to download below.<br>
+    <span style="font-size:0.85rem;color:#1A3530;">
+    If anything looks off, switch to <em>Build step-by-step</em> mode to review and edit each risk.
+    </span>
+    </div>""", unsafe_allow_html=True)
+
+    # Quick summary of risks
+    with st.expander(f"Preview: {n_risks} risks identified"):
+        for i, r in enumerate(risks):
+            if not r.get("issue_title","").strip(): continue
+            level = compute_risk_level(r.get("likelihood","D – Likely/frequently"),
+                                       r.get("consequence","3 – Moderate"))
+            col = risk_colour(level)
+            st.markdown(
+                f"**{i+1}. {r['issue_title']}** "
+                f"<span style='color:{col};font-weight:700;font-size:0.85rem;'>[{level}]</span>",
+                unsafe_allow_html=True)
+            if r.get("issue_detail"):
+                st.caption(r["issue_detail"][:120] + "…")
+
+    # Quality warning — if risks seem generic/template-derived
+    all_risk_text = " ".join(r.get("issue_detail","") + r.get("proactive","") for r in risks)
+    if "Xavier" in all_risk_text or (n_risks >= 6 and all(
+        any(t in r.get("issue_title","").lower() for t in ["abscond","fence","road","verbal","peer","staff safety","handover"])
+        for r in risks if r.get("issue_title")
+    )):
+        st.markdown(f"""<div class="card-red">
+        ⚠️ <strong>Quality check:</strong> The generated risks may be based on a template rather than
+        {student['name']}'s specific documents. Before downloading, review each risk in the preview above
+        and confirm it matches the documents you uploaded. If the content looks generic,
+        click <em>Switch to step-by-step</em> below to review and correct individual risks.
+        </div>""", unsafe_allow_html=True)
+
+    # ── Build docx (reuse Step 6 helpers inline) ──────────────────────────────
+    with st.spinner("Building document…"):
+
+        def rgb(h):
+            h = h.lstrip("#")
+            return RGBColor(int(h[0:2],16), int(h[2:4],16), int(h[4:6],16))
+
+        def set_bg(cell, hex_color):
+            tc = cell._tc; tcPr = tc.get_or_add_tcPr()
+            shd = OxmlElement('w:shd')
+            shd.set(qn('w:val'),'clear'); shd.set(qn('w:color'),'auto')
+            shd.set(qn('w:fill'), hex_color.lstrip("#")); tcPr.append(shd)
+
+        def set_borders(cell, color="1A7A6E", size="4"):
+            tc = cell._tc; tcPr = tc.get_or_add_tcPr()
+            tcB = OxmlElement('w:tcBorders')
+            for side in ['top','left','bottom','right']:
+                b = OxmlElement(f'w:{side}')
+                b.set(qn('w:val'),'single'); b.set(qn('w:sz'),size)
+                b.set(qn('w:space'),'0'); b.set(qn('w:color'), color.lstrip("#"))
+                tcB.append(b)
+            tcPr.append(tcB)
+
+        def arun(para, text, bold=False, italic=False, size=18, color="000000"):
+            run = para.add_run(text)
+            run.bold = bold; run.italic = italic
+            run.font.size = Pt(size/2)
+            run.font.color.rgb = rgb(color)
+            run.font.name = "Arial"
+            return run
+
+        def cpara(cell, text, bold=False, italic=False, size=18, color="000000",
+                   align=WD_ALIGN_PARAGRAPH.LEFT, sb=40, sa=40):
+            p = cell.add_paragraph()
+            p.paragraph_format.space_before = Pt(sb/20)
+            p.paragraph_format.space_after  = Pt(sa/20)
+            p.alignment = align
+            if text: arun(p, text, bold=bold, italic=italic, size=size, color=color)
+            return p
+
+        def cbullet(cell, text, size=17, color="333333"):
+            p = cell.add_paragraph(style='List Bullet')
+            p.paragraph_format.space_before = Pt(1)
+            p.paragraph_format.space_after  = Pt(1)
+            arun(p, text, size=size, color=color)
+
+        def render_content(cell, text: str):
+            if not text.strip():
+                cpara(cell, "(Not completed)", italic=True, color="888888"); return
+            for line in text.splitlines():
+                line = line.strip()
+                if not line: continue
+                if line.startswith("###"):
+                    p = cell.add_paragraph()
+                    p.paragraph_format.space_before = Pt(5)
+                    p.paragraph_format.space_after  = Pt(2)
+                    arun(p, line.lstrip("# "), bold=True, color=TEAL.lstrip("#"), size=16)
+                elif line.startswith("•") or line.startswith("-"):
+                    cbullet(cell, line.lstrip("•- "))
+                else:
+                    p = cell.add_paragraph()
+                    p.paragraph_format.space_before = Pt(2)
+                    p.paragraph_format.space_after  = Pt(2)
+                    arun(p, line, size=17)
+
+        doc = DocxDocument()
+        sec = doc.sections[0]
+        sec.page_width  = Cm(21); sec.page_height = Cm(29.7)
+        for attr in ('left_margin','right_margin','top_margin','bottom_margin'):
+            setattr(sec, attr, Cm(1.5))
+
+        # Title
+        t = doc.add_table(rows=1, cols=1); t.style='Table Grid'
+        tc = t.rows[0].cells[0]; set_bg(tc, TEAL.lstrip("#")); set_borders(tc, TEAL.lstrip("#"))
+        p1 = tc.paragraphs[0]; p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        arun(p1, "SAFETY & RISK MANAGEMENT PLAN", bold=True, size=28, color="FFFFFF")
+        cpara(tc, f"{student['name']}  |  Cowandilla Learning Centre  |  LBU {student['program']} Program",
+              size=18, color="FEF3C7", align=WD_ALIGN_PARAGRAPH.CENTER, sb=20, sa=40)
+        doc.add_paragraph()
+
+        # Student details
+        det = doc.add_table(rows=3, cols=2); det.style='Table Grid'
+        hdr = det.rows[0].cells[0].merge(det.rows[0].cells[1])
+        set_bg(hdr, GREY_DARK.lstrip("#")); set_borders(hdr, TEAL.lstrip("#"))
+        arun(hdr.paragraphs[0], "STUDENT DETAILS", bold=True, size=18, color="FFFFFF")
+        details_l = [("Full Name", student['name']), ("Date of Birth", student['dob'] or "—"),
+                     ("Age", student['age'] or "—"), ("EDSAS ID", student['edsas'] or "—")]
+        details_r = [("Home School", student['home_school'] or "—"),
+                     ("CLC Program", student['program']), ("Plan Date", student['plan_date'])]
+        for ci, items in enumerate([details_l, details_r]):
+            c = det.rows[1].cells[ci]; set_bg(c,"F2F6F6"); set_borders(c, TEAL.lstrip("#"))
+            c.paragraphs[0].clear()
+            for label, val in items:
+                p = c.add_paragraph()
+                arun(p, f"{label}: ", bold=True, size=17, color=GREY_DARK.lstrip("#"))
+                arun(p, val or "—", size=17)
+        status_cell = det.rows[2].cells[0].merge(det.rows[2].cells[1])
+        set_bg(status_cell, AMBER_LIGHT.lstrip("#")); set_borders(status_cell, AMBER.lstrip("#"))
+        p = status_cell.paragraphs[0]
+        arun(p, "Key staff: ", bold=True, size=17, color=AMBER.lstrip("#"))
+        arun(p, student['key_staff'] or "—", size=17)
+        if student.get('medical_notes'):
+            p2 = status_cell.add_paragraph()
+            arun(p2, "Medical/context: ", bold=True, size=16, color="666666")
+            arun(p2, student['medical_notes'], size=16, italic=True)
+        if student.get('clc_context'):
+            p3 = status_cell.add_paragraph()
+            arun(p3, "CLC context: ", bold=True, size=16, color="666666")
+            arun(p3, student['clc_context'], size=16, italic=True)
+        doc.add_paragraph()
+
+        # Risk table
+        h = doc.add_paragraph()
+        arun(h, "IDENTIFIED RISKS AND MANAGEMENT STRATEGIES", bold=True, size=20, color=GREY_DARK.lstrip("#"))
+        n = doc.add_paragraph()
+        arun(n, "* Risk ratings use the Likelihood/Consequence matrix on page 2.",
+             italic=True, size=14, color="666666")
+
+        main = doc.add_table(rows=1, cols=4); main.style='Table Grid'
+        for i, w in enumerate([Cm(5.2), Cm(2.0), Cm(7.2), Cm(8.6)]):
+            for c in main.columns[i].cells: c.width = w
+        for i, h in enumerate(["Concerning Issue","Risk Level *","Proactive Strategies","Procedure to Follow"]):
+            c = main.rows[0].cells[i]; set_bg(c, TEAL.lstrip("#")); set_borders(c, TEAL.lstrip("#"))
+            p = c.paragraphs[0]; p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            arun(p, h, bold=True, size=17, color="FFFFFF")
+
+        for r in risks:
+            if not r.get("issue_title","").strip(): continue
+            lk = r.get("likelihood","D – Likely/frequently")
+            cq = r.get("consequence","3 – Moderate")
+            level  = compute_risk_level(lk, cq)
+            lhex   = RISK_COLOURS.get(level,"#888").lstrip("#")
+            l_code = lk.split("–")[0].strip().split(" ")[0]
+            c_code = cq.split("–")[0].strip().split(" ")[0]
+            row = main.add_row()
+
+            c0 = row.cells[0]; set_bg(c0,"D6EEEB"); set_borders(c0, TEAL.lstrip("#"))
+            c0.paragraphs[0].clear()
+            p = c0.paragraphs[0]; arun(p, r["issue_title"], bold=True, size=17, color=GREY_DARK.lstrip("#"))
+            if r.get("issue_detail"):
+                p2 = c0.add_paragraph(); p2.paragraph_format.space_before = Pt(4)
+                arun(p2, r["issue_detail"], size=16)
+            if r.get("behaviour_descriptors","").strip():
+                ph = c0.add_paragraph(); ph.paragraph_format.space_before = Pt(5)
+                arun(ph, "Characterised by:", bold=True, size=15, color=TEAL.lstrip("#"))
+                for bd in r["behaviour_descriptors"].splitlines():
+                    bd = bd.strip()
+                    if bd:
+                        bp = c0.add_paragraph(style='List Bullet')
+                        bp.paragraph_format.space_before = Pt(1); bp.paragraph_format.space_after = Pt(1)
+                        arun(bp, bd.lstrip("•- "), size=15)
+            if r.get("function","").strip():
+                pf = c0.add_paragraph(); pf.paragraph_format.space_before = Pt(5)
+                arun(pf, "Function: ", bold=True, size=15, color="555555")
+                arun(pf, r["function"], size=15, italic=True)
+            if r.get("clc_notes","").strip():
+                pn = c0.add_paragraph(); pn.paragraph_format.space_before = Pt(5)
+                arun(pn, "CLC: ", bold=True, size=14, color=AMBER.lstrip("#"))
+                arun(pn, r["clc_notes"], size=14, italic=True)
+
+            c1 = row.cells[1]; set_bg(c1, lhex); set_borders(c1, lhex)
+            p1 = c1.paragraphs[0]; p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            arun(p1, f"{l_code}{c_code}", bold=True, size=26, color="FFFFFF")
+            p2 = c1.add_paragraph(); p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            arun(p2, level, bold=True, size=14, color="FFFFFF")
+
+            c2 = row.cells[2]; set_borders(c2, TEAL.lstrip("#"))
+            c2.paragraphs[0].clear(); render_content(c2, r.get("proactive",""))
+
+            c3 = row.cells[3]; set_borders(c3, TEAL.lstrip("#"))
+            c3.paragraphs[0].clear(); render_content(c3, r.get("procedure",""))
+
+        fn_row  = main.add_row()
+        fn_cell = fn_row.cells[0].merge(fn_row.cells[1]).merge(fn_row.cells[2]).merge(fn_row.cells[3])
+        set_bg(fn_cell,"F2F6F6"); set_borders(fn_cell, TEAL.lstrip("#"))
+        arun(fn_cell.paragraphs[0], "* Refer to risk matrix on page 2.",
+             italic=True, size=13, color="666666")
+        doc.add_paragraph()
+
+        # Priority actions
+        if priority_actions.strip():
+            pa_tbl = doc.add_table(rows=1, cols=1); pa_tbl.style='Table Grid'
+            pa = pa_tbl.rows[0].cells[0]
+            set_bg(pa, AMBER_LIGHT.lstrip("#")); set_borders(pa, AMBER.lstrip("#"))
+            pa.paragraphs[0].clear()
+            cpara(pa, "PRIORITY ACTIONS", bold=True, size=19, color=AMBER.lstrip("#"), sb=40, sa=60)
+            for line in priority_actions.splitlines():
+                line = line.strip()
+                if not line: continue
+                if line.startswith("•") or line.startswith("-"):
+                    cbullet(pa, line.lstrip("•- "))
+                else:
+                    cpara(pa, line, size=17)
+            doc.add_paragraph()
+
+
+        # ── Staff Acknowledgement sign-off ─────────────────────────────────
+        doc.add_paragraph()
+        sh = doc.add_paragraph()
+        arun(sh, "STAFF ACKNOWLEDGEMENT", bold=True, size=19, color=GREY_DARK.lstrip("#"))
+        sn = doc.add_paragraph()
+        arun(sn, "All staff working with this student must read this plan and sign below to confirm they understand the identified risks and their responsibilities.",
+             size=15, italic=True)
+        doc.add_paragraph()
+
+        # Sign-off table — header + 8 blank rows
+        SIGN_COLS = ["Staff Member Name", "Role", "Signature", "Date"]
+        SIGN_WIDTHS_CM = [5.5, 4.0, 5.5, 2.5]
+        stbl = doc.add_table(rows=9, cols=4); stbl.style='Table Grid'
+        from docx.shared import Cm as _Cm
+        for ci, w in enumerate(SIGN_WIDTHS_CM):
+            for cell in stbl.columns[ci].cells:
+                cell.width = _Cm(w)
+        # Header row
+        for ci, lbl in enumerate(SIGN_COLS):
+            c = stbl.rows[0].cells[ci]
+            set_bg(c, GREY_DARK.lstrip("#")); set_borders(c, TEAL.lstrip("#"))
+            c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            arun(c.paragraphs[0], lbl, bold=True, size=16, color="FFFFFF")
+        # 8 blank signing rows
+        for ri in range(1, 9):
+            row = stbl.rows[ri]
+            bg = "F2F6F6" if ri % 2 == 0 else "FFFFFF"
+            for ci in range(4):
+                c = row.cells[ci]
+                set_bg(c, bg); set_borders(c, "CCCCCC")
+                cpara(c, "", size=16, sb=60, sa=60)
+        doc.add_paragraph()
+
+        # Endorsement / review
+        eh = doc.add_paragraph()
+        arun(eh, "PLAN ENDORSEMENT", bold=True, size=19, color=GREY_DARK.lstrip("#"))
+        doc.add_paragraph()
+        sign_tbl = doc.add_table(rows=2, cols=3); sign_tbl.style='Table Grid'
+        for ci, lbl in enumerate(["Prepared by (CLC staff)","Endorsed by (Principal/Leader)","Next Review Date"]):
+            c = sign_tbl.rows[0].cells[ci]; set_bg(c, GREY_DARK.lstrip("#"))
+            set_borders(c, TEAL.lstrip("#"))
+            c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            arun(c.paragraphs[0], lbl, bold=True, size=16, color="FFFFFF")
+        for ci, val in enumerate(["Name: ___________________________\nSignature: ______________________\nDate: _______________",
+                                   "Name: ___________________________\nSignature: ______________________\nDate: _______________",
+                                   review_date or "TBC"]):
+            c = sign_tbl.rows[1].cells[ci]; set_bg(c,"F2F6F6"); set_borders(c, TEAL.lstrip("#"))
+            for line in val.split('\n'):
+                cpara(c, line, size=16, sb=20, sa=20)
+
+
+        doc.add_page_break()
+
+        # Risk matrix
+        mh = doc.add_paragraph()
+        arun(mh, "LEVEL OF RISK — REFERENCE MATRIX", bold=True, size=22, color=GREY_DARK.lstrip("#"))
+        likelihoods = ["E – Almost Certain","D – Likely/Frequently","C – Likely Sometimes","B – Unlikely","A – Rare"]
+        cons_labels = ["1 Insignificant","2 Minor","3 Moderate","4 Major","5 Catastrophic"]
+        matrix_data = [["High","High","Extreme","Extreme","Extreme"],
+                       ["Moderate","High","High","Extreme","Extreme"],
+                       ["Low","Moderate","High","Extreme","Extreme"],
+                       ["Low","Low","Moderate","High","Extreme"],
+                       ["Low","Low","Moderate","High","High"]]
+        fill_m = {"Extreme":"C0392B","High":"E67E22","Moderate":"F1C40F","Low":"27AE60"}
+        text_m = {"Extreme":"FFFFFF","High":"FFFFFF","Moderate":"333333","Low":"FFFFFF"}
+        mx = doc.add_table(rows=6, cols=6); mx.style='Table Grid'
+        set_bg(mx.rows[0].cells[0], GREY_DARK.lstrip("#"))
+        arun(mx.rows[0].cells[0].paragraphs[0], "Likelihood \\ Consequences",
+             bold=True, size=13, color="FFFFFF")
+        for ci, cl in enumerate(cons_labels):
+            c = mx.rows[0].cells[ci+1]; set_bg(c, GREY_DARK.lstrip("#"))
+            c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            arun(c.paragraphs[0], cl, bold=True, size=13, color="FFFFFF")
+        for ri, (lh, row_data) in enumerate(zip(likelihoods, matrix_data)):
+            row = mx.rows[ri+1]
+            set_bg(row.cells[0],"F2F6F6")
+            arun(row.cells[0].paragraphs[0], lh, bold=True, size=13, color=GREY_DARK.lstrip("#"))
+            for ci, val in enumerate(row_data):
+                c = row.cells[ci+1]; set_bg(c, fill_m.get(val,"888888"))
+                c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                arun(c.paragraphs[0], val, bold=True, size=13, color=text_m.get(val,"FFFFFF"))
+
+        buf = io.BytesIO()
+        doc.save(buf); buf.seek(0)
+
+    # ── Download ──────────────────────────────────────────────────────────────
+    safe  = student['name'].replace(" ","_").replace("/","")
+    fname = f"Safety_Risk_Plan_{safe}_CLC_{student['plan_date'].replace('/','')}.docx"
+    st.download_button("⬇️  Download Safety & Risk Plan (.docx)",
+                       data=buf, file_name=fname,
+                       mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                       type="primary", use_container_width=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        if st.button("← Upload different documents"):
+            del st.session_state["express_result"]
+            st.session_state.step = 7; st.rerun()
+    with col_b:
+        if st.button("🧱 Switch to step-by-step to edit risks"):
+            del st.session_state["express_result"]
+            st.session_state.mode = "wizard"
+            st.session_state.synthesis_done = True
+            st.session_state.step = 4; st.rerun()
+    with col_c:
+        if st.button("🔄 Start a new plan"):
+            for k in list(st.session_state.keys()): del st.session_state[k]
+            st.rerun()
