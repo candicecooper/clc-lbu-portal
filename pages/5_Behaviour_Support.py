@@ -1111,19 +1111,23 @@ def save_staff_to_db(staff_member):
         return False
     try:
         data = {
-            "name": staff_member['name'],
-            "email": staff_member['email'],
-            "password": staff_member['password'],
-            "role": staff_member['role'],
-            "program": staff_member.get('program'),
-            "phone": staff_member.get('phone'),
-            "notes": staff_member.get('notes'),
-            "receive_critical_emails": staff_member.get('receive_critical_emails', True)
+            "name":                    staff_member.get('name', ''),
+            "email":                   staff_member.get('email', ''),
+            "password":                staff_member.get('password'),
+            "password_hash":           staff_member.get('password_hash') or None,
+            "role":                    staff_member.get('role', ''),
+            "program":                 staff_member.get('program'),
+            "phone":                   staff_member.get('phone'),
+            "notes":                   staff_member.get('notes'),
+            "receive_critical_emails": staff_member.get('receive_critical_emails', True),
         }
-        if 'id' in staff_member and staff_member['id'].startswith('staff_'):
-            supabase.table('staff').insert(data).execute()
+        sid = staff_member.get('id', '')
+        if sid and not str(sid).startswith('staff_'):
+            # Real Supabase UUID — always UPDATE
+            supabase.table('staff').update(data).eq('id', sid).execute()
         else:
-            supabase.table('staff').update(data).eq('id', staff_member['id']).execute()
+            # New local ID — INSERT (without id; Supabase generates one)
+            supabase.table('staff').insert(data).execute()
         return True
     except Exception as e:
         st.error(f"Error saving staff: {e}")
@@ -1510,8 +1514,10 @@ def init_state():
     if "logged_in" not in ss: ss.logged_in = False
     if "current_user" not in ss: ss.current_user = None
     if "current_page" not in ss: ss.current_page = "login"
-    ss.students = load_students_from_db() if supabase else MOCK_STUDENTS
-    ss.staff = load_staff_from_db() if supabase else MOCK_STAFF
+    if "students" not in ss:
+        ss.students = load_students_from_db() if supabase else MOCK_STUDENTS
+    if "staff" not in ss:
+        ss.staff = load_staff_from_db() if supabase else MOCK_STAFF
     if "incidents" not in ss:
         ss.incidents = load_incidents_from_db() if supabase else generate_mock_incidents(70)
     if "critical_incidents" not in ss:
@@ -4232,7 +4238,7 @@ def render_admin_portal():
         if st.button("⬅ Back to Landing", key="back_admin"):
             go_to("landing")
     st.markdown("---")
-    tab1, tab2, tab3, tab4 = st.tabs(["👥 Active Students", "📦 Archived Students", "📊 System Overview", "👨‍💼 Staff Management"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["👥 Active Students", "📦 Archived Students", "📊 System Overview", "👨‍💼 Staff Management", "🔑 Password Reset"])
 
     with tab1:
         st.markdown("### Student Management")
@@ -4478,7 +4484,9 @@ def render_admin_portal():
                                 "created_date": date.today().isoformat()
                             }
                             if save_staff_to_db(new_staff):
-                                st.session_state.staff.append(new_staff)
+                                # Force clean reload so DB-generated UUID is used
+                                if "staff" in st.session_state:
+                                    del st.session_state["staff"]
                                 st.success(f"✅ Added {staff_name} to database")
                                 st.rerun()
                             else:
@@ -4545,19 +4553,24 @@ def render_admin_portal():
                                         staff['program']                 = edit_program if edit_program != "All Programs" else None
                                         staff['receive_critical_emails'] = edit_receive_emails
                                         staff['notes']                   = edit_notes if edit_notes else None
+                                        _pw_msg = ""
                                         if new_password:
                                             staff['password']      = new_password
-                                            staff['password_hash'] = ""
+                                            staff['password_hash'] = None
                                             if supabase:
                                                 try:
                                                     supabase.table('staff').update({
-                                                        'password': new_password, 'password_hash': None
+                                                        'password':      new_password,
+                                                        'password_hash': None,
                                                     }).eq('id', staff['id']).execute()
-                                                except Exception as e:
-                                                    st.error(f"Password update failed: {e}")
+                                                    _pw_msg = " — password reset"
+                                                except Exception as _pw_e:
+                                                    st.error(f"❌ Password update failed: {_pw_e}")
                                         save_staff_to_db(staff)
+                                        if "staff" in st.session_state:
+                                            del st.session_state["staff"]
                                         st.session_state.editing_staff = None
-                                        st.success("✅ Updated" + (" (password reset)" if new_password else ""))
+                                        st.success(f"✅ Saved{_pw_msg}")
                                         st.rerun()
                                 with col_cancel:
                                     if st.form_submit_button("❌ Cancel"):
@@ -4581,6 +4594,92 @@ def render_admin_portal():
                 st.write(f"• **{recipient['name']}** ({recipient['email']}) - {recipient['role']}")
         else:
             st.warning("⚠️ No staff members set to receive critical incident emails!")
+
+    with tab5:
+        st.markdown("### 🔑 Staff Password Reset")
+        st.caption(
+            "Use this to directly reset any staff member\'s password. "
+            "The new password is saved immediately and the bcrypt hash is cleared — "
+            "staff can log in straight away with the new password."
+        )
+        _pw_all = {s["id"]: f"{s['name']} ({s['email']})" for s in st.session_state.staff}
+        if not _pw_all:
+            st.info("No staff loaded — reload the page.")
+        else:
+            _pw_sel = st.selectbox("Staff member *", list(_pw_all.keys()),
+                                   format_func=lambda x: _pw_all[x], key="pw_reset_sel")
+            _pw_c1, _pw_c2 = st.columns(2)
+            with _pw_c1:
+                _pw_new  = st.text_input("New password *", type="password",
+                                          placeholder="Min 6 characters", key="pw_reset_new")
+            with _pw_c2:
+                _pw_conf = st.text_input("Confirm password *", type="password",
+                                          placeholder="Re-enter", key="pw_reset_conf")
+            if st.button("🔑 Reset Password Now", type="primary", use_container_width=True, key="pw_reset_btn"):
+                _target = next((s for s in st.session_state.staff if s["id"] == _pw_sel), None)
+                if not _pw_new:
+                    st.error("Enter a new password.")
+                elif len(_pw_new) < 6:
+                    st.error("Password must be at least 6 characters.")
+                elif _pw_new != _pw_conf:
+                    st.error("Passwords do not match.")
+                elif not _target:
+                    st.error("Staff member not found — reload the page.")
+                elif not supabase:
+                    st.error("Supabase not connected.")
+                else:
+                    try:
+                        _res = supabase.table("staff").update({
+                            "password":      _pw_new,
+                            "password_hash": None,
+                        }).eq("id", _target["id"]).execute()
+                        if _res.data:
+                            _target["password"]      = _pw_new
+                            _target["password_hash"] = None
+                            if "staff" in st.session_state:
+                                del st.session_state["staff"]
+                            st.success(f"✅ Password reset for **{_target['name']}** ({_target['email']})")
+                            st.info(f"Email: `{_target['email']}` \u00b7 Password: `{_pw_new}`")
+                        else:
+                            st.error("Supabase returned no confirmation. Check the staff ID exists in the database.")
+                    except Exception as _e:
+                        st.error(f"❌ Reset failed: {_e}")
+
+        st.markdown("---")
+        st.markdown("### 🧪 Test a Login")
+        st.caption("Verify credentials work before notifying a staff member.")
+        _t_email = st.text_input("Email", placeholder="staff@schools.sa.edu.au", key="tl_email")
+        _t_pw    = st.text_input("Password", type="password", key="tl_pw")
+        if st.button("Test", key="tl_btn", use_container_width=True):
+            if _t_email and _t_pw:
+                _fresh = load_staff_from_db() if supabase else st.session_state.staff
+                _m = next((s for s in _fresh if s.get("email","").lower() == _t_email.lower().strip()), None)
+                if not _m:
+                    st.error(f"No staff record found for: {_t_email}")
+                else:
+                    _ok, _method = False, ""
+                    _h = (_m.get("password_hash") or "")
+                    _p = (_m.get("password") or "")
+                    if _h:
+                        try:
+                            _ok = bcrypt.checkpw(_t_pw.encode(), _h.encode() if isinstance(_h, str) else _h)
+                            _method = "bcrypt hash"
+                        except Exception:
+                            pass
+                    if not _ok and _p:
+                        _ok = (_p == _t_pw)
+                        _method = "plaintext password"
+                    if _ok:
+                        st.success(f"✅ Login would succeed for **{_m['name']}** (matched via {_method})")
+                    else:
+                        st.error(
+                            f"Login would FAIL for **{_m['name']}**. "
+                            f"password_hash: {'set' if _h else 'empty/null'}. "
+                            f"password: {'set' if _p else 'empty/null'}. "
+                            "Run the Password Reset above if both are empty."
+                        )
+            else:
+                st.warning("Enter both email and password to test.")
 
 
 def main():
