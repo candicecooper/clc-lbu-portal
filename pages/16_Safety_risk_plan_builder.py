@@ -125,6 +125,48 @@ def groq_call(prompt: str, max_tokens: int = 2000) -> str:
     )
     return resp.choices[0].message.content.strip()
 
+def check_language_objectivity(text: str) -> list:
+    """
+    Scan text for subjective / non-observable language.
+    Returns list of (flagged_phrase, suggestion) tuples.
+    """
+    import re
+    flags = [
+        # Speed/pace
+        (r'\bat speed\b',          '"at speed" — describe what was observed instead, e.g. "running out of the supervised area"'),
+        (r'\bhigh.?speed\b',       '"high speed" — subjective. Describe the observable action'),
+        (r'\bquickly\b',           '"quickly" — subjective. Name the trigger for action instead'),
+        (r'\brapidly\b',           '"rapidly" — subjective. Describe the specific observable behaviour'),
+        (r'\bswiftly\b',           '"swiftly" — subjective. Use an observable anchor instead'),
+        # Distance/proximity
+        (r"\barm'?s\s+reach\b",    '"arm\'s reach" — ambiguous. Use positional language: "positioned between student and fence"'),
+        (r'\bclose proximity\b',   '"close proximity" — vague. Define position: "within 1 metre of student at all times"'),
+        (r'\bnearby\b',            '"nearby" — vague distance. Specify: "within line-of-sight" or name the location'),
+        # Behaviour descriptors
+        (r'\bchallenging behaviour\b', '"challenging behaviour" — not observable. Name the specific behaviour'),
+        (r'\bdysregulated\b',      '"dysregulated" — clinical inference. Describe what is observed: "shouting, throwing objects, moving toward fence"'),
+        (r'\bescalating\b',        '"escalating" — subjective judgement. Describe the observable signs instead'),
+        (r'\baggressively\b',      '"aggressively" — subjective. Describe the act: "struck with open hand", "threw chair"'),
+        (r'\bviolently\b',         '"violently" — subjective intensity. Describe the observable action'),
+        # Time qualifiers
+        (r'\bstraight away\b',     '"straight away" — ambiguous timing. Name the trigger: "as soon as student moves toward fence"'),
+        (r'\bimmediately\b',       '"immediately" — ambiguous. Specify the trigger for the action'),
+        # Intervention language
+        (r'\bde-?escalat',         '"de-escalation" — vague strategy. Name the specific technique: "reduce verbal demands", "offer choice", "move to quieter space"'),
+        (r'\bappropriate(ly)?\b',  '"appropriate" — subjective. State what the appropriate action actually is'),
+        (r'\badequate\b',          '"adequate" — subjective. Define the specific standard required'),
+        (r'\blow.?arousal\b',      '"low arousal" — professional shorthand. Define for all staff: "calm tone, no raised voice, no direct commands, offer choice"'),
+        (r'\bmanage the situation\b', '"manage the situation" — vague. List the specific steps'),
+        (r'\brespond appropriately\b', '"respond appropriately" — vague. State the specific response'),
+    ]
+    found = []
+    text_lower = text.lower()
+    for pattern, suggestion in flags:
+        if re.search(pattern, text_lower):
+            found.append(suggestion)
+    return found
+
+
 def compute_risk_level(likelihood: str, consequence: str) -> str:
     l = likelihood.split("–")[0].strip().split(" ")[0]
     c = consequence.split("–")[0].strip().split(" ")[0]
@@ -167,6 +209,20 @@ CRITICAL RULES for CLC adaptation:
 - Do NOT describe triggers or function in the risk description — those belong in proactive strategies
 - Use language: "program option for students with educational exclusion" not "specialist setting"
 - Describe behaviour specifically: fence climbing, running onto roads, darting across traffic, verbal aggression — not vague terms like "challenging behaviour"
+LANGUAGE OBJECTIVITY — MANDATORY:
+Every word in this plan must be observable and measurable. A different staff member reading this plan must interpret it identically.
+NEVER USE subjective terms — replace with observable descriptions:
+  ✗ "high speed / at speed / quickly / rapidly / fast" → ✓ describe what is observed: "running out of the supervised area", "ran onto the road"
+  ✗ "arm's reach / close proximity / nearby" → ✓ "within arm's length" is still vague — use positional descriptions: "positioned between student and fence boundary", "physically proximate during all peer interactions"
+  ✗ "aggressively / violently / severely" → ✓ describe the observable act: "struck staff with open hand", "threw chair across room"
+  ✗ "immediately / straight away / quickly respond" → ✓ specify the trigger for action: "as soon as student moves toward fence", "once verbal engagement ceases"
+  ✗ "challenging behaviour / dysregulated / escalating" → ✓ name the specific behaviour: "climbing fence", "running toward road", "throwing objects"
+  ✗ "de-escalation strategies" → ✓ name the specific strategy: "offer sensory break", "reduce verbal demands", "move to quieter space"
+  ✗ "appropriate supervision / adequate support" → ✓ "staff positioned between student and fence at all times", "one staff member maintains line-of-sight to student"
+  ✗ "respond appropriately / manage the situation" → ✓ "radio leadership immediately", "retrieve vehicle keys from program office"
+  ✗ "low arousal approach" → ✓ "calm tone, no raised voice, no direct commands, offer choice"
+If you use a measurement, define it: not "close proximity" but "within arm's length (approx. 60cm)"
+Every procedure step must be a specific, named action — not a category of action.
 
 Extract each risk row and return as a JSON array. Each object must have:
 - issue_title: specific behaviour name (e.g. "Absconding from school grounds")
@@ -210,6 +266,20 @@ def ai_synthesise_from_docs(support_docs: list, student: dict) -> list:
 MOST IMPORTANT RULE: Only identify risks that are directly evidenced in the documents provided below.
 Do NOT include risks because they are common or because they appeared in another student's plan.
 Do NOT invent behaviours. Every risk must trace to specific content in the documents.
+LANGUAGE OBJECTIVITY — MANDATORY:
+Every word in this plan must be observable and measurable. A different staff member reading this plan must interpret it identically.
+NEVER USE subjective terms — replace with observable descriptions:
+  ✗ "high speed / at speed / quickly / rapidly / fast" → ✓ describe what is observed: "running out of the supervised area", "ran onto the road"
+  ✗ "arm's reach / close proximity / nearby" → ✓ "within arm's length" is still vague — use positional descriptions: "positioned between student and fence boundary", "physically proximate during all peer interactions"
+  ✗ "aggressively / violently / severely" → ✓ describe the observable act: "struck staff with open hand", "threw chair across room"
+  ✗ "immediately / straight away / quickly respond" → ✓ specify the trigger for action: "as soon as student moves toward fence", "once verbal engagement ceases"
+  ✗ "challenging behaviour / dysregulated / escalating" → ✓ name the specific behaviour: "climbing fence", "running toward road", "throwing objects"
+  ✗ "de-escalation strategies" → ✓ name the specific strategy: "offer sensory break", "reduce verbal demands", "move to quieter space"
+  ✗ "appropriate supervision / adequate support" → ✓ "staff positioned between student and fence at all times", "one staff member maintains line-of-sight to student"
+  ✗ "respond appropriately / manage the situation" → ✓ "radio leadership immediately", "retrieve vehicle keys from program office"
+  ✗ "low arousal approach" → ✓ "calm tone, no raised voice, no direct commands, offer choice"
+If you use a measurement, define it: not "close proximity" but "within arm's length (approx. 60cm)"
+Every procedure step must be a specific, named action — not a category of action.
 
 CLC CONTEXT (apply only where relevant to evidenced risks):
 - CLC is a program option for students with educational exclusion in Adelaide SA
@@ -258,6 +328,20 @@ Return ONLY valid JSON array. No markdown, no preamble."""
 def ai_contextualise(risk: dict, student: dict) -> str:
     """Generate CLC contextualisation advisory for a school-plan risk."""
     prompt = f"""You are a behaviour support specialist helping CLC (Cowandilla Learning Centre) staff adapt a school safety plan risk for their specialist setting.
+LANGUAGE OBJECTIVITY — MANDATORY:
+Every word in this plan must be observable and measurable. A different staff member reading this plan must interpret it identically.
+NEVER USE subjective terms — replace with observable descriptions:
+  ✗ "high speed / at speed / quickly / rapidly / fast" → ✓ describe what is observed: "running out of the supervised area", "ran onto the road"
+  ✗ "arm's reach / close proximity / nearby" → ✓ "within arm's length" is still vague — use positional descriptions: "positioned between student and fence boundary", "physically proximate during all peer interactions"
+  ✗ "aggressively / violently / severely" → ✓ describe the observable act: "struck staff with open hand", "threw chair across room"
+  ✗ "immediately / straight away / quickly respond" → ✓ specify the trigger for action: "as soon as student moves toward fence", "once verbal engagement ceases"
+  ✗ "challenging behaviour / dysregulated / escalating" → ✓ name the specific behaviour: "climbing fence", "running toward road", "throwing objects"
+  ✗ "de-escalation strategies" → ✓ name the specific strategy: "offer sensory break", "reduce verbal demands", "move to quieter space"
+  ✗ "appropriate supervision / adequate support" → ✓ "staff positioned between student and fence at all times", "one staff member maintains line-of-sight to student"
+  ✗ "respond appropriately / manage the situation" → ✓ "radio leadership immediately", "retrieve vehicle keys from program office"
+  ✗ "low arousal approach" → ✓ "calm tone, no raised voice, no direct commands, offer choice"
+If you use a measurement, define it: not "close proximity" but "within arm's length (approx. 60cm)"
+Every procedure step must be a specific, named action — not a category of action.
 
 CLC context:
 - Program option for students with educational exclusion (not "specialist centre")
@@ -299,6 +383,20 @@ CLC context: program option for students with educational exclusion; small group
 
 CRITICAL: Risk descriptions in this plan focus on what the student DOES — observable behaviour only.
 Triggers go in proactive strategies. Function is noted separately.
+LANGUAGE OBJECTIVITY — MANDATORY:
+Every word in this plan must be observable and measurable. A different staff member reading this plan must interpret it identically.
+NEVER USE subjective terms — replace with observable descriptions:
+  ✗ "high speed / at speed / quickly / rapidly / fast" → ✓ describe what is observed: "running out of the supervised area", "ran onto the road"
+  ✗ "arm's reach / close proximity / nearby" → ✓ "within arm's length" is still vague — use positional descriptions: "positioned between student and fence boundary", "physically proximate during all peer interactions"
+  ✗ "aggressively / violently / severely" → ✓ describe the observable act: "struck staff with open hand", "threw chair across room"
+  ✗ "immediately / straight away / quickly respond" → ✓ specify the trigger for action: "as soon as student moves toward fence", "once verbal engagement ceases"
+  ✗ "challenging behaviour / dysregulated / escalating" → ✓ name the specific behaviour: "climbing fence", "running toward road", "throwing objects"
+  ✗ "de-escalation strategies" → ✓ name the specific strategy: "offer sensory break", "reduce verbal demands", "move to quieter space"
+  ✗ "appropriate supervision / adequate support" → ✓ "staff positioned between student and fence at all times", "one staff member maintains line-of-sight to student"
+  ✗ "respond appropriately / manage the situation" → ✓ "radio leadership immediately", "retrieve vehicle keys from program office"
+  ✗ "low arousal approach" → ✓ "calm tone, no raised voice, no direct commands, offer choice"
+If you use a measurement, define it: not "close proximity" but "within arm's length (approx. 60cm)"
+Every procedure step must be a specific, named action — not a category of action.
 
 Student: {student.get('name','')}, Age {student.get('age','')}, Program {student.get('program','')}
 Key staff: {student.get('key_staff','')}
@@ -405,6 +503,20 @@ RISK DESCRIPTION RULES:
 - Do NOT include triggers or function in the risk description
 - Use specific language from the documents (e.g. "threw chairs", "bit staff", "ran into traffic")
 - Rate based on actual severity and frequency described in the documents
+LANGUAGE OBJECTIVITY — MANDATORY:
+Every word in this plan must be observable and measurable. A different staff member reading this plan must interpret it identically.
+NEVER USE subjective terms — replace with observable descriptions:
+  ✗ "high speed / at speed / quickly / rapidly / fast" → ✓ describe what is observed: "running out of the supervised area", "ran onto the road"
+  ✗ "arm's reach / close proximity / nearby" → ✓ "within arm's length" is still vague — use positional descriptions: "positioned between student and fence boundary", "physically proximate during all peer interactions"
+  ✗ "aggressively / violently / severely" → ✓ describe the observable act: "struck staff with open hand", "threw chair across room"
+  ✗ "immediately / straight away / quickly respond" → ✓ specify the trigger for action: "as soon as student moves toward fence", "once verbal engagement ceases"
+  ✗ "challenging behaviour / dysregulated / escalating" → ✓ name the specific behaviour: "climbing fence", "running toward road", "throwing objects"
+  ✗ "de-escalation strategies" → ✓ name the specific strategy: "offer sensory break", "reduce verbal demands", "move to quieter space"
+  ✗ "appropriate supervision / adequate support" → ✓ "staff positioned between student and fence at all times", "one staff member maintains line-of-sight to student"
+  ✗ "respond appropriately / manage the situation" → ✓ "radio leadership immediately", "retrieve vehicle keys from program office"
+  ✗ "low arousal approach" → ✓ "calm tone, no raised voice, no direct commands, offer choice"
+If you use a measurement, define it: not "close proximity" but "within arm's length (approx. 60cm)"
+Every procedure step must be a specific, named action — not a category of action.
 
 DOCUMENTS:
 {combined_docs[:14000]}
@@ -1332,6 +1444,34 @@ elif st.session_state.step == 6:
         buf = io.BytesIO()
         doc.save(buf); buf.seek(0)
 
+    # ── Language objectivity check ────────────────────────────────────────────
+    all_text = " ".join([
+        r.get("issue_title","") + " " + r.get("issue_detail","") + " " +
+        r.get("behaviour_descriptors","") + " " + r.get("proactive","") + " " + r.get("procedure","")
+        for r in risks
+    ])
+    lang_flags = check_language_objectivity(all_text)
+    if lang_flags:
+        st.markdown("""
+        <div style="background:#fff8e6;border:2px solid #e8a125;border-radius:10px;padding:1rem 1.2rem;margin-bottom:1rem;">
+        <div style="font-weight:700;color:#92400e;font-size:.9rem;margin-bottom:.5rem;">
+        ⚠️ Language Review — Possible Subjective Terms Detected
+        </div>
+        <div style="font-size:.8rem;color:#78350f;margin-bottom:.5rem;">
+        The plan may contain language that is open to individual interpretation.
+        Review the flagged items below and edit the relevant risk rows before downloading.
+        Objective language ensures all staff understand and apply the plan consistently.
+        </div>
+        </div>""", unsafe_allow_html=True)
+        for flag in lang_flags:
+            st.markdown(f'<div style="background:#fef9ee;border-left:3px solid #e8a125;border-radius:0 6px 6px 0;padding:.4rem .8rem;margin-bottom:.35rem;font-size:.8rem;color:#78350f;">⚠️ {flag}</div>', unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div style="background:#f0faf8;border:1.5px solid #1a7a6e;border-radius:10px;padding:.75rem 1rem;margin-bottom:1rem;font-size:.85rem;color:#1a2e44;">
+        ✅ <strong>Language check passed</strong> — no obvious subjective terms detected. Review the plan content before downloading.
+        </div>""", unsafe_allow_html=True)
+
     # ── Download ──────────────────────────────────────────────────────────────
     st.markdown(f"""<div class="card-teal">
     ✅ <strong>Plan generated!</strong> {student['name']}'s Safety &amp; Risk Management Plan is ready —
@@ -1809,6 +1949,33 @@ elif st.session_state.step == 8:
 
         buf = io.BytesIO()
         doc.save(buf); buf.seek(0)
+
+    # ── Language objectivity check ────────────────────────────────────────────
+    exp_all_text = " ".join([
+        r.get("issue_title","") + " " + r.get("issue_detail","") + " " +
+        r.get("behaviour_descriptors","") + " " + r.get("proactive","") + " " + r.get("procedure","")
+        for r in risks
+    ])
+    exp_lang_flags = check_language_objectivity(exp_all_text)
+    if exp_lang_flags:
+        st.markdown("""
+        <div style="background:#fff8e6;border:2px solid #e8a125;border-radius:10px;padding:1rem 1.2rem;margin-bottom:1rem;">
+        <div style="font-weight:700;color:#92400e;font-size:.9rem;margin-bottom:.5rem;">
+        ⚠️ Language Review — Possible Subjective Terms Detected
+        </div>
+        <div style="font-size:.8rem;color:#78350f;margin-bottom:.5rem;">
+        The plan may contain language that is open to individual interpretation.
+        Use <strong>Switch to step-by-step to edit risks</strong> below to review and correct flagged items before downloading.
+        </div>
+        </div>""", unsafe_allow_html=True)
+        for flag in exp_lang_flags:
+            st.markdown(f'<div style="background:#fef9ee;border-left:3px solid #e8a125;border-radius:0 6px 6px 0;padding:.4rem .8rem;margin-bottom:.35rem;font-size:.8rem;color:#78350f;">⚠️ {flag}</div>', unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div style="background:#f0faf8;border:1.5px solid #1a7a6e;border-radius:10px;padding:.75rem 1rem;margin-bottom:1rem;font-size:.85rem;color:#1a2e44;">
+        ✅ <strong>Language check passed</strong> — no obvious subjective terms detected.
+        </div>""", unsafe_allow_html=True)
 
     # ── Download ──────────────────────────────────────────────────────────────
     safe  = student['name'].replace(" ","_").replace("/","")
