@@ -125,6 +125,7 @@ def init():
             "present": "",
             "apologies": "",
             "organisation": "Cowandilla Learning Centre — LBU",
+            "subject": "",
         },
         "mp_raw_text": "",
         "mp_style": "formal",
@@ -196,6 +197,9 @@ if st.session_state.mp_step == 1:
         m["type"] = st.selectbox("Meeting type", MEETING_TYPES,
             index=MEETING_TYPES.index(m["type"]) if m["type"] in MEETING_TYPES else 0)
         m["date"] = st.text_input("Date", value=m["date"], placeholder="e.g. Monday 23 March 2026")
+        m["subject"] = st.text_input("Subject / reason for meeting", value=m.get("subject",""),
+            placeholder="e.g. Xavier Shilton Sumner — TAC Review  ·  Term 1 Staff Meeting",
+            help="Who or what the meeting is about — appears prominently on the minutes")
         m["organisation"] = st.text_input("Organisation / team", value=m["organisation"])
     with c2:
         m["start_time"]  = st.text_input("Start time", value=m["start_time"], placeholder="e.g. 3:30 PM")
@@ -299,7 +303,104 @@ elif st.session_state.mp_step == 2:
         word_count = len(st.session_state.mp_raw_text.split())
         st.markdown(f'<div style="font-size:.78rem;color:#4a7fb5;margin-top:.25rem;">📊 {word_count} words ready to polish</div>', unsafe_allow_html=True)
 
+        # ── Auto-extract meeting details from transcript ──────
+        if st.button("🔍 Auto-detect meeting details from transcript", use_container_width=True, key="auto_detect"):
+            with st.spinner("Reading transcript for meeting details…"):
+                detect_prompt = f"""Read this transcript carefully and extract meeting metadata.
+
+TRANSCRIPT:
+{st.session_state.mp_raw_text[:8000]}
+
+Return as JSON only (no markdown):
+{{
+  "date": "full date mentioned e.g. Monday 23 March 2026 — extract exactly as stated",
+  "start_time": "time meeting started e.g. 3:30 PM",
+  "end_time": "time meeting closed if mentioned",
+  "location": "where the meeting was held or platform used e.g. Teams, CLC Staff Room",
+  "chair": "name of person who chaired or opened the meeting",
+  "minutes_by": "name of person taking minutes if mentioned",
+  "subject": "what the meeting is about — student name, topic, or meeting purpose e.g. 'Xavier Shilton Sumner — TAC Review' or 'Term 1 Staff Meeting'",
+  "present": [
+    {{"name": "full name", "role": "their role or organisation e.g. Principal, BSE, Kinship Carer, DCP Worker"}}
+  ],
+  "apologies": [
+    {{"name": "full name", "role": "role if mentioned"}}
+  ],
+  "next_meeting": "next meeting details if mentioned"
+}}
+
+Extract only what is explicitly stated. For present/apologies, include EVERY person introduced or mentioned as attending — including external attendees like DCP workers, parents, specialists.
+If a field is not mentioned, return an empty string or empty array."""
+
+                raw = groq_call(detect_prompt, 1500)
+                raw = raw.replace("```json","").replace("```","").strip()
+                if not raw.startswith("{"): 
+                    idx = raw.find("{"); raw = raw[idx:] if idx != -1 else raw
+                try:
+                    detected = json.loads(raw)
+                    changed = []
+                    if detected.get("date","").strip() and not m.get("date","").strip():
+                        m["date"] = detected["date"]; changed.append("date")
+                    elif detected.get("date","").strip():
+                        m["date"] = detected["date"]; changed.append("date")
+                    if detected.get("start_time","").strip():
+                        m["start_time"] = detected["start_time"]; changed.append("start time")
+                    if detected.get("end_time","").strip():
+                        m["end_time"] = detected["end_time"]; changed.append("end time")
+                    if detected.get("location","").strip():
+                        m["location"] = detected["location"]; changed.append("location")
+                    if detected.get("chair","").strip():
+                        m["chair"] = detected["chair"]; changed.append("chair")
+                    if detected.get("minutes_by","").strip():
+                        m["minutes_by"] = detected["minutes_by"]; changed.append("minutes by")
+                    if detected.get("subject","").strip():
+                        m["subject"] = detected["subject"]; changed.append("subject/reason")
+                    if detected.get("next_meeting","").strip():
+                        m["next_meeting"] = detected["next_meeting"]; changed.append("next meeting")
+                    # Build present list with roles
+                    present_list = detected.get("present",[])
+                    if present_list:
+                        m["present"] = "\n".join(
+                            f"{p['name']}{' (' + p['role'] + ')' if p.get('role') else ''}"
+                            for p in present_list if p.get("name")
+                        )
+                        changed.append(f"attendees ({len(present_list)} people)")
+                    # Build apologies list
+                    apo_list = detected.get("apologies",[])
+                    if apo_list:
+                        m["apologies"] = "\n".join(
+                            f"{p['name']}{' (' + p['role'] + ')' if p.get('role') else ''}"
+                            for p in apo_list if p.get("name")
+                        )
+                        changed.append("apologies")
+                    if changed:
+                        st.success(f"✅ Auto-detected: {', '.join(changed)} — scroll up to Meeting Details (Step 1) to review")
+                    else:
+                        st.info("Could not detect meeting details from transcript. Fill in manually.")
+                    st.rerun()
+                except Exception as e:
+                    st.warning(f"Could not parse detection result. Fill in details manually ({e}).")
+
     st.markdown('</div></div>', unsafe_allow_html=True)
+
+    # Show current detected details as a summary
+    if any([m.get("date"), m.get("present"), m.get("subject")]):
+        st.markdown('<div class="card"><div class="card-header slate"><h3>📋 Current Meeting Details</h3></div><div class="card-body">', unsafe_allow_html=True)
+        det1, det2 = st.columns(2)
+        with det1:
+            m["date"]      = st.text_input("Date", value=m.get("date",""), key="s2_date", placeholder="e.g. Monday 23 March 2026")
+            m["start_time"]= st.text_input("Start time", value=m.get("start_time",""), key="s2_st", placeholder="e.g. 3:30 PM")
+            m["end_time"]  = st.text_input("End time", value=m.get("end_time",""), key="s2_et", placeholder="e.g. 4:45 PM")
+            m["location"]  = st.text_input("Location / platform", value=m.get("location",""), key="s2_loc", placeholder="e.g. CLC Staff Room / Teams")
+        with det2:
+            m["subject"]   = st.text_input("Subject / reason for meeting", value=m.get("subject",""), key="s2_subj",
+                                placeholder="e.g. Xavier Shilton Sumner — TAC Review · Term 1 Staff Meeting")
+            m["chair"]     = st.text_input("Chaired by", value=m.get("chair",""), key="s2_chair")
+            m["minutes_by"]= st.text_input("Minutes by", value=m.get("minutes_by",""), key="s2_minby")
+        m["present"]   = st.text_area("Present (name + role)", value=m.get("present",""), height=110, key="s2_pres",
+                            placeholder="e.g.\nAnnette Smith (Principal, CLC)\nSarah Cromer (BSE)\nJane Doe (Kinship Carer)")
+        m["apologies"] = st.text_area("Apologies", value=m.get("apologies",""), height=70, key="s2_apo")
+        st.markdown('</div></div>', unsafe_allow_html=True)
 
     n1, n2 = st.columns(2)
     with n1:
@@ -318,72 +419,96 @@ elif st.session_state.mp_step == 2:
 # ══════════════════════════════════════════════════════════════
 elif st.session_state.mp_step == 3:
 
-    SYSTEM_PROMPT = """You are an expert minute-taker for Cowandilla Learning Centre (CLC) LBU, Adelaide SA.
-You produce clear, accurate, professional meeting minutes.
-You preserve all factual content, decisions, and action items — never omit anything important.
-You remove filler words, repetition, and off-topic tangents.
-You write in third person (e.g. 'Annette advised that…', 'The group agreed to…').
-Actions must be clearly attributed to a named person with a due date where mentioned.
-Do not add information that was not in the original transcript."""
+    SYSTEM_PROMPT = """You are a professional minute-taker producing formal meeting minutes for Cowandilla Learning Centre (CLC) LBU, Adelaide SA.
+
+These minutes are the official record of the meeting and will be distributed to ALL attendees — including external parties such as DCP workers, parents/carers, BSE, allied health, and other agencies.
+
+CRITICAL STANDARDS:
+- Write for ALL attendees, not just CLC staff. Assume some readers were not at the meeting.
+- Write in formal third person throughout (e.g. 'Ms Smith advised that…', 'The group resolved to…', 'It was noted that…')
+- Be thorough and complete — capture the substance of every discussion, not just dot points
+- Every decision must be recorded as a clear Resolution or Agreed Outcome
+- Every action must name the responsible person, the specific task, and the due date
+- Include context where needed so a reader unfamiliar with the situation understands the discussion
+- Do NOT use casual language, abbreviations without explanation, or staff-only shorthand
+- Do not fabricate anything — only record what was actually discussed in the transcript"""
 
     def build_prompt():
         style_instruction = {
-            "formal": "Use full sentences and a formal professional tone throughout. Each agenda item should have a paragraph-style summary of discussion and any resolution reached.",
-            "concise": "Use clear dot points under each heading. Keep each point to one or two lines. Prioritise decisions and actions over discussion.",
-            "narrative": "Write in flowing prose that captures the tone and substance of the discussion. This should read like a professional narrative account of the meeting.",
+            "formal": "Write in complete, formal sentences with clear paragraph structure. Each section should fully summarise the discussion, any positions raised, and the resolution or outcome reached.",
+            "concise": "Use clear structured bullet points under each heading. Each point should be a complete thought. Prioritise decisions, resolutions, and actions — but include enough context for external readers.",
+            "narrative": "Write in flowing formal prose that reads as a professional narrative record. Capture the tone and substance of the discussion so any reader can understand what occurred and what was agreed.",
         }.get(st.session_state.mp_style, "")
 
         present_list  = m.get("present","").strip()
         apology_list  = m.get("apologies","").strip()
         next_mtg      = m.get("next_meeting","").strip()
+        subject       = m.get("subject","").strip()
 
-        return f"""Transform the following rough transcript/notes into polished, professional meeting minutes.
+        return f"""Produce formal, professional meeting minutes from the transcript below.
+These minutes are an official record to be distributed to ALL attendees including external parties.
 
 MEETING DETAILS:
-- Type: {m['type']}
-- Date: {m['date']}
+- Meeting type: {m['type']}
+- Subject / reason: {subject if subject else '(extract from transcript)'}
+- Date: {m['date'] if m.get('date') else '(extract from transcript)'}
 - Time: {m.get('start_time','')} – {m.get('end_time','')}
 - Location: {m.get('location','')}
 - Organisation: {m.get('organisation','')}
-- Chair: {m.get('chair','')}
+- Chaired by: {m.get('chair','')}
 - Minutes recorded by: {m.get('minutes_by','')}
-- Present: {present_list}
-- Apologies: {apology_list}
+- Present: {present_list if present_list else '(extract all names and roles from transcript)'}
+- Apologies: {apology_list if apology_list else '(extract from transcript if mentioned)'}
 - Next meeting: {next_mtg}
 
 STYLE: {style_instruction}
 
-TRANSCRIPT / ROUGH NOTES:
+TRANSCRIPT:
 {st.session_state.mp_raw_text[:12000]}
 
 Return as JSON only (no markdown fences):
 {{
-  "opening": "One sentence: who opened the meeting, time, quorum noted if relevant",
+  "date": "full meeting date extracted from transcript if not already provided",
+  "start_time": "meeting start time if found in transcript",
+  "end_time": "meeting end time if found in transcript",
+  "location": "meeting location or platform if found",
+  "chair": "name of chair if found",
+  "minutes_by": "name of minute-taker if found",
+  "subject": "subject or reason for meeting extracted from transcript",
+  "present": [
+    {{"name": "full name", "role": "role or organisation e.g. Principal CLC, BSE, Kinship Carer, DCP Caseworker"}}
+  ],
+  "apologies": [
+    {{"name": "full name", "role": "role if mentioned"}}
+  ],
+  "opening": "Formal opening sentence: who chaired, date, time, location, and that a quorum was present",
   "sections": [
     {{
-      "heading": "Section heading (e.g. agenda item, topic discussed)",
-      "content": "Polished content for this section as a string. Use \\n• for bullet points within. Use \\n\\n for paragraph breaks.",
+      "heading": "Clear section heading describing the topic",
+      "content": "Thorough formal summary of the discussion. Write enough that an external reader who was not present can fully understand: what was discussed, what positions were held, what evidence or information was presented, and what was agreed or resolved. Use \\n• for bullet points. Use \\nResolution: to clearly mark any agreed outcomes.",
       "is_actions": false
     }}
   ],
   "actions": [
     {{
-      "who": "Person responsible",
-      "action": "Specific action to be taken",
-      "due": "Due date or 'Next meeting' if not specified"
+      "who": "Full name of person responsible",
+      "action": "Specific action to be taken — written clearly for someone who was not at the meeting",
+      "due": "Due date, or 'Prior to next meeting' if not specified"
     }}
   ],
-  "closing": "One or two sentences: time meeting closed, next meeting date/time if known",
-  "next_meeting": "Next meeting details if mentioned in transcript (or empty string)"
+  "closing": "Formal closing: time the meeting closed, who closed it, and next meeting details if known",
+  "next_meeting": "Next meeting details if mentioned"
 }}
 
-RULES:
-- Create a section for each distinct topic discussed — do not clump multiple topics together
-- Every decision made must be explicitly stated as a resolution/agreed outcome
-- Every action mentioned must appear in the actions array, attributed to a named person
-- If a topic was discussed but no decision was reached, note 'Discussion only — no resolution reached'
-- Remove all filler words, cross-talk, and off-topic conversation
-- Do not fabricate content — only include what was in the transcript"""
+RULES — READ CAREFULLY:
+- Extract ALL attendees from the transcript including any external parties — name and role for each
+- If date/time/location were not provided in Meeting Details above, extract them from the transcript
+- Create one section per distinct topic — never clump two topics together
+- Each section must be thorough enough for an external reader to understand without having been present
+- Every decision = a clear Resolution statement within that section's content
+- Every action = an entry in the actions array with full name and specific task
+- If a topic was discussed but no decision reached, state explicitly: 'Discussion only — no resolution reached at this meeting'
+- Write for distribution: assume the minutes will be read by parents, DCP, external agencies, and other professionals"""
 
     st.markdown("""
     <div class="hero" style="text-align:center;padding:2rem;">
@@ -413,7 +538,7 @@ RULES:
     with p2:
         if st.button("✨ Polish Minutes Now", type="primary", use_container_width=True):
             with st.spinner("Reading transcript and writing polished minutes — this may take 20–40 seconds…"):
-                raw = groq_call(build_prompt(), 4000, SYSTEM_PROMPT)
+                raw = groq_call(build_prompt(), 4500, SYSTEM_PROMPT)
                 raw = raw.replace("```json","").replace("```","").strip()
                 if not raw.startswith("{"):
                     idx = raw.find("{")
@@ -424,8 +549,34 @@ RULES:
                     st.session_state.mp_actions    = parsed.get("actions", [])
                     st.session_state["mp_opening"] = parsed.get("opening", "")
                     st.session_state["mp_closing"] = parsed.get("closing", "")
+                    # Auto-fill meeting details from AI extraction if not already set
+                    if parsed.get("date","").strip() and not m.get("date","").strip():
+                        m["date"] = parsed["date"]
+                    if parsed.get("start_time","").strip() and not m.get("start_time","").strip():
+                        m["start_time"] = parsed["start_time"]
+                    if parsed.get("end_time","").strip() and not m.get("end_time","").strip():
+                        m["end_time"] = parsed["end_time"]
+                    if parsed.get("location","").strip() and not m.get("location","").strip():
+                        m["location"] = parsed["location"]
+                    if parsed.get("chair","").strip() and not m.get("chair","").strip():
+                        m["chair"] = parsed["chair"]
+                    if parsed.get("minutes_by","").strip() and not m.get("minutes_by","").strip():
+                        m["minutes_by"] = parsed["minutes_by"]
+                    if parsed.get("subject","").strip():
+                        m["subject"] = parsed["subject"]
                     if parsed.get("next_meeting","").strip() and not m.get("next_meeting","").strip():
                         m["next_meeting"] = parsed["next_meeting"]
+                    # Build present/apologies from extracted lists if not already set
+                    if parsed.get("present") and not m.get("present","").strip():
+                        m["present"] = "\n".join(
+                            f"{p['name']}{' (' + p['role'] + ')' if p.get('role') else ''}"
+                            for p in parsed["present"] if p.get("name")
+                        )
+                    if parsed.get("apologies") and not m.get("apologies","").strip():
+                        m["apologies"] = "\n".join(
+                            f"{p['name']}{' (' + p['role'] + ')' if p.get('role') else ''}"
+                            for p in parsed["apologies"] if p.get("name")
+                        )
                     st.session_state.mp_step = 4
                     st.rerun()
                 except Exception as e:
@@ -531,6 +682,7 @@ elif st.session_state.mp_step == 4:
         with c1:
             m["type"]      = st.text_input("Meeting type", value=m["type"], key="rv_type")
             m["date"]      = st.text_input("Date", value=m["date"], key="rv_date")
+            m["subject"]   = st.text_input("Subject / reason", value=m.get("subject",""), key="rv_subj")
             m["start_time"]= st.text_input("Start time", value=m.get("start_time",""), key="rv_st")
             m["end_time"]  = st.text_input("End time", value=m.get("end_time",""), key="rv_et")
             m["location"]  = st.text_input("Location", value=m.get("location",""), key="rv_loc")
@@ -540,6 +692,154 @@ elif st.session_state.mp_step == 4:
             m["organisation"]= st.text_input("Organisation", value=m.get("organisation",""), key="rv_org")
         m["present"]   = st.text_area("Present", value=m.get("present",""), height=100, key="rv_present")
         m["apologies"] = st.text_area("Apologies", value=m.get("apologies",""), height=80, key="rv_apo")
+
+    # ── AI REFINEMENT CHAT ────────────────────────────────────
+    st.markdown("---")
+    st.markdown('<div class="card"><div class="card-header teal"><h3>🤖 Ask AI to Refine the Minutes</h3></div><div class="card-body">', unsafe_allow_html=True)
+    st.markdown("""
+    <div class="info-box">
+    Tell the AI what to change — it will update the minutes and you can keep asking until it's right.
+    <br><strong>Examples:</strong> "Make section 2 more formal" · "Add an action for Mike to fix the fence by Friday" ·
+    "Expand the timetable discussion" · "Remove the part about the photocopier" · "Rewrite the opening in third person"
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Show chat history
+    if "mp_chat" not in st.session_state:
+        st.session_state.mp_chat = []
+
+    for msg in st.session_state.mp_chat:
+        role_icon = "🧑‍💼" if msg["role"] == "user" else "🤖"
+        bg = "#f0f7ff" if msg["role"] == "user" else "#f0faf8"
+        border = "#4a7fb5" if msg["role"] == "user" else "#1a7a6e"
+        st.markdown(
+            f'<div style="background:{bg};border-left:3px solid {border};border-radius:0 8px 8px 0;'
+            f'padding:.6rem .9rem;margin-bottom:.4rem;font-size:.85rem;color:#1a2e44;">'
+            f'<span style="font-weight:700;">{role_icon} {"You" if msg["role"]=="user" else "AI"}</span>'
+            f'<br>{msg["content"]}'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+
+    # Input
+    with st.form("mp_ai_chat_form", clear_on_submit=True):
+        chat_cols = st.columns([5, 1])
+        with chat_cols[0]:
+            user_instruction = st.text_input(
+                "Your instruction",
+                placeholder="e.g. Make the opening more concise · Add action for Sarah to send agenda by Monday · Expand the discussion about the new timetable",
+                label_visibility="collapsed"
+            )
+        with chat_cols[1]:
+            send = st.form_submit_button("✨ Apply", type="primary", use_container_width=True)
+
+        if send and user_instruction.strip():
+            # Build current minutes as text for the AI to work with
+            current_minutes = f"OPENING:\n{st.session_state.get('mp_opening','')}\n\n"
+            for sec in st.session_state.mp_sections:
+                current_minutes += f"SECTION: {sec.get('heading','')}\n{sec.get('content','')}\n\n"
+            current_minutes += f"CLOSING:\n{st.session_state.get('mp_closing','')}\n\n"
+            if st.session_state.mp_actions:
+                current_minutes += "ACTIONS:\n"
+                for a in st.session_state.mp_actions:
+                    current_minutes += f"- {a.get('who','')}: {a.get('action','')} (due: {a.get('due','')})\n"
+
+            refine_prompt = f"""You are refining meeting minutes for Cowandilla Learning Centre (CLC) LBU.
+
+CURRENT MINUTES:
+{current_minutes}
+
+USER INSTRUCTION:
+{user_instruction}
+
+Apply the instruction and return the updated minutes as JSON only (no markdown):
+{{
+  "opening": "updated opening text",
+  "sections": [
+    {{"heading": "section title", "content": "section content with \\n• for bullets"}}
+  ],
+  "actions": [
+    {{"who": "person", "action": "action description", "due": "due date"}}
+  ],
+  "closing": "updated closing text",
+  "change_summary": "One sentence describing what you changed"
+}}
+
+RULES:
+- Only make the change the user asked for — preserve everything else exactly
+- If the instruction adds a new action, add it to the actions array
+- If the instruction removes content, remove only that content
+- Maintain the same style ({st.session_state.mp_style}) throughout
+- Return ALL sections, even unchanged ones"""
+
+            with st.spinner("Applying changes…"):
+                raw = groq_call(refine_prompt, 3000,
+                    "You are a professional minute-taker refining meeting minutes. Apply changes precisely as instructed. Preserve all other content exactly.")
+                raw = raw.replace("```json","").replace("```","").strip()
+                if not raw.startswith("{"): 
+                    idx = raw.find("{")
+                    if idx != -1: raw = raw[idx:]
+                try:
+                    updated = json.loads(raw)
+                    # Apply updates
+                    if updated.get("opening","").strip():
+                        st.session_state["mp_opening"] = updated["opening"]
+                    if updated.get("sections"):
+                        st.session_state.mp_sections = updated["sections"]
+                    if updated.get("actions") is not None:
+                        st.session_state.mp_actions = updated["actions"]
+                    if updated.get("closing","").strip():
+                        st.session_state["mp_closing"] = updated["closing"]
+                    # Log to chat
+                    summary = updated.get("change_summary", "Changes applied.")
+                    st.session_state.mp_chat.append({"role": "user", "content": user_instruction})
+                    st.session_state.mp_chat.append({"role": "assistant", "content": f"✅ Done — {summary}"})
+                    st.rerun()
+                except Exception as e:
+                    st.session_state.mp_chat.append({"role": "user", "content": user_instruction})
+                    st.session_state.mp_chat.append({"role": "assistant", "content": f"⚠️ Could not apply that change ({e}). Try rephrasing your instruction."})
+                    st.rerun()
+
+    # Quick-action buttons
+    st.markdown("**Quick actions:**")
+    qa_cols = st.columns(4)
+    quick_actions = [
+        ("📏 More concise",       "Make all sections more concise — remove any unnecessary words"),
+        ("🎩 More formal",        "Rewrite all sections in a more formal professional tone"),
+        ("✅ Extract all actions","Find any action items in the minutes text that aren't in the action register and add them"),
+        ("🔢 Add numbering",      "Add agenda item numbers to all section headings (1., 2., 3. etc.)"),
+    ]
+    for i, (label, instruction) in enumerate(quick_actions):
+        with qa_cols[i]:
+            if st.button(label, key=f"qa_{i}", use_container_width=True):
+                st.session_state.mp_chat.append({"role": "user", "content": instruction})
+                # Build current state
+                current = f"OPENING:\n{st.session_state.get('mp_opening','')}\n\n"
+                for sec in st.session_state.mp_sections:
+                    current += f"SECTION: {sec.get('heading','')}\n{sec.get('content','')}\n\n"
+                current += f"CLOSING:\n{st.session_state.get('mp_closing','')}\n"
+                refine_p = f"""Current minutes:\n{current}\n\nInstruction: {instruction}\n\nReturn updated JSON only:\n{{"opening":"...","sections":[{{"heading":"...","content":"..."}}],"actions":[{{"who":"...","action":"...","due":"..."}}],"closing":"...","change_summary":"one sentence"}}"""
+                with st.spinner("Applying…"):
+                    raw = groq_call(refine_p, 3000, "You are a professional minute-taker. Apply changes precisely.")
+                    raw = raw.replace("```json","").replace("```","").strip()
+                    if not raw.startswith("{"): 
+                        idx = raw.find("{"); raw = raw[idx:] if idx != -1 else raw
+                    try:
+                        upd = json.loads(raw)
+                        if upd.get("opening","").strip(): st.session_state["mp_opening"] = upd["opening"]
+                        if upd.get("sections"): st.session_state.mp_sections = upd["sections"]
+                        if upd.get("actions") is not None: st.session_state.mp_actions = upd["actions"]
+                        if upd.get("closing","").strip(): st.session_state["mp_closing"] = upd["closing"]
+                        st.session_state.mp_chat.append({"role":"assistant","content":f"✅ {upd.get('change_summary','Done.')}"})
+                    except:
+                        st.session_state.mp_chat.append({"role":"assistant","content":"⚠️ Could not apply — try the manual instruction box above."})
+                st.rerun()
+
+    if st.session_state.mp_chat:
+        if st.button("🗑️ Clear chat history", key="clear_chat"):
+            st.session_state.mp_chat = []; st.rerun()
+
+    st.markdown('</div></div>', unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
     rv1, rv2, rv3 = st.columns([1,1,1])
@@ -633,6 +933,12 @@ elif st.session_state.mp_step == 5:
         p_title = hc.add_paragraph()
         p_title.paragraph_format.space_before = Pt(0); p_title.paragraph_format.space_after = Pt(4)
         add_run(p_title, "MEETING MINUTES", bold=True, size=14, color=WHITE)
+        # Subject line prominently
+        subject = m.get("subject","").strip()
+        p_subj = hc.add_paragraph()
+        p_subj.paragraph_format.space_before = Pt(0); p_subj.paragraph_format.space_after = Pt(3)
+        if subject:
+            add_run(p_subj, subject, bold=True, size=10.5, color=CREAM)
         p_org = hc.add_paragraph()
         p_org.paragraph_format.space_before = Pt(0); p_org.paragraph_format.space_after = Pt(0)
         add_run(p_org, f"{m.get('organisation','')}  ·  {m.get('type','')}  ·  {m.get('date','')}", size=9, color=CREAM)
@@ -644,8 +950,9 @@ elif st.session_state.mp_step == 5:
             ("Date", m.get("date","")),
             ("Time", f"{m.get('start_time','')} – {m.get('end_time','')}".strip(" –")),
             ("Location", m.get("location","")),
+            ("Subject / Reason", subject),
             ("Chaired by", m.get("chair","")),
-            ("Minutes by", m.get("minutes_by","")),
+            ("Minutes prepared by", m.get("minutes_by","")),
         ]
         info_fields = [(k,v) for k,v in info_fields if v.strip()]
         if info_fields:
@@ -844,7 +1151,7 @@ elif st.session_state.mp_step == 5:
     with d2:
         if st.button("📝 Polish New Minutes", use_container_width=True):
             for k in ["mp_step","mp_meeting","mp_raw_text","mp_style","mp_sections",
-                      "mp_actions","mp_opening","mp_closing","mp_docx_bytes"]:
+                      "mp_actions","mp_opening","mp_closing","mp_docx_bytes","mp_chat"]:
                 if k in st.session_state: del st.session_state[k]
             st.rerun()
 
