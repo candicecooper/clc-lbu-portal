@@ -199,7 +199,7 @@ def get_clinical_behaviour(raw: str) -> str:
 
 INTERVENTIONS = ["CPI Supportive stance", "Offered break", "Reduced demand", "Provided choices",
                 "Removed audience", "Visual supports", "Co-regulation", "Prompted coping skill", "Redirection"]
-LOCATIONS = ["JP Room", "PY Room", "SY Room", "Yard", "Playground", "Library", "Office", "Student Gate", "Toilets", "Transition area", "Other"]
+LOCATIONS = ["JP Room", "PY Room", "SY Room", "Yard", "Playground", "Library", "Kitchen", "Office", "Student Gate", "Toilets", "Transition area", "Other"]
 VALID_PAGES = ["login", "landing", "program_students", "incident_log", "critical_incident", "review_critical", "leader_approve_critical", "student_analysis", "student_dashboard", "admin_portal"]
 
 HYPOTHESIS_FUNCTIONS = ["To get", "To avoid"]
@@ -582,7 +582,7 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
              ("Grade",   student.get('grade','—'))],
             [("Analysis Date", datetime.now().strftime('%d %B %Y')),
              ("Data Period",   f"{full_df['date_parsed'].min().strftime('%d/%m/%Y')} – {full_df['date_parsed'].max().strftime('%d/%m/%Y')}"),
-             ("Risk Level",    f"{risk_level} ({risk_score}/100)")]
+             ("Total incidents", str(len(full_df)))]
         ]):
             c = det.rows[1].cells[ci]
             set_bg(c, LIGHT_GREY); set_borders(c, TEAL_HEX)
@@ -601,8 +601,7 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         p_s.paragraph_format.space_after  = Pt(3)
         arun(p_s, "Summary:  ", bold=True, size=16, color=AMBER_HEX)
         arun(p_s, f"Total incidents: {len(full_df)}   |   "
-                  f"Critical: {len(full_df[full_df['incident_type']=='Critical'])}   |   "
-                  f"Average severity: {full_df['severity'].mean():.1f}/5", size=16)
+                  f"Critical: {len(full_df[full_df['incident_type']=='Critical'])}", size=16)
 
         doc.add_paragraph().paragraph_format.space_after = Pt(4)
 
@@ -630,19 +629,33 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         section_header(doc, "VISUAL ANALYTICS — FREQUENCY PATTERNS")
         p_sp = doc.add_paragraph(); p_sp.paragraph_format.space_after = Pt(4)
 
-        daily = full_df.groupby(full_df["date_parsed"].dt.date).size().reset_index(name="count")
+        # Show ALL days in range (not just incident days) so zero-incident days are visible
+        import datetime as _bdt
+        _b_start = full_df["date_parsed"].min().date()
+        _b_end   = full_df["date_parsed"].max().date()
+        _b_all_days = []
+        _b_d = _b_start
+        while _b_d <= _b_end:
+            _b_all_days.append(_b_d)
+            _b_d += _bdt.timedelta(days=1)
+        _b_counts_map = full_df.groupby(full_df["date_parsed"].dt.date).size().to_dict()
+        daily_all = [(_b_d, _b_counts_map.get(_b_d, 0)) for _b_d in _b_all_days]
+        daily = type("obj", (object,), {
+            "date_parsed": [x[0] for x in daily_all],
+            "count":       [x[1] for x in daily_all]
+        })()
         fig, ax = plt.subplots(figsize=(FIG_W, FIG_H), dpi=FIG_DPI)
-        bar_colours = ['#C0392B' if v >= 3 else '#1A7A6E' for v in daily["count"]]
-        bars = ax.bar(range(len(daily)), daily["count"],
+        bar_colours = ['#94a3b8' if v == 0 else '#C0392B' if v >= 3 else '#1A7A6E' for v in daily.count]
+        bars = ax.bar(range(len(daily.count)), daily.count,
                       color=bar_colours, width=0.7, edgecolor='white', linewidth=0.6)
-        ax.set_xticks(range(len(daily)))
-        ax.set_xticklabels([d.strftime("%a %d/%m") for d in daily["date_parsed"]],
+        ax.set_xticks(range(len(daily.count)))
+        ax.set_xticklabels([d.strftime("%a %d/%m") for d in daily.date_parsed],
                            fontsize=7, rotation=35, ha='right')
         ax.set_ylabel("Incidents", fontsize=8.5, fontweight='bold', color='#334155')
         ax.set_title("1.  Daily Incident Frequency  —  teal = 1–2 incidents,  red = 3+",
                      fontsize=9.5, fontweight='bold', color='#0f172a', pad=6, loc='left')
         ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
-        for bar, v in zip(bars, daily["count"]):
+        for bar, v in zip(bars, daily.count):
             if v > 0:
                 ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.05,
                         str(int(v)), ha='center', va='bottom', fontsize=8, fontweight='bold', color='#0f172a')
@@ -652,19 +665,25 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             f"Daily totals across the data period. Red bars flag days with 3+ incidents — these are priority days for proactive planning.")
 
         beh_counts = full_df["behaviour_type"].value_counts().head(6)
-        labels_beh = wrap_labels(list(beh_counts.index[::-1]))
+        # Use clinical terminology and filter out raw ABCH narratives (>80 chars)
+        _bap_beh_clean = [(get_clinical_behaviour(b) if len(str(b)) <= 80 else b[:55]+"…", v)
+                          for b, v in zip(beh_counts.index, beh_counts.values)]
+        _bap_beh_labels = [x[0] for x in _bap_beh_clean]
+        _bap_beh_vals   = [x[1] for x in _bap_beh_clean]
+        beh_counts_vals = _bap_beh_vals
+        labels_beh = wrap_labels(_bap_beh_labels[::-1])
         chart_colours = ['#C0392B','#E67E22','#1A7A6E','#2E4057','#D97706','#5D6D7E']
         fig, ax = plt.subplots(figsize=(FIG_W, FIG_H), dpi=FIG_DPI)
         y_pos = range(len(labels_beh))
-        bars = ax.barh(y_pos, beh_counts.values[::-1],
-                       color=chart_colours[:len(beh_counts)], edgecolor='white', height=0.6)
+        bars = ax.barh(y_pos, _bap_beh_vals[::-1],
+                       color=chart_colours[:len(_bap_beh_vals)], edgecolor='white', height=0.6)
         ax.set_yticks(list(y_pos))
         ax.set_yticklabels(labels_beh, fontsize=8)
         ax.set_xlabel("Number of incidents", fontsize=8.5, fontweight='bold', color='#334155')
         ax.set_title("2.  Behaviours of Concern — Frequency",
                      fontsize=9.5, fontweight='bold', color='#0f172a', pad=6, loc='left')
         ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
-        for bar, v in zip(bars, beh_counts.values[::-1]):
+        for bar, v in zip(bars, _bap_beh_vals[::-1]):
             ax.text(v + 0.08, bar.get_y() + bar.get_height()/2,
                     str(int(v)), va='center', fontsize=8, fontweight='bold', color='#0f172a')
         base_ax_style(ax)
@@ -675,7 +694,12 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             f"{int(beh_counts.values[0]/len(full_df)*100)}% of total).")
 
         ant_counts = full_df["antecedent"].value_counts().head(6)
-        labels_ant = wrap_labels(list(ant_counts.index[::-1]))
+        # Strip category prefix (e.g. "Peer - " → "peer conflict/interaction")
+        def _strip_ant(a):
+            a = str(a)
+            if " - " in a: a = a[a.find(" - ")+3:]
+            return a[:60] + ("…" if len(a) > 60 else "")
+        labels_ant = wrap_labels([_strip_ant(a) for a in list(ant_counts.index[::-1])])
         fig, ax = plt.subplots(figsize=(FIG_W, FIG_H), dpi=FIG_DPI)
         y_pos = range(len(labels_ant))
         bars = ax.barh(y_pos, ant_counts.values[::-1],
@@ -809,7 +833,7 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
 
         doc.add_page_break()
 
-        section_header(doc, "SUMMARY — EVIDENCE-BASED INTERPRETATION")
+        section_header(doc, "FUNCTIONAL HYPOTHESIS")
         p_sp3 = doc.add_paragraph(); p_sp3.paragraph_format.space_after = Pt(4)
 
         interp_tbl = doc.add_table(rows=1, cols=1); interp_tbl.style='Table Grid'
@@ -828,8 +852,8 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             f"The behaviour '{top_beh}' is the primary concern. From a trauma-informed perspective, "
             f"this is {student['name']}'s way of communicating an unmet need or responding to feeling "
             f"unsafe or overwhelmed — a stress response, not deliberate defiance.",
-            f"Risk level: {risk_level} ({risk_score}/100). All recommendations below prioritise the "
-            f"Berry Street Body and Relationship domains first.",
+            f"All recommendations below are informed by the functional hypothesis and prioritise the "
+            "Berry Street Body and Relationship domains first.",
         ]:
             p = interp_c.add_paragraph()
             p.paragraph_format.space_before = Pt(3)
@@ -3308,8 +3332,9 @@ def render_student_analysis_page():
                 beh = row.get("behaviour_type", "")
                 if beh and beh in all_behaviours:
                     for iv in (ints if isinstance(ints, list) else [ints]):
-                        if iv and str(iv).strip():
-                            _int_rows.append({"behaviour": beh, "intervention": str(iv).strip()})
+                        _iv_str = str(iv).strip()
+                        if _iv_str and _iv_str.lower() not in ("nan", "none", "", "null"):
+                            _int_rows.append({"behaviour": beh, "intervention": _iv_str})
             if len(_int_rows) >= 3:
                 st.markdown("#### I — Interventions by Behaviour Type")
                 st.caption("Which strategies were used for each behaviour. Helps assess whether responses are matched to the behaviour function.")
@@ -3346,15 +3371,30 @@ def render_student_analysis_page():
 
     st.markdown("### 🔍 Trigger Analysis")
     all_triggers = full_df["antecedent"].value_counts().head(6).index.tolist()
+    # Strip section headers and truncate to clinical label only (remove free-text names)
+    def _clean_trigger_label(t):
+        if not t or str(t).startswith("---"): return None
+        t = str(t).strip()
+        # If it contains " - " it is a structured antecedent — keep only after the dash
+        if " - " in t: t = t[t.find(" - ")+3:]
+        # Truncate long free-text (from ABCH narratives)
+        if len(t) > 70: t = t[:70] + "…"
+        return t
+    _trig_labels = [_clean_trigger_label(a) for a in all_triggers]
+    _trig_pairs  = [(a, lbl) for a, lbl in zip(all_triggers, _trig_labels) if lbl]
+    all_triggers       = [p[0] for p in _trig_pairs]
+    _trig_display      = [p[1] for p in _trig_pairs]
     quick_ant_counts = [len(quick_only_df[quick_only_df["antecedent"] == a]) if not quick_only_df.empty else 0 for a in all_triggers]
     crit_ant_counts  = [len(crit_only_df[crit_only_df["antecedent"] == a]) if not crit_only_df.empty else 0 for a in all_triggers]
     fig3 = go.Figure()
-    fig3.add_trace(go.Bar(y=all_triggers, x=quick_ant_counts, name='Regular', orientation='h',
+    fig3.add_trace(go.Bar(y=_trig_display, x=quick_ant_counts, name='Regular', orientation='h',
         marker=dict(color='#3b82f6'), text=quick_ant_counts, textposition='inside',
-        textfont=dict(color='white', size=11, family='Arial Black')))
-    fig3.add_trace(go.Bar(y=all_triggers, x=crit_ant_counts, name='Critical', orientation='h',
+        textfont=dict(color='white', size=11, family='Arial Black'),
+        hovertemplate='<b>%{y}</b><br>Regular: %{x}<extra></extra>'))
+    fig3.add_trace(go.Bar(y=_trig_display, x=crit_ant_counts, name='Critical', orientation='h',
         marker=dict(color='#ef4444'), text=crit_ant_counts, textposition='inside',
-        textfont=dict(color='white', size=11, family='Arial Black')))
+        textfont=dict(color='white', size=11, family='Arial Black'),
+        hovertemplate='<b>%{y}</b><br>Critical: %{x}<extra></extra>'))
     fig3.update_layout(height=350, barmode='stack', xaxis_title="<b>Incident Count</b>",
         plot_bgcolor='#f8fafc', paper_bgcolor='white', font=dict(color='#0f172a', size=12, family='Arial'),
         xaxis=dict(tickmode='linear', tick0=0, dtick=1, gridcolor='#e2e8f0', showline=True, linewidth=2, linecolor='#cbd5e1'),
@@ -3365,7 +3405,7 @@ def render_student_analysis_page():
                               for i in range(len(all_triggers)))
     if _any_reliable_ant:
         st.markdown("**Escalation Risk by Trigger** *(minimum 4 incidents required for % to display)*")
-        for i, ant in enumerate(all_triggers):
+        for i, (ant, lbl) in enumerate(zip(all_triggers, _trig_display)):
             total = quick_ant_counts[i] + crit_ant_counts[i]
             if total >= 4:
                 risk_pct = (crit_ant_counts[i] / total) * 100
@@ -3431,11 +3471,15 @@ def render_student_analysis_page():
         recent_avg = full_df.tail(5)["severity"].mean()
         early_avg = full_df.head(5)["severity"].mean()
         trend_dir = "improving" if recent_avg < early_avg else "worsening" if recent_avg > early_avg else "stable"
-        trend_emoji = "📈" if trend_dir == "improving" else "📉" if trend_dir == "worsening" else "➡️"
-        col1, col2, col3 = st.columns(3)
-        with col1: st.metric("Early Average", f"{early_avg:.1f}")
-        with col2: st.metric("Recent Average", f"{recent_avg:.1f}")
-        with col3: st.metric("Trend", f"{trend_emoji} {trend_dir.title()}")
+        col1, col2 = st.columns(2)
+        with col1: st.metric("Early period average", f"{early_avg:.1f}")
+        with col2: st.metric("Recent period average", f"{recent_avg:.1f}")
+        if recent_avg < early_avg:
+            st.caption("📉 Severity reducing over time — positive indicator.")
+        elif recent_avg == early_avg:
+            st.caption("➡️ Severity stable over the observed period.")
+        else:
+            st.caption("📊 Severity has increased in recent incidents — review proactive supports.")
     st.markdown("---")
 
     st.markdown("### 📍 Location Hotspots")
@@ -3538,6 +3582,221 @@ def render_student_analysis_page():
     # ══════════════════════════════════════════════════════════════════════════
     # CLINICAL HYPOTHESIS
     # ══════════════════════════════════════════════════════════════════════════
+
+    # ── Window of Tolerance visual ────────────────────────────────────────────
+    st.markdown("### 🪟 Window of Tolerance")
+    st.caption(
+        "The Window of Tolerance is the zone of optimal arousal in which a student can engage, "
+        "learn, regulate emotions, and respond to support. "
+        "**Green** = On task and engaged — within the window. "
+        "**Yellow** = Coping — behaviour is occurring as the student attempts to manage distress. "
+        "**Red** = Hyperaroused or hyperaroused/frozen — significant dysregulation, risk of harm."
+    )
+    _wot_fig = go.Figure()
+    # Zones
+    _wot_fig.add_hrect(y0=0.55, y1=1.45, fillcolor="#dcfce7", opacity=0.7, line_width=0)
+    _wot_fig.add_hrect(y0=1.45, y1=2.45, fillcolor="#fef9c3", opacity=0.7, line_width=0)
+    _wot_fig.add_hrect(y0=2.45, y1=3.45, fillcolor="#fee2e2", opacity=0.7, line_width=0)
+    # Zone labels
+    for y, lbl, sub, col in [
+        (1.0, "🟢  Within Window — On task and engaged",
+         "Student is regulated, learning, and responding to support", "#15803d"),
+        (2.0, "🟡  Coping Zone — Behaviour present",
+         "Student is attempting to manage distress — yellow behaviours occur here", "#92400e"),
+        (3.0, "🔴  Outside Window — Hyperaroused / significant distress",
+         "Significant dysregulation — risk of harm to self or others", "#dc2626"),
+    ]:
+        _wot_fig.add_annotation(
+            x=0.5, y=y, text=f"<b>{lbl}</b><br><span style='font-size:11px'>{sub}</span>",
+            showarrow=False, xanchor="center", yanchor="middle",
+            font=dict(size=13, color=col), xref="paper"
+        )
+    # Incident marker band
+    _wot_fig.add_shape(
+        type="rect", x0=0, x1=1, y0=1.45, y1=2.45,
+        fillcolor="rgba(234,179,8,0.15)", line=dict(color="#eab308", width=2, dash="dot"),
+        xref="paper"
+    )
+    _wot_fig.add_annotation(
+        x=1.01, y=1.95, text="← Incidents<br>logged here",
+        showarrow=False, xanchor="left", xref="paper",
+        font=dict(size=10, color="#92400e")
+    )
+    _wot_fig.update_layout(
+        height=280,
+        xaxis=dict(visible=False, range=[0, 1]),
+        yaxis=dict(visible=False, range=[0.3, 3.7]),
+        plot_bgcolor="white", paper_bgcolor="white",
+        margin=dict(l=20, r=80, t=10, b=10),
+        showlegend=False
+    )
+    st.plotly_chart(_wot_fig, use_container_width=True)
+    st.caption(
+        "ℹ️ If a behaviour is being logged, the student is not in the green zone — "
+        "by definition, incidents occur in the coping zone (yellow) or outside window (red). "
+        "A critical incident does not automatically mean the student is outside their window."
+    )
+    st.markdown("---")
+
+    # ══ SENSORY OVERVIEW ══════════════════════════════════════════════════════
+    with st.expander("📋 Sensory Overview — upload to enrich analysis (optional)", expanded=False):
+        st.caption(
+            "Upload a Sensory Overview or Sensory Profile (OT assessment, sensory checklist, or similar). "
+            "AI extracts key themes and cross-references them with the behaviour and trigger data. "
+            "Accepts .docx, .pdf, or paste text directly."
+        )
+        _so_key = f"sensory_overview_{student_id}"
+        _so_data = st.session_state.get(_so_key, {})
+
+        _so_tab1, _so_tab2 = st.tabs(["📄 Upload File (.docx / .pdf)", "📋 Paste Text"])
+
+        with _so_tab1:
+            _so_file = st.file_uploader(
+                "Upload Sensory Overview",
+                type=["docx","pdf","odt"],
+                key=f"so_upload_{student_id}"
+            )
+            if _so_file and st.button(
+                "🤖 Extract Sensory Information",
+                type="primary", key=f"so_extract_file_{student_id}", use_container_width=True
+            ):
+                with st.spinner("Reading document..."):
+                    try:
+                        _fname = _so_file.name.lower()
+                        if _fname.endswith(".pdf"):
+                            try:
+                                import fitz
+                                _raw = _so_file.read()
+                                _pdoc = fitz.open(stream=_raw, filetype="pdf")
+                                _so_text = " ".join(page.get_text() for page in _pdoc)
+                                _pdoc.close()
+                            except Exception:
+                                _so_text = "[PDF extraction failed — use paste tab]"
+                        elif _fname.endswith(".odt"):
+                            import zipfile, xml.etree.ElementTree as _ET
+                            _zf = zipfile.ZipFile(_so_file)
+                            _content = _ET.fromstring(_zf.read("content.xml"))
+                            _so_text = " ".join(_content.itertext())
+                        else:
+                            from docx import Document as _DocxDoc
+                            _d = _DocxDoc(_so_file)
+                            _paras = [p.text for p in _d.paragraphs if p.text.strip()]
+                            _cells = [c.text for t in _d.tables
+                                      for r in t.rows for c in r.cells if c.text.strip()]
+                            _so_text = " ".join(_paras + _cells)
+                        st.session_state[f"so_raw_{student_id}"] = _so_text
+                        st.success(f"Extracted {len(_so_text):,} characters from {_so_file.name}")
+                    except Exception as _e:
+                        st.error(f"Extraction error: {_e}")
+
+        with _so_tab2:
+            _so_pasted = st.text_area(
+                "Paste sensory overview content",
+                height=180, placeholder="Paste the full text of the sensory overview here...",
+                key=f"so_paste_{student_id}"
+            )
+            if st.button("✅ Use this text", key=f"so_use_paste_{student_id}", use_container_width=True):
+                if _so_pasted.strip():
+                    st.session_state[f"so_raw_{student_id}"] = _so_pasted.strip()
+                    st.success("Text ready — expand section and run extraction.")
+                else:
+                    st.warning("Please paste some content first.")
+
+        # Run AI extraction when raw text is available and result not yet cached
+        _so_raw = st.session_state.get(f"so_raw_{student_id}", "")
+        if _so_raw and not _so_data:
+            GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
+            if GROQ_KEY:
+                with st.spinner("AI extracting sensory themes..."):
+                    try:
+                        from groq import Groq as _GQ
+                        import json as _sjs
+                        _gc = _GQ(api_key=GROQ_KEY)
+                        _so_prompt = (
+                            "You are an occupational therapist and behaviour support specialist. "
+                            f"Extract a structured sensory profile from this document for student: {student['name']}. "
+                            "Return ONLY valid JSON with this exact structure: "
+                            '{"sensory_seeking":["list"],"sensory_avoiding":["list"],'
+                            '"regulation_strategies":["list"],"triggers":["list"],'
+                            '"recommendations":["list"],"summary":"2-3 sentence clinical summary"}'
+                            f" Document: {_so_raw[:4000]}"
+                        )
+                        _so_resp = _gc.chat.completions.create(
+                            model="llama-3.3-70b-versatile",
+                            messages=[{"role":"user","content":_so_prompt}],
+                            max_tokens=1500, temperature=0.1
+                        )
+                        _so_json = _so_resp.choices[0].message.content.strip()
+                        _so_json = _so_json.replace("```json","").replace("```","").strip()
+                        _so_parsed = _sjs.loads(_so_json)
+                        st.session_state[_so_key] = _so_parsed
+                        _so_data = _so_parsed
+                        st.success("Sensory overview processed.")
+                    except Exception as _se:
+                        st.error(f"AI extraction failed: {_se}")
+        _so_data = st.session_state.get(_so_key, {})
+
+        # Display extracted sensory profile
+        if _so_data:
+            st.markdown("---")
+            st.markdown("#### 🧠 Sensory Profile — Extracted Themes")
+            if _so_data.get("summary"):
+                st.markdown(
+                    f"<div style='background:#f0f9ff;border-left:4px solid #0284c7;"
+                    f"border-radius:6px;padding:.75rem 1rem;font-size:.88rem;color:#0c4a6e;'>"
+                    f"{_so_data['summary']}</div>",
+                    unsafe_allow_html=True
+                )
+            _sc1, _sc2 = st.columns(2)
+            with _sc1:
+                if _so_data.get("sensory_seeking"):
+                    st.markdown("**🔍 Sensory seeking / high need:**")
+                    for item in _so_data["sensory_seeking"][:6]: st.markdown(f"• {item}")
+                if _so_data.get("triggers"):
+                    st.markdown("**⚡ Sensory triggers:**")
+                    for item in _so_data["triggers"][:6]: st.markdown(f"• {item}")
+            with _sc2:
+                if _so_data.get("sensory_avoiding"):
+                    st.markdown("**🛡️ Sensory sensitivities:**")
+                    for item in _so_data["sensory_avoiding"][:6]: st.markdown(f"• {item}")
+                if _so_data.get("regulation_strategies"):
+                    st.markdown("**✅ Effective regulation strategies:**")
+                    for item in _so_data["regulation_strategies"][:6]: st.markdown(f"• {item}")
+            if _so_data.get("recommendations"):
+                st.markdown("**📚 Sensory-based classroom recommendations:**")
+                for item in _so_data["recommendations"][:8]: st.markdown(f"• {item}")
+
+            # Cross-reference sensory triggers with logged incident antecedents
+            if not full_df.empty:
+                st.markdown("---")
+                st.markdown("#### 🔗 Sensory–Behaviour Cross-Reference")
+                _sens_kw = ["noise","sound","crowd","touch","bright","light","texture",
+                            "smell","movement","propriocep","vestibular","tactile",
+                            "auditory","visual","sensory","medication","hungry","food"]
+                _ant_lower = full_df["antecedent"].dropna().str.lower()
+                _sens_mask = _ant_lower.apply(lambda a: any(kw in a for kw in _sens_kw))
+                _n_sens = _sens_mask.sum()
+                if _n_sens > 0:
+                    _pct_sens = int(_n_sens / len(full_df) * 100)
+                    st.markdown(
+                        f"<div style='background:#fefce8;border-left:3px solid #eab308;"
+                        f"border-radius:6px;padding:.55rem .85rem;font-size:.84rem;margin:.3rem 0;'>"
+                        f"<b>{_pct_sens}% of incidents</b> ({_n_sens}/{len(full_df)}) were preceded by "
+                        f"antecedents with a sensory dimension. Sensory regulation strategies should "
+                        f"be considered a priority antecedent intervention.</div>",
+                        unsafe_allow_html=True
+                    )
+                else:
+                    st.caption(
+                        "No direct sensory antecedent overlap detected in current incident logs. "
+                        "Consider whether sensory factors are being captured in antecedent selection."
+                    )
+            if st.button("🗑️ Clear sensory overview", key=f"so_clear_{student_id}"):
+                for _k in [_so_key, f"so_raw_{student_id}"]:
+                    if _k in st.session_state: del st.session_state[_k]
+                st.rerun()
+
+    st.markdown("---")
     st.markdown("### 🔬 Behaviour Analysis & Functional Hypothesis")
     hyp_data = generate_strong_clinical_hypothesis(
         full_df, top_ant, top_beh, top_loc, top_session, student["name"]
