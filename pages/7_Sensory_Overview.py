@@ -236,7 +236,7 @@ def priority_card(section_name, info, icon=""):
 def load_students():
     """Load all active students from the shared students table."""
     try:
-        res = supabase.table("students").select("id,name,edid,program,grade") \
+        res = supabase.table("student_placements").select("id,name,edid,program,grade") \
             .eq("archived", False).order("name").execute()
         return res.data or []
     except Exception as e:
@@ -256,7 +256,7 @@ def load_all_overviews():
 def create_student_inline(name, edid, program, grade, dob):
     """Create a new student in the shared students table."""
     try:
-        res = supabase.table("students").insert({
+        res = supabase.table("student_placements").insert({
             "name": name.strip(),
             "edid": edid.strip(),
             "program": program,
