@@ -232,69 +232,31 @@ def priority_card(section_name, info, icon=""):
         <div class="sub">{info['checked']} / {info['total']} items ({info['pct']}%)</div>
     </div>"""
 
-def load_students():
-    """Load all active students from the shared students table."""
-    try:
-        res = supabase.table("students").select("id,name,edid,program,grade,dob") \
-            .eq("archived", False).order("name").execute()
-        return res.data or []
-    except Exception as e:
-        st.error(f"Could not load students: {e}")
-        return []
-
 def load_all_overviews():
     try:
         res = supabase.table("sensory_overviews") \
-            .select("*, students(name,edid,program)") \
+            .select("*") \
             .order("created_at", desc=True).execute()
         return res.data or []
     except Exception as e:
         st.error(f"Could not load overviews: {e}")
         return []
 
-def create_student_inline(name, edid, program, grade, dob):
-    """Create a new student in the shared students table."""
-    try:
-        # grade is integer in DB — convert safely
-        try:
-            grade_int = int(grade) if grade else None
-        except ValueError:
-            grade_int = None
-        payload = {
-            "name":            name.strip(),
-            "edid":            edid.strip(),
-            "program":         program,
-            "grade":           grade_int,
-            "dob":             str(dob),
-            "placement_start": str(date.today()),
-            "archived":        False,
-        }
-        res = supabase.table("students").insert(payload).execute()
-        return res.data[0] if res.data else None
-    except Exception as e:
-        st.error(f"Could not create student: {e}")
-        return None
-
 # ── Session state ──────────────────────────────────────────────────────────────
 if "responses" not in st.session_state:
     st.session_state.responses = {sec: {it: False for it in m["items"]} for sec, m in SECTIONS.items()}
 if "saved_ok" not in st.session_state:
     st.session_state.saved_ok = False
-if "selected_student_id" not in st.session_state:
-    st.session_state.selected_student_id = None
-if "preselect_student_id" not in st.session_state:
-    st.session_state.preselect_student_id = None
 if "section_open" not in st.session_state:
     st.session_state.section_open = {sec: False for sec in SECTIONS}
 
 # ── Header ─────────────────────────────────────────────────────────────────────
 st.markdown("<h1>🧠 Sensory Overview</h1>", unsafe_allow_html=True)
 
-# Check for ?student_id= query param (launched from behaviour app)
+# Check for ?student_id= query param (deep-link from behaviour app)
 params = st.query_params
-deep_link_id = params.get("student_id", None)
-if deep_link_id and not st.session_state.preselect_student_id:
-    st.session_state.preselect_student_id = deep_link_id
+deep_link_id   = params.get("student_id", None)
+deep_link_name = params.get("student_name", None)
 
 tab_new, tab_past = st.tabs(["📝  New Overview", "📋  Past Overviews"])
 
@@ -308,94 +270,62 @@ with tab_new:
         if st.button("Start another overview"):
             st.session_state.responses = {sec: {it: False for it in m["items"]} for sec, m in SECTIONS.items()}
             st.session_state.saved_ok = False
-            st.session_state.selected_student_id = None
             st.rerun()
 
-    # ── Student selection ──────────────────────────────────────────────────────
+    # ── Student details ────────────────────────────────────────────────────────
     with st.container(border=True):
         st.markdown("#### 👤 Student")
 
-        students = load_students()
-        student_options = {s["id"]: f"{s['name']} ({s.get('program','?')} · {s.get('edid','—')})" for s in students}
-
-        # Determine default index for deep-link
-        default_idx = 0
-        all_ids = ["— Select a student —"] + list(student_options.keys())
-        if st.session_state.preselect_student_id and st.session_state.preselect_student_id in student_options:
-            default_idx = all_ids.index(st.session_state.preselect_student_id)
-
-        selected_raw = st.selectbox(
-            "Select existing student",
-            options=all_ids,
-            index=default_idx,
-            format_func=lambda x: student_options.get(x, x),
-        )
-
-        selected_student_id   = selected_raw if selected_raw != "— Select a student —" else None
-        selected_student_data = next((s for s in students if s["id"] == selected_student_id), None)
-
-        if selected_student_data:
-            st.markdown(
-                f'<div class="student-badge">✅ {selected_student_data["name"]} '
-                f'· {selected_student_data.get("program","?")} '
-                f'· {selected_student_data.get("grade","?")}</div>',
-                unsafe_allow_html=True,
+        sc1, sc2, sc3 = st.columns(3)
+        with sc1:
+            student_name = st.text_input(
+                "Student name *",
+                value=deep_link_name or "",
+                placeholder="Full name",
             )
+        with sc2:
+            program = st.selectbox("Program *", ["— Select —", "JP", "PY", "SY"])
+        with sc3:
+            completed_by = st.text_input("Completed by *", placeholder="Staff name")
 
-        # ── Add new student inline ─────────────────────────────────────────────
-        with st.expander("➕ Student not in the list? Add them here"):
-            st.markdown('<div class="new-student-box">', unsafe_allow_html=True)
-            nc1, nc2 = st.columns(2)
-            with nc1:
-                new_name    = st.text_input("Full name *")
-                new_edid    = st.text_input("EDID *")
-                new_program = st.selectbox("Program *", ["JP", "PY", "SY"])
-            with nc2:
-                new_grade   = st.number_input("Year level", min_value=0, max_value=12, step=1, value=0)
-                new_dob     = st.date_input("Date of birth *", value=date(2015, 1, 1), min_value=date(2005, 1, 1), max_value=date.today())
+        # Store the deep-linked student_id if present (used when saving)
+        selected_student_id = deep_link_id  # may be None — that's fine
 
-            if st.button("Create student & use for this overview", type="primary"):
-                if not new_name.strip() or not new_edid.strip():
-                    st.error("Name and EDID are required.")
-                else:
-                    created = create_student_inline(new_name, new_edid, new_program, new_grade, new_dob)
-                    if created:
-                        st.success(f"✅ {new_name} added to the students database.")
-                        load_students.clear()
-                        st.session_state.selected_student_id = created["id"]
-                        st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        # ── Other overview fields ──────────────────────────────────────────────
-        oc1, oc2, oc3 = st.columns(3)
+        oc1, oc2 = st.columns(2)
         with oc1:
             overview_date = st.date_input("Overview Date", value=date.today())
         with oc2:
-            review_date   = st.date_input("Review Date")
-        with oc3:
-            completed_by  = st.text_input("Completed by", placeholder="Staff name")
+            review_date = st.date_input("Review Date")
 
-    # ── Existing overviews for this student ────────────────────────────────────
-    if selected_student_id:
-        existing = supabase.table("sensory_overviews") \
-            .select("overview_date,completed_by,priority_results") \
-            .eq("student_id", selected_student_id) \
-            .order("overview_date", desc=True).limit(1).execute()
-        if existing.data:
-            prev = existing.data[0]
-            with st.expander(f"ℹ️ Previous overview exists — {prev['overview_date']} (by {prev['completed_by']})", expanded=False):
-                try:
-                    pr = json.loads(prev["priority_results"]) if isinstance(prev["priority_results"], str) else prev["priority_results"]
-                    cols = st.columns(4)
-                    for idx, (sec, info) in enumerate(pr.items()):
-                        icon = SECTIONS.get(sec, {}).get("icon", "")
-                        _, css, emoji = priority_info(info.get("pct", 0))
-                        info["css"] = css
-                        info["emoji"] = emoji
-                        with cols[idx % 4]:
-                            st.markdown(priority_card(sec, info, icon), unsafe_allow_html=True)
-                except Exception:
-                    pass
+    # ── Existing overviews for this student (by name match) ────────────────────
+    if student_name.strip():
+        try:
+            existing = supabase.table("sensory_overviews") \
+                .select("overview_date,completed_by,priority_results") \
+                .ilike("student_name", student_name.strip()) \
+                .order("overview_date", desc=True).limit(1).execute()
+            if existing.data:
+                prev = existing.data[0]
+                with st.expander(
+                    f"ℹ️ Previous overview exists — {prev['overview_date']} (by {prev['completed_by']})",
+                    expanded=False,
+                ):
+                    try:
+                        pr = prev["priority_results"]
+                        if isinstance(pr, str):
+                            pr = json.loads(pr)
+                        cols = st.columns(4)
+                        for idx, (sec, info) in enumerate(pr.items()):
+                            icon = SECTIONS.get(sec, {}).get("icon", "")
+                            _, css, emoji = priority_info(info.get("pct", 0))
+                            info["css"] = css
+                            info["emoji"] = emoji
+                            with cols[idx % 4]:
+                                st.markdown(priority_card(sec, info, icon), unsafe_allow_html=True)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
     st.markdown("---")
 
@@ -479,8 +409,10 @@ with tab_new:
     btn_col, clr_col = st.columns([3, 1])
     with btn_col:
         if st.button("💾  Save Overview", type="primary", use_container_width=True):
-            if not selected_student_id:
-                st.error("Please select a student before saving.")
+            if not student_name.strip():
+                st.error("Please enter a student name before saving.")
+            elif program == "— Select —":
+                st.error("Please select a program.")
             else:
                 store_priorities = {
                     sec: {"priority": v["priority"], "checked": v["checked"],
@@ -489,7 +421,7 @@ with tab_new:
                 }
                 payload = {
                     "student_id":       selected_student_id,
-                    "student_name":     selected_student_data["name"] if selected_student_data else "",
+                    "student_name":     student_name.strip(),
                     "overview_date":    str(overview_date),
                     "review_date":      str(review_date),
                     "completed_by":     completed_by.strip(),
@@ -541,15 +473,13 @@ with tab_past:
         st.caption(f"Showing {len(filtered)} of {len(records)} records")
 
         for rec in filtered:
-            sdata     = rec.get("students") or {}
-            sname     = sdata.get("name") or rec.get("student_name", "Unknown")
-            program   = sdata.get("program", "")
-            ov_date   = rec.get("overview_date", "—")
-            by        = rec.get("completed_by", "—")
-            rev_date  = rec.get("review_date", "—")
+            sname    = rec.get("student_name", "Unknown")
+            ov_date  = rec.get("overview_date", "—")
+            by       = rec.get("completed_by", "—")
+            rev_date = rec.get("review_date", "—")
 
             with st.expander(
-                f"**{sname}** {f'· {program}' if program else ''} · {ov_date} · {by}",
+                f"**{sname}** · {ov_date} · {by}",
                 expanded=False
             ):
                 st.markdown(f"**Review date:** {rev_date}")
