@@ -244,12 +244,152 @@ def load_all_overviews():
         st.error(f"Could not load overviews: {e}")
         return []
 
-def generate_report_html(rec: dict) -> str:
-    """Generate a standalone HTML report for a completed sensory overview."""
+def generate_hypothesis(pr: dict) -> str:
+    """
+    Generate a functional hypothesis paragraph from priority results.
+    Maps high/medium sensory areas to likely functional implications.
+    """
+    IMPLICATIONS = {
+        "Body Awareness (Interoception)": (
+            "difficulty recognising and regulating internal body signals, which may contribute to "
+            "emotional dysregulation, delayed awareness of distress, and challenges in self-monitoring "
+            "behaviour and physiological states"
+        ),
+        "Visual": (
+            "heightened or reduced sensitivity to visual stimuli, which may affect attention, "
+            "comfort in bright or busy environments, and ability to process visual information "
+            "in classroom settings"
+        ),
+        "Sense of Body in Space": (
+            "reduced proprioceptive or vestibular awareness, which may impact spatial orientation, "
+            "gross motor coordination, and comfort in group or crowded environments"
+        ),
+        "Auditory": (
+            "atypical auditory sensitivity, which may cause distress in noisy environments, "
+            "difficulty filtering background noise, and use of self-generated sound as a "
+            "regulatory strategy"
+        ),
+        "Auditory Processing": (
+            "challenges processing verbal instructions, which may affect the ability to follow "
+            "multi-step directions, retain spoken information, and engage in verbal learning tasks"
+        ),
+        "Smell": (
+            "sensitivity to olfactory input, which may result in avoidance of certain environments, "
+            "foods, or social situations due to smell-related discomfort"
+        ),
+        "Touch and Textures": (
+            "tactile sensitivity or seeking behaviour, which may influence responses to physical "
+            "contact, food textures, clothing, and the use of touch as a self-regulatory strategy"
+        ),
+        "Kinaesthetic": (
+            "differences in movement processing and motor planning, which may affect participation "
+            "in physical activities, use of movement as regulation, and fine motor task engagement"
+        ),
+    }
+
+    STRATEGIES = {
+        "Body Awareness (Interoception)": [
+            "explicit interoception teaching (e.g. Zones of Regulation, body scan activities)",
+            "regular check-in routines using visual emotion scales",
+            "co-regulation support to build awareness of physiological cues",
+        ],
+        "Visual": [
+            "reducing visual clutter in the learning environment",
+            "offering tinted overlays, sunglasses, or alternative lighting options",
+            "providing advance notice before entering visually stimulating spaces",
+        ],
+        "Sense of Body in Space": [
+            "regular proprioceptive input (e.g. heavy work, wall push-ups, weighted items)",
+            "clear spatial boundaries using visual markers or designated seating",
+            "structured movement breaks throughout the day",
+        ],
+        "Auditory": [
+            "use of noise-cancelling headphones or ear defenders in loud environments",
+            "pre-warning before transitions to noisy settings",
+            "providing a quiet withdrawal space for regulation",
+        ],
+        "Auditory Processing": [
+            "breaking instructions into single steps with visual supports",
+            "allowing processing time before expecting a response",
+            "using written or visual instructions alongside verbal communication",
+        ],
+        "Smell": [
+            "identifying and minimising exposure to trigger smells where possible",
+            "offering scent-neutral toiletries and food options",
+            "providing advance warning before entering areas with strong smells",
+        ],
+        "Touch and Textures": [
+            "offering deep pressure input (e.g. weighted lap pad, compression clothing)",
+            "providing advance warning before physical contact",
+            "allowing flexibility around uniform, food textures, and tactile materials",
+        ],
+        "Kinaesthetic": [
+            "embedding regular movement breaks and sensory circuits",
+            "offering alternative seating (e.g. wobble cushion, standing desk)",
+            "using movement-based learning activities where possible",
+        ],
+    }
+
+    high = [(s, i) for s, i in pr.items() if i.get("priority") == "HIGH PRIORITY"]
+    med  = [(s, i) for s, i in pr.items() if i.get("priority") == "MEDIUM PRIORITY"]
+
+    if not high and not med:
+        return ("Based on the completed overview, no sensory areas were identified as high or "
+                "medium priority at this time. Continued monitoring is recommended.")
+
+    # Build hypothesis
+    priority_areas = [s for s, _ in high] + [s for s, _ in med]
+    implications   = [IMPLICATIONS[s] for s in priority_areas if s in IMPLICATIONS]
+
+    if len(implications) == 1:
+        impl_text = implications[0]
+    elif len(implications) == 2:
+        impl_text = f"{implications[0]}, and {implications[1]}"
+    else:
+        impl_text = "; ".join(implications[:-1]) + f"; and {implications[-1]}"
+
+    area_names = []
+    for s, _ in high:
+        area_names.append(f"{s} (HIGH)")
+    for s, _ in med:
+        area_names.append(f"{s} (MEDIUM)")
+
+    hypothesis = (
+        f"Based on the sensory overview, {', '.join(area_names[:3])}"
+        f"{'and other areas ' if len(area_names) > 3 else ''}"
+        f" {'were' if len(area_names) > 1 else 'was'} identified as priority areas. "
+        f"It is hypothesised that this student experiences {impl_text}. "
+        f"These sensory differences may contribute to observed behaviours including "
+        f"emotional dysregulation, avoidance, sensory-seeking, or difficulty sustaining "
+        f"engagement in the learning environment."
+    )
+
+    # Strategies
+    all_strategies = []
+    for s in priority_areas[:4]:
+        if s in STRATEGIES:
+            all_strategies.extend(STRATEGIES[s][:2])
+
+    return hypothesis, all_strategies[:6]
+
+
+def generate_pdf_report(rec: dict) -> bytes:
+    """Generate a clean 2-page PDF sensory overview report."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+        HRFlowable, PageBreak, KeepTogether
+    )
+    from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_JUSTIFY
+    from io import BytesIO
+
     sname    = rec.get("student_name", "Unknown")
     ov_date  = rec.get("overview_date", "—")
-    rev_date = rec.get("review_date", "—")
-    by       = rec.get("completed_by", "—")
+    rev_date = rec.get("review_date",   "—")
+    by       = rec.get("completed_by",  "—")
 
     try:
         pr = rec.get("priority_results") or {}
@@ -265,106 +405,228 @@ def generate_report_html(rec: dict) -> str:
     except Exception:
         resp = {}
 
-    def pri_colour(pct):
-        if pct >= 60:   return "#c62828", "#fff8f8", "HIGH PRIORITY",   "🔴"
-        elif pct >= 30: return "#e65100", "#fffaf5", "MEDIUM PRIORITY", "🟡"
-        return "#2e7d32", "#f6fff6", "LOW PRIORITY", "🟢"
+    # Hypothesis
+    hyp_result     = generate_hypothesis(pr)
+    if isinstance(hyp_result, tuple):
+        hyp_text, strategies = hyp_result
+    else:
+        hyp_text, strategies = hyp_result, []
 
-    # Priority summary cards
-    priority_html = ""
-    for sec, info in pr.items():
-        pct = info.get("pct", 0)
-        colour, bg, label, emoji = pri_colour(pct)
-        icon = SECTIONS.get(sec, {}).get("icon", "")
-        priority_html += f"""
-        <div style="background:{bg};border-left:5px solid {colour};
-                    padding:10px 14px;border-radius:8px;margin:6px 0;">
-            <div style="font-size:0.78rem;font-weight:700;color:#555;">{icon} {sec}</div>
-            <div style="font-size:1rem;font-weight:800;color:{colour};">{emoji} {label}</div>
-            <div style="font-size:0.72rem;color:#888;">{info.get('checked',0)} / {info.get('total',0)} items ({pct}%)</div>
-        </div>"""
+    TEAL_C  = colors.HexColor("#1A7A7A")
+    AMBER_C = colors.HexColor("#C8760A")
+    HIGH_C  = colors.HexColor("#c62828")
+    MED_C   = colors.HexColor("#e65100")
+    LOW_C   = colors.HexColor("#2e7d32")
+    HIGH_BG = colors.HexColor("#fff8f8")
+    MED_BG  = colors.HexColor("#fffaf5")
+    LOW_BG  = colors.HexColor("#f6fff6")
+    LIGHT   = colors.HexColor("#e8f4f4")
 
-    # Checked items by section
-    detail_html = ""
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=18*mm, rightMargin=18*mm,
+        topMargin=16*mm, bottomMargin=16*mm,
+    )
+
+    styles = getSampleStyleSheet()
+    def S(name, **kw):
+        return ParagraphStyle(name, parent=styles["Normal"], **kw)
+
+    title_style    = S("title",    fontSize=18, textColor=colors.white,    fontName="Helvetica-Bold", spaceAfter=2)
+    sub_style      = S("sub",      fontSize=9,  textColor=colors.white,    spaceAfter=1)
+    heading_style  = S("heading",  fontSize=11, textColor=TEAL_C,          fontName="Helvetica-Bold", spaceBefore=8, spaceAfter=4)
+    body_style     = S("body",     fontSize=8.5, leading=13, alignment=TA_JUSTIFY, spaceAfter=4)
+    bullet_style   = S("bullet",   fontSize=8.5, leading=13, leftIndent=12, spaceAfter=2)
+    pri_label      = S("pri",      fontSize=7.5, fontName="Helvetica-Bold", textColor=colors.HexColor("#555"))
+    pri_val_high   = S("pvh",      fontSize=9,   fontName="Helvetica-Bold", textColor=HIGH_C)
+    pri_val_med    = S("pvm",      fontSize=9,   fontName="Helvetica-Bold", textColor=MED_C)
+    pri_val_low    = S("pvl",      fontSize=9,   fontName="Helvetica-Bold", textColor=LOW_C)
+    pri_sub        = S("psub",     fontSize=7,   textColor=colors.HexColor("#888"))
+    footer_style   = S("footer",   fontSize=7,   textColor=colors.grey,     alignment=TA_CENTER)
+    sec_head_style = S("shead",    fontSize=9,   fontName="Helvetica-Bold", textColor=colors.white)
+    item_style     = S("item",     fontSize=8,   leading=12)
+
+    story = []
+
+    # ── PAGE 1 ─────────────────────────────────────────────────────────────────
+
+    # Header banner via table
+    header_data = [[
+        Paragraph(f"🧠 Sensory Overview Report", title_style),
+        ""
+    ]]
+    header_table = Table(header_data, colWidths=[140*mm, 34*mm])
+    header_table.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,-1), TEAL_C),
+        ("ROUNDEDCORNERS", [6]),
+        ("TOPPADDING",    (0,0), (-1,-1), 10),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 10),
+        ("LEFTPADDING",   (0,0), (-1,-1), 14),
+    ]))
+    story.append(header_table)
+    story.append(Spacer(1, 4*mm))
+
+    # Student details row
+    detail_data = [[
+        Paragraph(f"<b>Student:</b> {sname}", body_style),
+        Paragraph(f"<b>Overview date:</b> {ov_date}", body_style),
+        Paragraph(f"<b>Review date:</b> {rev_date}", body_style),
+        Paragraph(f"<b>Completed by:</b> {by}", body_style),
+    ]]
+    detail_table = Table(detail_data, colWidths=[44*mm, 40*mm, 38*mm, 52*mm])
+    detail_table.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,-1), LIGHT),
+        ("ROWBACKGROUNDS", (0,0), (-1,-1), [LIGHT]),
+        ("TOPPADDING",    (0,0), (-1,-1), 6),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 6),
+        ("LEFTPADDING",   (0,0), (-1,-1), 8),
+        ("ROUNDEDCORNERS", [4]),
+    ]))
+    story.append(detail_table)
+    story.append(Spacer(1, 5*mm))
+
+    # Priority summary grid — 4 columns
+    story.append(Paragraph("Priority Summary", heading_style))
+    story.append(HRFlowable(width="100%", thickness=1, color=TEAL_C, spaceAfter=4))
+
+    def pri_info(pct):
+        if pct >= 60:   return "🔴 HIGH PRIORITY",   pri_val_high, HIGH_BG, HIGH_C
+        elif pct >= 30: return "🟡 MEDIUM PRIORITY", pri_val_med,  MED_BG,  MED_C
+        return "🟢 LOW PRIORITY",    pri_val_low,  LOW_BG,  LOW_C
+
+    pr_items = list(pr.items())
+    rows = []
+    for i in range(0, len(pr_items), 4):
+        chunk = pr_items[i:i+4]
+        row = []
+        for sec, info in chunk:
+            pct        = info.get("pct", 0)
+            val_lbl, vstyle, bg, col = pri_info(pct)
+            icon       = SECTIONS.get(sec, {}).get("icon", "")
+            cell = [
+                Paragraph(f"{icon} {sec}", pri_label),
+                Paragraph(val_lbl, vstyle),
+                Paragraph(f"{info.get('checked',0)}/{info.get('total',0)} ({pct}%)", pri_sub),
+            ]
+            row.append(cell)
+        # Pad row to 4 cols
+        while len(row) < 4:
+            row.append([""])
+        rows.append(row)
+
+    col_w = 43*mm
+    for row in rows:
+        t = Table([row], colWidths=[col_w]*4)
+        bg_colors = []
+        for ci, (sec, info) in enumerate(pr_items[:4]):
+            pct = info.get("pct", 0)
+            _, _, bg, _ = pri_info(pct)
+            bg_colors.append(("BACKGROUND", (ci, 0), (ci, 0), bg))
+        t.setStyle(TableStyle([
+            ("BOX",          (0,0), (-1,-1), 0.5, colors.HexColor("#ddd")),
+            ("INNERGRID",    (0,0), (-1,-1), 0.5, colors.HexColor("#ddd")),
+            ("TOPPADDING",   (0,0), (-1,-1), 6),
+            ("BOTTOMPADDING",(0,0), (-1,-1), 6),
+            ("LEFTPADDING",  (0,0), (-1,-1), 8),
+            ("VALIGN",       (0,0), (-1,-1), "TOP"),
+        ] + bg_colors))
+        story.append(t)
+        story.append(Spacer(1, 2*mm))
+
+    story.append(Spacer(1, 4*mm))
+
+    # Hypothesis
+    story.append(Paragraph("Clinical Hypothesis", heading_style))
+    story.append(HRFlowable(width="100%", thickness=1, color=AMBER_C, spaceAfter=4))
+    story.append(Paragraph(hyp_text, body_style))
+
+    if strategies:
+        story.append(Spacer(1, 3*mm))
+        story.append(Paragraph("Recommended Strategies", heading_style))
+        for strat in strategies:
+            story.append(Paragraph(f"• {strat.capitalize()}", bullet_style))
+
+    # Footer p1
+    story.append(Spacer(1, 4*mm))
+    story.append(HRFlowable(width="100%", thickness=0.5, color=colors.lightgrey))
+    story.append(Spacer(1, 2*mm))
+    story.append(Paragraph(
+        f"Cowandilla Learning Centre · Learning & Behaviour Unit · Sensory Overview · "
+        f"Generated {date.today().strftime('%d %B %Y')} · Page 1 of 2",
+        footer_style
+    ))
+
+    # ── PAGE 2 ─────────────────────────────────────────────────────────────────
+    story.append(PageBreak())
+
+    # Page 2 header
+    p2_header = Table([[Paragraph(f"Sensory Overview — {sname} · Checked Items Detail", title_style)]])
+    p2_header.setStyle(TableStyle([
+        ("BACKGROUND",    (0,0), (-1,-1), TEAL_C),
+        ("TOPPADDING",    (0,0), (-1,-1), 8),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 8),
+        ("LEFTPADDING",   (0,0), (-1,-1), 14),
+    ]))
+    story.append(p2_header)
+    story.append(Spacer(1, 5*mm))
+
+    # Checked items — two column layout per section
+    any_checked = False
     for sec_name, items_dict in resp.items():
         checked = [it for it, val in items_dict.items() if val]
         if not checked:
             continue
+        any_checked = True
         icon = SECTIONS.get(sec_name, {}).get("icon", "")
         pct  = round(len(checked) / max(len(items_dict), 1) * 100, 1)
-        colour, bg, label, emoji = pri_colour(pct)
-        items_html = "".join(
-            f'<div style="padding:4px 0;border-bottom:1px solid #eee;font-size:0.88rem;">✅ {it}</div>'
-            for it in checked
-        )
-        detail_html += f"""
-        <div style="margin-bottom:18px;">
-            <div style="background:{TEAL};color:white;padding:8px 14px;
-                        border-radius:6px 6px 0 0;font-weight:700;font-size:0.92rem;">
-                {icon} {sec_name} &nbsp;·&nbsp; {emoji} {label} ({len(checked)}/{len(items_dict)})
-            </div>
-            <div style="background:white;border:1px solid #ddd;border-top:none;
-                        border-radius:0 0 6px 6px;padding:10px 14px;">
-                {items_html}
-            </div>
-        </div>"""
+        _, _, bg, col = pri_info(pct)
 
-    if not detail_html:
-        detail_html = '<p style="color:#888;">No items were checked in this overview.</p>'
+        # Section header
+        sec_hdr = Table([[Paragraph(f"{icon}  {sec_name}  ·  {len(checked)}/{len(items_dict)} items", sec_head_style)]])
+        sec_hdr.setStyle(TableStyle([
+            ("BACKGROUND",    (0,0), (-1,-1), col),
+            ("TOPPADDING",    (0,0), (-1,-1), 5),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+            ("LEFTPADDING",   (0,0), (-1,-1), 10),
+        ]))
 
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<title>Sensory Overview — {sname}</title>
-<style>
-  body {{ font-family: Arial, sans-serif; max-width: 900px; margin: 40px auto;
-          padding: 0 24px; color: #222; background: #f5f7f7; }}
-  .header {{ background: {TEAL}; color: white; padding: 24px 28px;
-             border-radius: 10px; margin-bottom: 24px; }}
-  .header h1 {{ margin: 0 0 6px 0; font-size: 1.6rem; }}
-  .header p  {{ margin: 2px 0; font-size: 0.9rem; opacity: 0.9; }}
-  .section-title {{ font-size: 1.1rem; font-weight: 700; color: {TEAL};
-                    border-bottom: 2px solid {TEAL}; padding-bottom: 6px;
-                    margin: 28px 0 12px 0; }}
-  .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }}
-  .footer {{ text-align: center; font-size: 0.75rem; color: #aaa;
-             margin-top: 40px; padding-top: 16px; border-top: 1px solid #ddd; }}
-  @media print {{
-    body {{ background: white; margin: 20px; }}
-    .no-print {{ display: none; }}
-  }}
-</style>
-</head>
-<body>
+        # Items in two columns
+        left  = checked[::2]
+        right = checked[1::2]
+        max_rows = max(len(left), len(right))
+        item_rows = []
+        for i in range(max_rows):
+            l = Paragraph(f"✅  {left[i]}",  item_style) if i < len(left)  else Paragraph("", item_style)
+            r = Paragraph(f"✅  {right[i]}", item_style) if i < len(right) else Paragraph("", item_style)
+            item_rows.append([l, r])
 
-<div class="header">
-  <h1>🧠 Sensory Overview Report</h1>
-  <p><strong>Student:</strong> {sname}</p>
-  <p><strong>Overview date:</strong> {ov_date} &nbsp;·&nbsp;
-     <strong>Review date:</strong> {rev_date} &nbsp;·&nbsp;
-     <strong>Completed by:</strong> {by}</p>
-</div>
+        items_table = Table(item_rows, colWidths=[86*mm, 86*mm])
+        items_table.setStyle(TableStyle([
+            ("BACKGROUND",    (0,0), (-1,-1), bg),
+            ("TOPPADDING",    (0,0), (-1,-1), 4),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+            ("LEFTPADDING",   (0,0), (-1,-1), 10),
+            ("LINEBELOW",     (0,0), (-1,-2), 0.3, colors.HexColor("#ddd")),
+        ]))
 
-<button class="no-print" onclick="window.print()"
-  style="background:{TEAL};color:white;border:none;padding:10px 22px;
-         border-radius:6px;font-size:0.95rem;cursor:pointer;margin-bottom:20px;">
-  🖨️ Print / Save as PDF
-</button>
+        story.append(KeepTogether([sec_hdr, items_table, Spacer(1, 3*mm)]))
 
-<div class="section-title">Priority Summary</div>
-<div class="grid">{priority_html}</div>
+    if not any_checked:
+        story.append(Paragraph("No items were checked in this overview.", body_style))
 
-<div class="section-title">Checked Items by Section</div>
-{detail_html}
+    # Footer p2
+    story.append(Spacer(1, 4*mm))
+    story.append(HRFlowable(width="100%", thickness=0.5, color=colors.lightgrey))
+    story.append(Spacer(1, 2*mm))
+    story.append(Paragraph(
+        f"Cowandilla Learning Centre · Learning & Behaviour Unit · Sensory Overview · "
+        f"Generated {date.today().strftime('%d %B %Y')} · Page 2 of 2",
+        footer_style
+    ))
 
-<div class="footer">
-  Cowandilla Learning Centre · Learning &amp; Behaviour Unit · Sensory Overview<br>
-  Generated {date.today().strftime('%d %B %Y')}
-</div>
-
-</body>
-</html>"""
+    doc.build(story)
+    return buf.getvalue()
 
 
 # ── Session state ──────────────────────────────────────────────────────────────
@@ -679,16 +941,19 @@ with tab_past:
 
                 # Download report
                 with ac1:
-                    html_report = generate_report_html(rec)
-                    fname = f"sensory_{sname.replace(' ','_')}_{ov_date}.html"
-                    st.download_button(
-                        "📄 Download Report",
-                        data=html_report,
-                        file_name=fname,
-                        mime="text/html",
-                        use_container_width=True,
-                        key=f"dl_{rec['id']}",
-                    )
+                    try:
+                        pdf_bytes = generate_pdf_report(rec)
+                        fname = f"sensory_{sname.replace(' ','_')}_{ov_date}.pdf"
+                        st.download_button(
+                            "📄 Download PDF Report",
+                            data=pdf_bytes,
+                            file_name=fname,
+                            mime="application/pdf",
+                            use_container_width=True,
+                            key=f"dl_{rec['id']}",
+                        )
+                    except Exception as e:
+                        st.error(f"PDF generation failed: {e}")
 
                 # Edit / add to overview
                 with ac2:
