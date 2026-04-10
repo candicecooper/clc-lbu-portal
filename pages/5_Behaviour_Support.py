@@ -5284,18 +5284,22 @@ def render_student_analysis_page():
 
     tc1, tc2 = st.columns(2)
     with tc1:
+        _tc1_sensory = "".join(
+            f"<li><strong>Sensory recommendation:</strong> {r}</li>"
+            for r in _so_recs[:3]
+        ) if _has_sensory and _so_recs else ""
         st.markdown(
             "<div style='background:#eff6ff;border-radius:10px;padding:1rem 1.1rem;"
-            "border:1px solid #bfdbfe;height:100%;'>"
-            "<div style='font-weight:700;color:#1d4ed8;font-size:.93rem;margin-bottom:.6rem;'>"
-            "📚 Curriculum & Pedagogy</div>"
+            "border:1px solid #bfdbfe;height:100%;'><div style='font-weight:700;color:#1d4ed8;"
+            "font-size:.93rem;margin-bottom:.6rem;'>📚 Curriculum & Pedagogy</div>"
             "<ul style='margin:0;padding-left:1.2rem;font-size:.84rem;color:#1e293b;line-height:1.85;'>"
             f"<li>Deliver <strong>clear, single-step instructions</strong> supported by visual cues — avoid multi-part verbal directives, particularly during the {top_session} session</li>"
-            f"<li><strong>Scaffold tasks</strong> into small, achievable components with explicit success criteria before engaging in activities preceded by <em>{top_ant[:55]}...</em>-type triggers</li>"
+            f"<li><strong>Scaffold tasks</strong> into small, achievable components with explicit success criteria before activities preceded by <em>{top_ant[:55]}...</em>-type triggers</li>"
             "<li>Embed <strong>student choice</strong> within the curriculum (topic, modality, sequence) to maintain agency and reduce escape-motivated responding</li>"
-            "<li>Apply <strong>strength-based entry points</strong> — begin all tasks at a mastery level prior to incrementally increasing demand</li>"
+            "<li>Apply <strong>strength-based entry points</strong> — begin all tasks at mastery level before incrementally increasing demand</li>"
             "<li>Use <strong>pre-teaching and content priming</strong> before transitions or cognitively demanding activities</li>"
             "<li>Implement <strong>flexible, low-stakes assessment</strong> to reduce evaluation-related anxiety as a trigger</li>"
+            + _tc1_sensory +
             "</ul></div>",
             unsafe_allow_html=True
         )
@@ -5341,17 +5345,25 @@ def render_student_analysis_page():
 
     sc1, sc2 = st.columns(2)
     with sc1:
+        _sc1_seeking_items = "".join(
+            f"<li><strong>Sensory need (profile):</strong> {s} — provide proactively before high-risk periods</li>"
+            for s in _so_seeking[:2]
+        ) if _has_sensory and _so_seeking else ""
+        _sc1_strat_items = "".join(
+            f"<li><strong>Regulation strategy (profile):</strong> {s}</li>"
+            for s in _so_strategies[:2]
+        ) if _has_sensory and _so_strategies else ""
         st.markdown(
             "<div style='background:#fdf4ff;border-radius:10px;padding:1rem 1.1rem;"
-            "border:1px solid #e9d5ff;height:100%;'>"
-            "<div style='font-weight:700;color:#7c3aed;font-size:.93rem;margin-bottom:.6rem;'>"
-            "🧠 Regulation & Sensory Strategies</div>"
+            "border:1px solid #e9d5ff;height:100%;'><div style='font-weight:700;color:#7c3aed;"
+            "font-size:.93rem;margin-bottom:.6rem;'>🧠 Regulation & Sensory Strategies</div>"
             "<ul style='margin:0;padding-left:1.2rem;font-size:.84rem;color:#1e293b;line-height:1.85;'>"
-            f"<li><strong>Sensory diet</strong> incorporated before the {top_session} session — movement break, heavy work activity, or proprioceptive input to prepare the nervous system for learning demands</li>"
-            "<li><strong>Co-regulation with a key adult</strong> — calm, attuned, and predictable adult presence; CPI Supportive Stance (low, slow, sideways) as the default interaction posture</li>"
-            f"<li>Develop a personalised <strong>Window of Tolerance profile</strong> for {student['name']} — document early warning signs, escalation cues, and individually effective de-escalation strategies</li>"
-            "<li><strong>Teach and embed regulation tools</strong> during calm states (breathing, grounding); cue their use proactively at Yellow/Level 2 — before escalation to Level 3+</li>"
-            "<li>If relevant, <strong>monitor medication timing</strong> and note correlations with incident frequency during the identified peak session</li>"
+            f"<li><strong>Sensory diet</strong> incorporated before the {top_session} session — movement break, heavy work activity, or proprioceptive input to prepare the nervous system</li>"
+            "<li><strong>Co-regulation with a key adult</strong> — calm, attuned, predictable adult presence; CPI Supportive Stance (low, slow, sideways) as the default posture</li>"
+            f"<li>Develop a personalised <strong>Window of Tolerance profile</strong> for {student['name']} — document early warning signs, escalation cues, and effective de-escalation strategies</li>"
+            "<li><strong>Teach and embed regulation tools</strong> during calm states; cue their use proactively at Yellow/Level 2 — before escalation to Level 3+</li>"
+            "<li>Monitor <strong>medication timing</strong> if relevant and note correlations with incident frequency</li>"
+            + _sc1_seeking_items + _sc1_strat_items +
             "</ul></div>",
             unsafe_allow_html=True
         )
@@ -5400,6 +5412,77 @@ def render_student_analysis_page():
             f"<li>Ensure <strong>all staff working with {student['name']}</strong> are fully briefed on the current BAP and implementing strategies consistently across all settings</li>"
             "<li>Review and formally update the <strong>Behaviour Support Plan</strong> at minimum each term, or following any critical incident</li>"
             "</ul></div>",
+            unsafe_allow_html=True
+        )
+
+    # ── Sensory recommendations panel ─────────────────────────────────────
+    if _has_sensory:
+        st.markdown(
+            "<div style='background:#f0f9ff;border:2px solid #0284c7;border-radius:12px;"
+            "padding:1rem 1.25rem;margin:.5rem 0;'>"
+            "<div style='font-weight:700;color:#0369a1;font-size:1rem;margin-bottom:.6rem;'>"
+            "🧠 Sensory Profile — Integrated Recommendations</div>"
+            f"<p style='font-size:.84rem;color:#1e293b;margin-bottom:.5rem;line-height:1.6;'>{_so_summary}</p>"
+            "</div>",
+            unsafe_allow_html=True
+        )
+        _sp1, _sp2 = st.columns(2)
+        with _sp1:
+            _avoiding_li = "".join(
+                f"<li>Minimise/modify <strong>{a}</strong> in the learning environment</li>" for a in _so_avoiding[:4]
+            ) if _so_avoiding else "<li>No specific avoidances recorded in profile</li>"
+            st.markdown(
+                "<div style='background:#fef9c3;border-radius:8px;padding:.85rem 1rem;"
+                "border:1px solid #fde68a;height:100%;'><div style='font-weight:700;color:#92400e;"
+                "font-size:.88rem;margin-bottom:.5rem;'>🛡️ Sensory Sensitivities — Reduce/Modify</div>"
+                "<ul style='margin:0;padding-left:1.1rem;font-size:.83rem;color:#1e293b;line-height:1.8;'>" + _avoiding_li + "</ul></div>",
+                unsafe_allow_html=True
+            )
+        with _sp2:
+            _seeking_li = "".join(
+                f"<li>Provide <strong>{s}</strong> proactively — schedule before high-risk periods</li>" for s in _so_seeking[:4]
+            ) if _so_seeking else "<li>No specific seeking needs recorded in profile</li>"
+            st.markdown(
+                "<div style='background:#f0fdf4;border-radius:8px;padding:.85rem 1rem;"
+                "border:1px solid #bbf7d0;height:100%;'><div style='font-weight:700;color:#15803d;"
+                "font-size:.88rem;margin-bottom:.5rem;'>✅ Sensory Needs — Provide Proactively</div>"
+                "<ul style='margin:0;padding-left:1.1rem;font-size:.83rem;color:#1e293b;line-height:1.8;'>" + _seeking_li + "</ul></div>",
+                unsafe_allow_html=True
+            )
+        if _so_triggers:
+            st.markdown(
+                "<div style='background:#fff7ed;border-radius:8px;padding:.85rem 1rem;"
+                "border:1px solid #fed7aa;margin-top:.5rem;'><div style='font-weight:700;color:#c2410c;"
+                "font-size:.88rem;margin-bottom:.5rem;'>⚡ Sensory Triggers — Antecedent Priorities</div>"
+                "<ul style='margin:0;padding-left:1.1rem;font-size:.83rem;color:#1e293b;line-height:1.8;'>" +
+                "".join(f"<li><strong>{t}</strong> — pre-empt or modify before high-risk periods</li>" for t in _so_triggers[:5]) +
+                "</ul></div>",
+                unsafe_allow_html=True
+            )
+        if _so_recs:
+            st.markdown(
+                "<div style='background:#f8fafc;border-radius:8px;padding:.85rem 1rem;"
+                "border:1px solid #e2e8f0;margin-top:.5rem;'><div style='font-weight:700;color:#1A7A7A;"
+                "font-size:.88rem;margin-bottom:.5rem;'>📚 All Classroom Recommendations (from Sensory Profile)</div>"
+                "<ul style='margin:0;padding-left:1.1rem;font-size:.83rem;color:#1e293b;line-height:1.8;'>" +
+                "".join(f"<li>{r}</li>" for r in _so_recs) + "</ul></div>",
+                unsafe_allow_html=True
+            )
+    elif _sensory_prominent and not _has_sensory:
+        st.markdown(
+            "<div style='background:#fff7ed;border:2px solid #f97316;border-radius:12px;"
+            "padding:1rem 1.25rem;margin:.5rem 0;'>"
+            "<div style='font-weight:700;color:#c2410c;font-size:1rem;margin-bottom:.5rem;'>"
+            "⚡ Recommendation: Complete a Sensory Overview</div>"
+            f"<p style='font-size:.84rem;color:#1e293b;line-height:1.65;margin:0;'>"
+            f"<b>{_n_sensory_ants} of {len(full_df)} incidents ({int(_n_sensory_ants/max(len(full_df),1)*100)}%)</b> "
+            "were preceded by antecedents with a sensory dimension (noise, hunger, crowding, movement, sensory input). "
+            "Sensory processing is likely playing a significant role in this student's behaviour pattern. "
+            "<br><br><strong>Recommended action:</strong> Request a formal Sensory Overview or Sensory Profile "
+            "from an Occupational Therapist. This will identify specific sensory needs, sensitivities, and "
+            "regulation strategies that can be embedded directly into the teaching and support approach. "
+            "Once completed, upload the document using the <strong>🧠 Sensory Overview</strong> expander "
+            "at the top of this analysis page — the recommendations here will automatically update.</p></div>",
             unsafe_allow_html=True
         )
 
