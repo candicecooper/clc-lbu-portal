@@ -232,7 +232,6 @@ def priority_card(section_name, info, icon=""):
         <div class="sub">{info['checked']} / {info['total']} items ({info['pct']}%)</div>
     </div>"""
 
-@st.cache_data(ttl=60)
 def load_students():
     """Load all active students from the shared students table."""
     try:
@@ -353,11 +352,11 @@ with tab_new:
                 new_program = st.selectbox("Program *", ["JP", "PY", "SY"])
             with nc2:
                 new_grade   = st.number_input("Year level", min_value=0, max_value=12, step=1, value=0)
-                new_dob     = st.date_input("Date of birth *", value=None)
+                new_dob     = st.date_input("Date of birth *", value=date(2015, 1, 1), min_value=date(2005, 1, 1), max_value=date.today())
 
             if st.button("Create student & use for this overview", type="primary"):
-                if not new_name or not new_edid or not new_dob:
-                    st.error("Name, EDID and Date of Birth are required.")
+                if not new_name.strip() or not new_edid.strip():
+                    st.error("Name and EDID are required.")
                 else:
                     created = create_student_inline(new_name, new_edid, new_program, new_grade, new_dob)
                     if created:
