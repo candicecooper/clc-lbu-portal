@@ -236,7 +236,7 @@ def priority_card(section_name, info, icon=""):
 def load_students():
     """Load all active students from the shared students table."""
     try:
-        res = supabase.table("student_placements").select("id,name,edid,program,grade") \
+        res = supabase.table("students").select("id,name,edid,program,grade,dob") \
             .eq("archived", False).order("name").execute()
         return res.data or []
     except Exception as e:
@@ -256,13 +256,21 @@ def load_all_overviews():
 def create_student_inline(name, edid, program, grade, dob):
     """Create a new student in the shared students table."""
     try:
-        res = supabase.table("student_placements").insert({
-            "name": name.strip(),
-            "edid": edid.strip(),
-            "program": program,
-            "grade": grade.strip(),
-            "dob": str(dob),
-        }).execute()
+        # grade is integer in DB — convert safely
+        try:
+            grade_int = int(grade) if grade else None
+        except ValueError:
+            grade_int = None
+        payload = {
+            "name":            name.strip(),
+            "edid":            edid.strip(),
+            "program":         program,
+            "grade":           grade_int,
+            "dob":             str(dob),
+            "placement_start": str(date.today()),
+            "archived":        False,
+        }
+        res = supabase.table("students").insert(payload).execute()
         return res.data[0] if res.data else None
     except Exception as e:
         st.error(f"Could not create student: {e}")
@@ -344,7 +352,7 @@ with tab_new:
                 new_edid    = st.text_input("EDID *")
                 new_program = st.selectbox("Program *", ["JP", "PY", "SY"])
             with nc2:
-                new_grade   = st.text_input("Grade")
+                new_grade   = st.number_input("Year level", min_value=0, max_value=12, step=1, value=0)
                 new_dob     = st.date_input("Date of birth *", value=None)
 
             if st.button("Create student & use for this overview", type="primary"):
