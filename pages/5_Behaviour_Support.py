@@ -644,6 +644,20 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             "date_parsed": [x[0] for x in daily_all],
             "count":       [x[1] for x in daily_all]
         })()
+        # Compute summary stats for chart 1 caption
+        _fi_total_days_bap    = len(_b_all_days)
+        _fi_incident_days_bap = sum(1 for v in daily.count if v > 0)
+        _fi_zero_days_bap     = sum(1 for v in daily.count if v == 0)
+        _fi_max_day_bap       = max(daily.count) if daily.count else 0
+        _fi_avg_per_day_bap   = sum(daily.count) / max(_fi_incident_days_bap, 1)
+        _fi_high_days_bap     = sum(1 for v in daily.count if v >= 3)
+        # Count consecutive incident days
+        _fi_consec_bap = 0
+        _prev_had = False
+        for _cv in daily.count:
+            if _cv > 0 and _prev_had:
+                _fi_consec_bap += 1
+            _prev_had = _cv > 0
         fig, ax = plt.subplots(figsize=(FIG_W, FIG_H), dpi=FIG_DPI)
         bar_colours = ['#94a3b8' if v == 0 else '#C0392B' if v >= 3 else '#1A7A6E' for v in daily.count]
         bars = ax.bar(range(len(daily.count)), daily.count,
@@ -662,7 +676,22 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         base_ax_style(ax)
         plt.tight_layout(pad=0.4)
         add_chart(doc, fig,
-            f"Daily totals across the data period. Red bars flag days with 3+ incidents — these are priority days for proactive planning.")
+            f"Daily totals across {_fi_total_days_bap} school days. "
+            f"Incidents occurred on {_fi_incident_days_bap} days ({_fi_zero_days_bap} incident-free). "
+            f"On days with incidents, average was {_fi_avg_per_day_bap:.1f} per day "
+            f"(peak: {_fi_max_day_bap}). "
+            + (f"{_fi_high_days_bap} day(s) had 3 or more incidents — "
+               "these are high-demand days requiring retrospective review: what was different about "
+               "the environment, staffing, timetable, or demands on those days? "
+               if _fi_high_days_bap > 0 else "") +
+            (f"There are {_fi_consec_bap} instance(s) of consecutive incident days — "
+             "consecutive high-incident days indicate the student did not have sufficient recovery time "
+             "between episodes, or a systemic stressor was sustained across multiple days. "
+             "Proactive regulation support at the start of each day is strongly indicated. "
+             if _fi_consec_bap >= 2 else "") +
+            f"Incident-free days ({_fi_zero_days_bap}) are equally important — "
+            "what proactive conditions were in place on those days? Replicating them on high-risk days "
+            "is one of the most effective preventive strategies available.")
 
         beh_counts = full_df["behaviour_type"].value_counts().head(6)
         # Use clinical terminology and filter out raw ABCH narratives (>80 chars)
@@ -689,9 +718,19 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         base_ax_style(ax)
         plt.tight_layout(pad=0.4)
         add_chart(doc, fig,
-            f"Primary behaviour: {beh_counts.index[0]} "
-            f"({int(beh_counts.values[0])} of {len(full_df)} incidents, "
-            f"{int(beh_counts.values[0]/len(full_df)*100)}% of total).")
+            f"The most frequently occurring behaviour is {_bap_beh_labels[0] if _bap_beh_labels else 'Unknown'} "
+            f"({_bap_beh_vals[0] if _bap_beh_vals else 0} of {len(full_df)} incidents, "
+            f"{int((_bap_beh_vals[0] if _bap_beh_vals else 0)/max(len(full_df),1)*100)}% of total). "
+            + (f"A wide range of behaviour types ({len(_bap_beh_labels)} types shown) indicates a broad stress response — "
+               "the student is communicating distress through multiple channels. "
+               "Foundational Body domain regulation supports (sensory regulation, movement breaks, "
+               "predictable routines) should be the primary focus rather than behaviour-by-behaviour intervention. "
+               if len(_bap_beh_labels) >= 4 else
+               "A narrow behaviour profile (1-2 types) suggests a specific, consistent function — "
+               "the student is using a predictable response to communicate a particular unmet need. "
+               "This supports targeted functional intervention: identify the function, "
+               "teach an alternative, and pre-empt the trigger. ") +
+            "Behaviours are presented using clinical terminology consistent with the functional hypothesis.")
 
         ant_counts = full_df["antecedent"].value_counts().head(6)
         # Strip category prefix (e.g. "Peer - " → "peer conflict/interaction")
@@ -717,8 +756,17 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         base_ax_style(ax)
         plt.tight_layout(pad=0.4)
         add_chart(doc, fig,
-            f"Key trigger: '{wrap_labels([top_ant], width=60)[0]}'. "
-            "Pre-empting this trigger is the single highest-leverage prevention strategy.")
+            f"The most frequent trigger is '{wrap_labels([top_ant], width=60)[0]}' "
+            f"({int(ant_counts.values[0])} of {len(full_df)} incidents, "
+            f"{int(ant_counts.values[0]/max(len(full_df),1)*100)}% of total). "
+            "Antecedent-stage intervention — modifying what happens before the trigger occurs — "
+            "is consistently more effective than any consequence-based response. "
+            "The goal is either to reduce or modify the trigger itself, or to build the student's "
+            "capacity to tolerate it through graduated exposure and skill-building. "
+            "Triggers that cluster around peer interaction, instruction, or transitions point to "
+            "specific environmental conditions that can be directly modified by staff. "
+            "Sensory triggers indicate the nervous system is overloaded before behaviour emerges — "
+            "a sensory audit and proactive sensory breaks are the most direct preventive intervention.")
 
         doc.add_page_break()
 
@@ -753,10 +801,35 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         plt.tight_layout(pad=0.4)
         peak_name = session_order[peak_idx]
         add_chart(doc, fig,
-            f"Peak: {SESSION_LABELS[peak_name].replace(chr(10),' ')} — "
+            f"Peak session: {SESSION_LABELS[peak_name].replace(chr(10),' ')} — "
             f"{int(session_counts[peak_name])} of {len(full_df)} incidents "
-            f"({int(session_counts[peak_name]/len(full_df)*100)}%). "
-            "Additional proactive support is recommended during this window.")
+            f"({int(session_counts[peak_name]/max(len(full_df),1)*100)}%). "
+            + ({"Morning":
+                "Morning peaks frequently reflect difficulty with the transition from home, "
+                "low readiness to engage, or unmet overnight and morning needs (hunger, sleep disruption, "
+                "sensory dysregulation on arrival). A structured, low-demand arrival routine with a "
+                "trusted adult check-in is the most effective morning intervention. "
+                "Consider: has the student eaten? Have there been any household stressors? "
+                "A predictable, warm, unhurried start to the day reduces cortisol and builds regulatory capacity "
+                "before academic demands are introduced.",
+                "Middle":
+                "Middle-of-day peaks reflect cumulative fatigue — the student has been managing demands "
+                "since arrival and regulatory capacity is depleted. Lunch and transition periods introduce "
+                "unstructured time which can be particularly challenging. "
+                "A mid-day sensory or movement break, a quiet opt-out space, and reduced demand "
+                "before and after the lunch break are high-priority strategies. "
+                "Pre-teach the transition into and out of lunch with explicit expectations and a visual schedule.",
+                "Afternoon":
+                "Afternoon peaks often reflect end-of-day fatigue, anticipatory anxiety about the transition "
+                "home, or the accumulation of the day's regulatory demands. "
+                "A structured, predictable end-of-day routine — including a debrief, a positive closure "
+                "activity, and advance notice of tomorrow's schedule — reduces afternoon escalation. "
+                "Consider the student's home situation: if the transition home is anxiety-provoking, "
+                "this may manifest as afternoon behaviour at school.",
+               }.get(peak_name,
+                "Review the specific conditions of this session and schedule targeted proactive support. "
+                "Identify what is different about the lowest-incident session and replicate those conditions.")) +
+            f" Lowest-frequency session provides a template: identify what differs structurally and replicate.")
 
         loc_counts = full_df["location"].value_counts().head(6)
         labels_loc = wrap_labels(list(loc_counts.index[::-1]))
@@ -779,7 +852,34 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         base_ax_style(ax)
         plt.tight_layout(pad=0.4)
         add_chart(doc, fig,
-            f"Hotspot: {top_loc}. Environmental modification and targeted supervision in this area are a priority strategy.")
+            f"Highest-frequency location: {normalise_location(top_loc)} "
+            f"({int(loc_counts.values[-1])} of {len(full_df)} incidents, "
+            f"{int(loc_counts.values[-1]/max(len(full_df),1)*100)}% of total). "
+            "Location clustering signals that specific environmental conditions are contributing to behaviour. "
+            + ({"jp room": "Classroom behaviour often reflects academic demand, seating arrangements, "
+                "peer noise, or non-preferred task presentation. Review the physical layout, "
+                "sensory conditions, and demand level of activities occurring at the time of incidents.",
+                "py room": "Classroom behaviour often reflects academic demand, seating arrangements, "
+                "peer noise, or non-preferred task presentation. Review the physical layout, "
+                "sensory conditions, and demand level of activities occurring at the time of incidents.",
+                "sy room": "Classroom behaviour often reflects academic demand, seating arrangements, "
+                "peer noise, or non-preferred task presentation. Review the physical layout, "
+                "sensory conditions, and demand level of activities occurring at the time of incidents.",
+                "yard":    "Yard incidents reflect unstructured time, peer conflict, sensory overload, "
+                "and reduced adult proximity. Increased supervision ratios, structured yard activities, "
+                "and a clear opt-out space are recommended.",
+                "kitchen": "Kitchen incidents may reflect access to food as a motivator, transitions "
+                "in/out of the space, or sensory factors around meal/snack time. "
+                "Ensure clear, consistent expectations and supervised, predictable kitchen routines.",
+                "toilets": "Incidents in or near toilets may indicate the student uses this space as an "
+                "escape route, or that transitions to/from the toilets are a trigger. "
+                "Review supervision and transition routines.",
+               }.get(normalise_location(top_loc).lower(),
+               "Conduct an environmental audit of this location — review noise level, crowding, "
+               "supervision ratio, demand level, and transition patterns in and out of the space. ")) +
+            "An environmental audit of this location is the most direct preventive action. "
+            "Also note whether this hotspot coincides with the peak time of day — "
+            "if so, the combination creates a compounding risk window requiring an immediate targeted plan.")
 
         # WoT for incidents: yellow/orange=coping (L1-3), red=outside window (L4-5)
         sev_colours = {1:'#eab308',2:'#eab308',3:'#f97316',4:'#ef4444',5:'#7f1d1d'}
@@ -819,17 +919,45 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         plt.xticks(rotation=25, ha='right', fontsize=7.5)
         base_ax_style(ax)
         plt.tight_layout(pad=0.4)
+        r_avg = e_avg = full_df["severity"].mean() if len(full_df) > 0 else 0  # defaults
+        direction = "stable"
         if len(full_df) >= 5:
             r_avg = full_df.tail(5)['severity'].mean()
             e_avg = full_df.head(5)['severity'].mean()
-            direction = "improving" if r_avg < e_avg else "worsening" if r_avg > e_avg else "stable"
-        else:
+            direction = "reducing" if r_avg < e_avg else "increasing" if r_avg > e_avg else "stable"
+        elif len(full_df) > 0:
             direction = "insufficient data for trend"
         add_chart(doc, fig,
-            f"Severity trajectory: {direction}. "
-            "Yellow zone (Levels 1–3) = Coping — behaviour is present; student is communicating or managing distress. "
-            "A critical incident does not automatically mean the student is outside their window. "
-            "Red (Levels 4–5) = Outside window — significant dysregulation, requires intensive support.")
+            f"Severity trajectory: {direction} (early average {e_avg:.1f} → recent average {r_avg:.1f}). "
+            + ({
+               "reducing": (
+                   f"Average severity has reduced by {abs(round(r_avg-e_avg,1))} levels across the data period. "
+                   "This is a meaningful positive indicator — the student is experiencing less intense episodes over time. "
+                   "This may reflect improved regulatory capacity, more effective proactive supports, or a stronger "
+                   "relational foundation with key staff. Document specifically what has changed and ensure those "
+                   "conditions are deliberately sustained — gains in regulation can reverse quickly if supports "
+                   "are reduced or key staff change."
+               ),
+               "stable": (
+                   "Severity has remained stable across the data period. "
+                   "Current supports are maintaining a consistent level of functioning — not a deterioration, "
+                   "but not a recovery. Consider whether support intensity matches the student's needs, "
+                   "or whether a targeted strategy shift is needed to move the trajectory downward. "
+                   "A case review or consultation with an external specialist may be appropriate "
+                   "if this pattern has held across multiple terms."
+               ),
+               "increasing": (
+                   f"Average severity has increased by {abs(round(r_avg-e_avg,1))} levels — "
+                   "the most significant finding in this analysis. Current supports are insufficient. "
+                   "Recommended immediate actions: case conference, updated safety plan, "
+                   "sensory and environmental audit, review of staffing consistency and relational supports, "
+                   "and consideration of specialist referral. Also check whether external stressors "
+                   "(family changes, transitions, health factors) are contributing."
+               ),
+              }.get(direction, "")) +
+            " Yellow zone (L1–L3) = Coping. Red zone (L4–L5) = Outside window. "
+            "A critical incident does not automatically mean outside the window. "
+            "All episodes in the red zone require post-incident relational repair before re-engaging with learning.")
 
         doc.add_page_break()
 
@@ -863,10 +991,17 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             _dow_peak_n_bap = int(_dow_bap.max())
             _dow_low_bap = _dow_bap[_dow_bap > 0].idxmin() if (_dow_bap > 0).any() else ""
             add_chart(doc, fig,
-                f"Peak day: {_dow_peak_bap} ({_dow_peak_n_bap} incidents). "
-                "Day-of-week patterns point to timetable-specific triggers — specific subjects, staff changes, "
-                "scheduled transitions, or peer groupings unique to that day. "
-                + (f"Lowest-incident day: {_dow_low_bap} — identify what differs structurally and replicate those conditions. "
+                f"Peak incident day: {_dow_peak_bap} ({_dow_peak_n_bap} incidents). "
+                "Day-of-week patterns point to timetable-specific triggers. "
+                "The recommended action is to review the full timetable for the peak day: "
+                "which subjects, staff members, peer groupings, or transitions are unique to that day? "
+                "Is there a particular subject that is cognitively demanding or non-preferred? "
+                "Is there a staffing change (e.g. a relief teacher, a different support worker)? "
+                "Is there an unstructured or transition-heavy period that does not appear on other days? "
+                + (f"The lowest-incident day is {_dow_low_bap} — "
+                   "this day provides a template for what effective conditions look like. "
+                   "Identify what is structurally different and deliberately replicate those conditions "
+                   "on high-risk days. This is one of the highest-leverage preventive strategies available. "
                    if _dow_low_bap and _dow_low_bap != _dow_peak_bap else ""))
 
         # ── Chart 8: Escalation Rate by Behaviour ────────────────────────
@@ -909,13 +1044,27 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             plt.tight_layout(pad=0.4)
             _high_esc = [x for x in _esc_data if x[3] > 50]
             add_chart(doc, fig,
-                "Escalation rate = proportion of incidents for each behaviour that progressed to a critical episode. "
-                "Grey bars = fewer than 4 incidents, rate not yet reliable. "
-                + (f"High escalation risk: {", ".join(x[0][:30] for x in _high_esc)}. "
-                   "Proactive intervention must be in place before these behaviours emerge — "
-                   "intervening in the Coping zone prevents escalation to the outside-window zone. "
+                "Escalation rate is the proportion of incidents for each behaviour that progressed "
+                "from a regular (Coping zone) episode to a critical incident (ABCH-documented). "
+                "A high rate for a specific behaviour signals that something about how that behaviour unfolds "
+                "— the environment, the staff response, or the student's internal state — "
+                "is not being interrupted effectively while the student is still in the Coping zone. "
+                "Grey bars indicate fewer than 4 incidents — rate is not yet reliable, continue logging. "
+                "The Sev StDev (if shown) tells you how variable the severity is: a low value means "
+                "episodes are consistently similar in intensity; a high value means the student "
+                "oscillates between mild and severe episodes, which may indicate inconsistent triggers "
+                "or inconsistent staff responses across different contexts. "
+                + (f"HIGH ESCALATION RISK IDENTIFIED: {", ".join(x[0][:35] for x in _high_esc)}. "
+                   "For these behaviours, proactive strategies must be in place BEFORE the behaviour emerges. "
+                   "The Coping zone (yellow/orange) is the window for effective intervention — "
+                   "once the student moves to the outside-window zone (red), de-escalation is the only "
+                   "available strategy and learning re-engagement must wait until full recovery. "
+                   "Review the antecedent chain for these specific behaviours: what conditions reliably "
+                   "precede escalation, and how can those conditions be modified or removed? "
                    if _high_esc else
-                   "No behaviours currently showing high escalation risk — current responses are containing escalation effectively. "))
+                   "No behaviours are currently showing high escalation risk — "
+                   "all incidents are remaining within the Coping zone rather than escalating to critical. "
+                   "This is a significant positive indicator: document and sustain current staff responses. "))
 
         # ── Chart 9: Severity distribution by Behaviour (WoT coloured) ──
         doc.add_paragraph().paragraph_format.space_after = Pt(4)
@@ -957,13 +1106,25 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             _outside_n = int((full_df["severity"] > 3).sum())
             _c_pct = int(_coping_n / len(full_df) * 100) if len(full_df) else 0
             add_chart(doc, fig,
-                f"{_c_pct}% of all incidents ({_coping_n}/{len(full_df)}) occurred within the Coping zone (L1–L3). "
-                "Colour shows Window of Tolerance zone: yellow/orange = Coping (behaviour present, student managing); "
-                "red = Outside window (significant dysregulation). "
-                + (f"The remaining {100-_c_pct}% ({_outside_n} incidents) reached the outside-window zone, "
-                   "requiring immediate de-escalation and post-incident relational repair. "
+                f"{_c_pct}% of all incidents ({_coping_n} of {len(full_df)}) occurred within the Coping zone (L1–L3). "
+                "This chart shows how each behaviour type is distributed across Window of Tolerance zones. "
+                "Colour key: yellow = L1-2 Coping (low-level behaviour, student managing); "
+                "orange = L3 Coping, approaching edge; red = L4-5 Outside window (significant dysregulation). "
+                "Behaviours with a high proportion of yellow/orange are being managed within the Coping zone — "
+                "these are responsive to proactive supports and de-escalation strategies. "
+                "Behaviours with a high proportion of red indicate the student is regularly moving "
+                "outside their window with this specific behaviour — these require urgent antecedent intervention, "
+                "a robust safety plan, and a clear post-incident relational repair protocol. "
+                "Important: a critical incident classification does not automatically mean outside the window — "
+                "many critical incidents are logged at L3 (Coping, approaching edge). "
+                + (f"The remaining {100-_c_pct}% ({_outside_n} incidents) reached the outside-window zone (L4-5). "
+                   "Post-incident repair — re-establishing relational safety before returning to learning — "
+                   "is essential after every outside-window episode. "
+                   "Review what proactive conditions were absent on those days. "
                    if _outside_n > 0 else
-                   "No incidents reached the outside-window zone — all behaviour remained within the Coping zone. "))
+                   "All logged incidents remained within the Coping zone — a strong positive indicator. "
+                   "Current staff responses are successfully preventing escalation to full dysregulation. "
+                   "Document and sustain current proactive strategies explicitly. "))
 
         section_header(doc, "FUNCTIONAL HYPOTHESIS")
         p_sp3 = doc.add_paragraph(); p_sp3.paragraph_format.space_after = Pt(4)
