@@ -2852,21 +2852,12 @@ def render_student_analysis_page():
                             st.rerun()
                 st.caption(f"Total absent days recorded: {len(_abs_stored)}")
 
-                # Absence summary note
-                import datetime as _adt
-                if not full_df.empty:
-                    _abs_in_range = [
-                        d for d in _abs_stored
-                        if full_df["date_parsed"].min().date() <= _adt.date.fromisoformat(d)
-                        <= full_df["date_parsed"].max().date()
-                    ]
-                    if _abs_in_range:
-                        st.info(
-                            f"⏱️ {len(_abs_in_range)} recorded absence(s) fall within the data period. "
-                            "Zero-incident days on those dates reflect absence, not regulation. "
-                            "Frequency counts and incident-free day counts should be interpreted "
-                            "with this in mind."
-                        )
+                # Absence summary note — shown here; deeper analysis shown after full_df is built
+                st.info(
+                    f"⏱️ {len(_abs_stored)} absence date(s) recorded. "
+                    "These will be accounted for in the frequency analysis below — "
+                    "zero-incident days on recorded absence dates reflect absence, not regulation."
+                )
             else:
                 st.caption("No absent dates recorded yet.")
 
