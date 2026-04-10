@@ -156,43 +156,38 @@ def prog_badge(program):
 
 
 # ── Data loaders ───────────────────────────────────────────────────────────────
-@st.cache_data(ttl=60)
-def load_students():
-    try:
-        res = supabase.table("students") \
-            .select("id,name,edid,program,grade,dob") \
-            .eq("archived", False) \
-            .order("name").execute()
-        return res.data or []
-    except Exception as e:
-        st.error(f"Could not load students: {e}")
-        return []
-
-
-@st.cache_data(ttl=30)
-def load_latest_overview(student_id: str):
-    """Returns the most recent overview for a student, or None."""
+def load_all_overviews():
+    """Load all overviews, grouped by student_name."""
     try:
         res = supabase.table("sensory_overviews") \
-            .select("id,overview_date,review_date,completed_by,priority_results,responses") \
-            .eq("student_id", student_id) \
-            .order("overview_date", desc=True) \
-            .limit(1).execute()
-        return res.data[0] if res.data else None
-    except Exception:
-        return None
-
-
-@st.cache_data(ttl=30)
-def load_all_overviews_for_student(student_id: str):
-    try:
-        res = supabase.table("sensory_overviews") \
-            .select("id,overview_date,review_date,completed_by,priority_results,responses") \
-            .eq("student_id", student_id) \
+            .select("id,student_id,student_name,overview_date,review_date,completed_by,priority_results,responses") \
             .order("overview_date", desc=True).execute()
         return res.data or []
-    except Exception:
+    except Exception as e:
+        st.error(f"Could not load overviews: {e}")
         return []
+
+
+def build_student_list(all_overviews):
+    """
+    Derive a unique student list from saved overviews.
+    Returns list of dicts: {name, program, latest_overview, all_overviews}
+    """
+    seen = {}
+    for ov in all_overviews:
+        name = ov.get("student_name", "Unknown")
+        if name not in seen:
+            seen[name] = {"name": name, "overviews": []}
+        seen[name]["overviews"].append(ov)
+    # Sort each student's overviews newest-first (already sorted from query)
+    result = []
+    for name, data in seen.items():
+        result.append({
+            "name":           name,
+            "latest_overview": data["overviews"][0],
+            "all_overviews":  data["overviews"],
+        })
+    return sorted(result, key=lambda x: x["name"])
 
 
 def parse_priorities(raw):
@@ -241,59 +236,34 @@ def review_status(review_date_str):
 
 # ── Page header ────────────────────────────────────────────────────────────────
 st.markdown("<h1>🧠 Sensory Profiles</h1>", unsafe_allow_html=True)
-st.caption("View sensory overviews for all students. Linked to the Sensory Overview app and Behaviour Support data.")
+st.caption("View sensory overviews for all students.")
 
-students = load_students()
+all_overviews = load_all_overviews()
 
-if not students:
-    st.warning("No students found. Make sure students have been added via the Behaviour Support app or Sensory Overview app.")
+if not all_overviews:
+    st.info("No overviews have been saved yet. Complete a Sensory Overview first.")
+    st.link_button("➕ Go to Sensory Overview", SENSORY_OVERVIEW_APP_URL)
     st.stop()
 
+students = build_student_list(all_overviews)
+
 # ── Top controls ───────────────────────────────────────────────────────────────
-ctrl1, ctrl2, ctrl3 = st.columns([2, 2, 2])
+ctrl1, ctrl2 = st.columns([2, 2])
 with ctrl1:
-    program_filter = st.selectbox(
-        "Program",
-        ["All Programs", "JP — Junior Primary", "PY — Primary Years", "SY — Senior Years"],
-    )
-with ctrl2:
     overview_filter = st.selectbox(
         "Overview status",
-        ["All students", "Has overview", "No overview yet", "Review overdue"],
+        ["All students", "Review overdue", "Review due soon"],
     )
-with ctrl3:
+with ctrl2:
     search_name = st.text_input("Search student name", placeholder="Type to filter…")
 
-program_code = None
-if "JP" in program_filter:
-    program_code = "JP"
-elif "PY" in program_filter:
-    program_code = "PY"
-elif "SY" in program_filter:
-    program_code = "SY"
-
-if program_code:
-    students = [s for s in students if s.get("program") == program_code]
 if search_name:
     students = [s for s in students if search_name.lower() in s["name"].lower()]
 
-# Pull latest overviews for all filtered students in bulk
-# (one query per student — fine at this scale)
-overview_map = {}
-for s in students:
-    overview_map[s["id"]] = load_latest_overview(s["id"])
-
 # Apply overview status filter
-if overview_filter == "Has overview":
-    students = [s for s in students if overview_map.get(s["id"])]
-elif overview_filter == "No overview yet":
-    students = [s for s in students if not overview_map.get(s["id"])]
-elif overview_filter == "Review overdue":
+if overview_filter == "Review overdue":
     def is_overdue(s):
-        ov = overview_map.get(s["id"])
-        if not ov:
-            return False
-        rv = ov.get("review_date")
+        rv = s["latest_overview"].get("review_date")
         if not rv:
             return False
         try:
@@ -301,36 +271,44 @@ elif overview_filter == "Review overdue":
         except Exception:
             return False
     students = [s for s in students if is_overdue(s)]
+elif overview_filter == "Review due soon":
+    def is_due_soon(s):
+        rv = s["latest_overview"].get("review_date")
+        if not rv:
+            return False
+        try:
+            delta = (date.fromisoformat(rv) - date.today()).days
+            return 0 <= delta <= 14
+        except Exception:
+            return False
+    students = [s for s in students if is_due_soon(s)]
 
 st.markdown(f"**{len(students)} student{'s' if len(students) != 1 else ''}** matching filters")
 st.markdown("---")
 
-# ── Student list ───────────────────────────────────────────────────────────────
 if not students:
     st.info("No students match the current filters.")
     st.stop()
 
+# ── Student list ───────────────────────────────────────────────────────────────
 for student in students:
-    sid      = student["id"]
     sname    = student["name"]
-    program  = student.get("program", "—")
-    grade    = str(student.get("grade", "") or "—")
-    edid     = student.get("edid", "—")
-    overview = overview_map.get(sid)
+    overview = student["latest_overview"]
+    all_ovs  = student["all_overviews"]
 
-    # Build priority pills for the card header
+    # Build priority pills
     pills_html = ""
-    if overview:
-        pr = parse_priorities(overview.get("priority_results"))
-        for sec, info in pr.items():
-            icon = SECTION_ICONS.get(sec, "")
-            pills_html += f'<span class="pill {info["css"]}">{icon} {sec.split("(")[0].strip()}</span> '
-    else:
-        pills_html = '<span class="pill none">No overview on file</span>'
+    pr = parse_priorities(overview.get("priority_results"))
+    for sec, info in pr.items():
+        icon = SECTION_ICONS.get(sec, "")
+        pills_html += f'<span class="pill {info["css"]}">{icon} {sec.split("(")[0].strip()}</span> '
+
+    has_high = any(i.get("priority") == "HIGH PRIORITY" for i in pr.values())
+    ov_date  = overview.get("overview_date", "—")
+    by       = overview.get("completed_by", "—")
 
     with st.expander(
-        f"{'🔴 ' if overview and any(parse_priorities(overview.get('priority_results', {})).get(s, {}).get('priority') == 'HIGH PRIORITY' for s in SECTION_ICONS) else ''}"
-        f"{sname}  ·  {program}  ·  {grade}  ·  {edid}",
+        f"{'🔴 ' if has_high else ''}{sname}  ·  Last overview: {ov_date}  ·  {by}",
         expanded=False,
     ):
         # ── Student meta bar ───────────────────────────────────────────────────
@@ -338,8 +316,7 @@ for student in students:
         with mc1:
             st.markdown(
                 f'<div class="student-card">'
-                f'<div class="sname">{sname} {prog_badge(program)}</div>'
-                f'<div class="smeta">Grade: {grade} &nbsp;·&nbsp; EDID: {edid}</div>'
+                f'<div class="sname">{sname}</div>'
                 f'<div style="margin-top:6px;">{pills_html}</div>'
                 f'</div>',
                 unsafe_allow_html=True,
@@ -348,24 +325,12 @@ for student in students:
             st.markdown("&nbsp;")
             st.link_button(
                 "➕ New Overview",
-                f"{SENSORY_OVERVIEW_APP_URL}?student_id={sid}",
+                f"{SENSORY_OVERVIEW_APP_URL}?student_name={sname}",
                 use_container_width=True,
             )
 
-        if not overview:
-            st.markdown(
-                f'<div class="no-overview">'
-                f'⚠️ No sensory overview has been completed for <strong>{sname}</strong> yet.<br>'
-                f'Click <strong>New Overview</strong> above to start one — the student will be pre-selected.'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-            continue
-
         # ── Overview meta ──────────────────────────────────────────────────────
-        ov_date  = overview.get("overview_date", "—")
-        rev_date = overview.get("review_date")
-        by       = overview.get("completed_by", "—")
+        rev_date  = overview.get("review_date")
         rev_label, rev_colour = review_status(rev_date)
 
         st.markdown(
@@ -439,11 +404,10 @@ for student in students:
 
         # ── HISTORY tab ───────────────────────────────────────────────────────
         with tab_history:
-            all_overviews = load_all_overviews_for_student(sid)
-            if len(all_overviews) <= 1:
+            if len(all_ovs) <= 1:
                 st.info("Only one overview on file — history will appear here as more are added.")
             else:
-                for ov in all_overviews:
+                for ov in all_ovs:
                     o_date = ov.get("overview_date", "—")
                     o_by   = ov.get("completed_by", "—")
                     o_rev  = ov.get("review_date", "—")
@@ -465,7 +429,7 @@ for student in students:
         with fa1:
             st.link_button(
                 "🔄 Start updated overview",
-                f"{SENSORY_OVERVIEW_APP_URL}?student_id={sid}",
+                f"{SENSORY_OVERVIEW_APP_URL}?student_name={sname}",
                 use_container_width=True,
             )
         with fa2:
