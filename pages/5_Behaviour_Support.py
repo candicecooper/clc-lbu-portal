@@ -7272,9 +7272,15 @@ def render_quick_incident_log():
 
 def main():
     # ── Quick Incident Log — no login required ────────────────────────────
-    # Accessible at ?mode=quicklog (tile URL: /5_Behaviour_Support?mode=quicklog)
-    _qparams = st.query_params
-    if _qparams.get("mode") == "quicklog":
+    # Accessible at ?mode=quicklog (tile URL: /Behaviour_Support?mode=quicklog)
+    try:
+        _ql_mode = st.query_params.get("mode", "")
+    except Exception:
+        try:
+            _ql_mode = st.experimental_get_query_params().get("mode", [""])[0]
+        except Exception:
+            _ql_mode = ""
+    if _ql_mode == "quicklog":
         render_quick_incident_log()
         return
 
