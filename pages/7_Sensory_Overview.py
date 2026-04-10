@@ -355,13 +355,14 @@ def generate_hypothesis(pr: dict) -> str:
         area_names.append(f"{s} (MEDIUM)")
 
     hypothesis = (
-        f"Based on the sensory overview, {', '.join(area_names[:3])}"
+        f"Based on the completed sensory overview, {', '.join(area_names[:3])}"
         f"{'and other areas ' if len(area_names) > 3 else ''}"
         f" {'were' if len(area_names) > 1 else 'was'} identified as priority areas. "
-        f"It is hypothesised that this student experiences {impl_text}. "
-        f"These sensory differences may contribute to observed behaviours including "
+        f"From what has been observed, it is suggested that this student may experience {impl_text}. "
+        f"These observed sensory differences may be contributing to behaviours including "
         f"emotional dysregulation, avoidance, sensory-seeking, or difficulty sustaining "
-        f"engagement in the learning environment."
+        f"engagement in the learning environment. This is based on staff observation only "
+        f"and does not constitute a clinical assessment."
     )
 
     # Strategies
@@ -537,13 +538,13 @@ def generate_pdf_report(rec: dict) -> bytes:
     story.append(Spacer(1, 4*mm))
 
     # Hypothesis
-    story.append(Paragraph("Clinical Hypothesis", heading_style))
+    story.append(Paragraph("Hypothesis from Observed Sensory Profile", heading_style))
     story.append(HRFlowable(width="100%", thickness=1, color=AMBER_C, spaceAfter=4))
     story.append(Paragraph(hyp_text, body_style))
 
     if strategies:
         story.append(Spacer(1, 3*mm))
-        story.append(Paragraph("Recommended Strategies", heading_style))
+        story.append(Paragraph("Suggested Supports to Explore", heading_style))
         for strat in strategies:
             story.append(Paragraph(f"• {strat.capitalize()}", bullet_style))
 
