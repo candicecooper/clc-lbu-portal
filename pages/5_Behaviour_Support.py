@@ -1365,6 +1365,50 @@ def hash_password(plain_password: str) -> str:
     hashed = bcrypt.hashpw(plain_password.encode('utf-8'), salt)
     return hashed.decode('utf-8')
 
+# ── Attendance / absence persistence ─────────────────────────────────────────
+def load_attendance_from_db(student_id):
+    """Load saved attendance record for a student from Supabase."""
+    if not supabase or not student_id:
+        return {}
+    try:
+        res = supabase.table("student_attendance") \
+            .select("*").eq("student_id", student_id).limit(1).execute()
+        if res.data:
+            row = res.data[0]
+            return {
+                "absent_dates": row.get("absent_dates") or [],
+                "pt_days":      row.get("pt_days") or ["Monday","Tuesday","Wednesday","Thursday","Friday"],
+                "pt_sessions":  row.get("pt_sessions") or ["Full day"],
+                "pt_notes":     row.get("pt_notes") or "",
+            }
+    except Exception:
+        pass
+    return {}
+
+
+def save_attendance_to_db(student_id, absent_dates, pt_days, pt_sessions, pt_notes):
+    """Upsert attendance record for a student in Supabase."""
+    if not supabase or not student_id:
+        return False
+    try:
+        data = {
+            "student_id":   student_id,
+            "absent_dates": absent_dates or [],
+            "pt_days":      pt_days or [],
+            "pt_sessions":  pt_sessions or [],
+            "pt_notes":     pt_notes or "",
+        }
+        # Try update first
+        res = supabase.table("student_attendance") \
+            .update(data).eq("student_id", student_id).execute()
+        if not res.data:
+            # No existing row — insert
+            supabase.table("student_attendance").insert(data).execute()
+        return True
+    except Exception as e:
+        return False
+
+
 def load_students_from_db():
     if not supabase:
         return MOCK_STUDENTS
@@ -2790,91 +2834,211 @@ def render_student_analysis_page():
             go_to("landing")
 
     # ── Part-time schedule context ───────────────────────────────────────────
-    with st.expander("⏱️ Attendance & Absence Tracking (optional — affects pattern interpretation)", expanded=False):
+    # ── Load saved attendance from Supabase on first render ─────────────────
+    _att_cache_key = f"att_loaded_{student_id}"
+    if _att_cache_key not in st.session_state:
+        _att_from_db = load_attendance_from_db(student_id)
+        if _att_from_db:
+            st.session_state[f"absent_dates_{student_id}"]  = _att_from_db.get("absent_dates", [])
+            st.session_state[f"pt_days_{student_id}"]       = _att_from_db.get("pt_days", ["Monday","Tuesday","Wednesday","Thursday","Friday"])
+            st.session_state[f"pt_sess_{student_id}"]       = _att_from_db.get("pt_sessions", ["Full day"])
+            st.session_state[f"pt_notes_{student_id}"]      = _att_from_db.get("pt_notes", "")
+        st.session_state[_att_cache_key] = True
+
+    _abs_key   = f"absent_dates_{student_id}"
+    _abs_stored = st.session_state.get(_abs_key, [])
+    _pt_days    = st.session_state.get(f"pt_days_{student_id}", ["Monday","Tuesday","Wednesday","Thursday","Friday"])
+    _pt_sessions = st.session_state.get(f"pt_sess_{student_id}", ["Full day"])
+    _pt_notes   = st.session_state.get(f"pt_notes_{student_id}", "")
+
+    # ══ Placement Timeline ═══════════════════════════════════════════════════
+    with st.expander("📌 Placement Timeline & Extensions", expanded=False):
         st.caption(
-            "Record this student's attendance pattern and any specific absent dates here. "
-            "Absence data is important context for analysis — zero-incident days may reflect absence rather than regulation. "
-            "Day-of-week and time-of-day patterns are only meaningful in the context of which days and sessions "
-            "the student was actually present for. This information will be referenced in the frequency analysis."
+            "Record and view this student's placement start date, agreed end date, and any extensions. "
+            "Placement timeline provides important context for incident pattern analysis — "
+            "incidents in the first weeks of placement may reflect adjustment, "
+            "while incidents near the end of an agreed period may reflect transition anxiety."
+        )
+        _pl_start_raw = student.get("placement_start")
+        _pl_end_raw   = student.get("placement_end")
+        _ext_key_an   = f"placement_extensions_{student_id}"
+        _pl_exts      = st.session_state.get(_ext_key_an, [])
+
+        _pl_c1, _pl_c2, _pl_c3 = st.columns(3)
+        with _pl_c1:
+            st.metric("Placement Start",
+                      datetime.fromisoformat(_pl_start_raw).strftime("%-d %b %Y") if _pl_start_raw else "Not set")
+        with _pl_c2:
+            st.metric("Original End Date",
+                      datetime.fromisoformat(_pl_end_raw).strftime("%-d %b %Y") if _pl_end_raw else "Ongoing")
+        with _pl_c3:
+            if _pl_exts:
+                try:
+                    _last_ext = max(datetime.fromisoformat(e["to"]) for e in _pl_exts)
+                    st.metric("Extended Until", _last_ext.strftime("%-d %b %Y"))
+                except: st.metric("Extensions", f"{len(_pl_exts)} recorded")
+            elif _pl_start_raw:
+                import datetime as _pdt
+                _days_en = (_pdt.date.today() - datetime.fromisoformat(_pl_start_raw).date()).days
+                st.metric("Days enrolled", _days_en)
+
+        if _pl_exts:
+            st.markdown("**Extensions:**")
+            for _ex in _pl_exts:
+                try:
+                    _ef = datetime.fromisoformat(_ex["from"]).strftime("%-d %b %Y")
+                    _et = datetime.fromisoformat(_ex["to"]).strftime("%-d %b %Y")
+                    st.markdown(
+                        f"<div style='background:#eff6ff;border-left:3px solid #3b82f6;"
+                        f"border-radius:5px;padding:.4rem .75rem;margin:.2rem 0;font-size:.83rem;'>"
+                        f"📌 <b>{_ef} – {_et}</b> — {_ex['reason']}</div>",
+                        unsafe_allow_html=True
+                    )
+                except: pass
+
+        st.markdown("---")
+        with st.expander("✏️ Edit placement dates or add extension", expanded=False):
+            _pfc1, _pfc2 = st.columns(2)
+            with _pfc1:
+                _new_pl_start = st.date_input(
+                    "Placement start *",
+                    value=datetime.fromisoformat(_pl_start_raw).date() if _pl_start_raw else date.today(),
+                    key=f"an_pl_start_{student_id}"
+                )
+            with _pfc2:
+                _new_pl_end = st.date_input(
+                    "Original end date (blank = ongoing)",
+                    value=datetime.fromisoformat(_pl_end_raw).date() if _pl_end_raw else None,
+                    key=f"an_pl_end_{student_id}"
+                )
+            if st.button("💾 Save placement dates", key=f"an_pl_save_{student_id}", use_container_width=True):
+                student["placement_start"] = _new_pl_start.isoformat()
+                student["placement_end"]   = _new_pl_end.isoformat() if _new_pl_end else None
+                if save_student_to_db(student):
+                    if "students" in st.session_state: del st.session_state["students"]
+                    st.success("✅ Placement dates saved.")
+                    st.rerun()
+
+            st.markdown("**Add extension:**")
+            _exc1, _exc2, _exc3 = st.columns([2, 2, 3])
+            with _exc1:
+                _an_ef = st.date_input("From *", value=None, key=f"an_ext_f_{student_id}")
+            with _exc2:
+                _an_et = st.date_input("To *",   value=None, key=f"an_ext_t_{student_id}")
+            with _exc3:
+                _an_er = st.text_input(
+                    "Reason / context *",
+                    placeholder="e.g. Extended — transition support, positive progress",
+                    key=f"an_ext_r_{student_id}"
+                )
+            if st.button("➕ Add extension", key=f"an_ext_add_{student_id}", use_container_width=True):
+                if _an_ef and _an_et and _an_er.strip():
+                    _pl_exts = _pl_exts + [{"from": _an_ef.isoformat(), "to": _an_et.isoformat(), "reason": _an_er.strip()}]
+                    st.session_state[_ext_key_an] = _pl_exts
+                    st.success(f"✅ Extension added: {_an_ef.strftime('%-d %b')} – {_an_et.strftime('%-d %b %Y')}")
+                    st.rerun()
+                else:
+                    st.error("Please complete all three fields.")
+
+        st.session_state[f"pl_start_an_{student_id}"] = _pl_start_raw
+        st.session_state[f"pl_end_an_{student_id}"]   = _pl_end_raw
+
+    with st.expander("⏱️ Attendance & Absence Tracking — saved automatically", expanded=False):
+        st.caption(
+            "Record attendance pattern and specific absent dates. "
+            "Data is saved automatically to the database. "
+            "Absent days appear on the frequency chart and are used in the pattern analysis below."
         )
 
-        _att_tab1, _att_tab2 = st.tabs(["📅 Regular Schedule", "🗓️ Specific Absent Dates"])
+        _att_tab1, _att_tab2 = st.tabs(["📅 Regular Schedule", "🗓️ Absent Dates"])
 
         with _att_tab1:
-            _pt_days = st.multiselect(
+            _pt_days_new = st.multiselect(
                 "Days the student regularly attends",
                 ["Monday","Tuesday","Wednesday","Thursday","Friday"],
-                default=["Monday","Tuesday","Wednesday","Thursday","Friday"],
-                key=f"pt_days_{student_id}"
+                default=_pt_days,
+                key=f"pt_days_w_{student_id}"
             )
-            _pt_sessions = st.multiselect(
-                "Sessions attended (if not full days)",
+            _pt_sess_new = st.multiselect(
+                "Sessions attended",
                 ["Full day","Morning only","Middle of day only","Afternoon only","Morning + Middle","Middle + Afternoon"],
-                default=["Full day"],
-                key=f"pt_sess_{student_id}"
+                default=_pt_sessions,
+                key=f"pt_sess_w_{student_id}"
             )
-            _pt_notes = st.text_area(
-                "Schedule details / notes",
+            _pt_notes_new = st.text_area(
+                "Schedule notes",
+                value=_pt_notes,
                 placeholder="e.g. Attends Tue–Thu, mornings only. Transition to full days planned Term 2.",
-                height=65, key=f"pt_notes_{student_id}"
+                height=65, key=f"pt_notes_w_{student_id}"
             )
+            if st.button("💾 Save schedule", key=f"pt_save_{student_id}", type="primary", use_container_width=True):
+                st.session_state[f"pt_days_{student_id}"]  = _pt_days_new
+                st.session_state[f"pt_sess_{student_id}"]  = _pt_sess_new
+                st.session_state[f"pt_notes_{student_id}"] = _pt_notes_new
+                _pt_days = _pt_days_new; _pt_sessions = _pt_sess_new; _pt_notes = _pt_notes_new
+                save_attendance_to_db(student_id, _abs_stored, _pt_days_new, _pt_sess_new, _pt_notes_new)
+                st.success("✅ Schedule saved.")
 
         with _att_tab2:
             st.caption(
-                "Enter specific dates when the student was absent. "
-                "These will be marked on the daily frequency chart and excluded from 'zero incident' counts."
+                "Add dates when the student was absent. "
+                "Each date is saved immediately. Saved dates appear on the frequency chart."
             )
-            _abs_key = f"absent_dates_{student_id}"
-            _abs_stored = st.session_state.get(_abs_key, [])
-
             _abs_col1, _abs_col2 = st.columns([2, 1])
             with _abs_col1:
                 _abs_new = st.date_input(
-                    "Add an absent date",
+                    "Date to add",
                     value=None, key=f"abs_date_input_{student_id}"
                 )
             with _abs_col2:
                 st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("➕ Add date", key=f"abs_add_{student_id}", use_container_width=True):
+                if st.button("➕ Add & save", key=f"abs_add_{student_id}",
+                             type="primary", use_container_width=True):
                     if _abs_new and str(_abs_new) not in _abs_stored:
-                        _abs_stored = _abs_stored + [str(_abs_new)]
+                        _abs_stored = sorted(_abs_stored + [str(_abs_new)])
                         st.session_state[_abs_key] = _abs_stored
+                        save_attendance_to_db(student_id, _abs_stored, _pt_days, _pt_sessions, _pt_notes)
                         st.rerun()
 
             if _abs_stored:
-                st.markdown("**Recorded absent dates:**")
-                _abs_cols = st.columns(4)
+                st.markdown(f"**{len(_abs_stored)} absent date(s) recorded:**")
+                _abs_display_cols = st.columns(4)
                 for _i, _d in enumerate(sorted(_abs_stored)):
-                    with _abs_cols[_i % 4]:
+                    with _abs_display_cols[_i % 4]:
                         if st.button(f"❌ {_d}", key=f"abs_rm_{student_id}_{_i}", use_container_width=True):
                             _abs_stored = [x for x in _abs_stored if x != _d]
                             st.session_state[_abs_key] = _abs_stored
+                            save_attendance_to_db(student_id, _abs_stored, _pt_days, _pt_sessions, _pt_notes)
                             st.rerun()
-                st.caption(f"Total absent days recorded: {len(_abs_stored)}")
-
-                # Absence summary note — shown here; deeper analysis shown after full_df is built
-                st.info(
-                    f"⏱️ {len(_abs_stored)} absence date(s) recorded. "
-                    "These will be accounted for in the frequency analysis below — "
-                    "zero-incident days on recorded absence dates reflect absence, not regulation."
-                )
             else:
-                st.caption("No absent dates recorded yet.")
+                st.info("No absent dates recorded yet — add dates above.")
 
-        _parttime_active = len(_pt_days) < 5 or (len(_pt_sessions) > 0 and "Full day" not in _pt_sessions)
-        _absent_dates = st.session_state.get(f"absent_dates_{student_id}", [])
-        if _parttime_active or _absent_dates:
-            _att_parts = []
-            if _parttime_active:
-                _att_parts.append(
-                    f"Part-time schedule: attends {len(_pt_days)}/5 days "
-                    f"({", ".join(_pt_days[:3])}{"..." if len(_pt_days) > 3 else ""}). "
-                    "Zero-incident days in charts may reflect absence. "
-                    "Time-of-day patterns should be interpreted against sessions attended only."
-                )
-            if _absent_dates:
-                _att_parts.append(f"{len(_absent_dates)} specific absence(s) recorded.")
-            st.info("⏱️ **Attendance context:** " + " ".join(_att_parts))
+    # ── Active attendance summary (always visible below expander) ─────────
+    _parttime_active = len(_pt_days) < 5 or (len(_pt_sessions) > 0 and "Full day" not in _pt_sessions)
+    _absent_dates    = _abs_stored
+    if _parttime_active or _absent_dates:
+        _att_html = (
+            "<div style='background:#eff6ff;border-left:4px solid #3b82f6;border-radius:8px;"
+            "padding:.65rem 1rem;margin:.4rem 0;font-size:.84rem;color:#1e293b;'>"
+            "<b>⏱️ Attendance context active</b><br>"
+        )
+        if _parttime_active:
+            _att_html += (
+                f"<b>Part-time schedule:</b> attends {len(_pt_days)}/5 days "
+                f"({", ".join(_pt_days[:3])}{"..." if len(_pt_days) > 3 else ""}). "
+                "Sessions: " + (", ".join(_pt_sessions) if _pt_sessions else "not specified") + ". "
+                "Zero-incident days may reflect absence. Time-of-day analysis reflects attended sessions only.<br>"
+            )
+        if _absent_dates:
+            _att_html += (
+                f"<b>Absent dates recorded: {len(_absent_dates)}</b> — "
+                "marked on the frequency chart below. "
+                "Zero-incident days on these dates reflect absence, not regulation.<br>"
+            )
+        if _pt_notes:
+            _att_html += f"<i>Note: {_pt_notes}</i>"
+        _att_html += "</div>"
+        st.markdown(_att_html, unsafe_allow_html=True)
 
     quick = [i for i in st.session_state.incidents if i["student_id"] == student_id]
     crit = [c for c in st.session_state.critical_incidents if c["student_id"] == student_id]
@@ -3334,6 +3498,106 @@ def render_student_analysis_page():
                 "no significant absence–incident patterns detected in the current data. "
                 "Continue logging to build a more complete picture."
             )
+
+    # ── Placement phase analysis ──────────────────────────────────────────────
+    _pl_start_str = st.session_state.get(f"pl_start_an_{student_id}") or student.get("placement_start")
+    _pl_end_str   = st.session_state.get(f"pl_end_an_{student_id}")   or student.get("placement_end")
+    _pl_exts_an   = st.session_state.get(f"placement_extensions_{student_id}", [])
+    if _pl_start_str and not full_df.empty:
+        import datetime as _pldt
+        _pl_s = datetime.fromisoformat(_pl_start_str).date()
+        _pl_e = datetime.fromisoformat(_pl_end_str).date() if _pl_end_str else _pldt.date.today()
+        _total_pl_days = (_pl_e - _pl_s).days or 1
+
+        # Settling-in period — first 4 weeks
+        _setl_end  = _pl_s + _pldt.timedelta(weeks=4)
+        _setl_incs = full_df[full_df["date_parsed"].dt.date <= _setl_end]
+        _n_setl    = len(_setl_incs)
+        _setl_pct  = int(_n_setl / len(full_df) * 100) if len(full_df) else 0
+
+        # Pre-transition — last 4 weeks before end
+        _pret_start = _pl_e - _pldt.timedelta(weeks=4)
+        _pret_incs  = full_df[full_df["date_parsed"].dt.date >= _pret_start]
+        _n_pret     = len(_pret_incs)
+        _pret_pct   = int(_n_pret / len(full_df) * 100) if len(full_df) else 0
+
+        # Extension period incidents
+        _ext_rows = []
+        for _ex in _pl_exts_an:
+            try:
+                _ef = datetime.fromisoformat(_ex["from"]).date()
+                _et = datetime.fromisoformat(_ex["to"]).date()
+                _en = len(full_df[(full_df["date_parsed"].dt.date >= _ef) &
+                                   (full_df["date_parsed"].dt.date <= _et)])
+                _ext_rows.append((_ex, _ef, _et, _en))
+            except: pass
+
+        if _total_pl_days > 14:  # Only show if placement long enough to be meaningful
+            st.markdown("### 📌 Placement Phase Analysis")
+            _phase_parts = []
+
+            if _n_setl > 0:
+                _phase_parts.append(
+                    f"<b>🌱 Settling-in period (first 4 weeks — up to {_setl_end.strftime('%-d %b %Y')}):</b> "
+                    f"<b>{_n_setl} of {len(full_df)} incidents ({_setl_pct}%)</b> occurred in this phase. "
+                    + ("This is a high proportion during the adjustment phase. "
+                       "Early placement incidents typically reflect the student testing relational safety, "
+                       "adjusting to new routines and expectations, and beginning to build "
+                       "regulatory capacity in an unfamiliar environment. "
+                       "These incidents are expected and should not be over-interpreted — "
+                       "compare week 1 to week 4 to assess whether adjustment was occurring. "
+                       if _setl_pct >= 40 else
+                       "The student settled into the placement with relatively few early incidents — "
+                       "a positive indicator of early relational capacity and readiness to engage. ") +
+                    "If incidents reduced after the first 4 weeks, this is evidence that the student "
+                    "was successfully building regulatory capacity and relational safety through the placement."
+                )
+            elif _pl_s <= _pldt.date.today():
+                _phase_parts.append(
+                    f"<b>🌱 Settling-in period (first 4 weeks):</b> "
+                    "No incidents recorded in the first 4 weeks of placement — "
+                    "a strong positive start. Document what conditions supported this and sustain them."
+                )
+
+            if _pl_end_str and _n_pret > 0:
+                _phase_parts.append(
+                    f"<b>🔚 Pre-transition period (last 4 weeks — from {_pret_start.strftime('%-d %b %Y')}):</b> "
+                    f"<b>{_n_pret} incident(s) ({_pret_pct}%)</b> occurred in this phase. "
+                    + ("This elevated rate is consistent with anticipatory transition anxiety. "
+                       "Students with disrupted attachment histories often escalate as a significant "
+                       "relationship or routine approaches an end — testing whether the placement "
+                       "and the relationship will hold. "
+                       "A clear, predictable, communicated-in-advance transition plan — "
+                       "with the student actively involved in co-designing next steps — "
+                       "is the most effective intervention at this stage. "
+                       "Avoid reducing structure or staff presence in the pre-transition period. "
+                       if _pret_pct >= 30 else
+                       "No significant pre-transition escalation — "
+                       "the student appears to be managing the approaching transition well. "
+                       "Continue providing clear transition information and predictable routines. ") +
+                    "Compare the pre-transition rate to the overall rate to determine whether "
+                    "transition anxiety is a significant factor in the incident profile."
+                )
+
+            for _ex, _ef, _et, _en in _ext_rows:
+                _ext_days = (_et - _ef).days or 1
+                _phase_parts.append(
+                    f"<b>📌 Extension period {_ef.strftime('%-d %b')} – {_et.strftime('%-d %b %Y')}:</b> "
+                    f"<b>{_en} incident(s)</b> during this extension "
+                    f"(context: {_ex['reason']}). "
+                    "Extensions reflect a decision to continue building on progress. "
+                    "The incident rate during an extension should be compared to the rate in the original placement "
+                    "period — if lower, the extension is supporting consolidation of gains. "
+                    "If higher, consider whether increased demands or expectations are contributing."
+                )
+
+            for part in _phase_parts:
+                st.markdown(
+                    f"<div style='background:#f8fafc;border-left:4px solid #3b82f6;border-radius:8px;"
+                    f"padding:.75rem 1.1rem;margin:.4rem 0;font-size:.84rem;color:#1e293b;line-height:1.65;'>"
+                    f"{part}</div>",
+                    unsafe_allow_html=True
+                )
 
     if not quick_only_df.empty and not crit_only_df.empty:
         escalation_rate = (len(crit_only_df) / len(quick_only_df)) * 100 if len(quick_only_df) > 0 else 0
@@ -5826,16 +6090,52 @@ def render_admin_portal():
                                 edit_end = st.date_input("Placement End (None = Ongoing)", value=current_end, key=f"edit_end_{student['id']}")
                             col_save, col_cancel = st.columns(2)
                             with col_save:
-                                if st.form_submit_button("Save Changes", type="primary"):
+                                if st.form_submit_button("💾 Save Placement Dates", type="primary"):
                                     student['placement_start'] = edit_start.isoformat()
                                     student['placement_end']   = edit_end.isoformat() if edit_end else None
+                                    save_student_to_db(student)
+                                    if "students" in st.session_state: del st.session_state["students"]
                                     st.session_state.editing_student = None
-                                    st.success("✅ Updated")
+                                    st.success("✅ Placement dates saved.")
                                     st.rerun()
                             with col_cancel:
                                 if st.form_submit_button("Cancel"):
                                     st.session_state.editing_student = None
                                     st.rerun()
+
+                        st.markdown("---")
+                        st.markdown("**📌 Placement Extensions**")
+                        st.caption(
+                            "Record any extensions to the original placement. "
+                            "Extensions appear in the student's analysis alongside incident patterns."
+                        )
+                        _adm_ext_key = f"placement_extensions_{student['id']}"
+                        _adm_exts    = st.session_state.get(_adm_ext_key, [])
+
+                        with st.form(f"ext_form_{student['id']}"):
+                            _ae1, _ae2, _ae3 = st.columns([2, 2, 3])
+                            with _ae1: _adm_ef = st.date_input("From *", value=None, key=f"adm_ef_{student['id']}")
+                            with _ae2: _adm_et = st.date_input("To *",   value=None, key=f"adm_et_{student['id']}")
+                            with _ae3: _adm_er = st.text_input("Reason / context *", placeholder="e.g. Extended — positive progress", key=f"adm_er_{student['id']}")
+                            if st.form_submit_button("➕ Add Extension"):
+                                if _adm_ef and _adm_et and _adm_er.strip():
+                                    _adm_exts = _adm_exts + [{"from": _adm_ef.isoformat(), "to": _adm_et.isoformat(), "reason": _adm_er.strip()}]
+                                    st.session_state[_adm_ext_key] = _adm_exts
+                                    st.success(f"✅ Extension added")
+                                    st.rerun()
+                                else: st.error("Complete all three fields.")
+
+                        if _adm_exts:
+                            for _ei, _ex in enumerate(_adm_exts):
+                                try:
+                                    _c1, _c2 = st.columns([5, 1])
+                                    with _c1:
+                                        st.markdown(f"📌 **{datetime.fromisoformat(_ex['from']).strftime('%-d %b %Y')} – {datetime.fromisoformat(_ex['to']).strftime('%-d %b %Y')}** — {_ex['reason']}")
+                                    with _c2:
+                                        if st.button("❌", key=f"rm_ext_{student['id']}_{_ei}"):
+                                            st.session_state[_adm_ext_key] = [e for i, e in enumerate(_adm_exts) if i != _ei]
+                                            st.rerun()
+                                except: pass
 
     with tab2:
         st.markdown("### 📦 Archived Students")
