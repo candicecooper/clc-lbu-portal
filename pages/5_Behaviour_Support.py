@@ -2767,22 +2767,50 @@ def render_student_analysis_page():
     st.plotly_chart(fig1, use_container_width=True)
     # ── Daily frequency insight ───────────────────────────────────────────
     if not full_df.empty:
-        _fi_total_days = (full_df["date_parsed"].max() - full_df["date_parsed"].min()).days + 1
+        _fi_total_days  = (full_df["date_parsed"].max() - full_df["date_parsed"].min()).days + 1
         _fi_incident_days = full_df["date_parsed"].dt.date.nunique()
-        _fi_zero_days = _fi_total_days - _fi_incident_days
-        _fi_max_day = full_df.groupby(full_df["date_parsed"].dt.date).size().max()
+        _fi_zero_days   = _fi_total_days - _fi_incident_days
+        _fi_day_counts  = full_df.groupby(full_df["date_parsed"].dt.date).size()
+        _fi_max_day     = int(_fi_day_counts.max())
         _fi_avg_per_day = len(full_df) / max(_fi_incident_days, 1)
+        _fi_high_days   = int((_fi_day_counts >= 3).sum())
+        # Identify any consecutive runs of 2+ incident days
+        _fi_dates_sorted = sorted(_fi_day_counts.index)
+        _fi_consec = 0
+        if len(_fi_dates_sorted) >= 2:
+            import datetime as _fdt
+            for _dx in range(1, len(_fi_dates_sorted)):
+                if (_fi_dates_sorted[_dx] - _fi_dates_sorted[_dx-1]).days == 1:
+                    _fi_consec += 1
+        _fi_insight = (
+            f"<b>{_fi_incident_days} of {_fi_total_days} school days</b> had at least one incident "
+            f"({_fi_zero_days} day(s) incident-free). "
+            f"When incidents occurred, the average was <b>{_fi_avg_per_day:.1f} per day</b> "
+            f"(highest single day: {_fi_max_day}). "
+        )
+        if _fi_high_days >= 2:
+            _fi_insight += (
+                f"<b>{_fi_high_days} day(s) had 3 or more incidents</b> — these are high-demand days "
+                "that warrant retrospective review: what was different about the environment, "
+                "staffing, timetable, or demands on those days? "
+            )
+        if _fi_consec >= 2:
+            _fi_insight += (
+                f"There are <b>{_fi_consec} instance(s) of consecutive incident days</b>. "
+                "Consecutive high-incident days are a significant indicator — they suggest the student "
+                "did not have sufficient recovery time between events, or that a systemic stressor "
+                "(e.g. a transition, staffing change, or curriculum demand) was sustained across multiple days. "
+                "Proactive regulation support at the start of each day is strongly indicated. "
+            )
+        _fi_insight += (
+            f"Incident-free days ({_fi_zero_days}) are equally important data — "
+            "what proactive conditions, routines, or environmental factors were in place on those days? "
+            "Replicating those conditions on high-risk days is one of the most effective preventive strategies."
+        )
         st.markdown(
-            f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;border-radius:6px;"
-            f"padding:.65rem 1rem;margin:.4rem 0;font-size:.84rem;color:#1e293b;'>"
-            f"<b>📊 What this shows:</b> Across the data period, incidents occurred on "
-            f"<b>{_fi_incident_days} of {_fi_total_days} school days</b> "
-            f"({_fi_zero_days} day(s) with no incidents recorded). "
-            f"On days where incidents did occur, there were on average <b>{_fi_avg_per_day:.1f} per day</b> "
-            f"(peak: {_fi_max_day}). "
-            + ("Clusters of consecutive incident days may indicate periods of elevated stress, "
-               "transitions, or environmental changes worth investigating." if _fi_incident_days > 3
-               else "Limited data — continue logging to identify patterns.") + "</div>",
+            f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;border-radius:8px;"
+            f"padding:.75rem 1.1rem;margin:.5rem 0;font-size:.84rem;color:#1e293b;line-height:1.65;'>"
+            f"<b>📊 Understanding this chart:</b><br>{_fi_insight}</div>",
             unsafe_allow_html=True
         )
     if not quick_only_df.empty and not crit_only_df.empty:
@@ -2877,23 +2905,52 @@ def render_student_analysis_page():
             )
             st.plotly_chart(fig_a1, use_container_width=True)
             if all_behaviours:
-                _pa_top = all_behaviours[0]
-                _pa_top_n = total_beh_counts[0]
+                _pa_top     = all_behaviours[0]
+                _pa_top_n   = total_beh_counts[0]
                 _pa_top_pct = int(_pa_top_n / _n_total * 100) if _n_total else 0
-                _pa_crit_n = crit_beh_counts[0]
+                _pa_crit_n  = crit_beh_counts[0]
+                _pa_crit_pct = int(_pa_crit_n / _pa_top_n * 100) if _pa_top_n else 0
+                _pa_n_types = len(all_behaviours)
+                _pa_insight = (
+                    f"The primary behaviour is <b>{get_clinical_behaviour(_pa_top)}</b>, "
+                    f"accounting for <b>{_pa_top_n} of {_n_total} incidents ({_pa_top_pct}%)</b>. "
+                )
+                if _pa_crit_n > 0:
+                    _pa_insight += (
+                        f"Of these, <b>{_pa_crit_n} ({_pa_crit_pct}%) escalated to a critical incident (ABCH form). </b>"
+                        "Escalation from this behaviour warrants careful review of the antecedent chain — "
+                        "what specific conditions or sequences led to the most severe episodes? "
+                    )
+                else:
+                    _pa_insight += (
+                        "No incidents involving this behaviour have escalated to critical level — "
+                        "current responses appear to be containing escalation effectively. "
+                    )
+                if _pa_n_types >= 4:
+                    _pa_insight += (
+                        f"<b>{_pa_n_types} distinct behaviour types</b> are present across the data. "
+                        "A wide range of behaviour types typically indicates a broad, pervasive stress response — "
+                        "the student is communicating distress through multiple channels rather than a single "
+                        "specific function. This suggests that foundational Body domain regulation supports "
+                        "(sensory regulation, movement breaks, predictable routines) should be the primary focus, "
+                        "rather than behaviour-by-behaviour intervention. "
+                    )
+                elif _pa_n_types <= 2:
+                    _pa_insight += (
+                        "A <b>narrow behaviour profile</b> (1–2 types) suggests a specific, consistent function — "
+                        "the student is using a predictable response to communicate a particular unmet need. "
+                        "This is a positive indicator for targeted functional intervention: "
+                        "identify the function, teach an alternative, and pre-empt the trigger. "
+                    )
+                _pa_insight += (
+                    "The proportion of blue (regular) to red (critical) bars shows how often each behaviour "
+                    "remains in the Coping zone versus escalating to a more significant episode. "
+                    "Behaviours with a high red proportion should be the focus of immediate antecedent intervention."
+                )
                 st.markdown(
-                    f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;"
-                    f"border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
-                    f"<b>📊 What this shows:</b> "
-                    f"The most frequently occurring behaviour is <b>{get_clinical_behaviour(_pa_top)}</b> "
-                    f"({_pa_top_n} incidents, {_pa_top_pct}% of total). "
-                    + (f"Of these, {_pa_crit_n} escalated to a critical incident — "
-                       f"a rate of {int(_pa_crit_n/_pa_top_n*100)}%. "
-                       if _pa_crit_n > 0 else "") +
-                    ("Multiple behaviour types present suggests a broad stress response pattern "
-                     "rather than a single function." if len(all_behaviours) >= 4
-                     else "Focus intervention on the primary behaviour type identified.") +
-                    "</div>",
+                    f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;border-radius:8px;"
+                    f"padding:.75rem 1.1rem;margin:.5rem 0;font-size:.84rem;color:#1e293b;line-height:1.65;'>"
+                    f"<b>📊 Understanding this chart:</b><br>{_pa_insight}</div>",
                     unsafe_allow_html=True
                 )
         with _pa2:
@@ -3022,26 +3079,49 @@ def render_student_analysis_page():
         )
         st.plotly_chart(fig_b, use_container_width=True)
         if all_behaviours:
-            _pb_coping_n = sum(
-                sum(_sev_matrix[b][sv] for sv in [1,2,3]) for b in all_behaviours
-            )
-            _pb_outside_n = sum(
-                sum(_sev_matrix[b][sv] for sv in [4,5]) for b in all_behaviours
-            )
+            _pb_coping_n  = sum(sum(_sev_matrix[b][sv] for sv in [1,2,3]) for b in all_behaviours)
+            _pb_outside_n = sum(sum(_sev_matrix[b][sv] for sv in [4,5]) for b in all_behaviours)
             _pb_coping_pct = int(_pb_coping_n / _n_total * 100) if _n_total else 0
+            _pb_l1_n = sum(_sev_matrix[b][1] for b in all_behaviours)
+            _pb_l2_n = sum(_sev_matrix[b][2] for b in all_behaviours)
+            _pb_l3_n = sum(_sev_matrix[b][3] for b in all_behaviours)
+            _pb_l4_n = sum(_sev_matrix[b][4] for b in all_behaviours)
+            _pb_l5_n = sum(_sev_matrix[b][5] for b in all_behaviours)
+            _pb_insight = (
+                f"<b>{_pb_coping_pct}% of all incidents ({_pb_coping_n}/{_n_total}) occurred within the Coping zone</b> "
+                f"(L1–L3: low-level {_pb_l1_n}, escalating {_pb_l2_n}, approaching edge {_pb_l3_n}). "
+                "This is clinically significant — it means the student is exhibiting behaviour as a way of "
+                "managing or communicating distress, rather than being fully dysregulated. "
+                "The Coping zone is where staff intervention is most effective: "
+                "offering choices, reducing demand, co-regulating, and providing predictable structure "
+                "can prevent further escalation. "
+            )
+            if _pb_outside_n > 0:
+                _pb_insight += (
+                    f"<b>{_pb_outside_n} incident(s) ({100-_pb_coping_pct}%) reached the outside-window zone</b> "
+                    f"(serious {_pb_l4_n}, crisis {_pb_l5_n}). "
+                    "These episodes indicate the student moved beyond coping into significant dysregulation. "
+                    "Post-incident repair — re-establishing relational safety before returning to learning — "
+                    "is essential after every outside-window episode. "
+                    "Review what proactive conditions were absent on those days and what de-escalation "
+                    "strategies were applied — this informs both the safety plan and the hypothesis. "
+                )
+            else:
+                _pb_insight += (
+                    "<b>No incidents reached the outside-window zone</b> — a significant positive indicator. "
+                    "All logged behaviour remained within the Coping zone, meaning the student "
+                    "was always attempting to manage, and current staff responses are successfully "
+                    "preventing escalation to full dysregulation. "
+                )
+            _pb_insight += (
+                "The mean severity diamond markers show the average level for each behaviour type. "
+                "Where the mean approaches L3 or above, consider whether current antecedent strategies "
+                "are sufficiently proactive — the student may need wider-window supports before that behaviour emerges."
+            )
             st.markdown(
-                f"<div style='background:#f8fafc;border-left:4px solid #eab308;"
-                f"border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
-                f"<b>📊 What this shows:</b> "
-                f"<b>{_pb_coping_pct}% of incidents</b> ({_pb_coping_n}/{_n_total}) "
-                f"occurred within the Coping zone (L1–L3), meaning "
-                f"the student was attempting to manage distress rather than being fully dysregulated. "
-                + (f"The remaining {100-_pb_coping_pct}% ({_pb_outside_n} incidents) "
-                   f"reached the outside-window zone (L4–L5), indicating periods of significant "
-                   f"dysregulation that require immediate de-escalation and post-incident repair. "
-                   if _pb_outside_n > 0 else
-                   "No incidents reached the outside-window zone — all behaviour occurred within the Coping zone. ") +
-                "Interventions should be timed to the Coping zone — this is where they are most effective.</div>",
+                f"<div style='background:#f8fafc;border-left:4px solid #eab308;border-radius:8px;"
+                f"padding:.75rem 1.1rem;margin:.5rem 0;font-size:.84rem;color:#1e293b;line-height:1.65;'>"
+                f"<b>📊 Understanding this chart:</b><br>{_pb_insight}</div>",
                 unsafe_allow_html=True
             )
 
@@ -3178,11 +3258,28 @@ def render_student_analysis_page():
                 f"({", ".join(get_clinical_behaviour(r['Behaviour']) for r in _pch[:2])}). "
                 "Intervene early in the Coping zone for these behaviours.")
             if _pcm: _pcp.append(f"{len(_pcm)} behaviour(s) have medium risk — apply co-regulation consistently.")
-            if not _pch and not _pcm: _pcp.append("No high escalation risk identified — maintain current proactive strategies.")
+            if not _pch and not _pcm: _pcp.append(
+                "No behaviours currently showing elevated escalation risk — "
+                "all behaviours are remaining within the Coping zone rather than escalating to critical. "
+                "This is a positive indicator that current staff responses are containing escalation. "
+                "Maintain and document current strategies explicitly so they survive staff changes."
+            )
+            _pcp_preamble = (
+                "Escalation rate is the proportion of incidents involving a given behaviour that progressed "
+                "from regular (coping) to critical (ABCH-documented). A high rate for a specific behaviour "
+                "signals that something about how that behaviour unfolds — the environment, staff response, "
+                "or the student's internal state — is not being interrupted effectively in the Coping zone. "
+                "Sev StDev (standard deviation) tells you how variable the severity is: "
+                "a low StDev means episodes are consistently similar in intensity; "
+                "a high StDev means the student oscillates between mild and severe episodes, "
+                "which may suggest unpredictable triggers or inconsistent staff response. "
+            )
             st.markdown(
-                "<div style='background:#f8fafc;border-left:4px solid #1A7A7A;"
-                "border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
-                "<b>📊 What this shows:</b> " + " ".join(_pcp) + "</div>",
+                "<div style='background:#f8fafc;border-left:4px solid #1A7A7A;border-radius:8px;"
+                "padding:.75rem 1.1rem;margin:.5rem 0;font-size:.84rem;color:#1e293b;line-height:1.65;'>"
+                "<b>📊 Understanding this chart:</b><br>"
+                + _pcp_preamble + "<br>"
+                + " ".join(_pcp) + "</div>",
                 unsafe_allow_html=True
             )
 
@@ -3222,18 +3319,51 @@ def render_student_analysis_page():
             # D insight
             if _bsdf_rows:
                 _pd_counts = {s: sum(r[s] for r in _bsdf_rows) for s in ["Morning","Middle","Afternoon"]}
-                _pd_peak = max(_pd_counts, key=_pd_counts.get)
+                _pd_peak   = max(_pd_counts, key=_pd_counts.get)
+                _pd_low    = min(_pd_counts, key=_pd_counts.get)
                 _pd_peak_n = _pd_counts[_pd_peak]
+                _pd_low_n  = _pd_counts[_pd_low]
                 _pd_peak_pct = int(_pd_peak_n / _n_total * 100) if _n_total else 0
-                _pd_labels = {"Morning":"morning (before 11am)","Middle":"middle of day (11am–1:30pm)","Afternoon":"afternoon (after 1:30pm)"}
+                _pd_low_pct  = int(_pd_low_n  / _n_total * 100) if _n_total else 0
+                _pd_labels = {
+                    "Morning":   "morning session (before 11am)",
+                    "Middle":    "middle of the day (11am–1:30pm)",
+                    "Afternoon": "afternoon session (after 1:30pm)"
+                }
+                _pd_context = {
+                    "Morning":   "Morning peaks may reflect difficulty with the transition from home, "
+                                 "low readiness to engage, or unmet overnight/morning needs (hunger, sleep, "
+                                 "sensory dysregulation on arrival). A structured, low-demand arrival routine "
+                                 "with a trusted adult check-in is the most effective morning intervention.",
+                    "Middle":    "Middle-of-day peaks frequently reflect cumulative fatigue — the student "
+                                 "has been managing demands since arrival and their regulatory capacity is depleted. "
+                                 "Lunch and transition periods also introduce unstructured time, which can be "
+                                 "particularly challenging. A mid-day sensory break, a quiet space option, "
+                                 "or reduced demand before/after the lunch break are high-priority strategies.",
+                    "Afternoon": "Afternoon peaks often reflect end-of-day fatigue, anticipatory anxiety about "
+                                 "the transition home, or the accumulation of the day's regulatory demands. "
+                                 "A structured, predictable end-of-day routine — including a debrief, "
+                                 "a positive closure activity, and advance notice of tomorrow's schedule — "
+                                 "is recommended."
+                }
+                _pd_insight = (
+                    f"Incidents peak in the <b>{_pd_labels[_pd_peak]}</b>, "
+                    f"accounting for <b>{_pd_peak_n} of {_n_total} incidents ({_pd_peak_pct}%)</b>. "
+                    f"{_pd_context[_pd_peak]} "
+                )
+                if _pd_low_n < _pd_peak_n and _pd_low != _pd_peak:
+                    _pd_insight += (
+                        f"The lowest-frequency session is the <b>{_pd_labels[_pd_low]}</b> "
+                        f"({_pd_low_n} incidents, {_pd_low_pct}%). "
+                        "Identifying what is structurally different about this session — "
+                        "staffing, activity type, demand level, or environmental factors — "
+                        "and replicating those conditions in the peak session is one of the most effective "
+                        "preventive strategies available."
+                    )
                 st.markdown(
-                    f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;"
-                    f"border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
-                    f"<b>📊 What this shows:</b> Incidents peak during the "
-                    f"<b>{_pd_labels[_pd_peak]}</b> ({_pd_peak_pct}% of all incidents). "
-                    "This identifies the highest-risk window for proactive support. "
-                    "Consider scheduling regulation activities, check-ins, and low-demand tasks "
-                    f"just before this period begins.</div>",
+                    f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;border-radius:8px;"
+                    f"padding:.75rem 1.1rem;margin:.5rem 0;font-size:.84rem;color:#1e293b;line-height:1.65;'>"
+                    f"<b>📊 Understanding this chart:</b><br>{_pd_insight}</div>",
                     unsafe_allow_html=True
                 )
             if _n_total < 5:
@@ -3275,15 +3405,48 @@ def render_student_analysis_page():
                     if _bloc_y:
                         _pe_top_loc = _top_locs[0] if _top_locs else ""
                         _pe_top_n = max(sum(r) for r in _bloc_z) if _bloc_z else 0
+                        _pe_name = normalise_location(_pe_top_loc)
+                        _pe_advice_map = {
+                            "jp room": "Classroom environments can trigger behaviour due to academic demand, "
+                                       "seating arrangements, noise from peers, or the presence of "
+                                       "non-preferred tasks. Consider the physical layout, sensory conditions, "
+                                       "and the demand level of activities occurring when incidents happen.",
+                            "py room": "Classroom environments can trigger behaviour due to academic demand, "
+                                       "seating arrangements, noise from peers, or the presence of "
+                                       "non-preferred tasks. Consider the physical layout, sensory conditions, "
+                                       "and the demand level of activities occurring when incidents happen.",
+                            "sy room": "Classroom environments can trigger behaviour due to academic demand, "
+                                       "seating arrangements, noise from peers, or the presence of "
+                                       "non-preferred tasks. Consider the physical layout, sensory conditions, "
+                                       "and the demand level of activities occurring when incidents happen.",
+                            "yard":    "Yard and playground incidents often reflect unstructured time, "
+                                       "peer conflict, sensory overload from noise and activity, "
+                                       "and reduced adult proximity. Increased supervision ratios, "
+                                       "structured yard activities, and a clear opt-out space are recommended.",
+                            "kitchen": "Kitchen incidents may reflect access to food as a motivator, "
+                                       "transitions in and out of the space, or sensory factors. "
+                                       "Review routines around meal/snack times and ensure clear, "
+                                       "consistent expectations are in place.",
+                            "toilets": "Incidents in or near toilets may indicate the student uses "
+                                       "this space as an escape route, or that transitions to/from "
+                                       "the toilets are a trigger. Review supervision and transition routines.",
+                        }
+                        _pe_advice = next(
+                            (v for k, v in _pe_advice_map.items() if k in _pe_name.lower()),
+                            "Review the specific environmental conditions in this location — "
+                            "consider noise, crowding, demand level, supervision, and transition patterns."
+                        )
                         st.markdown(
-                            f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;"
-                            f"border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
-                            f"<b>📊 What this shows:</b> "
-                            f"The highest-frequency incident location is <b>{normalise_location(_pe_top_loc)}</b>. "
-                            "Environmental modification, increased supervision, and pre-emptive "
-                            "regulation strategies in this space are the highest-priority prevention actions. "
-                            "Behaviour that clusters in one location often points to specific "
-                            "environmental triggers (crowding, noise, transitions in/out).</div>",
+                            f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;border-radius:8px;"
+                            f"padding:.75rem 1.1rem;margin:.5rem 0;font-size:.84rem;color:#1e293b;line-height:1.65;'>"
+                            f"<b>📊 Understanding this chart:</b><br>"
+                            f"The highest-frequency incident location is <b>{_pe_name}</b>. "
+                            "Location clustering is an important signal — it tells you where environmental "
+                            "modification will have the most direct preventive impact. "
+                            f"{_pe_advice} "
+                            "Also consider: does this location coincide with the peak time of day? "
+                            "If so, the combination of place and time creates a compounding risk window "
+                            "that warrants an immediate, targeted proactive plan.</div>",
                             unsafe_allow_html=True
                         )
                     if _n_total < 5:
@@ -3397,14 +3560,20 @@ def render_student_analysis_page():
                 )
                 st.plotly_chart(fig_g, use_container_width=True)
                 st.markdown(
-                    "<div style='background:#f8fafc;border-left:4px solid #1A7A7A;"
-                    "border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
-                    "<b>📊 What this shows:</b> "
-                    "Increasing trend lines indicate a behaviour is becoming more frequent — "
-                    "this signals that current supports may need review or intensification. "
-                    "Declining or stable trends are a positive indicator that strategies are having effect. "
-                    "Diamond markers indicate only one week of data for that behaviour — "
-                    "more observations are needed before conclusions can be drawn.</div>",
+                    "<div style='background:#f8fafc;border-left:4px solid #1A7A7A;border-radius:8px;"
+                    "padding:.75rem 1.1rem;margin:.5rem 0;font-size:.84rem;color:#1e293b;line-height:1.65;'>"
+                    "<b>📊 Understanding this chart:</b><br>"
+                    "This chart shows whether each behaviour is <b>increasing, stable, or reducing</b> over time. "
+                    "An <b>upward trend</b> is the most important finding — it means a behaviour is becoming more frequent, "
+                    "signalling that current supports are insufficient and an urgent review is warranted. "
+                    "Ask: have there been any changes in staffing, timetable, or environmental conditions "
+                    "that coincide with the increase? "
+                    "A <b>downward trend</b> is a positive indicator — current strategies are having effect. "
+                    "Document what has changed and ensure those conditions are sustained. "
+                    "A <b>flat trend</b> suggests the current level of support is maintaining but not reducing the behaviour — "
+                    "consider whether a strategy intensification or a new approach is needed. "
+                    "Diamond markers indicate only a single week of data — treat these as preliminary observations, "
+                    "not conclusions. Continue logging to build a trend line.</div>",
                     unsafe_allow_html=True
                 )
             full_df.drop(columns=["_week"], errors="ignore", inplace=True)
@@ -3456,16 +3625,37 @@ def render_student_analysis_page():
                 st.caption("🔴 Red = 15+ min  ·  🟡 Amber = 8–14 min  ·  🔵 Blue = under 8 min  ·  ⬜ Grey = insufficient records")
                 if not _dur_agg.empty:
                     _ph_longest = _dur_agg.iloc[-1]
+                    _ph_beh_name = get_clinical_behaviour(_ph_longest["behaviour_type"])
+                    _ph_avg      = _ph_longest["avg"]
+                    _ph_tier     = "long" if _ph_avg >= 15 else "medium" if _ph_avg >= 8 else "short"
+                    _ph_tier_text = {
+                        "long":   f"An average of {_ph_avg:.1f} minutes is a <b>long-duration episode</b>. "
+                                  "Long-duration incidents indicate the student has moved significantly "
+                                  "outside their window and requires substantial time to return to a state "
+                                  "where they can re-engage. Post-incident, do not rush back to learning — "
+                                  "prioritise relational repair, offer a low-demand transition activity, "
+                                  "and allow recovery time proportionate to the episode length. "
+                                  "For episodes over 15 minutes, a structured re-entry protocol is recommended.",
+                        "medium": f"An average of {_ph_avg:.1f} minutes is a <b>medium-duration episode</b>. "
+                                  "The student is taking a moderate amount of time to return to the Coping zone. "
+                                  "De-escalation strategies should be applied early and consistently — "
+                                  "the goal is to shorten this window through earlier intervention, "
+                                  "not to wait out the episode.",
+                        "short":  f"An average of {_ph_avg:.1f} minutes is a <b>short-duration episode</b>. "
+                                  "Brief episodes suggest the student recovers relatively quickly once triggered. "
+                                  "This is a protective factor — focus on preventing the trigger rather than "
+                                  "managing the episode itself.",
+                    }
                     st.markdown(
-                        f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;"
-                        f"border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
-                        f"<b>📊 What this shows:</b> "
-                        f"Longer-duration incidents indicate more entrenched escalation — "
-                        f"the student takes longer to return to the Coping zone. "
-                        f"<b>{_ph_longest['behaviour_type']}</b> has the longest average duration "
-                        f"({_ph_longest['avg']:.1f} min), suggesting this behaviour requires "
-                        "the most intensive de-escalation support and the longest recovery time "
-                        "before re-engaging with learning tasks.</div>",
+                        f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;border-radius:8px;"
+                        f"padding:.75rem 1.1rem;margin:.5rem 0;font-size:.84rem;color:#1e293b;line-height:1.65;'>"
+                        f"<b>📊 Understanding this chart:</b><br>"
+                        "Incident duration shows how long the student remains in an escalated state — "
+                        "this directly informs recovery time planning and post-incident protocols. "
+                        "Longer durations mean the student's nervous system takes longer to return to baseline, "
+                        "which means re-engagement with learning must be delayed accordingly. "
+                        f"The longest-duration behaviour is <b>{_ph_beh_name}</b>. "
+                        + _ph_tier_text[_ph_tier] + "</div>",
                         unsafe_allow_html=True
                     )
 
@@ -3531,25 +3721,124 @@ def render_student_analysis_page():
     st.markdown("---")
 
     st.markdown("### 🔍 Trigger Analysis")
-    st.markdown(
-        "<div style='background:#f8fafc;border-left:4px solid #1A7A7A;"
-        "border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;margin-bottom:.5rem;'>"
-        "<b>📊 What this shows:</b> "
-        "The antecedents most commonly recorded immediately before an incident. "
-        "The most frequent trigger is the highest-leverage point for intervention — "
-        "pre-empting what happens before the behaviour is more effective than responding after. "
-        "Triggers that frequently precede critical incidents require immediate proactive planning.</div>",
-        unsafe_allow_html=True
-    )
+    if all_triggers:
+        _ta_top_raw = all_triggers[0]
+        _ta_top_lbl = _trig_display[0] if _trig_display else _ta_top_raw
+        _ta_top_n   = quick_ant_counts[0] + crit_ant_counts[0] if quick_ant_counts else 0
+        _ta_top_pct = int(_ta_top_n / len(full_df) * 100) if len(full_df) else 0
+        _ta_crit_n  = crit_ant_counts[0] if crit_ant_counts else 0
+        # Classify trigger category
+        _ta_cat = "peer" if "peer" in _ta_top_raw.lower() else \
+                  "transition" if "transition" in _ta_top_raw.lower() else \
+                  "instruction" if "instruction" in _ta_top_raw.lower() or "demand" in _ta_top_raw.lower() else \
+                  "sensory" if "sensory" in _ta_top_raw.lower() or "noise" in _ta_top_raw.lower() else \
+                  "engagement" if "engagement" in _ta_top_raw.lower() or "wait" in _ta_top_raw.lower() else "other"
+        _ta_cat_advice = {
+            "peer":       "Peer-related triggers indicate the student struggles to regulate in social contexts. "
+                          "Structured, supervised peer interactions with explicit social scripts, "
+                          "reduced competition, and immediate adult support are recommended. "
+                          "Avoid unstructured peer time during high-risk periods.",
+            "transition": "Transition triggers indicate difficulty managing changes in activity, "
+                          "environment, or expectation. Predictive warnings (5-minute, 2-minute), "
+                          "visual schedules, transition objects, and a consistent transition routine "
+                          "reduce the cognitive load of change.",
+            "instruction":"Instruction/demand triggers suggest the behaviour serves an escape function — "
+                          "the student is communicating that the demand feels unmanageable. "
+                          "Pre-teaching content, offering choice within the task, and starting at "
+                          "mastery level before increasing demand are high-priority strategies.",
+            "sensory":    "Sensory triggers indicate the student's nervous system is being overloaded "
+                          "before the behaviour occurs. A sensory audit of the environment — "
+                          "noise, lighting, crowding, temperature — and proactive sensory breaks "
+                          "are the most direct preventive intervention.",
+            "engagement": "Engagement triggers (waiting, non-preferred tasks, interrupted activities) "
+                          "suggest the student has difficulty with delayed gratification or task demand. "
+                          "Break tasks into smaller steps, build in frequent success moments, "
+                          "and use visual timers to reduce the ambiguity of waiting.",
+            "other":      "Investigate the specific context of this trigger type to identify "
+                          "the most appropriate antecedent strategy."
+        }
+        _ta_insight = (
+            f"The most frequent trigger is <b>{_ta_top_lbl}</b>, "
+            f"preceding <b>{_ta_top_n} of {len(full_df)} incidents ({_ta_top_pct}%)</b>. "
+            + (f"Of these, <b>{_ta_crit_n} resulted in a critical incident</b> — "
+               "this trigger–critical pairing requires immediate proactive planning. "
+               if _ta_crit_n > 0 else "") +
+            "<br><br><b>Intervention principle:</b> "
+            "Antecedent-stage intervention — modifying what happens <i>before</i> the trigger — "
+            "is consistently more effective than any consequence-based response. "
+            "The goal is to reduce or modify the trigger itself, or build the student's capacity "
+            "to tolerate it. <br><br>"
+            f"<b>Specific guidance for this trigger type:</b> {_ta_cat_advice.get(_ta_cat, _ta_cat_advice["other"])}"
+        )
+        st.markdown(
+            f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;border-radius:8px;"
+            f"padding:.75rem 1.1rem;margin-bottom:.6rem;font-size:.84rem;color:#1e293b;line-height:1.65;'>"
+            f"<b>📊 Understanding this chart:</b><br>{_ta_insight}</div>",
+            unsafe_allow_html=True
+        )
     all_triggers = full_df["antecedent"].value_counts().head(6).index.tolist()
     # Strip section headers and truncate to clinical label only (remove free-text names)
+    # Keyword map: free-text ABCH antecedents → canonical clinical trigger labels
+    _TRIGGER_KW_MAP = [
+        (["noise","loud","sound","auditory","noisy","making noise"],
+         "Sensory — noise / auditory input"),
+        (["crowd","crowded","too many","busy"],
+         "Sensory — crowded environment"),
+        (["hungry","food","thirsty","meal","snack","refused food","wouldn't eat"],
+         "Sensory — hunger / food refusal"),
+        (["medication","no med","without med"],
+         "Sensory — medication not taken"),
+        (["movement break","couldn't move","unable to move","no break"],
+         "Sensory — unable to take movement break"),
+        (["bright","light","glare"],
+         "Sensory — bright/visual environment"),
+        (["peer conflict","peer interaction","conflict with peer","argument with",
+           "disagreement with","another student"],
+         "Peer — conflict / interaction"),
+        (["losing","competition","lost the game","didn't win"],
+         "Peer — competition / losing"),
+        (["instruction","demand","told to","asked to","required to","refused to clean",
+           "refused to help","refused to do","wouldn't follow"],
+         "Instructions — following adult direction"),
+        (["transition","change","moved to","from one","different activity"],
+         "Transition — activity or environment change"),
+        (["non-preferred","didn't want to","not wanting to","off device","device"],
+         "Transition — from preferred to non-preferred activity"),
+        (["wait","waiting","had to wait","queue"],
+         "Engagement — having to wait"),
+        (["difficult task","hard task","too hard","can't do","maths","literacy","reading"],
+         "Engagement — difficult or non-preferred task"),
+        (["independent","alone","working by himself","working by herself"],
+         "Engagement — working independently"),
+        (["injustice","unfair","not fair","perceived"],
+         "Other — perceived injustice"),
+        (["unstructured","free time","no structure","playground"],
+         "Other — unstructured time"),
+        (["attention","ignored","staff not attending","shifted attention"],
+         "Other — staff attention shifted"),
+        (["trt","relief teacher","new teacher","substitute"],
+         "Other — relief / unfamiliar teacher"),
+    ]
+
     def _clean_trigger_label(t):
+        """Map an antecedent to a clinical label — never show student names or raw narrative."""
         if not t or str(t).startswith("---"): return None
         t = str(t).strip()
-        # If it contains " - " it is a structured antecedent — keep only after the dash
-        if " - " in t: t = t[t.find(" - ")+3:]
-        # Truncate long free-text (from ABCH narratives)
-        if len(t) > 70: t = t[:70] + "…"
+        # Structured antecedent (e.g. "Peer - peer conflict/interaction") — strip category prefix
+        if " - " in t:
+            clean = t[t.find(" - ")+3:]
+            # Still check length — some structured ones are fine
+            if len(clean) <= 70:
+                return clean
+            t = clean  # fall through to keyword map for long ones
+        # Free-text (ABCH narrative) — map via keywords, never show raw text
+        t_low = t.lower()
+        for keywords, label in _TRIGGER_KW_MAP:
+            if any(kw in t_low for kw in keywords):
+                return label
+        # Last resort: if > 40 chars it almost certainly contains names or narrative
+        if len(t) > 40:
+            return "Other — context recorded in incident notes"
         return t
     _trig_labels = [_clean_trigger_label(a) for a in all_triggers]
     _trig_pairs  = [(a, lbl) for a, lbl in zip(all_triggers, _trig_labels) if lbl]
@@ -3645,23 +3934,55 @@ def render_student_analysis_page():
         col1, col2 = st.columns(2)
         with col1: st.metric("Early period average", f"{early_avg:.1f}")
         with col2: st.metric("Recent period average", f"{recent_avg:.1f}")
-        _traj_dir = "reducing" if recent_avg < early_avg else "stable" if recent_avg == early_avg else "increasing"
+        _traj_dir    = "reducing" if recent_avg < early_avg else "stable" if recent_avg == early_avg else "increasing"
         _traj_colour = "#16a34a" if _traj_dir == "reducing" else "#64748b" if _traj_dir == "stable" else "#dc2626"
+        _traj_diff   = abs(round(recent_avg - early_avg, 1))
+        _traj_advice = {
+            "reducing": (
+                f"Average severity has <b>reduced by {_traj_diff} levels</b> across the data period. "
+                "This is a meaningful positive indicator — the student is experiencing less intense "
+                "dysregulation episodes over time. "
+                "This may reflect improved regulatory capacity, more effective proactive supports, "
+                "a stronger relational foundation with key staff, or environmental improvements. "
+                "Document specifically what has changed and ensure those conditions are deliberately "
+                "maintained — gains in regulation can reverse quickly if supports are reduced or "
+                "staff relationships change. "
+                "If severity has reduced but frequency remains the same, the student is still "
+                "struggling but managing better — sustain current supports and continue monitoring."
+            ),
+            "stable": (
+                f"Average severity has remained <b>stable</b> across the data period ({early_avg:.1f}). "
+                "Stability indicates current supports are maintaining the student within a consistent "
+                "level of functioning — this is not a deterioration, but it is also not a recovery. "
+                "Consider whether the current support intensity matches the student's needs, "
+                "or whether a targeted strategy shift is required to move the trajectory downward. "
+                "A case review, updated hypothesis, or consultation with an external specialist "
+                "may be appropriate if the pattern has been stable across multiple terms."
+            ),
+            "increasing": (
+                f"Average severity has <b>increased by {_traj_diff} levels</b> across the data period. "
+                "This is the most significant finding in this analysis — it indicates the student's "
+                "episodes are becoming more intense over time, which signals that current supports "
+                "are insufficient and escalation pathways need urgent review. "
+                "Recommended immediate actions: schedule a case conference with all key staff, "
+                "update the safety plan, conduct a sensory and environmental audit, "
+                "review staffing consistency and relational supports, "
+                "and consider referral for additional specialist assessment. "
+                "Also check whether any external life stressors (family changes, transitions, "
+                "health factors) are contributing to the increase."
+            )
+        }
         st.markdown(
-            f"<div style='background:#f8fafc;border-left:4px solid {_traj_colour};"
-            f"border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
-            f"<b>📊 What this shows:</b> "
-            f"Average severity is <b>{_traj_dir}</b> over the observed period. "
-            + ("This is a positive indicator — the student may be building capacity to cope, "
-               "or current strategies are having effect. Continue monitoring. "
-               if _traj_dir == "reducing" else
-               "Severity is holding steady — review whether current supports are maintaining "
-               "the student in the coping zone or whether intensity should increase. "
-               if _traj_dir == "stable" else
-               "Increasing severity warrants urgent review of current supports — "
-               "consider a case conference, updated safety plan, and sensory or environmental audit. ") +
-            "Points in the red zone (L4–L5) indicate the student moved outside their window "
-            "and require immediate post-incident repair before re-engaging with learning.</div>",
+            f"<div style='background:#f8fafc;border-left:4px solid {_traj_colour};border-radius:8px;"
+            f"padding:.75rem 1.1rem;margin:.5rem 0;font-size:.84rem;color:#1e293b;line-height:1.65;'>"
+            f"<b>📊 Understanding this chart:</b><br>"
+            f"{_traj_advice[_traj_dir]}<br><br>"
+            "<b>Reading the chart:</b> Each dot represents one incident, positioned on the date it occurred "
+            "and the severity level recorded. The dashed trend line shows the overall direction. "
+            "Yellow zone = Coping (L1–L3, behaviour present but student managing). "
+            "Red zone = Outside window (L4–L5, significant dysregulation). "
+            "Any dot in the red zone marks an episode that required intensive de-escalation "
+            "and post-incident relational repair before the student could re-engage with learning.</div>",
             unsafe_allow_html=True
         )
         if recent_avg < early_avg:
@@ -3793,8 +4114,12 @@ def render_student_analysis_page():
             + (f"<b>{_dow_low}</b> has the fewest — consider what differs about that day's "
                "structure, staffing, or routine and replicate those conditions on other days. "
                if _dow_low and _dow_low != _dow_peak else "") +
-            "Day-of-week patterns can indicate timetable triggers such as specific subjects, "
-            "staff changes, or transitions on that day.</div>",
+            "Day-of-week patterns often point to timetable-specific triggers — "
+            "a particular subject, a staff change, a scheduled transition, or a specific peer group "
+            "on that day. The recommended action is to review the timetable for the high-incident day: "
+            "what subjects, staff, peers, or transitions are unique to that day? "
+            "Conversely, if one day consistently has no or few incidents, identify what is different "
+            "about that day's structure and replicate it.</div>",
             unsafe_allow_html=True
         )
     else:
