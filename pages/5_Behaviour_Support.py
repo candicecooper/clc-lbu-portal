@@ -3093,6 +3093,31 @@ def render_student_analysis_page():
                     yshift=4
                 )
 
+    # Overlay absent day markers on the chart
+    _absent_dates_chart = st.session_state.get(f"absent_dates_{student_id}", [])
+    if _absent_dates_chart and not _all_daily.empty:
+        import datetime as _acdt
+        for _abs_d in _absent_dates_chart:
+            try:
+                _abs_date_obj = _acdt.date.fromisoformat(_abs_d)
+                _abs_lbl = _abs_date_obj.strftime("%a %-d %b")
+                if _abs_lbl in label_order:
+                    fig1.add_annotation(
+                        x=_abs_lbl, y=0.3,
+                        text="absent",
+                        showarrow=False,
+                        font=dict(size=9, color="#94a3b8"),
+                        textangle=-90,
+                        yanchor="bottom",
+                    )
+                    fig1.add_vline(
+                        x=label_order.index(_abs_lbl),
+                        line_dash="dot", line_color="#cbd5e1",
+                        line_width=1.5, opacity=0.7
+                    )
+            except Exception:
+                pass
+
     fig1.update_layout(
         height=380, barmode="stack",
         xaxis_title="<b>Date (school days only)</b>", yaxis_title="<b>Incident Count</b>",
@@ -3159,6 +3184,157 @@ def render_student_analysis_page():
             f"<b>📊 Understanding this chart:</b><br>{_fi_insight}</div>",
             unsafe_allow_html=True
         )
+    # ══ Absence–Incident Pattern Analysis ═══════════════════════════════════
+    _absent_dates_analysis = st.session_state.get(f"absent_dates_{student_id}", [])
+    if _absent_dates_analysis and not full_df.empty:
+        import datetime as _aadt
+        _abs_date_objs = set()
+        for _d in _absent_dates_analysis:
+            try: _abs_date_objs.add(_aadt.date.fromisoformat(_d))
+            except: pass
+
+        _inc_dates_sorted = sorted(full_df["date_parsed"].dt.date.tolist())
+        _all_dates_sorted = sorted(set(_inc_dates_sorted) | _abs_date_objs)
+
+        # ── Pattern 1: Incidents on return-to-school day after absence ──────
+        _return_incidents = []  # (return_date, n_incidents, prev_abs_dates)
+        for _dt in sorted(set(_inc_dates_sorted)):
+            # Check if yesterday or recent prior school days were absences
+            _prev = _dt - _aadt.timedelta(days=1)
+            _prev2 = _dt - _aadt.timedelta(days=2)
+            _prev3 = _dt - _aadt.timedelta(days=3)
+            _prior_abs = [d for d in [_prev, _prev2, _prev3] if d in _abs_date_objs]
+            if _prior_abs:
+                _n = len([d for d in _inc_dates_sorted if d == _dt])
+                _return_incidents.append((_dt, _n, _prior_abs))
+
+        # ── Pattern 2: Absence immediately after a high-severity incident ───
+        _post_escalation_abs = []  # (incident_date, severity, abs_dates_after)
+        _high_sev_dates = full_df[full_df["severity"] >= 4]["date_parsed"].dt.date.tolist()
+        for _hd in _high_sev_dates:
+            _day_after = _hd + _aadt.timedelta(days=1)
+            _two_after = _hd + _aadt.timedelta(days=2)
+            _abs_after = [d for d in [_day_after, _two_after] if d in _abs_date_objs]
+            if _abs_after:
+                _sev = int(full_df[full_df["date_parsed"].dt.date == _hd]["severity"].max())
+                _post_escalation_abs.append((_hd, _sev, _abs_after))
+
+        # ── Pattern 3: Build-up after absence (escalation within 3 days of return) ─
+        _buildup_after_abs = []  # (abs_end_date, first_incident_after, days_gap)
+        _abs_sorted = sorted(_abs_date_objs)
+        for _abs_d in _abs_sorted:
+            # Find first incident within 4 school days of this absence
+            for _gap in range(1, 5):
+                _candidate = _abs_d + _aadt.timedelta(days=_gap)
+                if _candidate in set(_inc_dates_sorted):
+                    _n_on_return = len([d for d in _inc_dates_sorted if d == _candidate])
+                    _buildup_after_abs.append((_abs_d, _candidate, _gap, _n_on_return))
+                    break
+
+        # ── Display analysis if any patterns found ───────────────────────────
+        if _return_incidents or _post_escalation_abs or _buildup_after_abs:
+            st.markdown("### 📅 Absence & Return-to-School Pattern Analysis")
+            st.caption(
+                "This section cross-references recorded absence dates with incident data to identify "
+                "patterns that are clinically important: incidents on return-to-school days, "
+                "absences after escalations, and incident build-up following time away."
+            )
+
+            if _return_incidents:
+                _ri_total = sum(r[1] for r in _return_incidents)
+                _ri_pct = int(_ri_total / len(full_df) * 100) if len(full_df) else 0
+                st.markdown(
+                    f"<div style='background:#fff7ed;border-left:4px solid #f97316;border-radius:8px;"
+                    f"padding:.75rem 1.1rem;margin:.4rem 0;font-size:.84rem;color:#1e293b;line-height:1.65;'>"
+                    f"<b>🔄 Return-to-school incidents:</b> "
+                    f"<b>{len(_return_incidents)} return day(s)</b> had incidents within 1–3 days of an absence. "
+                    f"These account for <b>{_ri_total} incidents ({_ri_pct}% of total)</b>. "
+                    "<br><br>"
+                    "Return-to-school days are high-risk for students with disrupted regulatory systems. "
+                    "After any period away — even a single day — the student must re-establish "
+                    "familiarity with the environment, reconnect with staff, and rebuild tolerance for "
+                    "the demands of the school day. This re-regulation period is a significant vulnerability window. "
+                    "<br><br>"
+                    "<b>Recommended proactive strategies for return days:</b> "
+                    "Greet the student at the gate with a known, trusted adult. "
+                    "Begin with a low-demand, highly predictable activity. "
+                    "Delay any assessment, group work, or non-preferred task for at least the first hour. "
+                    "Build in an explicit check-in before each session and provide a visual overview of the day."
+                    "</div>",
+                    unsafe_allow_html=True
+                )
+                with st.expander("See return-day details", expanded=False):
+                    for _rt, _rn, _ra in _return_incidents:
+                        st.markdown(f"• **{_rt.strftime('%a %-d %b')}** — {_rn} incident(s) "
+                                    f"(absent on: {", ".join(d.strftime('%-d %b') for d in sorted(_ra))})")
+
+            if _post_escalation_abs:
+                st.markdown(
+                    f"<div style='background:#fef2f2;border-left:4px solid #ef4444;border-radius:8px;"
+                    f"padding:.75rem 1.1rem;margin:.4rem 0;font-size:.84rem;color:#1e293b;line-height:1.65;'>"
+                    f"<b>⚠️ Absences following escalation:</b> "
+                    f"<b>{len(_post_escalation_abs)} instance(s)</b> where a recorded absence followed "
+                    "a high-severity incident (Level 4–5) within 1–2 days. "
+                    "<br><br>"
+                    "Post-escalation absences are a significant clinical indicator. They may reflect: "
+                    "the student being too dysregulated to return, a family decision to keep the student home "
+                    "while the situation settles, or a planned withdrawal as part of a crisis response. "
+                    "While protective in the short term, post-escalation absence also resets the student's "
+                    "routine and regulatory baseline — making the return-to-school day a compounded risk event. "
+                    "<br><br>"
+                    "<b>Recommended approach:</b> When a student is absent following a significant episode, "
+                    "the team should plan the return proactively — not reactively. "
+                    "A re-entry plan should be agreed before the student arrives: "
+                    "who will meet them, what the first hour looks like, and what supports are in place. "
+                    "A brief family or carer contact before return can reduce anxiety on both sides."
+                    "</div>",
+                    unsafe_allow_html=True
+                )
+                with st.expander("See post-escalation absence details", expanded=False):
+                    for _hd, _hs, _ha in _post_escalation_abs:
+                        st.markdown(f"• Severity {_hs} incident on **{_hd.strftime('%a %-d %b')}** "
+                                    f"→ absent on: {", ".join(d.strftime('%-d %b') for d in sorted(_ha))}")
+
+            if _buildup_after_abs:
+                _multi_inc_returns = [x for x in _buildup_after_abs if x[3] >= 2]
+                _short_gap = [x for x in _buildup_after_abs if x[2] <= 2]
+                st.markdown(
+                    f"<div style='background:#fefce8;border-left:4px solid #eab308;border-radius:8px;"
+                    f"padding:.75rem 1.1rem;margin:.4rem 0;font-size:.84rem;color:#1e293b;line-height:1.65;'>"
+                    f"<b>📈 Incident build-up after absence:</b> "
+                    f"<b>{len(_buildup_after_abs)} of {len(_abs_date_objs)} recorded absence(s)</b> "
+                    "were followed by an incident within 4 school days. "
+                    + (f"{len(_short_gap)} of these occurred within 1–2 days of return — "
+                       "indicating rapid build-up once back in the environment. "
+                       if _short_gap else "") +
+                    "<br><br>"
+                    "This pattern is consistent with the theory of cumulative stress and regulatory capacity depletion: "
+                    "when the student returns to a structured, demand-based environment after time away, "
+                    "they must immediately begin managing the cognitive and sensory load of school. "
+                    "Without a proactive re-regulation window at the start of each return day, "
+                    "the student's window of tolerance narrows quickly and behaviours emerge sooner. "
+                    "<br><br>"
+                    "<b>Key question for the team:</b> Is there a pattern in the <i>type</i> of incidents "
+                    "that follow absences? Do they match the primary behaviour identified above, "
+                    "or are different behaviours emerging on return days? "
+                    "If different, this may point to a specific return-to-school trigger "
+                    "rather than a general regulatory vulnerability."
+                    "</div>",
+                    unsafe_allow_html=True
+                )
+                with st.expander("See absence-to-incident timeline", expanded=False):
+                    for _ad, _id, _gap, _nin in _buildup_after_abs:
+                        st.markdown(f"• Absent **{_ad.strftime('%a %-d %b')}** "
+                                    f"→ {_nin} incident(s) on **{_id.strftime('%a %-d %b')}** "
+                                    f"({_gap} day(s) after)")
+
+        elif _absent_dates_analysis:
+            st.info(
+                f"✅ {len(_absent_dates_analysis)} absence(s) recorded — "
+                "no significant absence–incident patterns detected in the current data. "
+                "Continue logging to build a more complete picture."
+            )
+
     if not quick_only_df.empty and not crit_only_df.empty:
         escalation_rate = (len(crit_only_df) / len(quick_only_df)) * 100 if len(quick_only_df) > 0 else 0
         col1, col2, col3 = st.columns(3)
