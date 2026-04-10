@@ -7076,7 +7076,208 @@ def render_admin_portal():
                 st.warning("Enter both email and password to test.")
 
 
+def render_quick_incident_log():
+    """Standalone quick incident log — no login required."""
+    import uuid as _uuid
+
+    st.markdown(
+        "<div style='background:#1A7A7A;border-radius:12px;padding:1rem 1.5rem;"
+        "margin-bottom:1.25rem;'>"
+        "<div style='color:white;font-size:1.5rem;font-weight:700;'>⚡ Quick Incident Log</div>"
+        "<div style='color:#fef3c7;font-size:.88rem;margin-top:.2rem;'>"
+        "Cowandilla Learning Centre — Learning & Behaviour Unit</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Log a regular (non-critical) incident quickly. "
+        "All entries appear immediately in the student's analysis. "
+        "For critical incidents requiring an ABCH form, use the full Behaviour Support Tool."
+    )
+
+    if not supabase:
+        st.error("Database not connected — unable to save. Contact the portal administrator.")
+        return
+
+    # Load students live
+    try:
+        _stu_resp = supabase.table("students").select("id,first_name,last_name,name,program") \
+            .eq("archived", False).execute()
+        _students = []
+        for _r in _stu_resp.data:
+            _nm = (
+                f"{_r.get('first_name','')} {_r.get('last_name','')}".strip()
+                if _r.get("first_name") else _r.get("name", "Unknown")
+            )
+            _students.append({"id": str(_r["id"]), "name": _nm, "program": _r.get("program","")})
+        _students = sorted(_students, key=lambda s: s["name"])
+    except Exception as _e:
+        st.error(f"Could not load students: {_e}")
+        return
+
+    if not _students:
+        st.warning("No students found in the database.")
+        return
+
+    _SESSIONS_QL = {
+        "Morning (before 11:00am)": "Morning",
+        "Middle of day (11:00am – 1:30pm)": "Middle",
+        "Afternoon (1:31pm – 2:45pm)": "Afternoon",
+    }
+    _SEV_LABELS_QL = {
+        1: "1 — Low level, student coping",
+        2: "2 — Escalating, still coping",
+        3: "3 — Elevated, approaching edge of window",
+        4: "4 — Outside window, significant dysregulation",
+        5: "5 — Crisis, immediate safety concern",
+    }
+    _SEV_COLS_QL = {1:"#22c55e", 2:"#eab308", 3:"#f97316", 4:"#ef4444", 5:"#7f1d1d"}
+
+    with st.form("ql_form", clear_on_submit=True):
+        _ql_c1, _ql_c2 = st.columns([3, 2])
+        with _ql_c1:
+            _stu_opts = {s["id"]: f"{s['name']}  ({s['program']})" for s in _students}
+            _sel_id = st.selectbox("👤 Student *", list(_stu_opts.keys()),
+                                   format_func=lambda x: _stu_opts[x])
+        with _ql_c2:
+            _rep_by = st.text_input("🙋 Your name *", placeholder="e.g. Sarah")
+
+        st.markdown("<hr style='margin:.5rem 0;border-color:#e2e8f0;'>", unsafe_allow_html=True)
+
+        _dc1, _dc2, _dc3 = st.columns(3)
+        with _dc1:
+            _inc_date = st.date_input("📅 Date *", value=date.today())
+        with _dc2:
+            _inc_time = st.time_input("🕐 Time *",
+                value=datetime.now().replace(second=0, microsecond=0).time())
+        with _dc3:
+            _sess_lbl = st.selectbox("⏰ Session *", list(_SESSIONS_QL.keys()))
+
+        _location = st.selectbox("📍 Location *", LOCATIONS)
+
+        st.markdown("<hr style='margin:.5rem 0;border-color:#e2e8f0;'>", unsafe_allow_html=True)
+
+        st.markdown("**⚡ What happened just before? (Trigger / Antecedent)**")
+        _antecedent = st.selectbox("Antecedent", ANTECEDENTS, label_visibility="collapsed")
+
+        st.markdown("**🎯 Behaviour observed**")
+        _behaviour = st.selectbox("Behaviour", BEHAVIOUR_TYPES, label_visibility="collapsed")
+
+        st.markdown("<hr style='margin:.5rem 0;border-color:#e2e8f0;'>", unsafe_allow_html=True)
+
+        st.markdown("**📊 Severity**")
+        _sev_c1, _sev_c2 = st.columns([2, 3])
+        with _sev_c1:
+            _severity = st.select_slider("Severity", options=[1,2,3,4,5],
+                                          value=2, label_visibility="collapsed")
+        with _sev_c2:
+            _sc = _SEV_COLS_QL[_severity]
+            st.markdown(
+                f"<div style='background:{_sc}20;border-left:4px solid {_sc};"
+                f"border-radius:6px;padding:.35rem .7rem;font-size:.84rem;color:#1e293b;"
+                f"margin-top:.1rem;'><b>{_SEV_LABELS_QL[_severity]}</b></div>",
+                unsafe_allow_html=True
+            )
+        st.caption("🟡 1–2 = Coping zone  ·  🟠 3 = Approaching edge  ·  🔴 4–5 = Outside window")
+
+        st.markdown("<hr style='margin:.5rem 0;border-color:#e2e8f0;'>", unsafe_allow_html=True)
+
+        st.markdown("**🤝 Staff response / intervention**")
+        _interventions = st.multiselect("Interventions", INTERVENTIONS,
+                                         label_visibility="collapsed")
+
+        _opt1, _opt2 = st.columns([1, 2])
+        with _opt1:
+            _duration = st.number_input("⏱️ Duration (min)", min_value=0, max_value=120,
+                                         value=0, step=1, help="Leave 0 if unknown")
+        with _opt2:
+            _desc = st.text_area("📝 Brief notes (optional)", height=75,
+                                  placeholder="Any additional context not captured above...")
+
+        _submitted = st.form_submit_button("✅ Log Incident", type="primary",
+                                            use_container_width=True)
+
+    if _submitted:
+        _errs = []
+        if not _rep_by.strip():
+            _errs.append("Please enter your name.")
+        if _antecedent.startswith("---"):
+            _errs.append("Please select an antecedent (not a section header).")
+        if _behaviour.startswith("---"):
+            _errs.append("Please select a behaviour (not a section header).")
+        if not _interventions:
+            _errs.append("Please select at least one staff response.")
+        if _errs:
+            for _e in _errs:
+                st.error(_e)
+        else:
+            try:
+                _staff_id = None
+                try:
+                    _sr = supabase.table("staff").select("id").eq(
+                        "name", _rep_by.strip()).limit(1).execute()
+                    if _sr.data:
+                        _staff_id = str(_sr.data[0]["id"])
+                except Exception:
+                    pass
+
+                _data = {
+                    "id":               str(_uuid.uuid4()),
+                    "student_id":       _sel_id,
+                    "date":             _inc_date.isoformat(),
+                    "time":             _inc_time.strftime("%H:%M:%S"),
+                    "day_of_week":      _inc_date.strftime("%A"),
+                    "session":          _SESSIONS_QL[_sess_lbl],
+                    "location":         _location,
+                    "behaviour_type":   _behaviour,
+                    "antecedent":       _antecedent,
+                    "intervention":     _interventions,
+                    "severity":         _severity,
+                    "reported_by":      _staff_id,
+                    "description":      _desc.strip(),
+                    "duration_minutes": _duration if _duration > 0 else None,
+                    "hypothesis_function": None,
+                    "hypothesis_item":  None,
+                    "is_critical":      False,
+                }
+                supabase.table("incidents").insert(_data).execute()
+                _stu_name = _stu_opts[_sel_id].split("  (")[0]
+                _sc2 = _SEV_COLS_QL[_severity]
+                st.markdown(
+                    f"<div style='background:#f0fdf4;border:2px solid #22c55e;border-radius:12px;"
+                    f"padding:1.1rem 1.5rem;margin-top:.5rem;'>"
+                    f"<div style='font-weight:700;color:#15803d;font-size:1rem;margin-bottom:.4rem;'>"
+                    f"✅ Incident logged successfully</div>"
+                    f"<div style='font-size:.85rem;color:#1e293b;line-height:1.7;'>"
+                    f"<b>Student:</b> {_stu_name}<br>"
+                    f"<b>Date/Time:</b> {_inc_date.strftime('%-d %b %Y')} at {_inc_time.strftime('%H:%M')}"
+                    f" — {_SESSIONS_QL[_sess_lbl]}<br>"
+                    f"<b>Location:</b> {_location}<br>"
+                    f"<b>Behaviour:</b> {_behaviour}<br>"
+                    f"<b>Antecedent:</b> {_antecedent}<br>"
+                    f"<b>Severity:</b> <span style='background:{_sc2};color:white;"
+                    f"padding:.1rem .4rem;border-radius:4px;font-size:.82rem;'>"
+                    f"{_SEV_LABELS_QL[_severity]}</span><br>"
+                    f"<b>Logged by:</b> {_rep_by.strip()}"
+                    f"</div></div>",
+                    unsafe_allow_html=True,
+                )
+                st.caption("Visible immediately in the student's analysis in the Behaviour Support Tool.")
+            except Exception as _e:
+                st.error(f"❌ Save failed: {_e}")
+
+    st.markdown("---")
+    st.caption("CLC-LBU Portal · Quick Incident Log · For critical incidents use the full Behaviour Support Tool")
+
+
 def main():
+    # ── Quick Incident Log — no login required ────────────────────────────
+    # Accessible at ?mode=quicklog (tile URL: /5_Behaviour_Support?mode=quicklog)
+    _qparams = st.query_params
+    if _qparams.get("mode") == "quicklog":
+        render_quick_incident_log()
+        return
+
     init_state()
     page = st.session_state.current_page
     if not st.session_state.logged_in:
