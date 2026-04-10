@@ -374,17 +374,14 @@ def generate_hypothesis(pr: dict) -> str:
     return hypothesis, all_strategies[:6]
 
 
-def generate_pdf_report(rec: dict) -> bytes:
-    """Generate a clean 2-page PDF sensory overview report."""
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib import colors
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import mm
-    from reportlab.platypus import (
-        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-        HRFlowable, PageBreak, KeepTogether
-    )
-    from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_JUSTIFY
+def generate_word_report(rec: dict) -> bytes:
+    """Generate a clean, editable Word document sensory overview report."""
+    from docx import Document
+    from docx.shared import Pt, RGBColor, Cm, Inches
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.table import WD_ALIGN_VERTICAL
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
     from io import BytesIO
 
     sname    = rec.get("student_name", "Unknown")
@@ -406,227 +403,264 @@ def generate_pdf_report(rec: dict) -> bytes:
     except Exception:
         resp = {}
 
-    # Hypothesis
-    hyp_result     = generate_hypothesis(pr)
+    hyp_result = generate_hypothesis(pr)
     if isinstance(hyp_result, tuple):
         hyp_text, strategies = hyp_result
     else:
         hyp_text, strategies = hyp_result, []
 
-    TEAL_C  = colors.HexColor("#1A7A7A")
-    AMBER_C = colors.HexColor("#C8760A")
-    HIGH_C  = colors.HexColor("#c62828")
-    MED_C   = colors.HexColor("#e65100")
-    LOW_C   = colors.HexColor("#2e7d32")
-    HIGH_BG = colors.HexColor("#fff8f8")
-    MED_BG  = colors.HexColor("#fffaf5")
-    LOW_BG  = colors.HexColor("#f6fff6")
-    LIGHT   = colors.HexColor("#e8f4f4")
+    # Colours
+    TEAL_RGB  = RGBColor(0x1A, 0x7A, 0x7A)
+    AMBER_RGB = RGBColor(0xC8, 0x76, 0x0A)
+    HIGH_RGB  = RGBColor(0xC6, 0x28, 0x28)
+    MED_RGB   = RGBColor(0xE6, 0x51, 0x00)
+    LOW_RGB   = RGBColor(0x2E, 0x7D, 0x32)
+    WHITE     = RGBColor(0xFF, 0xFF, 0xFF)
 
-    buf = BytesIO()
-    doc = SimpleDocTemplate(
-        buf, pagesize=A4,
-        leftMargin=18*mm, rightMargin=18*mm,
-        topMargin=16*mm, bottomMargin=16*mm,
-    )
+    def hex_to_rgb_str(r, g, b):
+        return f"{r:02X}{g:02X}{b:02X}"
 
-    styles = getSampleStyleSheet()
-    def S(name, **kw):
-        return ParagraphStyle(name, parent=styles["Normal"], **kw)
+    TEAL_HEX  = "1A7A7A"
+    AMBER_HEX = "C8760A"
+    HIGH_HEX  = "C62828"
+    MED_HEX   = "E65100"
+    LOW_HEX   = "2E7D32"
+    HIGH_BG   = "FFF8F8"
+    MED_BG    = "FFFAF5"
+    LOW_BG    = "F6FFF6"
 
-    title_style    = S("title",    fontSize=18, textColor=colors.white,    fontName="Helvetica-Bold", spaceAfter=2)
-    sub_style      = S("sub",      fontSize=9,  textColor=colors.white,    spaceAfter=1)
-    heading_style  = S("heading",  fontSize=11, textColor=TEAL_C,          fontName="Helvetica-Bold", spaceBefore=8, spaceAfter=4)
-    body_style     = S("body",     fontSize=8.5, leading=13, alignment=TA_JUSTIFY, spaceAfter=4)
-    bullet_style   = S("bullet",   fontSize=8.5, leading=13, leftIndent=12, spaceAfter=2)
-    pri_label      = S("pri",      fontSize=7.5, fontName="Helvetica-Bold", textColor=colors.HexColor("#555"))
-    pri_val_high   = S("pvh",      fontSize=9,   fontName="Helvetica-Bold", textColor=HIGH_C)
-    pri_val_med    = S("pvm",      fontSize=9,   fontName="Helvetica-Bold", textColor=MED_C)
-    pri_val_low    = S("pvl",      fontSize=9,   fontName="Helvetica-Bold", textColor=LOW_C)
-    pri_sub        = S("psub",     fontSize=7,   textColor=colors.HexColor("#888"))
-    footer_style   = S("footer",   fontSize=7,   textColor=colors.grey,     alignment=TA_CENTER)
-    sec_head_style = S("shead",    fontSize=9,   fontName="Helvetica-Bold", textColor=colors.white)
-    item_style     = S("item",     fontSize=8,   leading=12)
+    def set_cell_bg(cell, hex_colour):
+        tc   = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        shd  = OxmlElement("w:shd")
+        shd.set(qn("w:val"),   "clear")
+        shd.set(qn("w:color"), "auto")
+        shd.set(qn("w:fill"),  hex_colour)
+        tcPr.append(shd)
 
-    story = []
+    def set_cell_borders(cell, colour_hex="DDDDDD"):
+        tc   = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        tcBorders = OxmlElement("w:tcBorders")
+        for side in ["top","left","bottom","right"]:
+            el = OxmlElement(f"w:{side}")
+            el.set(qn("w:val"),   "single")
+            el.set(qn("w:sz"),    "4")
+            el.set(qn("w:color"), colour_hex)
+            tcBorders.append(el)
+        tcPr.append(tcBorders)
 
-    # ── PAGE 1 ─────────────────────────────────────────────────────────────────
+    def add_heading(doc, text, colour_hex=TEAL_HEX, size=13):
+        p   = doc.add_paragraph()
+        run = p.add_run(text)
+        run.bold      = True
+        run.font.size = Pt(size)
+        run.font.color.rgb = RGBColor(
+            int(colour_hex[0:2],16),
+            int(colour_hex[2:4],16),
+            int(colour_hex[4:6],16),
+        )
+        p.paragraph_format.space_before = Pt(10)
+        p.paragraph_format.space_after  = Pt(2)
+        # Bottom border
+        pPr  = p._p.get_or_add_pPr()
+        pBdr = OxmlElement("w:pBdr")
+        bot  = OxmlElement("w:bottom")
+        bot.set(qn("w:val"),   "single")
+        bot.set(qn("w:sz"),    "6")
+        bot.set(qn("w:color"), colour_hex)
+        pBdr.append(bot)
+        pPr.append(pBdr)
+        return p
 
-    # Header banner via table
-    header_data = [[
-        Paragraph(f"🧠 Sensory Overview Report", title_style),
-        ""
-    ]]
-    header_table = Table(header_data, colWidths=[140*mm, 34*mm])
-    header_table.setStyle(TableStyle([
-        ("BACKGROUND", (0,0), (-1,-1), TEAL_C),
-        ("ROUNDEDCORNERS", [6]),
-        ("TOPPADDING",    (0,0), (-1,-1), 10),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 10),
-        ("LEFTPADDING",   (0,0), (-1,-1), 14),
-    ]))
-    story.append(header_table)
-    story.append(Spacer(1, 4*mm))
+    def pri_colours(pct):
+        if pct >= 60:   return "HIGH PRIORITY 🔴",   HIGH_HEX, HIGH_BG
+        elif pct >= 30: return "MEDIUM PRIORITY 🟡", MED_HEX,  MED_BG
+        return "LOW PRIORITY 🟢",    LOW_HEX,  LOW_BG
 
-    # Student details row
-    detail_data = [[
-        Paragraph(f"<b>Student:</b> {sname}", body_style),
-        Paragraph(f"<b>Overview date:</b> {ov_date}", body_style),
-        Paragraph(f"<b>Review date:</b> {rev_date}", body_style),
-        Paragraph(f"<b>Completed by:</b> {by}", body_style),
-    ]]
-    detail_table = Table(detail_data, colWidths=[44*mm, 40*mm, 38*mm, 52*mm])
-    detail_table.setStyle(TableStyle([
-        ("BACKGROUND", (0,0), (-1,-1), LIGHT),
-        ("ROWBACKGROUNDS", (0,0), (-1,-1), [LIGHT]),
-        ("TOPPADDING",    (0,0), (-1,-1), 6),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 6),
-        ("LEFTPADDING",   (0,0), (-1,-1), 8),
-        ("ROUNDEDCORNERS", [4]),
-    ]))
-    story.append(detail_table)
-    story.append(Spacer(1, 5*mm))
+    doc = Document()
 
-    # Priority summary grid — 4 columns
-    story.append(Paragraph("Priority Summary", heading_style))
-    story.append(HRFlowable(width="100%", thickness=1, color=TEAL_C, spaceAfter=4))
+    # ── Page margins ───────────────────────────────────────────────────────────
+    for section in doc.sections:
+        section.top_margin    = Cm(1.8)
+        section.bottom_margin = Cm(1.8)
+        section.left_margin   = Cm(2.0)
+        section.right_margin  = Cm(2.0)
 
-    def pri_info(pct):
-        if pct >= 60:   return "🔴 HIGH PRIORITY",   pri_val_high, HIGH_BG, HIGH_C
-        elif pct >= 30: return "🟡 MEDIUM PRIORITY", pri_val_med,  MED_BG,  MED_C
-        return "🟢 LOW PRIORITY",    pri_val_low,  LOW_BG,  LOW_C
+    # ── Header banner ──────────────────────────────────────────────────────────
+    banner = doc.add_table(rows=1, cols=1)
+    banner.style = "Table Grid"
+    cell = banner.cell(0, 0)
+    set_cell_bg(cell, TEAL_HEX)
+    cell.paragraphs[0].clear()
+    r1 = cell.paragraphs[0].add_run("🧠  Sensory Overview Report")
+    r1.bold = True
+    r1.font.size  = Pt(16)
+    r1.font.color.rgb = WHITE
+    cell.paragraphs[0].paragraph_format.space_before = Pt(6)
+    cell.paragraphs[0].paragraph_format.space_after  = Pt(2)
+
+    p2 = cell.add_paragraph()
+    p2.add_run(f"Cowandilla Learning Centre · Learning & Behaviour Unit")
+    p2.runs[0].font.size      = Pt(9)
+    p2.runs[0].font.color.rgb = WHITE
+    p2.paragraph_format.space_after = Pt(6)
+
+    doc.add_paragraph()  # spacer
+
+    # ── Student details table ──────────────────────────────────────────────────
+    dtbl = doc.add_table(rows=2, cols=4)
+    dtbl.style = "Table Grid"
+    labels = ["Student", "Overview Date", "Review Date", "Completed by"]
+    values = [sname, ov_date, rev_date, by]
+    for i, (lbl, val) in enumerate(zip(labels, values)):
+        hcell = dtbl.rows[0].cells[i]
+        vcell = dtbl.rows[1].cells[i]
+        set_cell_bg(hcell, TEAL_HEX)
+        set_cell_bg(vcell, "E8F4F4")
+        hp = hcell.paragraphs[0]
+        hp.clear()
+        hr = hp.add_run(lbl)
+        hr.bold = True
+        hr.font.size      = Pt(8)
+        hr.font.color.rgb = WHITE
+        vp = vcell.paragraphs[0]
+        vp.clear()
+        vr = vp.add_run(val)
+        vr.font.size = Pt(9)
+
+    doc.add_paragraph()
+
+    # ── Priority Summary ───────────────────────────────────────────────────────
+    add_heading(doc, "Priority Summary")
 
     pr_items = list(pr.items())
-    rows = []
+    # 4 columns
     for i in range(0, len(pr_items), 4):
         chunk = pr_items[i:i+4]
-        row = []
-        for sec, info in chunk:
-            pct        = info.get("pct", 0)
-            val_lbl, vstyle, bg, col = pri_info(pct)
-            icon       = SECTIONS.get(sec, {}).get("icon", "")
-            cell = [
-                Paragraph(f"{icon} {sec}", pri_label),
-                Paragraph(val_lbl, vstyle),
-                Paragraph(f"{info.get('checked',0)}/{info.get('total',0)} ({pct}%)", pri_sub),
-            ]
-            row.append(cell)
-        # Pad row to 4 cols
-        while len(row) < 4:
-            row.append([""])
-        rows.append(row)
+        tbl   = doc.add_table(rows=3, cols=len(chunk))
+        tbl.style = "Table Grid"
+        for ci, (sec, info) in enumerate(chunk):
+            pct         = info.get("pct", 0)
+            lbl, col_hex, bg_hex = pri_colours(pct)
+            icon        = SECTIONS.get(sec, {}).get("icon", "")
 
-    col_w = 43*mm
-    for row in rows:
-        t = Table([row], colWidths=[col_w]*4)
-        bg_colors = []
-        for ci, (sec, info) in enumerate(pr_items[:4]):
-            pct = info.get("pct", 0)
-            _, _, bg, _ = pri_info(pct)
-            bg_colors.append(("BACKGROUND", (ci, 0), (ci, 0), bg))
-        t.setStyle(TableStyle([
-            ("BOX",          (0,0), (-1,-1), 0.5, colors.HexColor("#ddd")),
-            ("INNERGRID",    (0,0), (-1,-1), 0.5, colors.HexColor("#ddd")),
-            ("TOPPADDING",   (0,0), (-1,-1), 6),
-            ("BOTTOMPADDING",(0,0), (-1,-1), 6),
-            ("LEFTPADDING",  (0,0), (-1,-1), 8),
-            ("VALIGN",       (0,0), (-1,-1), "TOP"),
-        ] + bg_colors))
-        story.append(t)
-        story.append(Spacer(1, 2*mm))
+            # Row 0 — section name
+            c0 = tbl.rows[0].cells[ci]
+            set_cell_bg(c0, "F0F8F8")
+            p0 = c0.paragraphs[0]
+            p0.clear()
+            r0 = p0.add_run(f"{icon} {sec}")
+            r0.bold      = True
+            r0.font.size = Pt(8)
 
-    story.append(Spacer(1, 4*mm))
+            # Row 1 — priority label
+            c1 = tbl.rows[1].cells[ci]
+            set_cell_bg(c1, bg_hex)
+            p1 = c1.paragraphs[0]
+            p1.clear()
+            r1 = p1.add_run(lbl)
+            r1.bold = True
+            r1.font.size = Pt(9)
+            r1.font.color.rgb = RGBColor(
+                int(col_hex[0:2],16), int(col_hex[2:4],16), int(col_hex[4:6],16)
+            )
 
-    # Hypothesis
-    story.append(Paragraph("Hypothesis from Observed Sensory Profile", heading_style))
-    story.append(HRFlowable(width="100%", thickness=1, color=AMBER_C, spaceAfter=4))
-    story.append(Paragraph(hyp_text, body_style))
+            # Row 2 — count
+            c2 = tbl.rows[2].cells[ci]
+            set_cell_bg(c2, bg_hex)
+            p2 = c2.paragraphs[0]
+            p2.clear()
+            r2 = p2.add_run(f"{info.get('checked',0)}/{info.get('total',0)} items ({pct}%)")
+            r2.font.size = Pt(7.5)
+            r2.font.color.rgb = RGBColor(0x88, 0x88, 0x88)
+
+        doc.add_paragraph()
+
+    # ── Hypothesis ─────────────────────────────────────────────────────────────
+    add_heading(doc, "Hypothesis from Observed Sensory Profile", AMBER_HEX)
+    p = doc.add_paragraph(hyp_text)
+    p.paragraph_format.space_after = Pt(6)
+    p.runs[0].font.size = Pt(10)
 
     if strategies:
-        story.append(Spacer(1, 3*mm))
-        story.append(Paragraph("Suggested Supports to Explore", heading_style))
+        add_heading(doc, "Suggested Supports to Explore", TEAL_HEX, size=11)
         for strat in strategies:
-            story.append(Paragraph(f"• {strat.capitalize()}", bullet_style))
+            bp = doc.add_paragraph(style="List Bullet")
+            bp.add_run(strat.capitalize()).font.size = Pt(10)
 
-    # Footer p1
-    story.append(Spacer(1, 4*mm))
-    story.append(HRFlowable(width="100%", thickness=0.5, color=colors.lightgrey))
-    story.append(Spacer(1, 2*mm))
-    story.append(Paragraph(
-        f"Cowandilla Learning Centre · Learning & Behaviour Unit · Sensory Overview · "
-        f"Generated {date.today().strftime('%d %B %Y')} · Page 1 of 2",
-        footer_style
-    ))
+    # ── Page break ─────────────────────────────────────────────────────────────
+    doc.add_page_break()
 
-    # ── PAGE 2 ─────────────────────────────────────────────────────────────────
-    story.append(PageBreak())
+    # ── Page 2 header ──────────────────────────────────────────────────────────
+    p2h = doc.add_paragraph()
+    r   = p2h.add_run(f"Sensory Overview — {sname}  ·  Checked Items Detail")
+    r.bold            = True
+    r.font.size       = Pt(13)
+    r.font.color.rgb  = TEAL_RGB
+    p2h.paragraph_format.space_after = Pt(6)
 
-    # Page 2 header
-    p2_header = Table([[Paragraph(f"Sensory Overview — {sname} · Checked Items Detail", title_style)]])
-    p2_header.setStyle(TableStyle([
-        ("BACKGROUND",    (0,0), (-1,-1), TEAL_C),
-        ("TOPPADDING",    (0,0), (-1,-1), 8),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 8),
-        ("LEFTPADDING",   (0,0), (-1,-1), 14),
-    ]))
-    story.append(p2_header)
-    story.append(Spacer(1, 5*mm))
-
-    # Checked items — two column layout per section
+    # ── Checked items ──────────────────────────────────────────────────────────
     any_checked = False
     for sec_name, items_dict in resp.items():
         checked = [it for it, val in items_dict.items() if val]
         if not checked:
             continue
         any_checked = True
-        icon = SECTIONS.get(sec_name, {}).get("icon", "")
-        pct  = round(len(checked) / max(len(items_dict), 1) * 100, 1)
-        _, _, bg, col = pri_info(pct)
+        icon    = SECTIONS.get(sec_name, {}).get("icon", "")
+        pct     = round(len(checked) / max(len(items_dict), 1) * 100, 1)
+        lbl, col_hex, bg_hex = pri_colours(pct)
 
-        # Section header
-        sec_hdr = Table([[Paragraph(f"{icon}  {sec_name}  ·  {len(checked)}/{len(items_dict)} items", sec_head_style)]])
-        sec_hdr.setStyle(TableStyle([
-            ("BACKGROUND",    (0,0), (-1,-1), col),
-            ("TOPPADDING",    (0,0), (-1,-1), 5),
-            ("BOTTOMPADDING", (0,0), (-1,-1), 5),
-            ("LEFTPADDING",   (0,0), (-1,-1), 10),
-        ]))
+        # Section header row
+        shdr = doc.add_table(rows=1, cols=1)
+        shdr.style = "Table Grid"
+        sc = shdr.cell(0, 0)
+        set_cell_bg(sc, col_hex)
+        sp = sc.paragraphs[0]
+        sp.clear()
+        sr = sp.add_run(f"{icon}  {sec_name}  ·  {lbl}  ({len(checked)}/{len(items_dict)} items)")
+        sr.bold           = True
+        sr.font.size      = Pt(9)
+        sr.font.color.rgb = WHITE
 
         # Items in two columns
-        left  = checked[::2]
-        right = checked[1::2]
-        max_rows = max(len(left), len(right))
-        item_rows = []
-        for i in range(max_rows):
-            l = Paragraph(f"✅  {left[i]}",  item_style) if i < len(left)  else Paragraph("", item_style)
-            r = Paragraph(f"✅  {right[i]}", item_style) if i < len(right) else Paragraph("", item_style)
-            item_rows.append([l, r])
+        left_items  = checked[::2]
+        right_items = checked[1::2]
+        rows        = max(len(left_items), len(right_items))
+        itbl        = doc.add_table(rows=rows, cols=2)
+        itbl.style  = "Table Grid"
+        for ri in range(rows):
+            lc = itbl.rows[ri].cells[0]
+            rc = itbl.rows[ri].cells[1]
+            set_cell_bg(lc, bg_hex)
+            set_cell_bg(rc, bg_hex)
+            if ri < len(left_items):
+                lp = lc.paragraphs[0]
+                lp.clear()
+                lp.add_run(f"✅  {left_items[ri]}").font.size = Pt(9)
+            if ri < len(right_items):
+                rp = rc.paragraphs[0]
+                rp.clear()
+                rp.add_run(f"✅  {right_items[ri]}").font.size = Pt(9)
 
-        items_table = Table(item_rows, colWidths=[86*mm, 86*mm])
-        items_table.setStyle(TableStyle([
-            ("BACKGROUND",    (0,0), (-1,-1), bg),
-            ("TOPPADDING",    (0,0), (-1,-1), 4),
-            ("BOTTOMPADDING", (0,0), (-1,-1), 4),
-            ("LEFTPADDING",   (0,0), (-1,-1), 10),
-            ("LINEBELOW",     (0,0), (-1,-2), 0.3, colors.HexColor("#ddd")),
-        ]))
-
-        story.append(KeepTogether([sec_hdr, items_table, Spacer(1, 3*mm)]))
+        doc.add_paragraph()
 
     if not any_checked:
-        story.append(Paragraph("No items were checked in this overview.", body_style))
+        doc.add_paragraph("No items were checked in this overview.").runs[0].font.size = Pt(10)
 
-    # Footer p2
-    story.append(Spacer(1, 4*mm))
-    story.append(HRFlowable(width="100%", thickness=0.5, color=colors.lightgrey))
-    story.append(Spacer(1, 2*mm))
-    story.append(Paragraph(
-        f"Cowandilla Learning Centre · Learning & Behaviour Unit · Sensory Overview · "
-        f"Generated {date.today().strftime('%d %B %Y')} · Page 2 of 2",
-        footer_style
-    ))
+    # ── Footer note ────────────────────────────────────────────────────────────
+    doc.add_paragraph()
+    fp = doc.add_paragraph(
+        f"Cowandilla Learning Centre · Learning & Behaviour Unit · "
+        f"Generated {date.today().strftime('%d %B %Y')} · "
+        f"Based on staff observation only — not a clinical assessment."
+    )
+    fp.runs[0].font.size      = Pt(7.5)
+    fp.runs[0].font.color.rgb = RGBColor(0xAA, 0xAA, 0xAA)
+    fp.paragraph_format.space_before = Pt(12)
 
-    doc.build(story)
+    buf = BytesIO()
+    doc.save(buf)
     return buf.getvalue()
 
 
@@ -943,18 +977,18 @@ with tab_past:
                 # Download report
                 with ac1:
                     try:
-                        pdf_bytes = generate_pdf_report(rec)
-                        fname = f"sensory_{sname.replace(' ','_')}_{ov_date}.pdf"
+                        doc_bytes = generate_word_report(rec)
+                        fname = f"sensory_{sname.replace(' ','_')}_{ov_date}.docx"
                         st.download_button(
-                            "📄 Download PDF Report",
-                            data=pdf_bytes,
+                            "📄 Download Word Report",
+                            data=doc_bytes,
                             file_name=fname,
-                            mime="application/pdf",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                             use_container_width=True,
                             key=f"dl_{rec['id']}",
                         )
                     except Exception as e:
-                        st.error(f"PDF generation failed: {e}")
+                        st.error(f"Report generation failed: {e}")
 
                 # Edit / add to overview
                 with ac2:
