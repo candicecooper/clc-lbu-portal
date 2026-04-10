@@ -461,11 +461,11 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         WHITE      = "FFFFFF"
         LIGHT_GREY = "F2F6F6"
 
-        FIG_W    = 14
-        FIG_H    = 3.2
-        FIG_DPI  = 130
-        DOC_W    = Cm(16.5)
-        MAX_LABEL_CHARS = 38
+        FIG_W    = 16.5   # wider — fills the page
+        FIG_H    = 4.2    # taller — more readable when printed
+        FIG_DPI  = 150    # sharper for printing
+        DOC_W    = Cm(18.5)  # stretch to near full page width
+        MAX_LABEL_CHARS = 42
 
         def wrap_labels(labels, width=MAX_LABEL_CHARS):
             out = []
@@ -539,9 +539,9 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             cap.paragraph_format.space_before = Pt(1)
             cap.paragraph_format.space_after  = Pt(6)
             run = cap.add_run(caption_text)
-            run.font.size = Pt(7.5)
+            run.font.size = Pt(10)   # increased for print readability
             run.font.italic = True
-            run.font.color.rgb = rgb("555555")
+            run.font.color.rgb = rgb("333333")
             run.font.name = "Arial"
 
         def base_ax_style(ax):
@@ -549,7 +549,7 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             ax.spines['right'].set_visible(False)
             ax.spines['left'].set_color('#cbd5e1')
             ax.spines['bottom'].set_color('#cbd5e1')
-            ax.tick_params(colors='#334155', labelsize=7.5)
+            ax.tick_params(colors='#334155', labelsize=9)
             ax.grid(True, alpha=0.25, linestyle='--', color='#94a3b8')
 
         doc = Document()
@@ -592,7 +592,7 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
                 p.paragraph_format.space_before = Pt(1)
                 p.paragraph_format.space_after  = Pt(1)
                 arun(p, f"{label}: ", bold=True, size=16, color=GREY_DARK)
-                arun(p, val, size=16)
+                arun(p, val, size=18)
 
         sum_cell = det.rows[2].cells[0].merge(det.rows[2].cells[1])
         set_bg(sum_cell, AMBER_LIGHT); set_borders(sum_cell, AMBER_HEX)
@@ -665,14 +665,14 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         ax.set_xticks(range(len(daily.count)))
         ax.set_xticklabels([d.strftime("%a %d/%m") for d in daily.date_parsed],
                            fontsize=7, rotation=35, ha='right')
-        ax.set_ylabel("Incidents", fontsize=8.5, fontweight='bold', color='#334155')
+        ax.set_ylabel("Incidents", fontsize=10, fontweight='bold', color='#334155')
         ax.set_title("1.  Daily Incident Frequency  —  teal = 1–2 incidents,  red = 3+",
-                     fontsize=9.5, fontweight='bold', color='#0f172a', pad=6, loc='left')
+                     fontsize=11.5, fontweight='bold', color='#0f172a', pad=8, loc='left')
         ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
         for bar, v in zip(bars, daily.count):
             if v > 0:
                 ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.05,
-                        str(int(v)), ha='center', va='bottom', fontsize=8, fontweight='bold', color='#0f172a')
+                        str(int(v)), ha='center', va='bottom', fontsize=9, fontweight='bold', color='#0f172a')
         base_ax_style(ax)
         plt.tight_layout(pad=0.4)
         add_chart(doc, fig,
@@ -708,13 +708,13 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
                        color=chart_colours[:len(_bap_beh_vals)], edgecolor='white', height=0.6)
         ax.set_yticks(list(y_pos))
         ax.set_yticklabels(labels_beh, fontsize=8)
-        ax.set_xlabel("Number of incidents", fontsize=8.5, fontweight='bold', color='#334155')
+        ax.set_xlabel("Number of incidents", fontsize=10, fontweight='bold', color='#334155')
         ax.set_title("2.  Behaviours of Concern — Frequency",
-                     fontsize=9.5, fontweight='bold', color='#0f172a', pad=6, loc='left')
+                     fontsize=11.5, fontweight='bold', color='#0f172a', pad=8, loc='left')
         ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
         for bar, v in zip(bars, _bap_beh_vals[::-1]):
             ax.text(v + 0.08, bar.get_y() + bar.get_height()/2,
-                    str(int(v)), va='center', fontsize=8, fontweight='bold', color='#0f172a')
+                    str(int(v)), va='center', fontsize=9, fontweight='bold', color='#0f172a')
         base_ax_style(ax)
         plt.tight_layout(pad=0.4)
         add_chart(doc, fig,
@@ -730,7 +730,7 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
                "the student is using a predictable response to communicate a particular unmet need. "
                "This supports targeted functional intervention: identify the function, "
                "teach an alternative, and pre-empt the trigger. ") +
-            "Behaviours are presented using clinical terminology consistent with the functional hypothesis.")
+            "Behaviours are described using consistent, observable language to support shared understanding across the team.")
 
         ant_counts = full_df["antecedent"].value_counts().head(6)
         # Strip category prefix (e.g. "Peer - " → "peer conflict/interaction")
@@ -746,9 +746,9 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         ax.set_yticks(list(y_pos))
         ax.set_yticklabels(labels_ant, fontsize=7.5)
         ax.set_xlabel("Number of incidents preceded by this trigger",
-                      fontsize=8.5, fontweight='bold', color='#334155')
+                      fontsize=10, fontweight='bold', color='#334155')
         ax.set_title("3.  Most Common Triggers / Antecedents",
-                     fontsize=9.5, fontweight='bold', color='#0f172a', pad=6, loc='left')
+                     fontsize=11.5, fontweight='bold', color='#0f172a', pad=8, loc='left')
         ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
         for bar, v in zip(bars, ant_counts.values[::-1]):
             ax.text(v + 0.08, bar.get_y() + bar.get_height()/2,
@@ -790,9 +790,9 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         ax.set_xticks(x_pos)
         ax.set_xticklabels([SESSION_LABELS[s] for s in session_order],
                            fontsize=8.5, linespacing=1.3)
-        ax.set_ylabel("Number of incidents", fontsize=8.5, fontweight='bold', color='#334155')
+        ax.set_ylabel("Number of incidents", fontsize=10, fontweight='bold', color='#334155')
         ax.set_title("4.  Incidents by Time of Day  —  orange = peak session",
-                     fontsize=9.5, fontweight='bold', color='#0f172a', pad=6, loc='left')
+                     fontsize=11.5, fontweight='bold', color='#0f172a', pad=8, loc='left')
         ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
         for bar, v in zip(bars, session_counts.values):
             ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.05,
@@ -842,13 +842,13 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         ax.set_yticks(list(y_pos))
         ax.set_yticklabels(labels_loc, fontsize=8.5)
         ax.set_xlabel("Number of incidents in this location",
-                      fontsize=8.5, fontweight='bold', color='#334155')
+                      fontsize=10, fontweight='bold', color='#334155')
         ax.set_title("5.  Location Hotspots  —  red = highest frequency",
-                     fontsize=9.5, fontweight='bold', color='#0f172a', pad=6, loc='left')
+                     fontsize=11.5, fontweight='bold', color='#0f172a', pad=8, loc='left')
         ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
         for bar, v in zip(bars, loc_counts.values[::-1]):
             ax.text(v + 0.08, bar.get_y() + bar.get_height()/2,
-                    f"{int(v)} incidents", va='center', fontsize=8, fontweight='bold', color='#0f172a')
+                    f"{int(v)} incidents", va='center', fontsize=9, fontweight='bold', color='#0f172a')
         base_ax_style(ax)
         plt.tight_layout(pad=0.4)
         add_chart(doc, fig,
@@ -907,12 +907,12 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             ax.plot(full_df['date_parsed'], p_poly(x_num),
                     color=trend_col, linewidth=2, linestyle='--',
                     label='Trend ↓ improving' if z[0]<0 else 'Trend ↑ worsening', zorder=4)
-        ax.set_xlabel("Date", fontsize=8.5, fontweight='bold', color='#334155')
+        ax.set_xlabel("Date", fontsize=10, fontweight='bold', color='#334155')
         ax.set_yticks([1,2,3,4,5])
         ax.set_yticklabels(['1\nMinor','2\nLow','3\nModerate','4\nSerious','5\nCritical'], fontsize=7)
         ax.set_ylim(0.3, 5.7)
         ax.set_title("6.  Severity Trajectory — Window of Tolerance",
-                     fontsize=9.5, fontweight='bold', color='#0f172a', pad=6, loc='left')
+                     fontsize=11.5, fontweight='bold', color='#0f172a', pad=8, loc='left')
         ax.legend(loc='upper right', frameon=True, fontsize=6.5,
                   framealpha=0.85, ncol=3, borderpad=0.4, handlelength=1)
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
@@ -2790,38 +2790,100 @@ def render_student_analysis_page():
             go_to("landing")
 
     # ── Part-time schedule context ───────────────────────────────────────────
-    with st.expander("⏱️ Part-time / modified schedule context (optional — affects incident pattern interpretation)", expanded=False):
+    with st.expander("⏱️ Attendance & Absence Tracking (optional — affects pattern interpretation)", expanded=False):
         st.caption(
-            "If this student attends on a part-time or modified timetable, recording it here improves "
-            "the accuracy of analysis. Zero-incident days may reflect absence rather than regulation, "
-            "and time-of-day patterns only make sense in the context of which sessions the student is present for. "
-            "This context should be referenced in the functional hypothesis and any recommendations."
+            "Record this student's attendance pattern and any specific absent dates here. "
+            "Absence data is important context for analysis — zero-incident days may reflect absence rather than regulation. "
+            "Day-of-week and time-of-day patterns are only meaningful in the context of which days and sessions "
+            "the student was actually present for. This information will be referenced in the frequency analysis."
         )
-        _pt_days = st.multiselect(
-            "Days present at school",
-            ["Monday","Tuesday","Wednesday","Thursday","Friday"],
-            default=["Monday","Tuesday","Wednesday","Thursday","Friday"],
-            key=f"pt_days_{student_id}"
-        )
-        _pt_sessions = st.multiselect(
-            "Sessions attended (if not full days)",
-            ["Full day","Morning only","Middle of day only","Afternoon only","Morning + Middle","Middle + Afternoon"],
-            default=["Full day"],
-            key=f"pt_sess_{student_id}"
-        )
-        _pt_notes = st.text_area(
-            "Schedule details",
-            placeholder="e.g. Attends Tue–Thu, mornings only. Transition to full days planned Term 2.",
-            height=65, key=f"pt_notes_{student_id}"
-        )
-        _parttime_active = len(_pt_days) < 5 or (len(_pt_sessions) > 0 and "Full day" not in _pt_sessions)
-        if _parttime_active:
-            st.info(
-                "⏱️ **Part-time schedule active.** "
-                "Zero-incident days in frequency charts may reflect absence rather than regulation. "
-                "Time-of-day analysis should be interpreted against the sessions attended only. "
-                "The functional hypothesis below should reference attendance pattern as context."
+
+        _att_tab1, _att_tab2 = st.tabs(["📅 Regular Schedule", "🗓️ Specific Absent Dates"])
+
+        with _att_tab1:
+            _pt_days = st.multiselect(
+                "Days the student regularly attends",
+                ["Monday","Tuesday","Wednesday","Thursday","Friday"],
+                default=["Monday","Tuesday","Wednesday","Thursday","Friday"],
+                key=f"pt_days_{student_id}"
             )
+            _pt_sessions = st.multiselect(
+                "Sessions attended (if not full days)",
+                ["Full day","Morning only","Middle of day only","Afternoon only","Morning + Middle","Middle + Afternoon"],
+                default=["Full day"],
+                key=f"pt_sess_{student_id}"
+            )
+            _pt_notes = st.text_area(
+                "Schedule details / notes",
+                placeholder="e.g. Attends Tue–Thu, mornings only. Transition to full days planned Term 2.",
+                height=65, key=f"pt_notes_{student_id}"
+            )
+
+        with _att_tab2:
+            st.caption(
+                "Enter specific dates when the student was absent. "
+                "These will be marked on the daily frequency chart and excluded from 'zero incident' counts."
+            )
+            _abs_key = f"absent_dates_{student_id}"
+            _abs_stored = st.session_state.get(_abs_key, [])
+
+            _abs_col1, _abs_col2 = st.columns([2, 1])
+            with _abs_col1:
+                _abs_new = st.date_input(
+                    "Add an absent date",
+                    value=None, key=f"abs_date_input_{student_id}"
+                )
+            with _abs_col2:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("➕ Add date", key=f"abs_add_{student_id}", use_container_width=True):
+                    if _abs_new and str(_abs_new) not in _abs_stored:
+                        _abs_stored = _abs_stored + [str(_abs_new)]
+                        st.session_state[_abs_key] = _abs_stored
+                        st.rerun()
+
+            if _abs_stored:
+                st.markdown("**Recorded absent dates:**")
+                _abs_cols = st.columns(4)
+                for _i, _d in enumerate(sorted(_abs_stored)):
+                    with _abs_cols[_i % 4]:
+                        if st.button(f"❌ {_d}", key=f"abs_rm_{student_id}_{_i}", use_container_width=True):
+                            _abs_stored = [x for x in _abs_stored if x != _d]
+                            st.session_state[_abs_key] = _abs_stored
+                            st.rerun()
+                st.caption(f"Total absent days recorded: {len(_abs_stored)}")
+
+                # Absence summary note
+                import datetime as _adt
+                if not full_df.empty:
+                    _abs_in_range = [
+                        d for d in _abs_stored
+                        if full_df["date_parsed"].min().date() <= _adt.date.fromisoformat(d)
+                        <= full_df["date_parsed"].max().date()
+                    ]
+                    if _abs_in_range:
+                        st.info(
+                            f"⏱️ {len(_abs_in_range)} recorded absence(s) fall within the data period. "
+                            "Zero-incident days on those dates reflect absence, not regulation. "
+                            "Frequency counts and incident-free day counts should be interpreted "
+                            "with this in mind."
+                        )
+            else:
+                st.caption("No absent dates recorded yet.")
+
+        _parttime_active = len(_pt_days) < 5 or (len(_pt_sessions) > 0 and "Full day" not in _pt_sessions)
+        _absent_dates = st.session_state.get(f"absent_dates_{student_id}", [])
+        if _parttime_active or _absent_dates:
+            _att_parts = []
+            if _parttime_active:
+                _att_parts.append(
+                    f"Part-time schedule: attends {len(_pt_days)}/5 days "
+                    f"({", ".join(_pt_days[:3])}{"..." if len(_pt_days) > 3 else ""}). "
+                    "Zero-incident days in charts may reflect absence. "
+                    "Time-of-day patterns should be interpreted against sessions attended only."
+                )
+            if _absent_dates:
+                _att_parts.append(f"{len(_absent_dates)} specific absence(s) recorded.")
+            st.info("⏱️ **Attendance context:** " + " ".join(_att_parts))
 
     quick = [i for i in st.session_state.incidents if i["student_id"] == student_id]
     crit = [c for c in st.session_state.critical_incidents if c["student_id"] == student_id]
