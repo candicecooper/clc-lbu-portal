@@ -244,6 +244,129 @@ def load_all_overviews():
         st.error(f"Could not load overviews: {e}")
         return []
 
+def generate_report_html(rec: dict) -> str:
+    """Generate a standalone HTML report for a completed sensory overview."""
+    sname    = rec.get("student_name", "Unknown")
+    ov_date  = rec.get("overview_date", "—")
+    rev_date = rec.get("review_date", "—")
+    by       = rec.get("completed_by", "—")
+
+    try:
+        pr = rec.get("priority_results") or {}
+        if isinstance(pr, str):
+            pr = json.loads(pr)
+    except Exception:
+        pr = {}
+
+    try:
+        resp = rec.get("responses") or {}
+        if isinstance(resp, str):
+            resp = json.loads(resp)
+    except Exception:
+        resp = {}
+
+    def pri_colour(pct):
+        if pct >= 60:   return "#c62828", "#fff8f8", "HIGH PRIORITY",   "🔴"
+        elif pct >= 30: return "#e65100", "#fffaf5", "MEDIUM PRIORITY", "🟡"
+        return "#2e7d32", "#f6fff6", "LOW PRIORITY", "🟢"
+
+    # Priority summary cards
+    priority_html = ""
+    for sec, info in pr.items():
+        pct = info.get("pct", 0)
+        colour, bg, label, emoji = pri_colour(pct)
+        icon = SECTIONS.get(sec, {}).get("icon", "")
+        priority_html += f"""
+        <div style="background:{bg};border-left:5px solid {colour};
+                    padding:10px 14px;border-radius:8px;margin:6px 0;">
+            <div style="font-size:0.78rem;font-weight:700;color:#555;">{icon} {sec}</div>
+            <div style="font-size:1rem;font-weight:800;color:{colour};">{emoji} {label}</div>
+            <div style="font-size:0.72rem;color:#888;">{info.get('checked',0)} / {info.get('total',0)} items ({pct}%)</div>
+        </div>"""
+
+    # Checked items by section
+    detail_html = ""
+    for sec_name, items_dict in resp.items():
+        checked = [it for it, val in items_dict.items() if val]
+        if not checked:
+            continue
+        icon = SECTIONS.get(sec_name, {}).get("icon", "")
+        pct  = round(len(checked) / max(len(items_dict), 1) * 100, 1)
+        colour, bg, label, emoji = pri_colour(pct)
+        items_html = "".join(
+            f'<div style="padding:4px 0;border-bottom:1px solid #eee;font-size:0.88rem;">✅ {it}</div>'
+            for it in checked
+        )
+        detail_html += f"""
+        <div style="margin-bottom:18px;">
+            <div style="background:{TEAL};color:white;padding:8px 14px;
+                        border-radius:6px 6px 0 0;font-weight:700;font-size:0.92rem;">
+                {icon} {sec_name} &nbsp;·&nbsp; {emoji} {label} ({len(checked)}/{len(items_dict)})
+            </div>
+            <div style="background:white;border:1px solid #ddd;border-top:none;
+                        border-radius:0 0 6px 6px;padding:10px 14px;">
+                {items_html}
+            </div>
+        </div>"""
+
+    if not detail_html:
+        detail_html = '<p style="color:#888;">No items were checked in this overview.</p>'
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Sensory Overview — {sname}</title>
+<style>
+  body {{ font-family: Arial, sans-serif; max-width: 900px; margin: 40px auto;
+          padding: 0 24px; color: #222; background: #f5f7f7; }}
+  .header {{ background: {TEAL}; color: white; padding: 24px 28px;
+             border-radius: 10px; margin-bottom: 24px; }}
+  .header h1 {{ margin: 0 0 6px 0; font-size: 1.6rem; }}
+  .header p  {{ margin: 2px 0; font-size: 0.9rem; opacity: 0.9; }}
+  .section-title {{ font-size: 1.1rem; font-weight: 700; color: {TEAL};
+                    border-bottom: 2px solid {TEAL}; padding-bottom: 6px;
+                    margin: 28px 0 12px 0; }}
+  .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }}
+  .footer {{ text-align: center; font-size: 0.75rem; color: #aaa;
+             margin-top: 40px; padding-top: 16px; border-top: 1px solid #ddd; }}
+  @media print {{
+    body {{ background: white; margin: 20px; }}
+    .no-print {{ display: none; }}
+  }}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🧠 Sensory Overview Report</h1>
+  <p><strong>Student:</strong> {sname}</p>
+  <p><strong>Overview date:</strong> {ov_date} &nbsp;·&nbsp;
+     <strong>Review date:</strong> {rev_date} &nbsp;·&nbsp;
+     <strong>Completed by:</strong> {by}</p>
+</div>
+
+<button class="no-print" onclick="window.print()"
+  style="background:{TEAL};color:white;border:none;padding:10px 22px;
+         border-radius:6px;font-size:0.95rem;cursor:pointer;margin-bottom:20px;">
+  🖨️ Print / Save as PDF
+</button>
+
+<div class="section-title">Priority Summary</div>
+<div class="grid">{priority_html}</div>
+
+<div class="section-title">Checked Items by Section</div>
+{detail_html}
+
+<div class="footer">
+  Cowandilla Learning Centre · Learning &amp; Behaviour Unit · Sensory Overview<br>
+  Generated {date.today().strftime('%d %B %Y')}
+</div>
+
+</body>
+</html>"""
+
+
 # ── Session state ──────────────────────────────────────────────────────────────
 if "responses" not in st.session_state:
     st.session_state.responses = {sec: {it: False for it in m["items"]} for sec, m in SECTIONS.items()}
@@ -251,6 +374,10 @@ if "saved_ok" not in st.session_state:
     st.session_state.saved_ok = False
 if "section_open" not in st.session_state:
     st.session_state.section_open = {sec: False for sec in SECTIONS}
+if "editing_mode" not in st.session_state:
+    st.session_state.editing_mode = False
+if "edit_record_id" not in st.session_state:
+    st.session_state.edit_record_id = None
 
 # ── Header ─────────────────────────────────────────────────────────────────────
 st.markdown("<h1>🧠 Sensory Overview</h1>", unsafe_allow_html=True)
@@ -271,7 +398,21 @@ with tab_new:
         st.success("✅ Overview saved successfully!")
         if st.button("Start another overview"):
             st.session_state.responses = {sec: {it: False for it in m["items"]} for sec, m in SECTIONS.items()}
-            st.session_state.saved_ok = False
+            st.session_state.saved_ok        = False
+            st.session_state.editing_mode    = False
+            st.session_state.edit_record_id  = None
+            st.rerun()
+
+    # Editing mode banner
+    if st.session_state.editing_mode:
+        st.info(f"✏️ **Editing overview** for **{st.session_state.get('edit_student','')}** "
+                f"· Originally completed {st.session_state.get('edit_ov_date','—')} "
+                f"by {st.session_state.get('edit_by','—')}. "
+                f"Make changes and save to update.")
+        if st.button("✖ Cancel edit — start fresh instead"):
+            st.session_state.responses       = {sec: {it: False for it in m["items"]} for sec, m in SECTIONS.items()}
+            st.session_state.editing_mode    = False
+            st.session_state.edit_record_id  = None
             st.rerun()
 
     # ── Student details ────────────────────────────────────────────────────────
@@ -282,16 +423,19 @@ with tab_new:
         with sc1:
             student_name = st.text_input(
                 "Student name *",
-                value=deep_link_name or "",
+                value=st.session_state.get("edit_student", deep_link_name or ""),
                 placeholder="Full name",
             )
         with sc2:
             program = st.selectbox("Program *", ["— Select —", "JP", "PY", "SY"])
         with sc3:
-            completed_by = st.text_input("Completed by *", placeholder="Staff name")
+            completed_by = st.text_input(
+                "Completed by *",
+                value=st.session_state.get("edit_by", "") if st.session_state.editing_mode else "",
+                placeholder="Staff name",
+            )
 
-        # Store the deep-linked student_id if present (used when saving)
-        selected_student_id = deep_link_id  # may be None — that's fine
+        selected_student_id = deep_link_id
 
         oc1, oc2 = st.columns(2)
         with oc1:
@@ -431,8 +575,18 @@ with tab_new:
                     "priority_results": json.dumps(store_priorities),
                 }
                 try:
-                    supabase.table("sensory_overviews").insert(payload).execute()
-                    st.session_state.saved_ok = True
+                    if st.session_state.editing_mode and st.session_state.edit_record_id:
+                        # Update existing record
+                        supabase.table("sensory_overviews") \
+                            .update(payload) \
+                            .eq("id", st.session_state.edit_record_id) \
+                            .execute()
+                    else:
+                        # Insert new record
+                        supabase.table("sensory_overviews").insert(payload).execute()
+                    st.session_state.saved_ok       = True
+                    st.session_state.editing_mode   = False
+                    st.session_state.edit_record_id = None
                     st.rerun()
                 except Exception as e:
                     st.error(f"Save failed: {e}")
@@ -519,10 +673,49 @@ with tab_past:
                                 st.markdown(f"&nbsp;&nbsp;&nbsp;✅ {it}")
 
                 st.markdown("---")
-                if st.button("🗑️ Delete record", key=f"del_{rec['id']}"):
-                    try:
-                        supabase.table("sensory_overviews").delete().eq("id", rec["id"]).execute()
-                        st.success("Deleted.")
+
+                # ── Action buttons ─────────────────────────────────────────────
+                ac1, ac2, ac3 = st.columns(3)
+
+                # Download report
+                with ac1:
+                    html_report = generate_report_html(rec)
+                    fname = f"sensory_{sname.replace(' ','_')}_{ov_date}.html"
+                    st.download_button(
+                        "📄 Download Report",
+                        data=html_report,
+                        file_name=fname,
+                        mime="text/html",
+                        use_container_width=True,
+                        key=f"dl_{rec['id']}",
+                    )
+
+                # Edit / add to overview
+                with ac2:
+                    if st.button("✏️ Edit / Add to Overview", key=f"edit_{rec['id']}", use_container_width=True):
+                        # Load this record into session state for editing
+                        try:
+                            resp = rec["responses"]
+                            if isinstance(resp, str):
+                                resp = json.loads(resp)
+                            st.session_state.responses = resp
+                        except Exception:
+                            st.session_state.responses = {sec: {it: False for it in m["items"]} for sec, m in SECTIONS.items()}
+                        st.session_state.edit_record_id  = rec["id"]
+                        st.session_state.edit_student    = sname
+                        st.session_state.edit_ov_date    = ov_date
+                        st.session_state.edit_rev_date   = rev_date
+                        st.session_state.edit_by         = by
+                        st.session_state.editing_mode    = True
+                        st.session_state.saved_ok        = False
                         st.rerun()
-                    except Exception as e:
-                        st.error(f"Delete failed: {e}")
+
+                # Delete
+                with ac3:
+                    if st.button("🗑️ Delete", key=f"del_{rec['id']}", use_container_width=True):
+                        try:
+                            supabase.table("sensory_overviews").delete().eq("id", rec["id"]).execute()
+                            st.success("Deleted.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Delete failed: {e}")
