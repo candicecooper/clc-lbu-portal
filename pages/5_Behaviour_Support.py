@@ -2943,6 +2943,196 @@ def render_student_analysis_page():
         st.session_state[f"pl_start_an_{student_id}"] = _pl_start_raw
         st.session_state[f"pl_end_an_{student_id}"]   = _pl_end_raw
 
+
+    # ══ Sensory Overview Upload ════════════════════════════════════════════════
+    with st.expander("🧠 Sensory Overview — upload to enrich analysis (optional)", expanded=False):
+        st.caption(
+            "Upload a completed Sensory Overview or Sensory Profile document "
+            "(e.g. OT assessment, sensory checklist, or sensory processing summary). "
+            "The AI will extract key themes and cross-reference them with the behaviour "
+            "and trigger data already identified for this student. "
+            "Accepts .docx, .pdf, or paste text directly."
+        )
+
+        _so_key  = f"sensory_overview_{student_id}"
+        _so_data = st.session_state.get(_so_key, {})
+
+        _so_tab1, _so_tab2 = st.tabs(["📄 Upload File (.docx / .pdf)", "📋 Paste Text"])
+
+        with _so_tab1:
+            _so_file = st.file_uploader(
+                "Upload Sensory Overview",
+                type=["docx", "pdf", "odt"],
+                key=f"so_upload_{student_id}"
+            )
+            if _so_file:
+                if st.button("🤖 Extract Sensory Information", type="primary",
+                             key=f"so_extract_file_{student_id}", use_container_width=True):
+                    with st.spinner("Reading document..."):
+                        try:
+                            _fname = _so_file.name.lower()
+                            if _fname.endswith(".pdf"):
+                                try:
+                                    import fitz
+                                    _raw  = _so_file.read()
+                                    _pdoc = fitz.open(stream=_raw, filetype="pdf")
+                                    _so_text = " ".join(page.get_text() for page in _pdoc)
+                                    _pdoc.close()
+                                except Exception:
+                                    _so_text = "[PDF extraction failed — use the Paste Text tab instead]"
+                            elif _fname.endswith(".odt"):
+                                import zipfile, xml.etree.ElementTree as _ET
+                                _zf      = zipfile.ZipFile(_so_file)
+                                _content = _ET.fromstring(_zf.read("content.xml"))
+                                _so_text = " ".join(_content.itertext())
+                            else:
+                                from docx import Document as _DocxDoc
+                                _d      = _DocxDoc(_so_file)
+                                _paras  = [p.text for p in _d.paragraphs if p.text.strip()]
+                                _cells  = [c.text for t in _d.tables
+                                           for r in t.rows for c in r.cells if c.text.strip()]
+                                _so_text = " ".join(_paras + _cells)
+                            st.session_state[f"so_raw_{student_id}"] = _so_text
+                            st.success(f"✅ Extracted {len(_so_text):,} characters from {_so_file.name}")
+                        except Exception as _e:
+                            st.error(f"Extraction error: {_e}")
+
+        with _so_tab2:
+            _so_pasted = st.text_area(
+                "Paste sensory overview content here",
+                height=200,
+                placeholder="Paste the full text of the sensory overview or OT report here...",
+                key=f"so_paste_{student_id}"
+            )
+            if st.button("✅ Use this text", key=f"so_use_paste_{student_id}", use_container_width=True):
+                if _so_pasted.strip():
+                    st.session_state[f"so_raw_{student_id}"] = _so_pasted.strip()
+                    st.success("Text saved — click 'Run AI Extraction' below.")
+                else:
+                    st.warning("Please paste some content first.")
+
+        # Run AI extraction when raw text is available
+        _so_raw = st.session_state.get(f"so_raw_{student_id}", "")
+        if _so_raw:
+            st.markdown(
+                f"<div style='background:#f0fdf4;border-left:3px solid #22c55e;border-radius:6px;"
+                f"padding:.4rem .75rem;font-size:.82rem;margin:.3rem 0;'>"
+                f"✅ {len(_so_raw):,} characters of sensory overview text ready for extraction.</div>",
+                unsafe_allow_html=True
+            )
+            if not _so_data:
+                if st.button("🤖 Run AI Extraction", type="primary",
+                             key=f"so_run_ai_{student_id}", use_container_width=True):
+                    GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
+                    if GROQ_KEY:
+                        with st.spinner("AI extracting sensory themes — this takes a few seconds..."):
+                            try:
+                                from groq import Groq as _GQ
+                                import json as _sjs
+                                _gc = _GQ(api_key=GROQ_KEY)
+                                _so_prompt = (
+                                    "You are an occupational therapist and behaviour support specialist. "
+                                    f"Extract a structured sensory profile from this document for student: {student['name']}. "
+                                    "Return ONLY valid JSON — no markdown, no preamble. "
+                                    'Use this exact structure: '
+                                    '{"sensory_seeking":["list of sensory-seeking needs"],'
+                                    '"sensory_avoiding":["list of sensory sensitivities"],'
+                                    '"regulation_strategies":["effective strategies noted"],'
+                                    '"triggers":["sensory triggers that precede behaviour"],'
+                                    '"recommendations":["classroom recommendations"],'
+                                    '"summary":"2-3 sentence clinical summary"}'
+                                    f" Document: {_so_raw[:4000]}"
+                                )
+                                _so_resp = _gc.chat.completions.create(
+                                    model="llama-3.3-70b-versatile",
+                                    messages=[{"role": "user", "content": _so_prompt}],
+                                    max_tokens=1500, temperature=0.1
+                                )
+                                _so_json = _so_resp.choices[0].message.content.strip()
+                                _so_json = _so_json.replace("```json", "").replace("```", "").strip()
+                                _so_parsed = _sjs.loads(_so_json)
+                                st.session_state[_so_key] = _so_parsed
+                                _so_data = _so_parsed
+                                st.success("✅ Sensory overview processed.")
+                                st.rerun()
+                            except Exception as _se:
+                                st.error(f"AI extraction failed: {_se}")
+                    else:
+                        st.error("Groq API key not configured — AI extraction unavailable.")
+
+        # Re-read _so_data after possible update
+        _so_data = st.session_state.get(_so_key, {})
+
+        # Display extracted sensory profile
+        if _so_data:
+            st.markdown("---")
+            st.markdown("#### 🧠 Sensory Profile — Extracted Themes")
+            if _so_data.get("summary"):
+                st.markdown(
+                    f"<div style='background:#f0f9ff;border-left:4px solid #0284c7;"
+                    f"border-radius:6px;padding:.75rem 1rem;font-size:.88rem;"
+                    f"color:#0c4a6e;margin-bottom:.6rem;'>"
+                    f"{_so_data['summary']}</div>",
+                    unsafe_allow_html=True
+                )
+            _sc1, _sc2 = st.columns(2)
+            with _sc1:
+                if _so_data.get("sensory_seeking"):
+                    st.markdown("**🔍 Sensory seeking / high need:**")
+                    for item in _so_data["sensory_seeking"][:6]:
+                        st.markdown(f"• {item}")
+                if _so_data.get("triggers"):
+                    st.markdown("**⚡ Sensory triggers:**")
+                    for item in _so_data["triggers"][:6]:
+                        st.markdown(f"• {item}")
+            with _sc2:
+                if _so_data.get("sensory_avoiding"):
+                    st.markdown("**🛡️ Sensory sensitivities:**")
+                    for item in _so_data["sensory_avoiding"][:6]:
+                        st.markdown(f"• {item}")
+                if _so_data.get("regulation_strategies"):
+                    st.markdown("**✅ Effective regulation strategies:**")
+                    for item in _so_data["regulation_strategies"][:6]:
+                        st.markdown(f"• {item}")
+            if _so_data.get("recommendations"):
+                st.markdown("**📚 Classroom recommendations:**")
+                for item in _so_data["recommendations"][:8]:
+                    st.markdown(f"• {item}")
+
+            # Cross-reference with incident trigger data
+            if "full_df" in dir() and not full_df.empty:
+                st.markdown("---")
+                st.markdown("#### 🔗 Sensory–Behaviour Cross-Reference")
+                _sens_kw = ["noise","sound","crowd","touch","bright","light","texture",
+                            "smell","movement","propriocep","vestibular","tactile",
+                            "auditory","visual","sensory","hungry","food","thirsty"]
+                _ant_lower = full_df["antecedent"].dropna().str.lower()
+                _sens_mask = _ant_lower.apply(lambda a: any(kw in a for kw in _sens_kw))
+                _n_sens = int(_sens_mask.sum())
+                if _n_sens > 0:
+                    _pct_sens = int(_n_sens / len(full_df) * 100)
+                    st.markdown(
+                        f"<div style='background:#fefce8;border-left:3px solid #eab308;"
+                        f"border-radius:6px;padding:.55rem .85rem;font-size:.84rem;margin:.3rem 0;'>"
+                        f"<b>{_pct_sens}% of incidents ({_n_sens}/{len(full_df)})</b> were preceded by "
+                        f"antecedents with a sensory dimension. "
+                        "This aligns with the uploaded sensory profile and supports prioritising "
+                        "sensory regulation strategies as antecedent interventions.</div>",
+                        unsafe_allow_html=True
+                    )
+                else:
+                    st.caption(
+                        "No direct sensory antecedent overlap detected in current incident logs. "
+                        "Consider whether sensory factors are being captured consistently "
+                        "when logging antecedents."
+                    )
+
+            if st.button("🗑️ Clear sensory overview", key=f"so_clear_{student_id}"):
+                for _k in [_so_key, f"so_raw_{student_id}"]:
+                    if _k in st.session_state:
+                        del st.session_state[_k]
+                st.rerun()
+
     with st.expander("⏱️ Attendance & Absence Tracking — saved automatically", expanded=False):
         st.caption(
             "Record attendance pattern and specific absent dates. "
