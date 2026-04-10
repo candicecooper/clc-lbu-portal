@@ -83,7 +83,7 @@ st.markdown(f"""
 @st.cache_resource
 def get_supabase():
     url = "https://lvzaebjrxrgguypqvdcq.supabase.co"
-    key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx2emFlYmpyeHJnZ3V5cHZkY3EiLCJyb2xlIjoiYW5vbiIsImlhdCI6MTczMDM0MjkwNCwiZXhwIjoyMDQ1OTE4OTA0fQ.RkfHNMnQIGeq-Xy0BFxHkSEFRBVWE1kLJJfiirwOMnI"
+    key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx2emFlYmpyeHJnZ3V5cHF2ZGNxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NDAzNDU2MSwiZXhwIjoyMDc5NjEwNTYxfQ.vw8nYDA-tnQVr-mAEAGFsxUkcYbB5J8ilv4ATCBnlOY"
     return create_client(url, key)
 
 supabase = get_supabase()
