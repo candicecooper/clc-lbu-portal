@@ -1,602 +1,553 @@
 import streamlit as st
-import json
-import os
-from datetime import date, datetime, timedelta
-from supabase import create_client
+from datetime import datetime, date, timedelta
+import pandas as pd
 from groq import Groq
+import json
 
-# ── Page config ──────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# Page Config
+# ═══════════════════════════════════════════════════════════════════════════════
 st.set_page_config(page_title="SMARTAR Goal Builder", page_icon="🎯", layout="wide")
 
-# ── Clients ───────────────────────────────────────────────────────────────────
-@st.cache_resource
-def get_supabase():
-    return create_client(
-        st.secrets["supabase"]["url"],
-        st.secrets["supabase"]["key"]
-    )
+# ═══════════════════════════════════════════════════════════════════════════════
+# Database Connection
+# ═══════════════════════════════════════════════════════════════════════════════
+from database import get_supabase
+supabase = get_supabase()
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Groq Client - FIXED to use GROQ_API_KEY format
+# ═══════════════════════════════════════════════════════════════════════════════
 @st.cache_resource
 def get_groq():
-    return Groq(api_key=st.secrets["groq"]["api_key"])
+    return Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-sb = get_supabase()
 groq_client = get_groq()
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-LEVEL_ORDER  = ["EXCEEDING", "ABOVE", "EXPECTED", "BELOW", "NOT YET"]
-LEVEL_EMOJI  = {"EXCEEDING": "🌟", "ABOVE": "✅", "EXPECTED": "🎯", "BELOW": "⚠️", "NOT YET": "❌"}
-LEVEL_COLOR  = {"EXCEEDING": "#1a7a3c", "ABOVE": "#2d8a5e", "EXPECTED": "#1d6fa4", "BELOW": "#d97706", "NOT YET": "#c0392b"}
+def groq_chat(user_msg, system="You are a helpful assistant.", model="llama-3.3-70b-versatile", max_tokens=1500):
+    try:
+        response = groq_client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_msg}
+            ],
+            max_tokens=max_tokens,
+            temperature=0.7
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        st.error(f"Groq API error: {e}")
+        return None
 
-GROUPINGS    = ["Independently", "One to one", "Small group", "Large group", "Unstructured", "With a peer"]
-TASK_TYPES   = ["Written task", "Hands-on activity", "Using equipment", "Paper/pencil task", "Oral/listening activity", "Following a routine", "Computer-based task", "Other"]
-SETTINGS     = ["During a maths lesson", "During a literacy lesson", "During morning block", "During afternoon block", "During transitions", "At recess", "At lunch", "On excursion", "During negotiated school time", "During a learning activity"]
-PROMPT_TYPES = ["independently (no prompts)", "with a gestural prompt", "with a verbal prompt", "with a visual prompt", "with a model prompt", "with partial physical support", "with full physical support", "with SSO support", "with verbal and gestural prompts", "with verbal and visual prompts"]
-RATE_OPTIONS = [
-    "3 out of 5 days over 3 weeks",
-    "4 out of 5 days over 3 weeks",
-    "3 out of 5 days over 5 weeks",
-    "80% of the time over a 3-week period",
-    "80% of the time over a 5-week period",
-    "3 out of 3 times over a 3-week period",
-    "on 3 consecutive occasions",
-    "consistently over 2 weeks",
+# ═══════════════════════════════════════════════════════════════════════════════
+# SMARTAR Component Options (from SMARTAR Characteristics 2019)
+# ═══════════════════════════════════════════════════════════════════════════════
+GROUPING_OPTIONS = [
+    "Independently",
+    "With 1:1 adult support",
+    "In a small group (2-4 students)",
+    "In a large group (5+ students)",
+    "With peer support"
 ]
 
-PROGRAMS = ["JP", "PY", "SY"]
+TASK_TYPE_OPTIONS = [
+    "Structured task",
+    "Semi-structured activity",
+    "Unstructured/free time",
+    "Transition between activities",
+    "Self-directed learning"
+]
 
-def groq_call(prompt, system="You are an expert educator supporting students in alternative education settings. Be concise and practical."):
-    resp = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
-        max_tokens=800
-    )
-    return resp.choices[0].message.content.strip()
+SETTING_OPTIONS = [
+    "Classroom",
+    "Kitchen",
+    "Outdoor/Yard",
+    "Playground",
+    "Spill-out space",
+    "During transitions",
+    "Community setting"
+]
 
-# ── Supabase helpers ──────────────────────────────────────────────────────────
-def get_students():
-    r = sb.table("smartar_students").select("*").order("student_name").execute()
-    return r.data or []
+PROMPT_OPTIONS = [
+    "No prompts (independent)",
+    "Verbal prompt",
+    "Visual prompt",
+    "Gestural prompt",
+    "Physical prompt",
+    "Combination of prompts"
+]
 
-def get_goals(student_id=None):
-    q = sb.table("smartar_goals").select("*")
-    if student_id:
-        q = q.eq("student_id", student_id)
-    q = q.eq("active", True).order("goal_number")
-    return q.execute().data or []
+RATE_OPTIONS = [
+    "On every opportunity",
+    "4 out of 5 opportunities",
+    "3 out of 5 opportunities",
+    "Daily",
+    "Weekly",
+    "By end of term"
+]
 
-def get_tracking(goal_id, days=30):
-    since = (date.today() - timedelta(days=days)).isoformat()
-    r = sb.table("smartar_tracking").select("*").eq("goal_id", goal_id).gte("tracked_date", since).order("tracked_date").execute()
-    return r.data or []
-
-def get_today_tracking(goal_id):
-    r = sb.table("smartar_tracking").select("*").eq("goal_id", goal_id).eq("tracked_date", date.today().isoformat()).execute()
-    return r.data or []
-
-def upsert_session(goal_id, session, level, staff):
-    today = date.today().isoformat()
-    existing = sb.table("smartar_tracking").select("id").eq("goal_id", goal_id).eq("tracked_date", today).eq("session", session).execute()
-    if existing.data:
-        sb.table("smartar_tracking").update({"level": level, "staff_name": staff, "updated_at": datetime.utcnow().isoformat()}).eq("id", existing.data[0]["id"]).execute()
-    else:
-        sb.table("smartar_tracking").insert({"goal_id": goal_id, "tracked_date": today, "session": session, "level": level, "staff_name": staff}).execute()
-
-def calc_percentages(tracking_data):
-    counts = {l: 0 for l in LEVEL_ORDER}
-    for row in tracking_data:
-        if row["level"] in counts:
-            counts[row["level"]] += 1
-    total = sum(counts.values())
-    if total == 0:
-        return counts, total, {}
-    pcts = {l: round(counts[l] / total * 100, 1) for l in LEVEL_ORDER}
-    return counts, total, pcts
-
-# ── CSS ───────────────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-    .gas-card {
-        background: #f8fafc;
-        border: 1px solid #e2e8f0;
-        border-radius: 12px;
-        padding: 16px 20px;
-        margin-bottom: 12px;
-    }
-    .gas-level-bar {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 6px 0;
-        border-bottom: 1px solid #f0f0f0;
-    }
-    .gas-level-label {
-        font-weight: 600;
-        font-size: 0.82rem;
-        width: 90px;
-        flex-shrink: 0;
-    }
-    .gas-level-desc {
-        font-size: 0.85rem;
-        color: #374151;
-        flex: 1;
-    }
-    .student-header {
-        background: linear-gradient(135deg, #1d6fa4, #134e7a);
-        color: white;
-        padding: 14px 20px;
-        border-radius: 10px;
-        margin-bottom: 16px;
-    }
-    .metric-pill {
-        display: inline-block;
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-size: 0.8rem;
-        font-weight: 600;
-        margin: 2px;
-    }
-    .session-btn-row {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-    }
-    .goal-badge {
-        background: #e0f2fe;
-        color: #0369a1;
-        font-size: 0.75rem;
-        padding: 2px 8px;
-        border-radius: 4px;
-        font-weight: 600;
-    }
-    .exclusion-box {
-        background: #fff7ed;
-        border-left: 4px solid #f97316;
-        padding: 10px 14px;
-        border-radius: 0 8px 8px 0;
-        font-size: 0.88rem;
-        margin-bottom: 8px;
-    }
-    .smartar-box {
-        background: #f0fdf4;
-        border-left: 4px solid #16a34a;
-        padding: 10px 14px;
-        border-radius: 0 8px 8px 0;
-        font-size: 0.88rem;
-    }
-    div[data-testid="stTabs"] [data-baseweb="tab"] {
-        font-size: 0.95rem;
-        font-weight: 600;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# ── Sidebar ───────────────────────────────────────────────────────────────────
-st.sidebar.title("🎯 SMARTAR Tool")
-staff_name = st.sidebar.text_input("Your name", key="staff_name", placeholder="Enter your name")
-view = st.sidebar.radio("View", ["🏫 Class Dashboard", "📋 Goal Builder", "📊 Daily Tracking", "📈 Progress Report"])
-
-st.sidebar.markdown("---")
-st.sidebar.caption("SMARTAR + GAS Goal Tracking · CLC LBU")
+GAS_LEVELS = ["EXCEEDING", "ABOVE", "EXPECTED", "BELOW", "NOT YET"]
+SESSION_TIMES = ["Morning", "Middle", "Afternoon"]
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 1. CLASS DASHBOARD
+# Helper Functions
 # ═══════════════════════════════════════════════════════════════════════════════
-if view == "🏫 Class Dashboard":
-    st.title("🏫 Class Dashboard")
-    st.caption(f"Today — {date.today().strftime('%A, %d %B %Y')}")
+def get_all_students():
+    """Fetch all students with active SMARTAR goals."""
+    try:
+        response = supabase.table("smartar_students").select("*").order("student_name").execute()
+        return response.data if response.data else []
+    except Exception as e:
+        st.error(f"Error fetching students: {e}")
+        return []
 
-    students = get_students()
-    if not students:
-        st.info("No students set up yet. Go to **Goal Builder** to add your first student.")
-        st.stop()
+def get_student_goals(student_name):
+    """Fetch all goals for a specific student."""
+    try:
+        response = supabase.table("smartar_goals").select("*").eq("student_name", student_name).order("created_at", desc=True).execute()
+        return response.data if response.data else []
+    except Exception as e:
+        st.error(f"Error fetching goals: {e}")
+        return []
 
-    prog_filter = st.selectbox("Filter by Program", ["All", "JP", "PY", "SY"], index=0)
-    if prog_filter != "All":
-        students = [s for s in students if s.get("program") == prog_filter]
+def get_tracking_data(goal_id, days=21):
+    """Fetch tracking data for a specific goal."""
+    try:
+        cutoff = (datetime.now() - timedelta(days=days)).date().isoformat()
+        response = supabase.table("smartar_tracking").select("*").eq("goal_id", goal_id).gte("session_date", cutoff).order("session_date", desc=True).order("session_time").execute()
+        return response.data if response.data else []
+    except Exception as e:
+        st.error(f"Error fetching tracking data: {e}")
+        return []
 
-    if not students:
-        st.warning("No students found for this program.")
-        st.stop()
+def generate_gas_levels(smartar_goal, rate):
+    """Use Groq to generate GAS performance level descriptors."""
+    system = """You are an educational assessment expert specializing in Goal Attainment Scaling (GAS) for students with diverse learning needs.
 
-    for student in students:
-        goals = get_goals(student["id"])
-        if not goals:
-            continue
+Given a SMARTAR goal and success rate, generate 5 performance level descriptors:
+- EXCEEDING: Student exceeds the expected goal
+- ABOVE: Student performing above expected level
+- EXPECTED: Student meeting the goal as written
+- BELOW: Student approaching but not yet meeting goal
+- NOT YET: Student well below expected performance
 
-        with st.expander(f"**{student['student_name']}** — {student.get('program','?')}  ·  {len(goals)} goal{'s' if len(goals)!=1 else ''}", expanded=True):
-            for goal in goals:
-                tracking = get_tracking(goal["id"], days=21)
-                counts, total, pcts = calc_percentages(tracking)
-                today_rows = get_today_tracking(goal["id"])
-                today_sessions = {r["session"]: r["level"] for r in today_rows}
+Each descriptor should:
+1. Be specific and observable
+2. Scale appropriately from the base goal
+3. Use positive, strengths-based language
+4. Be achievable and realistic
 
-                st.markdown(f'<span class="goal-badge">Goal {goal["goal_number"]}</span>', unsafe_allow_html=True)
+Return ONLY a JSON object with keys: exceeding, above, expected, below, not_yet"""
 
-                # Exclusion goal
-                if goal.get("exclusion_goal"):
-                    st.markdown(f'<div class="exclusion-box">🏫 <b>Exclusion Goal:</b> {goal["exclusion_goal"]}</div>', unsafe_allow_html=True)
+    user_prompt = f"""SMARTAR Goal: {smartar_goal}
+Success Rate: {rate}
 
-                # SMARTAR goal
-                st.markdown(f'<div class="smartar-box">🎯 <b>SMARTAR Goal:</b> {goal["goal_statement"]}</div>', unsafe_allow_html=True)
+Generate 5 GAS level descriptors for this goal."""
 
-                # Today's sessions
-                cols = st.columns([1, 1, 1, 2])
-                for i, session in enumerate(["Morning", "Middle", "Afternoon"]):
-                    lvl = today_sessions.get(session)
-                    if lvl:
-                        cols[i].markdown(f"**{session}**<br>{LEVEL_EMOJI.get(lvl,'')} {lvl}", unsafe_allow_html=True)
-                    else:
-                        cols[i].markdown(f"**{session}**<br>⬜ Not recorded", unsafe_allow_html=True)
+    try:
+        response = groq_chat(user_prompt, system=system, max_tokens=800)
+        if response:
+            clean = response.strip()
+            if clean.startswith("```"):
+                clean = "\n".join(clean.split("\n")[1:])
+            if clean.endswith("```"):
+                clean = clean.rsplit("```", 1)[0]
+            data = json.loads(clean)
+            return data
+    except Exception as e:
+        st.error(f"Error generating GAS levels: {e}")
+    
+    return None
 
-                # 21-day summary bar
-                if total > 0:
-                    bar_parts = []
-                    for lvl in LEVEL_ORDER:
-                        pct = pcts.get(lvl, 0)
-                        if pct > 0:
-                            bar_parts.append(f'<div style="width:{pct}%;background:{LEVEL_COLOR[lvl]};height:14px;display:inline-block;title=\'{lvl}: {pct}%\'"></div>')
-                    bar_html = f'<div style="display:flex;width:100%;border-radius:6px;overflow:hidden;margin:6px 0">' + "".join(bar_parts) + '</div>'
-                    st.markdown(bar_html, unsafe_allow_html=True)
-                    legend = "  ".join([f'{LEVEL_EMOJI[l]} **{l}** {pcts.get(l,0):.0f}%' for l in LEVEL_ORDER if pcts.get(l,0)>0])
-                    st.caption(f"Last 21 days ({total} sessions): {legend}")
-                else:
-                    st.caption("No tracking data yet.")
+def refine_smartar_goal(components):
+    """Use Groq to refine assembled SMARTAR goal into professional language."""
+    system = """You are an educational goal-writing expert. Refine the assembled SMARTAR goal into clear, professional, observable language suitable for student IEPs.
 
-                st.markdown("---")
+Rules:
+- Keep it specific and measurable
+- Use positive, strengths-based language
+- Ensure it's achievable and realistic
+- Make it time-bound and contextual
+- Write in active voice
+- Be concise (1-2 sentences max)
 
+Return ONLY the refined goal text, nothing else."""
+
+    assembled = f"{components['skill']} {components['grouping']} during {components['task_type']} in {components['setting']} with {components['prompts']} {components['rate']}"
+    
+    try:
+        refined = groq_chat(f"Assembled goal: {assembled}\n\nRefine this into a professional SMARTAR goal.", system=system, max_tokens=300)
+        return refined.strip() if refined else assembled
+    except Exception as e:
+        st.error(f"Error refining goal: {e}")
+        return assembled
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 2. GOAL BUILDER
+# TAB 1: GOAL BUILDER
 # ═══════════════════════════════════════════════════════════════════════════════
-elif view == "📋 Goal Builder":
-    st.title("📋 SMARTAR Goal Builder")
-
-    tab1, tab2 = st.tabs(["➕ Add / Edit Goals", "👥 Manage Students"])
-
-    # ── Student management ────────────────────────────────────────────────────
-    with tab2:
-        st.subheader("Add New Student")
-        c1, c2, c3 = st.columns([3, 1, 1])
-        new_name = c1.text_input("Student first name", key="new_student_name")
-        new_prog = c2.selectbox("Program", PROGRAMS, key="new_prog")
-        if c3.button("Add Student", type="primary"):
-            if new_name.strip():
-                sb.table("smartar_students").insert({"student_name": new_name.strip(), "program": new_prog}).execute()
-                st.success(f"✅ {new_name.strip()} added.")
+def render_goal_builder():
+    st.markdown("## 📋 Goal Builder")
+    st.markdown("Build new SMARTAR goals with AI-assisted refinement and GAS level generation.")
+    
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        st.markdown("### Student & Exclusion Goal")
+        student_name = st.text_input("Student Name", key="gb_student")
+        exclusion_goal = st.text_area("Exclusion Goal (from main school)", height=100, 
+                                     help="Paste the exclusion goal provided by the mainstream school", 
+                                     key="gb_exclusion")
+    
+    with col2:
+        st.markdown("### SMARTAR Components")
+        skill = st.text_input("Skill/Behaviour (what)", placeholder="e.g., 'Will use a calm voice'", key="gb_skill")
+        grouping = st.selectbox("Grouping (with whom)", GROUPING_OPTIONS, key="gb_grouping")
+        task_type = st.selectbox("Task Type (during what)", TASK_TYPE_OPTIONS, key="gb_task")
+        setting = st.selectbox("Setting (where)", SETTING_OPTIONS, key="gb_setting")
+        prompts = st.selectbox("Prompts (support level)", PROMPT_OPTIONS, key="gb_prompts")
+        rate = st.selectbox("Rate (how often)", RATE_OPTIONS, key="gb_rate")
+    
+    st.markdown("---")
+    
+    if st.button("🤖 Refine Goal with AI", type="primary", use_container_width=True):
+        if not student_name or not skill:
+            st.error("Please enter student name and skill/behaviour.")
+        else:
+            with st.spinner("Refining SMARTAR goal..."):
+                components = {
+                    "skill": skill,
+                    "grouping": grouping,
+                    "task_type": task_type,
+                    "setting": setting,
+                    "prompts": prompts,
+                    "rate": rate
+                }
+                refined = refine_smartar_goal(components)
+                st.session_state["refined_goal"] = refined
+                st.session_state["goal_components"] = components
+                st.success("Goal refined! Review below.")
                 st.rerun()
-            else:
-                st.warning("Please enter a student name.")
-
-        st.subheader("Current Students")
-        students = get_students()
-        if students:
-            for s in students:
-                goals = get_goals(s["id"])
-                sc1, sc2, sc3 = st.columns([3, 1, 1])
-                sc1.write(f"**{s['student_name']}** — {s.get('program','?')} — {len(goals)} goals")
-                if sc3.button("Archive", key=f"arch_{s['id']}"):
-                    sb.table("smartar_students").update({"active": False}).eq("id", s["id"]).execute()
+    
+    if "refined_goal" in st.session_state:
+        st.markdown("### ✨ Refined SMARTAR Goal")
+        refined_goal = st.text_area("Edit if needed", value=st.session_state["refined_goal"], height=100, key="gb_refined_edit")
+        
+        if st.button("📊 Generate GAS Levels", type="secondary", use_container_width=True):
+            with st.spinner("Generating performance level descriptors..."):
+                gas_data = generate_gas_levels(refined_goal, st.session_state["goal_components"]["rate"])
+                if gas_data:
+                    st.session_state["gas_levels"] = gas_data
+                    st.success("GAS levels generated! Review and save below.")
                     st.rerun()
-        else:
-            st.info("No students yet.")
-
-    # ── Goal builder ──────────────────────────────────────────────────────────
-    with tab1:
-        students = get_students()
-        if not students:
-            st.info("Add a student first in the **Manage Students** tab.")
-            st.stop()
-
-        student_options = {s["student_name"]: s for s in students}
-        selected_name = st.selectbox("Select student", list(student_options.keys()))
-        student = student_options[selected_name]
-        existing_goals = get_goals(student["id"])
-
-        st.markdown(f'<div class="student-header"><b>{selected_name}</b> · {student.get("program","?")} · {len(existing_goals)}/4 goals</div>', unsafe_allow_html=True)
-
-        # Show existing goals
-        if existing_goals:
-            st.subheader("Current Goals")
-            for g in existing_goals:
-                with st.expander(f"Goal {g['goal_number']} — {g['goal_statement'][:80]}..."):
-                    st.markdown(f'<div class="exclusion-box">🏫 <b>Exclusion Goal:</b> {g.get("exclusion_goal","—")}</div>', unsafe_allow_html=True)
-                    st.markdown(f'<div class="smartar-box">🎯 <b>SMARTAR Goal:</b> {g["goal_statement"]}</div>', unsafe_allow_html=True)
-                    gas = json.loads(g.get("gas_levels", "{}")) if isinstance(g.get("gas_levels"), str) else (g.get("gas_levels") or {})
-                    if gas:
-                        st.markdown("**GAS Performance Levels:**")
-                        for lvl in LEVEL_ORDER:
-                            desc = gas.get(lvl, "")
-                            emoji = LEVEL_EMOJI[lvl]
-                            color = LEVEL_COLOR[lvl]
-                            st.markdown(f'<div class="gas-level-bar"><span class="gas-level-label" style="color:{color}">{emoji} {lvl}</span><span class="gas-level-desc">{desc}</span></div>', unsafe_allow_html=True)
-                    if st.button(f"🗑 Archive Goal {g['goal_number']}", key=f"del_{g['id']}"):
-                        sb.table("smartar_goals").update({"active": False}).eq("id", g["id"]).execute()
-                        st.rerun()
-
-        # New goal form
-        if len(existing_goals) >= 4:
-            st.warning("This student already has 4 active goals. Archive one before adding another.")
-            st.stop()
-
-        st.subheader(f"Add Goal {len(existing_goals)+1}")
-
-        excl_goal = st.text_area(
-            "🏫 Exclusion Goal (from main school)",
-            placeholder="Paste the exclusion goal as received from the main school...",
-            height=80
-        )
-
-        st.markdown("#### Build the SMARTAR Goal")
-        st.caption("Complete each field — the goal statement will be assembled automatically, then refined by AI.")
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            student_first = st.text_input("Student first name (as it appears in goal)", value=selected_name.split()[0])
-            skill = st.text_area("Expected skill / behaviour", placeholder="e.g. build his learning resilience by staying on task", height=80)
-            grouping = st.selectbox("Grouping", GROUPINGS)
-            task_type = st.selectbox("Task type", TASK_TYPES)
-
-        with col2:
-            setting = st.selectbox("Setting", SETTINGS)
-            time_freq = st.text_input("Time / frequency of assessment", placeholder="e.g. each day, once a week, daily")
-            prompts = st.selectbox("Prompts (from least to most)", PROMPT_TYPES)
-            rate = st.selectbox("Rate / success criteria", RATE_OPTIONS)
-
-        # Assemble preview goal
-        if skill and student_first:
-            assembled = f"{student_first} will {skill} {grouping.lower()} {task_type.lower()} {setting.lower()} {time_freq} {prompts} {rate}."
-            st.markdown("**Assembled Goal Preview:**")
-            st.info(assembled)
-        else:
-            assembled = ""
-
-        # AI refinement
+    
+    if "gas_levels" in st.session_state:
+        st.markdown("### 📈 GAS Performance Levels")
+        st.markdown("Review and edit each performance level descriptor:")
+        
+        gas_levels_edit = {}
+        for level in ["exceeding", "above", "expected", "below", "not_yet"]:
+            label = level.replace("_", " ").upper()
+            gas_levels_edit[level] = st.text_area(
+                f"**{label}**",
+                value=st.session_state["gas_levels"].get(level, ""),
+                height=80,
+                key=f"gb_gas_{level}"
+            )
+        
         st.markdown("---")
-        col_a, col_b = st.columns(2)
-
-        if col_a.button("✨ Refine Goal with AI", disabled=not assembled, type="primary"):
-            with st.spinner("Refining goal..."):
-                refined = groq_call(f"""You are an expert educator specialising in the SMARTAR framework and alternative education.
-
-Refine this goal statement into clear, professional, student-centred language suitable for an IEP/support plan. 
-Keep all the specific details (grouping, task, setting, time, prompts, rate). 
-Do NOT change the student's name. Return ONLY the refined goal statement, nothing else.
-
-Goal to refine: {assembled}""")
-            st.session_state["refined_goal"] = refined
-
-        refined_goal = st.session_state.get("refined_goal", assembled)
-        if refined_goal:
-            final_goal = st.text_area("Final SMARTAR Goal (edit if needed)", value=refined_goal, height=100, key="final_goal_text")
-        else:
-            final_goal = assembled
-
-        # GAS level generation
-        if st.button("🎚 Generate GAS Performance Levels", disabled=not final_goal, type="secondary"):
-            with st.spinner("Generating GAS levels..."):
-                gas_prompt = f"""You are an expert educator creating a Goal Attainment Scale (GAS) for this SMARTAR goal:
-
-"{final_goal}"
-
-Create 5 performance level descriptions that logically scale above and below this EXPECTED level.
-The EXPECTED level IS the goal as written.
-
-Return ONLY a JSON object with these exact keys: EXCEEDING, ABOVE, EXPECTED, BELOW, NOT_YET
-Each value should be a brief modified version of the goal showing what the student does at that level.
-Keep the student name. Only modify the rate/frequency/success criteria to show each level.
-No markdown, no explanation, pure JSON only."""
-                raw = groq_call(gas_prompt)
-                try:
-                    raw_clean = raw.strip().strip("```json").strip("```").strip()
-                    gas_levels = json.loads(raw_clean)
-                    # normalise key
-                    if "NOT_YET" in gas_levels and "NOT YET" not in gas_levels:
-                        gas_levels["NOT YET"] = gas_levels.pop("NOT_YET")
-                    st.session_state["gas_levels"] = gas_levels
-                except Exception as e:
-                    st.error(f"Couldn't parse GAS levels. Try again. ({e})")
-                    st.code(raw)
-
-        gas_levels = st.session_state.get("gas_levels", {})
-        if gas_levels:
-            st.markdown("**Review GAS Performance Levels:**")
-            edited_gas = {}
-            for lvl in LEVEL_ORDER:
-                key = lvl if lvl in gas_levels else lvl.replace(" ", "_")
-                default = gas_levels.get(lvl, gas_levels.get(key, ""))
-                color = LEVEL_COLOR[lvl]
-                edited_gas[lvl] = st.text_area(
-                    f"{LEVEL_EMOJI[lvl]} {lvl}",
-                    value=default,
-                    height=70,
-                    key=f"gas_edit_{lvl}"
-                )
-        else:
-            edited_gas = {}
-
-        # Save goal
-        st.markdown("---")
-        if st.button("💾 Save Goal", type="primary", disabled=not final_goal):
-            if not staff_name:
-                st.warning("Enter your name in the sidebar first.")
-            else:
-                new_goal = {
-                    "student_id": student["id"],
-                    "goal_number": len(existing_goals) + 1,
-                    "exclusion_goal": excl_goal.strip() if excl_goal else None,
-                    "goal_statement": final_goal.strip(),
-                    "gas_levels": json.dumps(edited_gas) if edited_gas else None,
-                    "created_by": staff_name,
+        
+        if st.button("💾 Save Goal to Database", type="primary", use_container_width=True):
+            try:
+                # Check if student exists, create if not
+                student_check = supabase.table("smartar_students").select("*").eq("student_name", student_name).execute()
+                if not student_check.data:
+                    supabase.table("smartar_students").insert({"student_name": student_name}).execute()
+                
+                # Save goal
+                goal_data = {
+                    "student_name": student_name,
+                    "exclusion_goal": exclusion_goal,
+                    "smartar_goal": refined_goal,
+                    "skill": st.session_state["goal_components"]["skill"],
+                    "grouping": st.session_state["goal_components"]["grouping"],
+                    "task_type": st.session_state["goal_components"]["task_type"],
+                    "setting": st.session_state["goal_components"]["setting"],
+                    "prompts": st.session_state["goal_components"]["prompts"],
+                    "rate": st.session_state["goal_components"]["rate"],
+                    "gas_exceeding": gas_levels_edit["exceeding"],
+                    "gas_above": gas_levels_edit["above"],
+                    "gas_expected": gas_levels_edit["expected"],
+                    "gas_below": gas_levels_edit["below"],
+                    "gas_not_yet": gas_levels_edit["not_yet"],
                     "active": True
                 }
-                sb.table("smartar_goals").insert(new_goal).execute()
-                # clear session state
-                for k in ["refined_goal", "gas_levels"]:
-                    st.session_state.pop(k, None)
-                st.success(f"✅ Goal saved for {selected_name}!")
+                
+                supabase.table("smartar_goals").insert(goal_data).execute()
+                st.success(f"✅ Goal saved for {student_name}!")
+                
+                # Clear session state
+                for key in ["refined_goal", "goal_components", "gas_levels"]:
+                    if key in st.session_state:
+                        del st.session_state[key]
+                
                 st.rerun()
-
+                
+            except Exception as e:
+                st.error(f"Error saving goal: {e}")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 3. DAILY TRACKING
+# TAB 2: DAILY TRACKING
 # ═══════════════════════════════════════════════════════════════════════════════
-elif view == "📊 Daily Tracking":
-    st.title("📊 Daily Tracking")
-
-    if not staff_name:
-        st.warning("Enter your name in the sidebar to record tracking data.")
-        st.stop()
-
-    students = get_students()
+def render_daily_tracking():
+    st.markdown("## 📊 Daily Tracking")
+    st.markdown("Record session-by-session performance levels for active goals.")
+    
+    students = get_all_students()
     if not students:
-        st.info("No students set up yet.")
-        st.stop()
-
-    track_date = st.date_input("Tracking date", value=date.today())
-    st.markdown(f"**Recording for: {track_date.strftime('%A, %d %B %Y')}**")
-
-    student_options = {s["student_name"]: s for s in students}
-    selected_name = st.selectbox("Select student", list(student_options.keys()))
-    student = student_options[selected_name]
-    goals = get_goals(student["id"])
-
-    if not goals:
-        st.info(f"No goals set up for {selected_name}. Go to Goal Builder first.")
-        st.stop()
-
-    st.markdown("---")
-
-    for goal in goals:
-        today_rows = sb.table("smartar_tracking").select("*").eq("goal_id", goal["id"]).eq("tracked_date", track_date.isoformat()).execute().data or []
-        today_sessions = {r["session"]: r["level"] for r in today_rows}
-        gas_levels = json.loads(goal.get("gas_levels") or "{}") if isinstance(goal.get("gas_levels"), str) else (goal.get("gas_levels") or {})
-
-        st.markdown(f"### Goal {goal['goal_number']}")
-        st.markdown(f'<div class="smartar-box">🎯 {goal["goal_statement"]}</div>', unsafe_allow_html=True)
-
-        if gas_levels:
-            with st.expander("📋 View GAS Performance Levels"):
-                for lvl in LEVEL_ORDER:
-                    desc = gas_levels.get(lvl, "")
-                    color = LEVEL_COLOR[lvl]
-                    st.markdown(f'<div class="gas-level-bar"><span class="gas-level-label" style="color:{color}">{LEVEL_EMOJI[lvl]} {lvl}</span><span class="gas-level-desc">{desc}</span></div>', unsafe_allow_html=True)
-
-        st.markdown("**Record session:**")
-        session_cols = st.columns(3)
-        sessions = ["Morning", "Middle", "Afternoon"]
-
-        for i, session in enumerate(sessions):
-            with session_cols[i]:
-                st.markdown(f"**{session}**")
-                current = today_sessions.get(session)
-                if current:
-                    st.markdown(f"Currently: {LEVEL_EMOJI.get(current,'')} **{current}**")
-                for lvl in LEVEL_ORDER:
-                    btn_key = f"track_{goal['id']}_{session}_{lvl}_{track_date}"
-                    is_selected = current == lvl
-                    label = f"{LEVEL_EMOJI[lvl]} {lvl}" + (" ✓" if is_selected else "")
-                    if st.button(label, key=btn_key, use_container_width=True,
-                                 type="primary" if is_selected else "secondary"):
-                        upsert_session(goal["id"], session, lvl, staff_name)
-                        st.rerun()
-
+        st.info("No students with active goals yet. Create a goal in the Goal Builder tab.")
+        return
+    
+    student_names = [s["student_name"] for s in students]
+    selected_student = st.selectbox("Select Student", student_names, key="dt_student")
+    
+    if selected_student:
+        goals = get_student_goals(selected_student)
+        active_goals = [g for g in goals if g.get("active", True)]
+        
+        if not active_goals:
+            st.info(f"No active goals for {selected_student}. Create a goal in the Goal Builder tab.")
+            return
+        
+        goal_options = [f"{g['smartar_goal'][:60]}..." if len(g['smartar_goal']) > 60 else g['smartar_goal'] for g in active_goals]
+        selected_goal_idx = st.selectbox("Select Goal", range(len(goal_options)), format_func=lambda i: goal_options[i], key="dt_goal")
+        
+        goal = active_goals[selected_goal_idx]
+        
         st.markdown("---")
-
-    st.success("Tracking saves immediately when you click a level button.")
-
+        st.markdown("### 🎯 Goal Details")
+        st.info(f"**SMARTAR Goal:** {goal['smartar_goal']}")
+        
+        # Display GAS levels
+        with st.expander("📈 View GAS Performance Levels"):
+            for level, label in [("gas_exceeding", "EXCEEDING"), ("gas_above", "ABOVE"), 
+                                ("gas_expected", "EXPECTED"), ("gas_below", "BELOW"), ("gas_not_yet", "NOT YET")]:
+                st.markdown(f"**{label}:** {goal.get(level, 'Not set')}")
+        
+        st.markdown("---")
+        st.markdown("### 📅 Today's Tracking")
+        
+        today = date.today().isoformat()
+        
+        # Check existing tracking for today
+        existing_tracking = supabase.table("smartar_tracking").select("*").eq("goal_id", goal["id"]).eq("session_date", today).execute()
+        tracked_sessions = {t["session_time"]: t["performance_level"] for t in (existing_tracking.data or [])}
+        
+        col1, col2, col3 = st.columns(3)
+        
+        for col, session in zip([col1, col2, col3], SESSION_TIMES):
+            with col:
+                st.markdown(f"**{session} Session**")
+                if session in tracked_sessions:
+                    st.success(f"✅ Recorded: {tracked_sessions[session]}")
+                else:
+                    for level in GAS_LEVELS:
+                        if st.button(level, key=f"dt_{session}_{level}", use_container_width=True):
+                            try:
+                                supabase.table("smartar_tracking").insert({
+                                    "goal_id": goal["id"],
+                                    "student_name": selected_student,
+                                    "session_date": today,
+                                    "session_time": session,
+                                    "performance_level": level
+                                }).execute()
+                                st.success(f"✅ {session} session recorded: {level}")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error saving: {e}")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 4. PROGRESS REPORT
+# TAB 3: CLASS DASHBOARD
 # ═══════════════════════════════════════════════════════════════════════════════
-elif view == "📈 Progress Report":
-    st.title("📈 Progress Report")
-
-    students = get_students()
+def render_class_dashboard():
+    st.markdown("## 🏫 Class Dashboard")
+    st.markdown("Overview of all students and their goal progress.")
+    
+    students = get_all_students()
     if not students:
-        st.info("No students set up yet.")
-        st.stop()
-
-    student_options = {s["student_name"]: s for s in students}
-    selected_name = st.selectbox("Select student", list(student_options.keys()))
-    student = student_options[selected_name]
-    goals = get_goals(student["id"])
-
-    if not goals:
-        st.info(f"No goals for {selected_name}.")
-        st.stop()
-
-    period = st.radio("Period", ["Last 2 weeks", "Last 3 weeks", "Last 5 weeks"], horizontal=True)
-    days_map = {"Last 2 weeks": 14, "Last 3 weeks": 21, "Last 5 weeks": 35}
-    days = days_map[period]
-
-    st.markdown(f"## {selected_name} — Progress Report")
-    st.caption(f"Period: last {days} days · Program: {student.get('program','?')}")
-
-    for goal in goals:
-        tracking = get_tracking(goal["id"], days=days)
-        counts, total, pcts = calc_percentages(tracking)
-        gas_levels = json.loads(goal.get("gas_levels") or "{}") if isinstance(goal.get("gas_levels"), str) else (goal.get("gas_levels") or {})
-
-        st.markdown(f"### Goal {goal['goal_number']}")
-        if goal.get("exclusion_goal"):
-            st.markdown(f'<div class="exclusion-box">🏫 <b>Exclusion Goal:</b> {goal["exclusion_goal"]}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="smartar-box">🎯 <b>SMARTAR Goal:</b> {goal["goal_statement"]}</div>', unsafe_allow_html=True)
-
-        if total == 0:
-            st.warning("No tracking data for this period.")
+        st.info("No students with active goals yet.")
+        return
+    
+    today = date.today().isoformat()
+    
+    for student in students:
+        goals = get_student_goals(student["student_name"])
+        active_goals = [g for g in goals if g.get("active", True)]
+        
+        if not active_goals:
             continue
+        
+        with st.expander(f"**{student['student_name']}** ({len(active_goals)} active goal{'s' if len(active_goals) > 1 else ''})", expanded=False):
+            for goal in active_goals:
+                st.markdown(f"**Goal:** {goal['smartar_goal']}")
+                
+                # Today's sessions
+                today_tracking = supabase.table("smartar_tracking").select("*").eq("goal_id", goal["id"]).eq("session_date", today).execute()
+                tracked_today = {t["session_time"]: t["performance_level"] for t in (today_tracking.data or [])}
+                
+                col1, col2, col3 = st.columns(3)
+                for col, session in zip([col1, col2, col3], SESSION_TIMES):
+                    with col:
+                        if session in tracked_today:
+                            st.success(f"{session}: {tracked_today[session]}")
+                        else:
+                            st.warning(f"{session}: Not recorded")
+                
+                # 21-day progress bar
+                tracking_data = get_tracking_data(goal["id"], days=21)
+                if tracking_data:
+                    level_counts = {level: 0 for level in GAS_LEVELS}
+                    for record in tracking_data:
+                        level = record["performance_level"]
+                        if level in level_counts:
+                            level_counts[level] += 1
+                    
+                    total = sum(level_counts.values())
+                    if total > 0:
+                        st.markdown("**21-Day Progress:**")
+                        progress_html = "<div style='display:flex; height:20px; border-radius:4px; overflow:hidden;'>"
+                        colors = {"EXCEEDING": "#10b981", "ABOVE": "#3b82f6", "EXPECTED": "#8b5cf6", "BELOW": "#f59e0b", "NOT YET": "#ef4444"}
+                        for level in GAS_LEVELS:
+                            pct = (level_counts[level] / total) * 100
+                            if pct > 0:
+                                progress_html += f"<div style='width:{pct}%; background:{colors[level]}; height:100%;' title='{level}: {level_counts[level]}'></div>"
+                        progress_html += "</div>"
+                        st.markdown(progress_html, unsafe_allow_html=True)
+                        
+                        # Legend
+                        legend_html = "<div style='display:flex; gap:12px; margin-top:8px; font-size:12px;'>"
+                        for level in GAS_LEVELS:
+                            legend_html += f"<span><span style='display:inline-block; width:12px; height:12px; background:{colors[level]}; border-radius:2px; margin-right:4px;'></span>{level}: {level_counts[level]}</span>"
+                        legend_html += "</div>"
+                        st.markdown(legend_html, unsafe_allow_html=True)
+                
+                st.markdown("---")
 
-        # Summary metrics
-        mc = st.columns(5)
-        for i, lvl in enumerate(LEVEL_ORDER):
-            pct = pcts.get(lvl, 0)
-            mc[i].metric(f"{LEVEL_EMOJI[lvl]} {lvl}", f"{pct:.0f}%", f"{counts[lvl]} sessions")
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 4: PROGRESS REPORT
+# ═══════════════════════════════════════════════════════════════════════════════
+def render_progress_report():
+    st.markdown("## 📈 Progress Report")
+    st.markdown("Generate narrative summaries for review meetings and reports.")
+    
+    students = get_all_students()
+    if not students:
+        st.info("No students with active goals yet.")
+        return
+    
+    student_names = [s["student_name"] for s in students]
+    selected_student = st.selectbox("Select Student", student_names, key="pr_student")
+    
+    if selected_student:
+        goals = get_student_goals(selected_student)
+        active_goals = [g for g in goals if g.get("active", True)]
+        
+        if not active_goals:
+            st.info(f"No active goals for {selected_student}.")
+            return
+        
+        goal_options = [f"{g['smartar_goal'][:60]}..." if len(g['smartar_goal']) > 60 else g['smartar_goal'] for g in active_goals]
+        selected_goal_idx = st.selectbox("Select Goal", range(len(goal_options)), format_func=lambda i: goal_options[i], key="pr_goal")
+        
+        goal = active_goals[selected_goal_idx]
+        
+        days = st.slider("Reporting Period (days)", 7, 90, 21, key="pr_days")
+        
+        if st.button("Generate Progress Report", type="primary", use_container_width=True):
+            tracking_data = get_tracking_data(goal["id"], days=days)
+            
+            if not tracking_data:
+                st.warning(f"No tracking data available for the last {days} days.")
+                return
+            
+            # Calculate statistics
+            level_counts = {level: 0 for level in GAS_LEVELS}
+            for record in tracking_data:
+                level = record["performance_level"]
+                if level in level_counts:
+                    level_counts[level] += 1
+            
+            total = sum(level_counts.values())
+            percentages = {level: (count/total)*100 if total > 0 else 0 for level, count in level_counts.items()}
+            
+            st.markdown("### 📊 Performance Breakdown")
+            col1, col2, col3, col4, col5 = st.columns(5)
+            for col, level in zip([col1, col2, col3, col4, col5], GAS_LEVELS):
+                with col:
+                    st.metric(level, f"{percentages[level]:.1f}%", f"{level_counts[level]} sessions")
+            
+            st.markdown("---")
+            st.markdown("### 📝 AI-Generated Narrative Summary")
+            
+            with st.spinner("Generating narrative..."):
+                system = """You are an educational psychologist writing progress reports for students with diverse learning needs.
 
-        # Progress bar
-        bar_parts = []
-        for lvl in LEVEL_ORDER:
-            pct = pcts.get(lvl, 0)
-            if pct > 0:
-                bar_parts.append(f'<div style="width:{pct}%;background:{LEVEL_COLOR[lvl]};height:22px;display:inline-block;" title="{lvl}: {pct:.1f}%"></div>')
-        bar_html = '<div style="display:flex;width:100%;border-radius:8px;overflow:hidden;margin:12px 0">' + "".join(bar_parts) + '</div>'
-        st.markdown(bar_html, unsafe_allow_html=True)
-        st.caption(f"Total sessions recorded: {total}")
+Write a strengths-based, trauma-informed narrative summary using:
+- BSEM (Berry Street Education Model) language
+- Positive, growth-oriented tone
+- Specific data references
+- Recognition of progress and effort
+- Constructive next steps
 
-        # Trend — group by date
-        if tracking:
-            from collections import defaultdict
-            daily = defaultdict(lambda: {l: 0 for l in LEVEL_ORDER})
-            for r in tracking:
-                daily[r["tracked_date"]][r["level"]] += 1
-            dates_sorted = sorted(daily.keys())
+Keep it professional, concise (2-3 paragraphs), and suitable for inclusion in IEP/review meeting notes."""
 
-            st.markdown("**Session breakdown by day:**")
-            for d in dates_sorted[-10:]:  # last 10 days
-                row = daily[d]
-                day_total = sum(row.values())
-                if day_total == 0:
-                    continue
-                day_label = datetime.strptime(d, "%Y-%m-%d").strftime("%d %b")
-                pills = " ".join([f'<span class="metric-pill" style="background:{LEVEL_COLOR[l]}22;color:{LEVEL_COLOR[l]}">{LEVEL_EMOJI[l]} {l}: {row[l]}</span>' for l in LEVEL_ORDER if row[l] > 0])
-                st.markdown(f"**{day_label}** — {pills}", unsafe_allow_html=True)
+                data_summary = f"""Student: {selected_student}
+Goal: {goal['smartar_goal']}
+Reporting Period: {days} days
+Total Sessions: {total}
 
-        # AI narrative
-        if st.button(f"✨ Generate Progress Summary (AI)", key=f"ai_report_{goal['id']}"):
-            with st.spinner("Generating summary..."):
-                level_summary = ", ".join([f"{lvl}: {pcts.get(lvl,0):.0f}%" for lvl in LEVEL_ORDER])
-                narrative = groq_call(f"""Write a brief, professional progress summary (3–4 sentences) for a student's IEP/review meeting.
+Performance Distribution:
+- EXCEEDING: {percentages['EXCEEDING']:.1f}% ({level_counts['EXCEEDING']} sessions)
+- ABOVE: {percentages['ABOVE']:.1f}% ({level_counts['ABOVE']} sessions)
+- EXPECTED: {percentages['EXPECTED']:.1f}% ({level_counts['EXPECTED']} sessions)
+- BELOW: {percentages['BELOW']:.1f}% ({level_counts['BELOW']} sessions)
+- NOT YET: {percentages['NOT YET']:.1f}% ({level_counts['NOT YET']} sessions)
 
-Student: {selected_name}
-SMARTAR Goal: {goal['goal_statement']}
-Period: last {days} days
-Performance distribution: {level_summary}
-Total sessions recorded: {total}
+Write a narrative progress summary based on this data."""
 
-Use trauma-informed, strengths-based language. Reference the BSEM framework if relevant (Regulate, Relate, Reason). 
-Be specific about the data. Suggest one actionable next step.""")
-                st.markdown("**AI-Generated Progress Summary:**")
-                st.success(narrative)
+                narrative = groq_chat(data_summary, system=system, max_tokens=600)
+                
+                if narrative:
+                    st.markdown(narrative)
+                    st.markdown("---")
+                    
+                    # Copy button
+                    st.text_area("Copy for meeting notes:", value=narrative, height=200, key="pr_narrative_copy")
 
-        st.markdown("---")
+# ═══════════════════════════════════════════════════════════════════════════════
+# MAIN APP
+# ═══════════════════════════════════════════════════════════════════════════════
+def main():
+    st.title("🎯 SMARTAR Goal Builder")
+    st.markdown("Build, track, and report on student SMARTAR goals with GAS performance levels.")
+    
+    tab = st.radio(
+        "Navigation",
+        ["📋 Goal Builder", "📊 Daily Tracking", "🏫 Class Dashboard", "📈 Progress Report"],
+        horizontal=True,
+        label_visibility="collapsed"
+    )
+    
+    st.markdown("---")
+    
+    if tab == "📋 Goal Builder":
+        render_goal_builder()
+    elif tab == "📊 Daily Tracking":
+        render_daily_tracking()
+    elif tab == "🏫 Class Dashboard":
+        render_class_dashboard()
+    elif tab == "📈 Progress Report":
+        render_progress_report()
+
+if __name__ == "__main__":
+    main()
