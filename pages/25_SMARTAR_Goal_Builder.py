@@ -3,6 +3,7 @@ from datetime import datetime, date, timedelta
 import pandas as pd
 from groq import Groq
 import json
+import plotly.graph_objects as go
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Page Config
@@ -123,6 +124,50 @@ def get_tracking_data(goal_id, days=21):
     except Exception as e:
         st.error(f"Error fetching tracking data: {e}")
         return []
+
+def create_performance_pie_chart(tracking_data, title="Performance Distribution"):
+    """Create a pie chart from tracking data."""
+    if not tracking_data:
+        return None
+    
+    level_counts = {level: 0 for level in GAS_LEVELS}
+    for record in tracking_data:
+        level = record["performance_level"]
+        if level in level_counts:
+            level_counts[level] += 1
+    
+    # Filter out zero values
+    labels = [level for level, count in level_counts.items() if count > 0]
+    values = [count for count in level_counts.values() if count > 0]
+    
+    if not values:
+        return None
+    
+    colors = {
+        "EXCEEDING": "#10b981",
+        "ABOVE": "#3b82f6",
+        "EXPECTED": "#8b5cf6",
+        "BELOW": "#f59e0b",
+        "NOT YET": "#ef4444"
+    }
+    
+    fig = go.Figure(data=[go.Pie(
+        labels=labels,
+        values=values,
+        marker=dict(colors=[colors[label] for label in labels]),
+        textinfo='label+percent',
+        textposition='inside',
+        hovertemplate='<b>%{label}</b><br>%{value} sessions<br>%{percent}<extra></extra>'
+    )])
+    
+    fig.update_layout(
+        title=title,
+        showlegend=True,
+        height=350,
+        margin=dict(t=40, b=0, l=0, r=0)
+    )
+    
+    return fig
 
 def generate_gas_levels(smartar_goal, rate):
     """Use Groq to generate GAS performance level descriptors."""
@@ -368,6 +413,17 @@ def render_daily_tracking():
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Error saving: {e}")
+        
+        # Add 21-day performance pie chart
+        st.markdown("---")
+        st.markdown("### 📊 21-Day Performance Distribution")
+        tracking_data = get_tracking_data(goal["id"], days=21)
+        if tracking_data:
+            pie_chart = create_performance_pie_chart(tracking_data, f"Last 21 Days - {len(tracking_data)} Sessions")
+            if pie_chart:
+                st.plotly_chart(pie_chart, use_container_width=True)
+        else:
+            st.info("No tracking data yet. Start recording sessions above!")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB 3: CLASS DASHBOARD
@@ -433,6 +489,11 @@ def render_class_dashboard():
                             legend_html += f"<span><span style='display:inline-block; width:12px; height:12px; background:{colors[level]}; border-radius:2px; margin-right:4px;'></span>{level}: {level_counts[level]}</span>"
                         legend_html += "</div>"
                         st.markdown(legend_html, unsafe_allow_html=True)
+                        
+                        # Add pie chart
+                        pie_chart = create_performance_pie_chart(tracking_data, f"21-Day Distribution ({total} sessions)")
+                        if pie_chart:
+                            st.plotly_chart(pie_chart, use_container_width=True)
                 
                 st.markdown("---")
 
@@ -488,6 +549,12 @@ def render_progress_report():
             for col, level in zip([col1, col2, col3, col4, col5], GAS_LEVELS):
                 with col:
                     st.metric(level, f"{percentages[level]:.1f}%", f"{level_counts[level]} sessions")
+            
+            # Add pie chart visualization
+            st.markdown("---")
+            pie_chart = create_performance_pie_chart(tracking_data, f"{days}-Day Performance Distribution ({total} sessions)")
+            if pie_chart:
+                st.plotly_chart(pie_chart, use_container_width=True)
             
             st.markdown("---")
             st.markdown("### 📝 AI-Generated Narrative Summary")
