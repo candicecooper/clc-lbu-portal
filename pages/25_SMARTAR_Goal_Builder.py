@@ -10,10 +10,13 @@ import json
 st.set_page_config(page_title="SMARTAR Goal Builder", page_icon="🎯", layout="wide")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Database Connection
+# Database Connection - Direct connection to bypass cache issues
 # ═══════════════════════════════════════════════════════════════════════════════
-from database import get_supabase
-supabase = get_supabase()
+from supabase import create_client
+supabase = create_client(
+    st.secrets["supabase"]["url"],
+    st.secrets["supabase"]["key"]
+)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Groq Client - FIXED to use GROQ_API_KEY format
