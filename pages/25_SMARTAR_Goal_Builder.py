@@ -19,6 +19,28 @@ supabase = create_client(
 )
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# TEMPORARY DEBUG - Remove after testing
+# ═══════════════════════════════════════════════════════════════════════════════
+st.write("🔍 DEBUG INFO:")
+st.write(f"**Supabase URL:** {st.secrets['supabase']['url']}")
+st.write(f"**Expected project:** lvzaebjrxrgguypqvdcq")
+
+# Test if we can query an existing table
+try:
+    test = supabase.table("tm_documents").select("*").limit(1).execute()
+    st.success(f"✅ Can connect! Found {len(test.data)} tm_documents")
+except Exception as e:
+    st.error(f"❌ Connection test failed: {e}")
+
+# Test if smartar_students is accessible
+try:
+    test2 = supabase.table("smartar_students").select("*").limit(1).execute()
+    st.success(f"✅ smartar_students accessible! Found {len(test2.data)} students")
+except Exception as e:
+    st.error(f"❌ smartar_students error: {e}")
+st.write("---")
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Groq Client - FIXED to use GROQ_API_KEY format
 # ═══════════════════════════════════════════════════════════════════════════════
 @st.cache_resource
