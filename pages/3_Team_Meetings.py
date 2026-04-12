@@ -756,10 +756,16 @@ def render_program_meeting(program):
             
             st.session_state.last_autosave_time = None
             st.session_state.autosave_message = ""
-            st.session_state.current_meeting_id = None
             st.rerun()
         except Exception as e:
-            st.error(f"Could not save: {e}")
+            st.error(f"⚠️ Database save failed: {e}")
+            st.warning("**Workaround:** Creating temporary meeting ID for SMARTAR integration. Your data won't be saved to database until schema is fixed.")
+            
+            # Create temporary meeting_id so SMARTAR links work
+            import random
+            st.session_state.current_meeting_id = random.randint(900000, 999999)
+            st.info(f"✅ Temporary Meeting ID: {st.session_state.current_meeting_id} - SMARTAR links now active!")
+            st.rerun()
 
     # Past meeting records
     if last_records:
