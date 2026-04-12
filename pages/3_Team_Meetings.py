@@ -435,31 +435,28 @@ def render_program_meeting(program):
         """, unsafe_allow_html=True)
         
         if st.button("🎯 Initialize Meeting & Enable SMARTAR", type="primary", use_container_width=True, key="init_meeting"):
-            # Create meeting with current details
-            meeting_data = {
+            # Create meeting with MINIMAL data to avoid schema cache issues
+            # Only send basic required fields - detailed data saved later
+            minimal_data = {
                 "program": program,
                 "meeting_date": str(pm_date),
-                "term": pm_term.strip(),
+                "term": pm_term.strip() or "T1",
                 "week_number": int(pm_week),
                 "week_type": "A" if is_week_a else "B",
-                "facilitator": pm_facilitator.strip(),
-                "attendees": pm_attendees.strip(),
-                "checkin_notes": "",
-                "student_concerns": "[]",
-                "smartar_spotlight": "[]",
-                "actions": "[]",
-                "created_at": datetime.datetime.now().isoformat()
+                "facilitator": pm_facilitator.strip() or get_staff_name(),
+                "attendees": pm_attendees.strip() or "",
             }
             
             try:
-                result = supabase.table('tm_program_meetings').insert(meeting_data).execute()
+                result = supabase.table('tm_program_meetings').insert(minimal_data).execute()
                 if result.data:
                     st.session_state.current_meeting_id = result.data[0]['id']
                     st.session_state.last_autosave_time = time.time()
                     st.success("✅ Meeting initialized! SMARTAR Goal Tool links are now active. Continue with meeting below.")
                     st.rerun()
             except Exception as e:
-                st.error(f"Could not initialize meeting: {e}")
+                st.error(f"❌ Could not initialize meeting: {e}")
+                st.caption("Database error - check Supabase table structure.")
         
         st.markdown("---")
     else:
