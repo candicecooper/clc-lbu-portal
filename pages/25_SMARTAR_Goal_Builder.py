@@ -12,14 +12,21 @@ st.set_page_config(page_title="SMARTAR Goal Builder", page_icon="🎯", layout="
 # ── Clients ───────────────────────────────────────────────────────────────────
 @st.cache_resource
 def get_supabase():
-    return create_client(
-        st.secrets["supabase"]["url"],
-        st.secrets["supabase"]["key"]
-    )
+    # SMARTAR uses Behaviour Support Supabase (where smartar_goals table lives)
+    url = st.secrets.get("BEHAVIOUR_SUPABASE_URL") or st.secrets.get("supabase", {}).get("url")
+    key = st.secrets.get("BEHAVIOUR_SUPABASE_KEY") or st.secrets.get("supabase", {}).get("key")
+    if not url or not key:
+        st.error("⚠️ Behaviour Support Supabase credentials not configured")
+        st.stop()
+    return create_client(url, key)
 
 @st.cache_resource
 def get_groq():
-    return Groq(api_key=st.secrets["groq"]["api_key"])
+    api_key = st.secrets.get("GROQ_API_KEY") or st.secrets.get("groq", {}).get("api_key")
+    if not api_key:
+        st.warning("⚠️ Groq API key not configured - AI features disabled")
+        return None
+    return Groq(api_key=api_key)
 
 sb = get_supabase()
 groq_client = get_groq()
@@ -73,6 +80,8 @@ RATE_OPTIONS = [
 PROGRAMS = ["JP", "PY", "SY"]
 
 def groq_call(prompt, system="You are an expert educator supporting students in alternative education settings. Be concise and practical."):
+    if not groq_client:
+        return "[AI features unavailable - Groq API key not configured]"
     resp = groq_client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
@@ -433,7 +442,7 @@ elif view == "📋 Goal Builder":
         st.markdown("---")
         col_a, col_b = st.columns(2)
 
-        if col_a.button("✨ Refine Goal with AI", disabled=not assembled, type="primary"):
+        if col_a.button("✨ Refine Goal with AI", disabled=(not assembled or not groq_client), type="primary"):
             with st.spinner("Refining goal..."):
                 refined = groq_call(f"""You are an expert educator specialising in the SMARTAR framework and alternative education.
 
@@ -443,6 +452,9 @@ Do NOT change the student's name. Return ONLY the refined goal statement, nothin
 
 Goal to refine: {assembled}""")
             st.session_state["refined_goal"] = refined
+        
+        if not groq_client:
+            col_a.caption("⚠️ AI refinement unavailable (Groq API key not configured)")
 
         refined_goal = st.session_state.get("refined_goal", assembled)
         if refined_goal:
@@ -451,7 +463,7 @@ Goal to refine: {assembled}""")
             final_goal = assembled
 
         # GAS level generation
-        if st.button("🎚 Generate GAS Performance Levels", disabled=not final_goal, type="secondary"):
+        if st.button("🎚 Generate GAS Performance Levels", disabled=(not final_goal or not groq_client), type="secondary"):
             with st.spinner("Generating GAS levels..."):
                 gas_prompt = f"""You are an expert educator creating a Goal Attainment Scale (GAS) for this SMARTAR goal:
 
@@ -475,6 +487,9 @@ No markdown, no explanation, pure JSON only."""
                 except Exception as e:
                     st.error(f"Couldn't parse GAS levels. Try again. ({e})")
                     st.code(raw)
+        
+        if not groq_client:
+            st.caption("⚠️ AI GAS generation unavailable (Groq API key not configured) - you can still manually enter GAS levels below")
 
         gas_levels = st.session_state.get("gas_levels", {})
         if gas_levels:
@@ -683,10 +698,11 @@ elif view == "📈 Progress Report":
                 st.markdown(f"**{day_label}** — {pills}", unsafe_allow_html=True)
 
         # AI narrative
-        if st.button(f"✨ Generate Progress Summary (AI)", key=f"ai_report_{goal['id']}"):
-            with st.spinner("Generating summary..."):
-                level_summary = ", ".join([f"{lvl}: {pcts.get(lvl,0):.0f}%" for lvl in LEVEL_ORDER])
-                narrative = groq_call(f"""Write a brief, professional progress summary (3–4 sentences) for a student's IEP/review meeting.
+        if groq_client:
+            if st.button(f"✨ Generate Progress Summary (AI)", key=f"ai_report_{goal['id']}"):
+                with st.spinner("Generating summary..."):
+                    level_summary = ", ".join([f"{lvl}: {pcts.get(lvl,0):.0f}%" for lvl in LEVEL_ORDER])
+                    narrative = groq_call(f"""Write a brief, professional progress summary (3–4 sentences) for a student's IEP/review meeting.
 
 Student: {selected_name}
 SMARTAR Goal: {goal['goal_statement']}
@@ -696,7 +712,9 @@ Total sessions recorded: {total}
 
 Use trauma-informed, strengths-based language. Reference the BSEM framework if relevant (Regulate, Relate, Reason). 
 Be specific about the data. Suggest one actionable next step.""")
-                st.markdown("**AI-Generated Progress Summary:**")
-                st.success(narrative)
+                    st.markdown("**AI-Generated Progress Summary:**")
+                    st.success(narrative)
+        else:
+            st.caption("⚠️ AI summaries unavailable (Groq API key not configured)")
 
         st.markdown("---")
