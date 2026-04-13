@@ -37,14 +37,22 @@ integration = check_team_meetings_integration()
 # ── Clients ───────────────────────────────────────────────────────────────────
 @st.cache_resource
 def get_supabase():
-    return create_client(
-        st.secrets["supabase"]["url"],
-        st.secrets["supabase"]["key"]
-    )
+    # Try flat structure first, then nested
+    url = st.secrets.get("BEHAVIOUR_SUPABASE_URL") or st.secrets.get("supabase", {}).get("url")
+    key = st.secrets.get("BEHAVIOUR_SUPABASE_KEY") or st.secrets.get("supabase", {}).get("key")
+    if not url or not key:
+        st.error("⚠️ Supabase credentials not configured")
+        st.stop()
+    return create_client(url, key)
 
 @st.cache_resource
 def get_groq():
-    return Groq(api_key=st.secrets["groq"]["api_key"])
+    # Try flat structure first, then nested
+    api_key = st.secrets.get("GROQ_API_KEY") or st.secrets.get("groq", {}).get("api_key")
+    if not api_key:
+        st.warning("⚠️ Groq API key not configured - AI features will be disabled")
+        return None
+    return Groq(api_key=api_key)
 
 sb = get_supabase()
 groq_client = get_groq()
@@ -72,6 +80,8 @@ RATE_OPTIONS = [
 PROGRAMS = ["JP", "PY", "SY"]
 
 def groq_call(prompt, system="You are an expert educator supporting students in alternative education settings. Be concise and practical."):
+    if not groq_client:
+        return "[AI features unavailable - Groq API key not configured]"
     resp = groq_client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
@@ -429,7 +439,7 @@ elif view == "📋 Goal Builder":
         st.markdown("---")
         col_a, col_b = st.columns(2)
 
-        if col_a.button("✨ Refine Goal with AI", disabled=not assembled, type="primary"):
+        if col_a.button("✨ Refine Goal with AI", disabled=(not assembled or not groq_client), type="primary"):
             with st.spinner("Refining goal..."):
                 refined = groq_call(f"""You are an expert educator specialising in the SMARTAR framework and alternative education.
 
@@ -447,7 +457,7 @@ Goal to refine: {assembled}""")
             final_goal = assembled
 
         # GAS level generation
-        if st.button("🎚 Generate GAS Performance Levels", disabled=not final_goal, type="secondary"):
+        if st.button("🎚 Generate GAS Performance Levels", disabled=(not final_goal or not groq_client), type="secondary"):
             with st.spinner("Generating GAS levels..."):
                 gas_prompt = f"""You are an expert educator creating a Goal Attainment Scale (GAS) for this SMARTAR goal:
 
@@ -679,10 +689,11 @@ elif view == "📈 Progress Report":
                 st.markdown(f"**{day_label}** — {pills}", unsafe_allow_html=True)
 
         # AI narrative
-        if st.button(f"✨ Generate Progress Summary (AI)", key=f"ai_report_{goal['id']}"):
-            with st.spinner("Generating summary..."):
-                level_summary = ", ".join([f"{lvl}: {pcts.get(lvl,0):.0f}%" for lvl in LEVEL_ORDER])
-                narrative = groq_call(f"""Write a brief, professional progress summary (3–4 sentences) for a student's IEP/review meeting.
+        if groq_client:
+            if st.button(f"✨ Generate Progress Summary (AI)", key=f"ai_report_{goal['id']}"):
+                with st.spinner("Generating summary..."):
+                    level_summary = ", ".join([f"{lvl}: {pcts.get(lvl,0):.0f}%" for lvl in LEVEL_ORDER])
+                    narrative = groq_call(f"""Write a brief, professional progress summary (3–4 sentences) for a student's IEP/review meeting.
 
 Student: {selected_name}
 SMARTAR Goal: {goal['goal_statement']}
@@ -692,7 +703,9 @@ Total sessions recorded: {total}
 
 Use trauma-informed, strengths-based language. Reference the BSEM framework if relevant (Regulate, Relate, Reason). 
 Be specific about the data. Suggest one actionable next step.""")
-                st.markdown("**AI-Generated Progress Summary:**")
-                st.success(narrative)
+                    st.markdown("**AI-Generated Progress Summary:**")
+                    st.success(narrative)
+        else:
+            st.caption("⚠️ AI summaries unavailable (Groq API key not configured)")
 
         st.markdown("---")
