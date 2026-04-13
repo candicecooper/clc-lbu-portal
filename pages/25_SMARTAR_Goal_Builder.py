@@ -291,7 +291,7 @@ if view == "🏫 Class Dashboard":
                     st.markdown(f'<div class="exclusion-box">🏫 <b>Exclusion Goal:</b> {goal["exclusion_goal"]}</div>', unsafe_allow_html=True)
 
                 # SMARTAR goal
-                st.markdown(f'<div class="smartar-box">🎯 <b>SMARTAR Goal:</b> {goal["goal_statement"]}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="smartar-box">🎯 <b>SMARTAR Goal:</b> {goal["smartar_goal"]}</div>', unsafe_allow_html=True)
 
                 # Today's sessions
                 cols = st.columns([1, 1, 1, 2])
@@ -387,9 +387,9 @@ elif view == "📋 Goal Builder":
             st.subheader("Current Goals")
             for idx, g in enumerate(existing_goals):
                 goal_num = g.get("goal_number", idx + 1)
-                with st.expander(f"Goal {goal_num} — {g['goal_statement'][:80]}..."):
+                with st.expander(f"Goal {goal_num} — {g['smartar_goal'][:80]}..."):
                     st.markdown(f'<div class="exclusion-box">🏫 <b>Exclusion Goal:</b> {g.get("exclusion_goal","—")}</div>', unsafe_allow_html=True)
-                    st.markdown(f'<div class="smartar-box">🎯 <b>SMARTAR Goal:</b> {g["goal_statement"]}</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="smartar-box">🎯 <b>SMARTAR Goal:</b> {g["smartar_goal"]}</div>', unsafe_allow_html=True)
                     gas = json.loads(g.get("gas_levels", "{}")) if isinstance(g.get("gas_levels"), str) else (g.get("gas_levels") or {})
                     if gas:
                         st.markdown("**GAS Performance Levels:**")
@@ -524,7 +524,7 @@ No markdown, no explanation, pure JSON only."""
                 new_goal = {
                     "student_name": selected_name,
                     "exclusion_goal": excl_goal.strip() if excl_goal else None,
-                    "goal_statement": final_goal.strip(),
+                    "smartar_goal": final_goal.strip(),
                     "gas_levels": json.dumps(edited_gas) if edited_gas else None,
                     "created_by": staff_name,
                     "active": True
@@ -596,7 +596,7 @@ elif view == "📊 Daily Tracking":
         gas_levels = json.loads(goal.get("gas_levels") or "{}") if isinstance(goal.get("gas_levels"), str) else (goal.get("gas_levels") or {})
 
         st.markdown(f"### Goal {goal_num}")
-        st.markdown(f'<div class="smartar-box">🎯 {goal["goal_statement"]}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="smartar-box">🎯 {goal["smartar_goal"]}</div>', unsafe_allow_html=True)
 
         if gas_levels:
             with st.expander("📋 View GAS Performance Levels"):
@@ -665,7 +665,7 @@ elif view == "📈 Progress Report":
         st.markdown(f"### Goal {goal_num}")
         if goal.get("exclusion_goal"):
             st.markdown(f'<div class="exclusion-box">🏫 <b>Exclusion Goal:</b> {goal["exclusion_goal"]}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="smartar-box">🎯 <b>SMARTAR Goal:</b> {goal["goal_statement"]}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="smartar-box">🎯 <b>SMARTAR Goal:</b> {goal["smartar_goal"]}</div>', unsafe_allow_html=True)
 
         if total == 0:
             st.warning("No tracking data for this period.")
@@ -713,7 +713,7 @@ elif view == "📈 Progress Report":
                     narrative = groq_call(f"""Write a brief, professional progress summary (3–4 sentences) for a student's IEP/review meeting.
 
 Student: {selected_name}
-SMARTAR Goal: {goal['goal_statement']}
+SMARTAR Goal: {goal['smartar_goal']}
 Period: last {days} days
 Performance distribution: {level_summary}
 Total sessions recorded: {total}
