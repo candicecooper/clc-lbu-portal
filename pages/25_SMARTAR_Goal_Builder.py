@@ -94,10 +94,10 @@ def get_students():
     r = sb.table("smartar_students").select("*").order("student_name").execute()
     return r.data or []
 
-def get_goals(student_id=None):
+def get_goals(student_name=None):
     q = sb.table("smartar_goals").select("*")
-    if student_id:
-        q = q.eq("student_id", student_id)
+    if student_name:
+        q = q.eq("student_name", student_name)
     q = q.eq("active", True).order("goal_number")
     return q.execute().data or []
 
@@ -267,7 +267,7 @@ if view == "🏫 Class Dashboard":
         st.stop()
 
     for student in students:
-        goals = get_goals(student["id"])
+        goals = get_goals(student["student_name"])
         if not goals:
             continue
 
@@ -339,7 +339,7 @@ elif view == "📋 Goal Builder":
         students = get_students()
         if students:
             for s in students:
-                goals = get_goals(s["id"])
+                goals = get_goals(s["student_name"])
                 sc1, sc2, sc3 = st.columns([3, 1, 1])
                 sc1.write(f"**{s['student_name']}** — {s.get('program','?')} — {len(goals)} goals")
                 if sc3.button("Archive", key=f"arch_{s['id']}"):
@@ -372,7 +372,7 @@ elif view == "📋 Goal Builder":
         selected_name = st.selectbox("Select student", list(student_options.keys()), 
                                      index=list(student_options.keys()).index(default_student) if default_student in student_options else 0)
         student = student_options[selected_name]
-        existing_goals = get_goals(student["id"])
+        existing_goals = get_goals(selected_name)
 
         st.markdown(f'<div class="student-header"><b>{selected_name}</b> · {student.get("program","?")} · {len(existing_goals)}/4 goals</div>', unsafe_allow_html=True)
 
@@ -515,7 +515,7 @@ No markdown, no explanation, pure JSON only."""
                 st.warning("Enter your name in the sidebar first.")
             else:
                 new_goal = {
-                    "student_id": student["id"],
+                    "student_name": selected_name,
                     "goal_number": len(existing_goals) + 1,
                     "exclusion_goal": excl_goal.strip() if excl_goal else None,
                     "goal_statement": final_goal.strip(),
@@ -575,7 +575,7 @@ elif view == "📊 Daily Tracking":
     student_options = {s["student_name"]: s for s in students}
     selected_name = st.selectbox("Select student", list(student_options.keys()))
     student = student_options[selected_name]
-    goals = get_goals(student["id"])
+    goals = get_goals(selected_name)
 
     if not goals:
         st.info(f"No goals set up for {selected_name}. Go to Goal Builder first.")
@@ -636,7 +636,7 @@ elif view == "📈 Progress Report":
     student_options = {s["student_name"]: s for s in students}
     selected_name = st.selectbox("Select student", list(student_options.keys()))
     student = student_options[selected_name]
-    goals = get_goals(student["id"])
+    goals = get_goals(selected_name)
 
     if not goals:
         st.info(f"No goals for {selected_name}.")
