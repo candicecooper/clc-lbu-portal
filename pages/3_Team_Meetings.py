@@ -1284,6 +1284,148 @@ def render_program_meeting(program):
             st.rerun()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# MEETING ARCHIVE - View and Edit Past Meetings
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render_meeting_archive(program):
+    """Display archive of past meetings with ability to view and edit minutes."""
+    import json as _json
+    
+    st.markdown("### 📚 Meeting Archive")
+    st.caption(f"Browse and edit past {PROGRAMS[program]['label']} meetings")
+    
+    # Fetch all past meetings
+    all_meetings = fetch("tm_program_meetings", {"program": program}, "meeting_date")
+    
+    if not all_meetings:
+        st.info("No past meetings found. Start recording meetings in the Program Meeting tab!")
+        return
+    
+    st.markdown(f"**Total meetings recorded:** {len(all_meetings)}")
+    
+    # Filter options
+    col_filter1, col_filter2 = st.columns(2)
+    with col_filter1:
+        filter_term = st.selectbox("Filter by term", ["All Terms"] + list(set([m.get('term', '') for m in all_meetings if m.get('term')])), key=f"archive_filter_term_{program}")
+    with col_filter2:
+        if program in ["JP", "PY", "SY"]:
+            filter_week_type = st.selectbox("Filter by type", ["All Types", "Week A", "Week B"], key=f"archive_filter_type_{program}")
+        else:
+            filter_week_type = "All Types"
+    
+    # Apply filters
+    filtered_meetings = all_meetings
+    if filter_term != "All Terms":
+        filtered_meetings = [m for m in filtered_meetings if m.get('term') == filter_term]
+    if filter_week_type == "Week A":
+        filtered_meetings = [m for m in filtered_meetings if m.get('week_type') == 'A']
+    elif filter_week_type == "Week B":
+        filtered_meetings = [m for m in filtered_meetings if m.get('week_type') == 'B']
+    
+    st.markdown("---")
+    
+    # Display meetings in reverse chronological order
+    for idx, meeting in enumerate(reversed(filtered_meetings)):
+        meeting_date = meeting.get('meeting_date', 'Unknown')
+        term = meeting.get('term', '')
+        week_num = meeting.get('week_number', '')
+        week_type = meeting.get('week_type', '')
+        facilitator = meeting.get('facilitator', '')
+        meeting_id = meeting.get('id', '')
+        
+        # Create header
+        if program in ["JP", "PY", "SY"]:
+            week_badge = "🔵 Week A" if week_type == "A" else "🟡 Week B"
+            header = f"{week_badge} | {meeting_date} | Term {term} W{week_num}"
+        else:
+            header = f"🎨 Specialist | {meeting_date} | Term {term} W{week_num}"
+        
+        with st.expander(header, expanded=False):
+            st.markdown(f"**Facilitator:** {facilitator}")
+            st.markdown(f"**Attendees:** {meeting.get('attendees', 'Not recorded')}")
+            st.markdown(f"**Meeting ID:** {meeting_id}")
+            
+            st.markdown("---")
+            
+            # Display check-in notes
+            if meeting.get('checkin_notes'):
+                st.markdown("**Check-in Notes:**")
+                if program == "SPECIALIST":
+                    try:
+                        checkin_data = _json.loads(meeting['checkin_notes'])
+                        st.markdown(f"*Monday Teacher:* {checkin_data.get('monday_teacher', '')}")
+                        st.markdown(f"*Tue-Fri Teacher:* {checkin_data.get('tuefri_teacher', '')}")
+                    except:
+                        st.markdown(meeting['checkin_notes'])
+                else:
+                    st.markdown(meeting['checkin_notes'])
+                st.markdown("")
+            
+            # Display meeting minutes (editable)
+            st.markdown("**📝 Meeting Minutes:**")
+            current_minutes = meeting.get('meeting_minutes', '')
+            
+            if current_minutes:
+                # Show existing minutes
+                st.markdown(current_minutes)
+                
+                # Edit button
+                if st.button("✏️ Edit Minutes", key=f"edit_minutes_{meeting_id}"):
+                    st.session_state[f"editing_minutes_{meeting_id}"] = True
+                    st.rerun()
+            else:
+                st.info("No minutes recorded for this meeting.")
+                if st.button("➕ Add Minutes", key=f"add_minutes_{meeting_id}"):
+                    st.session_state[f"editing_minutes_{meeting_id}"] = True
+                    st.rerun()
+            
+            # Edit mode
+            if st.session_state.get(f"editing_minutes_{meeting_id}", False):
+                st.markdown("---")
+                st.markdown("**Edit Minutes:**")
+                edited_minutes = st.text_area(
+                    "Update minutes",
+                    value=current_minutes,
+                    height=250,
+                    key=f"minutes_editor_{meeting_id}",
+                    label_visibility="collapsed"
+                )
+                
+                col_save, col_cancel = st.columns([1, 1])
+                with col_save:
+                    if st.button("💾 Save Changes", key=f"save_minutes_{meeting_id}", type="primary"):
+                        try:
+                            supabase.table('tm_program_meetings').update({
+                                'meeting_minutes': edited_minutes
+                            }).eq('id', meeting_id).execute()
+                            st.success("✅ Minutes updated!")
+                            st.session_state[f"editing_minutes_{meeting_id}"] = False
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to save: {e}")
+                
+                with col_cancel:
+                    if st.button("❌ Cancel", key=f"cancel_minutes_{meeting_id}"):
+                        st.session_state[f"editing_minutes_{meeting_id}"] = False
+                        st.rerun()
+            
+            # Display actions if present
+            if meeting.get('actions'):
+                try:
+                    actions = _json.loads(meeting['actions'])
+                    if actions:
+                        st.markdown("---")
+                        st.markdown("**Actions from This Meeting:**")
+                        for action in actions:
+                            status = "✅" if action.get("done") else "🔲"
+                            priority = action.get("priority", "Medium")
+                            priority_emoji = {"Low": "⬇️", "Medium": "➡️", "High": "⬆️", "Urgent": "🔴"}.get(priority, "➡️")
+                            st.markdown(f"{status} {priority_emoji} {action.get('action','')} — {action.get('who','')} by {action.get('by_when','')}")
+                except:
+                    pass
+
+
 def main():
     program   = get_program_from_params()
     prog_info = PROGRAMS[program]
@@ -1320,13 +1462,18 @@ def main():
     auto_term, auto_week = get_current_term_week()
 
     if program == "SPECIALIST":
-        tab_meeting = st.tabs(["🎨 Specialist Meeting"])[0]
+        tab_meeting, tab_archive = st.tabs(["🎨 Specialist Meeting", "📚 Archive"])
         with tab_meeting:
             render_specialist_meeting()
+        with tab_archive:
+            render_meeting_archive(program)
+            
     elif program in ("JP", "PY", "SY"):
-        tab_meeting = st.tabs(["🗒️ Program Meeting"])[0]
+        tab_meeting, tab_archive = st.tabs(["🗒️ Program Meeting", "📚 Archive"])
         with tab_meeting: 
             render_program_meeting(program)
+        with tab_archive:
+            render_meeting_archive(program)
 
 
 if __name__ == "__main__":
