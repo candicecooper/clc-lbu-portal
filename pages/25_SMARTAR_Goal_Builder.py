@@ -391,7 +391,7 @@ elif view == "📋 Goal Builder":
         if c3.button("Add Student", type="primary"):
             if new_name.strip():
                 sb.table("smartar_students").insert({"student_name": new_name.strip(), "program": new_prog}).execute()
-                st.success(f"✅ {new_name.strip()} added.")
+                st.success(f"✅ {new_name.strip()} added to {new_prog}.")
                 st.rerun()
             else:
                 st.warning("Please enter a student name.")
@@ -402,7 +402,8 @@ elif view == "📋 Goal Builder":
             for s in students:
                 goals = get_goals(s["student_name"])
                 sc1, sc2 = st.columns([4, 1])
-                sc1.write(f"**{s['student_name']}** — {len(goals)} goals")
+                prog_display = s.get('program', '❓')
+                sc1.write(f"**{s['student_name']}** — {prog_display} — {len(goals)} goals")
                 
                 if sc2.button("Delete", key=f"arch_{s['id']}"):
                     # Delete student (archive not supported - no active column)
@@ -584,6 +585,9 @@ No markdown, no explanation, pure JSON only."""
                 new_goal["term"] = integration["term"]
                 new_goal["week"] = integration["week"]
             
+            # Add start date for this goal version
+            new_goal["start_date"] = date.today().isoformat()
+            
             sb.table("smartar_goals").insert(new_goal).execute()
             
             for k in ["refined_goal", "gas_levels"]:
@@ -740,6 +744,18 @@ elif view == "📈 Progress Report":
             st.markdown(f'<div class="exclusion-box">🏫 <b>Exclusion Goal:</b> {goal["exclusion_goal"]}</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="smartar-box">🎯 <b>SMARTAR Goal:</b> {goal.get("smartar_goal", "No goal")}</div>', unsafe_allow_html=True)
 
+        # Show tracking date range
+        goal_start = goal.get("start_date")
+        if goal_start:
+            try:
+                start_date_obj = datetime.fromisoformat(str(goal_start)).date()
+                days_since_start = (date.today() - start_date_obj).days
+                st.caption(f"📅 **Goal started:** {start_date_obj.strftime('%d %B %Y')} ({days_since_start} days ago) | **Report period:** {period}")
+            except:
+                st.caption(f"**Report period:** {period}")
+        else:
+            st.caption(f"**Report period:** {period}")
+
         if total == 0:
             st.warning("No tracking data for this period.")
             continue
@@ -867,12 +883,16 @@ elif view == "⚙️ Admin Panel":
     # ─────────────────────────────────────────────────────────────────────────
     with tab1:
         st.subheader("Add New Student")
-        col1, col2 = st.columns([3, 1])
+        col1, col2, col3 = st.columns([3, 1, 1])
         new_student_name = col1.text_input("Student name", key="admin_new_student")
-        if col2.button("Add Student", type="primary", key="admin_add_student"):
+        new_student_prog = col2.selectbox("Program", PROGRAMS, key="admin_new_prog")
+        if col3.button("Add Student", type="primary", key="admin_add_student"):
             if new_student_name.strip():
-                sb.table("smartar_students").insert({"student_name": new_student_name.strip()}).execute()
-                st.success(f"✅ {new_student_name.strip()} added to the system.")
+                sb.table("smartar_students").insert({
+                    "student_name": new_student_name.strip(),
+                    "program": new_student_prog
+                }).execute()
+                st.success(f"✅ {new_student_name.strip()} added to {new_student_prog}.")
                 st.rerun()
             else:
                 st.warning("Please enter a student name.")
@@ -884,12 +904,33 @@ elif view == "⚙️ Admin Panel":
         if students:
             for s in students:
                 goals = get_goals(s["student_name"])
-                col1, col2 = st.columns([4, 1])
-                col1.write(f"**{s['student_name']}** — {len(goals)} active goals")
-                if col2.button("Delete", key=f"admin_arch_{s['id']}"):
-                    sb.table("smartar_students").delete().eq("id", s["id"]).execute()
-                    st.success(f"Deleted {s['student_name']}")
-                    st.rerun()
+                
+                with st.expander(f"**{s['student_name']}** — {s.get('program', '❓ No Program')} — {len(goals)} goals", expanded=False):
+                    # Edit program
+                    st.markdown("**Edit Student Details:**")
+                    edit_col1, edit_col2 = st.columns([2, 1])
+                    
+                    current_prog = s.get('program', 'JP')
+                    prog_idx = PROGRAMS.index(current_prog) if current_prog in PROGRAMS else 0
+                    new_program = edit_col1.selectbox(
+                        "Program", 
+                        PROGRAMS, 
+                        index=prog_idx,
+                        key=f"prog_edit_{s['id']}"
+                    )
+                    
+                    if edit_col2.button("Update Program", key=f"prog_save_{s['id']}", type="primary"):
+                        sb.table("smartar_students").update({"program": new_program}).eq("id", s["id"]).execute()
+                        st.success(f"✅ Updated {s['student_name']} to {new_program}")
+                        st.rerun()
+                    
+                    st.markdown("---")
+                    
+                    # Delete student
+                    if st.button(f"🗑 Delete {s['student_name']}", key=f"admin_del_{s['id']}"):
+                        sb.table("smartar_students").delete().eq("id", s["id"]).execute()
+                        st.success(f"Deleted {s['student_name']}")
+                        st.rerun()
         else:
             st.info("No students in the system yet.")
     
@@ -931,6 +972,35 @@ elif view == "⚙️ Admin Panel":
                             key=f"edit_smartar_{goal['id']}"
                         )
                         
+                        # Start date tracking
+                        st.markdown("**Goal Tracking Dates:**")
+                        date_col1, date_col2 = st.columns(2)
+                        
+                        # Get current start_date or use created_at as fallback
+                        current_start = goal.get("start_date")
+                        if current_start:
+                            try:
+                                current_start_date = datetime.fromisoformat(str(current_start)).date()
+                            except:
+                                current_start_date = date.today()
+                        else:
+                            current_start_date = date.today()
+                        
+                        edit_start_date = date_col1.date_input(
+                            "Start Date (when this version began)",
+                            value=current_start_date,
+                            key=f"edit_start_{goal['id']}",
+                            help="Update this when refining the goal to track the new version"
+                        )
+                        
+                        # Show days tracked
+                        days_tracked = (date.today() - current_start_date).days
+                        date_col2.metric("Days Tracked", f"{days_tracked} days", 
+                                        help=f"Data collected from {current_start_date.strftime('%d %b %Y')} to today")
+                        
+                        if days_tracked != (date.today() - edit_start_date).days:
+                            st.info("💡 **Start date changed** - This will update the tracking period for this goal version.")
+                        
                         st.markdown("**GAS Performance Levels:**")
                         edit_gas = {}
                         for lvl in LEVEL_ORDER:
@@ -953,6 +1023,7 @@ elif view == "⚙️ Admin Panel":
                                 "gas_expected": edit_gas.get("EXPECTED", ""),
                                 "gas_below": edit_gas.get("BELOW", ""),
                                 "gas_not_yet": edit_gas.get("NOT YET", ""),
+                                "start_date": edit_start_date.isoformat(),
                                 "updated_at": datetime.utcnow().isoformat()
                             }
                             sb.table("smartar_goals").update(update_data).eq("id", goal["id"]).execute()
@@ -1024,6 +1095,7 @@ elif view == "⚙️ Admin Panel":
                         "gas_expected": prepop_gas.get("EXPECTED", ""),
                         "gas_below": prepop_gas.get("BELOW", ""),
                         "gas_not_yet": prepop_gas.get("NOT YET", ""),
+                        "start_date": date.today().isoformat(),
                         "active": True
                     }
                     sb.table("smartar_goals").insert(new_goal).execute()
