@@ -772,9 +772,372 @@ def render_program_meeting(program):
         &nbsp;·&nbsp; ☑ Clear actions + ownership &nbsp;·&nbsp; ☑ Stick to time
     </div>""", unsafe_allow_html=True)
     
-    # [Rest of the render_program_meeting function stays exactly the same - truncated for space]
-    # This is the existing JP/PY/SY meeting code - keeping all SMARTAR integration, etc.
-    pass  # Placeholder - full code continues as in original
+    # AUTO-CREATE MEETING ID (no button needed)
+    # If no meeting_id exists, create a minimal record just to get an ID for SMARTAR links
+    if not st.session_state.current_meeting_id:
+        st.markdown("""
+        <div style="background:#e0f2fe;border-left:4px solid #0284c7;border-radius:0 8px 8px 0;
+                    padding:8px 14px;margin-bottom:12px;font-size:13px;color:#075985;">
+          ℹ️ <strong>New Meeting:</strong> Meeting ID will be created when you start entering content below. 
+          SMARTAR links will appear automatically.
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.success(f"✅ Meeting Active (ID: {st.session_state.current_meeting_id}) - SMARTAR integration ready")
+    
+    st.markdown("---")
+
+    checkin_label  = "TEAM CHECK-IN — Regulation Before Reaction" if is_week_a else "TEAM CHECK-IN"
+    checkin_prompt = "What do we need to know to support students effectively today?" if is_week_a else "Quick updates impacting program delivery"
+    st.markdown(f"#### ⏱ 0–10 min | {checkin_label}")
+    st.caption(checkin_prompt)
+    pm_checkin = st.text_area("Check-in notes", height=80, key=f"pm_checkin_{program}",
+        label_visibility="collapsed", placeholder=checkin_prompt)
+    st.markdown("---")
+
+    if is_week_a:
+        st.markdown("#### ⏱ 10–25 min | STUDENT CONCERNS — Structured Problem Solving")
+        st.caption("Facilitator prompt: Push for function-based thinking, not description.")
+
+        concerns_key = f"pm_concerns_{program}"
+        if concerns_key not in st.session_state:
+            st.session_state[concerns_key] = [{"notes": ""}]
+
+        concerns = st.session_state[concerns_key]
+        for idx, row in enumerate(concerns):
+            col_text, col_del = st.columns([11, 0.5])
+            with col_text:
+                row["notes"] = st.text_area(
+                    f"Student {idx + 1}",
+                    value=row.get("notes", ""),
+                    key=f"con_notes_{program}_{idx}",
+                    height=100,
+                    placeholder="Student name · Concern / behaviour · Hypothesis (why?) · Strategy to try · Who · By when",
+                )
+            with col_del:
+                st.markdown("<div style='margin-top:2rem;'></div>", unsafe_allow_html=True)
+                if len(concerns) > 1:
+                    if st.button("✕", key=f"con_del_{program}_{idx}"):
+                        concerns.pop(idx); st.rerun()
+        if st.button("➕ Add student concern", key=f"con_add_{program}"):
+            concerns.append({"notes": ""}); st.rerun()
+        st.markdown("---")
+
+        st.markdown("#### ⏱ 25–40 min | SMARTAR GOAL SPOTLIGHT — 4 Students")
+        st.caption("Rule: No update without evidence. What data or artefact supports this?")
+        
+        # SMARTAR integration status
+        if not st.session_state.current_meeting_id:
+            st.markdown("""
+            <div style="background:#fef3c7;border-left:4px solid #f59e0b;border-radius:0 8px 8px 0;
+                        padding:8px 14px;margin-bottom:12px;font-size:13px;color:#92400e;">
+              ⚠️ <strong>Save meeting first:</strong> Scroll down and click "💾 Save Meeting Record" button to create meeting ID and enable SMARTAR Goal Tool links.
+            </div>""", unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div style="background:#ede9fe;border-left:4px solid #7c3aed;border-radius:0 8px 8px 0;
+                        padding:8px 14px;margin-bottom:12px;font-size:13px;color:#5b21b6;">
+              🎯 <strong>SMARTAR Integration Active:</strong> Enter student name, then click "Open Goal Tool" to develop/update goals. 
+              Updated goals sync back here automatically.
+            </div>""", unsafe_allow_html=True)
+
+        if student_names:
+            st.caption(f"💡 {len(student_names)} students loaded. Type any name — not on the list? Just type it in.")
+
+        smartar_key = f"pm_smartar_{program}"
+        if smartar_key not in st.session_state:
+            st.session_state[smartar_key] = [{"student_name": "", "notes": ""} for _ in range(4)]
+
+        smartar = st.session_state[smartar_key]
+        for idx, row in enumerate(smartar):
+            st.markdown(f"**Student {idx + 1}**")
+            col_name, col_link, col_status = st.columns([3, 1, 1])
+            
+            with col_name:
+                row["student_name"] = st.text_input("Student name", 
+                    value=row.get("student_name", ""),
+                    key=f"sm_name_{program}_{idx}",
+                    label_visibility="collapsed",
+                    placeholder="Enter student name")
+            
+            with col_link:
+                # Show link if we have meeting_id AND student name
+                if row.get("student_name") and st.session_state.current_meeting_id:
+                    smartar_url = get_smartar_goal_link(
+                        row["student_name"], 
+                        st.session_state.current_meeting_id,
+                        program,
+                        pm_term,
+                        pm_week
+                    )
+                    st.markdown(f"[🔗 Open Goal Tool]({smartar_url})")
+                elif row.get("student_name") and not st.session_state.current_meeting_id:
+                    st.caption("↑ Initialize first")
+            
+            with col_status:
+                # Check for synced goal
+                if row.get("student_name") and st.session_state.current_meeting_id:
+                    synced_goal = fetch_synced_smartar_goal(row["student_name"], st.session_state.current_meeting_id)
+                    if synced_goal:
+                        st.success("✓ Synced")
+                        # Update notes with synced goal if not already there
+                        if "SMARTAR Goal:" not in row.get("notes", ""):
+                            row["notes"] = f"SMARTAR Goal: {synced_goal}\n\n{row.get('notes', '')}"
+            
+            col_notes, col_del = st.columns([11, 0.5])
+            with col_notes:
+                row["notes"] = st.text_area(
+                    f"Goal notes for {row.get('student_name', 'Student') or 'Student'}",
+                    value=row.get("notes", ""),
+                    key=f"sm_notes_{program}_{idx}",
+                    height=100,
+                    placeholder="Goal area · Current level / evidence · Next adjustment · Responsible",
+                    label_visibility="collapsed"
+                )
+            with col_del:
+                st.markdown("<div style='margin-top:2rem;'></div>", unsafe_allow_html=True)
+                if len(smartar) > 1:
+                    if st.button("✕", key=f"sm_del_{program}_{idx}"):
+                        smartar.pop(idx); st.rerun()
+        
+        if st.button("➕ Add SMARTAR row", key=f"sm_add_{program}"):
+            smartar.append({"student_name": "", "notes": ""}); st.rerun()
+        st.markdown("---")
+
+        st.markdown("#### ⏱ 40–45 min | REPORTS / TAC / TRANSITIONS")
+        pm_reports = st.text_area("Reports, TAC meetings, review or transition planning",
+            height=80, key=f"pm_reports_{program}", label_visibility="collapsed",
+            placeholder="Upcoming reports due · TAC meetings · Review or transition planning")
+        priority_rows = []
+
+    else:  # Week B - similar structure with SMARTAR section
+        st.markdown("#### ⏱ 10–30 min | CLC PRIORITY FOCUS — Implementation Fidelity")
+        st.caption("Align to: Implementation Plan · PDP Focus Areas · LBU Priorities")
+
+        priority_key = f"pm_priority_{program}"
+        if priority_key not in st.session_state:
+            st.session_state[priority_key] = [{"area":"","working":"","gap":"","adjustment":"","evidence":"","who":""}]
+
+        priority_rows = st.session_state[priority_key]
+        ph_cols = st.columns([2,2,2,2,2,1,0.5])
+        for h, label in zip(ph_cols, ["Priority Area","What's Working","Gap Identified","Adjustment","Evidence to Collect","Who",""]):
+            h.markdown(f"**{label}**" if label else "")
+
+        for idx, row in enumerate(priority_rows):
+            p1,p2,p3,p4,p5,p6,p7 = st.columns([2,2,2,2,2,1,0.5])
+            with p1: row["area"]       = st.text_input("A",   value=row.get("area",""),       key=f"pr_a_{program}_{idx}",   label_visibility="collapsed")
+            with p2: row["working"]    = st.text_input("W",   value=row.get("working",""),    key=f"pr_w_{program}_{idx}",   label_visibility="collapsed")
+            with p3: row["gap"]        = st.text_input("G",   value=row.get("gap",""),        key=f"pr_g_{program}_{idx}",   label_visibility="collapsed")
+            with p4: row["adjustment"] = st.text_input("Adj", value=row.get("adjustment",""), key=f"pr_adj_{program}_{idx}", label_visibility="collapsed")
+            with p5: row["evidence"]   = st.text_input("E",   value=row.get("evidence",""),   key=f"pr_e_{program}_{idx}",   label_visibility="collapsed")
+            with p6: row["who"]        = st.text_input("Who", value=row.get("who",""),        key=f"pr_who_{program}_{idx}", label_visibility="collapsed")
+            with p7:
+                if len(priority_rows) > 1:
+                    if st.button("✕", key=f"pr_del_{program}_{idx}"):
+                        priority_rows.pop(idx); st.rerun()
+        if st.button("➕ Add priority row", key=f"pr_add_{program}"):
+            priority_rows.append({"area":"","working":"","gap":"","adjustment":"","evidence":"","who":""}); st.rerun()
+        st.markdown("---")
+
+        # SMARTAR for Week B (same as Week A)
+        st.markdown("#### ⏱ 30–45 min | SMARTAR GOAL SPOTLIGHT — 4 Students")
+        st.caption("Rule: No update without evidence.")
+        
+        if not st.session_state.current_meeting_id:
+            st.markdown("""
+            <div style="background:#fef3c7;border-left:4px solid #f59e0b;border-radius:0 8px 8px 0;
+                        padding:8px 14px;margin-bottom:12px;font-size:13px;color:#92400e;">
+              ⚠️ <strong>Save meeting first:</strong> Scroll down and click "💾 Save Meeting Record" button.
+            </div>""", unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div style="background:#ede9fe;border-left:4px solid #7c3aed;border-radius:0 8px 8px 0;
+                        padding:8px 14px;margin-bottom:12px;font-size:13px;color:#5b21b6;">
+              🎯 <strong>SMARTAR Integration Active:</strong> Enter student name, then click "Open Goal Tool".
+            </div>""", unsafe_allow_html=True)
+
+        if student_names:
+            st.caption(f"💡 {len(student_names)} students loaded.")
+
+        smartar_key = f"pm_smartar_{program}"
+        if smartar_key not in st.session_state:
+            st.session_state[smartar_key] = [{"student_name": "", "notes": ""} for _ in range(4)]
+
+        smartar = st.session_state[smartar_key]
+        for idx, row in enumerate(smartar):
+            st.markdown(f"**Student {idx + 1}**")
+            col_name, col_link, col_status = st.columns([3, 1, 1])
+            
+            with col_name:
+                row["student_name"] = st.text_input("Student name", 
+                    value=row.get("student_name", ""),
+                    key=f"sm_name_{program}_{idx}",
+                    label_visibility="collapsed",
+                    placeholder="Enter student name")
+            
+            with col_link:
+                if row.get("student_name") and st.session_state.current_meeting_id:
+                    smartar_url = get_smartar_goal_link(
+                        row["student_name"], 
+                        st.session_state.current_meeting_id,
+                        program,
+                        pm_term,
+                        pm_week
+                    )
+                    st.markdown(f"[🔗 Open Goal Tool]({smartar_url})")
+                elif row.get("student_name") and not st.session_state.current_meeting_id:
+                    st.caption("↑ Initialize first")
+            
+            with col_status:
+                if row.get("student_name") and st.session_state.current_meeting_id:
+                    synced_goal = fetch_synced_smartar_goal(row["student_name"], st.session_state.current_meeting_id)
+                    if synced_goal:
+                        st.success("✓ Synced")
+                        if "SMARTAR Goal:" not in row.get("notes", ""):
+                            row["notes"] = f"SMARTAR Goal: {synced_goal}\n\n{row.get('notes', '')}"
+            
+            col_notes, col_del = st.columns([11, 0.5])
+            with col_notes:
+                row["notes"] = st.text_area(
+                    f"Goal notes for {row.get('student_name', 'Student') or 'Student'}",
+                    value=row.get("notes", ""),
+                    key=f"sm_notes_{program}_{idx}",
+                    height=100,
+                    placeholder="Goal area · Current level / evidence · Next adjustment · Responsible",
+                    label_visibility="collapsed"
+                )
+            with col_del:
+                st.markdown("<div style='margin-top:2rem;'></div>", unsafe_allow_html=True)
+                if len(smartar) > 1:
+                    if st.button("✕", key=f"sm_del_{program}_{idx}"):
+                        smartar.pop(idx); st.rerun()
+        
+        if st.button("➕ Add SMARTAR row", key=f"sm_add_{program}"):
+            smartar.append({"student_name": "", "notes": ""}); st.rerun()
+
+        pm_reports = ""
+        concerns = []
+
+    st.markdown("---")
+    
+    # ACTIONS SECTION (closing section removed, actions clarified)
+    st.markdown("#### ✅ ACTIONS — Clear Ownership & Accountability")
+    st.caption("Each action must have: specific task, responsible person, and due date")
+    
+    actions_key = f"pm_actions_{program}"
+    if actions_key not in st.session_state:
+        carried = [a for a in last_actions if not a.get("done", False)]
+        st.session_state[actions_key] = carried if carried else [{"action":"","who":"","by_when":"","priority":"Medium","notes":"","done":False}]
+
+    actions = st.session_state[actions_key]
+    if last_actions:
+        incomplete = [a for a in last_actions if not a.get("done", False)]
+        if incomplete:
+            st.caption(f"⬆️ {len(incomplete)} action(s) carried forward from last meeting")
+
+    ah_cols = st.columns([4,1.5,1,1,0.7,0.5])
+    for h, label in zip(ah_cols, ["Action (What needs to be done)","Who (Responsible person)","By When","Priority","✓ Done",""]):
+        h.markdown(f"**{label}**" if label else "")
+
+    for idx, row in enumerate(actions):
+        a1,a2,a3,a4,a5,a6 = st.columns([4,1.5,1,1,0.7,0.5])
+        with a1: row["action"]   = st.text_input("Act", value=row.get("action",""),   key=f"act_a_{program}_{idx}",      label_visibility="collapsed", placeholder="Specific action item")
+        with a2: row["who"]      = st.text_input("Who", value=row.get("who",""),      key=f"act_w_{program}_{idx}",      label_visibility="collapsed", placeholder="Person responsible")
+        with a3: row["by_when"]  = st.text_input("By",  value=row.get("by_when",""),  key=f"act_by_{program}_{idx}",     label_visibility="collapsed", placeholder="Due date/week")
+        with a4: row["priority"] = st.selectbox("Pri",  ["Low","Medium","High","Urgent"], index=["Low","Medium","High","Urgent"].index(row.get("priority","Medium")), key=f"act_pri_{program}_{idx}", label_visibility="collapsed")
+        with a5: row["done"]     = st.checkbox("✓",     value=row.get("done",False),   key=f"act_done_{program}_{idx}")
+        with a6:
+            if len(actions) > 1:
+                if st.button("✕", key=f"act_del_{program}_{idx}"):
+                    actions.pop(idx); st.rerun()
+        
+        if row.get("action"):
+            row["notes"] = st.text_input("Additional context/notes (optional)", 
+                value=row.get("notes", ""), 
+                key=f"act_notes_{program}_{idx}",
+                placeholder="Dependencies, resources needed, background...")
+
+    if st.button("➕ Add action", key=f"act_add_{program}"):
+        actions.append({"action":"","who":"","by_when":"","priority":"Medium","notes":"","done":False}); st.rerun()
+    st.markdown("---")
+
+    # Prepare meeting data for auto-save
+    smartar_raw = st.session_state.get(f"pm_smartar_{program}", [])
+    smartar_data = [{"student_name": r.get("student_name",""), "notes": r.get("notes","")} for r in smartar_raw]
+    actions_data = st.session_state.get(f"pm_actions_{program}", [])
+    concerns_raw = st.session_state.get(f"pm_concerns_{program}", []) if is_week_a else []
+    concerns_data = [{"notes": r.get("notes","")} for r in concerns_raw]
+    priority_data = st.session_state.get(f"pm_priority_{program}", []) if not is_week_a else []
+
+    meeting_data = {
+        "program": program, 
+        "meeting_date": str(pm_date),
+        "term": pm_term.strip(), 
+        "week_number": int(pm_week),
+        "week_type": "A" if is_week_a else "B",
+        "facilitator": pm_facilitator.strip(), 
+        "attendees": pm_attendees.strip(),
+        "checkin_notes": pm_checkin.strip(),
+        "student_concerns": _json.dumps(concerns_data),
+        "smartar_spotlight": _json.dumps(smartar_data),
+        "reports_tac_notes": pm_reports.strip() if is_week_a else "",
+        "priority_focus": _json.dumps(priority_data),
+        "actions": _json.dumps(actions_data),
+    }
+
+    # Trigger auto-save
+    trigger_autosave(program, meeting_data)
+
+    # Manual save button
+    if st.button("💾 Save Meeting Record", type="primary", use_container_width=True, key=f"pm_save_{program}"):
+        try:
+            if st.session_state.current_meeting_id:
+                supabase.table('tm_program_meetings').update(meeting_data).eq('id', st.session_state.current_meeting_id).execute()
+                st.success("✅ Meeting record updated!")
+            else:
+                result = supabase.table('tm_program_meetings').insert(meeting_data).execute()
+                if result.data:
+                    st.session_state.current_meeting_id = result.data[0]['id']
+                st.success("✅ Meeting record saved!")
+            
+            # Clear session state
+            for k in [f"pm_concerns_{program}", f"pm_smartar_{program}",
+                      f"pm_priority_{program}", f"pm_actions_{program}"]:
+                st.session_state.pop(k, None)
+            
+            st.session_state.last_autosave_time = None
+            st.session_state.autosave_message = ""
+            st.rerun()
+        except Exception as e:
+            st.error(f"⚠️ Database save failed: {e}")
+            st.warning("**Workaround:** Creating temporary meeting ID for SMARTAR integration. Your data won't be saved to database until schema is fixed.")
+            
+            # Create temporary meeting_id so SMARTAR links work
+            import random
+            st.session_state.current_meeting_id = random.randint(900000, 999999)
+            st.info(f"✅ Temporary Meeting ID: {st.session_state.current_meeting_id} - SMARTAR links now active!")
+            st.rerun()
+
+    # Past meeting records
+    if last_records:
+        with st.expander(f"📚 Past meeting records ({len(last_records)})", expanded=False):
+            for rec in reversed(last_records[-5:]):
+                wt = rec.get("week_type","?")
+                badge = "🔵 Week A" if wt == "A" else "🟡 Week B"
+                st.markdown(f"**{badge}** · {rec.get('meeting_date','')} · Term {rec.get('term','')} W{rec.get('week_number','')}")
+                
+                try:
+                    past_actions = _json.loads(rec.get("actions", "[]"))
+                    if past_actions:
+                        st.caption("Actions:")
+                        for action in past_actions:
+                            status = "✅" if action.get("done") else "🔲"
+                            priority = action.get("priority", "Medium")
+                            priority_emoji = {"Low": "⬇️", "Medium": "➡️", "High": "⬆️", "Urgent": "🔴"}.get(priority, "➡️")
+                            st.markdown(f"{status} {priority_emoji} {action.get('action','')} — {action.get('who','')} by {action.get('by_when','')}")
+                except:
+                    pass
+                st.divider()
 
 
 def main():
