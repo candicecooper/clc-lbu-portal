@@ -329,6 +329,64 @@ def render_specialist_meeting():
     if st.session_state.autosave_message:
         st.caption(st.session_state.autosave_message)
 
+    # Fetch past meetings for Specialist
+    past_meetings = fetch("tm_program_meetings", {"program": "SPECIALIST"}, "meeting_date")
+    
+    # Meeting selection - New or Edit existing
+    st.markdown("#### 📂 Select Meeting")
+    meeting_options = ["➕ New Meeting"] + [
+        f"{rec.get('meeting_date','')} - Term {rec.get('term','')} W{rec.get('week_number','')}"
+        for rec in reversed(past_meetings[-20:])  # Show last 20 meetings
+    ]
+    
+    selected_meeting = st.selectbox(
+        "Choose a meeting to edit or create new",
+        options=meeting_options,
+        key="meeting_select_specialist"
+    )
+    
+    # Load existing meeting if selected
+    selected_record = None
+    if selected_meeting != "➕ New Meeting":
+        # Find the selected record
+        selected_idx = meeting_options.index(selected_meeting) - 1
+        selected_record = list(reversed(past_meetings[-20:]))[selected_idx]
+        
+        # Set current_meeting_id so it updates instead of creating new
+        if not st.session_state.current_meeting_id or st.session_state.current_meeting_id != selected_record['id']:
+            st.session_state.current_meeting_id = selected_record['id']
+            
+            # Load data into session state
+            try:
+                if selected_record.get('student_concerns'):
+                    concerns_data = _json.loads(selected_record['student_concerns'])
+                    if isinstance(concerns_data, dict) and 'concerns' in concerns_data:
+                        st.session_state["sp_concerns"] = concerns_data['concerns']
+                if selected_record.get('curriculum_coverage'):
+                    curriculum_data = _json.loads(selected_record['curriculum_coverage'])
+                    if isinstance(curriculum_data, dict) and 'modules' in curriculum_data:
+                        st.session_state["sp_curriculum"] = curriculum_data['modules']
+                if selected_record.get('actions'):
+                    st.session_state["sp_actions"] = _json.loads(selected_record['actions'])
+            except:
+                pass
+        
+        st.info(f"✏️ Editing existing meeting - Meeting ID: {selected_record['id']}")
+        
+        # Show saved minutes in an expander for reference
+        if selected_record.get('meeting_minutes'):
+            with st.expander("📄 View Saved Minutes from This Meeting", expanded=False):
+                st.markdown(selected_record['meeting_minutes'])
+    else:
+        # Clear meeting_id for new meeting
+        if selected_meeting == "➕ New Meeting" and st.session_state.current_meeting_id:
+            st.session_state.current_meeting_id = None
+            # Clear session state
+            for k in ["sp_concerns", "sp_curriculum", "sp_actions"]:
+                st.session_state.pop(k, None)
+    
+    st.markdown("---")
+
     st.markdown(f"""<div style="background:#fef3c7;border-left:5px solid #d97706;
         border-radius:0 8px 8px 0;padding:8px 14px;margin-bottom:12px;font-size:13px;color:#92400e;">
         🎨 <strong>SPECIALIST PROGRAM MEETING</strong> · Job Share Coordination · Curriculum Delivery · Budget & Foodbank · Student Artifacts
@@ -346,11 +404,30 @@ def render_specialist_meeting():
 
     st.markdown("#### 📋 Meeting Details")
     mc1, mc2, mc3, mc4 = st.columns(4)
-    with mc1: sp_date        = st.date_input("Date", value=datetime.date.today(), key="sp_date")
-    with mc2: sp_term        = st.text_input("Term", placeholder="T1", key="sp_term")
-    with mc3: sp_week        = st.number_input("Week #", min_value=1, max_value=11, value=1, key="sp_week")
-    with mc4: sp_facilitator = st.text_input("Facilitator", value=get_staff_name(), key="sp_fac")
-    sp_attendees = st.text_input("Attendees (Both job share teachers + others)", placeholder="Names separated by commas", key="sp_att")
+    
+    # Pre-populate with existing data if editing
+    default_date = datetime.date.fromisoformat(selected_record['meeting_date']) if selected_record else datetime.date.today()
+    default_term = selected_record.get('term', '') if selected_record else ''
+    default_week = selected_record.get('week_number', 1) if selected_record else 1
+    default_facilitator = selected_record.get('facilitator', get_staff_name()) if selected_record else get_staff_name()
+    default_attendees = selected_record.get('attendees', '') if selected_record else ''
+    
+    # Get check-in notes if editing
+    default_monday_notes = ""
+    default_tuefri_notes = ""
+    if selected_record and selected_record.get('checkin_notes'):
+        try:
+            checkin_data = _json.loads(selected_record['checkin_notes'])
+            default_monday_notes = checkin_data.get('monday_teacher', '')
+            default_tuefri_notes = checkin_data.get('tuefri_teacher', '')
+        except:
+            pass
+    
+    with mc1: sp_date        = st.date_input("Date", value=default_date, key="sp_date")
+    with mc2: sp_term        = st.text_input("Term", value=default_term, placeholder="T1", key="sp_term")
+    with mc3: sp_week        = st.number_input("Week #", min_value=1, max_value=11, value=default_week, key="sp_week")
+    with mc4: sp_facilitator = st.text_input("Facilitator", value=default_facilitator, key="sp_fac")
+    sp_attendees = st.text_input("Attendees (Both job share teachers + others)", value=default_attendees, placeholder="Names separated by commas", key="sp_att")
 
     st.markdown("---")
 
@@ -363,6 +440,7 @@ def render_specialist_meeting():
         st.markdown("**Monday Teacher (0.2):**")
         sp_monday_notes = st.text_area(
             "Monday teacher notes",
+            value=default_monday_notes,
             height=100,
             key="sp_monday_notes",
             placeholder="How did Monday sessions go? Kitchen/BSEM notes? Concerns for week ahead?",
@@ -372,6 +450,7 @@ def render_specialist_meeting():
         st.markdown("**Tuesday–Friday Teacher (0.8):**")
         sp_tuefri_notes = st.text_area(
             "Tue-Fri teacher notes",
+            value=default_tuefri_notes,
             height=100,
             key="sp_tuefri_notes",
             placeholder="How was curriculum delivery this week? Student engagement? Handover working?",
@@ -558,6 +637,25 @@ def render_specialist_meeting():
         actions.append({"action":"","who":"","by_when":"","priority":"Medium","done":False}); st.rerun()
 
     st.markdown("---")
+    
+    # MEETING MINUTES / NOTES SECTION
+    st.markdown("#### 📝 MEETING MINUTES / NOTES")
+    st.caption("Comprehensive meeting notes - discussions, decisions, key points raised")
+    
+    default_sp_minutes = ""
+    if selected_record and selected_record.get('meeting_minutes'):
+        default_sp_minutes = selected_record['meeting_minutes']
+    
+    sp_minutes = st.text_area(
+        "Meeting minutes",
+        value=default_sp_minutes,
+        height=200,
+        key="sp_minutes",
+        label_visibility="collapsed",
+        placeholder="Record comprehensive meeting minutes here - discussions, decisions, key points, follow-up items..."
+    )
+
+    st.markdown("---")
 
     # Prepare meeting data
     concerns_data = st.session_state.get("sp_concerns", [])
@@ -618,6 +716,7 @@ def render_specialist_meeting():
             "artifact_data": artifact_data,
             "concerns": sp_artifact_concerns
         }),
+        "meeting_minutes": sp_minutes.strip(),
         "actions": _json.dumps(actions_data),
     }
 
@@ -625,7 +724,8 @@ def render_specialist_meeting():
     trigger_autosave("SPECIALIST", meeting_data)
 
     # Manual save button
-    if st.button("💾 Save Meeting Record", type="primary", use_container_width=True, key="sp_save"):
+    save_button_text = "💾 Update Meeting Record" if st.session_state.current_meeting_id else "💾 Save Meeting Record"
+    if st.button(save_button_text, type="primary", use_container_width=True, key="sp_save"):
         try:
             if st.session_state.current_meeting_id:
                 supabase.table('tm_program_meetings').update(meeting_data).eq('id', st.session_state.current_meeting_id).execute()
@@ -646,26 +746,6 @@ def render_specialist_meeting():
         except Exception as e:
             st.error(f"⚠️ Database save failed: {e}")
 
-    # Past meeting records
-    last_records = fetch("tm_program_meetings", {"program": "SPECIALIST"}, "meeting_date")
-    if last_records:
-        with st.expander(f"📚 Past meeting records ({len(last_records)})", expanded=False):
-            for rec in reversed(last_records[-5:]):
-                st.markdown(f"**🎨 Specialist Meeting** · {rec.get('meeting_date','')} · Term {rec.get('term','')} W{rec.get('week_number','')}")
-                
-                try:
-                    past_actions = _json.loads(rec.get("actions", "[]"))
-                    if past_actions:
-                        st.caption("Actions:")
-                        for action in past_actions:
-                            status = "✅" if action.get("done") else "🔲"
-                            priority = action.get("priority", "Medium")
-                            priority_emoji = {"Low": "⬇️", "Medium": "➡️", "High": "⬆️", "Urgent": "🔴"}.get(priority, "➡️")
-                            st.markdown(f"{status} {priority_emoji} {action.get('action','')} — {action.get('who','')} by {action.get('by_when','')}")
-                except:
-                    pass
-                st.divider()
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PROGRAM MEETING (JP/PY/SY) - WITH INITIALIZE MEETING BUTTON
@@ -679,6 +759,63 @@ def render_program_meeting(program):
     # Auto-save status display
     if st.session_state.autosave_message:
         st.caption(st.session_state.autosave_message)
+
+    # Fetch past meetings for this program
+    past_meetings = fetch("tm_program_meetings", {"program": program}, "meeting_date")
+    
+    # Meeting selection - New or Edit existing
+    st.markdown("#### 📂 Select Meeting")
+    meeting_options = ["➕ New Meeting"] + [
+        f"{rec.get('meeting_date','')} - Term {rec.get('term','')} W{rec.get('week_number','')} - Week {rec.get('week_type','')}"
+        for rec in reversed(past_meetings[-20:])  # Show last 20 meetings
+    ]
+    
+    selected_meeting = st.selectbox(
+        "Choose a meeting to edit or create new",
+        options=meeting_options,
+        key=f"meeting_select_{program}"
+    )
+    
+    # Load existing meeting if selected
+    selected_record = None
+    if selected_meeting != "➕ New Meeting":
+        # Find the selected record
+        selected_idx = meeting_options.index(selected_meeting) - 1
+        selected_record = list(reversed(past_meetings[-20:]))[selected_idx]
+        
+        # Set current_meeting_id so it updates instead of creating new
+        if not st.session_state.current_meeting_id or st.session_state.current_meeting_id != selected_record['id']:
+            st.session_state.current_meeting_id = selected_record['id']
+            
+            # Load data into session state
+            try:
+                if selected_record.get('student_concerns'):
+                    st.session_state[f"pm_concerns_{program}"] = _json.loads(selected_record['student_concerns'])
+                if selected_record.get('smartar_spotlight'):
+                    st.session_state[f"pm_smartar_{program}"] = _json.loads(selected_record['smartar_spotlight'])
+                if selected_record.get('priority_focus'):
+                    st.session_state[f"pm_priority_{program}"] = _json.loads(selected_record['priority_focus'])
+                if selected_record.get('actions'):
+                    st.session_state[f"pm_actions_{program}"] = _json.loads(selected_record['actions'])
+            except:
+                pass
+        
+        st.info(f"✏️ Editing existing meeting - Meeting ID: {selected_record['id']}")
+        
+        # Show saved minutes in an expander for reference
+        if selected_record.get('meeting_minutes'):
+            with st.expander("📄 View Saved Minutes from This Meeting", expanded=False):
+                st.markdown(selected_record['meeting_minutes'])
+    else:
+        # Clear meeting_id for new meeting
+        if selected_meeting == "➕ New Meeting" and st.session_state.current_meeting_id:
+            st.session_state.current_meeting_id = None
+            # Clear session state
+            for k in [f"pm_concerns_{program}", f"pm_smartar_{program}",
+                      f"pm_priority_{program}", f"pm_actions_{program}"]:
+                st.session_state.pop(k, None)
+    
+    st.markdown("---")
 
     # Fetch students for autocomplete
     @st.cache_data(ttl=120)
@@ -760,11 +897,21 @@ def render_program_meeting(program):
 
     st.markdown("#### 📋 Meeting Details")
     mc1, mc2, mc3, mc4 = st.columns(4)
-    with mc1: pm_date        = st.date_input("Date", value=datetime.date.today(), key=f"pm_date_{program}")
-    with mc2: pm_term        = st.text_input("Term", placeholder="T1", key=f"pm_term_{program}")
-    with mc3: pm_week        = st.number_input("Week #", min_value=1, max_value=11, value=1, key=f"pm_week_{program}")
-    with mc4: pm_facilitator = st.text_input("Facilitator", value=get_staff_name(), key=f"pm_fac_{program}")
-    pm_attendees = st.text_input("Attendees", placeholder="Names separated by commas", key=f"pm_att_{program}")
+    
+    # Pre-populate with existing data if editing
+    default_date = datetime.date.fromisoformat(selected_record['meeting_date']) if selected_record else datetime.date.today()
+    default_term = selected_record.get('term', '') if selected_record else ''
+    default_week = selected_record.get('week_number', 1) if selected_record else 1
+    default_facilitator = selected_record.get('facilitator', get_staff_name()) if selected_record else get_staff_name()
+    default_attendees = selected_record.get('attendees', '') if selected_record else ''
+    default_checkin = selected_record.get('checkin_notes', '') if selected_record else ''
+    default_reports = selected_record.get('reports_tac_notes', '') if selected_record else ''
+    
+    with mc1: pm_date        = st.date_input("Date", value=default_date, key=f"pm_date_{program}")
+    with mc2: pm_term        = st.text_input("Term", value=default_term, placeholder="T1", key=f"pm_term_{program}")
+    with mc3: pm_week        = st.number_input("Week #", min_value=1, max_value=11, value=default_week, key=f"pm_week_{program}")
+    with mc4: pm_facilitator = st.text_input("Facilitator", value=default_facilitator, key=f"pm_fac_{program}")
+    pm_attendees = st.text_input("Attendees", value=default_attendees, placeholder="Names separated by commas", key=f"pm_att_{program}")
 
     st.markdown("""<div style="background:#f0f9f9;border:1px solid #1A7A7A;border-radius:8px;
         padding:6px 12px;font-size:0.78rem;color:#1A7A7A;margin-bottom:8px;">
@@ -791,7 +938,7 @@ def render_program_meeting(program):
     checkin_prompt = "What do we need to know to support students effectively today?" if is_week_a else "Quick updates impacting program delivery"
     st.markdown(f"#### ⏱ 0–10 min | {checkin_label}")
     st.caption(checkin_prompt)
-    pm_checkin = st.text_area("Check-in notes", height=80, key=f"pm_checkin_{program}",
+    pm_checkin = st.text_area("Check-in notes", value=default_checkin, height=80, key=f"pm_checkin_{program}",
         label_visibility="collapsed", placeholder=checkin_prompt)
     st.markdown("---")
 
@@ -906,7 +1053,7 @@ def render_program_meeting(program):
 
         st.markdown("#### ⏱ 40–45 min | REPORTS / TAC / TRANSITIONS")
         pm_reports = st.text_area("Reports, TAC meetings, review or transition planning",
-            height=80, key=f"pm_reports_{program}", label_visibility="collapsed",
+            value=default_reports, height=80, key=f"pm_reports_{program}", label_visibility="collapsed",
             placeholder="Upcoming reports due · TAC meetings · Review or transition planning")
         priority_rows = []
 
@@ -1020,6 +1167,22 @@ def render_program_meeting(program):
 
     st.markdown("---")
     
+    # MEETING MINUTES / NOTES SECTION
+    st.markdown("#### 📝 MEETING MINUTES / NOTES")
+    st.caption("Comprehensive meeting notes - discussions, decisions, key points raised")
+    
+    default_minutes = selected_record.get('meeting_minutes', '') if selected_record else ''
+    pm_minutes = st.text_area(
+        "Meeting minutes",
+        value=default_minutes,
+        height=200,
+        key=f"pm_minutes_{program}",
+        label_visibility="collapsed",
+        placeholder="Record comprehensive meeting minutes here - discussions, decisions, key points, follow-up items..."
+    )
+    
+    st.markdown("---")
+    
     # ACTIONS SECTION (closing section removed, actions clarified)
     st.markdown("#### ✅ ACTIONS — Clear Ownership & Accountability")
     st.caption("Each action must have: specific task, responsible person, and due date")
@@ -1082,6 +1245,7 @@ def render_program_meeting(program):
         "smartar_spotlight": _json.dumps(smartar_data),
         "reports_tac_notes": pm_reports.strip() if is_week_a else "",
         "priority_focus": _json.dumps(priority_data),
+        "meeting_minutes": pm_minutes.strip(),
         "actions": _json.dumps(actions_data),
     }
 
@@ -1089,7 +1253,8 @@ def render_program_meeting(program):
     trigger_autosave(program, meeting_data)
 
     # Manual save button
-    if st.button("💾 Save Meeting Record", type="primary", use_container_width=True, key=f"pm_save_{program}"):
+    save_button_text = "💾 Update Meeting Record" if st.session_state.current_meeting_id else "💾 Save Meeting Record"
+    if st.button(save_button_text, type="primary", use_container_width=True, key=f"pm_save_{program}"):
         try:
             if st.session_state.current_meeting_id:
                 supabase.table('tm_program_meetings').update(meeting_data).eq('id', st.session_state.current_meeting_id).execute()
@@ -1117,27 +1282,6 @@ def render_program_meeting(program):
             st.session_state.current_meeting_id = random.randint(900000, 999999)
             st.info(f"✅ Temporary Meeting ID: {st.session_state.current_meeting_id} - SMARTAR links now active!")
             st.rerun()
-
-    # Past meeting records
-    if last_records:
-        with st.expander(f"📚 Past meeting records ({len(last_records)})", expanded=False):
-            for rec in reversed(last_records[-5:]):
-                wt = rec.get("week_type","?")
-                badge = "🔵 Week A" if wt == "A" else "🟡 Week B"
-                st.markdown(f"**{badge}** · {rec.get('meeting_date','')} · Term {rec.get('term','')} W{rec.get('week_number','')}")
-                
-                try:
-                    past_actions = _json.loads(rec.get("actions", "[]"))
-                    if past_actions:
-                        st.caption("Actions:")
-                        for action in past_actions:
-                            status = "✅" if action.get("done") else "🔲"
-                            priority = action.get("priority", "Medium")
-                            priority_emoji = {"Low": "⬇️", "Medium": "➡️", "High": "⬆️", "Urgent": "🔴"}.get(priority, "➡️")
-                            st.markdown(f"{status} {priority_emoji} {action.get('action','')} — {action.get('who','')} by {action.get('by_when','')}")
-                except:
-                    pass
-                st.divider()
 
 
 def main():
