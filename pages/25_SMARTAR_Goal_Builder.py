@@ -6,6 +6,8 @@ from supabase import create_client
 from groq import Groq
 from urllib.parse import unquote
 from collections import defaultdict
+import plotly.graph_objects as go
+import plotly.io as pio
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(page_title="SMARTAR Goal Builder", page_icon="🎯", layout="wide")
@@ -151,7 +153,8 @@ def check_goal_needs_refinement(goal_id, threshold=3):
     if len(recent) < threshold:
         return False, 0
     
-    low_performance = sum(1 for r in recent if r["performance_level"] in ["NOT YET", "BELOW"])
+    # Only count NOT YET (BELOW removed from tracking)
+    low_performance = sum(1 for r in recent if r["performance_level"] == "NOT YET")
     if low_performance >= threshold:
         return True, low_performance
     return False, low_performance
@@ -442,7 +445,7 @@ elif view == "📋 Goal Builder":
                 
                 with st.expander(f"Goal {idx} — {goal_text[:80]}..." + (" ⚠️ NEEDS REFINEMENT" if needs_refinement else "")):
                     if needs_refinement:
-                        st.markdown(f'<div class="alert-box">⚠️ <b>Action Required:</b> {low_count} recent sessions show low performance (NOT YET/BELOW). This goal may be too challenging. Please refine it to be more achievable and support incremental progress.</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="alert-box">⚠️ <b>Action Required:</b> {low_count} recent sessions show NOT YET performance. This goal may be too challenging. Please refine it to be more achievable and support incremental progress.</div>', unsafe_allow_html=True)
                     
                     if g.get("exclusion_goal"):
                         st.markdown(f'<div class="exclusion-box">🏫 <b>Exclusion Goal:</b> {g.get("exclusion_goal","—")}</div>', unsafe_allow_html=True)
@@ -637,7 +640,7 @@ elif view == "📊 Daily Tracking":
         st.markdown(f"### Goal {idx}")
         
         if needs_refinement:
-            st.markdown(f'<div class="alert-box">⚠️ <b>IMPORTANT:</b> This student has recorded {low_count} sessions of low performance (NOT YET/BELOW). <br><br><b>Action Required:</b> Please refine this goal to make it more achievable. We focus on incremental improvements, not persistent failure. Consider adjusting the rate, prompts, or task complexity to support the student\'s success.</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="alert-box">⚠️ <b>IMPORTANT:</b> This student has recorded {low_count} sessions of NOT YET performance. <br><br><b>Action Required:</b> Please refine this goal to make it more achievable. We focus on incremental improvements, not persistent failure. Consider adjusting the rate, prompts, or task complexity to support the student\'s success.</div>', unsafe_allow_html=True)
         
         st.markdown(f'<div class="smartar-box">🎯 {goal.get("smartar_goal", "No goal")}</div>', unsafe_allow_html=True)
 
@@ -659,7 +662,9 @@ elif view == "📊 Daily Tracking":
                 current = today_sessions.get(session)
                 if current:
                     st.markdown(f"Currently: {LEVEL_EMOJI.get(current,'')} **{current}**")
-                for lvl in LEVEL_ORDER:
+                # Only show EXCEEDING, ABOVE, EXPECTED, NOT YET (BELOW removed)
+                tracking_levels = ["EXCEEDING", "ABOVE", "EXPECTED", "NOT YET"]
+                for lvl in tracking_levels:
                     btn_key = f"track_{goal['id']}_{session}_{lvl}_{track_date}"
                     is_selected = current == lvl
                     label = f"{LEVEL_EMOJI[lvl]} {lvl}" + (" ✓" if is_selected else "")
@@ -667,16 +672,16 @@ elif view == "📊 Daily Tracking":
                                  type="primary" if is_selected else "secondary"):
                         upsert_session(goal["id"], selected_name, session, lvl)
                         
-                        # Show alert if recording NOT YET or BELOW
-                        if lvl in ["NOT YET", "BELOW"]:
+                        # Show alert if recording NOT YET
+                        if lvl == "NOT YET":
                             st.session_state["show_refinement_alert"] = goal["id"]
                         
                         st.rerun()
 
-        # Show refinement reminder if just recorded low performance
+        # Show refinement reminder if just recorded NOT YET
         if st.session_state.get("show_refinement_alert") == goal["id"]:
-            st.markdown(f'<div class="alert-box">⚠️ You\'ve recorded low performance for this goal. If this pattern continues, please refine the goal to support incremental progress. Our focus is on achievable growth, not documenting persistent challenges.</div>', unsafe_allow_html=True)
-            if st.button("I understand - will monitor and refine if needed", key=f"ack_{goal['id']}"):
+            st.markdown(f'<div class="alert-box">⚠️ <b>IMPORTANT:</b> You\'ve recorded NOT YET for this goal. This indicates the goal may be too challenging. Please refine the goal ASAP to make it more achievable and support incremental progress. Our focus is on achievable growth, not documenting persistent challenges.</div>', unsafe_allow_html=True)
+            if st.button("I understand - will refine goal as needed", key=f"ack_{goal['id']}"):
                 st.session_state.pop("show_refinement_alert", None)
                 st.rerun()
 
@@ -754,6 +759,56 @@ elif view == "📈 Progress Report":
         bar_html = '<div style="display:flex;width:100%;border-radius:8px;overflow:hidden;margin:12px 0">' + "".join(bar_parts) + '</div>'
         st.markdown(bar_html, unsafe_allow_html=True)
         st.caption(f"Total sessions recorded: {total}")
+
+        # Pie Chart - Performance Distribution
+        st.markdown("---")
+        st.markdown("**📊 Performance Distribution Chart:**")
+        
+        # Create pie chart data (only include levels with data)
+        chart_labels = []
+        chart_values = []
+        chart_colors = []
+        
+        for lvl in LEVEL_ORDER:
+            if counts[lvl] > 0:
+                chart_labels.append(f"{LEVEL_EMOJI[lvl]} {lvl}")
+                chart_values.append(counts[lvl])
+                chart_colors.append(LEVEL_COLOR[lvl])
+        
+        # Create Plotly pie chart
+        fig = go.Figure(data=[go.Pie(
+            labels=chart_labels,
+            values=chart_values,
+            marker=dict(colors=chart_colors),
+            textinfo='label+percent',
+            textfont=dict(size=14),
+            hovertemplate='<b>%{label}</b><br>Sessions: %{value}<br>Percentage: %{percent}<extra></extra>'
+        )])
+        
+        fig.update_layout(
+            title=dict(
+                text=f"{selected_name} - Goal {idx} Performance ({period})",
+                font=dict(size=18, color="#1d6fa4")
+            ),
+            showlegend=True,
+            height=500,
+            margin=dict(t=100, b=50, l=50, r=50)
+        )
+        
+        # Display chart
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Download button
+        img_bytes = pio.to_image(fig, format="png", width=1200, height=800, scale=2)
+        st.download_button(
+            label="📥 Download Chart as PNG",
+            data=img_bytes,
+            file_name=f"{selected_name}_Goal{idx}_Performance_{period.replace(' ', '_')}.png",
+            mime="image/png",
+            key=f"download_chart_{goal['id']}"
+        )
+        
+        st.markdown("---")
 
         # Trend over time
         if tracking:
