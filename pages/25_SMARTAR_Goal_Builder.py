@@ -88,8 +88,19 @@ def groq_call(prompt, system="You are an expert educator supporting students in 
 # ── Supabase helpers ──────────────────────────────────────────────────────────
 def get_students():
     try:
-        r = sb.table("smartar_students").select("*").order("student_name").execute()
+        r = sb.table("smartar_students").select("*").eq("active", True).order("student_name").execute()
         return r.data or []
+    except Exception as e:
+        st.error(f"Database error loading students: {e}")
+        return []
+
+def get_all_students(include_archived=False):
+    """Get all students, optionally including archived"""
+    try:
+        q = sb.table("smartar_students").select("*").order("student_name")
+        if not include_archived:
+            q = q.eq("active", True)
+        return q.execute().data or []
     except Exception as e:
         st.error(f"Database error loading students: {e}")
         return []
@@ -397,7 +408,11 @@ elif view == "📋 Goal Builder":
         new_prog = c2.selectbox("Program", PROGRAMS, key="new_prog")
         if c3.button("Add Student", type="primary"):
             if new_name.strip():
-                sb.table("smartar_students").insert({"student_name": new_name.strip(), "program": new_prog}).execute()
+                sb.table("smartar_students").insert({
+                    "student_name": new_name.strip(), 
+                    "program": new_prog,
+                    "active": True
+                }).execute()
                 st.success(f"✅ {new_name.strip()} added to {new_prog}.")
                 st.rerun()
             else:
@@ -412,9 +427,9 @@ elif view == "📋 Goal Builder":
                 prog_display = s.get('program', '❓')
                 sc1.write(f"**{s['student_name']}** — {prog_display} — {len(goals)} goals")
                 
-                if sc2.button("Delete", key=f"arch_{s['id']}"):
-                    # Delete student (archive not supported - no active column)
-                    sb.table("smartar_students").delete().eq("id", s["id"]).execute()
+                if sc2.button("Archive", key=f"arch_{s['id']}"):
+                    sb.table("smartar_students").update({"active": False}).eq("id", s["id"]).execute()
+                    st.success(f"📦 Archived {s['student_name']}")
                     st.rerun()
         else:
             st.info("No students yet.")
@@ -620,6 +635,12 @@ No markdown, no explanation, pure JSON only."""
 # ═══════════════════════════════════════════════════════════════════════════════
 elif view == "📊 Daily Tracking":
     st.title("📊 Daily Tracking")
+    
+    # Refresh button
+    col1, col2 = st.columns([6, 1])
+    col1.markdown("##")
+    if col2.button("🔄 Refresh Data", type="secondary"):
+        st.rerun()
 
     students = get_students()
     if not students:
@@ -644,6 +665,12 @@ elif view == "📊 Daily Tracking":
         today_rows = sb.table("smartar_tracking").select("*").eq("goal_id", goal["id"]).eq("session_date", track_date.isoformat()).execute().data or []
         today_sessions = {r["session_time"]: r["performance_level"] for r in today_rows}
         gas = get_gas_dict(goal)
+        
+        # Show debug info
+        if today_rows:
+            with st.expander(f"📊 Database records for Goal {idx} ({len(today_rows)} entries)", expanded=False):
+                for row in today_rows:
+                    st.caption(f"• {row['session_time']}: {row['performance_level']} (ID: {row['id']}, Recorded: {row.get('recorded_at', 'N/A')})")
         
         # Check if goal needs refinement
         needs_refinement, low_count = check_goal_needs_refinement(goal["id"])
@@ -732,6 +759,22 @@ elif view == "📈 Progress Report":
         tracking = get_tracking(goal["id"], days=days)
         counts, total, pcts = calc_percentages(tracking)
         gas = get_gas_dict(goal)
+        
+        # DEBUG: Show what data was retrieved
+        with st.expander(f"🔍 DEBUG: Data for Goal {idx} (Goal ID: {goal['id']})", expanded=False):
+            st.caption(f"**Query:** Last {days} days from {(date.today() - timedelta(days=days)).isoformat()} to {date.today().isoformat()}")
+            st.caption(f"**Records found:** {len(tracking)}")
+            if tracking:
+                st.json(tracking[:5])  # Show first 5 records
+            else:
+                st.warning("No tracking records found in database for this goal and date range!")
+                # Try to get ANY records for this goal
+                all_records = sb.table("smartar_tracking").select("*").eq("goal_id", goal["id"]).order("session_date", desc=True).limit(10).execute()
+                if all_records.data:
+                    st.info(f"Found {len(all_records.data)} records total for this goal (showing latest 10):")
+                    st.json(all_records.data)
+                else:
+                    st.error("NO records exist for this goal in the entire database!")
         
         # Analyze trend
         trend = analyze_trend(tracking)
@@ -890,7 +933,8 @@ elif view == "⚙️ Admin Panel":
                 try:
                     sb.table("smartar_students").insert({
                         "student_name": new_student_name.strip(),
-                        "program": new_student_prog
+                        "program": new_student_prog,
+                        "active": True
                     }).execute()
                     st.success(f"✅ {new_student_name.strip()} added to {new_student_prog}.")
                     st.rerun()
@@ -900,24 +944,39 @@ elif view == "⚙️ Admin Panel":
                 st.warning("Please enter a student name.")
         
         st.markdown("---")
-        st.subheader("All Students")
+        st.subheader("Active Students")
         
-        students = get_students()
+        # Toggle to show archived students
+        show_archived = st.checkbox("Show archived students", value=False)
+        
+        students = get_all_students(include_archived=show_archived)
+        
         if students:
-            # Don't load all goals at once - just show student count
-            st.info(f"📊 {len(students)} students in the system")
+            # Filter active vs archived
+            active_students = [s for s in students if s.get('active', True)]
+            archived_students = [s for s in students if not s.get('active', True)]
+            
+            st.info(f"📊 {len(active_students)} active students" + 
+                   (f" | 📦 {len(archived_students)} archived" if show_archived and archived_students else ""))
             
             # Select one student to edit at a time
-            student_names = [s["student_name"] for s in students]
+            student_list = active_students if not show_archived else students
+            student_names = [f"{s['student_name']}" + (" [ARCHIVED]" if not s.get('active', True) else "") 
+                           for s in student_list]
+            
             selected_edit = st.selectbox("Select student to edit", ["-- Select --"] + student_names, key="admin_edit_select")
             
             if selected_edit != "-- Select --":
-                student = next(s for s in students if s["student_name"] == selected_edit)
+                # Remove [ARCHIVED] tag if present
+                clean_name = selected_edit.replace(" [ARCHIVED]", "")
+                student = next(s for s in student_list if s["student_name"] == clean_name)
+                
+                is_archived = not student.get('active', True)
                 
                 try:
                     goals = get_goals(student["student_name"])
                     
-                    st.markdown(f"### {student['student_name']}")
+                    st.markdown(f"### {student['student_name']}" + (" 📦 [ARCHIVED]" if is_archived else ""))
                     st.caption(f"{len(goals)} active goals")
                     
                     # Edit program
@@ -930,10 +989,12 @@ elif view == "⚙️ Admin Panel":
                         "Program", 
                         PROGRAMS, 
                         index=prog_idx,
-                        key=f"prog_edit_{student['id']}"
+                        key=f"prog_edit_{student['id']}",
+                        disabled=is_archived
                     )
                     
-                    if edit_col2.button("Update Program", key=f"prog_save_{student['id']}", type="primary"):
+                    if edit_col2.button("Update Program", key=f"prog_save_{student['id']}", 
+                                       type="primary", disabled=is_archived):
                         try:
                             sb.table("smartar_students").update({"program": new_program}).eq("id", student["id"]).execute()
                             st.success(f"✅ Updated {student['student_name']} to {new_program}")
@@ -943,14 +1004,41 @@ elif view == "⚙️ Admin Panel":
                     
                     st.markdown("---")
                     
-                    # Delete student
-                    if st.button(f"🗑 Delete {student['student_name']}", key=f"admin_del_{student['id']}"):
-                        try:
-                            sb.table("smartar_students").delete().eq("id", student["id"]).execute()
-                            st.success(f"Deleted {student['student_name']}")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Error deleting student: {e}")
+                    # Archive/Restore or Delete
+                    col_a, col_b = st.columns(2)
+                    
+                    if is_archived:
+                        # Restore button for archived students
+                        if col_a.button(f"♻️ Restore {student['student_name']}", 
+                                       key=f"restore_{student['id']}", type="primary"):
+                            try:
+                                sb.table("smartar_students").update({"active": True}).eq("id", student["id"]).execute()
+                                st.success(f"✅ Restored {student['student_name']}")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error restoring student: {e}")
+                        
+                        # Permanent delete for archived students
+                        if col_b.button(f"🗑️ Permanently Delete", 
+                                       key=f"delete_{student['id']}"):
+                            st.warning("⚠️ This will permanently delete the student and all their data!")
+                            if st.button("Confirm Permanent Delete", key=f"confirm_del_{student['id']}", type="secondary"):
+                                try:
+                                    sb.table("smartar_students").delete().eq("id", student["id"]).execute()
+                                    st.success(f"Permanently deleted {student['student_name']}")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error deleting student: {e}")
+                    else:
+                        # Archive button for active students
+                        if col_a.button(f"📦 Archive {student['student_name']}", 
+                                       key=f"archive_{student['id']}"):
+                            try:
+                                sb.table("smartar_students").update({"active": False}).eq("id", student["id"]).execute()
+                                st.success(f"📦 Archived {student['student_name']} - they are hidden but data is preserved")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error archiving student: {e}")
                 
                 except Exception as e:
                     st.error(f"Error loading data for {student['student_name']}: {e}")
