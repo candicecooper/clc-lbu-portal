@@ -292,4 +292,5 @@ else:
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown("---")
 st.caption("💡 **Tip:** This page stays open - just click to track and it auto-saves. Switch students anytime without losing your place.")
+st.caption("📅 **Tracking flexibility:** Track only the sessions relevant to each goal (Morning only, Afternoon only, or all three). Leave sessions blank if they don't apply.")
 st.caption("🎯 View detailed reports and manage goals in the **SMARTAR Goal Builder** tool.")
