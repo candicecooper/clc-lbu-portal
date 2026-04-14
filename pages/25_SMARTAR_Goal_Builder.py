@@ -401,8 +401,9 @@ elif view == "📋 Goal Builder":
                 sc1, sc2 = st.columns([4, 1])
                 sc1.write(f"**{s['student_name']}** — {len(goals)} goals")
                 
-                if sc2.button("Archive", key=f"arch_{s['id']}"):
-                    sb.table("smartar_students").update({"active": False}).eq("id", s["id"]).execute()
+                if sc2.button("Delete", key=f"arch_{s['id']}"):
+                    # Delete student (archive not supported - no active column)
+                    sb.table("smartar_students").delete().eq("id", s["id"]).execute()
                     st.rerun()
         else:
             st.info("No students yet.")
@@ -815,7 +816,7 @@ elif view == "⚙️ Admin Panel":
         new_student_name = col1.text_input("Student name", key="admin_new_student")
         if col2.button("Add Student", type="primary", key="admin_add_student"):
             if new_student_name.strip():
-                sb.table("smartar_students").insert({"student_name": new_student_name.strip(), "active": True}).execute()
+                sb.table("smartar_students").insert({"student_name": new_student_name.strip()}).execute()
                 st.success(f"✅ {new_student_name.strip()} added to the system.")
                 st.rerun()
             else:
@@ -830,9 +831,9 @@ elif view == "⚙️ Admin Panel":
                 goals = get_goals(s["student_name"])
                 col1, col2 = st.columns([4, 1])
                 col1.write(f"**{s['student_name']}** — {len(goals)} active goals")
-                if col2.button("Archive", key=f"admin_arch_{s['id']}"):
-                    sb.table("smartar_students").update({"active": False}).eq("id", s["id"]).execute()
-                    st.success(f"Archived {s['student_name']}")
+                if col2.button("Delete", key=f"admin_arch_{s['id']}"):
+                    sb.table("smartar_students").delete().eq("id", s["id"]).execute()
+                    st.success(f"Deleted {s['student_name']}")
                     st.rerun()
         else:
             st.info("No students in the system yet.")
