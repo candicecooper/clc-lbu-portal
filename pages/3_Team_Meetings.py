@@ -398,7 +398,7 @@ def render_specialist_meeting():
         with c1: row["concern"]    = st.text_input("Con", value=row.get("concern",""),    key=f"spc_con_{idx}",    label_visibility="collapsed", placeholder="Student name · Concern / context")
         with c2: row["strategy"]   = st.text_input("Str", value=row.get("strategy",""),   key=f"spc_str_{idx}",    label_visibility="collapsed", placeholder="Current strategy")
         with c3: row["adjustment"] = st.text_input("Adj", value=row.get("adjustment",""), key=f"spc_adj_{idx}",    label_visibility="collapsed", placeholder="What needs to change")
-        with c4: row["who"]        = st.text_input("Who", value=row.get("who",""),        key=f="spc_who_{idx}",    label_visibility="collapsed", placeholder="Person")
+        with c4: row["who"]        = st.text_input("Who", value=row.get("who",""),        key=f"spc_who_{idx}",    label_visibility="collapsed", placeholder="Person")
         with c5: row["timeline"]   = st.text_input("By",  value=row.get("timeline",""),   key=f"spc_time_{idx}",   label_visibility="collapsed", placeholder="When")
         with c6:
             if len(concerns) > 1:
@@ -444,7 +444,7 @@ def render_specialist_meeting():
         with cu2: row["progress"]    = st.text_input("Prog",  value=row.get("progress",""),    key=f"cur_prog_{idx}",  label_visibility="collapsed", placeholder="What was covered")
         with cu3: row["engagement"]  = st.text_input("Eng",   value=row.get("engagement",""),  key=f"cur_eng_{idx}",   label_visibility="collapsed", placeholder="Student response")
         with cu4: row["adjustments"] = st.text_input("Adj",   value=row.get("adjustments",""), key=f"cur_adj_{idx}",   label_visibility="collapsed", placeholder="Changes needed")
-        with cu5: row["resources"]   = st.text_input("Res",   value=row.get("resources",""),   key=f="cur_res_{idx}",   label_visibility="collapsed", placeholder="What's needed")
+        with cu5: row["resources"]   = st.text_input("Res",   value=row.get("resources",""),   key=f"cur_res_{idx}",   label_visibility="collapsed", placeholder="What's needed")
 
     st.markdown("**Coverage gaps or concerns:**")
     sp_coverage_gaps = st.text_area(
@@ -514,7 +514,7 @@ def render_specialist_meeting():
             with a1: st.markdown(f"`{module}`")
             with a2: st.selectbox(f"Status {prog_name} {module}", ["Not Started", "In Progress", "Complete"], key=f"art_status_{prog_name}_{module}", label_visibility="collapsed")
             with a3: st.text_input(f"Timeline {prog_name} {module}", key=f"art_timeline_{prog_name}_{module}", label_visibility="collapsed", placeholder="Due date")
-            with a4: st.text_input(f"Support {prog_name} {module}", key=f="art_support_{prog_name}_{module}", label_visibility="collapsed", placeholder="What's needed")
+            with a4: st.text_input(f"Support {prog_name} {module}", key=f"art_support_{prog_name}_{module}", label_visibility="collapsed", placeholder="What's needed")
         
         st.markdown("")  # Spacing between programs
 
@@ -545,13 +545,13 @@ def render_specialist_meeting():
     for idx, row in enumerate(actions):
         a1,a2,a3,a4,a5,a6 = st.columns([4,1.5,1,1,0.7,0.5])
         with a1: row["action"]   = st.text_input("Act", value=row.get("action",""),   key=f"spa_a_{idx}",    label_visibility="collapsed", placeholder="Specific action")
-        with a2: row["who"]      = st.text_input("Who", value=row.get("who",""),      key=f="spa_w_{idx}",    label_visibility="collapsed", placeholder="Person")
-        with a3: row["by_when"]  = st.text_input("By",  value=row.get("by_when",""),  key=f="spa_by_{idx}",   label_visibility="collapsed", placeholder="When")
+        with a2: row["who"]      = st.text_input("Who", value=row.get("who",""),      key=f"spa_w_{idx}",    label_visibility="collapsed", placeholder="Person")
+        with a3: row["by_when"]  = st.text_input("By",  value=row.get("by_when",""),  key=f"spa_by_{idx}",   label_visibility="collapsed", placeholder="When")
         with a4: row["priority"] = st.selectbox("Pri",  ["Low","Medium","High","Urgent"], index=["Low","Medium","High","Urgent"].index(row.get("priority","Medium")), key=f"spa_pri_{idx}", label_visibility="collapsed")
-        with a5: row["done"]     = st.checkbox("✓",     value=row.get("done",False),   key=f="spa_done_{idx}")
+        with a5: row["done"]     = st.checkbox("✓",     value=row.get("done",False),   key=f"spa_done_{idx}")
         with a6:
             if len(actions) > 1:
-                if st.button("✕", key=f="spa_del_{idx}"):
+                if st.button("✕", key=f"spa_del_{idx}"):
                     actions.pop(idx); st.rerun()
 
     if st.button("➕ Add action", key="spa_add"):
@@ -764,7 +764,7 @@ def render_program_meeting(program):
     with mc2: pm_term        = st.text_input("Term", placeholder="T1", key=f"pm_term_{program}")
     with mc3: pm_week        = st.number_input("Week #", min_value=1, max_value=11, value=1, key=f"pm_week_{program}")
     with mc4: pm_facilitator = st.text_input("Facilitator", value=get_staff_name(), key=f"pm_fac_{program}")
-    pm_attendees = st.text_input("Attendees", placeholder="Names separated by commas", key=f="pm_att_{program}")
+    pm_attendees = st.text_input("Attendees", placeholder="Names separated by commas", key=f"pm_att_{program}")
 
     st.markdown("""<div style="background:#f0f9f9;border:1px solid #1A7A7A;border-radius:8px;
         padding:6px 12px;font-size:0.78rem;color:#1A7A7A;margin-bottom:8px;">
