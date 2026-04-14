@@ -398,25 +398,10 @@ elif view == "📋 Goal Builder":
         if students:
             for s in students:
                 goals = get_goals(s["student_name"])
-                sc1, sc2, sc3, sc4 = st.columns([3, 1, 1, 1])
-                sc1.write(f"**{s['student_name']}** — {s.get('program','?')} — {len(goals)} goals")
+                sc1, sc2 = st.columns([4, 1])
+                sc1.write(f"**{s['student_name']}** — {len(goals)} goals")
                 
-                # Edit program button
-                if sc2.button("Edit Program", key=f"edit_{s['id']}"):
-                    st.session_state[f"editing_{s['id']}"] = True
-                    st.rerun()
-                
-                if st.session_state.get(f"editing_{s['id']}", False):
-                    new_program = st.selectbox("New program", PROGRAMS, 
-                                              index=PROGRAMS.index(s.get('program', 'JP')) if s.get('program') in PROGRAMS else 0,
-                                              key=f"prog_select_{s['id']}")
-                    if st.button("Save", key=f"save_{s['id']}"):
-                        sb.table("smartar_students").update({"program": new_program}).eq("id", s["id"]).execute()
-                        st.session_state[f"editing_{s['id']}"] = False
-                        st.success(f"Updated {s['student_name']} to {new_program}")
-                        st.rerun()
-                
-                if sc4.button("Archive", key=f"arch_{s['id']}"):
+                if sc2.button("Archive", key=f"arch_{s['id']}"):
                     sb.table("smartar_students").update({"active": False}).eq("id", s["id"]).execute()
                     st.rerun()
         else:
@@ -813,88 +798,180 @@ Be specific about the data. Focus on incremental improvements. If the trend is d
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 5. ADMIN PANEL
+# 5. ADMIN PANEL (FULL EDITING CAPABILITY)
 # ═══════════════════════════════════════════════════════════════════════════════
 elif view == "⚙️ Admin Panel":
     st.title("⚙️ Admin Panel")
-    st.caption("Pre-populate goals from entry meetings and manage student data")
+    st.caption("Manage students, pre-populate goals from entry meetings, and edit existing goals")
 
-    students = get_students()
-    if not students:
-        st.info("No students in the system yet. Add them in Goal Builder → Manage Students.")
-        st.stop()
-
-    st.subheader("All Students Overview")
+    tab1, tab2, tab3 = st.tabs(["👥 Manage Students", "📝 Edit Goals", "➕ Add Pre-Populated Goals"])
     
-    for student in students:
-        goals = get_goals(student["student_name"])
-        
-        with st.expander(f"**{student['student_name']}** — {student.get('program', '❓ No Program')} — {len(goals)} goals", expanded=False):
-            st.markdown(f'<div class="admin-panel">', unsafe_allow_html=True)
-            
-            # Edit program
-            st.markdown("**Student Details:**")
-            col1, col2 = st.columns([2, 1])
-            new_program = col1.selectbox("Program", PROGRAMS, 
-                                        index=PROGRAMS.index(student.get('program')) if student.get('program') in PROGRAMS else 0,
-                                        key=f"admin_prog_{student['id']}")
-            if col2.button("Update Program", key=f"admin_update_{student['id']}"):
-                sb.table("smartar_students").update({"program": new_program}).eq("id", student["id"]).execute()
-                st.success(f"Updated {student['student_name']} to {new_program}")
+    # ─────────────────────────────────────────────────────────────────────────
+    # TAB 1: MANAGE STUDENTS
+    # ─────────────────────────────────────────────────────────────────────────
+    with tab1:
+        st.subheader("Add New Student")
+        col1, col2 = st.columns([3, 1])
+        new_student_name = col1.text_input("Student name", key="admin_new_student")
+        if col2.button("Add Student", type="primary", key="admin_add_student"):
+            if new_student_name.strip():
+                sb.table("smartar_students").insert({"student_name": new_student_name.strip(), "active": True}).execute()
+                st.success(f"✅ {new_student_name.strip()} added to the system.")
                 st.rerun()
+            else:
+                st.warning("Please enter a student name.")
+        
+        st.markdown("---")
+        st.subheader("All Students")
+        
+        students = get_students()
+        if students:
+            for s in students:
+                goals = get_goals(s["student_name"])
+                col1, col2 = st.columns([4, 1])
+                col1.write(f"**{s['student_name']}** — {len(goals)} active goals")
+                if col2.button("Archive", key=f"admin_arch_{s['id']}"):
+                    sb.table("smartar_students").update({"active": False}).eq("id", s["id"]).execute()
+                    st.success(f"Archived {s['student_name']}")
+                    st.rerun()
+        else:
+            st.info("No students in the system yet.")
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # TAB 2: EDIT EXISTING GOALS
+    # ─────────────────────────────────────────────────────────────────────────
+    with tab2:
+        st.subheader("Edit Existing Goals")
+        
+        students = get_students()
+        if not students:
+            st.info("No students in the system yet.")
+        else:
+            selected_student = st.selectbox("Select student to edit", 
+                                           [s["student_name"] for s in students],
+                                           key="admin_edit_student")
+            
+            goals = get_goals(selected_student)
+            
+            if not goals:
+                st.info(f"No goals for {selected_student}. Use 'Add Pre-Populated Goals' tab to create initial goals.")
+            else:
+                for idx, goal in enumerate(goals, 1):
+                    with st.expander(f"Goal {idx} — {goal.get('smartar_goal', 'No goal')[:60]}...", expanded=False):
+                        st.markdown("### Edit Goal")
+                        
+                        # Editable fields
+                        edit_excl = st.text_area(
+                            "Exclusion Goal",
+                            value=goal.get("exclusion_goal", ""),
+                            height=100,
+                            key=f"edit_excl_{goal['id']}"
+                        )
+                        
+                        edit_smartar = st.text_area(
+                            "SMARTAR Goal",
+                            value=goal.get("smartar_goal", ""),
+                            height=120,
+                            key=f"edit_smartar_{goal['id']}"
+                        )
+                        
+                        st.markdown("**GAS Performance Levels:**")
+                        edit_gas = {}
+                        for lvl in LEVEL_ORDER:
+                            col_name = f"gas_{lvl.lower().replace(' ', '_')}"
+                            edit_gas[lvl] = st.text_area(
+                                f"{LEVEL_EMOJI[lvl]} {lvl}",
+                                value=goal.get(col_name, ""),
+                                height=80,
+                                key=f"edit_gas_{lvl}_{goal['id']}"
+                            )
+                        
+                        # Save button
+                        col1, col2 = st.columns([1, 3])
+                        if col1.button("💾 Save Changes", key=f"save_goal_{goal['id']}", type="primary"):
+                            update_data = {
+                                "exclusion_goal": edit_excl.strip() if edit_excl.strip() else None,
+                                "smartar_goal": edit_smartar.strip(),
+                                "gas_exceeding": edit_gas.get("EXCEEDING", ""),
+                                "gas_above": edit_gas.get("ABOVE", ""),
+                                "gas_expected": edit_gas.get("EXPECTED", ""),
+                                "gas_below": edit_gas.get("BELOW", ""),
+                                "gas_not_yet": edit_gas.get("NOT YET", ""),
+                                "updated_at": datetime.utcnow().isoformat()
+                            }
+                            sb.table("smartar_goals").update(update_data).eq("id", goal["id"]).execute()
+                            st.success(f"✅ Goal {idx} updated for {selected_student}")
+                            st.rerun()
+                        
+                        if col2.button("🗑 Archive This Goal", key=f"archive_goal_{goal['id']}"):
+                            sb.table("smartar_goals").update({"active": False}).eq("id", goal["id"]).execute()
+                            st.success(f"Goal {idx} archived")
+                            st.rerun()
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # TAB 3: ADD PRE-POPULATED GOALS
+    # ─────────────────────────────────────────────────────────────────────────
+    with tab3:
+        st.subheader("Pre-Populate Goals from Entry Meeting")
+        st.caption("Add initial goals before teachers start tracking - teachers can refine later based on observations")
+        
+        students = get_students()
+        if not students:
+            st.info("No students in the system yet. Add them in the 'Manage Students' tab.")
+        else:
+            selected_student = st.selectbox("Select student", 
+                                           [s["student_name"] for s in students],
+                                           key="admin_prepop_student")
+            
+            goals = get_goals(selected_student)
+            if goals:
+                st.info(f"{selected_student} currently has {len(goals)} active goal(s). You can add more below.")
             
             st.markdown("---")
+            st.markdown("### New Goal Details")
             
-            # Show existing goals with GAS levels
-            if goals:
-                st.markdown("**Current Goals:**")
-                for idx, g in enumerate(goals, 1):
-                    st.markdown(f"**Goal {idx}:**")
-                    if g.get("exclusion_goal"):
-                        st.text_area(f"Exclusion Goal {idx}", value=g["exclusion_goal"], height=80, key=f"view_excl_{g['id']}", disabled=True)
-                    if g.get("smartar_goal"):
-                        st.text_area(f"SMARTAR Goal {idx}", value=g["smartar_goal"], height=80, key=f"view_smartar_{g['id']}", disabled=True)
-                    
-                    # Show GAS levels
-                    gas = get_gas_dict(g)
-                    if any(gas.values()):
-                        with st.expander(f"View GAS Levels - Goal {idx}"):
-                            for lvl in LEVEL_ORDER:
-                                if gas.get(lvl):
-                                    st.markdown(f"**{LEVEL_EMOJI[lvl]} {lvl}:**")
-                                    st.caption(gas[lvl])
-                    st.markdown("---")
-            
-            # Add new goal (pre-populate from entry meeting)
-            st.markdown("**📝 Pre-Populate New Goal (from Entry Meeting):**")
-            st.caption("Add goals before teachers start tracking - teachers can refine later based on observations")
-            
-            admin_excl = st.text_area(
-                "Exclusion Goal (from main school)",
+            prepop_excl = st.text_area(
+                "🏫 Exclusion Goal (from main school)",
                 placeholder="Paste exclusion goal from entry meeting...",
                 height=100,
-                key=f"admin_excl_{student['id']}"
+                key="prepop_excl"
             )
             
-            admin_smartar = st.text_area(
-                "Initial SMARTAR Goal",
+            prepop_smartar = st.text_area(
+                "🎯 Initial SMARTAR Goal",
                 placeholder="Enter initial SMARTAR goal based on entry meeting assessment...",
-                height=100,
-                key=f"admin_smartar_{student['id']}"
+                height=120,
+                key="prepop_smartar"
             )
             
-            if st.button("💾 Save Pre-Populated Goal", key=f"admin_save_{student['id']}", type="primary"):
-                if admin_smartar.strip():
+            st.markdown("**Optional: Add GAS Performance Levels**")
+            st.caption("You can add these now or teachers can generate them later")
+            
+            with st.expander("Add GAS Levels (Optional)"):
+                prepop_gas = {}
+                for lvl in LEVEL_ORDER:
+                    prepop_gas[lvl] = st.text_area(
+                        f"{LEVEL_EMOJI[lvl]} {lvl}",
+                        placeholder=f"Enter {lvl} performance description...",
+                        height=70,
+                        key=f"prepop_gas_{lvl}"
+                    )
+            
+            if st.button("💾 Save Pre-Populated Goal", type="primary", key="save_prepop"):
+                if prepop_smartar.strip():
                     new_goal = {
-                        "student_name": student["student_name"],
-                        "exclusion_goal": admin_excl.strip() if admin_excl.strip() else None,
-                        "smartar_goal": admin_smartar.strip(),
+                        "student_name": selected_student,
+                        "exclusion_goal": prepop_excl.strip() if prepop_excl.strip() else None,
+                        "smartar_goal": prepop_smartar.strip(),
+                        "gas_exceeding": prepop_gas.get("EXCEEDING", ""),
+                        "gas_above": prepop_gas.get("ABOVE", ""),
+                        "gas_expected": prepop_gas.get("EXPECTED", ""),
+                        "gas_below": prepop_gas.get("BELOW", ""),
+                        "gas_not_yet": prepop_gas.get("NOT YET", ""),
                         "active": True
                     }
                     sb.table("smartar_goals").insert(new_goal).execute()
-                    st.success(f"✅ Goal pre-populated for {student['student_name']}. Teachers can now begin tracking and will be able to refine based on observations.")
+                    st.success(f"✅ Goal pre-populated for {selected_student}. Teachers can now begin tracking and refine as needed.")
                     st.rerun()
                 else:
                     st.warning("Please enter a SMARTAR goal.")
-            
-            st.markdown('</div>', unsafe_allow_html=True)
