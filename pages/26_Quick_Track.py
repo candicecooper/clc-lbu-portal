@@ -32,37 +32,54 @@ LEVEL_COLOR = {"EXCEEDING": "#1a7a3c", "ABOVE": "#2d8a5e", "EXPECTED": "#1d6fa4"
 # ── Database helpers ──────────────────────────────────────────────────────────
 def get_students_by_program(program):
     """Get all students in a program"""
-    r = sb.table("smartar_students").select("*").eq("program", program).order("student_name").execute()
-    return r.data or []
+    try:
+        r = sb.table("smartar_students").select("*").eq("program", program).order("student_name").execute()
+        return r.data or []
+    except Exception as e:
+        st.error(f"Error loading students: {e}")
+        return []
 
 def get_active_goals(student_name):
     """Get active goals for a student"""
-    r = sb.table("smartar_goals").select("*").eq("student_name", student_name).eq("active", True).order("created_at").execute()
-    return r.data or []
+    try:
+        r = sb.table("smartar_goals").select("*").eq("student_name", student_name).eq("active", True).order("created_at").execute()
+        return r.data or []
+    except Exception as e:
+        st.error(f"Error loading goals: {e}")
+        return []
 
 def get_today_tracking(goal_id):
     """Get today's tracking for a goal"""
-    today = date.today().isoformat()
-    r = sb.table("smartar_tracking").select("*").eq("goal_id", goal_id).eq("session_date", today).execute()
-    return {row["session_time"]: row["performance_level"] for row in (r.data or [])}
+    try:
+        today = date.today().isoformat()
+        r = sb.table("smartar_tracking").select("*").eq("goal_id", goal_id).eq("session_date", today).execute()
+        return {row["session_time"]: row["performance_level"] for row in (r.data or [])}
+    except Exception as e:
+        st.error(f"Error loading tracking: {e}")
+        return {}
 
 def track_session(goal_id, student_name, session_time, level):
     """Save tracking - auto-update if exists, insert if new"""
-    today = date.today().isoformat()
-    existing = sb.table("smartar_tracking").select("id").eq("goal_id", goal_id).eq("session_date", today).eq("session_time", session_time).execute()
-    
-    if existing.data:
-        # Update existing
-        sb.table("smartar_tracking").update({"performance_level": level}).eq("id", existing.data[0]["id"]).execute()
-    else:
-        # Insert new
-        sb.table("smartar_tracking").insert({
-            "goal_id": goal_id,
-            "student_name": student_name,
-            "session_date": today,
-            "session_time": session_time,
-            "performance_level": level
-        }).execute()
+    try:
+        today = date.today().isoformat()
+        existing = sb.table("smartar_tracking").select("id").eq("goal_id", goal_id).eq("session_date", today).eq("session_time", session_time).execute()
+        
+        if existing.data:
+            # Update existing
+            sb.table("smartar_tracking").update({"performance_level": level}).eq("id", existing.data[0]["id"]).execute()
+        else:
+            # Insert new
+            sb.table("smartar_tracking").insert({
+                "goal_id": goal_id,
+                "student_name": student_name,
+                "session_date": today,
+                "session_time": session_time,
+                "performance_level": level
+            }).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error saving tracking: {e}")
+        return False
 
 # ── Initialize session state ──────────────────────────────────────────────────
 if "selected_program" not in st.session_state:
@@ -259,8 +276,9 @@ if st.session_state.selected_student:
                         type="primary" if is_current else "secondary",
                         use_container_width=True
                     ):
-                        track_session(goal["id"], st.session_state.selected_student, session, level)
-                        st.success(f"✅ Saved: {session} → {level}", icon="✅")
+                        success = track_session(goal["id"], st.session_state.selected_student, session, level)
+                        if success:
+                            st.success(f"✅ Saved: {session} → {level}", icon="✅")
                         st.rerun()
         
         st.markdown('</div>', unsafe_allow_html=True)
