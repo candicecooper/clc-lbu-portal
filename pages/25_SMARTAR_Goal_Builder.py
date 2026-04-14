@@ -5,15 +5,14 @@ from datetime import date, datetime, timedelta
 from supabase import create_client
 from groq import Groq
 from urllib.parse import unquote
+from collections import defaultdict
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(page_title="SMARTAR Goal Builder", page_icon="🎯", layout="wide")
 
 # ── Team Meetings Integration ────────────────────────────────────────────────
 def check_team_meetings_integration():
-    """Check if this session is from Team Meetings tool."""
     params = st.query_params
-    
     student_param = params.get("student", None)
     meeting_id_param = params.get("meeting_id", None)
     program_param = params.get("program", None)
@@ -85,7 +84,7 @@ def groq_call(prompt, system="You are an expert educator supporting students in 
     )
     return resp.choices[0].message.content.strip()
 
-# ── Supabase helpers (UPDATED FOR YOUR SCHEMA) ───────────────────────────────
+# ── Supabase helpers ──────────────────────────────────────────────────────────
 def get_students():
     r = sb.table("smartar_students").select("*").order("student_name").execute()
     return r.data or []
@@ -99,18 +98,20 @@ def get_goals(student_name=None):
 
 def get_tracking(goal_id, days=30):
     since = (date.today() - timedelta(days=days)).isoformat()
-    # YOUR SCHEMA: session_date, performance_level
     r = sb.table("smartar_tracking").select("*").eq("goal_id", goal_id).gte("session_date", since).order("session_date").execute()
     return r.data or []
 
 def get_today_tracking(goal_id):
-    # YOUR SCHEMA: session_date
     r = sb.table("smartar_tracking").select("*").eq("goal_id", goal_id).eq("session_date", date.today().isoformat()).execute()
+    return r.data or []
+
+def get_recent_tracking(goal_id, sessions=5):
+    """Get last N tracking sessions for a goal"""
+    r = sb.table("smartar_tracking").select("*").eq("goal_id", goal_id).order("session_date", desc=True).order("recorded_at", desc=True).limit(sessions).execute()
     return r.data or []
 
 def upsert_session(goal_id, student_name, session_time, performance_level):
     today = date.today().isoformat()
-    # YOUR SCHEMA: session_date, session_time, performance_level, student_name
     existing = sb.table("smartar_tracking").select("id").eq("goal_id", goal_id).eq("session_date", today).eq("session_time", session_time).execute()
     if existing.data:
         sb.table("smartar_tracking").update({"performance_level": performance_level}).eq("id", existing.data[0]["id"]).execute()
@@ -126,7 +127,6 @@ def upsert_session(goal_id, student_name, session_time, performance_level):
 def calc_percentages(tracking_data):
     counts = {l: 0 for l in LEVEL_ORDER}
     for row in tracking_data:
-        # YOUR SCHEMA: performance_level
         if row["performance_level"] in counts:
             counts[row["performance_level"]] += 1
     total = sum(counts.values())
@@ -144,6 +144,42 @@ def get_gas_dict(goal):
         "BELOW": goal.get("gas_below", ""),
         "NOT YET": goal.get("gas_not_yet", "")
     }
+
+def check_goal_needs_refinement(goal_id, threshold=3):
+    """Check if goal needs refinement based on recent performance"""
+    recent = get_recent_tracking(goal_id, sessions=5)
+    if len(recent) < threshold:
+        return False, 0
+    
+    low_performance = sum(1 for r in recent if r["performance_level"] in ["NOT YET", "BELOW"])
+    if low_performance >= threshold:
+        return True, low_performance
+    return False, low_performance
+
+def analyze_trend(tracking_data):
+    """Analyze if performance is improving, declining, or stable"""
+    if len(tracking_data) < 4:
+        return "insufficient_data"
+    
+    # Split into first half and second half
+    midpoint = len(tracking_data) // 2
+    first_half = tracking_data[:midpoint]
+    second_half = tracking_data[midpoint:]
+    
+    # Calculate average score (EXCEEDING=5, ABOVE=4, EXPECTED=3, BELOW=2, NOT YET=1)
+    score_map = {"EXCEEDING": 5, "ABOVE": 4, "EXPECTED": 3, "BELOW": 2, "NOT YET": 1}
+    
+    first_avg = sum(score_map.get(r["performance_level"], 0) for r in first_half) / len(first_half)
+    second_avg = sum(score_map.get(r["performance_level"], 0) for r in second_half) / len(second_half)
+    
+    diff = second_avg - first_avg
+    
+    if diff > 0.5:
+        return "improving"
+    elif diff < -0.5:
+        return "declining"
+    else:
+        return "stable"
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -212,6 +248,27 @@ st.markdown("""
         margin-bottom: 16px;
         border-left: 5px solid #fbbf24;
     }
+    .alert-box {
+        background: #fef3c7;
+        border-left: 4px solid #f59e0b;
+        padding: 12px 16px;
+        border-radius: 0 8px 8px 0;
+        margin: 12px 0;
+    }
+    .success-box {
+        background: #d1fae5;
+        border-left: 4px solid #10b981;
+        padding: 12px 16px;
+        border-radius: 0 8px 8px 0;
+        margin: 12px 0;
+    }
+    .admin-panel {
+        background: #f8fafc;
+        border: 2px solid #cbd5e1;
+        border-radius: 10px;
+        padding: 16px;
+        margin-bottom: 16px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -231,7 +288,6 @@ if integration["active"]:
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 st.sidebar.title("🎯 SMARTAR Tool")
 
-# Return to Team Meeting button if integration active
 if integration["active"]:
     meeting_url = f"https://clc-lbu-portal.onrender.com/Team_Meetings?program={integration['program']}"
     st.sidebar.markdown(f"""
@@ -240,7 +296,7 @@ if integration["active"]:
     margin-bottom:0.5rem;">← Back to Team Meeting</a>
     """, unsafe_allow_html=True)
 
-view = st.sidebar.radio("View", ["🏫 Class Dashboard", "📋 Goal Builder", "📊 Daily Tracking", "📈 Progress Report"])
+view = st.sidebar.radio("View", ["🏫 Class Dashboard", "📋 Goal Builder", "📊 Daily Tracking", "📈 Progress Report", "⚙️ Admin Panel"])
 
 st.sidebar.markdown("---")
 st.sidebar.caption("SMARTAR + GAS Goal Tracking · CLC LBU")
@@ -275,10 +331,15 @@ if view == "🏫 Class Dashboard":
                 tracking = get_tracking(goal["id"], days=21)
                 counts, total, pcts = calc_percentages(tracking)
                 today_rows = get_today_tracking(goal["id"])
-                # YOUR SCHEMA: session_time, performance_level
                 today_sessions = {r["session_time"]: r["performance_level"] for r in today_rows}
+                
+                # Check if goal needs refinement
+                needs_refinement, low_count = check_goal_needs_refinement(goal["id"])
 
                 st.markdown(f'<span class="goal-badge">Goal {idx}</span>', unsafe_allow_html=True)
+                
+                if needs_refinement:
+                    st.markdown(f'<div class="alert-box">⚠️ <b>Action Needed:</b> {low_count} recent sessions show low performance. Consider refining this goal to be more achievable.</div>', unsafe_allow_html=True)
 
                 if goal.get("exclusion_goal"):
                     st.markdown(f'<div class="exclusion-box">🏫 <b>Exclusion Goal:</b> {goal["exclusion_goal"]}</div>', unsafe_allow_html=True)
@@ -337,9 +398,25 @@ elif view == "📋 Goal Builder":
         if students:
             for s in students:
                 goals = get_goals(s["student_name"])
-                sc1, sc2, sc3 = st.columns([3, 1, 1])
+                sc1, sc2, sc3, sc4 = st.columns([3, 1, 1, 1])
                 sc1.write(f"**{s['student_name']}** — {s.get('program','?')} — {len(goals)} goals")
-                if sc3.button("Archive", key=f"arch_{s['id']}"):
+                
+                # Edit program button
+                if sc2.button("Edit Program", key=f"edit_{s['id']}"):
+                    st.session_state[f"editing_{s['id']}"] = True
+                    st.rerun()
+                
+                if st.session_state.get(f"editing_{s['id']}", False):
+                    new_program = st.selectbox("New program", PROGRAMS, 
+                                              index=PROGRAMS.index(s.get('program', 'JP')) if s.get('program') in PROGRAMS else 0,
+                                              key=f"prog_select_{s['id']}")
+                    if st.button("Save", key=f"save_{s['id']}"):
+                        sb.table("smartar_students").update({"program": new_program}).eq("id", s["id"]).execute()
+                        st.session_state[f"editing_{s['id']}"] = False
+                        st.success(f"Updated {s['student_name']} to {new_program}")
+                        st.rerun()
+                
+                if sc4.button("Archive", key=f"arch_{s['id']}"):
                     sb.table("smartar_students").update({"active": False}).eq("id", s["id"]).execute()
                     st.rerun()
         else:
@@ -353,7 +430,6 @@ elif view == "📋 Goal Builder":
 
         student_options = {s["student_name"]: s for s in students}
         
-        # Pre-select student from Team Meetings if integration active
         if integration["active"] and integration["student"]:
             if integration["student"] in student_options:
                 default_idx = list(student_options.keys()).index(integration["student"])
@@ -374,12 +450,18 @@ elif view == "📋 Goal Builder":
             st.subheader("Current Goals")
             for idx, g in enumerate(existing_goals, 1):
                 goal_text = g.get("smartar_goal", "No goal text")
-                with st.expander(f"Goal {idx} — {goal_text[:80]}..."):
+                
+                # Check if needs refinement
+                needs_refinement, low_count = check_goal_needs_refinement(g["id"])
+                
+                with st.expander(f"Goal {idx} — {goal_text[:80]}..." + (" ⚠️ NEEDS REFINEMENT" if needs_refinement else "")):
+                    if needs_refinement:
+                        st.markdown(f'<div class="alert-box">⚠️ <b>Action Required:</b> {low_count} recent sessions show low performance (NOT YET/BELOW). This goal may be too challenging. Please refine it to be more achievable and support incremental progress.</div>', unsafe_allow_html=True)
+                    
                     if g.get("exclusion_goal"):
                         st.markdown(f'<div class="exclusion-box">🏫 <b>Exclusion Goal:</b> {g.get("exclusion_goal","—")}</div>', unsafe_allow_html=True)
                     st.markdown(f'<div class="smartar-box">🎯 <b>SMARTAR Goal:</b> {goal_text}</div>', unsafe_allow_html=True)
                     
-                    # Display GAS levels from individual columns
                     gas = get_gas_dict(g)
                     if any(gas.values()):
                         st.markdown("**GAS Performance Levels:**")
@@ -422,7 +504,6 @@ elif view == "📋 Goal Builder":
             prompts = st.selectbox("Prompts", PROMPT_TYPES)
             rate = st.selectbox("Rate / success criteria", RATE_OPTIONS)
 
-        # Assemble preview goal
         if skill and student_first:
             assembled = f"The student will {skill} {grouping.lower()} during {task_type.lower()} in the {setting.lower()} with a {prompts.lower()}, demonstrating successful use on {rate}."
             st.markdown("**Assembled Goal Preview:**")
@@ -430,7 +511,6 @@ elif view == "📋 Goal Builder":
         else:
             assembled = ""
 
-        # AI refinement
         st.markdown("---")
         if groq_client and assembled:
             if st.button("✨ Refine Goal with AI", type="primary"):
@@ -445,7 +525,6 @@ Goal to refine: {assembled}""")
         refined_goal = st.session_state.get("refined_goal", assembled)
         final_goal = st.text_area("Final SMARTAR Goal (edit if needed)", value=refined_goal, height=100, key="final_goal_text")
 
-        # GAS level generation
         if groq_client and final_goal:
             if st.button("🎚 Generate GAS Performance Levels", type="secondary"):
                 with st.spinner("Generating GAS levels..."):
@@ -488,10 +567,8 @@ No markdown, no explanation, pure JSON only."""
         else:
             edited_gas = {}
 
-        # Save goal
         st.markdown("---")
         if st.button("💾 Save Goal", type="primary", disabled=not final_goal):
-            # YOUR SCHEMA: individual gas_ columns, skill, grouping, task_type, setting, prompts, rate
             new_goal = {
                 "student_name": selected_name,
                 "exclusion_goal": excl_goal.strip() if excl_goal else None,
@@ -505,7 +582,6 @@ No markdown, no explanation, pure JSON only."""
                 "active": True
             }
             
-            # Add GAS levels to individual columns
             if edited_gas:
                 new_goal["gas_exceeding"] = edited_gas.get("EXCEEDING", "")
                 new_goal["gas_above"] = edited_gas.get("ABOVE", "")
@@ -513,7 +589,6 @@ No markdown, no explanation, pure JSON only."""
                 new_goal["gas_below"] = edited_gas.get("BELOW", "")
                 new_goal["gas_not_yet"] = edited_gas.get("NOT YET", "")
             
-            # Add Team Meetings context if integration active
             if integration["active"]:
                 new_goal["meeting_id"] = integration["meeting_id"]
                 new_goal["program"] = integration["program"]
@@ -522,13 +597,11 @@ No markdown, no explanation, pure JSON only."""
             
             sb.table("smartar_goals").insert(new_goal).execute()
             
-            # Clear session state
             for k in ["refined_goal", "gas_levels"]:
                 st.session_state.pop(k, None)
             
             st.success(f"✅ Goal saved for {selected_name}!")
             
-            # Show integration success message
             if integration["active"]:
                 st.info(f"""
                 🔗 **Goal synced to Team Meeting** (Meeting ID: {integration['meeting_id']})
@@ -543,7 +616,7 @@ No markdown, no explanation, pure JSON only."""
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 3. DAILY TRACKING
+# 3. DAILY TRACKING (WITH REFINEMENT ALERTS)
 # ═══════════════════════════════════════════════════════════════════════════════
 elif view == "📊 Daily Tracking":
     st.title("📊 Daily Tracking")
@@ -568,12 +641,18 @@ elif view == "📊 Daily Tracking":
     st.markdown("---")
 
     for idx, goal in enumerate(goals, 1):
-        # YOUR SCHEMA: session_date
         today_rows = sb.table("smartar_tracking").select("*").eq("goal_id", goal["id"]).eq("session_date", track_date.isoformat()).execute().data or []
         today_sessions = {r["session_time"]: r["performance_level"] for r in today_rows}
         gas = get_gas_dict(goal)
+        
+        # Check if goal needs refinement
+        needs_refinement, low_count = check_goal_needs_refinement(goal["id"])
 
         st.markdown(f"### Goal {idx}")
+        
+        if needs_refinement:
+            st.markdown(f'<div class="alert-box">⚠️ <b>IMPORTANT:</b> This student has recorded {low_count} sessions of low performance (NOT YET/BELOW). <br><br><b>Action Required:</b> Please refine this goal to make it more achievable. We focus on incremental improvements, not persistent failure. Consider adjusting the rate, prompts, or task complexity to support the student\'s success.</div>', unsafe_allow_html=True)
+        
         st.markdown(f'<div class="smartar-box">🎯 {goal.get("smartar_goal", "No goal")}</div>', unsafe_allow_html=True)
 
         if any(gas.values()):
@@ -601,7 +680,19 @@ elif view == "📊 Daily Tracking":
                     if st.button(label, key=btn_key, use_container_width=True,
                                  type="primary" if is_selected else "secondary"):
                         upsert_session(goal["id"], selected_name, session, lvl)
+                        
+                        # Show alert if recording NOT YET or BELOW
+                        if lvl in ["NOT YET", "BELOW"]:
+                            st.session_state["show_refinement_alert"] = goal["id"]
+                        
                         st.rerun()
+
+        # Show refinement reminder if just recorded low performance
+        if st.session_state.get("show_refinement_alert") == goal["id"]:
+            st.markdown(f'<div class="alert-box">⚠️ You\'ve recorded low performance for this goal. If this pattern continues, please refine the goal to support incremental progress. Our focus is on achievable growth, not documenting persistent challenges.</div>', unsafe_allow_html=True)
+            if st.button("I understand - will monitor and refine if needed", key=f"ack_{goal['id']}"):
+                st.session_state.pop("show_refinement_alert", None)
+                st.rerun()
 
         st.markdown("---")
 
@@ -609,7 +700,7 @@ elif view == "📊 Daily Tracking":
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 4. PROGRESS REPORT
+# 4. PROGRESS REPORT (WITH TREND ANALYSIS)
 # ═══════════════════════════════════════════════════════════════════════════════
 elif view == "📈 Progress Report":
     st.title("📈 Progress Report")
@@ -639,8 +730,21 @@ elif view == "📈 Progress Report":
         tracking = get_tracking(goal["id"], days=days)
         counts, total, pcts = calc_percentages(tracking)
         gas = get_gas_dict(goal)
+        
+        # Analyze trend
+        trend = analyze_trend(tracking)
+        needs_refinement, low_count = check_goal_needs_refinement(goal["id"])
 
         st.markdown(f"### Goal {idx}")
+        
+        # Show trend indicator
+        if trend == "improving":
+            st.markdown(f'<div class="success-box">📈 <b>Improving Trend:</b> This goal shows incremental progress - student performance is getting better over time!</div>', unsafe_allow_html=True)
+        elif trend == "declining":
+            st.markdown(f'<div class="alert-box">📉 <b>Declining Trend:</b> Performance is decreasing. This goal may need refinement to be more achievable.</div>', unsafe_allow_html=True)
+        elif trend == "stable" and needs_refinement:
+            st.markdown(f'<div class="alert-box">➡️ <b>Stable but Low:</b> Performance is consistent but below expectations. Consider refining this goal for incremental success.</div>', unsafe_allow_html=True)
+        
         if goal.get("exclusion_goal"):
             st.markdown(f'<div class="exclusion-box">🏫 <b>Exclusion Goal:</b> {goal["exclusion_goal"]}</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="smartar-box">🎯 <b>SMARTAR Goal:</b> {goal.get("smartar_goal", "No goal")}</div>', unsafe_allow_html=True)
@@ -665,10 +769,9 @@ elif view == "📈 Progress Report":
         st.markdown(bar_html, unsafe_allow_html=True)
         st.caption(f"Total sessions recorded: {total}")
 
-        # Trend — group by date
+        # Trend over time
         if tracking:
             from collections import defaultdict
-            # YOUR SCHEMA: session_date
             daily = defaultdict(lambda: {l: 0 for l in LEVEL_ORDER})
             for r in tracking:
                 daily[r["session_date"]][r["performance_level"]] += 1
@@ -689,19 +792,109 @@ elif view == "📈 Progress Report":
             if st.button(f"✨ Generate Progress Summary (AI)", key=f"ai_report_{goal['id']}"):
                 with st.spinner("Generating summary..."):
                     level_summary = ", ".join([f"{lvl}: {pcts.get(lvl,0):.0f}%" for lvl in LEVEL_ORDER])
+                    trend_text = "improving" if trend == "improving" else "declining" if trend == "declining" else "stable"
                     narrative = groq_call(f"""Write a brief, professional progress summary (3–4 sentences) for a student's IEP/review meeting.
 
 Student: {selected_name}
 SMARTAR Goal: {goal.get('smartar_goal', 'No goal')}
 Period: last {days} days
 Performance distribution: {level_summary}
+Trend: {trend_text}
 Total sessions recorded: {total}
 
 Use trauma-informed, strengths-based language. Reference the BSEM framework if relevant (Regulate, Relate, Reason). 
-Be specific about the data. Suggest one actionable next step.""")
+Be specific about the data. Focus on incremental improvements. If the trend is declining or stable with low performance, suggest refining the goal to support achievable progress rather than continuing to track persistent challenges.""")
                     st.markdown("**AI-Generated Progress Summary:**")
                     st.success(narrative)
         else:
             st.caption("⚠️ AI summaries unavailable (Groq API key not configured)")
 
         st.markdown("---")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5. ADMIN PANEL
+# ═══════════════════════════════════════════════════════════════════════════════
+elif view == "⚙️ Admin Panel":
+    st.title("⚙️ Admin Panel")
+    st.caption("Pre-populate goals from entry meetings and manage student data")
+
+    students = get_students()
+    if not students:
+        st.info("No students in the system yet. Add them in Goal Builder → Manage Students.")
+        st.stop()
+
+    st.subheader("All Students Overview")
+    
+    for student in students:
+        goals = get_goals(student["student_name"])
+        
+        with st.expander(f"**{student['student_name']}** — {student.get('program', '❓ No Program')} — {len(goals)} goals", expanded=False):
+            st.markdown(f'<div class="admin-panel">', unsafe_allow_html=True)
+            
+            # Edit program
+            st.markdown("**Student Details:**")
+            col1, col2 = st.columns([2, 1])
+            new_program = col1.selectbox("Program", PROGRAMS, 
+                                        index=PROGRAMS.index(student.get('program')) if student.get('program') in PROGRAMS else 0,
+                                        key=f"admin_prog_{student['id']}")
+            if col2.button("Update Program", key=f"admin_update_{student['id']}"):
+                sb.table("smartar_students").update({"program": new_program}).eq("id", student["id"]).execute()
+                st.success(f"Updated {student['student_name']} to {new_program}")
+                st.rerun()
+            
+            st.markdown("---")
+            
+            # Show existing goals with GAS levels
+            if goals:
+                st.markdown("**Current Goals:**")
+                for idx, g in enumerate(goals, 1):
+                    st.markdown(f"**Goal {idx}:**")
+                    if g.get("exclusion_goal"):
+                        st.text_area(f"Exclusion Goal {idx}", value=g["exclusion_goal"], height=80, key=f"view_excl_{g['id']}", disabled=True)
+                    if g.get("smartar_goal"):
+                        st.text_area(f"SMARTAR Goal {idx}", value=g["smartar_goal"], height=80, key=f"view_smartar_{g['id']}", disabled=True)
+                    
+                    # Show GAS levels
+                    gas = get_gas_dict(g)
+                    if any(gas.values()):
+                        with st.expander(f"View GAS Levels - Goal {idx}"):
+                            for lvl in LEVEL_ORDER:
+                                if gas.get(lvl):
+                                    st.markdown(f"**{LEVEL_EMOJI[lvl]} {lvl}:**")
+                                    st.caption(gas[lvl])
+                    st.markdown("---")
+            
+            # Add new goal (pre-populate from entry meeting)
+            st.markdown("**📝 Pre-Populate New Goal (from Entry Meeting):**")
+            st.caption("Add goals before teachers start tracking - teachers can refine later based on observations")
+            
+            admin_excl = st.text_area(
+                "Exclusion Goal (from main school)",
+                placeholder="Paste exclusion goal from entry meeting...",
+                height=100,
+                key=f"admin_excl_{student['id']}"
+            )
+            
+            admin_smartar = st.text_area(
+                "Initial SMARTAR Goal",
+                placeholder="Enter initial SMARTAR goal based on entry meeting assessment...",
+                height=100,
+                key=f"admin_smartar_{student['id']}"
+            )
+            
+            if st.button("💾 Save Pre-Populated Goal", key=f"admin_save_{student['id']}", type="primary"):
+                if admin_smartar.strip():
+                    new_goal = {
+                        "student_name": student["student_name"],
+                        "exclusion_goal": admin_excl.strip() if admin_excl.strip() else None,
+                        "smartar_goal": admin_smartar.strip(),
+                        "active": True
+                    }
+                    sb.table("smartar_goals").insert(new_goal).execute()
+                    st.success(f"✅ Goal pre-populated for {student['student_name']}. Teachers can now begin tracking and will be able to refine based on observations.")
+                    st.rerun()
+                else:
+                    st.warning("Please enter a SMARTAR goal.")
+            
+            st.markdown('</div>', unsafe_allow_html=True)
