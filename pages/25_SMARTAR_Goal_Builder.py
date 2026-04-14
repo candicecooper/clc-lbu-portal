@@ -94,11 +94,11 @@ def get_students():
     r = sb.table("smartar_students").select("*").order("student_name").execute()
     return r.data or []
 
-def get_goals(student_id=None):
+def get_goals(student_name=None):
     q = sb.table("smartar_goals").select("*")
-    if student_id:
-        q = q.eq("student_id", student_id)
-    q = q.eq("active", True).order("goal_number")
+    if student_name:
+        q = q.eq("student_name", student_name)
+    q = q.eq("active", True).order("created_at", desc=False)
     return q.execute().data or []
 
 def get_tracking(goal_id, days=30):
@@ -267,25 +267,25 @@ if view == "🏫 Class Dashboard":
         st.stop()
 
     for student in students:
-        goals = get_goals(student["id"])
+        goals = get_goals(student["student_name"])
         if not goals:
             continue
 
         with st.expander(f"**{student['student_name']}** — {student.get('program','?')}  ·  {len(goals)} goal{'s' if len(goals)!=1 else ''}", expanded=True):
-            for goal in goals:
+            for idx, goal in enumerate(goals, 1):
                 tracking = get_tracking(goal["id"], days=21)
                 counts, total, pcts = calc_percentages(tracking)
                 today_rows = get_today_tracking(goal["id"])
                 today_sessions = {r["session"]: r["level"] for r in today_rows}
 
-                st.markdown(f'<span class="goal-badge">Goal {goal["goal_number"]}</span>', unsafe_allow_html=True)
+                st.markdown(f'<span class="goal-badge">Goal {idx}</span>', unsafe_allow_html=True)
 
                 # Exclusion goal
                 if goal.get("exclusion_goal"):
                     st.markdown(f'<div class="exclusion-box">🏫 <b>Exclusion Goal:</b> {goal["exclusion_goal"]}</div>', unsafe_allow_html=True)
 
                 # SMARTAR goal
-                st.markdown(f'<div class="smartar-box">🎯 <b>SMARTAR Goal:</b> {goal["goal_statement"]}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="smartar-box">🎯 <b>SMARTAR Goal:</b> {goal.get("smartar_goal", "No goal")}</div>', unsafe_allow_html=True)
 
                 # Today's sessions
                 cols = st.columns([1, 1, 1, 2])
@@ -339,7 +339,7 @@ elif view == "📋 Goal Builder":
         students = get_students()
         if students:
             for s in students:
-                goals = get_goals(s["id"])
+                goals = get_goals(s["student_name"])
                 sc1, sc2, sc3 = st.columns([3, 1, 1])
                 sc1.write(f"**{s['student_name']}** — {s.get('program','?')} — {len(goals)} goals")
                 if sc3.button("Archive", key=f"arch_{s['id']}"):
@@ -369,17 +369,18 @@ elif view == "📋 Goal Builder":
         
         selected_name = st.selectbox("Select student", list(student_options.keys()), index=default_idx)
         student = student_options[selected_name]
-        existing_goals = get_goals(student["id"])
+        existing_goals = get_goals(student["student_name"])
 
         st.markdown(f'<div class="student-header"><b>{selected_name}</b> · {student.get("program","?")} · {len(existing_goals)}/4 goals</div>', unsafe_allow_html=True)
 
         # Show existing goals
         if existing_goals:
             st.subheader("Current Goals")
-            for g in existing_goals:
-                with st.expander(f"Goal {g['goal_number']} — {g['goal_statement'][:80]}..."):
+            for idx, g in enumerate(existing_goals, 1):
+                goal_text = g.get("smartar_goal", "No goal text")
+                with st.expander(f"Goal {idx} — {goal_text[:80]}..."):
                     st.markdown(f'<div class="exclusion-box">🏫 <b>Exclusion Goal:</b> {g.get("exclusion_goal","—")}</div>', unsafe_allow_html=True)
-                    st.markdown(f'<div class="smartar-box">🎯 <b>SMARTAR Goal:</b> {g["goal_statement"]}</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="smartar-box">🎯 <b>SMARTAR Goal:</b> {goal_text}</div>', unsafe_allow_html=True)
                     gas = json.loads(g.get("gas_levels", "{}")) if isinstance(g.get("gas_levels"), str) else (g.get("gas_levels") or {})
                     if gas:
                         st.markdown("**GAS Performance Levels:**")
@@ -393,7 +394,7 @@ elif view == "📋 Goal Builder":
                     if g.get("meeting_id"):
                         st.caption(f"📋 Created from {g.get('program', '')} Team Meeting · Term {g.get('term', '')} Week {g.get('week', '')}")
                     
-                    if st.button(f"🗑 Archive Goal {g['goal_number']}", key=f"del_{g['id']}"):
+                    if st.button(f"🗑 Archive Goal {idx}", key=f"del_{g['id']}"):
                         sb.table("smartar_goals").update({"active": False}).eq("id", g["id"]).execute()
                         st.rerun()
 
@@ -506,10 +507,9 @@ No markdown, no explanation, pure JSON only."""
                 st.warning("Enter your name in the sidebar first.")
             else:
                 new_goal = {
-                    "student_id": student["id"],
-                    "goal_number": len(existing_goals) + 1,
+                    "student_name": selected_name,
                     "exclusion_goal": excl_goal.strip() if excl_goal else None,
-                    "goal_statement": final_goal.strip(),
+                    "smartar_goal": final_goal.strip(),
                     "gas_levels": json.dumps(edited_gas) if edited_gas else None,
                     "created_by": staff_name,
                     "active": True
@@ -566,7 +566,7 @@ elif view == "📊 Daily Tracking":
     student_options = {s["student_name"]: s for s in students}
     selected_name = st.selectbox("Select student", list(student_options.keys()))
     student = student_options[selected_name]
-    goals = get_goals(student["id"])
+    goals = get_goals(student["student_name"])
 
     if not goals:
         st.info(f"No goals set up for {selected_name}. Go to Goal Builder first.")
@@ -574,13 +574,13 @@ elif view == "📊 Daily Tracking":
 
     st.markdown("---")
 
-    for goal in goals:
+    for idx, goal in enumerate(goals, 1):
         today_rows = sb.table("smartar_tracking").select("*").eq("goal_id", goal["id"]).eq("tracked_date", track_date.isoformat()).execute().data or []
         today_sessions = {r["session"]: r["level"] for r in today_rows}
         gas_levels = json.loads(goal.get("gas_levels") or "{}") if isinstance(goal.get("gas_levels"), str) else (goal.get("gas_levels") or {})
 
-        st.markdown(f"### Goal {goal['goal_number']}")
-        st.markdown(f'<div class="smartar-box">🎯 {goal["goal_statement"]}</div>', unsafe_allow_html=True)
+        st.markdown(f"### Goal {idx}")
+        st.markdown(f'<div class="smartar-box">🎯 {goal.get("smartar_goal", "No goal")}</div>', unsafe_allow_html=True)
 
         if gas_levels:
             with st.expander("📋 View GAS Performance Levels"):
@@ -627,7 +627,7 @@ elif view == "📈 Progress Report":
     student_options = {s["student_name"]: s for s in students}
     selected_name = st.selectbox("Select student", list(student_options.keys()))
     student = student_options[selected_name]
-    goals = get_goals(student["id"])
+    goals = get_goals(student["student_name"])
 
     if not goals:
         st.info(f"No goals for {selected_name}.")
@@ -640,15 +640,15 @@ elif view == "📈 Progress Report":
     st.markdown(f"## {selected_name} — Progress Report")
     st.caption(f"Period: last {days} days · Program: {student.get('program','?')}")
 
-    for goal in goals:
+    for idx, goal in enumerate(goals, 1):
         tracking = get_tracking(goal["id"], days=days)
         counts, total, pcts = calc_percentages(tracking)
         gas_levels = json.loads(goal.get("gas_levels") or "{}") if isinstance(goal.get("gas_levels"), str) else (goal.get("gas_levels") or {})
 
-        st.markdown(f"### Goal {goal['goal_number']}")
+        st.markdown(f"### Goal {idx}")
         if goal.get("exclusion_goal"):
             st.markdown(f'<div class="exclusion-box">🏫 <b>Exclusion Goal:</b> {goal["exclusion_goal"]}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="smartar-box">🎯 <b>SMARTAR Goal:</b> {goal["goal_statement"]}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="smartar-box">🎯 <b>SMARTAR Goal:</b> {goal.get("smartar_goal", "No goal")}</div>', unsafe_allow_html=True)
 
         if total == 0:
             st.warning("No tracking data for this period.")
@@ -696,7 +696,7 @@ elif view == "📈 Progress Report":
                     narrative = groq_call(f"""Write a brief, professional progress summary (3–4 sentences) for a student's IEP/review meeting.
 
 Student: {selected_name}
-SMARTAR Goal: {goal['goal_statement']}
+SMARTAR Goal: {goal.get('smartar_goal', 'No goal')}
 Period: last {days} days
 Performance distribution: {level_summary}
 Total sessions recorded: {total}
