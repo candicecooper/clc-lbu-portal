@@ -88,15 +88,23 @@ def groq_call(prompt, system="You are an expert educator supporting students in 
 
 # ── Supabase helpers ──────────────────────────────────────────────────────────
 def get_students():
-    r = sb.table("smartar_students").select("*").order("student_name").execute()
-    return r.data or []
+    try:
+        r = sb.table("smartar_students").select("*").order("student_name").execute()
+        return r.data or []
+    except Exception as e:
+        st.error(f"Database error loading students: {e}")
+        return []
 
 def get_goals(student_name=None):
-    q = sb.table("smartar_goals").select("*")
-    if student_name:
-        q = q.eq("student_name", student_name)
-    q = q.eq("active", True).order("created_at", desc=False)
-    return q.execute().data or []
+    try:
+        q = sb.table("smartar_goals").select("*")
+        if student_name:
+            q = q.eq("student_name", student_name)
+        q = q.eq("active", True).order("created_at", desc=False)
+        return q.execute().data or []
+    except Exception as e:
+        st.error(f"Database error loading goals: {e}")
+        return []
 
 def get_tracking(goal_id, days=30):
     since = (date.today() - timedelta(days=days)).isoformat()
@@ -888,12 +896,15 @@ elif view == "⚙️ Admin Panel":
         new_student_prog = col2.selectbox("Program", PROGRAMS, key="admin_new_prog")
         if col3.button("Add Student", type="primary", key="admin_add_student"):
             if new_student_name.strip():
-                sb.table("smartar_students").insert({
-                    "student_name": new_student_name.strip(),
-                    "program": new_student_prog
-                }).execute()
-                st.success(f"✅ {new_student_name.strip()} added to {new_student_prog}.")
-                st.rerun()
+                try:
+                    sb.table("smartar_students").insert({
+                        "student_name": new_student_name.strip(),
+                        "program": new_student_prog
+                    }).execute()
+                    st.success(f"✅ {new_student_name.strip()} added to {new_student_prog}.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error adding student: {e}")
             else:
                 st.warning("Please enter a student name.")
         
@@ -902,35 +913,56 @@ elif view == "⚙️ Admin Panel":
         
         students = get_students()
         if students:
-            for s in students:
-                goals = get_goals(s["student_name"])
+            # Don't load all goals at once - just show student count
+            st.info(f"📊 {len(students)} students in the system")
+            
+            # Select one student to edit at a time
+            student_names = [s["student_name"] for s in students]
+            selected_edit = st.selectbox("Select student to edit", ["-- Select --"] + student_names, key="admin_edit_select")
+            
+            if selected_edit != "-- Select --":
+                student = next(s for s in students if s["student_name"] == selected_edit)
                 
-                with st.expander(f"**{s['student_name']}** — {s.get('program', '❓ No Program')} — {len(goals)} goals", expanded=False):
+                try:
+                    goals = get_goals(student["student_name"])
+                    
+                    st.markdown(f"### {student['student_name']}")
+                    st.caption(f"{len(goals)} active goals")
+                    
                     # Edit program
                     st.markdown("**Edit Student Details:**")
                     edit_col1, edit_col2 = st.columns([2, 1])
                     
-                    current_prog = s.get('program', 'JP')
+                    current_prog = student.get('program', 'JP')
                     prog_idx = PROGRAMS.index(current_prog) if current_prog in PROGRAMS else 0
                     new_program = edit_col1.selectbox(
                         "Program", 
                         PROGRAMS, 
                         index=prog_idx,
-                        key=f"prog_edit_{s['id']}"
+                        key=f"prog_edit_{student['id']}"
                     )
                     
-                    if edit_col2.button("Update Program", key=f"prog_save_{s['id']}", type="primary"):
-                        sb.table("smartar_students").update({"program": new_program}).eq("id", s["id"]).execute()
-                        st.success(f"✅ Updated {s['student_name']} to {new_program}")
-                        st.rerun()
+                    if edit_col2.button("Update Program", key=f"prog_save_{student['id']}", type="primary"):
+                        try:
+                            sb.table("smartar_students").update({"program": new_program}).eq("id", student["id"]).execute()
+                            st.success(f"✅ Updated {student['student_name']} to {new_program}")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error updating program: {e}")
                     
                     st.markdown("---")
                     
                     # Delete student
-                    if st.button(f"🗑 Delete {s['student_name']}", key=f"admin_del_{s['id']}"):
-                        sb.table("smartar_students").delete().eq("id", s["id"]).execute()
-                        st.success(f"Deleted {s['student_name']}")
-                        st.rerun()
+                    if st.button(f"🗑 Delete {student['student_name']}", key=f"admin_del_{student['id']}"):
+                        try:
+                            sb.table("smartar_students").delete().eq("id", student["id"]).execute()
+                            st.success(f"Deleted {student['student_name']}")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error deleting student: {e}")
+                
+                except Exception as e:
+                    st.error(f"Error loading data for {student['student_name']}: {e}")
         else:
             st.info("No students in the system yet.")
     
