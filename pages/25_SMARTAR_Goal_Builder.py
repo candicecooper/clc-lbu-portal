@@ -7,7 +7,6 @@ from groq import Groq
 from urllib.parse import unquote
 from collections import defaultdict
 import plotly.graph_objects as go
-import plotly.io as pio
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(page_title="SMARTAR Goal Builder", page_icon="🎯", layout="wide")
@@ -819,18 +818,10 @@ elif view == "📈 Progress Report":
             margin=dict(t=100, b=50, l=50, r=50)
         )
         
-        # Display chart
+        # Display chart with built-in download toolbar
         st.plotly_chart(fig, use_container_width=True)
         
-        # Download button
-        img_bytes = pio.to_image(fig, format="png", width=1200, height=800, scale=2)
-        st.download_button(
-            label="📥 Download Chart as PNG",
-            data=img_bytes,
-            file_name=f"{selected_name}_Goal{idx}_Performance_{period.replace(' ', '_')}.png",
-            mime="image/png",
-            key=f"download_chart_{goal['id']}"
-        )
+        st.caption("💡 **Tip:** Hover over the chart and click the camera icon (📷) in the toolbar to download as PNG")
         
         st.markdown("---")
 
