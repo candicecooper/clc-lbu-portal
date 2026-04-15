@@ -72,6 +72,23 @@ SUPPORT_TYPES = [
     "Visual supports", "Modified task", "Sensory break", "Peer support",
 ]
 
+# How the student is grouped / supported during this interval
+GROUPING_TYPES = {
+    "1:1":         "1:1",
+    "independent": "Independent",
+    "small_group": "Small group",
+    "large_group": "Large group (≤10)",
+}
+
+# Type of activity — multi-select (stored as comma-separated string)
+ACTIVITY_TYPES = [
+    "Structured",
+    "Unstructured",
+    "Yard play",
+    "Preferred task",
+    "Non-preferred task",
+]
+
 OUTCOMES = {
     "on_task":   {"label": "On task",   "short": "T", "bg": "#dcfce7", "fg": "#16a34a"},
     "partial":   {"label": "Partial",   "short": "P", "bg": "#fef9c3", "fg": "#ca8a04"},
@@ -337,6 +354,8 @@ with t_record:
     cur_reg  = cur_cell.get("regulated","") or ""
     cur_sup  = cur_cell.get("support_used","") or "None"
     cur_out  = cur_cell.get("outcome","") or ""
+    cur_grp  = cur_cell.get("grouping_type","") or ""
+    cur_acts = [a.strip() for a in (cur_cell.get("activity_types","") or "").split(",") if a.strip()]
     cfg_cur  = REG_STATES.get(cur_reg,{})
 
     st.markdown(
@@ -398,6 +417,43 @@ with t_record:
         if cur_out and st.button("✕", key=f"ist_out_clr_{sel_time}_{sel_day}",
                                   use_container_width=True):
             upsert_field(student_name, sel_date, sel_day, sel_time, "outcome", "")
+            st.rerun()
+
+    # Grouping type
+    st.markdown('<div style="font-size:.72rem;font-weight:700;color:#1A6B8A;margin:.3rem 0 .1rem;">'
+                'GROUPING / SUPPORT ARRANGEMENT</div>', unsafe_allow_html=True)
+    gc = st.columns(len(GROUPING_TYPES)+1)
+    for ci, (val, lbl) in enumerate(GROUPING_TYPES.items()):
+        is_sel = (cur_grp == val)
+        if gc[ci].button(lbl, key=f"ist_grp_{val}_{sel_time}_{sel_day}",
+                         use_container_width=True,
+                         type="primary" if is_sel else "secondary"):
+            upsert_field(student_name, sel_date, sel_day, sel_time,
+                         "grouping_type", "" if is_sel else val)
+            st.rerun()
+    with gc[-1]:
+        if cur_grp and st.button("✕", key=f"ist_grp_clr_{sel_time}_{sel_day}",
+                                  use_container_width=True):
+            upsert_field(student_name, sel_date, sel_day, sel_time, "grouping_type", "")
+            st.rerun()
+
+    # Activity type — multi-select (tap to toggle, multiple can be active)
+    st.markdown('<div style="font-size:.72rem;font-weight:700;color:#1A6B8A;margin:.3rem 0 .1rem;">'
+                'ACTIVITY TYPE <span style="font-weight:400;">(select all that apply)</span></div>',
+                unsafe_allow_html=True)
+    act_cols = st.columns(len(ACTIVITY_TYPES))
+    for ci, act in enumerate(ACTIVITY_TYPES):
+        is_sel = (act in cur_acts)
+        if act_cols[ci].button(act, key=f"ist_act_{act}_{sel_time}_{sel_day}",
+                                use_container_width=True,
+                                type="primary" if is_sel else "secondary"):
+            new_acts = list(cur_acts)
+            if is_sel:
+                new_acts.remove(act)
+            else:
+                new_acts.append(act)
+            upsert_field(student_name, sel_date, sel_day, sel_time,
+                         "activity_types", ",".join(new_acts))
             st.rerun()
 
     if cur_cell:
@@ -552,6 +608,55 @@ with t_analysis:
     st.plotly_chart(fig4, use_container_width=True)
 
     st.markdown("---")
+
+    # Chart 5: Grouping vs regulation
+    grp_filt = filt[filt.get("grouping_type", pd.Series(dtype=str)).notna()
+                    & (filt.get("grouping_type", pd.Series(dtype=str)).str.strip() != "")
+                    ] if "grouping_type" in filt.columns else pd.DataFrame()
+    if not grp_filt.empty:
+        st.markdown("##### Regulation by grouping / support arrangement")
+        grp_filt = grp_filt.copy()
+        grp_filt["Grouping"] = grp_filt["grouping_type"].map(GROUPING_TYPES).fillna(grp_filt["grouping_type"])
+        gdf = grp_filt.groupby(["Grouping","State"]).size().reset_index(name="n")
+        fig5 = px.bar(gdf, x="n", y="Grouping", color="State",
+            color_discrete_map=colour_map, barmode="stack", orientation="h",
+            labels={"Grouping":"","n":"Intervals","State":""},
+            category_orders={"State": state_order})
+        fig5.update_layout(height=max(200,len(gdf["Grouping"].unique())*45+80),
+            plot_bgcolor="white", paper_bgcolor="white",
+            yaxis=dict(autorange="reversed"),
+            xaxis=dict(tickformat="d", gridcolor="#e2e8f0"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
+            margin=dict(l=10,r=10,t=50,b=10))
+        st.plotly_chart(fig5, use_container_width=True)
+        st.caption("Shows which grouping arrangement is most associated with regulation for this student.")
+        st.markdown("---")
+
+    # Chart 6: Activity type vs regulation (explode multi-select)
+    if "activity_types" in filt.columns:
+        act_rows = []
+        for _, row in filt.iterrows():
+            acts = [a.strip() for a in str(row.get("activity_types","")).split(",") if a.strip()]
+            for act in acts:
+                act_rows.append({"Activity": act, "State": row["State"]})
+        if act_rows:
+            st.markdown("##### Regulation by activity type")
+            act_df = pd.DataFrame(act_rows)
+            adf = act_df.groupby(["Activity","State"]).size().reset_index(name="n")
+            fig6 = px.bar(adf, x="n", y="Activity", color="State",
+                color_discrete_map=colour_map, barmode="stack", orientation="h",
+                labels={"Activity":"","n":"Intervals","State":""},
+                category_orders={"State": state_order})
+            fig6.update_layout(height=max(200,len(adf["Activity"].unique())*45+80),
+                plot_bgcolor="white", paper_bgcolor="white",
+                yaxis=dict(autorange="reversed"),
+                xaxis=dict(tickformat="d", gridcolor="#e2e8f0"),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
+                margin=dict(l=10,r=10,t=50,b=10))
+            st.plotly_chart(fig6, use_container_width=True)
+            st.caption("💡 Shows how regulation differs across activity types. Intervals with multiple activity types are counted in each.")
+            st.markdown("---")
+
     dl = filt.copy()
     dl["obs_date"] = dl["obs_date_dt"].dt.strftime("%-d/%m/%Y")
     csv = dl[["obs_date","day_of_week","time_slot","regulated","State",
