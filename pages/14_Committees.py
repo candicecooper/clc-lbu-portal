@@ -171,7 +171,7 @@ elif st.session_state.committee_view == 'documents':
                     # Display documents in a clean format
                     for doc in filtered_docs:
                         with st.container():
-                            col1, col2, col3, col4, col5 = st.columns([3, 1.5, 1.5, 1.5, 1])
+                            col1, col2, col3, col4, col5 = st.columns([3, 1.5, 1.5, 1.5, 1.5])
                             
                             with col1:
                                 # Add pin emoji if marked as current
@@ -191,17 +191,31 @@ elif st.session_state.committee_view == 'documents':
                                 st.caption(f"👤 {doc['uploaded_by']}")
                             
                             with col5:
-                                # Download button
+                                # View and Download buttons
                                 try:
-                                    # Get the file from storage
-                                    file_data = supabase.storage.from_("committees").download(doc['file_path'])
+                                    # Create signed URL for viewing
+                                    signed_url = supabase.storage.from_("committees").create_signed_url(
+                                        doc['file_path'], 
+                                        3600  # URL valid for 1 hour
+                                    )
                                     
+                                    if signed_url:
+                                        # View button - opens in new tab
+                                        st.link_button(
+                                            "👁️",
+                                            signed_url['signedURL'],
+                                            use_container_width=True
+                                        )
+                                    
+                                    # Download button
+                                    file_data = supabase.storage.from_("committees").download(doc['file_path'])
                                     st.download_button(
                                         label="⬇️",
                                         data=file_data,
                                         file_name=doc['document_name'],
                                         mime=doc.get('mime_type', 'application/octet-stream'),
-                                        key=f"download_{doc['id']}"
+                                        key=f"download_{doc['id']}",
+                                        use_container_width=True
                                     )
                                 except Exception as e:
                                     st.error(f"Error: {str(e)[:30]}")
