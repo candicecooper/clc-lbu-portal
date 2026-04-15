@@ -1,6 +1,8 @@
 import streamlit as st
 from supabase import create_client
-from datetime import datetime
+from datetime import datetime, date
+from groq import Groq
+import json
 
 # Page config
 st.set_page_config(page_title="Committees", page_icon="📋", layout="wide")
@@ -18,14 +20,57 @@ supabase = create_client(
     st.secrets["supabase"]["key"]
 )
 
-# Initialize session state for navigation
+# Initialize Groq
+@st.cache_resource
+def get_groq():
+    return Groq(api_key=st.secrets["GROQ_API_KEY"])
+
+groq_client = get_groq()
+
+# Initialize session state
 if 'committee_view' not in st.session_state:
     st.session_state.committee_view = 'home'
+if 'selected_committee' not in st.session_state:
+    st.session_state.selected_committee = None
+if 'selected_meeting' not in st.session_state:
+    st.session_state.selected_meeting = None
 
 # Navigation handler
-def navigate_to(view):
+def navigate_to(view, committee=None, meeting=None):
     st.session_state.committee_view = view
+    if committee:
+        st.session_state.selected_committee = committee
+    if meeting:
+        st.session_state.selected_meeting = meeting
     st.rerun()
+
+# Committee configurations
+COMMITTEES = {
+    'finance': {
+        'name': 'Finance Committee',
+        'icon': '💰',
+        'color': '#059669',
+        'description': 'Budget · Expenditure · Reports'
+    },
+    'whs': {
+        'name': 'WHS Committee',
+        'icon': '🦺',
+        'color': '#ea580c',
+        'description': 'Safety · Hazards · Compliance'
+    },
+    'social': {
+        'name': 'Social Club',
+        'icon': '🎉',
+        'color': '#7c3aed',
+        'description': 'Events · Activities · Fun'
+    },
+    'special': {
+        'name': 'Special Events',
+        'icon': '✨',
+        'color': '#ec4899',
+        'description': 'Planning · Coordination · Celebration'
+    }
+}
 
 # ========== HEADER ==========
 st.markdown("""
@@ -45,74 +90,74 @@ st.markdown("""
 # ========== HOME VIEW ==========
 if st.session_state.committee_view == 'home':
     
-    st.markdown("<h3 style='color: #1e3a5f; margin-bottom: 1.5rem;'>Select a committee to view agendas, minutes and action items.</h3>", unsafe_allow_html=True)
+    st.markdown("<h3 style='color: #1e3a5f; margin-bottom: 1.5rem;'>Select a committee to manage meetings and documents.</h3>", unsafe_allow_html=True)
     
-    # Committee Cards - Row 1
+    # Committee Cards
     col1, col2 = st.columns(2)
     
     with col1:
-        # PAC Card
-        st.markdown("""
-            <div style="border: 3px solid #1e3a5f; border-radius: 16px; padding: 2rem; 
-                        background: white; margin-bottom: 1.5rem; min-height: 220px;
-                        box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
-                <div style="font-size: 3.5rem; margin-bottom: 1rem;">🏛️</div>
-                <h3 style="color: #1e3a5f; margin-bottom: 0.5rem;">Personnel Advisory Committee</h3>
-                <p style="color: #64748b; margin-bottom: 1rem;">Agendas · Minutes · Actions</p>
-                <span style="background: #d1fae5; color: #065f46; padding: 0.4rem 0.8rem; 
-                            border-radius: 20px; font-size: 0.85rem; font-weight: 600;">● Active</span>
-            </div>
-        """, unsafe_allow_html=True)
-        if st.button("Open PAC", key="btn_pac", use_container_width=True):
-            navigate_to('pac')
-        
-        # WHS Card
-        st.markdown("""
-            <div style="border: 3px solid #ea580c; border-radius: 16px; padding: 2rem; 
-                        background: white; margin-bottom: 1.5rem; min-height: 220px;
-                        box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
-                <div style="font-size: 3.5rem; margin-bottom: 1rem;">🦺</div>
-                <h3 style="color: #1e3a5f; margin-bottom: 0.5rem;">WHS Committee</h3>
-                <p style="color: #64748b; margin-bottom: 1rem;">Safety · Hazards · Compliance</p>
-                <span style="background: #fef3c7; color: #92400e; padding: 0.4rem 0.8rem; 
-                            border-radius: 20px; font-size: 0.85rem; font-weight: 600;">● Active</span>
-            </div>
-        """, unsafe_allow_html=True)
-        if st.button("Open WHS", key="btn_whs", use_container_width=True):
-            navigate_to('whs')
-    
-    with col2:
         # Finance Card
-        st.markdown("""
-            <div style="border: 3px solid #059669; border-radius: 16px; padding: 2rem; 
+        st.markdown(f"""
+            <div style="border: 3px solid {COMMITTEES['finance']['color']}; border-radius: 16px; padding: 2rem; 
                         background: white; margin-bottom: 1.5rem; min-height: 220px;
                         box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
-                <div style="font-size: 3.5rem; margin-bottom: 1rem;">💰</div>
-                <h3 style="color: #1e3a5f; margin-bottom: 0.5rem;">Finance Committee</h3>
-                <p style="color: #64748b; margin-bottom: 1rem;">Budget · Expenditure · Reports</p>
+                <div style="font-size: 3.5rem; margin-bottom: 1rem;">{COMMITTEES['finance']['icon']}</div>
+                <h3 style="color: #1e3a5f; margin-bottom: 0.5rem;">{COMMITTEES['finance']['name']}</h3>
+                <p style="color: #64748b; margin-bottom: 1rem;">{COMMITTEES['finance']['description']}</p>
                 <span style="background: #d1fae5; color: #065f46; padding: 0.4rem 0.8rem; 
                             border-radius: 20px; font-size: 0.85rem; font-weight: 600;">● Active</span>
             </div>
         """, unsafe_allow_html=True)
         if st.button("Open Finance", key="btn_finance", use_container_width=True):
-            navigate_to('finance')
+            navigate_to('committee_home', 'finance')
         
         # Social Club Card
-        st.markdown("""
-            <div style="border: 3px solid #7c3aed; border-radius: 16px; padding: 2rem; 
+        st.markdown(f"""
+            <div style="border: 3px solid {COMMITTEES['social']['color']}; border-radius: 16px; padding: 2rem; 
                         background: white; margin-bottom: 1.5rem; min-height: 220px;
                         box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
-                <div style="font-size: 3.5rem; margin-bottom: 1rem;">🎉</div>
-                <h3 style="color: #1e3a5f; margin-bottom: 0.5rem;">Social Club</h3>
-                <p style="color: #64748b; margin-bottom: 1rem;">Events · Activities · Fun</p>
+                <div style="font-size: 3.5rem; margin-bottom: 1rem;">{COMMITTEES['social']['icon']}</div>
+                <h3 style="color: #1e3a5f; margin-bottom: 0.5rem;">{COMMITTEES['social']['name']}</h3>
+                <p style="color: #64748b; margin-bottom: 1rem;">{COMMITTEES['social']['description']}</p>
                 <span style="background: #e9d5ff; color: #6b21a8; padding: 0.4rem 0.8rem; 
                             border-radius: 20px; font-size: 0.85rem; font-weight: 600;">● Active</span>
             </div>
         """, unsafe_allow_html=True)
         if st.button("Open Social Club", key="btn_social", use_container_width=True):
-            navigate_to('social')
+            navigate_to('committee_home', 'social')
     
-    # Documents Card - Row 2 (centered)
+    with col2:
+        # WHS Card
+        st.markdown(f"""
+            <div style="border: 3px solid {COMMITTEES['whs']['color']}; border-radius: 16px; padding: 2rem; 
+                        background: white; margin-bottom: 1.5rem; min-height: 220px;
+                        box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                <div style="font-size: 3.5rem; margin-bottom: 1rem;">{COMMITTEES['whs']['icon']}</div>
+                <h3 style="color: #1e3a5f; margin-bottom: 0.5rem;">{COMMITTEES['whs']['name']}</h3>
+                <p style="color: #64748b; margin-bottom: 1rem;">{COMMITTEES['whs']['description']}</p>
+                <span style="background: #fef3c7; color: #92400e; padding: 0.4rem 0.8rem; 
+                            border-radius: 20px; font-size: 0.85rem; font-weight: 600;">● Active</span>
+            </div>
+        """, unsafe_allow_html=True)
+        if st.button("Open WHS", key="btn_whs", use_container_width=True):
+            navigate_to('committee_home', 'whs')
+        
+        # Special Events Card
+        st.markdown(f"""
+            <div style="border: 3px solid {COMMITTEES['special']['color']}; border-radius: 16px; padding: 2rem; 
+                        background: white; margin-bottom: 1.5rem; min-height: 220px;
+                        box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                <div style="font-size: 3.5rem; margin-bottom: 1rem;">{COMMITTEES['special']['icon']}</div>
+                <h3 style="color: #1e3a5f; margin-bottom: 0.5rem;">{COMMITTEES['special']['name']}</h3>
+                <p style="color: #64748b; margin-bottom: 1rem;">{COMMITTEES['special']['description']}</p>
+                <span style="background: #fce7f3; color: #9f1239; padding: 0.4rem 0.8rem; 
+                            border-radius: 20px; font-size: 0.85rem; font-weight: 600;">● Active</span>
+            </div>
+        """, unsafe_allow_html=True)
+        if st.button("Open Special Events", key="btn_special", use_container_width=True):
+            navigate_to('committee_home', 'special')
+    
+    # Documents Card - Centered below
     st.divider()
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
@@ -130,17 +175,462 @@ if st.session_state.committee_view == 'home':
         if st.button("📂 Open Documents Library", key="btn_docs", use_container_width=True):
             navigate_to('documents')
 
+# ========== COMMITTEE HOME VIEW ==========
+elif st.session_state.committee_view == 'committee_home':
+    committee = COMMITTEES[st.session_state.selected_committee]
+    
+    st.subheader(f"{committee['icon']} {committee['name']}")
+    
+    # Tab navigation
+    tab1, tab2 = st.tabs(["📅 Meetings", "➕ New Meeting"])
+    
+    with tab1:
+        st.markdown("### Meetings")
+        
+        try:
+            # Fetch meetings for this committee
+            response = supabase.table("committee_meetings").select("*").eq(
+                "committee_name", st.session_state.selected_committee
+            ).order("meeting_date", desc=True).execute()
+            
+            if response.data:
+                for meeting in response.data:
+                    with st.container():
+                        col1, col2, col3, col4 = st.columns([3, 2, 1.5, 1.5])
+                        
+                        with col1:
+                            st.markdown(f"**{meeting['meeting_title']}**")
+                            st.caption(f"📅 {meeting['meeting_date']}")
+                        
+                        with col2:
+                            status_colors = {
+                                'draft': ('#fef3c7', '#92400e'),
+                                'published': ('#d1fae5', '#065f46'),
+                                'archived': ('#e5e7eb', '#6b7280')
+                            }
+                            bg, text = status_colors.get(meeting['status'], ('#e5e7eb', '#6b7280'))
+                            st.markdown(f"<span style='background:{bg};color:{text};padding:0.25rem 0.6rem;border-radius:12px;font-size:0.8rem;font-weight:600;'>{meeting['status'].upper()}</span>", unsafe_allow_html=True)
+                        
+                        with col3:
+                            if st.button("View Meeting", key=f"view_{meeting['id']}", use_container_width=True):
+                                navigate_to('meeting_detail', meeting=meeting['id'])
+                        
+                        with col4:
+                            if meeting['status'] != 'archived':
+                                if st.button("Archive", key=f"archive_{meeting['id']}", use_container_width=True):
+                                    supabase.table("committee_meetings").update({"status": "archived"}).eq("id", meeting['id']).execute()
+                                    st.rerun()
+                        
+                        st.divider()
+            else:
+                st.info("No meetings yet. Create your first meeting using the 'New Meeting' tab.")
+        
+        except Exception as e:
+            st.error(f"Error loading meetings: {str(e)}")
+    
+    with tab2:
+        st.markdown("### Create New Meeting")
+        
+        with st.form("new_meeting_form"):
+            meeting_title = st.text_input("Meeting Title*", placeholder="e.g., Finance Committee Meeting - May 2026")
+            meeting_date = st.date_input("Meeting Date*", value=date.today())
+            meeting_time = st.time_input("Meeting Time*")
+            location = st.text_input("Location", placeholder="e.g., Staff Room")
+            
+            st.markdown("#### Agenda Items")
+            num_items = st.number_input("Number of agenda items", min_value=1, max_value=20, value=5)
+            
+            agenda_items = []
+            for i in range(num_items):
+                st.markdown(f"**Item {i+1}**")
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    item_title = st.text_input(f"Title", key=f"item_title_{i}", placeholder="e.g., Budget Review")
+                with col2:
+                    duration = st.number_input(f"Duration (min)", key=f"duration_{i}", min_value=5, value=10)
+                item_description = st.text_area(f"Description", key=f"item_desc_{i}", placeholder="Brief description...")
+                
+                if item_title:
+                    agenda_items.append({
+                        'item_number': i + 1,
+                        'item_title': item_title,
+                        'item_description': item_description,
+                        'duration_minutes': duration
+                    })
+            
+            submit = st.form_submit_button("Create Meeting", use_container_width=True)
+            
+            if submit:
+                if not meeting_title:
+                    st.error("Please provide a meeting title.")
+                else:
+                    try:
+                        # Create meeting
+                        meeting_response = supabase.table("committee_meetings").insert({
+                            "committee_name": st.session_state.selected_committee,
+                            "meeting_title": meeting_title,
+                            "meeting_date": str(meeting_date),
+                            "meeting_time": str(meeting_time),
+                            "location": location,
+                            "status": "draft",
+                            "created_at": datetime.now().isoformat()
+                        }).execute()
+                        
+                        meeting_id = meeting_response.data[0]['id']
+                        
+                        # Create agenda items
+                        if agenda_items:
+                            for item in agenda_items:
+                                item['meeting_id'] = meeting_id
+                            supabase.table("committee_agenda_items").insert(agenda_items).execute()
+                        
+                        st.success("Meeting created successfully!")
+                        st.balloons()
+                        navigate_to('meeting_detail', meeting=meeting_id)
+                    
+                    except Exception as e:
+                        st.error(f"Error creating meeting: {str(e)}")
+    
+    # Return button
+    st.divider()
+    if st.button("↩ Return to Committees", use_container_width=True):
+        navigate_to('home')
+
+# ========== MEETING DETAIL VIEW ==========
+elif st.session_state.committee_view == 'meeting_detail':
+    
+    try:
+        # Fetch meeting details
+        meeting_response = supabase.table("committee_meetings").select("*").eq(
+            "id", st.session_state.selected_meeting
+        ).execute()
+        
+        if not meeting_response.data:
+            st.error("Meeting not found.")
+            if st.button("↩ Return"):
+                navigate_to('committee_home', st.session_state.selected_committee)
+        else:
+            meeting = meeting_response.data[0]
+            committee = COMMITTEES[meeting['committee_name']]
+            
+            st.subheader(f"{committee['icon']} {meeting['meeting_title']}")
+            st.caption(f"📅 {meeting['meeting_date']} | 🕐 {meeting['meeting_time']} | 📍 {meeting.get('location', 'TBA')}")
+            
+            # Tab navigation
+            tab1, tab2, tab3 = st.tabs(["📋 Agenda", "📝 Minutes", "⬇️ Download"])
+            
+            # ========== AGENDA TAB ==========
+            with tab1:
+                st.markdown("### Meeting Agenda")
+                
+                # Fetch agenda items
+                agenda_response = supabase.table("committee_agenda_items").select("*").eq(
+                    "meeting_id", st.session_state.selected_meeting
+                ).order("item_number").execute()
+                
+                if agenda_response.data:
+                    for item in agenda_response.data:
+                        with st.expander(f"**{item['item_number']}. {item['item_title']}** ({item['duration_minutes']} min)"):
+                            if item.get('item_description'):
+                                st.markdown(item['item_description'])
+                            else:
+                                st.caption("No description provided")
+                else:
+                    st.info("No agenda items yet.")
+            
+            # ========== MINUTES TAB ==========
+            with tab2:
+                st.markdown("### Meeting Minutes")
+                
+                # Check if minutes exist
+                minutes_response = supabase.table("committee_minutes").select("*").eq(
+                    "meeting_id", st.session_state.selected_meeting
+                ).execute()
+                
+                existing_minutes = minutes_response.data[0] if minutes_response.data else None
+                
+                # Minutes input method selection
+                input_method = st.radio(
+                    "Choose minutes input method:",
+                    ["AI-Assisted (Transcript)", "Manual Entry (DfE Format)"],
+                    horizontal=True
+                )
+                
+                if input_method == "AI-Assisted (Transcript)":
+                    st.markdown("#### 🤖 AI-Assisted Minutes Generation")
+                    st.caption("Paste your meeting transcript below and AI will convert it into structured minutes following DfE format.")
+                    
+                    transcript = st.text_area(
+                        "Meeting Transcript",
+                        height=300,
+                        placeholder="Paste the meeting transcript here...",
+                        value=existing_minutes.get('transcript', '') if existing_minutes else ''
+                    )
+                    
+                    if st.button("🪄 Generate Minutes from Transcript", use_container_width=True):
+                        if transcript:
+                            with st.spinner("Generating minutes..."):
+                                try:
+                                    # AI prompt for minutes generation
+                                    prompt = f"""You are a professional minute-taker for educational committees in South Australia. Convert this meeting transcript into formal meeting minutes following the Department for Education (DfE) format.
+
+Meeting: {meeting['meeting_title']}
+Date: {meeting['meeting_date']}
+Committee: {committee['name']}
+
+Format the minutes with these sections:
+1. ATTENDANCE: List attendees (extract from transcript)
+2. APOLOGIES: List apologies (if mentioned)
+3. MINUTES OF PREVIOUS MEETING: Confirmation status
+4. BUSINESS ARISING: Key points from previous meeting
+5. AGENDA ITEMS: For each agenda item, provide:
+   - Item title
+   - Discussion summary (key points, decisions, actions)
+   - Action items with responsible person
+6. GENERAL BUSINESS: Any other business discussed
+7. NEXT MEETING: Date and time if mentioned
+8. MEETING CLOSED: Time if mentioned
+
+Keep it professional, concise, and factual. Use past tense. Focus on decisions and actions.
+
+TRANSCRIPT:
+{transcript}
+
+Generate the formatted minutes:"""
+                                    
+                                    response = groq_client.chat.completions.create(
+                                        model="llama-3.3-70b-versatile",
+                                        messages=[{"role": "user", "content": prompt}],
+                                        temperature=0.3,
+                                        max_tokens=4000
+                                    )
+                                    
+                                    generated_minutes = response.choices[0].message.content
+                                    
+                                    # Save minutes
+                                    if existing_minutes:
+                                        supabase.table("committee_minutes").update({
+                                            "transcript": transcript,
+                                            "formatted_minutes": generated_minutes,
+                                            "updated_at": datetime.now().isoformat()
+                                        }).eq("meeting_id", st.session_state.selected_meeting).execute()
+                                    else:
+                                        supabase.table("committee_minutes").insert({
+                                            "meeting_id": st.session_state.selected_meeting,
+                                            "transcript": transcript,
+                                            "formatted_minutes": generated_minutes,
+                                            "created_at": datetime.now().isoformat()
+                                        }).execute()
+                                    
+                                    st.success("✅ Minutes generated successfully!")
+                                    st.rerun()
+                                
+                                except Exception as e:
+                                    st.error(f"Error generating minutes: {str(e)}")
+                        else:
+                            st.warning("Please paste a transcript first.")
+                    
+                    # Display generated minutes
+                    if existing_minutes and existing_minutes.get('formatted_minutes'):
+                        st.divider()
+                        st.markdown("#### Generated Minutes")
+                        
+                        edited_minutes = st.text_area(
+                            "Review and edit minutes if needed:",
+                            value=existing_minutes['formatted_minutes'],
+                            height=400,
+                            key="edit_ai_minutes"
+                        )
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.button("💾 Save Edited Minutes", use_container_width=True):
+                                supabase.table("committee_minutes").update({
+                                    "formatted_minutes": edited_minutes,
+                                    "updated_at": datetime.now().isoformat()
+                                }).eq("meeting_id", st.session_state.selected_meeting).execute()
+                                st.success("Minutes saved!")
+                                st.rerun()
+                        
+                        with col2:
+                            if st.button("📢 Publish Minutes", use_container_width=True):
+                                supabase.table("committee_meetings").update({
+                                    "status": "published"
+                                }).eq("id", st.session_state.selected_meeting).execute()
+                                st.success("Minutes published!")
+                                st.rerun()
+                
+                else:  # Manual Entry
+                    st.markdown("#### ✍️ Manual Minutes Entry (DfE Format)")
+                    
+                    with st.form("manual_minutes_form"):
+                        st.markdown("**ATTENDANCE**")
+                        attendance = st.text_area("Present", placeholder="List attendees...", height=80)
+                        apologies = st.text_input("Apologies", placeholder="List apologies...")
+                        
+                        st.markdown("**MINUTES OF PREVIOUS MEETING**")
+                        previous_confirmed = st.selectbox("Status", ["Confirmed", "Amended", "Not available"])
+                        
+                        st.markdown("**BUSINESS ARISING**")
+                        business_arising = st.text_area("Business Arising from Previous Meeting", height=100, placeholder="Key points from previous meeting...")
+                        
+                        st.markdown("**AGENDA ITEMS**")
+                        # Fetch agenda items
+                        agenda_response = supabase.table("committee_agenda_items").select("*").eq(
+                            "meeting_id", st.session_state.selected_meeting
+                        ).order("item_number").execute()
+                        
+                        agenda_minutes = {}
+                        if agenda_response.data:
+                            for item in agenda_response.data:
+                                st.markdown(f"**{item['item_number']}. {item['item_title']}**")
+                                discussion = st.text_area(
+                                    f"Discussion & Decisions",
+                                    key=f"disc_{item['id']}",
+                                    placeholder="Summarize discussion, decisions made, and outcomes...",
+                                    height=100
+                                )
+                                actions = st.text_area(
+                                    f"Action Items",
+                                    key=f"action_{item['id']}",
+                                    placeholder="Action item | Responsible person | Due date",
+                                    height=60
+                                )
+                                agenda_minutes[item['item_number']] = {
+                                    'title': item['item_title'],
+                                    'discussion': discussion,
+                                    'actions': actions
+                                }
+                        
+                        st.markdown("**GENERAL BUSINESS**")
+                        general_business = st.text_area("Other Business Discussed", height=100)
+                        
+                        st.markdown("**NEXT MEETING**")
+                        next_meeting = st.text_input("Next Meeting Date/Time")
+                        
+                        st.markdown("**MEETING CLOSED**")
+                        closed_time = st.text_input("Meeting Closed At")
+                        
+                        submit_manual = st.form_submit_button("💾 Save Minutes", use_container_width=True)
+                        
+                        if submit_manual:
+                            # Format minutes in DfE structure
+                            formatted_manual = f"""MEETING MINUTES
+
+Committee: {committee['name']}
+Meeting Title: {meeting['meeting_title']}
+Date: {meeting['meeting_date']}
+Time: {meeting['meeting_time']}
+Location: {meeting.get('location', 'TBA')}
+
+1. ATTENDANCE
+Present: {attendance}
+Apologies: {apologies}
+
+2. MINUTES OF PREVIOUS MEETING
+Status: {previous_confirmed}
+
+3. BUSINESS ARISING
+{business_arising}
+
+4. AGENDA ITEMS
+"""
+                            for num, item_data in agenda_minutes.items():
+                                formatted_manual += f"\n{num}. {item_data['title']}\n"
+                                formatted_manual += f"Discussion: {item_data['discussion']}\n"
+                                if item_data['actions']:
+                                    formatted_manual += f"Actions: {item_data['actions']}\n"
+                            
+                            formatted_manual += f"""
+5. GENERAL BUSINESS
+{general_business}
+
+6. NEXT MEETING
+{next_meeting}
+
+7. MEETING CLOSED
+{closed_time}
+"""
+                            
+                            try:
+                                if existing_minutes:
+                                    supabase.table("committee_minutes").update({
+                                        "formatted_minutes": formatted_manual,
+                                        "updated_at": datetime.now().isoformat()
+                                    }).eq("meeting_id", st.session_state.selected_meeting).execute()
+                                else:
+                                    supabase.table("committee_minutes").insert({
+                                        "meeting_id": st.session_state.selected_meeting,
+                                        "formatted_minutes": formatted_manual,
+                                        "created_at": datetime.now().isoformat()
+                                    }).execute()
+                                
+                                st.success("✅ Minutes saved successfully!")
+                                st.rerun()
+                            
+                            except Exception as e:
+                                st.error(f"Error saving minutes: {str(e)}")
+                    
+                    # Show existing manual minutes
+                    if existing_minutes and existing_minutes.get('formatted_minutes') and not existing_minutes.get('transcript'):
+                        st.divider()
+                        st.markdown("#### Current Minutes")
+                        st.text_area("", value=existing_minutes['formatted_minutes'], height=400, disabled=True, key="view_manual")
+                        
+                        if st.button("📢 Publish Minutes", use_container_width=True):
+                            supabase.table("committee_meetings").update({
+                                "status": "published"
+                            }).eq("id", st.session_state.selected_meeting).execute()
+                            st.success("Minutes published!")
+                            st.rerun()
+            
+            # ========== DOWNLOAD TAB ==========
+            with tab3:
+                st.markdown("### Download Meeting Documents")
+                
+                if minutes_response.data:
+                    minutes_data = minutes_response.data[0]
+                    
+                    # Download minutes
+                    if minutes_data.get('formatted_minutes'):
+                        st.download_button(
+                            label="📄 Download Minutes (TXT)",
+                            data=minutes_data['formatted_minutes'],
+                            file_name=f"{meeting['meeting_title']}_{meeting['meeting_date']}_Minutes.txt",
+                            mime="text/plain",
+                            use_container_width=True
+                        )
+                    
+                    # Download transcript if exists
+                    if minutes_data.get('transcript'):
+                        st.download_button(
+                            label="📝 Download Transcript (TXT)",
+                            data=minutes_data['transcript'],
+                            file_name=f"{meeting['meeting_title']}_{meeting['meeting_date']}_Transcript.txt",
+                            mime="text/plain",
+                            use_container_width=True
+                        )
+                else:
+                    st.info("No minutes available for download yet.")
+            
+            # Return button
+            st.divider()
+            if st.button("↩ Return to Committee", use_container_width=True):
+                navigate_to('committee_home', meeting['committee_name'])
+    
+    except Exception as e:
+        st.error(f"Error loading meeting: {str(e)}")
+        if st.button("↩ Return"):
+            navigate_to('home')
+
 # ========== DOCUMENTS VIEW ==========
 elif st.session_state.committee_view == 'documents':
     
-    # Create tabs for documents functionality
     tab1, tab2 = st.tabs(["📄 View Documents", "⬆️ Upload Document"])
     
-    # ========== VIEW DOCUMENTS TAB ==========
     with tab1:
         st.subheader("Committee Documents")
         
-        # Add filter options
         col1, col2 = st.columns([3, 1])
         with col1:
             search_term = st.text_input("🔍 Search documents", placeholder="Search by name or description...")
@@ -148,17 +638,14 @@ elif st.session_state.committee_view == 'documents':
             filter_category = st.selectbox("Filter by category", ["All", "Policy", "Procedure", "Meeting Minutes", "Report", "Other"])
         
         try:
-            # Fetch all documents from the committees_documents table
             query = supabase.table("committees_documents").select("*").order("upload_date", desc=True)
             
-            # Apply category filter
             if filter_category != "All":
                 query = query.eq("category", filter_category)
             
             response = query.execute()
             
             if response.data:
-                # Filter by search term if provided
                 filtered_docs = response.data
                 if search_term:
                     filtered_docs = [
@@ -168,13 +655,11 @@ elif st.session_state.committee_view == 'documents':
                     ]
                 
                 if filtered_docs:
-                    # Display documents in a clean format
                     for doc in filtered_docs:
                         with st.container():
                             col1, col2, col3, col4, col5 = st.columns([3, 1.5, 1.5, 1.5, 1.5])
                             
                             with col1:
-                                # Add pin emoji if marked as current
                                 pin = "📌 " if doc.get('is_current') else ""
                                 st.markdown(f"**{pin}{doc['document_name']}**")
                                 if doc.get('description'):
@@ -191,23 +676,19 @@ elif st.session_state.committee_view == 'documents':
                                 st.caption(f"👤 {doc['uploaded_by']}")
                             
                             with col5:
-                                # View and Download buttons
                                 try:
-                                    # Create signed URL for viewing
                                     signed_url = supabase.storage.from_("committees").create_signed_url(
                                         doc['file_path'], 
-                                        3600  # URL valid for 1 hour
+                                        3600
                                     )
                                     
                                     if signed_url:
-                                        # View button - opens in new tab
                                         st.link_button(
                                             "👁️",
                                             signed_url['signedURL'],
                                             use_container_width=True
                                         )
                                     
-                                    # Download button
                                     file_data = supabase.storage.from_("committees").download(doc['file_path'])
                                     st.download_button(
                                         label="⬇️",
@@ -224,86 +705,46 @@ elif st.session_state.committee_view == 'documents':
                 else:
                     st.warning(f"No documents found matching '{search_term}'")
             else:
-                st.info("📭 No documents uploaded yet. Use the 'Upload Document' tab to add documents.")
+                st.info("📭 No documents uploaded yet.")
         
         except Exception as e:
             st.error(f"Error loading documents: {str(e)}")
-            st.info("The database table may need to be created. See setup instructions.")
     
-    # ========== UPLOAD TAB ==========
     with tab2:
         st.subheader("Upload Committee Document")
         
         with st.form("upload_form"):
-            # File uploader
             uploaded_file = st.file_uploader(
                 "Choose a file",
-                type=['pdf', 'docx', 'doc', 'xlsx', 'xls', 'pptx', 'txt'],
-                help="Supported formats: PDF, Word, Excel, PowerPoint, Text"
+                type=['pdf', 'docx', 'doc', 'xlsx', 'xls', 'pptx', 'txt']
             )
             
-            # Document details
             col1, col2 = st.columns(2)
             
             with col1:
-                doc_name = st.text_input(
-                    "Document Name*",
-                    placeholder="e.g., Committees Policy 2026",
-                    help="Give the document a descriptive name"
-                )
-                
-                category = st.selectbox(
-                    "Document Category*",
-                    ["Policy", "Procedure", "Meeting Minutes", "Report", "Other"]
-                )
+                doc_name = st.text_input("Document Name*", placeholder="e.g., Committees Policy 2026")
+                category = st.selectbox("Document Category*", ["Policy", "Procedure", "Meeting Minutes", "Report", "Other"])
             
             with col2:
-                uploaded_by = st.text_input(
-                    "Your Name*",
-                    placeholder="e.g., Candice",
-                    help="Enter your name"
-                )
-                
-                # Add a checkbox for "most recent policy"
-                is_current_policy = st.checkbox(
-                    "📌 Mark as current/active policy",
-                    help="Check this if this is the most recent version of a policy document"
-                )
+                uploaded_by = st.text_input("Your Name*", placeholder="e.g., Candice")
+                is_current_policy = st.checkbox("📌 Mark as current/active policy")
             
-            description = st.text_area(
-                "Description (optional)",
-                placeholder="Brief description of the document, version notes, or key changes...",
-                help="Add any relevant notes about this document"
-            )
+            description = st.text_area("Description (optional)", placeholder="Brief description...")
             
-            # Submit button
             submit = st.form_submit_button("📤 Upload Document", use_container_width=True)
             
             if submit:
-                if not uploaded_file:
-                    st.error("Please select a file to upload.")
-                elif not doc_name:
-                    st.error("Please provide a document name.")
-                elif not uploaded_by:
-                    st.error("Please enter your name.")
+                if not uploaded_file or not doc_name or not uploaded_by:
+                    st.error("Please complete all required fields.")
                 else:
                     try:
-                        # Generate unique file path
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        file_extension = uploaded_file.name.split('.')[-1]
                         file_path = f"{timestamp}_{uploaded_file.name}"
-                        
-                        # Upload file to Supabase storage
                         file_bytes = uploaded_file.read()
                         
-                        storage_response = supabase.storage.from_("committees").upload(
-                            file_path,
-                            file_bytes,
-                            {"content-type": uploaded_file.type}
-                        )
+                        supabase.storage.from_("committees").upload(file_path, file_bytes, {"content-type": uploaded_file.type})
                         
-                        # Insert metadata into database
-                        db_response = supabase.table("committees_documents").insert({
+                        supabase.table("committees_documents").insert({
                             "document_name": doc_name,
                             "description": description,
                             "file_path": file_path,
@@ -317,33 +758,14 @@ elif st.session_state.committee_view == 'documents':
                         
                         st.success(f"✅ Document '{doc_name}' uploaded successfully!")
                         st.balloons()
-                        
-                        # Suggest switching to documents tab
-                        st.info("📄 Switch to the 'View Documents' tab to see your uploaded file.")
-                        
+                    
                     except Exception as e:
                         st.error(f"Error uploading document: {str(e)}")
-                        st.info("If this is the first upload, the storage bucket or table may need to be created. See setup instructions.")
     
-    # Return button
     st.divider()
-    if st.button("↩ Return to Committees Home", use_container_width=True):
-        navigate_to('home')
-
-# ========== INDIVIDUAL COMMITTEE VIEWS ==========
-elif st.session_state.committee_view in ['pac', 'finance', 'whs', 'social']:
-    committee_names = {
-        'pac': 'Personnel Advisory Committee',
-        'finance': 'Finance Committee',
-        'whs': 'WHS Committee',
-        'social': 'Social Club'
-    }
-    
-    st.info(f"🚧 {committee_names[st.session_state.committee_view]} page - Agendas, minutes, and actions functionality to be implemented.")
-    
     if st.button("↩ Return to Committees Home", use_container_width=True):
         navigate_to('home')
 
 # ========== FOOTER ==========
 st.divider()
-st.caption("💡 Tip: Use the Documents Library to access all committee policies and resources in one place.")
+st.caption("💡 Tip: Use AI-assisted minutes generation to save time, or enter minutes manually following DfE format.")
