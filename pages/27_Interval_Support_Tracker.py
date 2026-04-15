@@ -297,7 +297,7 @@ with t_record:
             cell = cell_data.get(t,{}).get(d)
             if cell:
                 reg  = cell.get("regulated","") or ""
-                sup  = cell.get("support_used","") or ""
+                sup  = str(cell.get("support_used","") or "")
                 cfg  = REG_STATES.get(reg,{})
                 bg   = cfg.get("bg","#f1f5f9")
                 fg   = cfg.get("fg","#334155")
@@ -386,20 +386,6 @@ with t_record:
                                   use_container_width=True):
             upsert_field(student_name, sel_date, sel_day, sel_time, "regulated", "")
             st.rerun()
-
-    # Support type
-    st.markdown('<div style="font-size:.72rem;font-weight:700;color:#1A6B8A;margin:.3rem 0 .1rem;">'
-                'SUPPORT TYPE</div>', unsafe_allow_html=True)
-    for row_sup in [SUPPORT_TYPES[:4], SUPPORT_TYPES[4:]]:
-        sc = st.columns(len(row_sup))
-        for ci, sup in enumerate(row_sup):
-            is_sel = (cur_sup == sup)
-            if sc[ci].button(sup, key=f"ist_sup_{sup}_{sel_time}_{sel_day}",
-                              use_container_width=True,
-                              type="primary" if is_sel else "secondary"):
-                upsert_field(student_name, sel_date, sel_day, sel_time,
-                             "support_used", "None" if is_sel else sup)
-                st.rerun()
 
     # Outcome
     st.markdown('<div style="font-size:.72rem;font-weight:700;color:#1A6B8A;margin:.3rem 0 .1rem;">'
@@ -557,15 +543,15 @@ with t_analysis:
 
     st.markdown("---")
 
-    # Chart 3: Support effectiveness heatmap
-    st.markdown("##### Which support type is most associated with regulation?")
+    # Chart 3: Grouping effectiveness heatmap
+    st.markdown("##### Which grouping/support arrangement is most associated with regulation?")
     sup_filt = filt[
-        filt["support_used"].notna() &
-        (filt["support_used"].str.strip() != "") &
-        (filt["support_used"] != "None")
-    ].copy()
+        filt["grouping_type"].notna() &
+        (filt["grouping_type"].str.strip() != "")
+    ].copy() if "grouping_type" in filt.columns else pd.DataFrame()
     if not sup_filt.empty:
-        pivot = sup_filt.groupby(["support_used","State"]).size().unstack(fill_value=0)
+        sup_filt["Grouping"] = sup_filt["grouping_type"].map(GROUPING_TYPES).fillna(sup_filt["grouping_type"])
+        pivot = sup_filt.groupby(["Grouping","State"]).size().unstack(fill_value=0)
         pivot_pct = pivot.div(pivot.sum(axis=1), axis=0) * 100
         ordered_cols = [s for s in state_order if s in pivot_pct.columns]
         if ordered_cols:
@@ -609,30 +595,7 @@ with t_analysis:
 
     st.markdown("---")
 
-    # Chart 5: Grouping vs regulation
-    grp_filt = filt[filt.get("grouping_type", pd.Series(dtype=str)).notna()
-                    & (filt.get("grouping_type", pd.Series(dtype=str)).str.strip() != "")
-                    ] if "grouping_type" in filt.columns else pd.DataFrame()
-    if not grp_filt.empty:
-        st.markdown("##### Regulation by grouping / support arrangement")
-        grp_filt = grp_filt.copy()
-        grp_filt["Grouping"] = grp_filt["grouping_type"].map(GROUPING_TYPES).fillna(grp_filt["grouping_type"])
-        gdf = grp_filt.groupby(["Grouping","State"]).size().reset_index(name="n")
-        fig5 = px.bar(gdf, x="n", y="Grouping", color="State",
-            color_discrete_map=colour_map, barmode="stack", orientation="h",
-            labels={"Grouping":"","n":"Intervals","State":""},
-            category_orders={"State": state_order})
-        fig5.update_layout(height=max(200,len(gdf["Grouping"].unique())*45+80),
-            plot_bgcolor="white", paper_bgcolor="white",
-            yaxis=dict(autorange="reversed"),
-            xaxis=dict(tickformat="d", gridcolor="#e2e8f0"),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
-            margin=dict(l=10,r=10,t=50,b=10))
-        st.plotly_chart(fig5, use_container_width=True)
-        st.caption("Shows which grouping arrangement is most associated with regulation for this student.")
-        st.markdown("---")
-
-    # Chart 6: Activity type vs regulation (explode multi-select)
+    # Chart 5: Activity type vs regulation (explode multi-select)
     if "activity_types" in filt.columns:
         act_rows = []
         for _, row in filt.iterrows():
