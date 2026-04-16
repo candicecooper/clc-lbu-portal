@@ -105,11 +105,21 @@ def get_sb():
 
 
 def load_known_students():
+    """Returns students with interval data, excluding archived ones."""
     sb = get_sb()
     if not sb: return []
     try:
-        res = sb.table("scatter_plot_observations").select("student_name").execute()
-        return sorted({r["student_name"] for r in (res.data or []) if r.get("student_name","").strip()})
+        res = sb.table("interval_support_observations").select("student_name").execute()
+        all_names = sorted({r["student_name"] for r in (res.data or [])
+                            if r.get("student_name","").strip()})
+        # Filter out archived
+        try:
+            ar = sb.table("interval_archived_students")                   .select("student_name").eq("archived", True).execute()
+            archived = {r["student_name"] for r in (ar.data or [])}
+            all_names = [n for n in all_names if n not in archived]
+        except Exception:
+            pass  # archive table may not exist yet — ignore
+        return all_names
     except Exception:
         return []
 
@@ -230,6 +240,104 @@ with nc1:
 with nc2:
     if st.button("← Change", key="ist_chg", use_container_width=True):
         ss.ist_name = ""; st.rerun()
+
+# ── Archive management ───────────────────────────────────────────────────
+with st.expander("🗄️ Archive / manage student data", expanded=False):
+    arch_tabs = st.tabs(["Archive a student", "View archived students"])
+
+    with arch_tabs[0]:
+        st.caption(
+            "Archiving moves a student out of the active list. "
+            "Their data is preserved and can be restored at any time."
+        )
+        if not known:
+            st.info("No students with data yet.")
+        else:
+            arch_name = st.selectbox("Select student to archive",
+                                     known, key="ist_arch_sel")
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("🗄️ Archive this student", key="ist_arch_btn",
+                             use_container_width=True, type="secondary"):
+                    sb = get_sb()
+                    if sb:
+                        try:
+                            # Add archived flag via a separate small table
+                            sb.table("interval_archived_students").upsert(
+                                {"student_name": arch_name, "archived": True},
+                                on_conflict="student_name"
+                            ).execute()
+                            if ss.ist_name == arch_name:
+                                ss.ist_name = ""
+                            st.success(f"✅ {arch_name} archived.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error("Could not archive: " + str(e))
+            with col_b:
+                if st.button("🗑️ Delete ALL data for this student", key="ist_del_btn",
+                             use_container_width=True, type="secondary"):
+                    ss["ist_confirm_del"] = arch_name
+                    st.rerun()
+
+            # Confirm delete
+            if ss.get("ist_confirm_del") == arch_name:
+                st.warning(f"⚠️ This permanently deletes all interval data for **{arch_name}**.")
+                confirm = st.text_input("Type the student name to confirm",
+                                        key="ist_del_confirm")
+                if st.button("Confirm delete", key="ist_del_confirm_btn", type="secondary"):
+                    if confirm.strip().lower() == arch_name.lower():
+                        sb = get_sb()
+                        if sb:
+                            try:
+                                sb.table("interval_support_observations").delete()                                  .eq("student_name", arch_name).execute()
+                                try:
+                                    sb.table("interval_archived_students").delete()                                      .eq("student_name", arch_name).execute()
+                                except Exception:
+                                    pass
+                                ss.pop("ist_confirm_del", None)
+                                if ss.ist_name == arch_name:
+                                    ss.ist_name = ""
+                                st.success(f"✅ All data for {arch_name} deleted.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error("Delete failed: " + str(e))
+                    else:
+                        st.error("Name does not match.")
+
+    with arch_tabs[1]:
+        sb = get_sb()
+        archived_names = []
+        if sb:
+            try:
+                ar = sb.table("interval_archived_students")                       .select("student_name").eq("archived", True).execute()
+                archived_names = [r["student_name"] for r in (ar.data or [])]
+            except Exception:
+                pass
+
+        if not archived_names:
+            st.info("No archived students.")
+        else:
+            st.markdown(f"**{len(archived_names)} archived student(s):**")
+            for aname in archived_names:
+                ac1, ac2, ac3 = st.columns([3, 1, 1])
+                with ac1:
+                    st.markdown(f"**{aname}**")
+                with ac2:
+                    if st.button("Restore", key=f"restore_{aname}",
+                                 use_container_width=True):
+                        try:
+                            sb.table("interval_archived_students").update(
+                                {"archived": False}
+                            ).eq("student_name", aname).execute()
+                            st.success(f"✅ {aname} restored.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(str(e))
+                with ac3:
+                    if st.button("View data", key=f"view_arch_{aname}",
+                                 use_container_width=True):
+                        ss.ist_name = aname
+                        st.rerun()
 
 st.markdown("---")
 t_record, t_analysis = st.tabs(["📋  Record & View", "📈  Analysis"])
