@@ -6,6 +6,7 @@ CLC Timetable — Cowandilla Learning Centre
 - Auto term/week display in header
 - Admin: upload, delete old versions
 - Mobile-responsive layout
+- INTELLIGENT SECTION DETECTION: Groups pages by detected section titles
 """
 
 import streamlit as st
@@ -163,26 +164,33 @@ def pdf_to_images(pdf_bytes: bytes) -> list | None:
         return None
 
 # ── PDF split & bulk save ─────────────────────────────────────────────────────
-# Page mapping (0-indexed):
-#   Page 0       → Specialist
-#   Pages 1–2    → JP
-#   Pages 3–4    → PY
-#   Page 5       → SY
-#   Pages 6–7    → SSO
-#   Page 8       → Meetings
-
-PAGE_MAP = {
-    "Specialist": [0],
-    "JP":         [1, 2],
-    "PY":         [3, 4],
-    "SY":         [5],
-    "SSO":        [6, 7],
-    "Meetings":   [8],
+# Section detection keywords (searched in page text to identify which program)
+SECTION_KEYWORDS = {
+    "Specialist": ["specialist teacher", "specialist", "roisin"],
+    "JP":         ["junior primary", "jp program", "jp "],
+    "PY":         ["primary years", "py program", "py "],
+    "SY":         ["senior years", "sy program", "sy "],
+    "SSO":        ["sso support", "sso program", "sso "],
+    "Meetings":   ["scheduled meetings", "meetings", "meeting schedule"],
 }
+
+def detect_page_section(page_text: str) -> str | None:
+    """
+    Analyze page text and return the program name if a section keyword is found.
+    Returns None if no clear section is detected.
+    """
+    text_lower = page_text.lower()
+    
+    for program, keywords in SECTION_KEYWORDS.items():
+        for keyword in keywords:
+            if keyword in text_lower:
+                return program
+    return None
 
 def split_and_save_full_pdf(pdf_bytes: bytes, label: str) -> dict:
     """
-    Split a full timetable PDF into per-program sections and save each one.
+    Split a full timetable PDF into per-program sections by detecting section titles.
+    Groups consecutive pages with the same section title together.
     Returns a dict of {program: status_message} or {"error": message}.
     """
     try:
@@ -197,18 +205,41 @@ def split_and_save_full_pdf(pdf_bytes: bytes, label: str) -> dict:
     except Exception as e:
         return {"error": f"Could not open PDF: {e}"}
 
+    # First pass: detect which section each page belongs to
+    page_sections = []
+    for page_num in range(total_pages):
+        page = full_doc[page_num]
+        page_text = page.get_text()
+        section = detect_page_section(page_text)
+        page_sections.append(section)
+    
+    # Group consecutive pages by section
+    section_groups = {}  # {program: [list of page indices]}
+    current_section = None
+    
+    for page_num, section in enumerate(page_sections):
+        if section:  # Valid section detected
+            if section != current_section:
+                # Starting a new section
+                current_section = section
+                if section not in section_groups:
+                    section_groups[section] = []
+            section_groups[current_section].append(page_num)
+    
+    # Now save each section
     results = {}
-    for program, page_indices in PAGE_MAP.items():
-        # Skip pages that don't exist in this PDF
-        valid_pages = [p for p in page_indices if p < total_pages]
-        if not valid_pages:
-            results[program] = "⚠️ Skipped — pages not found in PDF"
+    
+    for program in PROGRAMS:
+        if program not in section_groups:
+            results[program] = "⚠️ Not found in PDF"
             continue
-
+        
+        page_indices = section_groups[program]
+        
         try:
             # Build a new single-program PDF
             sub_doc = fitz.open()
-            for page_idx in valid_pages:
+            for page_idx in page_indices:
                 sub_doc.insert_pdf(full_doc, from_page=page_idx, to_page=page_idx)
 
             sub_bytes = sub_doc.tobytes()
@@ -218,7 +249,8 @@ def split_and_save_full_pdf(pdf_bytes: bytes, label: str) -> dict:
             b64data = _b64.b64encode(sub_bytes).decode("utf-8")
 
             ok = save_timetable(filename, b64data, label, program)
-            results[program] = "✅ Uploaded" if ok else "❌ Save failed"
+            page_count = len(page_indices)
+            results[program] = f"✅ Uploaded ({page_count} page{'s' if page_count != 1 else ''})" if ok else "❌ Save failed"
         except Exception as e:
             results[program] = f"❌ Error: {e}"
 
@@ -427,9 +459,9 @@ else:
     if upload_mode == "📄 Full PDF (auto-split all sections)":
         st.markdown("""<div style="background:#e8f5e1;border:1px solid #6BBF4E;border-radius:8px;
             padding:0.75rem 1rem;font-size:0.85rem;color:#1a2e44;margin-bottom:0.75rem;">
-            📋 <strong>Page mapping:</strong> Page 1 = Specialist Teacher (Roisin) · 
-            Pages 2–3 = JP · Pages 4–5 = PY · Page 6 = SY · 
-            Pages 7–8 = SSO · Page 9 = Meetings
+            🧠 <strong>Smart detection:</strong> The tool reads each page and automatically groups pages 
+            by their section titles (Specialist Teacher, JP Program, PY Program, etc.). 
+            No matter how many pages each section has, they'll be split correctly!
         </div>""", unsafe_allow_html=True)
         
         full_lbl = st.text_input("Label for all sections", placeholder="e.g. Term 1 · Week 6 · 2 Mar 2026", key="full_lbl")
@@ -445,7 +477,7 @@ else:
                 else:
                     full_file.seek(0)
                     raw = full_file.read()
-                    with st.spinner("Splitting PDF and uploading all sections..."):
+                    with st.spinner("Detecting sections and splitting PDF..."):
                         results = split_and_save_full_pdf(raw, full_lbl.strip())
                     if "error" in results:
                         st.error(f"❌ Split failed: {results['error']}")
