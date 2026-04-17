@@ -2,11 +2,6 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, date, timedelta
 from supabase import create_client
-from docx import Document
-from docx.shared import Inches, Pt, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement
 import io
 
 # Page config
@@ -48,26 +43,6 @@ def get_smartar_goals(student_id):
         return response.data if response.data else []
     except:
         return []
-
-def set_cell_border(cell, **kwargs):
-    """Set cell borders"""
-    tc = cell._tc
-    tcPr = tc.get_or_add_tcPr()
-    
-    for edge in ('top', 'left', 'bottom', 'right'):
-        edge_data = kwargs.get(edge)
-        if edge_data:
-            tag = 'w:{}'.format(edge)
-            element = OxmlElement(tag)
-            for key, value in edge_data.items():
-                element.set(qn('w:{}'.format(key)), str(value))
-            tcPr.append(element)
-
-def shade_cell(cell, color):
-    """Shade a table cell"""
-    shading_elm = OxmlElement('w:shd')
-    shading_elm.set(qn('w:fill'), color)
-    cell._element.get_or_add_tcPr().append(shading_elm)
 
 # Main app
 st.title("📄 Transition Report Builder")
@@ -365,28 +340,58 @@ with tab3:
     The document will use the professional template format.
     """)
     
-    if st.button("📄 Generate Word Document", type="primary", use_container_width=True):
+    if st.button("📄 Generate Report Data", type="primary", use_container_width=True):
         if not lc_teacher or not enrolled_school:
             st.error("Please enter LC Teacher name and Enrolled School in the sidebar")
         else:
-            with st.spinner("Generating document..."):
-                # Create document
-                doc = Document()
+            with st.spinner("Preparing report data..."):
                 
-                # This would include all the document generation logic
-                # using the updated Word template structure from earlier
-                # For now, placeholder message
+                # Collect all report data
+                report_data = {
+                    "student": selected_student,
+                    "report_date": report_date,
+                    "placement_start": placement_start,
+                    "placement_end": placement_end,
+                    "lc_teacher": lc_teacher,
+                    "enrolled_school": enrolled_school,
+                    "literacy": {
+                        "vocab_pre": st.session_state.get('vocab_pre', ''),
+                        "vocab_post": st.session_state.get('vocab_post', ''),
+                        "vocab_summary": st.session_state.get('vocab_summary', ''),
+                        "sounds_write": edited_sw.to_dict()
+                    },
+                    "numeracy": st.session_state.get('numeracy', ''),
+                    "hits": {
+                        "strategies": selected_hits,
+                        "comments": st.session_state.get('hits_comments', '')
+                    },
+                    "restorative": {
+                        "strategies": restorative_strategies,
+                        "comments": st.session_state.get('restorative_comments', '')
+                    },
+                    "regulation": st.session_state.get('regulation', ''),
+                    "attendance": {
+                        "attended": days_attended,
+                        "total": total_days
+                    },
+                    "summary": st.session_state.get('progress_summary', ''),
+                    "recommendations": st.session_state.get('recommendations', '')
+                }
                 
-                st.success("✅ Document generated successfully!")
-                st.info("📝 Full document generation with python-docx integration will be implemented")
+                st.success("✅ Report data prepared!")
+                st.json(report_data)
                 
-                # Placeholder download button
-                st.download_button(
-                    label="⬇️ Download Report",
-                    data=b"Placeholder",
-                    file_name=f"Transition_Report_{selected_student['first_name']}_{selected_student['last_name']}_{report_date}.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                )
+                st.info("""
+                📝 **Next Steps:**
+                
+                The report data is ready. To generate the Word document:
+                
+                1. Add `python-docx` to your requirements.txt
+                2. Push to GitHub and wait for Render to redeploy
+                3. Return here to generate the formatted Word document
+                
+                For now, you can copy the data above for manual report creation.
+                """)
 
 st.markdown("---")
 st.caption("Transition Report Builder | Cowandilla Learning Centre LBU")
