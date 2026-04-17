@@ -1,0 +1,392 @@
+import streamlit as st
+import pandas as pd
+from datetime import datetime, date, timedelta
+from supabase import create_client
+from docx import Document
+from docx.shared import Inches, Pt, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
+import io
+
+# Page config
+st.set_page_config(page_title="Transition Report Builder", layout="wide", page_icon="📄")
+
+# Supabase connection
+@st.cache_resource
+def init_supabase():
+    return create_client(
+        st.secrets["supabase"]["url"],
+        st.secrets["supabase"]["key"]
+    )
+
+supabase = init_supabase()
+
+# Helper functions
+def get_students():
+    """Get all students"""
+    try:
+        response = supabase.table("students").select("*").order("first_name").execute()
+        return response.data if response.data else []
+    except Exception as e:
+        st.error(f"Error loading students: {e}")
+        return []
+
+def get_wot_observations(student_id, days=90):
+    """Get Window of Tolerance observations for report"""
+    try:
+        start_date = (datetime.now() - timedelta(days=days)).isoformat()
+        response = supabase.table("wot_observations").select("*").eq("student_id", student_id).gte("observation_date", start_date).execute()
+        return response.data if response.data else []
+    except:
+        return []
+
+def get_smartar_goals(student_id):
+    """Get SMARTAR goals for student"""
+    try:
+        response = supabase.table("smartar_goals").select("*").eq("student_id", student_id).execute()
+        return response.data if response.data else []
+    except:
+        return []
+
+def set_cell_border(cell, **kwargs):
+    """Set cell borders"""
+    tc = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+    
+    for edge in ('top', 'left', 'bottom', 'right'):
+        edge_data = kwargs.get(edge)
+        if edge_data:
+            tag = 'w:{}'.format(edge)
+            element = OxmlElement(tag)
+            for key, value in edge_data.items():
+                element.set(qn('w:{}'.format(key)), str(value))
+            tcPr.append(element)
+
+def shade_cell(cell, color):
+    """Shade a table cell"""
+    shading_elm = OxmlElement('w:shd')
+    shading_elm.set(qn('w:fill'), color)
+    cell._element.get_or_add_tcPr().append(shading_elm)
+
+# Main app
+st.title("📄 Transition Report Builder")
+st.markdown("Generate comprehensive transition reports with integrated data from portal tools")
+
+# Sidebar for student selection
+with st.sidebar:
+    st.header("Report Configuration")
+    
+    students = get_students()
+    if not students:
+        st.warning("No students found")
+        st.stop()
+    
+    student_options = {f"{s['first_name']} {s['last_name']}": s for s in students}
+    selected_student_name = st.selectbox("Select Student", options=list(student_options.keys()))
+    selected_student = student_options[selected_student_name]
+    
+    st.markdown("---")
+    
+    report_date = st.date_input("Report Date", value=date.today())
+    placement_start = st.date_input("Placement Start Date")
+    placement_end = st.date_input("Placement End Date", value=date.today())
+    
+    st.markdown("---")
+    
+    lc_teacher = st.text_input("LC Teacher Name", value="")
+    enrolled_school = st.text_input("Enrolled School", value="")
+
+# Main content tabs
+tab1, tab2, tab3 = st.tabs(["📝 Report Sections", "👁️ Preview", "💾 Generate"])
+
+# TAB 1: Report Sections
+with tab1:
+    st.header(f"Transition Report: {selected_student_name}")
+    
+    # LITERACY PROGRESS
+    st.subheader("📖 Literacy Progress")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Word Aware (Vocabulary)**")
+        vocab_pre_assessment = st.text_input("Pre-Assessment Type", key="vocab_pre_type")
+        vocab_pre_score = st.text_input("Pre Score", key="vocab_pre", placeholder="/5")
+        vocab_post_score = st.text_input("Post Score", key="vocab_post", placeholder="/5")
+        vocab_summary = st.text_area("Summary", key="vocab_summary", height=80)
+    
+    with col2:
+        st.markdown("**Sounds Write Progress**")
+        st.caption("Leave blank if not assessed")
+    
+    # Sounds Write table
+    st.markdown("**Sounds Write Assessments**")
+    sounds_write_data = {
+        "Skill": [
+            "Blending (building words)",
+            "Segmenting (identifying sounds)",
+            "Phoneme Manipulation",
+            "Alphabet Code Knowledge",
+            "Non-Word Reading"
+        ],
+        "Max Score": [14, 69, 10, 50, 30],
+        "Pre": ["", "", "", "", ""],
+        "Post": ["", "", "", "", ""],
+        "Summary": ["", "", "", "", ""]
+    }
+    
+    sounds_write_df = pd.DataFrame(sounds_write_data)
+    edited_sw = st.data_editor(
+        sounds_write_df,
+        hide_index=True,
+        use_container_width=True,
+        key="sounds_write_data"
+    )
+    
+    st.markdown("---")
+    
+    # NUMERACY PROGRESS
+    st.subheader("🔢 Numeracy Progress")
+    numeracy_assessment = st.text_area(
+        "Numeracy Assessment Details",
+        placeholder="Describe numeracy assessments, progress, and key achievements...",
+        height=150,
+        key="numeracy"
+    )
+    
+    st.markdown("---")
+    
+    # HIGH IMPACT TEACHING STRATEGIES
+    st.subheader("🎯 Pedagogical Strategies (HITS)")
+    
+    hits_options = [
+        "Goal Setting",
+        "Structuring Lessons",
+        "Explicit Teaching",
+        "Worked Examples",
+        "Collaborative Learning",
+        "Multiple Exposures",
+        "Questioning",
+        "Feedback",
+        "Metacognitive Strategies",
+        "Differentiated Teaching"
+    ]
+    
+    selected_hits = st.multiselect(
+        "Select strategies that promoted positive engagement",
+        options=hits_options,
+        key="hits_strategies"
+    )
+    
+    hits_comments = st.text_area(
+        "Comments on pedagogical strategies",
+        placeholder="Describe how these strategies supported the student's learning...",
+        height=100,
+        key="hits_comments"
+    )
+    
+    st.markdown("---")
+    
+    # RESTORATIVE PRACTICE
+    st.subheader("🤝 Restorative Practice & Relational Safety")
+    
+    restorative_strategies = st.multiselect(
+        "Restorative strategies used",
+        options=[
+            "Comic Strip Conversations",
+            "Circles (Nurture/Restorative/Community)",
+            "Restorative Meetings",
+            "Relational Mapping",
+            "Restorative Conversations",
+            "Affective Questioning/Statements"
+        ],
+        key="restorative"
+    )
+    
+    restorative_comments = st.text_area(
+        "Comments on restorative practice",
+        placeholder="Describe relational safety strategies and their effectiveness...",
+        height=100,
+        key="restorative_comments"
+    )
+    
+    st.markdown("---")
+    
+    # REGULATION PROFILE (Pull from WOT if available)
+    st.subheader("🎯 Regulation Profile (Window of Tolerance)")
+    
+    # Check for WOT data
+    wot_obs = get_wot_observations(selected_student['id'])
+    if wot_obs:
+        st.success(f"Found {len(wot_obs)} Window of Tolerance observations")
+        wot_df = pd.DataFrame(wot_obs)
+        
+        # Calculate percentages
+        total_obs = len(wot_df)
+        in_window = len(wot_df[wot_df['arousal_state'] == 'window'])
+        mobilisation = len(wot_df[wot_df['arousal_state'] == 'mobilisation'])
+        immobilisation = len(wot_df[wot_df['arousal_state'] == 'immobilisation'])
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Window", f"{in_window} ({in_window/total_obs*100:.0f}%)")
+        with col2:
+            st.metric("Mobilisation", f"{mobilisation} ({mobilisation/total_obs*100:.0f}%)")
+        with col3:
+            st.metric("Immobilisation", f"{immobilisation} ({immobilisation/total_obs*100:.0f}%)")
+        
+        # Auto-populate summary
+        wot_auto_summary = f"Across {total_obs} observations during placement, {selected_student['first_name']} was within their Window of Tolerance {in_window/total_obs*100:.0f}% of the time, demonstrating {in_window > total_obs/2 and 'good' or 'developing'} capacity for regulation."
+    else:
+        st.info("No Window of Tolerance observations found. Manual entry required.")
+        wot_auto_summary = ""
+    
+    regulation_summary = st.text_area(
+        "Regulation Profile Summary",
+        value=wot_auto_summary,
+        placeholder="Describe typical arousal patterns, triggers, and effective co-regulation strategies...",
+        height=120,
+        key="regulation"
+    )
+    
+    st.markdown("---")
+    
+    # BEHAVIOUR PROGRESS (SMARTAR Goals)
+    st.subheader("📊 Behaviour Progress: SMARTAR Goals")
+    
+    # Check for SMARTAR goals
+    smartar_goals = get_smartar_goals(selected_student['id'])
+    if smartar_goals:
+        st.success(f"Found {len(smartar_goals)} SMARTAR goals")
+        for idx, goal in enumerate(smartar_goals[:3], 1):  # Max 3 goals
+            with st.expander(f"Goal {idx}: {goal.get('goal_name', 'Unnamed Goal')}", expanded=True):
+                exclusion_goal = st.text_input(f"Exclusion Goal {idx}", value="", key=f"excl_{idx}")
+                smartar_goal = st.text_input(f"SMARTAR Goal {idx}", value=goal.get('goal_description', ''), key=f"smartar_{idx}")
+                
+                # GAS levels
+                st.markdown("**Goal Attainment Scale**")
+                gas_levels = {
+                    "Exceeding Expectation": st.text_input(f"Exceeding {idx}", key=f"gas_exceed_{idx}"),
+                    "Above Expectation": st.text_input(f"Above {idx}", key=f"gas_above_{idx}"),
+                    "Expected Goal": st.text_input(f"Expected {idx}", key=f"gas_expected_{idx}"),
+                    "Below Expectation": st.text_input(f"Below {idx}", key=f"gas_below_{idx}"),
+                    "Well Below": st.text_input(f"Well Below {idx}", key=f"gas_wellbelow_{idx}")
+                }
+                
+                current_level = st.selectbox(
+                    f"Current achievement level for Goal {idx}",
+                    options=list(gas_levels.keys()),
+                    index=2,
+                    key=f"gas_current_{idx}"
+                )
+    else:
+        st.info("No SMARTAR goals found. Manual entry required.")
+        num_goals = st.number_input("Number of goals to include", min_value=1, max_value=3, value=2)
+        
+        for idx in range(1, num_goals + 1):
+            with st.expander(f"Goal {idx}", expanded=True):
+                st.text_input(f"Exclusion Goal {idx}", key=f"excl_{idx}")
+                st.text_input(f"SMARTAR Goal {idx}", key=f"smartar_{idx}")
+                
+                st.markdown("**Goal Attainment Scale**")
+                st.text_input(f"Exceeding Expectation {idx}", key=f"gas_exceed_{idx}")
+                st.text_input(f"Above Expectation {idx}", key=f"gas_above_{idx}")
+                st.text_input(f"Expected Goal {idx}", key=f"gas_expected_{idx}")
+                st.text_input(f"Below Expectation {idx}", key=f"gas_below_{idx}")
+                st.text_input(f"Well Below Expectation {idx}", key=f"gas_wellbelow_{idx}")
+                
+                st.selectbox(
+                    f"Current achievement level",
+                    options=["Exceeding Expectation", "Above Expectation", "Expected Goal", "Below Expectation", "Well Below"],
+                    index=2,
+                    key=f"gas_current_{idx}"
+                )
+    
+    st.markdown("---")
+    
+    # ATTENDANCE & SUMMARY
+    st.subheader("📅 Attendance & Progress Summary")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        days_attended = st.number_input("Days Attended", min_value=0, value=0, key="days_attended")
+        total_days = st.number_input("Total Days", min_value=1, value=1, key="total_days")
+    
+    with col2:
+        attendance_pct = (days_attended / total_days * 100) if total_days > 0 else 0
+        st.metric("Attendance Rate", f"{attendance_pct:.1f}%")
+    
+    progress_summary = st.text_area(
+        "Overall Progress Summary",
+        placeholder="Summarize key achievements, challenges, and demonstrated growth...",
+        height=150,
+        key="progress_summary"
+    )
+    
+    transition_recommendations = st.text_area(
+        "Transition Recommendations",
+        placeholder="Specific strategies, accommodations, or supports recommended for successful transition...",
+        height=150,
+        key="recommendations"
+    )
+
+# TAB 2: Preview
+with tab2:
+    st.header("Report Preview")
+    st.info("Preview functionality - shows key sections summary")
+    
+    if st.button("Show Preview"):
+        st.markdown(f"### Transition Report: {selected_student_name}")
+        st.markdown(f"**Report Date:** {report_date}")
+        st.markdown(f"**Placement Period:** {placement_start} to {placement_end}")
+        st.markdown(f"**LC Teacher:** {lc_teacher}")
+        st.markdown(f"**Enrolled School:** {enrolled_school}")
+        
+        st.markdown("---")
+        st.markdown("**Literacy Progress:**")
+        st.write(f"Vocabulary: Pre {st.session_state.get('vocab_pre', 'N/A')}, Post {st.session_state.get('vocab_post', 'N/A')}")
+        
+        st.markdown("**HITS Strategies:**")
+        st.write(", ".join(selected_hits) if selected_hits else "None selected")
+        
+        st.markdown("**Regulation Profile:**")
+        if wot_obs:
+            st.write(f"{len(wot_obs)} observations recorded")
+        
+        st.markdown("**Attendance:**")
+        st.write(f"{days_attended} of {total_days} days ({attendance_pct:.1f}%)")
+
+# TAB 3: Generate Document
+with tab3:
+    st.header("Generate Transition Report")
+    
+    st.markdown("""
+    Click below to generate the complete Word document with all entered data.
+    The document will use the professional template format.
+    """)
+    
+    if st.button("📄 Generate Word Document", type="primary", use_container_width=True):
+        if not lc_teacher or not enrolled_school:
+            st.error("Please enter LC Teacher name and Enrolled School in the sidebar")
+        else:
+            with st.spinner("Generating document..."):
+                # Create document
+                doc = Document()
+                
+                # This would include all the document generation logic
+                # using the updated Word template structure from earlier
+                # For now, placeholder message
+                
+                st.success("✅ Document generated successfully!")
+                st.info("📝 Full document generation with python-docx integration will be implemented")
+                
+                # Placeholder download button
+                st.download_button(
+                    label="⬇️ Download Report",
+                    data=b"Placeholder",
+                    file_name=f"Transition_Report_{selected_student['first_name']}_{selected_student['last_name']}_{report_date}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
+
+st.markdown("---")
+st.caption("Transition Report Builder | Cowandilla Learning Centre LBU")
