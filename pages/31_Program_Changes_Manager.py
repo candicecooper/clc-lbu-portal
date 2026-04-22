@@ -81,15 +81,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize Supabase
-@st.cache_resource
-def init_supabase():
-    return create_client(
-        st.secrets["supabase"]["url"],
-        st.secrets["supabase"]["key"]
-    )
-
-supabase = init_supabase()
+# Initialize Supabase - Direct connection to bypass schema cache issues
+supabase = create_client(
+    st.secrets["supabase"]["url"],
+    st.secrets["supabase"]["key"]
+)
 
 # Helper functions
 def format_time(t):
