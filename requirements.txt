@@ -14,3 +14,4 @@ bcrypt>=4.0.1
 openpyxl
 PyMuPDF==1.24.14
 python-docx
+reportlab
