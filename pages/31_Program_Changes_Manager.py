@@ -1,7 +1,6 @@
 import streamlit as st
 from datetime import datetime, date, time
 import pandas as pd
-from supabase import create_client
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -9,6 +8,8 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.units import cm
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
 import io
+import json
+import uuid
 
 # Page config
 st.set_page_config(page_title="Program Changes Manager", layout="wide")
@@ -81,11 +82,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize Supabase - Direct connection to bypass schema cache issues
-supabase = create_client(
-    st.secrets["supabase"]["url"],
-    st.secrets["supabase"]["key"]
-)
+# Initialize session state for storing changes
+if 'program_changes' not in st.session_state:
+    st.session_state.program_changes = {}
 
 # Helper functions
 def format_time(t):
@@ -99,42 +98,38 @@ def format_time(t):
             return t
     return str(t)
 
-def get_todays_changes():
-    """Get program changes for today - using direct SQL to bypass cache"""
-    today = date.today().isoformat()
+def get_changes_for_date(target_date_str):
+    """Get changes for specific date from session state"""
+    return st.session_state.program_changes.get(target_date_str, [])
+
+def save_program_change(target_date_str, change_data):
+    """Save a program change to session state"""
+    if target_date_str not in st.session_state.program_changes:
+        st.session_state.program_changes[target_date_str] = []
+    
+    change_data['id'] = str(uuid.uuid4())
+    change_data['created_at'] = datetime.now().isoformat()
+    st.session_state.program_changes[target_date_str].append(change_data)
+
+def delete_program_change(target_date_str, change_id):
+    """Delete a program change from session state"""
+    if target_date_str in st.session_state.program_changes:
+        st.session_state.program_changes[target_date_str] = [
+            c for c in st.session_state.program_changes[target_date_str] 
+            if c['id'] != change_id
+        ]
+
+def export_data():
+    """Export all changes as JSON"""
+    return json.dumps(st.session_state.program_changes, indent=2)
+
+def import_data(json_str):
+    """Import changes from JSON"""
     try:
-        # Use RPC to execute raw SQL
-        result = supabase.rpc('get_program_changes', {'p_date': today}).execute()
-        return result.data if result.data else []
+        st.session_state.program_changes = json.loads(json_str)
+        return True
     except:
-        # Fallback to direct query if RPC doesn't exist
-        return []
-
-def save_program_change(change_data):
-    """Save a program change to database - using RPC"""
-    try:
-        # Call RPC function with all parameters
-        result = supabase.rpc('insert_program_change', {
-            'p_change_date': change_data['change_date'],
-            'p_staff_name': change_data['staff_name'],
-            'p_reason': change_data['reason'],
-            'p_trt_name': change_data.get('trt_name'),
-            'p_notes': change_data.get('notes'),
-            'p_time_blocks': change_data.get('time_blocks', [])
-        }).execute()
-        return result.data
-    except Exception as e:
-        st.error(f"Error saving: {str(e)}")
-        return None
-
-def delete_program_change(change_id):
-    """Delete a program change - using RPC"""
-    try:
-        result = supabase.rpc('delete_program_change', {'p_id': change_id}).execute()
-        return result.data
-    except Exception as e:
-        st.error(f"Error deleting: {str(e)}")
-        return None
+        return False
 
 def generate_pdf(changes, target_date):
     """Generate one-page PDF of program changes"""
@@ -263,13 +258,14 @@ def render_mobile_view(changes, target_date):
 
 # Main interface
 st.title("📋 Program Changes Manager")
+st.info("⚠️ **Session-Based Storage**: Changes are stored in your browser session and will be lost when you close the tab. Use Export/Import to save permanently.")
 
 # Check for mobile or PDF mode
 query_params = st.query_params
 mode = query_params.get("mode", None)
 
 # Date selector
-col1, col2 = st.columns([3, 1])
+col1, col2, col3 = st.columns([2, 1, 1])
 with col1:
     target_date = st.date_input("Select Date", value=date.today(), key="target_date")
 with col2:
@@ -277,18 +273,32 @@ with col2:
     st.write("")
     if st.button("🔄 Refresh", use_container_width=True):
         st.rerun()
+with col3:
+    st.write("")
+    st.write("")
+    with st.popover("💾 Data"):
+        st.markdown("**Export Data**")
+        export_json = export_data()
+        st.download_button(
+            "📥 Download JSON",
+            data=export_json,
+            file_name=f"program_changes_{date.today().isoformat()}.json",
+            mime="application/json",
+            use_container_width=True
+        )
+        
+        st.markdown("**Import Data**")
+        uploaded_file = st.file_uploader("Upload JSON", type=['json'], key="import_json")
+        if uploaded_file:
+            import_json = uploaded_file.read().decode()
+            if import_data(import_json):
+                st.success("✅ Data imported!")
+                st.rerun()
 
 target_date_str = target_date.isoformat()
 
-# Get existing changes - with cache bypass
-try:
-    result = supabase.rpc('get_program_changes', {'p_date': target_date_str}).execute()
-    changes = result.data if result.data else []
-except Exception as e:
-    # If RPC fails, show error with details for debugging
-    st.error(f"⚠️ Could not load program changes. Error: {str(e)}")
-    st.info("Using empty list for now. Please refresh the page.")
-    changes = []
+# Get existing changes
+changes = get_changes_for_date(target_date_str)
 
 # Mode handling
 if mode == "mobile":
@@ -357,11 +367,10 @@ with st.expander("➕ Add New Program Change", expanded=len(changes) == 0):
                     'reason': reason,
                     'trt_name': trt_name if trt_name else None,
                     'notes': notes if notes else None,
-                    'time_blocks': valid_blocks,
-                    'created_at': datetime.now().isoformat()
+                    'time_blocks': valid_blocks
                 }
                 
-                save_program_change(change_data)
+                save_program_change(target_date_str, change_data)
                 st.success("✅ Program change saved successfully!")
                 st.session_state.num_blocks = 1
                 st.rerun()
@@ -382,7 +391,7 @@ else:
                 st.markdown(f"### Change {idx + 1}: {change.get('reason', 'Program Change')}")
             with col2:
                 if st.button("🗑️ Delete", key=f"del_{change['id']}", use_container_width=True):
-                    delete_program_change(change['id'])
+                    delete_program_change(target_date_str, change['id'])
                     st.rerun()
             
             col1, col2 = st.columns(2)
@@ -409,7 +418,7 @@ col1, col2 = st.columns(2)
 
 with col1:
     if st.button("📱 Mobile View", use_container_width=True, type="secondary"):
-        st.switch_page(f"pages/29_Program_Changes_Manager.py?mode=mobile&date={target_date_str}")
+        st.markdown(render_mobile_view(changes, target_date_str), unsafe_allow_html=True)
 
 with col2:
     pdf_buffer = generate_pdf(changes, target_date_str)
@@ -421,7 +430,3 @@ with col2:
         use_container_width=True,
         type="primary"
     )
-
-# Mobile view display (when in mobile mode)
-if mode == "mobile":
-    st.markdown(render_mobile_view(changes, target_date_str), unsafe_allow_html=True)
