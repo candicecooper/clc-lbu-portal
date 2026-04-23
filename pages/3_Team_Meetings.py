@@ -657,10 +657,10 @@ def render_specialist_meeting():
 
     st.markdown("---")
 
-    # Prepare meeting data
-    concerns_data = st.session_state.get("sp_concerns", [])
-    curriculum_data = st.session_state.get("sp_curriculum", [])
-    actions_data = st.session_state.get("sp_actions", [])
+    # Prepare meeting data - FIXED: Use local variables instead of session state
+    concerns_data = concerns  # Use local variable
+    curriculum_data = curriculum  # Use local variable
+    actions_data = actions  # Use local variable
     
     # Collect budget data
     budget_data = {}
@@ -748,7 +748,7 @@ def render_specialist_meeting():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PROGRAM MEETING (JP/PY/SY) - WITH INITIALIZE MEETING BUTTON
+# PROGRAM MEETING (JP/PY/SY) - WITH SMARTAR INTEGRATION
 # ─────────────────────────────────────────────────────────────────────────────
 
 def render_program_meeting(program):
@@ -920,7 +920,6 @@ def render_program_meeting(program):
     </div>""", unsafe_allow_html=True)
     
     # AUTO-CREATE MEETING ID (no button needed)
-    # If no meeting_id exists, create a minimal record just to get an ID for SMARTAR links
     if not st.session_state.current_meeting_id:
         st.markdown("""
         <div style="background:#e0f2fe;border-left:4px solid #0284c7;border-radius:0 8px 8px 0;
@@ -1183,7 +1182,7 @@ def render_program_meeting(program):
     
     st.markdown("---")
     
-    # ACTIONS SECTION (closing section removed, actions clarified)
+    # ACTIONS SECTION
     st.markdown("#### ✅ ACTIONS — Clear Ownership & Accountability")
     st.caption("Each action must have: specific task, responsible person, and due date")
     
@@ -1224,13 +1223,11 @@ def render_program_meeting(program):
         actions.append({"action":"","who":"","by_when":"","priority":"Medium","notes":"","done":False}); st.rerun()
     st.markdown("---")
 
-    # Prepare meeting data for auto-save
-    smartar_raw = st.session_state.get(f"pm_smartar_{program}", [])
-    smartar_data = [{"student_name": r.get("student_name",""), "notes": r.get("notes","")} for r in smartar_raw]
-    actions_data = st.session_state.get(f"pm_actions_{program}", [])
-    concerns_raw = st.session_state.get(f"pm_concerns_{program}", []) if is_week_a else []
-    concerns_data = [{"notes": r.get("notes","")} for r in concerns_raw]
-    priority_data = st.session_state.get(f"pm_priority_{program}", []) if not is_week_a else []
+    # Prepare meeting data for save - FIXED: Use local variables instead of session state
+    smartar_data = [{"student_name": r.get("student_name",""), "notes": r.get("notes","")} for r in smartar]
+    actions_data = actions  # Use local variable directly
+    concerns_data = [{"notes": r.get("notes","")} for r in concerns] if is_week_a else []
+    priority_data = priority_rows if not is_week_a else []
 
     meeting_data = {
         "program": program, 
