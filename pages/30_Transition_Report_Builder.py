@@ -1,61 +1,33 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, date, timedelta
-from supabase import create_client
 import io
 
 # Page config
 st.set_page_config(page_title="Transition Report Builder", layout="wide", page_icon="📄")
 
-# Supabase connection - Direct connection to avoid cache issues
-supabase = create_client(
-    st.secrets["supabase"]["url"],
-    st.secrets["supabase"]["key"]
-)
-
-# Helper functions
-def get_students():
-    """Get all students"""
-    try:
-        response = supabase.table("students").select("*").order("first_name").execute()
-        return response.data if response.data else []
-    except Exception as e:
-        st.error(f"Error loading students: {e}")
-        return []
-
-def get_wot_observations(student_id, days=90):
-    """Get Window of Tolerance observations for report"""
-    try:
-        start_date = (datetime.now() - timedelta(days=days)).isoformat()
-        response = supabase.table("wot_observations").select("*").eq("student_id", student_id).gte("observation_date", start_date).execute()
-        return response.data if response.data else []
-    except:
-        return []
-
-def get_smartar_goals(student_id):
-    """Get SMARTAR goals for student"""
-    try:
-        response = supabase.table("smartar_goals").select("*").eq("student_id", student_id).execute()
-        return response.data if response.data else []
-    except:
-        return []
-
 # Main app
 st.title("📄 Transition Report Builder")
-st.markdown("Generate comprehensive transition reports with integrated data from portal tools")
+st.markdown("Generate comprehensive transition reports")
 
 # Sidebar for student selection
 with st.sidebar:
     st.header("Report Configuration")
     
-    students = get_students()
-    if not students:
-        st.warning("No students found")
+    # Manual student entry
+    student_first_name = st.text_input("Student First Name *")
+    student_last_name = st.text_input("Student Last Name *")
+    
+    if not student_first_name or not student_last_name:
+        st.warning("Enter student name to continue")
         st.stop()
     
-    student_options = {f"{s['first_name']} {s['last_name']}": s for s in students}
-    selected_student_name = st.selectbox("Select Student", options=list(student_options.keys()))
-    selected_student = student_options[selected_student_name]
+    selected_student_name = f"{student_first_name} {student_last_name}"
+    selected_student = {
+        'first_name': student_first_name,
+        'last_name': student_last_name,
+        'id': 'manual'
+    }
     
     st.markdown("---")
     
@@ -186,35 +158,10 @@ with tab1:
     # REGULATION PROFILE (Pull from WOT if available)
     st.subheader("🎯 Regulation Profile (Window of Tolerance)")
     
-    # Check for WOT data
-    wot_obs = get_wot_observations(selected_student['id'])
-    if wot_obs:
-        st.success(f"Found {len(wot_obs)} Window of Tolerance observations")
-        wot_df = pd.DataFrame(wot_obs)
-        
-        # Calculate percentages
-        total_obs = len(wot_df)
-        in_window = len(wot_df[wot_df['arousal_state'] == 'window'])
-        mobilisation = len(wot_df[wot_df['arousal_state'] == 'mobilisation'])
-        immobilisation = len(wot_df[wot_df['arousal_state'] == 'immobilisation'])
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Window", f"{in_window} ({in_window/total_obs*100:.0f}%)")
-        with col2:
-            st.metric("Mobilisation", f"{mobilisation} ({mobilisation/total_obs*100:.0f}%)")
-        with col3:
-            st.metric("Immobilisation", f"{immobilisation} ({immobilisation/total_obs*100:.0f}%)")
-        
-        # Auto-populate summary
-        wot_auto_summary = f"Across {total_obs} observations during placement, {selected_student['first_name']} was within their Window of Tolerance {in_window/total_obs*100:.0f}% of the time, demonstrating {in_window > total_obs/2 and 'good' or 'developing'} capacity for regulation."
-    else:
-        st.info("No Window of Tolerance observations found. Manual entry required.")
-        wot_auto_summary = ""
+    st.info("Enter Window of Tolerance data manually")
     
     regulation_summary = st.text_area(
         "Regulation Profile Summary",
-        value=wot_auto_summary,
         placeholder="Describe typical arousal patterns, triggers, and effective co-regulation strategies...",
         height=120,
         key="regulation"
@@ -225,53 +172,27 @@ with tab1:
     # BEHAVIOUR PROGRESS (SMARTAR Goals)
     st.subheader("📊 Behaviour Progress: SMARTAR Goals")
     
-    # Check for SMARTAR goals
-    smartar_goals = get_smartar_goals(selected_student['id'])
-    if smartar_goals:
-        st.success(f"Found {len(smartar_goals)} SMARTAR goals")
-        for idx, goal in enumerate(smartar_goals[:3], 1):  # Max 3 goals
-            with st.expander(f"Goal {idx}: {goal.get('goal_name', 'Unnamed Goal')}", expanded=True):
-                exclusion_goal = st.text_input(f"Exclusion Goal {idx}", value="", key=f"excl_{idx}")
-                smartar_goal = st.text_input(f"SMARTAR Goal {idx}", value=goal.get('goal_description', ''), key=f"smartar_{idx}")
-                
-                # GAS levels
-                st.markdown("**Goal Attainment Scale**")
-                gas_levels = {
-                    "Exceeding Expectation": st.text_input(f"Exceeding {idx}", key=f"gas_exceed_{idx}"),
-                    "Above Expectation": st.text_input(f"Above {idx}", key=f"gas_above_{idx}"),
-                    "Expected Goal": st.text_input(f"Expected {idx}", key=f"gas_expected_{idx}"),
-                    "Below Expectation": st.text_input(f"Below {idx}", key=f"gas_below_{idx}"),
-                    "Well Below": st.text_input(f"Well Below {idx}", key=f"gas_wellbelow_{idx}")
-                }
-                
-                current_level = st.selectbox(
-                    f"Current achievement level for Goal {idx}",
-                    options=list(gas_levels.keys()),
-                    index=2,
-                    key=f"gas_current_{idx}"
-                )
-    else:
-        st.info("No SMARTAR goals found. Manual entry required.")
-        num_goals = st.number_input("Number of goals to include", min_value=1, max_value=3, value=2)
-        
-        for idx in range(1, num_goals + 1):
-            with st.expander(f"Goal {idx}", expanded=True):
-                st.text_input(f"Exclusion Goal {idx}", key=f"excl_{idx}")
-                st.text_input(f"SMARTAR Goal {idx}", key=f"smartar_{idx}")
-                
-                st.markdown("**Goal Attainment Scale**")
-                st.text_input(f"Exceeding Expectation {idx}", key=f"gas_exceed_{idx}")
-                st.text_input(f"Above Expectation {idx}", key=f"gas_above_{idx}")
-                st.text_input(f"Expected Goal {idx}", key=f"gas_expected_{idx}")
-                st.text_input(f"Below Expectation {idx}", key=f"gas_below_{idx}")
-                st.text_input(f"Well Below Expectation {idx}", key=f"gas_wellbelow_{idx}")
-                
-                st.selectbox(
-                    f"Current achievement level",
-                    options=["Exceeding Expectation", "Above Expectation", "Expected Goal", "Below Expectation", "Well Below"],
-                    index=2,
-                    key=f"gas_current_{idx}"
-                )
+    st.info("Enter SMARTAR goals manually")
+    num_goals = st.number_input("Number of goals to include", min_value=1, max_value=3, value=2)
+    
+    for idx in range(1, num_goals + 1):
+        with st.expander(f"Goal {idx}", expanded=True):
+            st.text_input(f"Exclusion Goal {idx}", key=f"excl_{idx}")
+            st.text_input(f"SMARTAR Goal {idx}", key=f"smartar_{idx}")
+            
+            st.markdown("**Goal Attainment Scale**")
+            st.text_input(f"Exceeding Expectation {idx}", key=f"gas_exceed_{idx}")
+            st.text_input(f"Above Expectation {idx}", key=f"gas_above_{idx}")
+            st.text_input(f"Expected Goal {idx}", key=f"gas_expected_{idx}")
+            st.text_input(f"Below Expectation {idx}", key=f"gas_below_{idx}")
+            st.text_input(f"Well Below Expectation {idx}", key=f"gas_wellbelow_{idx}")
+            
+            st.selectbox(
+                f"Current achievement level",
+                options=["Exceeding Expectation", "Above Expectation", "Expected Goal", "Below Expectation", "Well Below"],
+                index=2,
+                key=f"gas_current_{idx}"
+            )
     
     st.markdown("---")
     
@@ -319,10 +240,6 @@ with tab2:
         
         st.markdown("**HITS Strategies:**")
         st.write(", ".join(selected_hits) if selected_hits else "None selected")
-        
-        st.markdown("**Regulation Profile:**")
-        if wot_obs:
-            st.write(f"{len(wot_obs)} observations recorded")
         
         st.markdown("**Attendance:**")
         st.write(f"{days_attended} of {total_days} days ({attendance_pct:.1f}%)")
