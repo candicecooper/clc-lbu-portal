@@ -111,30 +111,30 @@ def get_todays_changes():
         return []
 
 def save_program_change(change_data):
-    """Save a program change to database - using direct SQL"""
+    """Save a program change to database - using RPC"""
     try:
-        result = supabase.rpc('insert_program_change', change_data).execute()
+        # Call RPC function with all parameters
+        result = supabase.rpc('insert_program_change', {
+            'p_change_date': change_data['change_date'],
+            'p_staff_name': change_data['staff_name'],
+            'p_reason': change_data['reason'],
+            'p_trt_name': change_data.get('trt_name'),
+            'p_notes': change_data.get('notes'),
+            'p_time_blocks': change_data.get('time_blocks', [])
+        }).execute()
         return result.data
-    except:
-        # Fallback to table insert
-        try:
-            response = supabase.table("program_changes").insert(change_data).execute()
-            return response.data
-        except:
-            return None
+    except Exception as e:
+        st.error(f"Error saving: {str(e)}")
+        return None
 
 def delete_program_change(change_id):
-    """Delete a program change - using direct SQL"""
+    """Delete a program change - using RPC"""
     try:
         result = supabase.rpc('delete_program_change', {'p_id': change_id}).execute()
         return result.data
-    except:
-        # Fallback
-        try:
-            response = supabase.table("program_changes").delete().eq("id", change_id).execute()
-            return response.data
-        except:
-            return None
+    except Exception as e:
+        st.error(f"Error deleting: {str(e)}")
+        return None
 
 def generate_pdf(changes, target_date):
     """Generate one-page PDF of program changes"""
@@ -282,16 +282,13 @@ target_date_str = target_date.isoformat()
 
 # Get existing changes - with cache bypass
 try:
-    existing_changes = supabase.rpc('get_program_changes', {'p_date': target_date_str}).execute()
-    changes = existing_changes.data if existing_changes.data else []
-except:
-    # Fallback: try direct table query
-    try:
-        existing_changes = supabase.table("program_changes").select("*").eq("change_date", target_date_str).order("created_at").execute()
-        changes = existing_changes.data if existing_changes.data else []
-    except Exception as e:
-        st.error(f"⚠️ Database connection issue. Please refresh the page or contact admin.")
-        st.stop()
+    result = supabase.rpc('get_program_changes', {'p_date': target_date_str}).execute()
+    changes = result.data if result.data else []
+except Exception as e:
+    # If RPC fails, show error with details for debugging
+    st.error(f"⚠️ Could not load program changes. Error: {str(e)}")
+    st.info("Using empty list for now. Please refresh the page.")
+    changes = []
 
 # Mode handling
 if mode == "mobile":
