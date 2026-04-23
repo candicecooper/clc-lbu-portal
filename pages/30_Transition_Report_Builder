@@ -7,15 +7,11 @@ import io
 # Page config
 st.set_page_config(page_title="Transition Report Builder", layout="wide", page_icon="📄")
 
-# Supabase connection
-@st.cache_resource
-def init_supabase():
-    return create_client(
-        st.secrets["supabase"]["url"],
-        st.secrets["supabase"]["key"]
-    )
-
-supabase = init_supabase()
+# Supabase connection - Direct connection to avoid cache issues
+supabase = create_client(
+    st.secrets["supabase"]["url"],
+    st.secrets["supabase"]["key"]
+)
 
 # Helper functions
 def get_students():
