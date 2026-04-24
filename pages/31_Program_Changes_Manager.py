@@ -374,50 +374,86 @@ st.markdown("---")
 
 # Add new change section
 with st.expander("➕ Add New Program Change", expanded=len(changes) == 0):
+    
+    # Staff list
+    staff_list = [
+        "Candice", "Annette", "Ben Selga", "Ben Sutton", "Caitie", 
+        "Jacqui", "Brenton", "New Teacher (TBD)", "Naomi", "Vinnie", "Cheryl"
+    ]
+    
     with st.form("new_change_form"):
         st.subheader("Change Type")
         
         change_type = st.radio(
             "What type of change is this?",
-            options=["Teacher Absence (TRT Cover)", "Staff Member Program Change"],
-            horizontal=True
+            options=[
+                "Teacher Absence (TRT Cover)", 
+                "Staff Member Released (by another staff member)",
+                "Site Need / Program Change"
+            ],
+            horizontal=False
         )
         
         st.markdown("---")
         st.subheader("Details")
         
+        # SCENARIO 1: Teacher Absence (TRT Cover)
         if change_type == "Teacher Absence (TRT Cover)":
-            # Scenario A: TRT Cover
             col1, col2 = st.columns(2)
             with col1:
-                absent_teacher = st.text_input("Absent Teacher *", placeholder="e.g., Ben Sutton")
+                absent_teacher = st.selectbox("Absent Staff Member *", options=staff_list)
                 absence_reason = st.selectbox(
                     "Reason for Absence *",
                     options=["Sick Leave", "Personal Leave", "Professional Learning", "Meeting", "Other"]
                 )
             with col2:
-                trt_name = st.text_input("TRT Name *", placeholder="e.g., Gary")
+                no_trt = st.checkbox("No TRT Available")
+                if not no_trt:
+                    trt_name = st.text_input("TRT Name *", placeholder="e.g., Gary, Relief Teacher Name")
+                else:
+                    trt_name = "No TRT"
                 notes = st.text_area("Additional Notes", placeholder="Optional notes...")
             
-            # Display labels for clarity
-            st.info(f"📋 **Covering {absent_teacher}'s timetable with {trt_name}**")
+            st.info(f"📋 **{absent_teacher} absent - {absence_reason}** | TRT: {trt_name}")
             staff_for_display = absent_teacher
             reason_for_display = f"{absence_reason} (TRT: {trt_name})"
+            releasing_staff = None
+            released_for = None
             
-        else:
-            # Scenario B: Program Change
+        # SCENARIO 2: Staff Member Released
+        elif change_type == "Staff Member Released (by another staff member)":
             col1, col2 = st.columns(2)
             with col1:
-                staff_name = st.text_input("Staff Member *", placeholder="e.g., Caitie")
-                change_reason = st.text_input("Reason for Change *", placeholder="e.g., Meeting, PD Session, Assessment")
+                released_staff = st.selectbox("Staff Member Being Released *", options=staff_list)
+                released_for = st.text_input("Released For *", placeholder="e.g., PAC Meeting, Student Support Meeting")
             with col2:
-                impact_note = st.text_input("Impact Note", placeholder="e.g., Will return at 11am")
+                # Remove the released staff from the list of who can release them
+                releasing_options = [s for s in staff_list if s != released_staff]
+                releasing_staff = st.selectbox("Released By (who covers their timetable) *", options=releasing_options)
                 notes = st.text_area("Additional Notes", placeholder="Optional notes...")
             
-            st.info(f"📋 **{staff_name}'s program changing due to: {change_reason}**")
-            staff_for_display = staff_name
+            st.info(f"📋 **{released_staff} released for {released_for}** | Covered by: {releasing_staff}")
+            st.warning(f"⚠️ This will create TWO changes: one for {released_staff} and one for {releasing_staff} (if they don't already have a change)")
+            staff_for_display = released_staff
+            reason_for_display = f"Released for {released_for} (Covered by {releasing_staff})"
+            trt_name = None
+            
+        # SCENARIO 3: Site Need / Program Change
+        else:  # Site Need / Program Change
+            col1, col2 = st.columns(2)
+            with col1:
+                affected_staff = st.selectbox("Staff Member Affected *", options=staff_list)
+                change_reason = st.text_input("Reason for Change *", placeholder="e.g., Program restructure, Special event")
+            with col2:
+                impact_note = st.text_input("Impact Note", placeholder="e.g., Temporary change, Full day")
+                notes = st.text_area("Additional Notes", placeholder="Optional notes...")
+            
+            st.info(f"📋 **{affected_staff}'s program changing:** {change_reason}")
+            staff_for_display = affected_staff
             reason_for_display = change_reason
             trt_name = None
+            releasing_staff = None
+            released_for = None
         
         st.markdown("---")
         st.subheader("Timetable Impact")
@@ -471,21 +507,19 @@ with st.expander("➕ Add New Program Change", expanded=len(changes) == 0):
         submitted = st.form_submit_button("💾 Save Program Change", type="primary", use_container_width=True)
         
         if submitted:
-            # Validation based on change type
+            # Validation
             if change_type == "Teacher Absence (TRT Cover)":
-                if not absent_teacher or not trt_name:
-                    st.error("Please fill in Absent Teacher and TRT Name")
+                if not absent_teacher or (not no_trt and not trt_name):
+                    st.error("Please fill in all required fields")
                     st.stop()
-                final_staff = absent_teacher
-                final_reason = reason_for_display
-                final_trt = trt_name
+            elif change_type == "Staff Member Released (by another staff member)":
+                if not released_staff or not released_for or not releasing_staff:
+                    st.error("Please fill in all required fields")
+                    st.stop()
             else:
-                if not staff_name or not change_reason:
-                    st.error("Please fill in Staff Member and Reason for Change")
+                if not affected_staff or not change_reason:
+                    st.error("Please fill in all required fields")
                     st.stop()
-                final_staff = staff_name
-                final_reason = change_reason
-                final_trt = None
             
             # Filter out empty blocks
             valid_blocks = [b for b in time_blocks if b.get('program_type')]
@@ -494,18 +528,46 @@ with st.expander("➕ Add New Program Change", expanded=len(changes) == 0):
                 st.error("Please add at least one time block")
                 st.stop()
             
+            # Save the primary change
             change_data = {
                 'change_date': target_date_str,
                 'change_type': change_type,
-                'staff_name': final_staff,
-                'reason': final_reason,
-                'trt_name': final_trt,
+                'staff_name': staff_for_display,
+                'reason': reason_for_display,
+                'trt_name': trt_name if change_type == "Teacher Absence (TRT Cover)" else None,
                 'notes': notes if notes else None,
                 'time_blocks': valid_blocks
             }
             
             save_program_change(target_date_str, change_data)
-            st.success("✅ Program change saved successfully!")
+            
+            # SCENARIO 2: Create second change for releasing staff member
+            if change_type == "Staff Member Released (by another staff member)" and releasing_staff:
+                # Check if releasing staff already has a change for these times
+                existing_changes = get_changes_for_date(target_date_str)
+                releasing_staff_has_change = any(
+                    c.get('staff_name') == releasing_staff 
+                    for c in existing_changes
+                )
+                
+                if not releasing_staff_has_change:
+                    # Create automatic second change
+                    releasing_change_data = {
+                        'change_date': target_date_str,
+                        'change_type': 'Auto-generated (Covering Released Staff)',
+                        'staff_name': releasing_staff,
+                        'reason': f"Covering {released_staff}'s {', '.join([b['program_type'] for b in valid_blocks])} while they attend {released_for}",
+                        'trt_name': None,
+                        'notes': f"Auto-created: Releasing {released_staff}",
+                        'time_blocks': valid_blocks
+                    }
+                    save_program_change(target_date_str, releasing_change_data)
+                    st.success(f"✅ Created changes for both {released_staff} (released) and {releasing_staff} (covering)!")
+                else:
+                    st.success(f"✅ Change saved for {released_staff}. Note: {releasing_staff} already has a change today.")
+            else:
+                st.success("✅ Program change saved successfully!")
+            
             st.session_state.num_blocks = 1
             st.rerun()
 
