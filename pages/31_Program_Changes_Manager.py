@@ -36,56 +36,18 @@ st.markdown("""
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         margin-bottom: 1rem;
     }
-    .mobile-view {
-        background-color: white;
-        padding: 1rem;
-        border-radius: 8px;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-        max-width: 375px;
-        margin: 0 auto;
-    }
-    .mobile-header {
-        background-color: #1A7A6E;
-        color: white;
-        padding: 1rem;
-        border-radius: 8px 8px 0 0;
-        text-align: center;
-        font-weight: bold;
-        font-size: 1.1rem;
-        margin: -1rem -1rem 1rem -1rem;
-    }
-    .mobile-change {
-        border-left: 4px solid #C8760A;
-        padding-left: 0.75rem;
-        margin-bottom: 1rem;
-    }
-    .mobile-staff {
-        font-weight: bold;
-        color: #1A7A6E;
-        font-size: 1rem;
-    }
-    .mobile-reason {
-        color: #666;
-        font-size: 0.9rem;
-        margin: 0.25rem 0;
-    }
-    .mobile-blocks {
-        background-color: #f8f9fa;
-        padding: 0.5rem;
-        border-radius: 4px;
-        margin-top: 0.5rem;
-        font-size: 0.85rem;
-    }
-    .mobile-time {
-        color: #C8760A;
-        font-weight: 600;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 # Initialize session state for storing changes
 if 'program_changes' not in st.session_state:
     st.session_state.program_changes = {}
+
+# Staff list
+STAFF_LIST = [
+    "Candice", "Annette", "Ben Selga", "Ben Sutton", "Caitie", 
+    "Jacqui", "Brenton", "New Teacher (TBD)", "Naomi", "Vinnie", "Cheryl"
+]
 
 # Helper functions
 def format_time(t):
@@ -142,7 +104,6 @@ def generate_pdf(changes, target_date):
     story = []
     styles = getSampleStyleSheet()
     
-    # Title style
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Heading1'],
@@ -152,7 +113,6 @@ def generate_pdf(changes, target_date):
         spaceAfter=12
     )
     
-    # Add title
     title_text = f"Program Changes - {datetime.strptime(target_date, '%Y-%m-%d').strftime('%A, %d %B %Y')}"
     story.append(Paragraph(title_text, title_style))
     story.append(Spacer(1, 0.3*cm))
@@ -167,11 +127,9 @@ def generate_pdf(changes, target_date):
         )
         story.append(Paragraph("No program changes scheduled for this day", no_changes_style))
     else:
-        # Build table data
         for idx, change in enumerate(changes):
-            # Change header
             header_data = [
-                [Paragraph(f"<b>Change {idx + 1}: {change.get('reason', 'Program Change')}</b>", 
+                [Paragraph(f"<b>{change.get('staff_name', 'N/A')}: {change.get('reason', 'Program Change')}</b>", 
                           ParagraphStyle('ChangeHeader', parent=styles['Normal'], 
                                        fontSize=11, textColor=colors.HexColor('#1A7A6E')))]
             ]
@@ -185,30 +143,26 @@ def generate_pdf(changes, target_date):
             story.append(header_table)
             story.append(Spacer(1, 0.2*cm))
             
-            # Details table
-            details_data = [
-                ['Staff Member:', change.get('staff_name', 'N/A')],
-                ['TRT/Acting:', change.get('trt_name', 'N/A') if change.get('trt_name') else 'N/A'],
-            ]
-            
-            # Add time blocks
             blocks = change.get('time_blocks', [])
             if blocks:
-                blocks_text = " | ".join([f"{format_time(b.get('start_time', ''))} → {format_time(b.get('end_time', ''))}: {b.get('modified_program', 'N/A')}" 
-                                         for b in blocks])
-                details_data.append(['Time Changes:', blocks_text])
-            
-            details_table = Table(details_data, colWidths=[4*cm, 21*cm])
-            details_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#F5F5F5')),
-                ('TEXTCOLOR', (0, 0), (0, -1), colors.HexColor('#1A7A6E')),
-                ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 9),
-                ('PADDING', (0, 0), (-1, -1), 6),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ]))
-            story.append(details_table)
+                for block in blocks:
+                    start = format_time(block.get('start_time', ''))
+                    end = format_time(block.get('end_time', ''))
+                    program = block.get('modified_program', 'N/A')
+                    released_by = block.get('released_by', '')
+                    
+                    block_text = f"{start} → {end}: {program}"
+                    if released_by:
+                        block_text += f" (Released by: {released_by})"
+                    
+                    details_data = [[block_text]]
+                    details_table = Table(details_data, colWidths=[25*cm])
+                    details_table.setStyle(TableStyle([
+                        ('FONTSIZE', (0, 0), (-1, -1), 9),
+                        ('PADDING', (0, 0), (-1, -1), 6),
+                        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                    ]))
+                    story.append(details_table)
             
             if idx < len(changes) - 1:
                 story.append(Spacer(1, 0.4*cm))
@@ -218,7 +172,7 @@ def generate_pdf(changes, target_date):
     return buffer
 
 def render_mobile_view(changes, target_date):
-    """Render mobile-friendly view with inline CSS"""
+    """Render mobile-friendly view"""
     date_str = datetime.strptime(target_date, '%Y-%m-%d').strftime('%A, %d %B %Y')
     
     html = f"""
@@ -256,22 +210,19 @@ def render_mobile_view(changes, target_date):
                 border-left: 4px solid #C8760A;
                 padding-left: 0.75rem;
                 margin-bottom: 1.5rem;
+                padding-bottom: 1rem;
+                border-bottom: 1px solid #eee;
             }}
             .mobile-staff {{
                 font-weight: bold;
                 color: #1A7A6E;
-                font-size: 1rem;
+                font-size: 1.1rem;
                 margin-bottom: 0.25rem;
             }}
             .mobile-reason {{
                 color: #666;
                 font-size: 0.9rem;
-                margin: 0.25rem 0;
-            }}
-            .mobile-trt {{
-                font-size: 0.85rem;
-                color: #666;
-                margin: 0.25rem 0;
+                margin: 0.25rem 0 0.5rem 0;
             }}
             .mobile-blocks {{
                 background-color: #f8f9fa;
@@ -287,6 +238,11 @@ def render_mobile_view(changes, target_date):
             .block-item {{
                 margin: 0.25rem 0;
             }}
+            .released-by {{
+                font-size: 0.8rem;
+                color: #888;
+                margin-left: 0.5rem;
+            }}
         </style>
     </head>
     <body>
@@ -300,15 +256,12 @@ def render_mobile_view(changes, target_date):
     if not changes:
         html += '<p style="text-align: center; color: #666; padding: 2rem;">No program changes scheduled</p>'
     else:
-        for idx, change in enumerate(changes):
+        for change in changes:
             html += f"""
             <div class="mobile-change">
                 <div class="mobile-staff">{change.get('staff_name', 'N/A')}</div>
                 <div class="mobile-reason">{change.get('reason', 'Program Change')}</div>
             """
-            
-            if change.get('trt_name'):
-                html += f'<div class="mobile-trt">TRT: {change.get("trt_name")}</div>'
             
             blocks = change.get('time_blocks', [])
             if blocks:
@@ -317,7 +270,12 @@ def render_mobile_view(changes, target_date):
                     start = format_time(block.get('start_time', ''))
                     end = format_time(block.get('end_time', ''))
                     program = block.get('modified_program', 'N/A')
-                    html += f'<div class="block-item"><span class="mobile-time">{start} → {end}</span>: {program}</div>'
+                    released_by = block.get('released_by', '')
+                    
+                    html += f'<div class="block-item"><span class="mobile-time">{start} → {end}</span>: {program}'
+                    if released_by:
+                        html += f'<span class="released-by">(Released by: {released_by})</span>'
+                    html += '</div>'
                 html += '</div>'
             
             html += '</div>'
@@ -331,7 +289,7 @@ def render_mobile_view(changes, target_date):
 
 # Main interface
 st.title("📋 Program Changes Manager")
-st.info("⚠️ **Session-Based Storage**: Changes are stored in your browser session and will be lost when you close the tab. Use Export/Import to save permanently.")
+st.info("⚠️ **Session-Based Storage**: Changes are stored in your browser session. Use Export/Import to save permanently.")
 
 # Date selector
 col1, col2, col3 = st.columns([2, 1, 1])
@@ -373,94 +331,22 @@ changes = get_changes_for_date(target_date_str)
 st.markdown("---")
 
 # Add new change section
-with st.expander("➕ Add New Program Change", expanded=len(changes) == 0):
-    
-    # Staff list
-    staff_list = [
-        "Candice", "Annette", "Ben Selga", "Ben Sutton", "Caitie", 
-        "Jacqui", "Brenton", "New Teacher (TBD)", "Naomi", "Vinnie", "Cheryl"
-    ]
+with st.expander("➕ Add Program Change for ONE Staff Member", expanded=len(changes) == 0):
+    st.caption("Each entry shows ONE person's timetable changes. Create separate entries for each person affected.")
     
     with st.form("new_change_form"):
-        st.subheader("Change Type")
+        st.subheader("Which staff member has a timetable change?")
         
-        change_type = st.radio(
-            "What type of change is this?",
-            options=[
-                "Teacher Absence (TRT Cover)", 
-                "Staff Member Released (by another staff member)",
-                "Site Need / Program Change"
-            ],
-            horizontal=False
-        )
+        staff_member = st.selectbox("Staff Member *", options=STAFF_LIST, key="staff_select")
+        
+        st.subheader("Why does their timetable change?")
+        
+        reason = st.text_input("Reason *", placeholder="e.g., Absent (TRT: Gary), Released for PAC Meeting, Covering Caitie's JP, Extra Lunch Cover")
+        notes = st.text_area("Additional Notes", placeholder="Optional notes...")
         
         st.markdown("---")
-        st.subheader("Details")
-        
-        # SCENARIO 1: Teacher Absence (TRT Cover)
-        if change_type == "Teacher Absence (TRT Cover)":
-            col1, col2 = st.columns(2)
-            with col1:
-                absent_teacher = st.selectbox("Absent Staff Member *", options=staff_list)
-                absence_reason = st.selectbox(
-                    "Reason for Absence *",
-                    options=["Sick Leave", "Personal Leave", "Professional Learning", "Meeting", "Other"]
-                )
-            with col2:
-                no_trt = st.checkbox("No TRT Available")
-                if not no_trt:
-                    trt_name = st.text_input("TRT Name *", placeholder="e.g., Gary, Relief Teacher Name")
-                else:
-                    trt_name = "No TRT"
-                notes = st.text_area("Additional Notes", placeholder="Optional notes...")
-            
-            st.info(f"📋 **{absent_teacher} absent - {absence_reason}** | TRT: {trt_name}")
-            staff_for_display = absent_teacher
-            reason_for_display = f"{absence_reason} (TRT: {trt_name})"
-            releasing_staff = None
-            released_for = None
-            
-        # SCENARIO 2: Staff Member Released
-        elif change_type == "Staff Member Released (by another staff member)":
-            st.markdown("**Who is being released?**")
-            col1, col2 = st.columns(2)
-            with col1:
-                released_staff = st.selectbox("Staff Member Leaving Their Timetable *", options=staff_list, key="released_staff")
-                released_for = st.text_input("They are leaving to attend *", placeholder="e.g., PAC Meeting, Student Support Meeting")
-            
-            st.markdown("**Who will cover their timetable?**")
-            with col2:
-                # Remove the released staff from the list of who can release them
-                releasing_options = [s for s in staff_list if s != released_staff]
-                releasing_staff = st.selectbox("Staff Member Covering Their Classes *", options=releasing_options, key="releasing_staff")
-                notes = st.text_area("Additional Notes", placeholder="Optional notes...")
-            
-            st.info(f"📋 **{released_staff}** leaves for **{released_for}** | **{releasing_staff}** covers their timetable")
-            st.warning(f"⚠️ This will create TWO changes:\n- {released_staff}: Released for {released_for}\n- {releasing_staff}: Covering {released_staff}'s timetable")
-            staff_for_display = released_staff
-            reason_for_display = f"Released for {released_for} (Covered by {releasing_staff})"
-            trt_name = None
-            
-        # SCENARIO 3: Site Need / Program Change
-        else:  # Site Need / Program Change
-            col1, col2 = st.columns(2)
-            with col1:
-                affected_staff = st.selectbox("Staff Member Affected *", options=staff_list)
-                change_reason = st.text_input("Reason for Change *", placeholder="e.g., Program restructure, Special event")
-            with col2:
-                impact_note = st.text_input("Impact Note", placeholder="e.g., Temporary change, Full day")
-                notes = st.text_area("Additional Notes", placeholder="Optional notes...")
-            
-            st.info(f"📋 **{affected_staff}'s program changing:** {change_reason}")
-            staff_for_display = affected_staff
-            reason_for_display = change_reason
-            trt_name = None
-            releasing_staff = None
-            released_for = None
-        
-        st.markdown("---")
-        st.subheader("Timetable Impact")
-        st.caption("Which blocks of the timetable are affected?")
+        st.subheader(f"{staff_member}'s Timetable Changes")
+        st.caption("Add each time block that's different from their normal timetable")
         
         # Dynamic time blocks
         if 'num_blocks' not in st.session_state:
@@ -469,22 +355,31 @@ with st.expander("➕ Add New Program Change", expanded=len(changes) == 0):
         time_blocks = []
         for i in range(st.session_state.num_blocks):
             st.markdown(f"**Block {i + 1}**")
-            bcol1, bcol2, bcol3, bcol4 = st.columns([2, 2, 2, 2])
+            bcol1, bcol2, bcol3, bcol4, bcol5 = st.columns([2, 2, 2, 2, 2])
             with bcol1:
-                start_time = st.time_input(f"Start Time", value=time(9, 0), key=f"start_{i}")
+                start_time = st.time_input(f"Start", value=time(9, 0), key=f"start_{i}")
             with bcol2:
-                end_time = st.time_input(f"End Time", value=time(10, 0), key=f"end_{i}")
+                end_time = st.time_input(f"End", value=time(10, 0), key=f"end_{i}")
             with bcol3:
                 program_type = st.selectbox(
                     f"Program",
-                    options=["JP", "PY", "SY", "NIT", "PRT", "Meeting", "Other"],
+                    options=["JP", "PY", "SY", "NIT", "PRT", "Lunch Cover", "Meeting", "Other"],
                     key=f"program_type_{i}"
                 )
             with bcol4:
                 lunch_type = st.selectbox(
                     f"Lunch",
-                    options=["N/A", "Cover", "Own Lunch"],
+                    options=["N/A", "Own Lunch", "Lunch Cover"],
                     key=f"lunch_type_{i}"
+                )
+            with bcol5:
+                # WHO releases this person during this block (for lunch/NIT)
+                release_options = ["N/A"] + [s for s in STAFF_LIST if s != staff_member]
+                released_by = st.selectbox(
+                    f"Released by",
+                    options=release_options,
+                    key=f"released_by_{i}",
+                    help="Who releases them for lunch/break during this block?"
                 )
             
             # Combine program info
@@ -497,7 +392,8 @@ with st.expander("➕ Add New Program Change", expanded=len(changes) == 0):
                 'end_time': end_time.strftime("%H:%M:%S"),
                 'modified_program': program_text,
                 'program_type': program_type,
-                'lunch_type': lunch_type
+                'lunch_type': lunch_type,
+                'released_by': released_by if released_by != "N/A" else ""
             })
         
         col1, col2 = st.columns([1, 4])
@@ -507,22 +403,12 @@ with st.expander("➕ Add New Program Change", expanded=len(changes) == 0):
                 st.rerun()
         
         st.markdown("---")
-        submitted = st.form_submit_button("💾 Save Program Change", type="primary", use_container_width=True)
+        submitted = st.form_submit_button("💾 Save This Person's Change", type="primary", use_container_width=True)
         
         if submitted:
-            # Validation
-            if change_type == "Teacher Absence (TRT Cover)":
-                if not absent_teacher or (not no_trt and not trt_name):
-                    st.error("Please fill in all required fields")
-                    st.stop()
-            elif change_type == "Staff Member Released (by another staff member)":
-                if not released_staff or not released_for or not releasing_staff:
-                    st.error("Please fill in all required fields")
-                    st.stop()
-            else:
-                if not affected_staff or not change_reason:
-                    st.error("Please fill in all required fields")
-                    st.stop()
+            if not staff_member or not reason:
+                st.error("Please fill in Staff Member and Reason")
+                st.stop()
             
             # Filter out empty blocks
             valid_blocks = [b for b in time_blocks if b.get('program_type')]
@@ -531,52 +417,23 @@ with st.expander("➕ Add New Program Change", expanded=len(changes) == 0):
                 st.error("Please add at least one time block")
                 st.stop()
             
-            # Save the primary change
             change_data = {
                 'change_date': target_date_str,
-                'change_type': change_type,
-                'staff_name': staff_for_display,
-                'reason': reason_for_display,
-                'trt_name': trt_name if change_type == "Teacher Absence (TRT Cover)" else None,
+                'staff_name': staff_member,
+                'reason': reason,
                 'notes': notes if notes else None,
                 'time_blocks': valid_blocks
             }
             
             save_program_change(target_date_str, change_data)
-            
-            # SCENARIO 2: Create second change for releasing staff member
-            if change_type == "Staff Member Released (by another staff member)" and releasing_staff:
-                # Check if releasing staff already has a change for these times
-                existing_changes = get_changes_for_date(target_date_str)
-                releasing_staff_has_change = any(
-                    c.get('staff_name') == releasing_staff 
-                    for c in existing_changes
-                )
-                
-                if not releasing_staff_has_change:
-                    # Create automatic second change
-                    releasing_change_data = {
-                        'change_date': target_date_str,
-                        'change_type': 'Auto-generated (Covering Released Staff)',
-                        'staff_name': releasing_staff,
-                        'reason': f"Covering {released_staff}'s {', '.join([b['program_type'] for b in valid_blocks])} while they attend {released_for}",
-                        'trt_name': None,
-                        'notes': f"Auto-created: Releasing {released_staff}",
-                        'time_blocks': valid_blocks
-                    }
-                    save_program_change(target_date_str, releasing_change_data)
-                    st.success(f"✅ Created changes for both {released_staff} (released) and {releasing_staff} (covering)!")
-                else:
-                    st.success(f"✅ Change saved for {released_staff}. Note: {releasing_staff} already has a change today.")
-            else:
-                st.success("✅ Program change saved successfully!")
-            
+            st.success(f"✅ Change saved for {staff_member}!")
             st.session_state.num_blocks = 1
             st.rerun()
 
 # Display existing changes
 st.markdown("---")
 st.subheader(f"Program Changes for {target_date.strftime('%A, %d %B %Y')}")
+st.caption("Each entry = one person's view of their timetable changes")
 
 if not changes:
     st.info("No program changes scheduled for this day")
@@ -587,27 +444,28 @@ else:
             
             col1, col2 = st.columns([4, 1])
             with col1:
-                st.markdown(f"### Change {idx + 1}: {change.get('reason', 'Program Change')}")
+                st.markdown(f"### {change.get('staff_name', 'N/A')}: {change.get('reason', 'Program Change')}")
             with col2:
-                if st.button("🗑️ Delete", key=f"del_{change['id']}", use_container_width=True):
+                if st.button("🗑️", key=f"del_{change['id']}", use_container_width=True):
                     delete_program_change(target_date_str, change['id'])
                     st.rerun()
             
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown(f"**Staff Member:** {change.get('staff_name', 'N/A')}")
-                if change.get('trt_name'):
-                    st.markdown(f"**TRT/Acting:** {change.get('trt_name')}")
-            with col2:
-                if change.get('notes'):
-                    st.markdown(f"**Notes:** {change.get('notes')}")
+            if change.get('notes'):
+                st.markdown(f"*{change.get('notes')}*")
             
             # Display time blocks
             blocks = change.get('time_blocks', [])
             if blocks:
-                st.markdown("**Time Changes:**")
+                st.markdown("**Timetable:**")
                 for block in blocks:
-                    st.markdown(f"- {format_time(block.get('start_time', ''))} → {format_time(block.get('end_time', ''))}: **{block.get('modified_program', 'N/A')}**")
+                    time_display = f"{format_time(block.get('start_time', ''))} → {format_time(block.get('end_time', ''))}"
+                    program_display = block.get('modified_program', 'N/A')
+                    released_by = block.get('released_by', '')
+                    
+                    if released_by:
+                        st.markdown(f"- **{time_display}**: {program_display} *(Released by: {released_by})*")
+                    else:
+                        st.markdown(f"- **{time_display}**: {program_display}")
             
             st.markdown('</div>', unsafe_allow_html=True)
 
