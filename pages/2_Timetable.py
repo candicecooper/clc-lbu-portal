@@ -173,7 +173,7 @@ SECTION_HEADERS = {
     "PY":         ["primary years program timetable", "primary years program", "primary years", "py program"],
     "SY":         ["senior years program timetable", "senior years program", "senior years", "sy program"],
     "SSO":        ["sso support timetable", "sso support", "sso program", "support staff"],
-    "Meetings":   [],  # Will not auto-match - scheduled meetings pages should be part of other sections
+    "Meetings":   ["scheduled meetings timetable", "scheduled meetings", "meetings timetable", "meeting schedule", "staff meetings"],
 }
 
 # Staff names that indicate SSO section (case-insensitive)
