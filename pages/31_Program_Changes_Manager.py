@@ -378,9 +378,6 @@ with st.expander("➕ Add Timetable Change", expanded=len(changes) == 0):
             staff_member = st.text_input("TRT/Relief Name *", placeholder="e.g., Gary, Relief Teacher Name", key="trt_name_main")
     
     # Now the form starts
-    with st.form("new_change_form"):
-        
-    # Now the form starts
     if not staff_member:
         st.warning("⬆️ Please select or enter a staff member name above")
         st.stop()
