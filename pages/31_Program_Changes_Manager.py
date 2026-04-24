@@ -128,8 +128,16 @@ def generate_pdf(changes, target_date):
         story.append(Paragraph("No program changes scheduled for this day", no_changes_style))
     else:
         for idx, change in enumerate(changes):
+            staff_name = change.get('staff_name', 'N/A')
+            reason = change.get('reason', 'Program Change')
+            covered_by = change.get('covered_by', '')
+            
+            header_text = f"<b>{staff_name}: {reason}</b>"
+            if covered_by:
+                header_text += f"<br/><font size=9>Covered by: {covered_by}</font>"
+            
             header_data = [
-                [Paragraph(f"<b>{change.get('staff_name', 'N/A')}: {change.get('reason', 'Program Change')}</b>", 
+                [Paragraph(header_text, 
                           ParagraphStyle('ChangeHeader', parent=styles['Normal'], 
                                        fontSize=11, textColor=colors.HexColor('#1A7A6E')))]
             ]
@@ -224,6 +232,12 @@ def render_mobile_view(changes, target_date):
                 font-size: 0.9rem;
                 margin: 0.25rem 0 0.5rem 0;
             }}
+            .mobile-covered {{
+                font-size: 0.85rem;
+                color: #1A7A6E;
+                font-weight: 600;
+                margin: 0.25rem 0;
+            }}
             .mobile-blocks {{
                 background-color: #f8f9fa;
                 padding: 0.5rem;
@@ -262,6 +276,9 @@ def render_mobile_view(changes, target_date):
                 <div class="mobile-staff">{change.get('staff_name', 'N/A')}</div>
                 <div class="mobile-reason">{change.get('reason', 'Program Change')}</div>
             """
+            
+            if change.get('covered_by'):
+                html += f'<div class="mobile-covered">Covered by: {change.get("covered_by")}</div>'
             
             blocks = change.get('time_blocks', [])
             if blocks:
@@ -337,15 +354,34 @@ with st.expander("➕ Add Program Change for ONE Staff Member", expanded=len(cha
     with st.form("new_change_form"):
         st.subheader("Which staff member has a timetable change?")
         
-        staff_member = st.selectbox("Staff Member *", options=STAFF_LIST, key="staff_select")
+        col1, col2 = st.columns(2)
+        with col1:
+            staff_member = st.selectbox("Staff Member *", options=STAFF_LIST, key="staff_select")
+            is_trt = st.checkbox("This is a TRT/Relief staff entry", help="Check if creating an entry for TRT showing who they're covering")
+        
+        with col2:
+            if is_trt:
+                covering_who = st.text_input("TRT Name *", placeholder="e.g., Gary, Relief Teacher")
+                trt_covering = st.selectbox("Covering for *", options=STAFF_LIST, key="trt_covering")
+            else:
+                covering_who = None
+                trt_covering = None
         
         st.subheader("Why does their timetable change?")
         
-        reason = st.text_input("Reason *", placeholder="e.g., Absent (TRT: Gary), Released for PAC Meeting, Covering Caitie's JP, Extra Lunch Cover")
-        notes = st.text_area("Additional Notes", placeholder="Optional notes...")
+        reason = st.text_input("Reason *", placeholder="e.g., Sick Leave, Released for PAC Meeting, Covering Caitie's JP")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            covered_by = st.text_input("Covered by", placeholder="e.g., Gary (TRT), Ben Sutton", help="Who covers this person's timetable? (Leave blank if N/A)")
+        with col2:
+            notes = st.text_area("Additional Notes", placeholder="Optional notes...")
         
         st.markdown("---")
-        st.subheader(f"{staff_member}'s Timetable Changes")
+        if is_trt:
+            st.subheader(f"{covering_who}'s Timetable (Covering {trt_covering})")
+        else:
+            st.subheader(f"{staff_member}'s Timetable Changes")
         st.caption("Add each time block that's different from their normal timetable")
         
         # Dynamic time blocks
@@ -406,9 +442,19 @@ with st.expander("➕ Add Program Change for ONE Staff Member", expanded=len(cha
         submitted = st.form_submit_button("💾 Save This Person's Change", type="primary", use_container_width=True)
         
         if submitted:
-            if not staff_member or not reason:
-                st.error("Please fill in Staff Member and Reason")
-                st.stop()
+            # Validation for TRT
+            if is_trt:
+                if not covering_who or not trt_covering:
+                    st.error("Please fill in TRT Name and who they're covering")
+                    st.stop()
+                display_staff = covering_who
+                display_reason = f"Covering {trt_covering} - {reason}"
+            else:
+                if not staff_member or not reason:
+                    st.error("Please fill in Staff Member and Reason")
+                    st.stop()
+                display_staff = staff_member
+                display_reason = reason
             
             # Filter out empty blocks
             valid_blocks = [b for b in time_blocks if b.get('program_type')]
@@ -419,14 +465,17 @@ with st.expander("➕ Add Program Change for ONE Staff Member", expanded=len(cha
             
             change_data = {
                 'change_date': target_date_str,
-                'staff_name': staff_member,
-                'reason': reason,
+                'staff_name': display_staff,
+                'reason': display_reason,
+                'covered_by': covered_by if covered_by else None,
+                'is_trt': is_trt,
+                'covering_for': trt_covering if is_trt else None,
                 'notes': notes if notes else None,
                 'time_blocks': valid_blocks
             }
             
             save_program_change(target_date_str, change_data)
-            st.success(f"✅ Change saved for {staff_member}!")
+            st.success(f"✅ Change saved for {display_staff}!")
             st.session_state.num_blocks = 1
             st.rerun()
 
@@ -445,6 +494,8 @@ else:
             col1, col2 = st.columns([4, 1])
             with col1:
                 st.markdown(f"### {change.get('staff_name', 'N/A')}: {change.get('reason', 'Program Change')}")
+                if change.get('covered_by'):
+                    st.markdown(f"**Covered by:** {change.get('covered_by')}")
             with col2:
                 if st.button("🗑️", key=f"del_{change['id']}", use_container_width=True):
                     delete_program_change(target_date_str, change['id'])
