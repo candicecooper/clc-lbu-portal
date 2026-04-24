@@ -359,23 +359,35 @@ with st.expander("➕ Add Timetable Change", expanded=len(changes) == 0):
     Each entry = one person's view of what THEY are doing today.
     """)
     
+    # Staff type selection OUTSIDE form so it updates immediately
+    st.subheader("Staff Member (must be onsite)")
+    st.caption("Only create entries for people WHO ARE ONSITE. Absent staff don't get entries.")
+    
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        staff_type = st.radio(
+            "Type",
+            options=["Regular Staff", "TRT/Relief"],
+            key="staff_type_selector"
+        )
+    
+    with col2:
+        if staff_type == "Regular Staff":
+            staff_member = st.selectbox("Select Staff Member *", options=STAFF_LIST, key="staff_select_main")
+        else:
+            staff_member = st.text_input("TRT/Relief Name *", placeholder="e.g., Gary, Relief Teacher Name", key="trt_name_main")
+    
+    # Now the form starts
     with st.form("new_change_form"):
-        st.subheader("Staff Member (must be onsite)")
-        st.caption("Only create entries for people WHO ARE ONSITE. Absent staff don't get entries.")
         
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            staff_type = st.radio(
-                "Type",
-                options=["Regular Staff", "TRT/Relief"],
-                key="staff_type"
-            )
-        
-        with col2:
-            if staff_type == "Regular Staff":
-                staff_member = st.selectbox("Select Staff Member *", options=STAFF_LIST, key="staff_select")
-            else:
-                staff_member = st.text_input("TRT/Relief Name *", placeholder="e.g., Gary, Relief Teacher Name", key="trt_name")
+    # Now the form starts
+    if not staff_member:
+        st.warning("⬆️ Please select or enter a staff member name above")
+        st.stop()
+    
+    with st.form("new_change_form"):
+        # Display current selection
+        st.info(f"📝 Creating timetable for: **{staff_member}**")
         
         st.markdown("---")
         st.subheader(f"Why is {staff_member}'s timetable different today?")
