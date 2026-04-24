@@ -164,32 +164,69 @@ def pdf_to_images(pdf_bytes: bytes) -> list | None:
         return None
 
 # ── PDF split & bulk save ─────────────────────────────────────────────────────
-# Section detection keywords (searched in page text to identify which program)
-SECTION_KEYWORDS = {
-    "Specialist": ["specialist teacher", "specialist", "roisin"],
-    "JP":         ["junior primary", "jp program", "jp "],
-    "PY":         ["primary years", "py program", "py "],
-    "SY":         ["senior years", "sy program", "sy "],
-    "SSO":        ["sso support", "sso program", "sso "],
-    "Meetings":   ["scheduled meetings", "meetings", "meeting schedule"],
+# Section detection - looks for exact phrases in the header band area
+# These should match the exact wording in the colored header band of each timetable page
+# Note: All matching is case-insensitive
+SECTION_HEADERS = {
+    "Specialist": ["specialist teacher timetable", "specialist teacher", "roisin"],
+    "JP":         ["junior primary program timetable", "junior primary program", "junior primary", "jp program"],
+    "PY":         ["primary years program timetable", "primary years program", "primary years", "py program"],
+    "SY":         ["senior years program timetable", "senior years program", "senior years", "sy program"],
+    "SSO":        ["sso support timetable", "sso support", "sso program", "support staff"],
+    "Meetings":   [],  # Will not auto-match - scheduled meetings pages should be part of other sections
 }
 
-def detect_page_section(page_text: str) -> str | None:
+# Staff names that indicate SSO section (case-insensitive)
+SSO_STAFF = ["naomi", "vinnie", "cheryl", "jacqui", "caitie"]
+
+def detect_page_section(page, page_num: int) -> tuple[str | None, str]:
     """
-    Analyze page text and return the program name if a section keyword is found.
-    Returns None if no clear section is detected.
+    Analyze page header area and return the program name if detected.
+    Returns (program_name, debug_info) where debug_info shows what was found.
     """
-    text_lower = page_text.lower()
+    import fitz  # PyMuPDF - needed for fitz.Rect
     
-    for program, keywords in SECTION_KEYWORDS.items():
-        for keyword in keywords:
-            if keyword in text_lower:
-                return program
-    return None
+    try:
+        # Extract text from just the top 20% of the page (header band area)
+        page_rect = page.rect
+        header_height = page_rect.height * 0.20  # Top 20% of page
+        header_rect = fitz.Rect(0, 0, page_rect.width, header_height)
+        header_text = page.get_text(clip=header_rect).lower().strip()
+        
+        # Also get first 300 characters of full page for backup detection
+        full_text = page.get_text().lower()
+        preview = full_text[:300]
+        
+        # Check for exact section header phrases (prioritize header area)
+        for program, phrases in SECTION_HEADERS.items():
+            for phrase in phrases:
+                if phrase in header_text:
+                    return program, f"Header: '{phrase}'"
+        
+        # Check for SSO staff names in header
+        for staff_name in SSO_STAFF:
+            if staff_name in header_text:
+                return "SSO", f"SSO staff: '{staff_name}'"
+        
+        # Fallback: check in preview text
+        for program, phrases in SECTION_HEADERS.items():
+            for phrase in phrases:
+                if phrase in preview:
+                    return program, f"Preview: '{phrase}'"
+        
+        # Check for SSO staff names in preview
+        for staff_name in SSO_STAFF:
+            if staff_name in preview:
+                return "SSO", f"SSO staff: '{staff_name}' (preview)"
+        
+        return None, f"No match (header: '{header_text[:50]}...')"
+        
+    except Exception as e:
+        return None, f"Error: {e}"
 
 def split_and_save_full_pdf(pdf_bytes: bytes, label: str) -> dict:
     """
-    Split a full timetable PDF into per-program sections by detecting section titles.
+    Split a full timetable PDF into per-program sections by detecting section headers.
     Groups consecutive pages with the same section title together.
     Returns a dict of {program: status_message} or {"error": message}.
     """
@@ -207,11 +244,13 @@ def split_and_save_full_pdf(pdf_bytes: bytes, label: str) -> dict:
 
     # First pass: detect which section each page belongs to
     page_sections = []
+    debug_info = []
+    
     for page_num in range(total_pages):
         page = full_doc[page_num]
-        page_text = page.get_text()
-        section = detect_page_section(page_text)
+        section, debug = detect_page_section(page, page_num)
         page_sections.append(section)
+        debug_info.append(f"Page {page_num + 1}: {section or 'UNDETECTED'} — {debug}")
     
     # Group consecutive pages by section
     section_groups = {}  # {program: [list of page indices]}
@@ -219,15 +258,22 @@ def split_and_save_full_pdf(pdf_bytes: bytes, label: str) -> dict:
     
     for page_num, section in enumerate(page_sections):
         if section:  # Valid section detected
-            if section != current_section:
-                # Starting a new section
-                current_section = section
-                if section not in section_groups:
-                    section_groups[section] = []
+            current_section = section
+            if section not in section_groups:
+                section_groups[section] = []
+            section_groups[section].append(page_num)
+        elif current_section:  # No section detected, but we have a current section
+            # This is likely a continuation page (e.g., "Scheduled Meetings" within Specialist)
+            # Group it with the current section
             section_groups[current_section].append(page_num)
+            debug_info[page_num] = f"Page {page_num + 1}: {current_section} (continuation) — {debug_info[page_num].split(' — ')[1]}"
+        # else: No section and no current section - page will be skipped
     
     # Now save each section
     results = {}
+    
+    # Add debug info as first result entry
+    results["_debug"] = "\n".join(debug_info)
     
     for program in PROGRAMS:
         if program not in section_groups:
@@ -250,7 +296,8 @@ def split_and_save_full_pdf(pdf_bytes: bytes, label: str) -> dict:
 
             ok = save_timetable(filename, b64data, label, program)
             page_count = len(page_indices)
-            results[program] = f"✅ Uploaded ({page_count} page{'s' if page_count != 1 else ''})" if ok else "❌ Save failed"
+            page_list = ", ".join([str(p+1) for p in page_indices])
+            results[program] = f"✅ Uploaded ({page_count} page{'s' if page_count != 1 else ''}: {page_list})" if ok else "❌ Save failed"
         except Exception as e:
             results[program] = f"❌ Error: {e}"
 
@@ -459,9 +506,10 @@ else:
     if upload_mode == "📄 Full PDF (auto-split all sections)":
         st.markdown("""<div style="background:#e8f5e1;border:1px solid #6BBF4E;border-radius:8px;
             padding:0.75rem 1rem;font-size:0.85rem;color:#1a2e44;margin-bottom:0.75rem;">
-            🧠 <strong>Smart detection:</strong> The tool reads each page and automatically groups pages 
-            by their section titles (Specialist Teacher, JP Program, PY Program, etc.). 
-            No matter how many pages each section has, they'll be split correctly!
+            🧠 <strong>Smart detection:</strong> The tool reads the header band at the top of each page 
+            to determine which section it belongs to. It looks for program names (Specialist Teacher, 
+            Junior Primary Program, etc.) and staff names (Naomi, Vinnie, Cheryl, etc.) to correctly 
+            group pages together. After uploading, you'll see exactly what was detected on each page.
         </div>""", unsafe_allow_html=True)
         
         full_lbl = st.text_input("Label for all sections", placeholder="e.g. Term 1 · Week 6 · 2 Mar 2026", key="full_lbl")
@@ -483,7 +531,16 @@ else:
                         st.error(f"❌ Split failed: {results['error']}")
                     else:
                         st.cache_resource.clear()
+                        
+                        # Show debug info first
+                        if "_debug" in results:
+                            with st.expander("🔍 Page Detection Details", expanded=True):
+                                st.text(results["_debug"])
+                        
+                        # Show results for each program
                         for prog, msg in results.items():
+                            if prog == "_debug":
+                                continue
                             label = PROGRAM_LABELS.get(prog, prog)
                             st.markdown(f"**{label}:** {msg}")
                         st.success("✅ All sections uploaded!")
