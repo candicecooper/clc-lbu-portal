@@ -348,41 +348,57 @@ changes = get_changes_for_date(target_date_str)
 st.markdown("---")
 
 # Add new change section
-with st.expander("➕ Add Program Change for ONE Staff Member", expanded=len(changes) == 0):
-    st.caption("Each entry shows ONE person's timetable changes. Create separate entries for each person affected.")
+with st.expander("➕ Add Timetable Change", expanded=len(changes) == 0):
+    st.info("""
+    **Important:** Only create entries for people WHO ARE ONSITE.
+    
+    - **Ben Sutton absent?** → Create entry for the TRT (Gary) showing Gary's timetable
+    - **Caitie released for meeting?** → Create entry for Caitie AND entry for person covering her
+    - **Someone picks up extra lunch duty?** → Create entry for that person
+    
+    Each entry = one person's view of what THEY are doing today.
+    """)
     
     with st.form("new_change_form"):
-        st.subheader("Which staff member has a timetable change?")
+        st.subheader("Staff Member (must be onsite)")
+        st.caption("Only create entries for people WHO ARE ONSITE. Absent staff don't get entries.")
         
-        col1, col2 = st.columns(2)
+        col1, col2 = st.columns([1, 3])
         with col1:
-            staff_member = st.selectbox("Staff Member *", options=STAFF_LIST, key="staff_select")
-            is_trt = st.checkbox("This is a TRT/Relief staff entry", help="Check if creating an entry for TRT showing who they're covering")
+            staff_type = st.radio(
+                "Type",
+                options=["Regular Staff", "TRT/Relief"],
+                key="staff_type"
+            )
         
         with col2:
-            if is_trt:
-                covering_who = st.text_input("TRT Name *", placeholder="e.g., Gary, Relief Teacher")
-                trt_covering = st.selectbox("Covering for *", options=STAFF_LIST, key="trt_covering")
+            if staff_type == "Regular Staff":
+                staff_member = st.selectbox("Select Staff Member *", options=STAFF_LIST, key="staff_select")
             else:
-                covering_who = None
-                trt_covering = None
+                staff_member = st.text_input("TRT/Relief Name *", placeholder="e.g., Gary, Relief Teacher Name", key="trt_name")
         
-        st.subheader("Why does their timetable change?")
+        st.markdown("---")
+        st.subheader(f"Why is {staff_member}'s timetable different today?")
         
-        reason = st.text_input("Reason *", placeholder="e.g., Sick Leave, Released for PAC Meeting, Covering Caitie's JP")
+        reason = st.text_input(
+            "Reason *", 
+            placeholder="e.g., Covering absent Ben Sutton, Released for PAC Meeting, Extra lunch duty",
+            help="What are they doing that's different from their normal timetable?"
+        )
         
         col1, col2 = st.columns(2)
         with col1:
-            covered_by = st.text_input("Covered by", placeholder="e.g., Gary (TRT), Ben Sutton", help="Who covers this person's timetable? (Leave blank if N/A)")
+            covered_by = st.text_input(
+                "If THEY are being covered (optional)", 
+                placeholder="e.g., Candice, Gary",
+                help="Only fill if THIS person is being released/covered by someone else"
+            )
         with col2:
             notes = st.text_area("Additional Notes", placeholder="Optional notes...")
         
         st.markdown("---")
-        if is_trt:
-            st.subheader(f"{covering_who}'s Timetable (Covering {trt_covering})")
-        else:
-            st.subheader(f"{staff_member}'s Timetable Changes")
-        st.caption("Add each time block that's different from their normal timetable")
+        st.subheader(f"{staff_member}'s Timetable for Today")
+        st.caption("What are their actual duties/blocks for this day?")
         
         # Dynamic time blocks
         if 'num_blocks' not in st.session_state:
@@ -439,22 +455,12 @@ with st.expander("➕ Add Program Change for ONE Staff Member", expanded=len(cha
                 st.rerun()
         
         st.markdown("---")
-        submitted = st.form_submit_button("💾 Save This Person's Change", type="primary", use_container_width=True)
+        submitted = st.form_submit_button("💾 Save Timetable Change", type="primary", use_container_width=True)
         
         if submitted:
-            # Validation for TRT
-            if is_trt:
-                if not covering_who or not trt_covering:
-                    st.error("Please fill in TRT Name and who they're covering")
-                    st.stop()
-                display_staff = covering_who
-                display_reason = f"Covering {trt_covering} - {reason}"
-            else:
-                if not staff_member or not reason:
-                    st.error("Please fill in Staff Member and Reason")
-                    st.stop()
-                display_staff = staff_member
-                display_reason = reason
+            if not staff_member or not reason:
+                st.error("Please fill in Staff Member and Reason")
+                st.stop()
             
             # Filter out empty blocks
             valid_blocks = [b for b in time_blocks if b.get('program_type')]
@@ -465,17 +471,15 @@ with st.expander("➕ Add Program Change for ONE Staff Member", expanded=len(cha
             
             change_data = {
                 'change_date': target_date_str,
-                'staff_name': display_staff,
-                'reason': display_reason,
+                'staff_name': staff_member,
+                'reason': reason,
                 'covered_by': covered_by if covered_by else None,
-                'is_trt': is_trt,
-                'covering_for': trt_covering if is_trt else None,
                 'notes': notes if notes else None,
                 'time_blocks': valid_blocks
             }
             
             save_program_change(target_date_str, change_data)
-            st.success(f"✅ Change saved for {display_staff}!")
+            st.success(f"✅ Timetable saved for {staff_member}!")
             st.session_state.num_blocks = 1
             st.rerun()
 
