@@ -260,10 +260,6 @@ def render_mobile_view(changes, target_date):
 st.title("📋 Program Changes Manager")
 st.info("⚠️ **Session-Based Storage**: Changes are stored in your browser session and will be lost when you close the tab. Use Export/Import to save permanently.")
 
-# Check for mobile or PDF mode
-query_params = st.query_params
-mode = query_params.get("mode", None)
-
 # Date selector
 col1, col2, col3 = st.columns([2, 1, 1])
 with col1:
@@ -300,11 +296,6 @@ target_date_str = target_date.isoformat()
 # Get existing changes
 changes = get_changes_for_date(target_date_str)
 
-# Mode handling
-if mode == "mobile":
-    st.markdown(render_mobile_view(changes, target_date_str), unsafe_allow_html=True)
-    st.stop()
-
 # Main interface continues
 st.markdown("---")
 
@@ -331,18 +322,35 @@ with st.expander("➕ Add New Program Change", expanded=len(changes) == 0):
         time_blocks = []
         for i in range(st.session_state.num_blocks):
             st.markdown(f"**Block {i + 1}**")
-            bcol1, bcol2, bcol3 = st.columns([2, 2, 3])
+            bcol1, bcol2, bcol3, bcol4 = st.columns([2, 2, 2, 2])
             with bcol1:
                 start_time = st.time_input(f"Start Time", value=time(9, 0), key=f"start_{i}")
             with bcol2:
                 end_time = st.time_input(f"End Time", value=time(10, 0), key=f"end_{i}")
             with bcol3:
-                modified_program = st.text_input(f"Modified Program", placeholder="e.g., TRT, PRT, Meeting", key=f"program_{i}")
+                program_type = st.selectbox(
+                    f"Program",
+                    options=["JP", "PY", "SY", "NIT", "PRT", "Meeting", "Other"],
+                    key=f"program_type_{i}"
+                )
+            with bcol4:
+                lunch_type = st.selectbox(
+                    f"Type",
+                    options=["Cover", "Own Lunch", "N/A"],
+                    key=f"lunch_type_{i}"
+                )
+            
+            # Combine program info
+            program_text = program_type
+            if lunch_type != "N/A":
+                program_text = f"{program_type} - {lunch_type}"
             
             time_blocks.append({
                 'start_time': start_time.strftime("%H:%M:%S"),
                 'end_time': end_time.strftime("%H:%M:%S"),
-                'modified_program': modified_program
+                'modified_program': program_text,
+                'program_type': program_type,
+                'lunch_type': lunch_type
             })
         
         col1, col2 = st.columns([1, 4])
@@ -358,8 +366,8 @@ with st.expander("➕ Add New Program Change", expanded=len(changes) == 0):
             if not staff_name or not reason:
                 st.error("Please fill in Staff Member and Reason")
             else:
-                # Filter out empty blocks
-                valid_blocks = [b for b in time_blocks if b['modified_program']]
+                # Filter out empty blocks (check if program type is selected)
+                valid_blocks = [b for b in time_blocks if b.get('program_type')]
                 
                 change_data = {
                     'change_date': target_date_str,
@@ -414,11 +422,16 @@ else:
 
 # Action buttons
 st.markdown("---")
+
+# Initialize mobile view state
+if 'show_mobile_view' not in st.session_state:
+    st.session_state.show_mobile_view = False
+
 col1, col2 = st.columns(2)
 
 with col1:
     if st.button("📱 Mobile View", use_container_width=True, type="secondary"):
-        st.markdown(render_mobile_view(changes, target_date_str), unsafe_allow_html=True)
+        st.session_state.show_mobile_view = not st.session_state.show_mobile_view
 
 with col2:
     pdf_buffer = generate_pdf(changes, target_date_str)
@@ -430,3 +443,9 @@ with col2:
         use_container_width=True,
         type="primary"
     )
+
+# Show mobile view if toggled
+if st.session_state.show_mobile_view:
+    st.markdown("---")
+    st.markdown("### 📱 Mobile View (Screenshot this for forwarding)")
+    st.markdown(render_mobile_view(changes, target_date_str), unsafe_allow_html=True)
