@@ -422,18 +422,21 @@ with st.expander("➕ Add New Program Change", expanded=len(changes) == 0):
             
         # SCENARIO 2: Staff Member Released
         elif change_type == "Staff Member Released (by another staff member)":
+            st.markdown("**Who is being released?**")
             col1, col2 = st.columns(2)
             with col1:
-                released_staff = st.selectbox("Staff Member Being Released *", options=staff_list)
-                released_for = st.text_input("Released For *", placeholder="e.g., PAC Meeting, Student Support Meeting")
+                released_staff = st.selectbox("Staff Member Leaving Their Timetable *", options=staff_list, key="released_staff")
+                released_for = st.text_input("They are leaving to attend *", placeholder="e.g., PAC Meeting, Student Support Meeting")
+            
+            st.markdown("**Who will cover their timetable?**")
             with col2:
                 # Remove the released staff from the list of who can release them
                 releasing_options = [s for s in staff_list if s != released_staff]
-                releasing_staff = st.selectbox("Released By (who covers their timetable) *", options=releasing_options)
+                releasing_staff = st.selectbox("Staff Member Covering Their Classes *", options=releasing_options, key="releasing_staff")
                 notes = st.text_area("Additional Notes", placeholder="Optional notes...")
             
-            st.info(f"📋 **{released_staff} released for {released_for}** | Covered by: {releasing_staff}")
-            st.warning(f"⚠️ This will create TWO changes: one for {released_staff} and one for {releasing_staff} (if they don't already have a change)")
+            st.info(f"📋 **{released_staff}** leaves for **{released_for}** | **{releasing_staff}** covers their timetable")
+            st.warning(f"⚠️ This will create TWO changes:\n- {released_staff}: Released for {released_for}\n- {releasing_staff}: Covering {released_staff}'s timetable")
             staff_for_display = released_staff
             reason_for_display = f"Released for {released_for} (Covered by {releasing_staff})"
             trt_name = None
