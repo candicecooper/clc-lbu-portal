@@ -7,6 +7,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.units import cm
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
+import streamlit.components.v1 as components
 import io
 import json
 import uuid
@@ -217,15 +218,83 @@ def generate_pdf(changes, target_date):
     return buffer
 
 def render_mobile_view(changes, target_date):
-    """Render mobile-friendly view"""
+    """Render mobile-friendly view with inline CSS"""
     date_str = datetime.strptime(target_date, '%Y-%m-%d').strftime('%A, %d %B %Y')
     
     html = f"""
-    <div class="mobile-view">
-        <div class="mobile-header">
-            Program Changes<br>
-            <span style="font-size: 0.9rem; font-weight: normal;">{date_str}</span>
-        </div>
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                margin: 0;
+                padding: 20px;
+                background: #f0f2f6;
+            }}
+            .mobile-view {{
+                background-color: white;
+                padding: 1rem;
+                border-radius: 8px;
+                max-width: 375px;
+                margin: 0 auto;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            }}
+            .mobile-header {{
+                background-color: #1A7A6E;
+                color: white;
+                padding: 1rem;
+                border-radius: 8px 8px 0 0;
+                text-align: center;
+                font-weight: bold;
+                font-size: 1.1rem;
+                margin: -1rem -1rem 1rem -1rem;
+            }}
+            .mobile-change {{
+                border-left: 4px solid #C8760A;
+                padding-left: 0.75rem;
+                margin-bottom: 1.5rem;
+            }}
+            .mobile-staff {{
+                font-weight: bold;
+                color: #1A7A6E;
+                font-size: 1rem;
+                margin-bottom: 0.25rem;
+            }}
+            .mobile-reason {{
+                color: #666;
+                font-size: 0.9rem;
+                margin: 0.25rem 0;
+            }}
+            .mobile-trt {{
+                font-size: 0.85rem;
+                color: #666;
+                margin: 0.25rem 0;
+            }}
+            .mobile-blocks {{
+                background-color: #f8f9fa;
+                padding: 0.5rem;
+                border-radius: 4px;
+                margin-top: 0.5rem;
+                font-size: 0.85rem;
+            }}
+            .mobile-time {{
+                color: #C8760A;
+                font-weight: 600;
+            }}
+            .block-item {{
+                margin: 0.25rem 0;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="mobile-view">
+            <div class="mobile-header">
+                Program Changes<br>
+                <span style="font-size: 0.9rem; font-weight: normal;">{date_str}</span>
+            </div>
     """
     
     if not changes:
@@ -239,7 +308,7 @@ def render_mobile_view(changes, target_date):
             """
             
             if change.get('trt_name'):
-                html += f'<div style="font-size: 0.85rem; color: #666;">TRT: {change.get("trt_name")}</div>'
+                html += f'<div class="mobile-trt">TRT: {change.get("trt_name")}</div>'
             
             blocks = change.get('time_blocks', [])
             if blocks:
@@ -248,12 +317,16 @@ def render_mobile_view(changes, target_date):
                     start = format_time(block.get('start_time', ''))
                     end = format_time(block.get('end_time', ''))
                     program = block.get('modified_program', 'N/A')
-                    html += f'<div><span class="mobile-time">{start} → {end}</span>: {program}</div>'
+                    html += f'<div class="block-item"><span class="mobile-time">{start} → {end}</span>: {program}</div>'
                 html += '</div>'
             
             html += '</div>'
     
-    html += '</div>'
+    html += """
+        </div>
+    </body>
+    </html>
+    """
     return html
 
 # Main interface
@@ -302,18 +375,53 @@ st.markdown("---")
 # Add new change section
 with st.expander("➕ Add New Program Change", expanded=len(changes) == 0):
     with st.form("new_change_form"):
-        st.subheader("Change Details")
+        st.subheader("Change Type")
         
-        col1, col2 = st.columns(2)
-        with col1:
-            staff_name = st.text_input("Staff Member *", placeholder="e.g., Ben Sutton")
-            reason = st.text_input("Reason for Change *", placeholder="e.g., Professional Learning, Sick Leave")
-        with col2:
-            trt_name = st.text_input("TRT/Acting (if applicable)", placeholder="e.g., Gary")
-            notes = st.text_area("Additional Notes", placeholder="Optional notes...")
+        change_type = st.radio(
+            "What type of change is this?",
+            options=["Teacher Absence (TRT Cover)", "Staff Member Program Change"],
+            horizontal=True
+        )
         
-        st.subheader("Time Blocks")
-        st.caption("Add the time periods affected and what the modified program is")
+        st.markdown("---")
+        st.subheader("Details")
+        
+        if change_type == "Teacher Absence (TRT Cover)":
+            # Scenario A: TRT Cover
+            col1, col2 = st.columns(2)
+            with col1:
+                absent_teacher = st.text_input("Absent Teacher *", placeholder="e.g., Ben Sutton")
+                absence_reason = st.selectbox(
+                    "Reason for Absence *",
+                    options=["Sick Leave", "Personal Leave", "Professional Learning", "Meeting", "Other"]
+                )
+            with col2:
+                trt_name = st.text_input("TRT Name *", placeholder="e.g., Gary")
+                notes = st.text_area("Additional Notes", placeholder="Optional notes...")
+            
+            # Display labels for clarity
+            st.info(f"📋 **Covering {absent_teacher}'s timetable with {trt_name}**")
+            staff_for_display = absent_teacher
+            reason_for_display = f"{absence_reason} (TRT: {trt_name})"
+            
+        else:
+            # Scenario B: Program Change
+            col1, col2 = st.columns(2)
+            with col1:
+                staff_name = st.text_input("Staff Member *", placeholder="e.g., Caitie")
+                change_reason = st.text_input("Reason for Change *", placeholder="e.g., Meeting, PD Session, Assessment")
+            with col2:
+                impact_note = st.text_input("Impact Note", placeholder="e.g., Will return at 11am")
+                notes = st.text_area("Additional Notes", placeholder="Optional notes...")
+            
+            st.info(f"📋 **{staff_name}'s program changing due to: {change_reason}**")
+            staff_for_display = staff_name
+            reason_for_display = change_reason
+            trt_name = None
+        
+        st.markdown("---")
+        st.subheader("Timetable Impact")
+        st.caption("Which blocks of the timetable are affected?")
         
         # Dynamic time blocks
         if 'num_blocks' not in st.session_state:
@@ -335,8 +443,8 @@ with st.expander("➕ Add New Program Change", expanded=len(changes) == 0):
                 )
             with bcol4:
                 lunch_type = st.selectbox(
-                    f"Type",
-                    options=["Cover", "Own Lunch", "N/A"],
+                    f"Lunch",
+                    options=["N/A", "Cover", "Own Lunch"],
                     key=f"lunch_type_{i}"
                 )
             
@@ -363,25 +471,43 @@ with st.expander("➕ Add New Program Change", expanded=len(changes) == 0):
         submitted = st.form_submit_button("💾 Save Program Change", type="primary", use_container_width=True)
         
         if submitted:
-            if not staff_name or not reason:
-                st.error("Please fill in Staff Member and Reason")
+            # Validation based on change type
+            if change_type == "Teacher Absence (TRT Cover)":
+                if not absent_teacher or not trt_name:
+                    st.error("Please fill in Absent Teacher and TRT Name")
+                    st.stop()
+                final_staff = absent_teacher
+                final_reason = reason_for_display
+                final_trt = trt_name
             else:
-                # Filter out empty blocks (check if program type is selected)
-                valid_blocks = [b for b in time_blocks if b.get('program_type')]
-                
-                change_data = {
-                    'change_date': target_date_str,
-                    'staff_name': staff_name,
-                    'reason': reason,
-                    'trt_name': trt_name if trt_name else None,
-                    'notes': notes if notes else None,
-                    'time_blocks': valid_blocks
-                }
-                
-                save_program_change(target_date_str, change_data)
-                st.success("✅ Program change saved successfully!")
-                st.session_state.num_blocks = 1
-                st.rerun()
+                if not staff_name or not change_reason:
+                    st.error("Please fill in Staff Member and Reason for Change")
+                    st.stop()
+                final_staff = staff_name
+                final_reason = change_reason
+                final_trt = None
+            
+            # Filter out empty blocks
+            valid_blocks = [b for b in time_blocks if b.get('program_type')]
+            
+            if not valid_blocks:
+                st.error("Please add at least one time block")
+                st.stop()
+            
+            change_data = {
+                'change_date': target_date_str,
+                'change_type': change_type,
+                'staff_name': final_staff,
+                'reason': final_reason,
+                'trt_name': final_trt,
+                'notes': notes if notes else None,
+                'time_blocks': valid_blocks
+            }
+            
+            save_program_change(target_date_str, change_data)
+            st.success("✅ Program change saved successfully!")
+            st.session_state.num_blocks = 1
+            st.rerun()
 
 # Display existing changes
 st.markdown("---")
@@ -448,4 +574,5 @@ with col2:
 if st.session_state.show_mobile_view:
     st.markdown("---")
     st.markdown("### 📱 Mobile View (Screenshot this for forwarding)")
-    st.markdown(render_mobile_view(changes, target_date_str), unsafe_allow_html=True)
+    mobile_html = render_mobile_view(changes, target_date_str)
+    components.html(mobile_html, height=600, scrolling=True)
