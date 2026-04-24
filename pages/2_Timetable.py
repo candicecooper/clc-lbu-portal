@@ -21,9 +21,8 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-from auth import require_auth, logout_button, get_staff_name
-require_auth("CLC Timetable", "📅")
-logout_button("sidebar")
+# No authentication required for viewing timetables
+# Admin password required for upload/delete functions
 
 # ── SA School Calendar 2026 ───────────────────────────────────────────────────
 # (term_number, first_monday, total_weeks)
@@ -136,6 +135,10 @@ def delete_timetable(row_id: int):
     except Exception as e:
         st.error(f"Delete failed: {e}")
         return False
+
+def verify_admin(password: str) -> bool:
+    """Verify admin password for upload/delete functions."""
+    return password == st.secrets.get("ADMIN_PASSWORD", "CLC2026admin")
 
 def fmt_date(iso: str) -> str:
     try:
@@ -431,7 +434,8 @@ div[data-testid="stExpander"]{border:1px solid var(--navy-border)!important;bord
 """, unsafe_allow_html=True)
 
 # ── Session state ─────────────────────────────────────────────────────────────
-# (No admin auth needed - all staff can upload)
+if "admin_authed" not in st.session_state:
+    st.session_state.admin_authed = False
 
 # ── Header ────────────────────────────────────────────────────────────────────
 term_label = get_term_week_label()
@@ -454,115 +458,154 @@ st.markdown(f"""
 
 st.markdown('<div class="main-wrap">', unsafe_allow_html=True)
 
-# ── Upload Panel (available to all staff) ─────────────────────────────────────
-st.markdown("""
-<div style="background:linear-gradient(90deg,#1a2e44,#2d4f72);border-radius:12px;
-padding:1rem 1.25rem;margin-bottom:1.25rem;">
-<div style="font-size:0.9rem;font-weight:700;color:white;margin-bottom:0.75rem;">
-📤 Upload New Timetable</div>
-</div>""", unsafe_allow_html=True)
+# ── Admin Access Bar ──────────────────────────────────────────────────────────
+if not st.session_state.admin_authed:
+    col1, col2 = st.columns([6, 1])
+    with col2:
+        if st.button("🔐 Admin", use_container_width=True, key="show_admin_btn"):
+            st.session_state["show_admin_login"] = not st.session_state.get("show_admin_login", False)
+            st.rerun()
 
-upload_mode = st.radio("Upload mode", 
-    ["📄 Full PDF (auto-split all sections)", "📑 Single section PDF"],
-    horizontal=True, key="upload_mode")
-    
-if upload_mode == "📄 Full PDF (auto-split all sections)":
-    st.markdown("""<div style="background:#e8f5e1;border:1px solid #6BBF4E;border-radius:8px;
-        padding:0.75rem 1rem;font-size:0.85rem;color:#1a2e44;margin-bottom:0.75rem;">
-        🧠 <strong>Smart detection:</strong> The tool reads the header band at the top of each page 
-        to determine which section it belongs to. It looks for program names (Specialist Teacher, 
-        Junior Primary Program, etc.) and staff names (Naomi, Vinnie, Cheryl, etc.) to correctly 
-        group pages together. After uploading, you'll see exactly what was detected on each page.
-    </div>""", unsafe_allow_html=True)
-    
-    full_lbl = st.text_input("Label for all sections", placeholder="e.g. Term 1 · Week 6 · 2 Mar 2026", key="full_lbl")
-    full_file = st.file_uploader("Upload full timetable PDF (all pages)", type=["pdf"], key="full_pdf")
-    
-    if st.button("✅ Split & Upload All Sections", type="primary", use_container_width=True, key="full_upload_btn"):
-        if not full_file:
-            st.error("Please choose a PDF file.")
-        elif not full_lbl.strip():
-            st.error("Please add a label.")
-        else:
-            full_file.seek(0)
-            raw = full_file.read()
-            with st.spinner("Detecting sections and splitting PDF..."):
-                results = split_and_save_full_pdf(raw, full_lbl.strip())
-            if "error" in results:
-                st.error(f"❌ Split failed: {results['error']}")
-            else:
-                st.cache_resource.clear()
-                
-                # Show debug info first
-                if "_debug" in results:
-                    with st.expander("🔍 Page Detection Details", expanded=True):
-                        st.text(results["_debug"])
-                
-                # Show results for each program
-                for prog, msg in results.items():
-                    if prog == "_debug":
-                        continue
-                    label = PROGRAM_LABELS.get(prog, prog)
-                    st.markdown(f"**{label}:** {msg}")
-                st.success("✅ All sections uploaded!")
+    if st.session_state.get("show_admin_login", False):
+        st.markdown("""
+        <div style="background:#eef2f7;border:1.5px solid #c5d3e0;border-radius:10px;
+        padding:1rem 1.25rem;margin-bottom:1rem;">
+        <div style="font-size:0.8rem;font-weight:700;color:#1a2e44;margin-bottom:0.6rem;">
+        🔐 Admin Login — Upload & Manage Timetables</div>
+        </div>""", unsafe_allow_html=True)
+        lc1, lc2, lc3 = st.columns([3, 1, 1])
+        with lc1:
+            admin_pw = st.text_input("Password", type="password", key="admin_pw_inline",
+                                     label_visibility="collapsed", placeholder="Enter admin password…")
+        with lc2:
+            if st.button("Login", type="primary", use_container_width=True, key="admin_login_btn"):
+                if verify_admin(admin_pw):
+                    st.session_state.admin_authed = True
+                    st.session_state.show_admin_login = False
+                    st.success("✅ Admin access granted")
+                    st.rerun()
+                else:
+                    st.error("Incorrect password.")
+        with lc3:
+            if st.button("Cancel", use_container_width=True, key="admin_cancel"):
+                st.session_state.show_admin_login = False
                 st.rerun()
 
-else:
-    with st.form("upload_form_top", clear_on_submit=False):
-        col_prog, col_lbl = st.columns([1, 2])
-        with col_prog:
-            prog_choice = st.selectbox("Program", options=PROGRAMS,
-                                       format_func=lambda p: PROGRAM_LABELS[p])
-        with col_lbl:
-            lbl = st.text_input("Label", placeholder="e.g. Term 1 · Week 6 · 2 Mar 2026")
+# ── Upload Panel (only shown when admin authenticated) ────────────────────────
+if st.session_state.admin_authed:
+    st.markdown("""
+    <div style="background:linear-gradient(90deg,#1a2e44,#2d4f72);border-radius:12px;
+    padding:1rem 1.25rem;margin-bottom:1.25rem;">
+    <div style="font-size:0.9rem;font-weight:700;color:white;margin-bottom:0.75rem;">
+    📤 Upload New Timetable</div>
+    </div>""", unsafe_allow_html=True)
 
-        file = st.file_uploader("Choose PDF", type=["pdf"], label_visibility="collapsed")
-
-        submitted = st.form_submit_button("✅ Upload & Set as Current",
-                                          type="primary", use_container_width=True)
-
-        if submitted:
-            if not file:
+    upload_mode = st.radio("Upload mode", 
+        ["📄 Full PDF (auto-split all sections)", "📑 Single section PDF"],
+        horizontal=True, key="upload_mode")
+    
+    if upload_mode == "📄 Full PDF (auto-split all sections)":
+        st.markdown("""<div style="background:#e8f5e1;border:1px solid #6BBF4E;border-radius:8px;
+            padding:0.75rem 1rem;font-size:0.85rem;color:#1a2e44;margin-bottom:0.75rem;">
+            🧠 <strong>Smart detection:</strong> The tool reads the header band at the top of each page 
+            to determine which section it belongs to. It looks for program names (Specialist Teacher, 
+            Junior Primary Program, etc.) and staff names (Naomi, Vinnie, Cheryl, etc.) to correctly 
+            group pages together. After uploading, you'll see exactly what was detected on each page.
+        </div>""", unsafe_allow_html=True)
+        
+        full_lbl = st.text_input("Label for all sections", placeholder="e.g. Term 1 · Week 6 · 2 Mar 2026", key="full_lbl")
+        full_file = st.file_uploader("Upload full timetable PDF (all pages)", type=["pdf"], key="full_pdf")
+        
+        if st.button("✅ Split & Upload All Sections", type="primary", use_container_width=True, key="full_upload_btn"):
+            if not full_file:
                 st.error("Please choose a PDF file.")
-            elif not lbl.strip():
+            elif not full_lbl.strip():
                 st.error("Please add a label.")
             else:
-                file.seek(0)
-                raw = file.read()
-                b64data = base64.b64encode(raw).decode("utf-8")
-                if save_timetable(file.name, b64data, lbl.strip(), prog_choice):
-                    st.success(f"✅ {PROGRAM_LABELS[prog_choice]} timetable updated — {lbl.strip()}")
+                full_file.seek(0)
+                raw = full_file.read()
+                with st.spinner("Detecting sections and splitting PDF..."):
+                    results = split_and_save_full_pdf(raw, full_lbl.strip())
+                if "error" in results:
+                    st.error(f"❌ Split failed: {results['error']}")
+                else:
                     st.cache_resource.clear()
+                    
+                    # Show debug info first
+                    if "_debug" in results:
+                        with st.expander("🔍 Page Detection Details", expanded=True):
+                            st.text(results["_debug"])
+                    
+                    # Show results for each program
+                    for prog, msg in results.items():
+                        if prog == "_debug":
+                            continue
+                        label = PROGRAM_LABELS.get(prog, prog)
+                        st.markdown(f"**{label}:** {msg}")
+                    st.success("✅ All sections uploaded!")
                     st.rerun()
 
-# ── Version history with delete ──
-with st.expander("🗂️ Version History & Delete Old Versions"):
-    for program in PROGRAMS:
-        all_tt = get_all_timetables(program)
-        if not all_tt:
-            continue
-        prog_label_str = PROGRAM_LABELS[program]
-        st.markdown(f"**{prog_label_str}**")
-        for i, tt in enumerate(all_tt):
-            row_id   = tt.get("id")
-            tt_label = tt.get("label") or tt.get("filename", "")
-            tt_meta  = f"Uploaded {fmt_date(tt.get('uploaded_at', ''))} · {tt.get('filename', '')}"
-            is_current = (i == 0)
-            col_info, col_del = st.columns([5, 1])
-            with col_info:
-                badge = " ✅ Current" if is_current else ""
-                st.markdown(f'<div style="font-size:0.82rem;font-weight:600;color:#1a2e44;">📄 {tt_label}{badge}</div>'
-                            f'<div style="font-size:0.72rem;color:#6b7f94;">{tt_meta}</div>',
-                            unsafe_allow_html=True)
-            with col_del:
-                if not is_current:
-                    if st.button("🗑", key=f"del_{row_id}", help="Delete this version"):
-                        if delete_timetable(row_id):
-                            st.success("Deleted.")
-                            st.rerun()
+    else:
+        with st.form("upload_form_top", clear_on_submit=False):
+            col_prog, col_lbl = st.columns([1, 2])
+            with col_prog:
+                prog_choice = st.selectbox("Program", options=PROGRAMS,
+                                           format_func=lambda p: PROGRAM_LABELS[p])
+            with col_lbl:
+                lbl = st.text_input("Label", placeholder="e.g. Term 1 · Week 6 · 2 Mar 2026")
+
+            file = st.file_uploader("Choose PDF", type=["pdf"], label_visibility="collapsed")
+
+            submitted = st.form_submit_button("✅ Upload & Set as Current",
+                                              type="primary", use_container_width=True)
+
+            if submitted:
+                if not file:
+                    st.error("Please choose a PDF file.")
+                elif not lbl.strip():
+                    st.error("Please add a label.")
                 else:
-                    st.markdown("<div style='font-size:11px;color:#9aa5b4;text-align:center;padding-top:8px;'>active</div>",
+                    file.seek(0)
+                    raw = file.read()
+                    b64data = base64.b64encode(raw).decode("utf-8")
+                    if save_timetable(file.name, b64data, lbl.strip(), prog_choice):
+                        st.success(f"✅ {PROGRAM_LABELS[prog_choice]} timetable updated — {lbl.strip()}")
+                        st.cache_resource.clear()
+                        st.rerun()
+
+    # ── Version history with delete (admin only) ──
+    with st.expander("🗂️ Version History & Delete Old Versions"):
+        for program in PROGRAMS:
+            all_tt = get_all_timetables(program)
+            if not all_tt:
+                continue
+            prog_label_str = PROGRAM_LABELS[program]
+            st.markdown(f"**{prog_label_str}**")
+            for i, tt in enumerate(all_tt):
+                row_id   = tt.get("id")
+                tt_label = tt.get("label") or tt.get("filename", "")
+                tt_meta  = f"Uploaded {fmt_date(tt.get('uploaded_at', ''))} · {tt.get('filename', '')}"
+                is_current = (i == 0)
+                col_info, col_del = st.columns([5, 1])
+                with col_info:
+                    badge = " ✅ Current" if is_current else ""
+                    st.markdown(f'<div style="font-size:0.82rem;font-weight:600;color:#1a2e44;">📄 {tt_label}{badge}</div>'
+                                f'<div style="font-size:0.72rem;color:#6b7f94;">{tt_meta}</div>',
                                 unsafe_allow_html=True)
+                with col_del:
+                    if not is_current:
+                        if st.button("🗑", key=f"del_{row_id}", help="Delete this version"):
+                            if delete_timetable(row_id):
+                                st.success("Deleted.")
+                                st.rerun()
+                    else:
+                        st.markdown("<div style='font-size:11px;color:#9aa5b4;text-align:center;padding-top:8px;'>active</div>",
+                                    unsafe_allow_html=True)
+    
+    # Logout button
+    if st.button("🚪 Logout Admin", use_container_width=False, key="logout_admin"):
+        st.session_state.admin_authed = False
+        st.rerun()
 
 st.markdown("---")
 
