@@ -11,8 +11,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-from auth import require_auth, logout_button, get_staff_name
-require_auth("Daily Bulletin", "📰")
+from auth import logout_button, get_staff_name
 logout_button("sidebar")
 
 # ── DESIGN SYSTEM ─────────────────────────────────────────────
