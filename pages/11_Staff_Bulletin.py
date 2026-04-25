@@ -390,65 +390,43 @@ def render_bulletin(edition, show_ack=True):
 # LOGIN
 # ══════════════════════════════════════════════════════════════════════════════
 def show_login():
-    left, right = st.columns([1.2, 1])
-    with left:
-        st.markdown(
-            '<div class="login-panel-left">'
-            '<div class="login-brand-icon">📋</div>'
-            '<div class="login-brand-title">CLC Staff<br>Bulletin</div>'
-            '<div class="login-brand-sub">Cowandilla Learning Centre — LBU</div>'
-            '<div class="login-info-pills">'
-            '<div class="login-info-pill"><div class="lip-icon">📧</div>'
-            '<div class="lip-text"><strong>Weekly bulletin</strong> sent each Wednesday</div></div>'
-            '<div class="login-info-pill"><div class="lip-icon">✅</div>'
-            '<div class="lip-text"><strong>Acknowledge receipt</strong> by Thursday COB</div></div>'
-            '<div class="login-info-pill"><div class="lip-icon">🗂</div>'
-            '<div class="lip-text"><strong>All bulletins</strong> logged in staff meeting minutes</div></div>'
-            '</div></div>',
-            unsafe_allow_html=True
-        )
-    with right:
-        st.markdown(
-            '<div class="login-panel-right">'
-            '<div class="login-form-title">Welcome back</div>'
-            '<div class="login-form-sub">Select your name and enter your PIN.</div>'
-            '</div>',
-            unsafe_allow_html=True
-        )
-        staff_names = db_get_staff_names()
-        if not staff_names:
-            st.warning("No staff set up yet. Please contact your administrator.")
-            return
-        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-        name = st.selectbox("Your name", ["Select your name"] + staff_names)
-        pin  = st.text_input("PIN", type="password", placeholder="Enter your PIN")
-        if st.session_state.login_attempts >= 5:
-            st.error("Too many failed attempts. Contact your administrator.")
-        elif st.button("Sign In", use_container_width=True, type="primary"):
-            if name == "Select your name":
-                st.error("Please select your name.")
-            elif not pin.strip():
-                st.error("Please enter your PIN.")
+    st.markdown("## 📋 CLC Staff Bulletin")
+    st.markdown("**Cowandilla Learning Centre — LBU**")
+    st.write("")
+    st.markdown("Select your name and enter your PIN to continue.")
+    st.write("")
+
+    staff_names = db_get_staff_names()
+    if not staff_names:
+        st.warning("No staff set up yet. Please contact your administrator.")
+        return
+
+    name = st.selectbox("Your name", ["Select your name"] + staff_names)
+    pin  = st.text_input("PIN", type="password", placeholder="Enter your PIN")
+
+    if st.session_state.login_attempts >= 5:
+        st.error("Too many failed attempts. Contact your administrator.")
+    elif st.button("Sign In", type="primary"):
+        if name == "Select your name":
+            st.error("Please select your name.")
+        elif not pin.strip():
+            st.error("Please enter your PIN.")
+        else:
+            staff = db_verify_pin(name, pin)
+            if staff:
+                st.session_state.staff_name     = staff["name"]
+                st.session_state.staff_id       = staff["id"]
+                st.session_state.is_admin       = staff.get("role") == "admin"
+                st.session_state.login_attempts = 0
+                st.rerun()
             else:
-                staff = db_verify_pin(name, pin)
-                if staff:
-                    st.session_state.staff_name     = staff["name"]
-                    st.session_state.staff_id       = staff["id"]
-                    st.session_state.is_admin       = staff.get("role") == "admin"
-                    st.session_state.login_attempts = 0
-                    st.rerun()
+                st.session_state.login_attempts += 1
+                rem = 5 - st.session_state.login_attempts
+                if rem > 0:
+                    st.error("Incorrect PIN. " + str(rem) + " attempt" + ("s" if rem != 1 else "") + " remaining.")
                 else:
-                    st.session_state.login_attempts += 1
-                    rem = 5 - st.session_state.login_attempts
-                    if rem > 0:
-                        st.error("Incorrect PIN. " + str(rem) + " attempt" + ("s" if rem != 1 else "") + " remaining.")
-                    else:
-                        st.error("Account locked. Contact your administrator.")
-        st.markdown(
-            '<div style="text-align:center;margin-top:14px;font-size:12px;color:#9CA3AF;">'
-            'Forgotten your PIN? Contact your administrator.</div>',
-            unsafe_allow_html=True
-        )
+                    st.error("Account locked. Contact your administrator.")
+    st.caption("Forgotten your PIN? Contact your administrator.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
