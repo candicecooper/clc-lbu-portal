@@ -26,7 +26,10 @@ def get_sb():
 # ── Auth ──────────────────────────────────────────────────────────────────────
 def db_get_staff_names():
     try:
-        res = get_sb().table("staff").select("name").eq("active", True).order("name").execute()
+        try:
+            res = get_sb().table("staff").select("name").eq("active", True).order("name").execute()
+        except Exception:
+            res = get_sb().table("staff").select("name").order("name").execute()
         return [r["name"] for r in res.data] if res.data else []
     except Exception:
         return []
@@ -54,7 +57,10 @@ def db_set_pin(staff_id, new_pin):
 
 def db_get_staff_list():
     try:
-        res = get_sb().table("staff").select("*").eq("active", True).order("name").execute()
+        try:
+            res = get_sb().table("staff").select("*").eq("active", True).order("name").execute()
+        except Exception:
+            res = get_sb().table("staff").select("*").order("name").execute()
         return res.data or []
     except Exception:
         return []
@@ -73,7 +79,10 @@ def db_add_staff(name, email, pin, role):
 
 def db_remove_staff(staff_id):
     try:
-        get_sb().table("staff").update({"active": False}).eq("id", staff_id).execute()
+        try:
+            get_sb().table("staff").update({"active": False}).eq("id", staff_id).execute()
+        except Exception:
+            get_sb().table("staff").delete().eq("id", staff_id).execute()
         return True
     except Exception:
         return False
