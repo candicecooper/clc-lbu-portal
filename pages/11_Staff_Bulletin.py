@@ -252,7 +252,7 @@ CAT_BORDER = {
 # ══════════════════════════════════════════════════════════════════════════════
 for k, v in {
     "staff_name": "", "staff_id": None, "is_admin": False,
-    "login_attempts": 0, "view": "bulletin", "viewing_edition_id": None,
+    "view": "bulletin", "viewing_edition_id": None,
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -277,10 +277,9 @@ def app_header():
     _, so = st.columns([11, 1])
     with so:
         if st.button("Sign out", key="signout"):
-            for k in ["staff_name", "staff_id", "is_admin", "login_attempts"]:
+            for k in ["staff_name", "staff_id", "is_admin"]:
                 st.session_state[k] = ("" if k == "staff_name" else
-                                       None if k == "staff_id" else
-                                       False if k == "is_admin" else 0)
+                                       None if k == "staff_id" else False)
             st.rerun()
 
 def nav_bar(active):
@@ -383,9 +382,7 @@ def show_login():
     name = st.selectbox("Your name", ["Select your name"] + staff_names)
     pin  = st.text_input("PIN", type="password", placeholder="Enter your PIN")
 
-    if st.session_state.login_attempts >= 5:
-        st.error("Too many failed attempts. Contact your administrator.")
-    elif st.button("Sign In", type="primary"):
+    if st.button("Sign In", type="primary"):
         if name == "Select your name":
             st.error("Please select your name.")
         elif not pin.strip():
@@ -393,18 +390,12 @@ def show_login():
         else:
             staff = db_verify_pin(name, pin)
             if staff:
-                st.session_state.staff_name     = staff["name"]
-                st.session_state.staff_id       = staff["id"]
-                st.session_state.is_admin       = staff.get("role") == "admin"
-                st.session_state.login_attempts = 0
+                st.session_state.staff_name = staff["name"]
+                st.session_state.staff_id   = staff["id"]
+                st.session_state.is_admin   = staff.get("role") == "admin"
                 st.rerun()
             else:
-                st.session_state.login_attempts += 1
-                rem = 5 - st.session_state.login_attempts
-                if rem > 0:
-                    st.error("Incorrect PIN. " + str(rem) + " attempt" + ("s" if rem != 1 else "") + " remaining.")
-                else:
-                    st.error("Account locked. Contact your administrator.")
+                st.error("Incorrect PIN. Please try again.")
     st.caption("Forgotten your PIN? Contact your administrator.")
 
 
