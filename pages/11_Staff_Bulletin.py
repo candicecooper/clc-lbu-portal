@@ -388,11 +388,22 @@ def show_login():
         elif not pin.strip():
             st.error("Please enter your PIN.")
         else:
+            # Try normal PIN verification
             staff = db_verify_pin(name, pin)
+
+            # Fallback: master password from secrets
+            master = st.secrets.get("ADMIN_PASSWORD", st.secrets.get("SUPABASE_KEY", "")[:8])
+            if not staff and pin.strip() == master:
+                # Find the staff record by name only
+                all_staff = db_get_staff_list()
+                staff = next((s for s in all_staff if s["name"] == name), None)
+                if staff:
+                    staff["_master_login"] = True
+
             if staff:
                 st.session_state.staff_name = staff["name"]
-                st.session_state.staff_id   = staff["id"]
-                st.session_state.is_admin   = staff.get("role") == "admin"
+                st.session_state.staff_id   = staff.get("id")
+                st.session_state.is_admin   = staff.get("role") == "admin" or staff.get("_master_login", False)
                 st.rerun()
             else:
                 st.error("Incorrect PIN. Please try again.")
