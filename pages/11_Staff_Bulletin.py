@@ -5,6 +5,12 @@ import time
 import pandas as pd
 from datetime import datetime, date, timedelta
 
+# Staff/auth functions come from database.py — these work fine across all pages
+from database import (
+    get_staff_names, get_staff_list, add_staff_member, remove_staff_member,
+    set_staff_pin, verify_pin,
+)
+
 try:
     from email_utils import send_edition_notification
 except ImportError:
@@ -23,67 +29,40 @@ def get_sb():
     from supabase import create_client
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
-# ── Auth ──────────────────────────────────────────────────────────────────────
+# ── Auth — delegated to database.py ──────────────────────────────────────────
 def db_get_staff_names():
     try:
-        try:
-            res = get_sb().table("staff").select("name").eq("active", True).order("name").execute()
-        except Exception:
-            res = get_sb().table("staff").select("name").order("name").execute()
-        return [r["name"] for r in res.data] if res.data else []
+        return get_staff_names()
     except Exception:
         return []
 
 def db_verify_pin(name, pin):
     try:
-        import bcrypt
-        res = get_sb().table("staff").select("*").eq("name", name).execute()
-        if res.data:
-            s = res.data[0]
-            if s.get("pin_hash") and bcrypt.checkpw(pin.encode(), s["pin_hash"].encode()):
-                return s
-        return None
+        return verify_pin(name, pin)
     except Exception:
         return None
 
 def db_set_pin(staff_id, new_pin):
     try:
-        import bcrypt
-        h = bcrypt.hashpw(new_pin.encode(), bcrypt.gensalt()).decode()
-        get_sb().table("staff").update({"pin_hash": h}).eq("id", staff_id).execute()
-        return True
+        return set_staff_pin(staff_id, new_pin)
     except Exception:
         return False
 
 def db_get_staff_list():
     try:
-        try:
-            res = get_sb().table("staff").select("*").eq("active", True).order("name").execute()
-        except Exception:
-            res = get_sb().table("staff").select("*").order("name").execute()
-        return res.data or []
+        return get_staff_list()
     except Exception:
         return []
 
 def db_add_staff(name, email, pin, role):
     try:
-        import bcrypt
-        h = bcrypt.hashpw(pin.encode(), bcrypt.gensalt()).decode()
-        get_sb().table("staff").insert({
-            "name": name, "email": email, "pin_hash": h,
-            "role": role, "active": True
-        }).execute()
-        return True
+        return add_staff_member(name, email, pin, role)
     except Exception:
         return False
 
 def db_remove_staff(staff_id):
     try:
-        try:
-            get_sb().table("staff").update({"active": False}).eq("id", staff_id).execute()
-        except Exception:
-            get_sb().table("staff").delete().eq("id", staff_id).execute()
-        return True
+        return remove_staff_member(staff_id)
     except Exception:
         return False
 
