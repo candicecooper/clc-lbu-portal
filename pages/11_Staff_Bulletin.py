@@ -87,28 +87,28 @@ def db_get_or_create_edition():
 
 def db_get_current_published():
     try:
-        res = get_sb().table("editions").select("*").eq("status", "published").order("week_start", desc=True).limit(1).execute()
+        res = get_sb().table("weekly_editions").select("*").eq("status", "published").order("week_start", desc=True).limit(1).execute()
         return res.data[0] if res.data else None
     except Exception:
         return None
 
 def db_get_edition(edition_id):
     try:
-        res = get_sb().table("editions").select("*").eq("id", edition_id).execute()
+        res = get_sb().table("weekly_editions").select("*").eq("id", edition_id).execute()
         return res.data[0] if res.data else None
     except Exception:
         return None
 
 def db_get_all_editions():
     try:
-        res = get_sb().table("editions").select("*").order("week_start", desc=True).execute()
+        res = get_sb().table("weekly_editions").select("*").order("week_start", desc=True).execute()
         return res.data or []
     except Exception:
         return []
 
 def db_publish_edition(edition_id, published_by):
     try:
-        get_sb().table("editions").update({
+        get_sb().table("weekly_editions").update({
             "status": "published",
             "published_at": datetime.utcnow().isoformat(),
             "published_by": published_by
@@ -152,7 +152,7 @@ def db_delete_notice(notice_id):
 # ── Acknowledgements ──────────────────────────────────────────────────────────
 def db_has_acknowledged(notice_id, staff_name):
     try:
-        res = (get_sb().table("responses")
+        res = (get_sb().table("notice_responses")
                .select("id")
                .eq("notice_id", notice_id)
                .eq("staff_name", staff_name)
@@ -372,24 +372,28 @@ def show_login():
     st.markdown("**Cowandilla Learning Centre — LBU**")
     st.write("")
 
-    email = st.text_input("Your email", placeholder="e.g. candice@clc.edu.au")
-    pin   = st.text_input("PIN", type="password", placeholder="Enter your PIN")
+    staff_names = db_get_staff_names()
+    if not staff_names:
+        st.warning("No staff set up yet. Please contact your administrator.")
+        return
+
+    name = st.selectbox("Your name", ["Select your name"] + staff_names)
+    pin  = st.text_input("PIN", type="password", placeholder="Enter your PIN")
 
     if st.button("Sign In", type="primary"):
-        if not email.strip():
-            st.error("Please enter your email.")
+        if name == "Select your name":
+            st.error("Please select your name.")
         elif not pin.strip():
             st.error("Please enter your PIN.")
         else:
-            # verify_pin in database.py uses email as the lookup key
-            staff = db_verify_pin(email.strip(), pin.strip())
+            staff = db_verify_pin(name, pin)
             if staff:
                 st.session_state.staff_name = staff["name"]
                 st.session_state.staff_id   = staff.get("id")
                 st.session_state.is_admin   = staff.get("role") == "admin"
                 st.rerun()
             else:
-                st.error("Incorrect email or PIN. Please try again.")
+                st.error("Incorrect PIN. Please try again.")
     st.caption("Forgotten your PIN? Contact your administrator.")
 
 
