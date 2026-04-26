@@ -66,19 +66,63 @@ def db_remove_staff(staff_id):
     except Exception:
         return False
 
+# ── Adelaide time helpers ─────────────────────────────────────────────────────
+from datetime import timezone
+
+ADELAIDE = timezone(timedelta(hours=9, minutes=30))  # ACST (standard; ACDT=+10:30)
+
+def adl_now() -> datetime:
+    return datetime.now(tz=ADELAIDE)
+
+def adl_today() -> date:
+    return adl_now().date()
+
+def target_monday() -> date:
+    """
+    Which week's edition should be active right now?
+    - Fri/Sat/Sun  → NEXT week (open for early entry)
+    - Mon–Tue 3pm  → THIS week (still accepting entries)
+    - Tue 3pm+     → THIS week locked; next week draft already created
+    - Wed/Thu      → THIS week (published or about to be)
+    """
+    today   = adl_today()
+    weekday = today.weekday()  # 0=Mon … 6=Sun
+    this_monday = today - timedelta(days=weekday)
+    if weekday >= 4:           # Fri=4, Sat=5, Sun=6
+        return this_monday + timedelta(weeks=1)
+    return this_monday
+
+def edition_week_label(monday: date) -> str:
+    return monday.strftime("Week of %-d %B %Y")
+
+def is_entry_open(edition) -> bool:
+    """True if staff can still add items (before Tuesday 3pm Adelaide)."""
+    try:
+        monday   = date.fromisoformat(str(edition["week_start"]))
+        deadline = datetime(monday.year, monday.month, monday.day,
+                            tzinfo=ADELAIDE) + timedelta(days=1, hours=15)
+        return adl_now() < deadline
+    except Exception:
+        return True
+
+def should_send_reminder(edition) -> bool:
+    """True if it's past Tuesday 3pm and reminder hasn't been sent yet."""
+    if edition.get("reminder_sent"):
+        return False
+    return not is_entry_open(edition)
+
 # ── Editions ──────────────────────────────────────────────────────────────────
 def db_get_or_create_edition():
     try:
-        sb = get_sb()
-        today  = date.today()
-        monday = today - timedelta(days=today.weekday())
-        week_label = monday.strftime("Week of %-d %B %Y")
-        res = sb.table("editions").select("*").eq("week_start", monday.isoformat()).execute()
+        sb     = get_sb()
+        monday = target_monday()
+        label  = edition_week_label(monday)
+        res    = sb.table("weekly_editions").select("*").eq("week_start", monday.isoformat()).execute()
         if res.data:
             return res.data[0]
-        ins = sb.table("editions").insert({
+        ins = sb.table("weekly_editions").insert({
             "week_start": monday.isoformat(),
-            "week_label": week_label,
+            "week_label": label,
             "status": "draft"
         }).execute()
         return ins.data[0] if ins.data else None
@@ -430,6 +474,46 @@ def show_bulletin():
 # ══════════════════════════════════════════════════════════════════════════════
 # COMPOSE AND SEND
 # ══════════════════════════════════════════════════════════════════════════════
+def send_reminder_email(edition):
+    """Send Tuesday close-of-entries reminder to admin."""
+    try:
+        staff_list = db_get_staff_list()
+        admin_emails = [s["email"] for s in staff_list if s.get("role") == "admin" and s.get("email")]
+        if not admin_emails:
+            admin_emails = [s["email"] for s in staff_list if s.get("email")][:1]
+        notices = db_get_notices(edition["id"])
+        week    = edition.get("week_label", "this week")
+        n       = len(notices)
+        for email in admin_emails:
+            try:
+                import smtplib
+                from email.mime.text import MIMEText
+                from email.mime.multipart import MIMEMultipart
+                msg = MIMEMultipart("alternative")
+                msg["Subject"] = f"CLC Staff Bulletin — {week} ready to review"
+                msg["From"]    = st.secrets.get("SMTP_FROM", st.secrets.get("SMTP_USER", ""))
+                msg["To"]      = email
+                body = f"""
+<h2>📋 CLC Staff Bulletin — Entries Closed</h2>
+<p>Staff submissions for <strong>{week}</strong> are now closed (Tuesday 3pm).</p>
+<p><strong>{n} item{"s" if n != 1 else ""}</strong> {"have" if n != 1 else "has"} been submitted.</p>
+<p>Please review and send the bulletin when ready:</p>
+<p><a href="{st.secrets.get('APP_URL', 'https://clc-lbu-portal.onrender.com')}/Staff_Bulletin">
+Open Staff Bulletin →</a></p>
+"""
+                msg.attach(MIMEText(body, "html"))
+                with smtplib.SMTP(st.secrets["SMTP_HOST"], int(st.secrets.get("SMTP_PORT", 587))) as s:
+                    s.starttls()
+                    s.login(st.secrets["SMTP_USER"], st.secrets["SMTP_PASSWORD"])
+                    s.sendmail(msg["From"], email, msg.as_string())
+            except Exception:
+                pass
+        # Mark reminder sent
+        get_sb().table("weekly_editions").update({"reminder_sent": True}).eq("id", edition["id"]).execute()
+        return True
+    except Exception:
+        return False
+
 def show_compose():
     app_header()
     nav_bar("compose")
@@ -443,7 +527,14 @@ def show_compose():
         return
 
     notices = db_get_notices(edition["id"])
-    is_sent = edition.get("status") == "published"
+    is_sent  = edition.get("status") == "published"
+    locked   = not is_entry_open(edition) and not is_sent
+
+    # ── Auto-send Tuesday reminder if due ────────────────────────────────────
+    if locked and should_send_reminder(edition) and st.session_state.is_admin:
+        sent = send_reminder_email(edition)
+        if sent:
+            st.toast("📧 Reminder email sent — entries are now closed for this week.")
 
     if is_sent:
         st.markdown(
@@ -456,7 +547,21 @@ def show_compose():
             + (" items" if len(notices) != 1 else " item") + "</div></div>",
             unsafe_allow_html=True
         )
+    elif locked:
+        monday = date.fromisoformat(str(edition["week_start"]))
+        deadline_str = (monday + timedelta(days=1)).strftime("Tuesday %-d %B") + " at 3:00pm"
+        st.markdown(
+            '<div style="background:#fee2e2;border:2px solid #dc2626;'
+            'border-radius:var(--radius);padding:14px 20px;margin-bottom:20px;">'
+            '<div style="font-weight:700;color:#991b1b;font-size:15px;">🔒 Entries closed — '
+            + edition["week_label"] + '</div>'
+            '<div style="font-size:13px;color:#7f1d1d;margin-top:2px;">Submissions closed '
+            + deadline_str + ". Review items below and send when ready.</div></div>",
+            unsafe_allow_html=True
+        )
     else:
+        monday = date.fromisoformat(str(edition["week_start"]))
+        deadline_str = (monday + timedelta(days=1)).strftime("Tuesday %-d %B") + " at 3:00pm"
         st.markdown(
             '<div style="background:var(--amber-light);border:2px solid #F59E0B;'
             'border-radius:var(--radius);padding:14px 20px;margin-bottom:20px;">'
@@ -464,7 +569,7 @@ def show_compose():
             + edition["week_label"] + '</div>'
             '<div style="font-size:13px;color:var(--amber);margin-top:2px;">'
             + str(len(notices)) + (" items" if len(notices) != 1 else " item")
-            + " · Not sent yet</div></div>",
+            + " · Open for entry until " + deadline_str + "</div></div>",
             unsafe_allow_html=True
         )
 
@@ -500,7 +605,7 @@ def show_compose():
 
     st.write("")
 
-    if not is_sent:
+    if not is_sent and not locked:
         with st.expander("Add Item", expanded=len(notices) == 0):
             with st.form("add_item", clear_on_submit=True):
                 cat     = st.selectbox("Category", list(CAT_LABELS.keys()),
@@ -521,33 +626,33 @@ def show_compose():
                         time.sleep(0.3)
                         st.rerun()
 
-        if notices:
-            st.markdown("---")
-            if not st.session_state.get("confirm_send"):
-                if st.button("Send to All Staff", type="primary", use_container_width=True):
-                    st.session_state["confirm_send"] = True
-                    st.rerun()
-            else:
-                staff_list = db_get_staff_list()
-                emails     = [s["email"] for s in staff_list if s.get("email")]
-                st.warning("This will email " + str(len(emails)) +
-                           " staff and log to meeting minutes. Confirm?")
-                s1, s2 = st.columns(2)
-                with s1:
-                    if st.button("Yes, Send Now", type="primary", use_container_width=True):
-                        if db_publish_edition(edition["id"], st.session_state.staff_name):
-                            send_edition_notification(
-                                edition["week_label"], len(notices), emails,
-                                st.secrets.get("APP_URL", "")
-                            )
-                            st.session_state["confirm_send"] = False
-                            st.success("Bulletin sent!")
-                            time.sleep(1.5)
-                            st.rerun()
-                with s2:
-                    if st.button("Cancel", use_container_width=True):
+    if notices and not is_sent:
+        st.markdown("---")
+        if not st.session_state.get("confirm_send"):
+            if st.button("Send to All Staff", type="primary", use_container_width=True):
+                st.session_state["confirm_send"] = True
+                st.rerun()
+        else:
+            staff_list = db_get_staff_list()
+            emails     = [s["email"] for s in staff_list if s.get("email")]
+            st.warning("This will email " + str(len(emails)) +
+                       " staff and log to meeting minutes. Confirm?")
+            s1, s2 = st.columns(2)
+            with s1:
+                if st.button("Yes, Send Now", type="primary", use_container_width=True):
+                    if db_publish_edition(edition["id"], st.session_state.staff_name):
+                        send_edition_notification(
+                            edition["week_label"], len(notices), emails,
+                            st.secrets.get("APP_URL", "")
+                        )
                         st.session_state["confirm_send"] = False
+                        st.success("Bulletin sent!")
+                        time.sleep(1.5)
                         st.rerun()
+            with s2:
+                if st.button("Cancel", use_container_width=True):
+                    st.session_state["confirm_send"] = False
+                    st.rerun()
 
     if is_sent:
         st.markdown("---")
