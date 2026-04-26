@@ -688,7 +688,24 @@ if params.get("display") == "true":
 
     r1c1, r1c2, r1c3, r1c4, r1c5 = st.columns([2,2,2.5,1.5,2])
     with r1c1:
-        st.markdown(f'<div class="dp"><div class="dp-header green">🙅 Staff & Student Absent</div><div class="dp-body"><table class="dt"><tr><th>Staff</th><th>TRT</th><th>Student</th><th>Program</th><th>Reason</th></tr>{tbl_rows(d_data.get("staff_absent",[]), ["Staff Absence","TRT","Student Absence","Program","Reason"])}</table></div></div>', unsafe_allow_html=True)
+        # ── SPLIT: Staff Absent and Student Absent as two separate tables ──
+        _sa = d_data.get("staff_absent", [])
+        _staff_rows   = [r for r in _sa if r.get("Staff Absence", "").strip()]
+        _student_rows = [r for r in _sa if r.get("Student Absence", "").strip()]
+        st.markdown(
+            f'<div class="dp"><div class="dp-header green">🙅 Staff Absent</div>'
+            f'<div class="dp-body"><table class="dt">'
+            f'<tr><th>Staff</th><th>TRT</th><th>Reason</th></tr>'
+            f'{tbl_rows(_staff_rows, ["Staff Absence","TRT","Reason"])}'
+            f'</table></div></div>'
+            f'<div style="height:6px;"></div>'
+            f'<div class="dp"><div class="dp-header blue">🎒 Student Absent</div>'
+            f'<div class="dp-body"><table class="dt">'
+            f'<tr><th>Student</th><th>Program</th><th>Reason</th></tr>'
+            f'{tbl_rows(_student_rows, ["Student Absence","Program","Reason"])}'
+            f'</table></div></div>',
+            unsafe_allow_html=True
+        )
     with r1c2:
         st.markdown(f'<div class="dp"><div class="dp-header blue">🚌 Excursions</div><div class="dp-body"><table class="dt"><tr><th>Program</th><th>Staff</th><th>Depart</th><th>Return</th><th>Location</th></tr>{tbl_rows(d_data.get("excursions",[]), ["Program","Staff Member","Time Departing","Time Returning","Location"])}</table></div></div>', unsafe_allow_html=True)
     with r1c3:
