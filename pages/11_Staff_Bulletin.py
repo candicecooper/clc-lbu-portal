@@ -371,42 +371,25 @@ def show_login():
     st.markdown("## 📋 CLC Staff Bulletin")
     st.markdown("**Cowandilla Learning Centre — LBU**")
     st.write("")
-    st.markdown("Select your name and enter your PIN to continue.")
-    st.write("")
 
-    staff_names = db_get_staff_names()
-    if not staff_names:
-        st.warning("No staff set up yet. Please contact your administrator.")
-        return
-
-    name = st.selectbox("Your name", ["Select your name"] + staff_names)
-    pin  = st.text_input("PIN", type="password", placeholder="Enter your PIN")
+    email = st.text_input("Your email", placeholder="e.g. candice@clc.edu.au")
+    pin   = st.text_input("PIN", type="password", placeholder="Enter your PIN")
 
     if st.button("Sign In", type="primary"):
-        if name == "Select your name":
-            st.error("Please select your name.")
+        if not email.strip():
+            st.error("Please enter your email.")
         elif not pin.strip():
             st.error("Please enter your PIN.")
         else:
-            # Try normal PIN verification
-            staff = db_verify_pin(name, pin)
-
-            # Fallback: master password from secrets
-            master = st.secrets.get("ADMIN_PASSWORD", st.secrets.get("SUPABASE_KEY", "")[:8])
-            if not staff and pin.strip() == master:
-                # Find the staff record by name only
-                all_staff = db_get_staff_list()
-                staff = next((s for s in all_staff if s["name"] == name), None)
-                if staff:
-                    staff["_master_login"] = True
-
+            # verify_pin in database.py uses email as the lookup key
+            staff = db_verify_pin(email.strip(), pin.strip())
             if staff:
                 st.session_state.staff_name = staff["name"]
                 st.session_state.staff_id   = staff.get("id")
-                st.session_state.is_admin   = staff.get("role") == "admin" or staff.get("_master_login", False)
+                st.session_state.is_admin   = staff.get("role") == "admin"
                 st.rerun()
             else:
-                st.error("Incorrect PIN. Please try again.")
+                st.error("Incorrect email or PIN. Please try again.")
     st.caption("Forgotten your PIN? Contact your administrator.")
 
 
