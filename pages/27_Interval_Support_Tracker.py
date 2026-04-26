@@ -72,7 +72,6 @@ SUPPORT_TYPES = [
     "Visual supports", "Modified task", "Sensory break", "Peer support",
 ]
 
-# How the student is grouped / supported during this interval
 GROUPING_TYPES = {
     "1:1":         "1:1",
     "independent": "Independent",
@@ -80,7 +79,6 @@ GROUPING_TYPES = {
     "large_group": "Large group (≤10)",
 }
 
-# Type of activity — multi-select (stored as comma-separated string)
 ACTIVITY_TYPES = [
     "Structured",
     "Unstructured",
@@ -112,13 +110,13 @@ def load_known_students():
         res = sb.table("interval_support_observations").select("student_name").execute()
         all_names = sorted({r["student_name"] for r in (res.data or [])
                             if r.get("student_name","").strip()})
-        # Filter out archived
         try:
-            ar = sb.table("interval_archived_students")                   .select("student_name").eq("archived", True).execute()
+            ar = sb.table("interval_archived_students") \
+                   .select("student_name").eq("archived", True).execute()
             archived = {r["student_name"] for r in (ar.data or [])}
             all_names = [n for n in all_names if n not in archived]
         except Exception:
-            pass  # archive table may not exist yet — ignore
+            pass
         return all_names
     except Exception:
         return []
@@ -216,30 +214,63 @@ st.markdown("""
 
 # ── Student selector ──────────────────────────────────────────────────────────
 known = load_known_students()
-opts  = ["— type name —"] + known
-cur_i = opts.index(ss.ist_name) if ss.ist_name in opts else 0
-sc1, sc2 = st.columns([4,1])
-with sc1:
-    sel_opt = st.selectbox("Student", opts, index=cur_i, key="ist_sel_opt")
-    if sel_opt != "— type name —" and sel_opt != ss.ist_name:
-        ss.ist_name = sel_opt; st.rerun()
-with sc2:
-    st.markdown("<div style='padding-top:1.8rem;'>", unsafe_allow_html=True)
-    if st.button("New", key="ist_new", use_container_width=True): ss.ist_name = ""
-    st.markdown("</div>", unsafe_allow_html=True)
 
 if not ss.ist_name:
-    new_n = st.text_input("Student name", placeholder="Type and press Enter", key="ist_name_inp")
-    if new_n.strip(): ss.ist_name = new_n.strip(); st.rerun()
+    st.markdown("#### Select or add a student")
+
+    if known:
+        opts = ["— select existing —"] + known
+        sel_opt = st.selectbox("Existing students", opts, index=0, key="ist_sel_opt")
+        if sel_opt != "— select existing —":
+            ss.ist_name = sel_opt
+            st.rerun()
+        st.markdown(
+            "<div style='text-align:center;color:#94a3b8;font-size:.82rem;"
+            "padding:.4rem 0;'>— or add a new student below —</div>",
+            unsafe_allow_html=True)
+    else:
+        st.info("No students tracked yet. Add the first one below.")
+
+    with st.form("ist_new_student_form", clear_on_submit=True):
+        new_n = st.text_input(
+            "New student name",
+            placeholder="e.g. Alex Smith",
+            key="ist_name_inp"
+        )
+        submitted = st.form_submit_button(
+            "▶ Start tracking", type="primary", use_container_width=True
+        )
+    if submitted:
+        if new_n.strip():
+            ss.ist_name = new_n.strip()
+            st.rerun()
+        else:
+            st.error("Please enter a student name.")
+
     st.stop()
 
 student_name = ss.ist_name
-nc1, nc2 = st.columns([5,1])
-with nc1:
-    st.markdown(f"**{student_name}**", unsafe_allow_html=True)
-with nc2:
-    if st.button("← Change", key="ist_chg", use_container_width=True):
-        ss.ist_name = ""; st.rerun()
+
+# Active student bar
+bar1, bar2, bar3 = st.columns([5, 1, 1])
+with bar1:
+    st.markdown(
+        f'<div style="background:#EBF4F9;border:1.5px solid #1A6B8A;border-radius:8px;'
+        f'padding:.45rem .9rem;font-weight:700;color:#1A6B8A;font-size:.95rem;">'
+        f'👤 {student_name}</div>',
+        unsafe_allow_html=True)
+with bar2:
+    if known and len(known) > 1:
+        other = [n for n in known if n != student_name]
+        switch = st.selectbox("Switch", ["—"] + other, index=0,
+                              key="ist_switch", label_visibility="collapsed")
+        if switch != "—":
+            ss.ist_name = switch
+            st.rerun()
+with bar3:
+    if st.button("+ New", key="ist_new", use_container_width=True):
+        ss.ist_name = ""
+        st.rerun()
 
 # ── Archive management ───────────────────────────────────────────────────
 with st.expander("🗄️ Archive / manage student data", expanded=False):
@@ -262,7 +293,6 @@ with st.expander("🗄️ Archive / manage student data", expanded=False):
                     sb = get_sb()
                     if sb:
                         try:
-                            # Add archived flag via a separate small table
                             sb.table("interval_archived_students").upsert(
                                 {"student_name": arch_name, "archived": True},
                                 on_conflict="student_name"
@@ -279,7 +309,6 @@ with st.expander("🗄️ Archive / manage student data", expanded=False):
                     ss["ist_confirm_del"] = arch_name
                     st.rerun()
 
-            # Confirm delete
             if ss.get("ist_confirm_del") == arch_name:
                 st.warning(f"⚠️ This permanently deletes all interval data for **{arch_name}**.")
                 confirm = st.text_input("Type the student name to confirm",
@@ -289,9 +318,11 @@ with st.expander("🗄️ Archive / manage student data", expanded=False):
                         sb = get_sb()
                         if sb:
                             try:
-                                sb.table("interval_support_observations").delete()                                  .eq("student_name", arch_name).execute()
+                                sb.table("interval_support_observations").delete() \
+                                  .eq("student_name", arch_name).execute()
                                 try:
-                                    sb.table("interval_archived_students").delete()                                      .eq("student_name", arch_name).execute()
+                                    sb.table("interval_archived_students").delete() \
+                                      .eq("student_name", arch_name).execute()
                                 except Exception:
                                     pass
                                 ss.pop("ist_confirm_del", None)
@@ -309,7 +340,8 @@ with st.expander("🗄️ Archive / manage student data", expanded=False):
         archived_names = []
         if sb:
             try:
-                ar = sb.table("interval_archived_students")                       .select("student_name").eq("archived", True).execute()
+                ar = sb.table("interval_archived_students") \
+                       .select("student_name").eq("archived", True).execute()
                 archived_names = [r["student_name"] for r in (ar.data or [])]
             except Exception:
                 pass
@@ -408,7 +440,6 @@ with t_record:
     # ════════════════════════════════════════════════════════════════════
     # INTERACTIVE GRID — each cell is a Streamlit button
     # ════════════════════════════════════════════════════════════════════
-    # Header row: Time label + 5 day columns
     hdr_cols = st.columns([1.2] + [1]*5)
     with hdr_cols[0]:
         st.markdown(
@@ -430,31 +461,26 @@ with t_record:
                 f'{d_date.strftime("%-d/%m")}</span></div>',
                 unsafe_allow_html=True)
 
-    # Data rows: one row per time slot
     for t in SLOT_TIMES:
         row_cols = st.columns([1.2] + [1]*5)
 
-        # Time label
         is_sel_time = (t == sel_time)
         with row_cols[0]:
             st.markdown(
-                f'<div style="font-size:.72rem;font-weight:{'700' if is_sel_time else '500'};'
-                f'color:{TEAL if is_sel_time else '#475569'};'
-                f'background:{'#EBF4F9' if is_sel_time else '#f8fafc'};'
+                f'<div style="font-size:.72rem;font-weight:{"700" if is_sel_time else "500"};'
+                f'color:{TEAL if is_sel_time else "#475569"};'
+                f'background:{"#EBF4F9" if is_sel_time else "#f8fafc"};'
                 f'border-radius:6px;padding:.28rem .4rem;text-align:center;'
-                f'border:{"1.5px solid "+TEAL if is_sel_time else '1px solid #e2e8f0'};">'
+                f'border:{"1.5px solid "+TEAL if is_sel_time else "1px solid #e2e8f0"};">'
                 f'{t}</div>', unsafe_allow_html=True)
 
-        # Day cells
         for di, d in enumerate(DAYS):
             cell    = cell_data.get(t,{}).get(d,{})
             reg     = cell.get("regulated","") or ""
             grp     = cell.get("grouping_type","") or ""
-            acts    = cell.get("activity_types","") or ""
             cfg     = REG_STATES.get(reg,{})
             is_this_cell = (t == sel_time and d == sel_day)
 
-            # Build cell label
             if reg:
                 bg_c   = cfg.get("bg","#f1f5f9")
                 fg_c   = cfg.get("fg","#334155")
@@ -465,9 +491,6 @@ with t_record:
                 bg_c   = "#f8fafc"
                 fg_c   = "#cbd5e1"
                 cell_txt = "·"
-
-            # Selected cell gets gold border highlight
-            border_style = "2px solid #fbbf24" if is_this_cell else "1px solid #e2e8f0"
 
             with row_cols[di+1]:
                 btn_clicked = st.button(
@@ -480,8 +503,6 @@ with t_record:
                     ss.ist_sel_time = t
                     ss.ist_sel_day  = d
                     st.rerun()
-
-
 
     st.markdown("---")
 
@@ -508,12 +529,10 @@ with t_record:
            '</span> <span style="color:#94a3b8;font-size:.8rem;">— tap a field to record</span>')
         + '</div>', unsafe_allow_html=True)
 
-    # All four fields in one white card, two rows of two
     st.markdown(
         '<div style="background:white;border:1px solid #e2e8f0;border-radius:10px;padding:.6rem .9rem;">',
         unsafe_allow_html=True)
 
-    # Row A: Regulation + Grouping side by side
     fa1, fa2 = st.columns(2)
     with fa1:
         st.markdown('<div style="font-size:.65rem;font-weight:700;color:#1A6B8A;margin-bottom:.1rem;">'
@@ -522,7 +541,6 @@ with t_record:
             is_sel = (cur_reg == val)
             col_a, col_b = st.columns([5,1]) if is_sel else [st.container(), None]
             if col_b is None:
-                # Use full width button
                 if st.button(cfg["emoji"]+" "+cfg["label"],
                              key=f"rf_{val}_{sel_time}_{sel_day}",
                              use_container_width=True,
@@ -538,7 +556,7 @@ with t_record:
                         upsert_field(student_name, sel_date, sel_day, sel_time,
                                      "regulated", ""); st.rerun()
                 with col_b:
-                    pass  # selected indicator
+                    pass
 
     with fa2:
         st.markdown('<div style="font-size:.65rem;font-weight:700;color:#1A6B8A;margin-bottom:.1rem;">'
@@ -554,7 +572,6 @@ with t_record:
     st.markdown('<div style="border-top:1px solid #f1f5f9;margin:.4rem 0;"></div>',
                 unsafe_allow_html=True)
 
-    # Row B: Activity type + Outcome side by side
     fb1, fb2 = st.columns(2)
     with fb1:
         st.markdown('<div style="font-size:.65rem;font-weight:700;color:#1A6B8A;margin-bottom:.1rem;">'
@@ -589,6 +606,7 @@ with t_record:
                 clear_interval(student_name, sel_date, sel_time); st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 # ════════════════════════════════════════════════════════════════════════════
 # ANALYSIS
 # ════════════════════════════════════════════════════════════════════════════
@@ -631,7 +649,6 @@ with t_analysis:
 
     st.markdown("---")
 
-    # Chart 1: Regulation by time slot (stacked bar)
     st.markdown("##### Regulation state across the day")
     slot_df = filt.groupby(["time_slot","State"]).size().reset_index(name="n")
     slot_df["sort_k"] = slot_df["time_slot"].apply(
@@ -651,7 +668,6 @@ with t_analysis:
 
     st.markdown("---")
 
-    # Chart 2: Daily % in-window trend (line)
     st.markdown("##### Daily regulation trend — % in window vs coping vs dysregulated")
     daily = filt.groupby("obs_date_dt").apply(lambda g: pd.Series({
         "pct_win":  round(100*(g["regulated"]=="in_window").sum()/len(g)),
@@ -684,7 +700,6 @@ with t_analysis:
 
     st.markdown("---")
 
-    # Chart 3: Grouping effectiveness heatmap
     st.markdown("##### Which grouping/support arrangement is most associated with regulation?")
     sup_filt = filt[
         filt["grouping_type"].notna() &
@@ -700,9 +715,7 @@ with t_analysis:
         fig3 = px.imshow(
             pivot_pct.round(1),
             color_continuous_scale=["#dc2626","#fef9c3","#16a34a"],
-            zmin=0, zmax=100,
-            aspect="auto",
-            text_auto=".0f",
+            zmin=0, zmax=100, aspect="auto", text_auto=".0f",
             labels=dict(x="Regulation state", y="Support type", color="%"),
         )
         fig3.update_layout(
@@ -719,7 +732,6 @@ with t_analysis:
 
     st.markdown("---")
 
-    # Chart 4: Day of week breakdown
     st.markdown("##### Regulation by day of week")
     dow = filt.groupby(["day_of_week","State"]).size().reset_index(name="n")
     dow["sort_k"] = dow["day_of_week"].apply(lambda d: DAYS.index(d) if d in DAYS else 9)
@@ -736,7 +748,6 @@ with t_analysis:
 
     st.markdown("---")
 
-    # Chart 5: Activity type vs regulation (explode multi-select)
     if "activity_types" in filt.columns:
         act_rows = []
         for _, row in filt.iterrows():
