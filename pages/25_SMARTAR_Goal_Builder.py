@@ -267,27 +267,40 @@ def get_recent_tracking(goal_id, sessions=5):
         return []
 
 
-def upsert_session(goal_id, student_name, session_time, performance_level):
-    today = date.today().isoformat()
+def upsert_session(goal_id, student_name, session_time, performance_level,
+                   track_date=None):
+    """Always INSERT new observation — allows multiple per session per day."""
+    record_date = track_date or date.today().isoformat()
     try:
-        ex = (
-            sb.table("smartar_tracking").select("id")
-            .eq("goal_id", goal_id)
-            .eq("session_date", today)
-            .eq("session_time", session_time)
-            .execute().data
-        )
-        payload = {
-            "goal_id": goal_id, "student_name": student_name,
-            "session_date": today, "session_time": session_time,
+        sb.table("smartar_tracking").insert({
+            "goal_id":           goal_id,
+            "student_name":      student_name,
+            "session_date":      record_date,
+            "session_time":      session_time,
             "performance_level": performance_level,
-        }
-        if ex:
-            sb.table("smartar_tracking").update(payload).eq("id", ex[0]["id"]).execute()
-        else:
-            sb.table("smartar_tracking").insert(payload).execute()
+        }).execute()
     except Exception as e:
         st.error(f"Save error: {e}")
+
+
+def get_session_counts(goal_id, track_date):
+    """Returns {session_time: {performance_level: count}} for given date."""
+    try:
+        rows = (
+            sb.table("smartar_tracking").select("session_time, performance_level")
+            .eq("goal_id", goal_id)
+            .eq("session_date", track_date)
+            .execute().data or []
+        )
+        counts = {}
+        for r in rows:
+            s = r["session_time"]
+            p = r["performance_level"]
+            counts.setdefault(s, {})
+            counts[s][p] = counts[s].get(p, 0) + 1
+        return counts
+    except Exception:
+        return {}
 
 
 def archive_goal(goal_id, reason: str = ""):
@@ -835,6 +848,10 @@ elif view == "📋 Goal Builder":
                             if st.button("Confirm Archive", key=f"arch_gb_d_{g['id']}", type="primary"):
                                 if archive_goal(g["id"], reason):
                                     st.session_state.pop(f"arch_gb_{g['id']}", None)
+                                    # Pre-fill exclusion goal from archived goal for new build
+                                    st.session_state["build_new_after_archive"] = True
+                                    st.session_state["archived_excl_goal"] = g.get("exclusion_goal","")
+                                    st.session_state["archived_student"] = g.get("student_name","")
                                     st.rerun()
                         with cb:
                             if st.button("Cancel", key=f"arch_gb_x_{g['id']}"):
@@ -843,12 +860,29 @@ elif view == "📋 Goal Builder":
 
         # ── NEW GOAL FORM ─────────────────────────────────────────────────────
         st.markdown("---")
-        st.subheader("Add New Goal")
-        st.markdown(
-            "**Step 1 — Exclusion Goal from Home School**"
-        )
+
+        build_after_archive = st.session_state.get("build_new_after_archive", False)
+
+        if build_after_archive:
+            st.markdown(
+                f'<div class="success-box">✅ Goal archived. Now build an updated '
+                f'SMARTAR goal for <strong>{selected_name}</strong> using the hierarchy of prompts below.</div>',
+                unsafe_allow_html=True,
+            )
+            if st.button("✖ Cancel — go back", key="cancel_new_after_arch"):
+                st.session_state.pop("build_new_after_archive", None)
+                st.session_state.pop("archived_excl_goal", None)
+                st.rerun()
+            excl_goal_default = st.session_state.get("archived_excl_goal", "")
+            st.subheader("Build Updated Goal")
+        else:
+            st.subheader("Add New Goal")
+            st.markdown("**Step 1 — Exclusion Goal from Home School**")
+            excl_goal_default = ""
+
         excl_goal = st.text_area(
             "🏫 Exclusion Goal (from main school)",
+            value=excl_goal_default,
             placeholder="Paste the exclusion goal as received from the main school…",
             height=80,
         )
@@ -895,19 +929,35 @@ elif view == "📋 Goal Builder":
         st.markdown("**Step 3 — Refine and Finalise the SMARTAR Goal**")
 
         # AI refinement
-        if groq_client and assembled:
+        if assembled:
             if st.button("✨ Refine Goal with AI", type="primary", key="refine_btn"):
                 with st.spinner("Refining goal…"):
                     refined = groq_call(
-                        f"""Refine this goal into clear, professional, student-centred language 
-suitable for an IEP/support plan. Keep all specific details (grouping, task, setting, prompts, rate). 
-Return ONLY the refined goal statement — no explanation, no preamble.
+                        f"""You are an expert at writing SMARTAR goals for students in alternative education settings.
 
-Goal to refine: {assembled}"""
+Rewrite this assembled goal into a single, fluent, professional goal statement suitable for an IEP.
+Rules:
+- Fix any repeated or doubled words (e.g. "during during" → "during")
+- Use "{student_first}" as the subject, starting with "{student_first} will..."
+- Keep ALL specific details: the skill/behaviour, grouping, task type, setting, prompt level, and success rate
+- Write in one clear sentence — no preamble, no explanation, just the goal
+- Language must be trauma-informed and strengths-based
+- Do NOT add words like "appropriately", "independently" unless they were in the original
+
+Assembled goal to refine:
+{assembled}
+
+Return ONLY the final goal statement."""
                     )
-                    st.session_state["refined_goal"] = refined
-                    st.session_state.pop("gb_ai_period", None)
-                    st.rerun()
+                    if refined and "[AI unavailable" not in refined:
+                        st.session_state["refined_goal"] = refined
+                        st.session_state.pop("gb_ai_period", None)
+                        st.rerun()
+                    else:
+                        st.warning("AI unavailable — edit the assembled goal manually below.")
+        elif not skill:
+            st.caption("💡 Fill in the skill/behaviour field above to enable AI refinement.")
+
 
         refined_goal = st.session_state.get("refined_goal", assembled)
         final_goal   = st.text_area(
@@ -1027,9 +1077,36 @@ No markdown, no explanation, pure JSON only."""
                     "week":       integration["week"],
                 })
 
+            # Auto-generate GAS if not already filled
+            if not any(edited_gas.values()) and final_goal.strip() and groq_client:
+                with st.spinner("Auto-generating GAS performance levels…"):
+                    gas_prompt = f"""Create a Goal Attainment Scale (GAS) for this SMARTAR goal:
+
+"{final_goal.strip()}"
+
+The EXPECTED level (0) IS the goal as written. Scale above and below it.
+Only modify the rate/frequency/success criteria to show each level.
+
+Return ONLY valid JSON with these exact keys: EXCEEDING, ABOVE, EXPECTED, BELOW, NOT_YET
+No markdown, no preamble, pure JSON only."""
+                    raw = groq_call(gas_prompt)
+                    try:
+                        raw_clean  = raw.strip().strip("```json").strip("```").strip()
+                        gas_parsed = json.loads(raw_clean)
+                        if "NOT_YET" in gas_parsed:
+                            gas_parsed["NOT YET"] = gas_parsed.pop("NOT_YET")
+                        new_goal["gas_exceeding"] = gas_parsed.get("EXCEEDING","")
+                        new_goal["gas_above"]     = gas_parsed.get("ABOVE","")
+                        new_goal["gas_expected"]  = gas_parsed.get("EXPECTED","")
+                        new_goal["gas_below"]     = gas_parsed.get("BELOW","")
+                        new_goal["gas_not_yet"]   = gas_parsed.get("NOT YET","")
+                    except Exception:
+                        pass  # Save without GAS if AI fails
+
             sb.table("smartar_goals").insert(new_goal).execute()
 
-            for k in ["refined_goal", "gas_levels", "gb_ai_period"]:
+            for k in ["refined_goal", "gas_levels", "gb_ai_period",
+                      "build_new_after_archive", "archived_excl_goal", "archived_student"]:
                 st.session_state.pop(k, None)
 
             st.success(f"✅ Goal saved for {selected_name}!")
@@ -1068,13 +1145,7 @@ elif view == "📊 Daily Tracking":
     st.markdown("---")
 
     for idx, goal in enumerate(goals, 1):
-        today_rows     = (
-            sb.table("smartar_tracking").select("*")
-            .eq("goal_id", goal["id"])
-            .eq("session_date", track_date.isoformat())
-            .execute().data or []
-        )
-        today_sessions = {r["session_time"]: r["performance_level"] for r in today_rows}
+        # today_sessions not used for display — get_session_counts handles counts
         gas            = get_gas_dict(goal)
         needs_ref, low_c = check_goal_needs_refinement(goal["id"])
 
@@ -1113,22 +1184,26 @@ elif view == "📊 Daily Tracking":
                             unsafe_allow_html=True,
                         )
 
-        st.markdown("**Record session:**")
-        sess_cols = st.columns(len(sessions))
+        st.markdown("**Record observation:**")
+        st.caption("Each button tap adds one observation — tap as many times as observed.")
+        sess_counts = get_session_counts(goal["id"], track_date.isoformat())
+        sess_cols   = st.columns(len(sessions))
 
         for i, session in enumerate(sessions):
+            lvl_counts = sess_counts.get(session, {})
+            total_obs  = sum(lvl_counts.values())
             with sess_cols[i]:
-                st.markdown(f"**{session}**")
-                current = today_sessions.get(session)
-                if current:
-                    st.markdown(f"Currently: {LEVEL_EMOJI.get(current,'')} **{current}**")
+                obs_label = f"**{session}**" + (f" · {total_obs} obs" if total_obs else "")
+                st.markdown(obs_label)
                 for lvl in TRACK_LEVELS:
-                    is_sel  = current == lvl
-                    label   = f"{LEVEL_EMOJI[lvl]} {lvl}" + (" ✓" if is_sel else "")
+                    n       = lvl_counts.get(lvl, 0)
+                    count_s = f" ×{n}" if n else ""
+                    label   = f"{LEVEL_EMOJI[lvl]} {lvl}{count_s}"
                     btn_key = f"track_{goal['id']}_{session}_{lvl}_{track_date}"
                     if st.button(label, key=btn_key, use_container_width=True,
-                                 type="primary" if is_sel else "secondary"):
-                        upsert_session(goal["id"], selected_name, session, lvl)
+                                 type="primary" if n > 0 else "secondary"):
+                        upsert_session(goal["id"], selected_name, session, lvl,
+                                       track_date=track_date.isoformat())
                         if lvl == "NOT YET":
                             st.session_state["show_ref_alert"] = goal["id"]
                         st.rerun()
