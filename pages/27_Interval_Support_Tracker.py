@@ -696,8 +696,46 @@ def _hypothesis_box(text, key=None):
         unsafe_allow_html=True)
 
 
-with t_analysis:
-    st.markdown(f"#### {student_name} — Regulation & Support Analysis")
+def _generate_questions(data_summary):
+    """Call Groq to generate specific investigative questions from data patterns."""
+    try:
+        import requests as _req
+        key = st.secrets.get("groq", {}).get("api_key") or st.secrets.get("GROQ_API_KEY", "")
+        if not key:
+            return None
+        resp = _req.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={
+                "model": "llama3-8b-8192",
+                "max_tokens": 400,
+                "temperature": 0.5,
+                "messages": [
+                    {"role": "system", "content":
+                        "You are a specialist behaviour support practitioner reviewing interval observation data. "
+                        "Based on the patterns in the data, generate exactly 5 specific, practical investigative "
+                        "questions the team should ask to better understand the student's regulation. "
+                        "Questions must be grounded in the actual data patterns described — reference specific "
+                        "times, days, activities, or support arrangements from the data. "
+                        "Number each question 1–5. Each question should be one sentence ending in a question mark. "
+                        "Do not use bullet points. Do not use the student's full name — say 'the student'. "
+                        "Focus on: what is happening at the times/days of best regulation (not just why it's bad), "
+                        "what specific tasks or routines occur at those times, "
+                        "what staff actions or environments correlate with regulation, "
+                        "and what would help the team build on strengths rather than only manage difficulties."},
+                    {"role": "user", "content": data_summary},
+                ]
+            },
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            return resp.json()["choices"][0]["message"]["content"].strip()
+    except Exception:
+        pass
+    return None
+
+
+
     all_obs = load_all_obs(student_name)
     if all_obs.empty:
         st.info("No observations recorded yet."); st.stop()
@@ -906,6 +944,20 @@ with t_analysis:
     st.plotly_chart(fig4, use_container_width=True)
     ss["rpt_fig4"] = _rpt_fig(fig4, height=320, margin_b=55, margin_l=65).to_html(full_html=False, include_plotlyjs=False)
 
+    # Build a separate NORMALISED (100% stacked) bar for the report so bar height
+    # always reflects the proportion, not raw count — matches the % table below.
+    fig4_pct = px.bar(dow, x="day_of_week", y="n", color="State",
+        color_discrete_map=colour_map, barmode="relative",
+        labels={"day_of_week":"","n":"Intervals","State":""},
+        category_orders={"day_of_week": DAYS, "State": active_states_dow})
+    fig4_pct.update_layout(barnorm="percent")
+    fig4_pct.update_layout(height=320, plot_bgcolor="white", paper_bgcolor="white",
+        yaxis=dict(tickformat="d", gridcolor="#e2e8f0", title="% of intervals",
+                   ticksuffix="%", range=[0,105]),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
+        margin=dict(l=10,r=10,t=50,b=10))
+    ss["rpt_fig4_pct"] = _rpt_fig(fig4_pct, height=320, margin_b=55, margin_l=70).to_html(full_html=False, include_plotlyjs=False)
+
     # Per-day summary under chart
     dow_summary_parts = []
     for _, r in dow_reg.iterrows():
@@ -1009,6 +1061,12 @@ with t_analysis:
         top_grp    = grp_counts.index[0] if not grp_counts.empty else "unknown"
         top_grp_n  = int(grp_counts.iloc[0]) if not grp_counts.empty else 0
         top_grp_pct = round(100*top_grp_n/len(sup_filt)) if len(sup_filt) else 0
+        # Plain-language support summary for report
+        support_summary_parts = [f"{g}: {n} interval{'s' if n!=1 else ''} ({round(100*n/len(sup_filt))}%)"
+                                  for g, n in grp_counts.items()]
+        ss["rpt_support_summary"] = " · ".join(support_summary_parts)
+        ss["rpt_top_grp"] = top_grp
+        ss["rpt_top_grp_pct"] = top_grp_pct
         # Use in-window only for regulation rate
         grp_win_rates = {}
         for g in sup_filt["Grouping"].unique():
@@ -1124,85 +1182,146 @@ with t_analysis:
 
     st.markdown("---")
 
+    # ── Build data summary for questions generator ────────────────────────────
+    # Identify time slots where student is consistently in-window
+    slot_win = filt[filt["regulated"]=="in_window"].groupby("time_slot").size()
+    slot_tot = filt.groupby("time_slot").size()
+    slot_pct_win = (slot_win / slot_tot * 100).fillna(0).round(0)
+    strong_slots = slot_pct_win[slot_pct_win >= 70].sort_values(ascending=False)
+    weak_slots   = slot_pct_win[slot_pct_win <= 20].sort_values()
+
+    questions_data_summary = (
+        f"Student: {student_name}. Observation period: {date_span}. "
+        f"Time range: {min_slot}–{max_slot}. Days observed: {n_days}. "
+        f"Total intervals: {n_tot}. In-window: {n_win} ({pct_inwin}%). Coping (dysregulated): {n_cop} ({pct_cop_only}%). "
+        f"Hyperaroused: {n_hyp}. Hypoaroused: {n_hypo}. "
+        + (f"Time slots with ≥70% in-window (consistently regulated): {', '.join(strong_slots.index.tolist())}. " if not strong_slots.empty else "")
+        + (f"Time slots with ≤20% in-window (consistently dysregulated): {', '.join(weak_slots.index.tolist())}. " if not weak_slots.empty else "")
+        + (f"Best day: {best_day} ({best_pct}% in-window). Worst day: {worst_day} ({worst_pct}% in-window). " if best_day else "")
+        + (f"Support distribution: {ss.get('rpt_support_summary','')}. " if ss.get("rpt_support_summary") else "")
+        + "Generate 5 specific investigative questions grounded in these patterns."
+    )
+
     # ── Report generator ─────────────────────────────────────────────────────
     with st.expander("📄 Generate analysis report", expanded=False):
         st.caption(
-            "Creates a standalone HTML report with all charts and hypotheses. "
             "Scroll through the Analysis tab first so every chart and hypothesis is generated, "
-            "then open this section and click Generate."
+            "then complete the fields below and click Generate."
         )
         report_title  = st.text_input("Report title",  value=f"Interval Support Analysis — {student_name}", key="rpt_title")
         report_author = st.text_input("Prepared by",   value=get_staff_name() or "", key="rpt_author")
+        additional_details = st.text_area(
+            "Additional context / staff observations",
+            placeholder=(
+                "Add any context to be included in the report — e.g. what specific tasks were "
+                "running at the times of best regulation, staffing notes, environmental factors, "
+                "recent changes to the student's program or home situation, etc."
+            ),
+            height=120,
+            key="rpt_additional"
+        )
 
         if st.button("📄 Generate report", key="rpt_gen_btn", type="primary", use_container_width=True):
+
+            # ── Generate investigative questions ────────────────────────────
+            with st.spinner("Generating investigative questions…"):
+                questions_text = _generate_questions(questions_data_summary)
+            if not questions_text:
+                # Rule-based fallback
+                q_lines = []
+                if not strong_slots.empty:
+                    q_lines.append(f"1. What specific tasks or routines are running at {strong_slots.index[0]} each day, given that this is when the student is most consistently within their window?")
+                if not weak_slots.empty:
+                    q_lines.append(f"2. What is happening at {weak_slots.index[0]} that consistently results in dysregulation — is this a transition point, change of staff, or particular demand?")
+                if best_day and worst_day and best_day != worst_day:
+                    q_lines.append(f"3. What structural differences exist between {best_day} and {worst_day} in terms of timetable, staffing, and peer grouping that could explain the difference in regulation?")
+                q_lines.append(f"4. Given that {ss.get('rpt_top_grp_pct',0)}% of observed intervals involve {ss.get('rpt_top_grp','1:1')} support, what is the plan for building the student's capacity to function in lower-support contexts?")
+                q_lines.append("5. Which specific activities or times of regulation could be used as a foundation for gradually introducing demand and building the student's window of tolerance?")
+                questions_text = "\n".join(q_lines[:5])
+
+            ss["rpt_questions"] = questions_text
+
+            # Show questions in UI before download
+            st.markdown("**Questions generated for this student:**")
+            st.info(questions_text)
 
             # ── Retrieve stored data ────────────────────────────────────────
             hyp_time  = ss.get("rpt_hyp_time", "")
             hyp_dow_  = ss.get("rpt_hyp_dow",  "")
             hyp_grp_  = ss.get("rpt_hyp_grp",  "")
             hyp_act_  = ss.get("rpt_hyp_act",  "")
-            fig1_html    = ss.get("rpt_fig1",    "")
-            fig2_html    = ss.get("rpt_fig2",    "")
-            fig4_html    = ss.get("rpt_fig4",    "")
-            fig_grp_html = ss.get("rpt_fig_grp", "")
-            fig6_html    = ss.get("rpt_fig6",    "")
+            fig1_html     = ss.get("rpt_fig1",    "")
+            fig2_html     = ss.get("rpt_fig2",    "")
+            fig4_html     = ss.get("rpt_fig4",    "")
+            fig4_pct_html = ss.get("rpt_fig4_pct","")
+            fig_grp_html  = ss.get("rpt_fig_grp", "")
+            fig6_html     = ss.get("rpt_fig6",    "")
+            support_summary = ss.get("rpt_support_summary", "")
+            top_grp      = ss.get("rpt_top_grp", "")
+            top_grp_pct  = ss.get("rpt_top_grp_pct", 0)
 
-            missing = [n for n, h in [
-                ("Regulation across the day", fig1_html),
-                ("Daily trend", fig2_html),
-                ("Day of week", fig4_html),
-            ] if not h]
+            missing = [n for n, h in [("Regulation across the day", fig1_html), ("Day of week", fig4_html)] if not h]
             if missing:
-                st.warning(
-                    f"⚠️ The following charts haven't been generated yet — "
-                    f"scroll through the Analysis tab to generate them first: "
-                    + ", ".join(missing)
-                )
+                st.warning("⚠️ Some charts missing — scroll through the Analysis tab first: " + ", ".join(missing))
 
-            # ── Helper functions ────────────────────────────────────────────
+            # ── Inner HTML helpers ──────────────────────────────────────────
             def _hyp_block(text):
-                if not text:
-                    return ""
+                if not text: return ""
                 return (
-                    '<div class="hyp">'
-                    '<div class="hyp-label">🔍 Hypothesis</div>'
+                    '<div class="hyp"><div class="hyp-label">🔍 Hypothesis</div>'
                     f'<p>{text}</p></div>'
                 )
 
             def _chart_block(title, info_text, chart_html, hyp_text=""):
-                if not chart_html:
-                    return f'<div class="no-data"><em>{title} — chart not yet generated. Open the Analysis tab and scroll through all charts, then regenerate.</em></div>'
+                ch = chart_html or '<p class="no-data">Chart not yet generated — scroll through the Analysis tab and regenerate.</p>'
                 return (
                     f'<h2>{title}</h2>'
                     f'<div class="info-box">{info_text}</div>'
-                    f'<div class="chart-wrap">{chart_html}</div>'
+                    f'<div class="chart-wrap">{ch}</div>'
                     + _hyp_block(hyp_text)
                 )
 
-            # ── Day of week data table ──────────────────────────────────────
+            # ── Day of week table ───────────────────────────────────────────
             dow_html_table = ""
             if not dow_reg.empty:
                 dow_html_table = (
-                    '<table><tr>'
-                    '<th>Day</th><th>% In window 🟢</th><th>% Coping 🟡</th>'
-                    '<th>% Hyperaroused 🔴</th><th>% Hypoaroused 🔵</th>'
-                    '</tr>'
+                    '<table><thead><tr>'
+                    '<th>Day</th><th>n (intervals)</th>'
+                    '<th style="color:#16a34a;">🟢 In window</th>'
+                    '<th style="color:#ca8a04;">🟡 Coping ⚠️</th>'
+                    '<th style="color:#dc2626;">🔴 Hyperaroused</th>'
+                    '<th style="color:#2563eb;">🔵 Hypoaroused</th>'
+                    '</tr></thead><tbody>'
                 )
                 for _, r in dow_reg.iterrows():
-                    d = r["day_of_week"]
-                    sub = filt[filt["day_of_week"]==d]
+                    d   = r["day_of_week"]
+                    sub = filt[filt["day_of_week"] == d]
                     tot = len(sub)
-                    p_hyp  = round(100*(sub["regulated"]=="hyperaroused").sum()/tot) if tot else 0
-                    p_hypo = round(100*(sub["regulated"]=="hypoaroused").sum()/tot)  if tot else 0
+                    p_h  = round(100*(sub["regulated"]=="hyperaroused").sum()/tot) if tot else 0
+                    p_ho = round(100*(sub["regulated"]=="hypoaroused").sum()/tot)  if tot else 0
                     dow_html_table += (
-                        f'<tr><td><strong>{d}</strong></td>'
+                        f'<tr><td><strong>{d}</strong></td><td>{tot}</td>'
                         f'<td style="color:#16a34a;font-weight:700;">{r["pct_win"]}%</td>'
                         f'<td style="color:#ca8a04;">{r["pct_cop"]}%</td>'
-                        f'<td style="color:#dc2626;">{p_hyp}%</td>'
-                        f'<td style="color:#2563eb;">{p_hypo}%</td>'
-                        f'</tr>'
+                        f'<td style="color:#dc2626;">{p_h}%</td>'
+                        f'<td style="color:#2563eb;">{p_ho}%</td></tr>'
                     )
-                dow_html_table += '</table>'
+                dow_html_table += '</tbody></table>'
+                dow_html_table += '<p style="font-size:.75rem;color:#64748b;margin-top:.2rem;">⚠️ Coping = at the edge of the window — the student is struggling to manage, not regulated.</p>'
+
+            # ── Support summary HTML ────────────────────────────────────────
+            support_summary_html = ""
+            if support_summary:
+                support_summary_html = (
+                    f'<div class="support-summary">'
+                    f'<strong>Support profile across all {n_tot} observed intervals:</strong><br>'
+                    f'{support_summary}<br>'
+                    + (f'<br><strong>⚠️ {top_grp_pct}% of all observed intervals involved {top_grp} support.</strong> '
+                       'This data represents what was observed — it does not mean the student '
+                       'was unsupported during other intervals; it means those intervals were '
+                       'not recorded under a different grouping arrangement.' if top_grp_pct >= 70 else '')
+                    + '</div>'
+                )
 
             # ── Support breakdown table ─────────────────────────────────────
             grp_html_table = ""
@@ -1210,10 +1329,9 @@ with t_analysis:
                 pivot_c = sup_filt.groupby(["Grouping","State"]).size().unstack(fill_value=0)
                 pivot_c["Total"] = pivot_c.sum(axis=1)
                 osc = [s for s in state_order if s in pivot_c.columns]
-                grp_html_table = f'<table><tr><th>Grouping</th><th>Total (n)</th>'
-                for sc in osc:
-                    grp_html_table += f'<th>{sc}</th>'
-                grp_html_table += '</tr>'
+                grp_html_table = '<table><thead><tr><th>Grouping</th><th>Total (n)</th>'
+                for sc in osc: grp_html_table += f'<th>{sc}</th>'
+                grp_html_table += '</tr></thead><tbody>'
                 for g, row in pivot_c.iterrows():
                     total = int(row["Total"])
                     warn  = " ⚠️" if total < 3 else ""
@@ -1221,12 +1339,24 @@ with t_analysis:
                     for sc in osc:
                         cnt = int(row.get(sc, 0))
                         pct = round(100*cnt/total) if total else 0
-                        grp_html_table += f'<td>{"—" if cnt == 0 else f"{cnt} ({pct}%)"}</td>'
+                        grp_html_table += f'<td>{"—" if cnt==0 else f"{cnt} ({pct}%)"}</td>'
                     grp_html_table += '</tr>'
-                grp_html_table += '</table>'
-                grp_html_table += '<p style="font-size:.75rem;color:#64748b;">⚠️ Rows with fewer than 3 intervals should be interpreted with caution — a single interval cannot establish a pattern.</p>'
+                grp_html_table += '</tbody></table>'
+                grp_html_table += '<p style="font-size:.75rem;color:#64748b;">⚠️ Rows with n &lt; 3 reflect a single moment, not a pattern.</p>'
 
-            # ── Build full HTML ─────────────────────────────────────────────
+            # ── Questions HTML ──────────────────────────────────────────────
+            qs_html = ""
+            if questions_text:
+                lines = [l.strip() for l in questions_text.strip().split("\n") if l.strip()]
+                qs_html = '<ol class="questions">' + "".join(f"<li>{l.lstrip('0123456789. ')}</li>" for l in lines) + "</ol>"
+
+            # ── Additional details HTML ─────────────────────────────────────
+            additional_html = ""
+            if additional_details and additional_details.strip():
+                safe_ad = additional_details.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br>")
+                additional_html = f'<div class="additional"><div class="add-label">📝 Additional staff observations</div><p>{safe_ad}</p></div>'
+
+            # ── Assemble full report ────────────────────────────────────────
             html_report = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1235,36 +1365,41 @@ with t_analysis:
 <title>{report_title}</title>
 <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
 <style>
-  body {{ font-family: Arial, sans-serif; font-size: 13px; color: #1e293b; margin:0; padding:0; background:white; }}
-  .page {{ max-width: 900px; margin: 0 auto; padding: 32px 36px; }}
-  h1 {{ font-size:1.5rem; color:#1A6B8A; border-bottom:3px solid #1A6B8A; padding-bottom:.5rem; margin-bottom:.3rem; }}
-  h2 {{ font-size:1.05rem; color:#1A6B8A; margin:2rem 0 .4rem; border-bottom:1px solid #e2e8f0; padding-bottom:.25rem; }}
-  .meta {{ font-size:.78rem; color:#64748b; margin-bottom:1.2rem; }}
-  .obs-box {{ background:#f0f9ff; border:1.5px solid #7dd3fc; border-radius:8px; padding:.65rem 1.1rem; font-size:.83rem; margin-bottom:.8rem; }}
-  .warn {{ background:#fef9c3; border-left:4px solid #ca8a04; border-radius:0 6px 6px 0; padding:.55rem 1rem; font-size:.82rem; margin-bottom:1rem; line-height:1.5; }}
-  .kpi-row {{ display:flex; gap:.8rem; margin-bottom:1rem; flex-wrap:wrap; }}
-  .kpi {{ background:white; border-left:4px solid #1A6B8A; border-radius:6px; padding:.5rem .9rem; min-width:110px; text-align:center; box-shadow:0 1px 4px rgba(0,0,0,.08); }}
-  .kpi .val {{ font-size:1.6rem; font-weight:700; color:#1A6B8A; }}
-  .kpi .lbl {{ font-size:.65rem; color:#64748b; line-height:1.4; }}
-  .kpi.g {{ border-color:#16a34a; }} .kpi.g .val {{ color:#16a34a; }}
-  .kpi.y {{ border-color:#ca8a04; }} .kpi.y .val {{ color:#ca8a04; }}
-  .kpi.r {{ border-color:#dc2626; }} .kpi.r .val {{ color:#dc2626; }}
-  .kpi.b {{ border-color:#2563eb; }} .kpi.b .val {{ color:#2563eb; }}
-  .info-box {{ background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:.5rem .9rem; font-size:.8rem; color:#475569; margin-bottom:.5rem; line-height:1.5; }}
-  .chart-wrap {{ margin:.2rem 0 .6rem; border:1px solid #e2e8f0; border-radius:8px; overflow:visible; padding:.4rem; width:820px; max-width:100%; }}
-  .hyp {{ background:#EBF4F9; border-left:4px solid #1A6B8A; border-radius:0 8px 8px 0; padding:.65rem 1.1rem; margin:.6rem 0 1.2rem; font-size:.83rem; line-height:1.6; }}
-  .hyp-label {{ font-size:.65rem; font-weight:700; color:#1A6B8A; letter-spacing:.06em; margin-bottom:.3rem; }}
-  .no-data {{ color:#94a3b8; font-size:.8rem; font-style:italic; margin:.5rem 0 1rem; }}
-  table {{ border-collapse:collapse; width:100%; margin:.5rem 0 .8rem; font-size:.8rem; }}
-  th {{ background:#1A6B8A; color:white; padding:.4rem .65rem; text-align:left; font-weight:600; }}
-  td {{ border:1px solid #e2e8f0; padding:.32rem .65rem; }}
-  tr:nth-child(even) td {{ background:#f8fafc; }}
-  .footer {{ font-size:.68rem; color:#94a3b8; border-top:1px solid #e2e8f0; margin-top:2.5rem; padding-top:.6rem; }}
+  body {{font-family:Arial,sans-serif;font-size:13px;color:#1e293b;margin:0;padding:0;background:white;}}
+  .page {{max-width:900px;margin:0 auto;padding:30px 36px;}}
+  h1 {{font-size:1.45rem;color:#1A6B8A;border-bottom:3px solid #1A6B8A;padding-bottom:.5rem;margin-bottom:.3rem;}}
+  h2 {{font-size:1.05rem;color:#1A6B8A;margin:2rem 0 .4rem;border-bottom:1px solid #e2e8f0;padding-bottom:.25rem;}}
+  .meta {{font-size:.78rem;color:#64748b;margin-bottom:1rem;}}
+  .obs-box {{background:#f0f9ff;border:1.5px solid #7dd3fc;border-radius:8px;padding:.65rem 1.1rem;font-size:.83rem;margin-bottom:.8rem;}}
+  .warn {{background:#fef9c3;border-left:4px solid #ca8a04;border-radius:0 6px 6px 0;padding:.55rem 1rem;font-size:.82rem;margin-bottom:1rem;line-height:1.6;}}
+  .kpi-row {{display:flex;gap:.8rem;margin-bottom:1rem;flex-wrap:wrap;}}
+  .kpi {{background:white;border-left:4px solid #1A6B8A;border-radius:6px;padding:.5rem .9rem;min-width:110px;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,.08);}}
+  .kpi .val {{font-size:1.6rem;font-weight:700;color:#1A6B8A;}}
+  .kpi .lbl {{font-size:.65rem;color:#64748b;line-height:1.4;}}
+  .kpi.g {{border-color:#16a34a;}} .kpi.g .val {{color:#16a34a;}}
+  .kpi.y {{border-color:#ca8a04;}} .kpi.y .val {{color:#ca8a04;}}
+  .kpi.r {{border-color:#dc2626;}} .kpi.r .val {{color:#dc2626;}}
+  .kpi.b {{border-color:#2563eb;}} .kpi.b .val {{color:#2563eb;}}
+  .info-box {{background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:.5rem .9rem;font-size:.8rem;color:#475569;margin-bottom:.5rem;line-height:1.5;}}
+  .chart-wrap {{margin:.2rem 0 .6rem;border:1px solid #e2e8f0;border-radius:8px;overflow:visible;padding:.3rem;width:820px;max-width:100%;}}
+  .hyp {{background:#EBF4F9;border-left:4px solid #1A6B8A;border-radius:0 8px 8px 0;padding:.65rem 1.1rem;margin:.6rem 0 1.2rem;font-size:.83rem;line-height:1.6;}}
+  .hyp-label {{font-size:.65rem;font-weight:700;color:#1A6B8A;letter-spacing:.06em;margin-bottom:.3rem;}}
+  .support-summary {{background:#f0f9ff;border:1.5px solid #7dd3fc;border-radius:8px;padding:.65rem 1.1rem;font-size:.83rem;margin:.4rem 0 .7rem;line-height:1.6;}}
+  .questions {{background:#f0fdf4;border:1.5px solid #86efac;border-radius:8px;padding:.8rem 1.1rem .8rem 2rem;margin:1rem 0;font-size:.84rem;line-height:1.8;color:#14532d;}}
+  .questions li {{margin-bottom:.3rem;}}
+  .additional {{background:#fefce8;border-left:4px solid #ca8a04;border-radius:0 8px 8px 0;padding:.65rem 1.1rem;margin:1rem 0;font-size:.83rem;line-height:1.6;}}
+  .add-label {{font-size:.65rem;font-weight:700;color:#92400e;letter-spacing:.06em;margin-bottom:.3rem;}}
+  .no-data {{color:#94a3b8;font-size:.8rem;font-style:italic;margin:.5rem 0 1rem;}}
+  table {{border-collapse:collapse;width:100%;margin:.5rem 0 .8rem;font-size:.8rem;}}
+  thead th {{background:#1A6B8A;color:white;padding:.4rem .65rem;text-align:left;font-weight:600;}}
+  td {{border:1px solid #e2e8f0;padding:.32rem .65rem;}}
+  tr:nth-child(even) td {{background:#f8fafc;}}
+  .footer {{font-size:.68rem;color:#94a3b8;border-top:1px solid #e2e8f0;margin-top:2.5rem;padding-top:.6rem;}}
   @media print {{
-    body {{ font-size:11px; }}
-    .page {{ padding:18px 22px; }}
-    .chart-wrap {{ page-break-inside:avoid; }}
-    h2 {{ page-break-after:avoid; }}
+    body {{font-size:11px;}}
+    .page {{padding:18px 22px;}}
+    .chart-wrap {{page-break-inside:avoid;}}
+    h2 {{page-break-after:avoid;}}
   }}
 </style>
 </head>
@@ -1279,81 +1414,93 @@ with t_analysis:
 
   <div class="obs-box">
     <strong>📅 Observation window:</strong> {date_span} &nbsp;·&nbsp;
-    <strong>{n_days} school day{"s" if n_days != 1 else ""}</strong> with data &nbsp;·&nbsp;
-    <strong>Time range recorded: {min_slot} – {max_slot}</strong>
+    <strong>{n_days} school day{"s" if n_days!=1 else ""}</strong> with data &nbsp;·&nbsp;
+    <strong>Time range: {min_slot}–{max_slot}</strong>
   </div>
 
   <div class="warn">
-    <strong>⚠️ How to read this report:</strong> Each <em>interval</em> = one 15-minute observation window.
-    Data was collected between <strong>{min_slot} and {max_slot}</strong> only — times outside this window are not represented.
-    <br><br>
-    <strong>Regulation states:</strong>
-    🟢 <em>In window</em> — genuinely regulated and learning-ready &nbsp;|&nbsp;
-    🟡 <em>Coping</em> — at the edge of the window, actively managing but <strong>not stable</strong> &nbsp;|&nbsp;
-    🔴 <em>Hyperaroused</em> — above window (fight/flight) &nbsp;|&nbsp;
-    🔵 <em>Hypoaroused</em> — below window (shutdown/freeze)
-    <br><br>
-    ⚠️ A session that is predominantly <em>Coping</em> still represents a student who is struggling.
-    Only <em>In window</em> indicates genuine regulation.
+    <strong>⚠️ How to read this report — regulation states:</strong><br>
+    🟢 <strong>In window</strong> — genuinely regulated; calm, present, learning-ready.<br>
+    🟡 <strong>Coping</strong> — <strong>at the edge of the window and dysregulated</strong>.
+    The student is actively working to manage their arousal state. This is not a stable or successful position.
+    A session that is predominantly yellow is still a difficult session.<br>
+    🔴 <strong>Hyperaroused</strong> — above the window; fight/flight/fright response.<br>
+    🔵 <strong>Hypoaroused</strong> — below the window; shutdown/freeze/dissociation.<br><br>
+    Each <em>interval</em> = one 15-minute observation window. Data was collected between
+    <strong>{min_slot} and {max_slot}</strong> only.
   </div>
 
   <h2>Overall regulation summary</h2>
   <div class="kpi-row">
     <div class="kpi"><div class="val">{n_tot}</div><div class="lbl">Total intervals<br>(15-min windows)</div></div>
     <div class="kpi g"><div class="val">{n_win}</div><div class="lbl">🟢 In window<br>{pct_inwin}%</div></div>
-    <div class="kpi y"><div class="val">{n_cop}</div><div class="lbl">🟡 Coping<br>{pct_cop_only}% — at edge</div></div>
+    <div class="kpi y"><div class="val">{n_cop}</div><div class="lbl">🟡 Coping (dysregulated)<br>{pct_cop_only}%</div></div>
     <div class="kpi r"><div class="val">{n_hyp}</div><div class="lbl">🔴 Hyperaroused</div></div>
     <div class="kpi b"><div class="val">{n_hypo}</div><div class="lbl">🔵 Hypoaroused</div></div>
   </div>
 
   {_chart_block(
     "📊 Regulation state across the day",
-    f"Each bar represents one 15-minute time slot between {min_slot} and {max_slot}. "
-    f"Bar height shows how many intervals were recorded at that time across all {n_days} observed days. "
-    "Colour indicates regulation state. Tall green bars = consistently in window at that time. "
-    "Red or blue = dysregulation risk at those times.",
+    f"Each bar = one 15-minute time slot between {min_slot} and {max_slot}, across all {n_days} observed days. "
+    "Bar height = number of intervals recorded at that time. Colour = regulation state. "
+    "<strong>🟡 Yellow (Coping) = dysregulated</strong> — the student is at the edge of their window and struggling to manage. "
+    "Tall green bars = the student was consistently within their window at that time.",
     fig1_html, hyp_time
   )}
 
-  {_chart_block(
-    "📈 Daily regulation trend",
-    f"Shows the percentage of each day's recorded intervals in each regulation state, "
-    f"across the {n_days} days in the observation window. "
-    "Only regulation states that were actually observed appear as lines — zero-count states are omitted. "
-    "The dashed green line marks the 70% in-window benchmark.",
-    fig2_html
-  )}
+  <h2>📈 Daily regulation trend</h2>
+  <div class="info-box">
+    Percentage of each day's intervals in each regulation state across the {n_days} observed school days.
+    The dashed green line marks the 70% in-window benchmark.
+    <strong>Days above the green line in window% are the strongest days for regulation.</strong>
+    Note: with a small number of observation days, individual daily variation may be large.
+  </div>
+  <div class="chart-wrap">{fig2_html or '<p class="no-data">Daily trend chart not yet generated.</p>'}</div>
 
   <h2>📅 Regulation by day of week</h2>
   <div class="info-box">
-    Total intervals per day of week across the observation period, coloured by regulation state.
-    The table below shows percentage in each state per day.
-    <strong>Best days are those with the highest percentage in window (green) — not coping.</strong>
-    A predominantly yellow day still represents a student who is actively struggling.
+    The bar chart below shows each day's intervals as a <strong>100% normalised bar</strong> —
+    bar colour split reflects the <em>proportion</em> of intervals in each state, regardless of how many
+    intervals were recorded on that day. This matches the percentage table.
+    <strong>Best days are those with the most green (In window), not yellow.</strong>
+    🟡 Coping = dysregulated.
   </div>
-  <div class="chart-wrap">{fig4_html if fig4_html else '<em>Chart not yet generated.</em>'}</div>
+  <div class="chart-wrap">{fig4_pct_html or fig4_html or '<p class="no-data">Chart not yet generated.</p>'}</div>
   {dow_html_table}
   {_hyp_block(hyp_dow_)}
 
   <h2>👥 Level of support</h2>
+  {support_summary_html}
   <div class="info-box">
-    Shows the total number of 15-minute intervals recorded under each support/grouping arrangement,
+    The bar chart shows the total number of intervals recorded under each support/grouping arrangement,
     coloured by regulation state during that interval.
-    This identifies which support type is most frequently used and whether it is associated with regulation.
-    <br>The table below shows raw counts and percentages — rows with fewer than 3 intervals
-    are flagged ⚠️ and should not be used to draw conclusions.
+    The table below shows exact counts and percentages per regulation state.
+    <strong>⚠️ Rows with n &lt; 3 should not be used to draw conclusions.</strong>
   </div>
-  <div class="chart-wrap">{fig_grp_html if fig_grp_html else '<em>Chart not yet generated.</em>'}</div>
+  <div class="chart-wrap">{fig_grp_html or '<p class="no-data">Support chart not yet generated.</p>'}</div>
   {grp_html_table}
   {_hyp_block(hyp_grp_)}
 
   {_chart_block(
     "🎯 Regulation by activity type",
-    "Each bar represents all intervals recorded during that activity type. "
-    "When an interval has multiple activity types selected, it is counted in each. "
-    "Colour shows regulation state. This reveals which tasks are associated with regulation and which with dysregulation.",
-    fig6_html if fig6_html else "", hyp_act_
-  ) if fig6_html else ('<h2>🎯 Regulation by activity type</h2><div class="no-data">No activity type data recorded, or chart not yet generated.</div>' + _hyp_block(hyp_act_))}
+    "Each bar = all intervals recorded during that activity type, coloured by regulation state. "
+    "When an interval has multiple activities selected, it is counted in each. "
+    "🟡 Coping = dysregulated.",
+    fig6_html or "", hyp_act_
+  ) if fig6_html else (
+    '<h2>🎯 Regulation by activity type</h2>'
+    '<div class="no-data">No activity data recorded, or chart not yet generated.</div>'
+    + _hyp_block(hyp_act_)
+  )}
+
+  <h2>🔎 Questions for the team to investigate</h2>
+  <div class="info-box">
+    The following questions were generated from the patterns in this student's data.
+    They are intended to guide discussion at the next team meeting or TAC.
+  </div>
+  {qs_html or '<p class="no-data">Questions not generated — regenerate the report after scrolling through all charts.</p>'}
+
+  {additional_html}
 
   <div class="footer">
     Interval Support Tracker &nbsp;·&nbsp; CLC Learning &amp; Behaviour Unit &nbsp;·&nbsp;
@@ -1371,8 +1518,9 @@ with t_analysis:
                 mime="text/html",
                 use_container_width=True,
             )
-            st.success("✅ Report ready — click above to download. Open in Chrome, Edge or Firefox to view interactive charts and print.")
+            st.success("✅ Report ready. Open in Chrome, Edge or Firefox to view interactive charts and print.")
 
     st.download_button("📥 Download raw data (CSV)", csv,
         file_name=f"IntervalSupport_{student_name.replace(' ','_')}_{date_from}_{date_to}.csv",
         mime="text/csv", use_container_width=True)
+
