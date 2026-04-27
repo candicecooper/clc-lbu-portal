@@ -610,6 +610,60 @@ with t_record:
 # ════════════════════════════════════════════════════════════════════════════
 # ANALYSIS
 # ════════════════════════════════════════════════════════════════════════════
+
+def _slot_to_min(t):
+    """Convert 'H:MM' string to minutes-since-midnight."""
+    try:
+        h, m = t.split(":")
+        return int(h) * 60 + int(m)
+    except Exception:
+        return 9999
+
+
+def _groq_hypothesis(prompt_text):
+    """Call Groq to generate a clinical hypothesis. Returns None if unavailable."""
+    try:
+        import requests as _req
+        key = st.secrets.get("groq", {}).get("api_key") or st.secrets.get("GROQ_API_KEY", "")
+        if not key:
+            return None
+        resp = _req.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={
+                "model": "llama3-8b-8192",
+                "max_tokens": 220,
+                "temperature": 0.4,
+                "messages": [
+                    {"role": "system", "content":
+                        "You are a specialist behaviour support practitioner at an alternative education setting "
+                        "for students with complex needs. Write a concise, data-grounded clinical hypothesis "
+                        "(3–5 sentences, plain English, no bullet points) interpreting the pattern described. "
+                        "Acknowledge what the data suggests, note what this means for the student's support needs, "
+                        "and identify one key question or recommendation for the team. Do not use the student's "
+                        "full name — refer to 'the student'."},
+                    {"role": "user", "content": prompt_text},
+                ]
+            },
+            timeout=12,
+        )
+        if resp.status_code == 200:
+            return resp.json()["choices"][0]["message"]["content"].strip()
+    except Exception:
+        pass
+    return None
+
+
+def _hypothesis_box(text):
+    """Render a teal hypothesis card."""
+    st.markdown(
+        f'<div style="background:#EBF4F9;border-left:4px solid #1A6B8A;border-radius:0 8px 8px 0;'
+        f'padding:.6rem 1rem;margin:.3rem 0 .7rem;font-size:.82rem;color:#1e3a4a;line-height:1.5;">'
+        f'<span style="font-size:.68rem;font-weight:700;color:#1A6B8A;letter-spacing:.05em;">'
+        f'🔍 CLINICAL HYPOTHESIS</span><br>{text}</div>',
+        unsafe_allow_html=True)
+
+
 with t_analysis:
     st.markdown(f"#### {student_name} — Regulation & Support Analysis")
     all_obs = load_all_obs(student_name)
@@ -634,41 +688,111 @@ with t_analysis:
     colour_map     = {v["emoji"]+" "+v["label"]: v["fg"] for v in REG_STATES.values()}
     state_order    = [v["emoji"]+" "+v["label"] for v in REG_STATES.values()]
 
+    # ── Time frame summary ────────────────────────────────────────────────────
+    slot_mins = filt["time_slot"].dropna().apply(_slot_to_min)
+    min_slot  = filt.loc[slot_mins.idxmin(), "time_slot"] if not slot_mins.empty else "—"
+    max_slot  = filt.loc[slot_mins.idxmax(), "time_slot"] if not slot_mins.empty else "—"
+    n_days    = filt["obs_date_dt"].dt.date.nunique()
+    date_span = f"{date_from.strftime('%-d %b')} – {date_to.strftime('%-d %b %Y')}"
+
+    st.markdown(
+        f'<div style="background:#f0f9ff;border:1.5px solid #7dd3fc;border-radius:8px;'
+        f'padding:.55rem 1rem;margin-bottom:.6rem;font-size:.82rem;color:#0c4a6e;">'
+        f'<strong>📅 Observation window:</strong> {date_span} &nbsp;·&nbsp; '
+        f'<strong>{n_days} school day{"s" if n_days != 1 else ""}</strong> with data &nbsp;·&nbsp; '
+        f'<strong>Time range recorded: {min_slot} – {max_slot}</strong>'
+        f'</div>',
+        unsafe_allow_html=True)
+
+    # ── What does "interval" mean? ────────────────────────────────────────────
+    st.info(
+        "ℹ️ **What is an interval?** Each interval represents one 15-minute observation window "
+        "during the school day. Staff record regulation state, grouping, activity type, and outcome "
+        "for each interval in which they observe the student. Intervals outside the observation "
+        f"window ({min_slot}–{max_slot}) were not collected and are not represented in these charts."
+    )
+
     n_tot  = len(filt)
     n_win  = int((filt["regulated"]=="in_window").sum())
     n_cop  = int((filt["regulated"]=="coping").sum())
     n_hyp  = int((filt["regulated"]=="hyperaroused").sum())
     n_hypo = int((filt["regulated"]=="hypoaroused").sum())
 
+    pct_reg = round(100*(n_win+n_cop)/n_tot) if n_tot else 0
+
     k1,k2,k3,k4,k5 = st.columns(5)
-    k1.markdown(f"<div class='kpi'><div class='val'>{n_tot}</div><div class='lbl'>Intervals</div></div>", unsafe_allow_html=True)
+    k1.markdown(f"<div class='kpi'><div class='val'>{n_tot}</div><div class='lbl'>Total intervals<br><span style='font-size:.58rem;'>15-min windows</span></div></div>", unsafe_allow_html=True)
     k2.markdown(f"<div class='kpi kpi-g'><div class='val'>{n_win}</div><div class='lbl'>🟢 In window</div></div>", unsafe_allow_html=True)
     k3.markdown(f"<div class='kpi kpi-y'><div class='val'>{n_cop}</div><div class='lbl'>🟡 Coping</div></div>", unsafe_allow_html=True)
     k4.markdown(f"<div class='kpi kpi-r'><div class='val'>{n_hyp}</div><div class='lbl'>🔴 Hyperaroused</div></div>", unsafe_allow_html=True)
     k5.markdown(f"<div class='kpi kpi-b'><div class='val'>{n_hypo}</div><div class='lbl'>🔵 Hypoaroused</div></div>", unsafe_allow_html=True)
 
+    st.markdown(
+        f'<div style="font-size:.8rem;color:#475569;text-align:center;margin:.3rem 0 .6rem;">'
+        f'Across {n_days} observed school days, <strong>{pct_reg}%</strong> of intervals '
+        f'({n_win+n_cop} of {n_tot}) were within or at the edge of the window of tolerance.</div>',
+        unsafe_allow_html=True)
+
     st.markdown("---")
 
-    st.markdown("##### Regulation state across the day")
+    # ── Chart 1: Regulation across the day ───────────────────────────────────
+    st.markdown("##### 📊 Regulation state across the day")
+    st.caption(
+        f"Each bar represents one 15-minute time slot. Height = number of intervals recorded at that time. "
+        f"Data was collected between **{min_slot}** and **{max_slot}**. "
+        f"Colour shows regulation state across all recorded days."
+    )
     slot_df = filt.groupby(["time_slot","State"]).size().reset_index(name="n")
-    slot_df["sort_k"] = slot_df["time_slot"].apply(
-        lambda t: int(t.split(":")[0])*60+int(t.split(":")[1]) if ":"in t else 999)
+    slot_df["sort_k"] = slot_df["time_slot"].apply(_slot_to_min)
     slot_df = slot_df.sort_values("sort_k")
+    # Only show states that actually have data
+    active_states_slot = [s for s in state_order if s in slot_df["State"].values]
     fig1 = px.bar(slot_df, x="time_slot", y="n", color="State",
         color_discrete_map=colour_map, barmode="stack",
         labels={"time_slot":"Time","n":"Intervals","State":""},
-        category_orders={"State": state_order})
+        category_orders={"State": active_states_slot})
     fig1.update_layout(height=320, plot_bgcolor="white", paper_bgcolor="white",
         xaxis=dict(tickangle=-45, gridcolor="#e2e8f0", title=""),
-        yaxis=dict(tickformat="d", gridcolor="#e2e8f0", title="Intervals recorded"),
+        yaxis=dict(tickformat="d", gridcolor="#e2e8f0", title="15-min intervals recorded"),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
         margin=dict(l=10,r=10,t=55,b=70))
     st.plotly_chart(fig1, use_container_width=True)
-    st.caption("Tall green = consistently in window. Red/blue = dysregulation risk at those times.")
+
+    # Hypothesis: time-of-day
+    best_slot = slot_df[slot_df["State"].str.contains("In window|Coping")].groupby("time_slot")["n"].sum()
+    worst_slot_df = slot_df[slot_df["State"].str.contains("Hyperaroused|Hypoaroused")].groupby("time_slot")["n"].sum()
+    best_t  = best_slot.idxmax()  if not best_slot.empty  else None
+    worst_t = worst_slot_df.idxmax() if not worst_slot_df.empty else None
+    hyp1_prompt = (
+        f"Student has {n_tot} intervals recorded between {min_slot} and {max_slot} across {n_days} school days. "
+        f"Regulation breakdown: {n_win} in-window, {n_cop} coping, {n_hyp} hyperaroused, {n_hypo} hypoaroused. "
+        + (f"Best regulated time slot is {best_t}. " if best_t else "")
+        + (f"Most dysregulation observed at {worst_t}. " if worst_t else "")
+        + "Interpret this time-of-day pattern and its implications for scheduling and support."
+    )
+    with st.spinner("Generating clinical hypothesis…"):
+        hyp1 = _groq_hypothesis(hyp1_prompt)
+    if hyp1:
+        _hypothesis_box(hyp1)
+    else:
+        best_str  = f"Best regulation is seen at {best_t}. " if best_t else ""
+        worst_str = f"Dysregulation is most prominent at {worst_t}. " if worst_t else ""
+        _hypothesis_box(
+            f"{n_win} of {n_tot} intervals ({round(100*n_win/n_tot) if n_tot else 0}%) were fully within the window of tolerance. "
+            + best_str + worst_str +
+            "This pattern suggests consideration of scheduling demands and staffing intensity "
+            "relative to time of day when planning this student's program."
+        )
 
     st.markdown("---")
 
-    st.markdown("##### Daily regulation trend — % in window vs coping vs dysregulated")
+    # ── Chart 2: Daily trend (ONLY show lines with actual data) ──────────────
+    st.markdown("##### 📈 Daily regulation trend")
+    st.caption(
+        "Percentage of that day's intervals in each regulation state. "
+        "Only states that were actually observed on at least one day appear as lines. "
+        "The dashed green line marks the 70% in-window benchmark."
+    )
     daily = filt.groupby("obs_date_dt").apply(lambda g: pd.Series({
         "pct_win":  round(100*(g["regulated"]=="in_window").sum()/len(g)),
         "pct_cop":  round(100*(g["regulated"]=="coping").sum()/len(g)),
@@ -677,16 +801,19 @@ with t_analysis:
     })).reset_index()
     daily["date_lbl"] = pd.to_datetime(daily["obs_date_dt"]).dt.strftime("%a %-d %b")
     fig2 = go.Figure()
-    for col, name, col_c in [
-        ("pct_win","🟢 In window","#16a34a"),
-        ("pct_cop","🟡 Coping","#ca8a04"),
-        ("pct_hyp","🔴 Hyperaroused","#dc2626"),
-        ("pct_hypo","🔵 Hypoaroused","#2563eb"),
-    ]:
-        fig2.add_trace(go.Scatter(x=daily["date_lbl"], y=daily[col],
-            mode="lines+markers", name=name,
-            line=dict(color=col_c, width=2.5), marker=dict(size=7, color=col_c),
-            hovertemplate=f"{name}: %{{y}}%<extra></extra>"))
+    trace_map = [
+        ("pct_win",  "🟢 In window",    "#16a34a"),
+        ("pct_cop",  "🟡 Coping",       "#ca8a04"),
+        ("pct_hyp",  "🔴 Hyperaroused", "#dc2626"),
+        ("pct_hypo", "🔵 Hypoaroused",  "#2563eb"),
+    ]
+    for col, name, col_c in trace_map:
+        # Only add trace if this state was ever observed (max > 0)
+        if daily[col].max() > 0:
+            fig2.add_trace(go.Scatter(x=daily["date_lbl"], y=daily[col],
+                mode="lines+markers", name=name,
+                line=dict(color=col_c, width=2.5), marker=dict(size=7, color=col_c),
+                hovertemplate=f"{name}: %{{y}}%<extra></extra>"))
     fig2.add_hline(y=70, line_dash="dot", line_color="#16a34a", line_width=1.5,
                    annotation_text="70% in-window target",
                    annotation_font_color="#16a34a", annotation_position="bottom right")
@@ -700,13 +827,94 @@ with t_analysis:
 
     st.markdown("---")
 
-    st.markdown("##### Which grouping/support arrangement is most associated with regulation?")
+    # ── Chart 3: Day of week ──────────────────────────────────────────────────
+    st.markdown("##### 📅 Regulation by day of week")
+    st.caption(
+        "Total intervals per day across the observation period, coloured by regulation state. "
+        "Taller bars mean more intervals were recorded on that day. "
+        "The colour split shows how regulation varied across days of the week."
+    )
+    dow = filt.groupby(["day_of_week","State"]).size().reset_index(name="n")
+    dow["sort_k"] = dow["day_of_week"].apply(lambda d: DAYS.index(d) if d in DAYS else 9)
+    dow = dow.sort_values("sort_k")
+    active_states_dow = [s for s in state_order if s in dow["State"].values]
+    # Best and worst days
+    dow_reg = filt.groupby("day_of_week").apply(
+        lambda g: round(100*(g["regulated"].isin(["in_window","coping"])).sum()/len(g))
+    ).reset_index(name="pct_reg")
+    dow_reg["sort_k"] = dow_reg["day_of_week"].apply(lambda d: DAYS.index(d) if d in DAYS else 9)
+    dow_reg = dow_reg.sort_values("sort_k")
+    best_day  = dow_reg.loc[dow_reg["pct_reg"].idxmax(), "day_of_week"] if not dow_reg.empty else None
+    worst_day = dow_reg.loc[dow_reg["pct_reg"].idxmin(), "day_of_week"] if not dow_reg.empty else None
+    best_pct  = dow_reg["pct_reg"].max() if not dow_reg.empty else 0
+    worst_pct = dow_reg["pct_reg"].min() if not dow_reg.empty else 0
+
+    fig4 = px.bar(dow, x="day_of_week", y="n", color="State",
+        color_discrete_map=colour_map, barmode="stack",
+        labels={"day_of_week":"","n":"Intervals","State":""},
+        category_orders={"day_of_week": DAYS, "State": active_states_dow})
+    fig4.update_layout(height=280, plot_bgcolor="white", paper_bgcolor="white",
+        yaxis=dict(tickformat="d", gridcolor="#e2e8f0",
+                   title="15-min intervals recorded"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
+        margin=dict(l=10,r=10,t=50,b=10))
+    st.plotly_chart(fig4, use_container_width=True)
+
+    hyp_dow_prompt = (
+        f"Student regulation by day of week (% intervals within or coping): "
+        + ", ".join(f"{r['day_of_week']} {r['pct_reg']}%" for _, r in dow_reg.iterrows()) + ". "
+        + (f"Best day is {best_day} ({best_pct}% regulated). " if best_day else "")
+        + (f"Most difficult day is {worst_day} ({worst_pct}% regulated). " if worst_day else "")
+        + "Interpret this weekly pattern. What might explain differences between days? "
+          "What questions should the team investigate about timetable, staffing, or curriculum on the most difficult day?"
+    )
+    with st.spinner("Generating clinical hypothesis…"):
+        hyp_dow = _groq_hypothesis(hyp_dow_prompt)
+    if hyp_dow:
+        _hypothesis_box(hyp_dow)
+    else:
+        _hypothesis_box(
+            (f"Data indicates the student is most regulated on {best_day} ({best_pct}% of intervals within or coping). " if best_day else "")
+            + (f"The most challenging day is {worst_day} ({worst_pct}% regulated). " if worst_day and worst_day != best_day else "")
+            + "The team should review what differs between these days — including timetable structure, "
+              "staffing consistency, peer groupings, and transition demands — as these factors are likely "
+              "influencing the student's capacity to remain within their window of tolerance."
+        )
+
+    st.markdown("---")
+
+    # ── Chart 4: Support / grouping type volume ───────────────────────────────
     sup_filt = filt[
-        filt["grouping_type"].notna() &
-        (filt["grouping_type"].str.strip() != "")
+        filt.get("grouping_type", pd.Series(dtype=str)).notna() &
+        (filt.get("grouping_type", pd.Series(dtype=str)).str.strip() != "")
     ].copy() if "grouping_type" in filt.columns else pd.DataFrame()
+
     if not sup_filt.empty:
+        st.markdown("##### 👥 Level of support — how often was each grouping recorded?")
+        st.caption(
+            "Shows the total number of 15-minute intervals recorded under each support/grouping arrangement, "
+            "coloured by the regulation state during that interval. "
+            "This identifies which support type is most frequently used and how effective it is."
+        )
         sup_filt["Grouping"] = sup_filt["grouping_type"].map(GROUPING_TYPES).fillna(sup_filt["grouping_type"])
+
+        # Volume chart: total intervals per grouping, colour = regulation state
+        grp_state = sup_filt.groupby(["Grouping","State"]).size().reset_index(name="n")
+        active_states_grp = [s for s in state_order if s in grp_state["State"].values]
+        fig_grp = px.bar(grp_state, x="n", y="Grouping", color="State",
+            color_discrete_map=colour_map, barmode="stack", orientation="h",
+            labels={"Grouping":"","n":"Intervals","State":""},
+            category_orders={"State": active_states_grp})
+        fig_grp.update_layout(height=max(220, len(grp_state["Grouping"].unique())*60+80),
+            plot_bgcolor="white", paper_bgcolor="white",
+            yaxis=dict(autorange="reversed"),
+            xaxis=dict(tickformat="d", gridcolor="#e2e8f0", title="15-min intervals recorded"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
+            margin=dict(l=10,r=10,t=50,b=10))
+        st.plotly_chart(fig_grp, use_container_width=True)
+
+        # Percentage heatmap
+        st.markdown("**Regulation rate by support type** — % of intervals in each state")
         pivot = sup_filt.groupby(["Grouping","State"]).size().unstack(fill_value=0)
         pivot_pct = pivot.div(pivot.sum(axis=1), axis=0) * 100
         ordered_cols = [s for s in state_order if s in pivot_pct.columns]
@@ -716,66 +924,126 @@ with t_analysis:
             pivot_pct.round(1),
             color_continuous_scale=["#dc2626","#fef9c3","#16a34a"],
             zmin=0, zmax=100, aspect="auto", text_auto=".0f",
-            labels=dict(x="Regulation state", y="Support type", color="%"),
+            labels=dict(x="Regulation state", y="Support / grouping", color="%"),
         )
         fig3.update_layout(
-            height=max(240, len(pivot_pct)*45+80),
+            height=max(240, len(pivot_pct)*55+80),
             coloraxis_colorbar=dict(title="%", ticksuffix="%"),
             margin=dict(l=10,r=80,t=20,b=10),
             xaxis=dict(side="top"),
         )
         st.plotly_chart(fig3, use_container_width=True)
-        st.caption("💡 Each row = one support type. Green = associated with regulation. "
-                   "Red = dysregulation still occurring. Identifies which supports work for this student.")
+
+        # Build summary for hypothesis
+        grp_counts = sup_filt["Grouping"].value_counts()
+        top_grp    = grp_counts.index[0] if not grp_counts.empty else "unknown"
+        top_grp_n  = int(grp_counts.iloc[0]) if not grp_counts.empty else 0
+        top_grp_pct = round(100*top_grp_n/len(sup_filt)) if len(sup_filt) else 0
+        hyp_grp_prompt = (
+            f"Student support type distribution across {len(sup_filt)} intervals: "
+            + ", ".join(f"{g} ({n} intervals, {round(100*n/len(sup_filt))}%)" for g, n in grp_counts.items()) + ". "
+            + f"Most common support arrangement is '{top_grp}' ({top_grp_pct}% of intervals). "
+            + "Regulation rates per support type: "
+            + "; ".join(
+                f"{row.name}: {round(row.get('🟢 In window', 0)+row.get('🟡 Coping', 0), 1)}% regulated"
+                for _, row in pivot_pct.iterrows()
+            ) + ". "
+            + "Interpret what this reveals about the student's dependence on support, "
+              "and what the data implies for resourcing, fading support, or building independence."
+        )
+        with st.spinner("Generating clinical hypothesis…"):
+            hyp_grp = _groq_hypothesis(hyp_grp_prompt)
+        if hyp_grp:
+            _hypothesis_box(hyp_grp)
+        else:
+            _hypothesis_box(
+                f"The data shows that {top_grp_pct}% of observed intervals occurred under '{top_grp}' support. "
+                "This indicates the current level of support is the primary context in which this student's "
+                "regulation is being observed and maintained. The team should consider whether this level of "
+                "resourcing is sustainable, what structured plans exist for support-fading, and how the "
+                "student's regulation changes in lower-support contexts."
+            )
     else:
-        st.info("Record support type data to see this chart.")
+        st.info("Record grouping/support data during observations to see this chart.")
 
     st.markdown("---")
 
-    st.markdown("##### Regulation by day of week")
-    dow = filt.groupby(["day_of_week","State"]).size().reset_index(name="n")
-    dow["sort_k"] = dow["day_of_week"].apply(lambda d: DAYS.index(d) if d in DAYS else 9)
-    dow = dow.sort_values("sort_k")
-    fig4 = px.bar(dow, x="day_of_week", y="n", color="State",
-        color_discrete_map=colour_map, barmode="stack",
-        labels={"day_of_week":"","n":"Intervals","State":""},
-        category_orders={"day_of_week": DAYS, "State": state_order})
-    fig4.update_layout(height=280, plot_bgcolor="white", paper_bgcolor="white",
-        yaxis=dict(tickformat="d", gridcolor="#e2e8f0"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
-        margin=dict(l=10,r=10,t=50,b=10))
-    st.plotly_chart(fig4, use_container_width=True)
-
-    st.markdown("---")
-
+    # ── Chart 5: Activity type vs regulation ─────────────────────────────────
     if "activity_types" in filt.columns:
         act_rows = []
         for _, row in filt.iterrows():
             acts = [a.strip() for a in str(row.get("activity_types","")).split(",") if a.strip()]
             for act in acts:
-                act_rows.append({"Activity": act, "State": row["State"]})
+                act_rows.append({
+                    "Activity": act,
+                    "State":    row["State"],
+                    "Grouping": GROUPING_TYPES.get(row.get("grouping_type",""),"") if row.get("grouping_type") else "",
+                })
         if act_rows:
-            st.markdown("##### Regulation by activity type")
+            st.markdown("##### 🎯 Regulation by activity type")
+            st.caption(
+                "Each bar represents all 15-minute intervals recorded during that activity type. "
+                "When an interval has multiple activity types selected, it is counted in each. "
+                "Colour shows regulation state during that activity."
+            )
             act_df = pd.DataFrame(act_rows)
-            adf = act_df.groupby(["Activity","State"]).size().reset_index(name="n")
+            adf    = act_df.groupby(["Activity","State"]).size().reset_index(name="n")
+            active_states_act = [s for s in state_order if s in adf["State"].values]
             fig6 = px.bar(adf, x="n", y="Activity", color="State",
                 color_discrete_map=colour_map, barmode="stack", orientation="h",
                 labels={"Activity":"","n":"Intervals","State":""},
-                category_orders={"State": state_order})
-            fig6.update_layout(height=max(200,len(adf["Activity"].unique())*45+80),
+                category_orders={"State": active_states_act})
+            fig6.update_layout(height=max(220,len(adf["Activity"].unique())*60+80),
                 plot_bgcolor="white", paper_bgcolor="white",
                 yaxis=dict(autorange="reversed"),
-                xaxis=dict(tickformat="d", gridcolor="#e2e8f0"),
+                xaxis=dict(tickformat="d", gridcolor="#e2e8f0", title="15-min intervals recorded"),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
                 margin=dict(l=10,r=10,t=50,b=10))
             st.plotly_chart(fig6, use_container_width=True)
-            st.caption("💡 Shows how regulation differs across activity types. Intervals with multiple activity types are counted in each.")
+
+            # Build hypothesis
+            act_counts  = act_df["Activity"].value_counts()
+            top_act     = act_counts.index[0] if not act_counts.empty else "unknown"
+            act_reg_pct = {}
+            for act in act_df["Activity"].unique():
+                sub = act_df[act_df["Activity"]==act]
+                reg_n = sub["State"].str.contains("In window|Coping").sum()
+                act_reg_pct[act] = round(100*reg_n/len(sub)) if len(sub) else 0
+
+            # Support info for top activity
+            top_act_grp = act_df[act_df["Activity"]==top_act]["Grouping"].value_counts()
+            top_grp_for_act = top_act_grp.index[0] if not top_act_grp.empty else "unrecorded grouping"
+
+            hyp_act_prompt = (
+                f"Student activity type data across all intervals: "
+                + ", ".join(f"{a} ({n} intervals, {act_reg_pct.get(a,0)}% regulated)" for a, n in act_counts.items()) + ". "
+                + f"Most common activity is '{top_act}' — primarily with '{top_grp_for_act}' support. "
+                + "Interpret what this reveals about demand tolerance, preferred vs non-preferred tasks, "
+                  "and what this implies for curriculum design and support planning. "
+                  "Note whether regulation is contingent on activity preference, and question whether "
+                  "the student is building capacity for non-preferred tasks."
+            )
+            with st.spinner("Generating clinical hypothesis…"):
+                hyp_act = _groq_hypothesis(hyp_act_prompt)
+            if hyp_act:
+                _hypothesis_box(hyp_act)
+            else:
+                best_act  = max(act_reg_pct, key=act_reg_pct.get) if act_reg_pct else None
+                worst_act = min(act_reg_pct, key=act_reg_pct.get) if act_reg_pct else None
+                _hypothesis_box(
+                    f"The majority of observed intervals involved '{top_act}' tasks, predominantly under '{top_grp_for_act}' support. "
+                    + (f"Highest regulation was observed during '{best_act}' activities ({act_reg_pct[best_act]}% regulated). " if best_act else "")
+                    + (f"Greatest dysregulation occurred during '{worst_act}' activities ({act_reg_pct[worst_act]}% regulated). " if worst_act and worst_act != best_act else "")
+                    + "The team should consider whether regulation during preferred or structured tasks "
+                      "is contingent on high levels of 1:1 support, and build a plan to gradually "
+                      "introduce demand and fade support across this student's program."
+                )
             st.markdown("---")
 
     dl = filt.copy()
     dl["obs_date"] = dl["obs_date_dt"].dt.strftime("%-d/%m/%Y")
     csv = dl[["obs_date","day_of_week","time_slot","regulated","State",
-              "support_used","outcome","created_by"]].to_csv(index=False)
+              "grouping_type","activity_types","outcome","created_by"]].to_csv(index=False)
     st.download_button("📥 Download CSV", csv,
         file_name=f"IntervalSupport_{student_name.replace(' ','_')}_{date_from}_{date_to}.csv",
         mime="text/csv", use_container_width=True)
