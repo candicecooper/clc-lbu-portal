@@ -921,7 +921,27 @@ with t_analysis:
         bargap=0.25, bargroupgap=0.05,
     )
     st.plotly_chart(fig2, use_container_width=True)
-    ss["rpt_fig2"] = _rpt_fig(fig2, height=380, margin_b=65, margin_l=65).to_html(full_html=False, include_plotlyjs=False)
+
+    # Build report version explicitly — _rpt_fig's generic overrides fight barmode/bargap
+    import copy as _copy
+    _fig2r = _copy.deepcopy(fig2)
+    _fig2r.update_layout(
+        width=820, height=400, autosize=False,
+        barmode="group", bargap=0.25, bargroupgap=0.05,
+        font=dict(size=12, family="Arial, sans-serif"),
+        margin=dict(l=70, r=40, t=75, b=55),
+        plot_bgcolor="white", paper_bgcolor="white",
+        yaxis=dict(range=[0,110], gridcolor="#e2e8f0", title="% of intervals",
+                   ticksuffix="%", tickfont=dict(size=11)),
+        xaxis=dict(gridcolor="rgba(0,0,0,0)", title="", tickfont=dict(size=12)),
+        legend=dict(orientation="h", yanchor="bottom", y=1.04,
+                    xanchor="left", x=0, font=dict(size=11)),
+    )
+    # Ensure text labels are readable at report size
+    for trace in _fig2r.data:
+        trace.update(textfont=dict(color="white", size=12, family="Arial"),
+                     textposition="inside")
+    ss["rpt_fig2"] = _fig2r.to_html(full_html=False, include_plotlyjs=False)
     # Make the daily df available for report (re-alias for consistency)
     daily = _daily
 
