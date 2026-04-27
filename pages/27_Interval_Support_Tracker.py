@@ -682,6 +682,9 @@ def _rpt_fig(fig, height=380, margin_b=100, margin_l=65, margin_r=30, margin_t=6
     f.update_xaxes(gridcolor="#e2e8f0", tickfont=dict(size=11))
     f.update_yaxes(gridcolor="#e2e8f0", tickfont=dict(size=11))
     return f
+
+
+def _hypothesis_box(text, key=None):
     """Render a teal hypothesis card. key stores text in ss for report."""
     if key:
         ss[key] = text
