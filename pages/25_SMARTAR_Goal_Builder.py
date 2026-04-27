@@ -39,22 +39,22 @@ def check_team_meetings_integration():
 integration = check_team_meetings_integration()
 
 # ── Clients ───────────────────────────────────────────────────────────────────
-@st.cache_resource
-def get_supabase():
-    # [supabase] section = BEHAVIOUR_SUPABASE_URL (correct project with smartar tables)
-    # SUPABASE_URL = main project (different) — must NOT use this as fallback here
-    url = (
-        st.secrets.get("supabase", {}).get("url")
-        or st.secrets.get("BEHAVIOUR_SUPABASE_URL")
-    )
-    key = (
-        st.secrets.get("supabase", {}).get("key")
-        or st.secrets.get("BEHAVIOUR_SUPABASE_KEY")
-    )
+def _get_sb_creds():
+    url = (st.secrets.get("supabase", {}).get("url")
+           or st.secrets.get("BEHAVIOUR_SUPABASE_URL"))
+    key = (st.secrets.get("supabase", {}).get("key")
+           or st.secrets.get("BEHAVIOUR_SUPABASE_KEY"))
+    return url, key
+
+def _make_sb():
+    url, key = _get_sb_creds()
     if not url or not key:
-        st.error("⚠️ Supabase credentials not found. Check BEHAVIOUR_SUPABASE_URL in Render environment.")
+        st.error("⚠️ Supabase credentials not found.")
         st.stop()
     return create_client(url, key)
+
+# Fresh client on every page load — prevents stale connections on Render free tier
+sb = _make_sb()
 
 @st.cache_resource
 def get_groq():
@@ -63,8 +63,22 @@ def get_groq():
         return None
     return Groq(api_key=api_key)
 
-sb           = get_supabase()
-groq_client  = get_groq()
+groq_client = get_groq()
+
+import time as _time
+
+def _q(fn, retries=3):
+    """Run a DB query with automatic retry + fresh client on failure."""
+    global sb
+    for attempt in range(retries):
+        try:
+            return fn(sb)
+        except Exception as e:
+            if attempt < retries - 1:
+                _time.sleep(0.5 * (attempt + 1))
+                sb = _make_sb()
+            else:
+                raise e
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 LEVEL_ORDER  = ["EXCEEDING", "ABOVE", "EXPECTED", "BELOW", "NOT YET"]
@@ -173,24 +187,29 @@ Use "All Day" unless the goal text CLEARLY references a specific time context (e
 
 # ── Supabase helpers ───────────────────────────────────────────────────────────
 def get_students(include_archived=False):
-    try:
-        q = sb.table("smartar_students").select("*").order("student_name")
+    def _fn(c):
+        q = c.table("smartar_students").select("*").order("student_name")
         if not include_archived:
             q = q.eq("active", True)
         return q.execute().data or []
+    try:
+        result = _q(_fn)
+        return result
     except Exception as e:
         st.error(f"DB error loading students: {e}")
         return []
 
 
 def get_goals(student_name=None, active_only=True):
-    try:
-        q = sb.table("smartar_goals").select("*")
+    def _fn(c):
+        q = c.table("smartar_goals").select("*")
         if student_name:
             q = q.eq("student_name", student_name)
         if active_only:
             q = q.eq("active", True)
         return q.order("created_at", desc=False).execute().data or []
+    try:
+        return _q(_fn)
     except Exception as e:
         st.error(f"DB error loading goals: {e}")
         return []
@@ -198,13 +217,15 @@ def get_goals(student_name=None, active_only=True):
 
 def get_all_goals_for_student(student_name: str):
     """Returns active + archived goals for a student, newest first."""
-    try:
+    def _fn(c):
         return (
-            sb.table("smartar_goals").select("*")
+            c.table("smartar_goals").select("*")
             .eq("student_name", student_name)
             .order("created_at", desc=True)
             .execute().data or []
         )
+    try:
+        return _q(_fn)
     except Exception:
         return []
 
