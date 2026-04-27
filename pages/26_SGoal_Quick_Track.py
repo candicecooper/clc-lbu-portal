@@ -1,30 +1,26 @@
 """
 SGoal Quick Track — fast daily SMARTAR goal tracking for CLC LBU staff.
-Page 26. Sessions shown are filtered by each goal's AI-assigned tracking period.
+Page 26. Sessions filtered by each goal's tracking period.
 """
 
 import streamlit as st
 from datetime import date, datetime
 from supabase import create_client
 
-st.set_page_config(
-    page_title="SGoal Quick Track",
-    page_icon="⚡",
-    layout="wide",
-)
+st.set_page_config(page_title="SGoal Quick Track", page_icon="⚡", layout="wide")
 
-# ─── Branding ────────────────────────────────────────────────────────────────
 TEAL  = "#1A7A6E"
 AMBER = "#C8760A"
 
-PERF_LEVELS = ["EXCEEDING", "EXPECTED", "NOT YET"]
-
-PERF_STYLE = {
-    "EXCEEDING": ("🌟", "#27ae60", "white"),
-    "EXPECTED":  ("✅", "#2980b9", "white"),
-    "NOT YET":   ("⚠️", "#e74c3c", "white"),
+# 4 tracking levels — matches Goal Builder (BELOW not tracked daily)
+PERF_LEVELS = ["EXCEEDING", "ABOVE", "EXPECTED", "NOT YET"]
+PERF_STYLE  = {
+    "EXCEEDING": ("🌟", "#27ae60"),
+    "ABOVE":     ("✅", "#2ecc71"),
+    "EXPECTED":  ("🎯", "#2980b9"),
+    "NOT YET":   ("❌", "#c0392b"),
 }
-
+SESSION_ICONS = {"Morning": "🌅", "Middle": "☀️", "Afternoon": "🌤️"}
 SESSIONS_FOR_PERIOD = {
     "All Day":            ["Morning", "Middle", "Afternoon"],
     "Morning Only":       ["Morning"],
@@ -34,100 +30,96 @@ SESSIONS_FOR_PERIOD = {
     "Middle & Afternoon": ["Middle", "Afternoon"],
 }
 
-SESSION_ICONS = {
-    "Morning":   "🌅",
-    "Middle":    "☀️",
-    "Afternoon": "🌤️",
-}
-
-# ─── Supabase ─────────────────────────────────────────────────────────────────
-
+# ── Supabase — same project as Goal Builder ───────────────────────────────────
 @st.cache_resource
 def get_sb():
-    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+    # Priority: [supabase] section first (written by start.sh from BEHAVIOUR_ vars)
+    # then direct BEHAVIOUR_ keys — never fall through to SUPABASE_URL (wrong project)
+    url = (
+        st.secrets.get("supabase", {}).get("url")
+        or st.secrets.get("BEHAVIOUR_SUPABASE_URL")
+    )
+    key = (
+        st.secrets.get("supabase", {}).get("key")
+        or st.secrets.get("BEHAVIOUR_SUPABASE_KEY")
+    )
+    if not url or not key:
+        st.error("⚠️ Supabase credentials not found.")
+        st.stop()
+    return create_client(url, key)
 
 sb = get_sb()
 
-# ─── Data helpers ─────────────────────────────────────────────────────────────
+# ── Data helpers ──────────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=60)
-def get_programs():
-    try:
-        rows = sb.table("students").select("program").execute().data
-        progs = sorted({r["program"] for r in rows if r.get("program")})
-        return progs if progs else ["JP", "PY", "SY"]
-    except Exception:
-        return ["JP", "PY", "SY"]
-
-
-@st.cache_data(ttl=60)
-def get_students_for_program(program: str):
+@st.cache_data(ttl=120)
+def get_all_students():
+    """Load from smartar_students — same table as Goal Builder."""
     try:
         rows = (
-            sb.table("students")
-            .select("name")
-            .eq("program", program)
-            .order("name")
-            .execute()
-            .data
+            sb.table("smartar_students")
+            .select("student_name, program")
+            .eq("active", True)
+            .order("student_name")
+            .execute().data
         )
-        return [r["name"] for r in rows]
-    except Exception:
+        return rows or []
+    except Exception as e:
+        st.error(f"Error loading students: {e}")
         return []
 
 
 @st.cache_data(ttl=30)
-def get_active_goals(student: str):
+def get_active_goals(student_name: str):
+    """Load active goals — uses active=True and smartar_goal column."""
     try:
         rows = (
             sb.table("smartar_goals")
-            .select("id, goal_text, domain, tracking_period")
-            .eq("student_name", student)
-            .eq("status", "Active")
+            .select("id, smartar_goal, domain, tracking_period")
+            .eq("student_name", student_name)
+            .eq("active", True)
             .order("created_at")
-            .execute()
-            .data
+            .execute().data
         )
-        return rows
-    except Exception:
+        return rows or []
+    except Exception as e:
+        st.error(f"Error loading goals: {e}")
         return []
 
 
-def get_today_tracking(student: str, today_str: str):
-    """Returns dict of {(session): performance} for today."""
+def get_today_sessions(student_name: str, today_str: str):
+    """Returns dict {(goal_id, session_time): performance_level} for today."""
     try:
         rows = (
             sb.table("smartar_tracking")
-            .select("session, performance")
-            .eq("student_name", student)
-            .eq("date", today_str)
-            .execute()
-            .data
+            .select("goal_id, session_time, performance_level")
+            .eq("student_name", student_name)
+            .eq("session_date", today_str)
+            .execute().data
         )
-        return {r["session"]: r["performance"] for r in rows}
+        return {(r["goal_id"], r["session_time"]): r["performance_level"] for r in rows}
     except Exception:
         return {}
 
 
-def save_tracking(student: str, session: str, performance: str, today_str: str):
-    """Upsert tracking entry for today."""
+def save_session(goal_id, student_name: str, session_time: str,
+                 performance_level: str, today_str: str) -> bool:
+    """Upsert a tracking record — matches smartar_tracking schema."""
     try:
-        # Check if entry exists
         existing = (
             sb.table("smartar_tracking")
             .select("id")
-            .eq("student_name", student)
-            .eq("date", today_str)
-            .eq("session", session)
-            .execute()
-            .data
+            .eq("goal_id", goal_id)
+            .eq("session_date", today_str)
+            .eq("session_time", session_time)
+            .execute().data
         )
         payload = {
-            "student_name": student,
-            "date":         today_str,
-            "session":      session,
-            "performance":  performance,
-            "updated_at":   datetime.utcnow().isoformat(),
+            "goal_id":           goal_id,
+            "student_name":      student_name,
+            "session_date":      today_str,
+            "session_time":      session_time,
+            "performance_level": performance_level,
         }
         if existing:
             sb.table("smartar_tracking").update(payload).eq("id", existing[0]["id"]).execute()
@@ -139,101 +131,73 @@ def save_tracking(student: str, session: str, performance: str, today_str: str):
         return False
 
 
-# ─── Styles ───────────────────────────────────────────────────────────────────
-
+# ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown(f"""
 <style>
   [data-testid="stSidebar"] {{ display: none !important; }}
-
-  /* Session button grid */
-  .session-label {{
-      font-weight: 700;
-      font-size: 15px;
-      color: {TEAL};
-      margin-bottom: 4px;
+  .today-banner {{
+      background: {TEAL}; color: white; border-radius: 8px;
+      padding: 8px 16px; font-size: 15px; font-weight: 600;
+      margin-bottom: 16px; text-align: center;
   }}
   .goal-header {{
-      background: {TEAL}18;
-      border-left: 4px solid {TEAL};
-      border-radius: 5px;
-      padding: 8px 12px;
-      margin: 8px 0 6px 0;
-      font-size: 13px;
+      background: {TEAL}18; border-left: 4px solid {TEAL};
+      border-radius: 5px; padding: 8px 12px; margin: 10px 0 6px 0; font-size: 13px;
   }}
-  .goal-period-tag {{
-      display: inline-block;
-      background: {AMBER};
-      color: white;
-      border-radius: 10px;
-      padding: 1px 9px;
-      font-size: 11px;
-      font-weight: 600;
-      margin-left: 8px;
+  .period-tag {{
+      display: inline-block; background: {AMBER}; color: white;
+      border-radius: 10px; padding: 1px 9px; font-size: 11px;
+      font-weight: 600; margin-left: 8px;
   }}
-  .today-banner {{
-      background: {TEAL};
-      color: white;
-      border-radius: 8px;
-      padding: 8px 16px;
-      font-size: 15px;
-      font-weight: 600;
-      margin-bottom: 16px;
-      text-align: center;
-  }}
-  .saved-badge {{
-      background: #27ae60;
-      color: white;
-      border-radius: 10px;
-      padding: 1px 9px;
-      font-size: 11px;
-      font-weight: 600;
+  .sess-label {{
+      font-weight: 700; font-size: 14px; color: {TEAL}; margin-bottom: 4px;
   }}
 </style>
 """, unsafe_allow_html=True)
 
-# ─── Header ───────────────────────────────────────────────────────────────────
-
+# ── Header ────────────────────────────────────────────────────────────────────
 st.title("⚡ SGoal Quick Track")
 st.markdown(
     "Fast daily SMARTAR goal tracking — keep this open while teaching. "
     "Sessions shown are tailored to each goal's tracking period."
 )
 
-today = date.today()
+today     = date.today()
 today_str = today.isoformat()
 today_fmt = today.strftime("%A, %d %B %Y")
 
-st.markdown(
-    f'<div class="today-banner">📅 {today_fmt}</div>',
-    unsafe_allow_html=True,
-)
+st.markdown(f'<div class="today-banner">📅 {today_fmt}</div>', unsafe_allow_html=True)
 
-# ─── Program + Student selectors ─────────────────────────────────────────────
+# ── Student selector ──────────────────────────────────────────────────────────
+all_students = get_all_students()
 
+if not all_students:
+    st.warning("No students found. Add students in the SMARTAR Goal Builder first.")
+    st.stop()
+
+# Group by program for the filter
+programs_avail = sorted({s.get("program","?") for s in all_students})
 col_prog, col_student = st.columns([1, 2])
 
 with col_prog:
-    programs = get_programs()
-    program  = st.selectbox("📚 Program", programs, key="qt_program")
+    prog_opts = ["All"] + programs_avail
+    program   = st.selectbox("📚 Program", prog_opts, key="qt_prog")
 
 with col_student:
-    students = get_students_for_program(program)
-    if not students:
-        students = []
-    student = st.selectbox(
-        "👤 Student",
-        students if students else ["— no students found —"],
-        key="qt_student",
-    )
+    if program == "All":
+        filtered = [s["student_name"] for s in all_students]
+    else:
+        filtered = [s["student_name"] for s in all_students if s.get("program") == program]
 
-if not students or student == "— no students found —":
-    st.info("No students found for this program. Check the SMARTAR Goal Builder or add students.")
-    st.stop()
+    if not filtered:
+        st.warning("No students in this program.")
+        st.stop()
 
-# ─── Load goals + today's tracking ───────────────────────────────────────────
+    student = st.selectbox("👤 Student", filtered, key="qt_student")
 
-active_goals   = get_active_goals(student)
-today_tracking = get_today_tracking(student, today_str)
+# ── Load goals + today's tracking ────────────────────────────────────────────
+active_goals  = get_active_goals(student)
+today_tracked = get_today_sessions(student, today_str)
 
 st.markdown("---")
 
@@ -244,91 +208,68 @@ if not active_goals:
     )
     st.stop()
 
-# ─── Per-goal tracking blocks ─────────────────────────────────────────────────
-
+# ── Per-goal tracking blocks ──────────────────────────────────────────────────
 for g_idx, goal in enumerate(active_goals):
-    period   = goal.get("tracking_period") or "All Day"
-    sessions = SESSIONS_FOR_PERIOD.get(period, ["Morning", "Middle", "Afternoon"])
-    domain   = goal.get("domain", "")
-    goal_text = goal.get("goal_text", "")
-
-    # Truncate goal text for display
-    display_goal = goal_text[:85] + "…" if len(goal_text) > 85 else goal_text
+    goal_id    = goal["id"]
+    period     = goal.get("tracking_period") or "All Day"
+    sessions   = SESSIONS_FOR_PERIOD.get(period, ["Morning", "Middle", "Afternoon"])
+    domain     = goal.get("domain", "")
+    goal_text  = goal.get("smartar_goal") or goal.get("goal_text") or "—"
+    display    = goal_text[:85] + "…" if len(goal_text) > 85 else goal_text
 
     st.markdown(
         f'<div class="goal-header">'
-        f'<strong>{domain}</strong>'
-        f'<span class="goal-period-tag">{period}</span><br>'
-        f'<span style="font-size:12px;color:#444">{display_goal}</span>'
+        f'<strong>Goal {g_idx + 1}</strong> · <strong>{domain}</strong>'
+        f'<span class="period-tag">{period}</span><br>'
+        f'<span style="font-size:12px;color:#444">{display}</span>'
         f'</div>',
         unsafe_allow_html=True,
     )
 
-    # Build one row of session columns
-    # Only show sessions relevant to this goal's tracking period
     sess_cols = st.columns(len(sessions))
 
     for s_idx, session in enumerate(sessions):
-        current_perf = today_tracking.get(session)
-        icon = SESSION_ICONS.get(session, "🕐")
+        current = today_tracked.get((goal_id, session))
+        icon    = SESSION_ICONS.get(session, "🕐")
 
         with sess_cols[s_idx]:
             st.markdown(
-                f'<div class="session-label">{icon} {session}</div>',
+                f'<div class="sess-label">{icon} {session}</div>',
                 unsafe_allow_html=True,
             )
-
             for perf in PERF_LEVELS:
-                p_icon, p_bg, p_fg = PERF_STYLE[perf]
-                is_selected = (current_perf == perf)
-
-                if is_selected:
-                    # Show highlighted selected state
-                    btn_label = f"{p_icon} ✓ {perf}"
-                    btn_key   = f"qt_{g_idx}_{session}_{perf}"
-                    # Still clickable to deselect / re-confirm
-                    if st.button(
-                        btn_label,
-                        key=btn_key,
-                        use_container_width=True,
-                        type="primary",
-                    ):
-                        # Already saved — clicking again re-saves (harmless)
-                        save_tracking(student, session, perf, today_str)
-                        get_today_tracking.clear()
+                p_icon, p_bg = PERF_STYLE[perf]
+                is_sel  = current == perf
+                label   = f"{p_icon} {'✓ ' if is_sel else ''}{perf}"
+                btn_key = f"qt_{g_idx}_{session}_{perf}"
+                if st.button(label, key=btn_key, use_container_width=True,
+                             type="primary" if is_sel else "secondary"):
+                    if save_session(goal_id, student, session, perf, today_str):
+                        get_today_sessions.clear() if hasattr(get_today_sessions, 'clear') else None
+                        st.toast(f"✅ {session} → {perf}")
                         st.rerun()
-                else:
-                    btn_label = f"{p_icon} {perf}"
-                    btn_key   = f"qt_{g_idx}_{session}_{perf}"
-                    if st.button(btn_label, key=btn_key, use_container_width=True):
-                        if save_tracking(student, session, perf, today_str):
-                            get_today_tracking.clear()
-                            st.toast(f"✅ {session} → {perf}", icon="✅")
-                            st.rerun()
 
     st.markdown("&nbsp;")
 
-# ─── Today's summary ─────────────────────────────────────────────────────────
-
-if today_tracking:
+# ── Today's summary ───────────────────────────────────────────────────────────
+if today_tracked:
     st.divider()
-    st.markdown(f"##### 📋 Today's Recorded Sessions — {student}")
-    cols = st.columns(len(today_tracking))
-    for i, (sess, perf) in enumerate(sorted(today_tracking.items())):
-        p_icon, p_bg, _ = PERF_STYLE.get(perf, ("", TEAL, "white"))
+    st.markdown(f"##### 📋 Today's Recorded — {student}")
+    summary_items = sorted(today_tracked.items(), key=lambda x: (x[0][1]))
+    cols = st.columns(max(len(summary_items), 1))
+    for i, ((gid, sess), perf) in enumerate(summary_items):
+        p_icon, p_bg = PERF_STYLE.get(perf, ("", TEAL))
+        # Find goal number
+        g_num = next((j+1 for j, g in enumerate(active_goals) if g["id"] == gid), "?")
         cols[i].markdown(
-            f"**{sess}**  \n"
-            f"<span style='background:{p_bg};color:white;"
-            f"padding:2px 10px;border-radius:10px;font-size:12px'>"
-            f"{p_icon} {perf}</span>",
+            f"**Goal {g_num} · {sess}**  \n"
+            f"<span style='background:{p_bg};color:white;padding:2px 10px;"
+            f"border-radius:10px;font-size:12px'>{p_icon} {perf}</span>",
             unsafe_allow_html=True,
         )
-
-# ─── Footer ───────────────────────────────────────────────────────────────────
 
 st.divider()
 st.caption(
     f"Tracking for **{student}** · {today_fmt}  \n"
-    "Data saves instantly. Switch students anytime. "
-    "View full reports in **SMARTAR Goal Builder → Progress Reports**."
+    "Data saves instantly. View reports in **SMARTAR Goal Builder → Progress Report**."
 )
