@@ -41,22 +41,19 @@ integration = check_team_meetings_integration()
 # ── Clients ───────────────────────────────────────────────────────────────────
 @st.cache_resource
 def get_supabase():
-    # Try every possible location these credentials could be stored
+    # [supabase] section = BEHAVIOUR_SUPABASE_URL (correct project with smartar tables)
+    # SUPABASE_URL = main project (different) — must NOT use this as fallback here
     url = (
-        st.secrets.get("BEHAVIOUR_SUPABASE_URL")
-        or st.secrets.get("SUPABASE_URL")
-        or st.secrets.get("supabase", {}).get("url")
+        st.secrets.get("supabase", {}).get("url")
+        or st.secrets.get("BEHAVIOUR_SUPABASE_URL")
     )
     key = (
-        st.secrets.get("BEHAVIOUR_SUPABASE_KEY")
-        or st.secrets.get("SUPABASE_KEY")
-        or st.secrets.get("supabase", {}).get("key")
+        st.secrets.get("supabase", {}).get("key")
+        or st.secrets.get("BEHAVIOUR_SUPABASE_KEY")
     )
     if not url or not key:
-        st.error("⚠️ Supabase credentials not found. Check Render environment variables.")
+        st.error("⚠️ Supabase credentials not found. Check BEHAVIOUR_SUPABASE_URL in Render environment.")
         st.stop()
-    # Debug — remove once working
-    st.sidebar.caption(f"🔌 DB: `{url.split('//')[1].split('.')[0]}`")
     return create_client(url, key)
 
 @st.cache_resource
