@@ -922,27 +922,40 @@ with t_analysis:
     )
     st.plotly_chart(fig2, use_container_width=True)
 
-    # Build report version explicitly — _rpt_fig's generic overrides fight barmode/bargap
-    import copy as _copy
-    _fig2r = _copy.deepcopy(fig2)
-    _fig2r.update_layout(
-        width=820, height=400, autosize=False,
-        barmode="group", bargap=0.25, bargroupgap=0.05,
-        font=dict(size=12, family="Arial, sans-serif"),
-        margin=dict(l=70, r=40, t=75, b=55),
-        plot_bgcolor="white", paper_bgcolor="white",
-        yaxis=dict(range=[0,110], gridcolor="#e2e8f0", title="% of intervals",
-                   ticksuffix="%", tickfont=dict(size=11)),
-        xaxis=dict(gridcolor="rgba(0,0,0,0)", title="", tickfont=dict(size=12)),
-        legend=dict(orientation="h", yanchor="bottom", y=1.04,
-                    xanchor="left", x=0, font=dict(size=11)),
-    )
-    # Ensure text labels are readable at report size
-    for trace in _fig2r.data:
-        trace.update(textfont=dict(color="white", size=12, family="Arial"),
-                     textposition="inside")
-    ss["rpt_fig2"] = _fig2r.to_html(full_html=False, include_plotlyjs=False)
-    # Make the daily df available for report (re-alias for consistency)
+    # ── Report version: pure HTML table with CSS bars — no Plotly export issues ──
+    _state_colours = {
+        "pct_win":  ("#16a34a", "#dcfce7", "🟢 In window"),
+        "pct_cop":  ("#ca8a04", "#fef9c3", "🟡 Coping ⚠️"),
+        "pct_hyp":  ("#dc2626", "#fee2e2", "🔴 Hyperaroused"),
+        "pct_hypo": ("#2563eb", "#dbeafe", "🔵 Hypoaroused"),
+    }
+    _rpt_daily_html = """
+<table style="border-collapse:collapse;width:100%;font-size:.82rem;margin:.4rem 0 .6rem;">
+<thead><tr style="background:#1A6B8A;color:white;">
+  <th style="padding:.4rem .7rem;text-align:left;">Date</th>
+  <th style="padding:.4rem .7rem;text-align:center;color:#86efac;">🟢 In window</th>
+  <th style="padding:.4rem .7rem;text-align:center;color:#fde68a;">🟡 Coping ⚠️</th>
+  <th style="padding:.4rem .7rem;text-align:center;color:#fca5a5;">🔴 Hyperaroused</th>
+  <th style="padding:.4rem .7rem;text-align:center;color:#93c5fd;">🔵 Hypoaroused</th>
+</tr></thead><tbody>"""
+    for _, _r in _daily.iterrows():
+        _rpt_daily_html += f'<tr><td style="padding:.38rem .7rem;font-weight:600;border-bottom:1px solid #e2e8f0;white-space:nowrap;">{_r["date_lbl"]}</td>'
+        for _col, (_fg, _bg, _lbl) in _state_colours.items():
+            _v = int(_r[_col])
+            # Mini horizontal bar inside the cell
+            _bar = (f'<div style="background:{_bg};border-radius:4px;height:18px;width:100%;position:relative;">'
+                    f'<div style="background:{_fg};border-radius:4px;height:18px;width:{_v}%;"></div>'
+                    f'<span style="position:absolute;left:50%;top:0;transform:translateX(-50%);'
+                    f'font-weight:700;font-size:.8rem;line-height:18px;color:{"white" if _v>30 else _fg};">'
+                    f'{_v}%</span></div>')
+            _rpt_daily_html += f'<td style="padding:.25rem .5rem;border-bottom:1px solid #e2e8f0;min-width:100px;">{_bar}</td>'
+        _rpt_daily_html += '</tr>'
+    _rpt_daily_html += '</tbody></table>'
+    # 70% benchmark note
+    _rpt_daily_html += '<p style="font-size:.75rem;color:#475569;margin:.1rem 0 .5rem;">Dashed green benchmark: 70% in-window is the target. 🟡 Coping = dysregulated — at the edge of the window.</p>'
+    ss["rpt_fig2"] = _rpt_daily_html
+
+    # Make the daily df available for report
     daily = _daily
 
     st.markdown("---")
@@ -1489,12 +1502,12 @@ with t_analysis:
 
   <h2>📈 Daily regulation trend</h2>
   <div class="info-box">
-    Percentage of each day's intervals in each regulation state across the {n_days} observed school days.
-    The dashed green line marks the 70% in-window benchmark.
-    <strong>Days above the green line in window% are the strongest days for regulation.</strong>
-    Note: with a small number of observation days, individual daily variation may be large.
+    Percentage of each day's recorded intervals in each regulation state, across the {n_days} observed school days.
+    Each row is one school day. The bar in each cell shows the proportion visually.
+    <strong>Days with the longest green bar are the strongest days for regulation.</strong>
+    🟡 Coping = dysregulated — at the edge of the window, not stable.
   </div>
-  <div class="chart-wrap">{fig2_html or '<p class="no-data">Daily trend chart not yet generated.</p>'}</div>
+  {fig2_html or '<p class="no-data">Daily trend not yet generated — scroll through the Analysis tab and regenerate.</p>'}
 
   <h2>📅 Regulation by day of week</h2>
   <div class="info-box">
