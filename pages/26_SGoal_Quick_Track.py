@@ -52,7 +52,7 @@ sb = get_sb()
 
 # ── Data helpers ──────────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=120)
+
 def get_all_students():
     """Load from smartar_students — same table as Goal Builder."""
     try:
@@ -69,7 +69,7 @@ def get_all_students():
         return []
 
 
-@st.cache_data(ttl=30)
+
 def get_active_goals(student_name: str):
     """Load active goals — uses active=True and smartar_goal column."""
     try:
@@ -240,7 +240,7 @@ for g_idx, goal in enumerate(active_goals):
                 p_icon, p_bg = PERF_STYLE[perf]
                 is_sel  = current == perf
                 label   = f"{p_icon} {'✓ ' if is_sel else ''}{perf}"
-                btn_key = f"qt_{g_idx}_{session}_{perf}"
+                btn_key = f"qt_{student}_{g_idx}_{session}_{perf}"
                 if st.button(label, key=btn_key, use_container_width=True,
                              type="primary" if is_sel else "secondary"):
                     if save_session(goal_id, student, session, perf, today_str):
