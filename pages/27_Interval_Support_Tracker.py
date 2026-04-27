@@ -735,7 +735,8 @@ def _generate_questions(data_summary):
     return None
 
 
-
+with t_analysis:
+    st.markdown(f"#### {student_name} — Regulation & Support Analysis")
     all_obs = load_all_obs(student_name)
     if all_obs.empty:
         st.info("No observations recorded yet."); st.stop()
