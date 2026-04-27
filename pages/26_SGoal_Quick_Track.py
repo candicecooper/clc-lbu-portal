@@ -53,6 +53,7 @@ sb = get_sb()
 # ── Data helpers ──────────────────────────────────────────────────────────────
 
 
+@st.cache_data(ttl=60)
 def get_all_students():
     """Load from smartar_students — same table as Goal Builder."""
     try:
@@ -69,9 +70,9 @@ def get_all_students():
         return []
 
 
-
+@st.cache_data(ttl=30)
 def get_active_goals(student_name: str):
-    """Load active goals — uses active=True and smartar_goal column."""
+    """Load active goals — cached per student_name."""
     try:
         rows = (
             sb.table("smartar_goals")
@@ -87,6 +88,7 @@ def get_active_goals(student_name: str):
         return []
 
 
+@st.cache_data(ttl=15)
 def get_today_sessions(student_name: str, today_str: str):
     """Returns dict {(goal_id, session_time): performance_level} for today."""
     try:
@@ -102,33 +104,45 @@ def get_today_sessions(student_name: str, today_str: str):
         return {}
 
 
-def save_session(goal_id, student_name: str, session_time: str,
-                 performance_level: str, today_str: str) -> bool:
-    """Upsert a tracking record — matches smartar_tracking schema."""
+@st.cache_data(ttl=10)
+def get_session_counts(goal_id, today_str: str) -> dict:
+    """Returns {session_time: {performance_level: count}} for today."""
     try:
-        existing = (
+        rows = (
             sb.table("smartar_tracking")
-            .select("id")
+            .select("session_time, performance_level")
             .eq("goal_id", goal_id)
             .eq("session_date", today_str)
-            .eq("session_time", session_time)
-            .execute().data
+            .execute().data or []
         )
-        payload = {
+        counts = {}
+        for r in rows:
+            s = r["session_time"]
+            p = r["performance_level"]
+            counts.setdefault(s, {})
+            counts[s][p] = counts[s].get(p, 0) + 1
+        return counts
+    except Exception:
+        return {}
+
+
+def save_session(goal_id, student_name: str, session_time: str,
+                 performance_level: str, today_str: str) -> bool:
+    """Always INSERT — allows multiple observations per session."""
+    try:
+        sb.table("smartar_tracking").insert({
             "goal_id":           goal_id,
             "student_name":      student_name,
             "session_date":      today_str,
             "session_time":      session_time,
             "performance_level": performance_level,
-        }
-        if existing:
-            sb.table("smartar_tracking").update(payload).eq("id", existing[0]["id"]).execute()
-        else:
-            sb.table("smartar_tracking").insert(payload).execute()
+        }).execute()
         return True
     except Exception as e:
         st.error(f"Save error: {e}")
         return False
+
+
 
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
@@ -225,45 +239,57 @@ for g_idx, goal in enumerate(active_goals):
         unsafe_allow_html=True,
     )
 
-    sess_cols = st.columns(len(sessions))
+    # Get per-level counts for this goal today
+    sess_counts = get_session_counts(goal_id, today_str)
+    sess_cols   = st.columns(len(sessions))
 
     for s_idx, session in enumerate(sessions):
-        current = today_tracked.get((goal_id, session))
-        icon    = SESSION_ICONS.get(session, "🕐")
+        lvl_counts = sess_counts.get(session, {})
+        total_obs  = sum(lvl_counts.values())
+        icon       = SESSION_ICONS.get(session, "🕐")
 
         with sess_cols[s_idx]:
+            obs_badge = f" · <small>{total_obs} obs</small>" if total_obs else ""
             st.markdown(
-                f'<div class="sess-label">{icon} {session}</div>',
+                f'<div class="sess-label">{icon} {session}{obs_badge}</div>',
                 unsafe_allow_html=True,
             )
             for perf in PERF_LEVELS:
                 p_icon, p_bg = PERF_STYLE[perf]
-                is_sel  = current == perf
-                label   = f"{p_icon} {'✓ ' if is_sel else ''}{perf}"
+                n       = lvl_counts.get(perf, 0)
+                count_s = f" ×{n}" if n > 0 else ""
+                label   = f"{p_icon} {perf}{count_s}"
                 btn_key = f"qt_{student}_{g_idx}_{session}_{perf}"
                 if st.button(label, key=btn_key, use_container_width=True,
-                             type="primary" if is_sel else "secondary"):
+                             type="primary" if n > 0 else "secondary"):
                     if save_session(goal_id, student, session, perf, today_str):
-                        get_today_sessions.clear() if hasattr(get_today_sessions, 'clear') else None
+                        get_session_counts.cache_clear() if hasattr(get_session_counts, "cache_clear") else None
                         st.toast(f"✅ {session} → {perf}")
                         st.rerun()
 
     st.markdown("&nbsp;")
 
 # ── Today's summary ───────────────────────────────────────────────────────────
-if today_tracked:
+# Build summary from get_session_counts across all goals
+any_today = False
+summary_rows = []
+for goal in active_goals:
+    sc = get_session_counts(goal["id"], today_str)
+    for sess, lvl_d in sc.items():
+        for perf, n in lvl_d.items():
+            summary_rows.append((goal, sess, perf, n))
+            any_today = True
+
+if any_today:
     st.divider()
-    st.markdown(f"##### 📋 Today's Recorded — {student}")
-    summary_items = sorted(today_tracked.items(), key=lambda x: (x[0][1]))
-    cols = st.columns(max(len(summary_items), 1))
-    for i, ((gid, sess), perf) in enumerate(summary_items):
+    st.markdown(f"##### 📋 Today's Observations — {student}")
+    for goal, sess, perf, n in summary_rows:
+        g_num  = next((j+1 for j, g in enumerate(active_goals) if g["id"] == goal["id"]), "?")
         p_icon, p_bg = PERF_STYLE.get(perf, ("", TEAL))
-        # Find goal number
-        g_num = next((j+1 for j, g in enumerate(active_goals) if g["id"] == gid), "?")
-        cols[i].markdown(
-            f"**Goal {g_num} · {sess}**  \n"
+        st.markdown(
+            f"**Goal {g_num} · {sess}** — "
             f"<span style='background:{p_bg};color:white;padding:2px 10px;"
-            f"border-radius:10px;font-size:12px'>{p_icon} {perf}</span>",
+            f"border-radius:10px;font-size:12px'>{p_icon} {perf} ×{n}</span>",
             unsafe_allow_html=True,
         )
 
