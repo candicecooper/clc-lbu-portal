@@ -31,90 +31,90 @@ SESSIONS_FOR_PERIOD = {
 }
 
 # ── Supabase — same project as Goal Builder ───────────────────────────────────
-@st.cache_resource
-def get_sb():
-    # Priority: [supabase] section first (written by start.sh from BEHAVIOUR_ vars)
-    # then direct BEHAVIOUR_ keys — never fall through to SUPABASE_URL (wrong project)
-    url = (
-        st.secrets.get("supabase", {}).get("url")
-        or st.secrets.get("BEHAVIOUR_SUPABASE_URL")
-    )
-    key = (
-        st.secrets.get("supabase", {}).get("key")
-        or st.secrets.get("BEHAVIOUR_SUPABASE_KEY")
-    )
+import time as _time
+
+def _make_sb():
+    url = (st.secrets.get("supabase", {}).get("url")
+           or st.secrets.get("BEHAVIOUR_SUPABASE_URL"))
+    key = (st.secrets.get("supabase", {}).get("key")
+           or st.secrets.get("BEHAVIOUR_SUPABASE_KEY"))
     if not url or not key:
         st.error("⚠️ Supabase credentials not found.")
         st.stop()
     return create_client(url, key)
 
-sb = get_sb()
+# Fresh client every page load — prevents stale connections on Render free tier
+sb = _make_sb()
+
+def _q(fn, retries=3):
+    """Run a DB query with automatic retry + fresh client on failure."""
+    global sb
+    for attempt in range(retries):
+        try:
+            return fn(sb)
+        except Exception as e:
+            if attempt < retries - 1:
+                _time.sleep(0.5 * (attempt + 1))
+                sb = _make_sb()
+            else:
+                raise e
 
 # ── Data helpers ──────────────────────────────────────────────────────────────
 
 
-@st.cache_data(ttl=60)
 def get_all_students():
-    """Load from smartar_students — same table as Goal Builder."""
+    """Load students with retry — no cache so stale data never blocks."""
+    def _fn(c):
+        return (c.table("smartar_students")
+                .select("student_name, program")
+                .eq("active", True)
+                .order("student_name")
+                .execute().data or [])
     try:
-        rows = (
-            sb.table("smartar_students")
-            .select("student_name, program")
-            .eq("active", True)
-            .order("student_name")
-            .execute().data
-        )
-        return rows or []
+        return _q(_fn)
     except Exception as e:
         st.error(f"Error loading students: {e}")
         return []
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=30, show_spinner=False)
 def get_active_goals(student_name: str):
-    """Load active goals — cached per student_name."""
+    """Load active goals — cached per student, short TTL."""
+    def _fn(c):
+        return (c.table("smartar_goals")
+                .select("id, smartar_goal, tracking_period")
+                .eq("student_name", student_name)
+                .eq("active", True)
+                .order("created_at")
+                .execute().data or [])
     try:
-        rows = (
-            sb.table("smartar_goals")
-            .select("id, smartar_goal, tracking_period")
-            .eq("student_name", student_name)
-            .eq("active", True)
-            .order("created_at")
-            .execute().data
-        )
-        return rows or []
+        result = _q(_fn)
+        # Don't cache empty results — force retry next run
+        if not result:
+            get_active_goals.clear()
+        return result
     except Exception as e:
         st.error(f"Error loading goals: {e}")
         return []
 
 
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=15, show_spinner=False)
 def get_today_sessions(student_name: str, today_str: str):
-    """Returns dict {(goal_id, session_time): performance_level} for today."""
-    try:
-        rows = (
-            sb.table("smartar_tracking")
-            .select("goal_id, session_time, performance_level")
-            .eq("student_name", student_name)
-            .eq("session_date", today_str)
-            .execute().data
-        )
-        return {(r["goal_id"], r["session_time"]): r["performance_level"] for r in rows}
-    except Exception:
-        return {}
+    """Kept for compatibility — session counts now via get_session_counts."""
+    return {}
 
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=8, show_spinner=False)
 def get_session_counts(goal_id, today_str: str) -> dict:
-    """Returns {session_time: {performance_level: count}} for today."""
+    """Returns {session_time: {performance_level: count}} for today — with retry."""
+    def _fn(c):
+        return (c.table("smartar_tracking")
+                .select("session_time, performance_level")
+                .eq("goal_id", goal_id)
+                .eq("session_date", today_str)
+                .execute().data or [])
     try:
-        rows = (
-            sb.table("smartar_tracking")
-            .select("session_time, performance_level")
-            .eq("goal_id", goal_id)
-            .eq("session_date", today_str)
-            .execute().data or []
-        )
+        rows = _q(_fn)
         counts = {}
         for r in rows:
             s = r["session_time"]
@@ -129,14 +129,16 @@ def get_session_counts(goal_id, today_str: str) -> dict:
 def save_session(goal_id, student_name: str, session_time: str,
                  performance_level: str, today_str: str) -> bool:
     """Always INSERT — allows multiple observations per session."""
+    payload = {
+        "goal_id":           goal_id,
+        "student_name":      student_name,
+        "session_date":      today_str,
+        "session_time":      session_time,
+        "performance_level": performance_level,
+    }
     try:
-        sb.table("smartar_tracking").insert({
-            "goal_id":           goal_id,
-            "student_name":      student_name,
-            "session_date":      today_str,
-            "session_time":      session_time,
-            "performance_level": performance_level,
-        }).execute()
+        _q(lambda c: c.table("smartar_tracking").insert(payload).execute())
+        get_session_counts.clear()   # invalidate count cache immediately
         return True
     except Exception as e:
         st.error(f"Save error: {e}")
