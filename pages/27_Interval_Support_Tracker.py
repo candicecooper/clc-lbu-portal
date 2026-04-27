@@ -1082,7 +1082,23 @@ with t_analysis:
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
             margin=dict(l=10,r=10,t=50,b=10))
         st.plotly_chart(fig_grp, use_container_width=True)
-        ss["rpt_fig_grp"] = _rpt_fig(fig_grp, height=max(280, len(grp_state["Grouping"].unique())*80+100), margin_b=60, margin_l=110, margin_r=20).to_html(full_html=False, include_plotlyjs=False)
+
+        # Build report version explicitly — _rpt_fig kills autorange='reversed' on horizontal bars
+        import copy as _cp
+        _fig_grp_r = _cp.deepcopy(fig_grp)
+        _n_grp_rows = len(grp_state["Grouping"].unique())
+        _fig_grp_r.update_layout(
+            width=820, height=max(300, _n_grp_rows * 85 + 120), autosize=False,
+            font=dict(size=12, family="Arial, sans-serif"),
+            margin=dict(l=130, r=30, t=75, b=60),
+            plot_bgcolor="white", paper_bgcolor="white",
+            legend=dict(orientation="h", yanchor="bottom", y=1.04,
+                        xanchor="left", x=0, font=dict(size=11)),
+            xaxis=dict(gridcolor="#e2e8f0", tickfont=dict(size=11), title="15-min intervals recorded"),
+            yaxis=dict(gridcolor="#e2e8f0", tickfont=dict(size=12),
+                       autorange="reversed"),   # MUST keep — puts top row at top
+        )
+        ss["rpt_fig_grp"] = _fig_grp_r.to_html(full_html=False, include_plotlyjs=False)
 
         # Regulation breakdown table (replaces misleading % heatmap)
         st.markdown("**Regulation breakdown by support type** — counts and percentages")
@@ -1185,7 +1201,23 @@ with t_analysis:
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
                 margin=dict(l=10,r=10,t=50,b=10))
             st.plotly_chart(fig6, use_container_width=True)
-            ss["rpt_fig6"] = _rpt_fig(fig6, height=max(300, len(adf["Activity"].unique())*80+100), margin_b=60, margin_l=130, margin_r=20).to_html(full_html=False, include_plotlyjs=False)
+
+            # Explicit report version — preserve autorange='reversed'
+            import copy as _cp2
+            _fig6r = _cp2.deepcopy(fig6)
+            _n_act_rows = len(adf["Activity"].unique())
+            _fig6r.update_layout(
+                width=820, height=max(300, _n_act_rows * 85 + 120), autosize=False,
+                font=dict(size=12, family="Arial, sans-serif"),
+                margin=dict(l=145, r=30, t=75, b=60),
+                plot_bgcolor="white", paper_bgcolor="white",
+                legend=dict(orientation="h", yanchor="bottom", y=1.04,
+                            xanchor="left", x=0, font=dict(size=11)),
+                xaxis=dict(gridcolor="#e2e8f0", tickfont=dict(size=11), title="15-min intervals recorded"),
+                yaxis=dict(gridcolor="#e2e8f0", tickfont=dict(size=12),
+                           autorange="reversed"),
+            )
+            ss["rpt_fig6"] = _fig6r.to_html(full_html=False, include_plotlyjs=False)
 
             # Build hypothesis
             act_counts  = act_df["Activity"].value_counts()
