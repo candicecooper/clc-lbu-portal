@@ -1083,22 +1083,56 @@ with t_analysis:
             margin=dict(l=10,r=10,t=50,b=10))
         st.plotly_chart(fig_grp, use_container_width=True)
 
-        # Build report version explicitly — _rpt_fig kills autorange='reversed' on horizontal bars
-        import copy as _cp
-        _fig_grp_r = _cp.deepcopy(fig_grp)
-        _n_grp_rows = len(grp_state["Grouping"].unique())
-        _fig_grp_r.update_layout(
-            width=820, height=max(300, _n_grp_rows * 85 + 120), autosize=False,
-            font=dict(size=12, family="Arial, sans-serif"),
-            margin=dict(l=130, r=30, t=75, b=60),
-            plot_bgcolor="white", paper_bgcolor="white",
-            legend=dict(orientation="h", yanchor="bottom", y=1.04,
-                        xanchor="left", x=0, font=dict(size=11)),
-            xaxis=dict(gridcolor="#e2e8f0", tickfont=dict(size=11), title="15-min intervals recorded"),
-            yaxis=dict(gridcolor="#e2e8f0", tickfont=dict(size=12),
-                       autorange="reversed"),   # MUST keep — puts top row at top
-        )
-        ss["rpt_fig_grp"] = _fig_grp_r.to_html(full_html=False, include_plotlyjs=False)
+        # ── Report version: pure HTML — Plotly horizontal bar exports are unreliable ──
+        _grp_totals = sup_filt.groupby("Grouping").size().sort_values(ascending=False)
+        _max_n = _grp_totals.max() if not _grp_totals.empty else 1
+        _state_bar_cfg = [
+            ("in_window",    "#16a34a", "🟢 In window"),
+            ("coping",       "#ca8a04", "🟡 Coping ⚠️"),
+            ("hyperaroused", "#dc2626", "🔴 Hyperaroused"),
+            ("hypoaroused",  "#2563eb", "🔵 Hypoaroused"),
+        ]
+        _grp_html = """
+<table style="border-collapse:collapse;width:100%;font-size:.82rem;margin:.4rem 0 .6rem;">
+<thead><tr style="background:#1A6B8A;color:white;">
+  <th style="padding:.4rem .8rem;text-align:left;min-width:130px;">Support type</th>
+  <th style="padding:.4rem .8rem;text-align:center;">Total intervals</th>
+  <th style="padding:.4rem .8rem;text-align:left;" colspan="2">Intervals by regulation state</th>
+</tr></thead><tbody>"""
+        for _grp_name, _grp_total in _grp_totals.items():
+            _grp_sub = sup_filt[sup_filt["Grouping"] == _grp_name]
+            # One row per grouping showing stacked segments
+            _bar_segments = ""
+            for _reg_key, _fg, _lbl in _state_bar_cfg:
+                _cnt = int((_grp_sub["regulated"] == _reg_key).sum())
+                if _cnt > 0:
+                    _pct_of_max = round(100 * _cnt / _max_n)
+                    _pct_of_grp = round(100 * _cnt / _grp_total)
+                    _bar_segments += (
+                        f'<span title="{_lbl}: {_cnt} intervals ({_pct_of_grp}%)" '
+                        f'style="display:inline-block;height:22px;width:{_pct_of_max}%;'
+                        f'background:{_fg};border-radius:3px;margin-right:2px;'
+                        f'vertical-align:middle;min-width:2px;"></span>'
+                    )
+            _detail_parts = []
+            for _reg_key, _fg, _lbl in _state_bar_cfg:
+                _cnt = int((_grp_sub["regulated"] == _reg_key).sum())
+                if _cnt > 0:
+                    _pct_of_grp = round(100 * _cnt / _grp_total)
+                    _detail_parts.append(
+                        f'<span style="color:{_fg};font-weight:700;">{_lbl}: {_cnt} ({_pct_of_grp}%)</span>'
+                    )
+            _grp_html += (
+                f'<tr style="border-bottom:1px solid #e2e8f0;">'
+                f'<td style="padding:.45rem .8rem;font-weight:700;white-space:nowrap;">{_grp_name}</td>'
+                f'<td style="padding:.45rem .8rem;text-align:center;font-weight:700;">{_grp_total}</td>'
+                f'<td style="padding:.45rem .8rem;width:35%;">{_bar_segments}</td>'
+                f'<td style="padding:.45rem .8rem;font-size:.78rem;">{" &nbsp; ".join(_detail_parts)}</td>'
+                f'</tr>'
+            )
+        _grp_html += "</tbody></table>"
+        _grp_html += '<p style="font-size:.75rem;color:#475569;margin:.1rem 0 .5rem;">Bar width is proportional to the grouping with the most intervals. Each colour segment represents a regulation state.</p>'
+        ss["rpt_fig_grp"] = _grp_html
 
         # Regulation breakdown table (replaces misleading % heatmap)
         st.markdown("**Regulation breakdown by support type** — counts and percentages")
@@ -1561,7 +1595,7 @@ with t_analysis:
     The table below shows exact counts and percentages per regulation state.
     <strong>⚠️ Rows with n &lt; 3 should not be used to draw conclusions.</strong>
   </div>
-  <div class="chart-wrap">{fig_grp_html or '<p class="no-data">Support chart not yet generated.</p>'}</div>
+  {fig_grp_html or '<p class="no-data">Support chart not yet generated — scroll through the Analysis tab and regenerate.</p>'}
   {grp_html_table}
   {_hyp_block(hyp_grp_)}
 
