@@ -654,7 +654,34 @@ def _groq_hypothesis(prompt_text):
     return None
 
 
-def _hypothesis_box(text, key=None):
+def _rpt_fig(fig, height=380, margin_b=100, margin_l=65, margin_r=30, margin_t=65, font_size=12):
+    """
+    Return a copy of fig sized and styled for the HTML report.
+    Sets explicit width so the chart fills the 820px report column without clipping,
+    increases font sizes and margins so axis labels aren't cropped, and turns off
+    autosize so Plotly doesn't try to resize to the Streamlit container.
+    """
+    import copy
+    f = copy.deepcopy(fig)
+    f.update_layout(
+        width=820,
+        height=height,
+        autosize=False,
+        font=dict(size=font_size, family="Arial, sans-serif"),
+        margin=dict(l=margin_l, r=margin_r, t=margin_t, b=margin_b),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        legend=dict(
+            orientation="h",
+            yanchor="bottom", y=1.04,
+            xanchor="left", x=0,
+            font=dict(size=11),
+        ),
+    )
+    # Make sure x/y grid lines remain clean
+    f.update_xaxes(gridcolor="#e2e8f0", tickfont=dict(size=11))
+    f.update_yaxes(gridcolor="#e2e8f0", tickfont=dict(size=11))
+    return f
     """Render a teal hypothesis card. key stores text in ss for report."""
     if key:
         ss[key] = text
@@ -764,7 +791,7 @@ with t_analysis:
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
         margin=dict(l=10,r=10,t=55,b=70))
     st.plotly_chart(fig1, use_container_width=True)
-    ss["rpt_fig1"] = fig1.to_html(full_html=False, include_plotlyjs=False)
+    ss["rpt_fig1"] = _rpt_fig(fig1, height=400, margin_b=130, margin_l=70).to_html(full_html=False, include_plotlyjs=False)
 
     # Hypothesis: time-of-day
     best_slot = slot_df[slot_df["State"].str.contains("In window")].groupby("time_slot")["n"].sum()
@@ -834,7 +861,7 @@ with t_analysis:
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
         margin=dict(l=10,r=10,t=55,b=20), hovermode="x unified")
     st.plotly_chart(fig2, use_container_width=True)
-    ss["rpt_fig2"] = fig2.to_html(full_html=False, include_plotlyjs=False)
+    ss["rpt_fig2"] = _rpt_fig(fig2, height=360, margin_b=60, margin_l=65).to_html(full_html=False, include_plotlyjs=False)
 
     st.markdown("---")
 
@@ -874,7 +901,7 @@ with t_analysis:
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
         margin=dict(l=10,r=10,t=50,b=10))
     st.plotly_chart(fig4, use_container_width=True)
-    ss["rpt_fig4"] = fig4.to_html(full_html=False, include_plotlyjs=False)
+    ss["rpt_fig4"] = _rpt_fig(fig4, height=320, margin_b=55, margin_l=65).to_html(full_html=False, include_plotlyjs=False)
 
     # Per-day summary under chart
     dow_summary_parts = []
@@ -948,7 +975,7 @@ with t_analysis:
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
             margin=dict(l=10,r=10,t=50,b=10))
         st.plotly_chart(fig_grp, use_container_width=True)
-        ss["rpt_fig_grp"] = fig_grp.to_html(full_html=False, include_plotlyjs=False)
+        ss["rpt_fig_grp"] = _rpt_fig(fig_grp, height=max(280, len(grp_state["Grouping"].unique())*80+100), margin_b=60, margin_l=110, margin_r=20).to_html(full_html=False, include_plotlyjs=False)
 
         # Regulation breakdown table (replaces misleading % heatmap)
         st.markdown("**Regulation breakdown by support type** — counts and percentages")
@@ -1045,7 +1072,7 @@ with t_analysis:
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
                 margin=dict(l=10,r=10,t=50,b=10))
             st.plotly_chart(fig6, use_container_width=True)
-            ss["rpt_fig6"] = fig6.to_html(full_html=False, include_plotlyjs=False)
+            ss["rpt_fig6"] = _rpt_fig(fig6, height=max(300, len(adf["Activity"].unique())*80+100), margin_b=60, margin_l=130, margin_r=20).to_html(full_html=False, include_plotlyjs=False)
 
             # Build hypothesis
             act_counts  = act_df["Activity"].value_counts()
@@ -1221,7 +1248,7 @@ with t_analysis:
   .kpi.r {{ border-color:#dc2626; }} .kpi.r .val {{ color:#dc2626; }}
   .kpi.b {{ border-color:#2563eb; }} .kpi.b .val {{ color:#2563eb; }}
   .info-box {{ background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:.5rem .9rem; font-size:.8rem; color:#475569; margin-bottom:.5rem; line-height:1.5; }}
-  .chart-wrap {{ margin:.2rem 0 .6rem; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; padding:.4rem; }}
+  .chart-wrap {{ margin:.2rem 0 .6rem; border:1px solid #e2e8f0; border-radius:8px; overflow:visible; padding:.4rem; width:820px; max-width:100%; }}
   .hyp {{ background:#EBF4F9; border-left:4px solid #1A6B8A; border-radius:0 8px 8px 0; padding:.65rem 1.1rem; margin:.6rem 0 1.2rem; font-size:.83rem; line-height:1.6; }}
   .hyp-label {{ font-size:.65rem; font-weight:700; color:#1A6B8A; letter-spacing:.06em; margin-bottom:.3rem; }}
   .no-data {{ color:#94a3b8; font-size:.8rem; font-style:italic; margin:.5rem 0 1rem; }}
