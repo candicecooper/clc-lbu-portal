@@ -865,45 +865,65 @@ with t_analysis:
 
     st.markdown("---")
 
-    # ── Chart 2: Daily trend (ONLY show lines with actual data) ──────────────
+    # ── Chart 2: Daily regulation trend ──────────────────────────────────────
     st.markdown("##### 📈 Daily regulation trend")
     st.caption(
-        "Percentage of that day's intervals in each regulation state. "
-        "Only states that were actually observed on at least one day appear as lines. "
-        "The dashed green line marks the 70% in-window benchmark."
+        f"Percentage of each day's recorded intervals in each regulation state, "
+        f"across the {n_days} observed school days. "
+        "Only states that were actually observed appear. "
+        "The dashed green line marks the 70% in-window benchmark. "
+        "🟡 Coping = dysregulated — at the edge of the window."
     )
-    daily = filt.groupby("obs_date_dt").apply(lambda g: pd.Series({
-        "pct_win":  round(100*(g["regulated"]=="in_window").sum()/len(g)),
-        "pct_cop":  round(100*(g["regulated"]=="coping").sum()/len(g)),
-        "pct_hyp":  round(100*(g["regulated"]=="hyperaroused").sum()/len(g)),
-        "pct_hypo": round(100*(g["regulated"]=="hypoaroused").sum()/len(g)),
-    })).reset_index()
-    daily["date_lbl"] = pd.to_datetime(daily["obs_date_dt"]).dt.strftime("%a %-d %b")
-    fig2 = go.Figure()
-    trace_map = [
+
+    # ── Robust daily % calc (avoids pandas groupby.apply lambda issues) ───────
+    _dc = filt.groupby(["obs_date_dt","regulated"]).size().unstack(fill_value=0)
+    _dt = _dc.sum(axis=1)
+    _daily = pd.DataFrame(index=_dc.index)
+    for _state, _col in [("in_window","pct_win"),("coping","pct_cop"),
+                          ("hyperaroused","pct_hyp"),("hypoaroused","pct_hypo")]:
+        _daily[_col] = (_dc.get(_state, pd.Series(0, index=_dc.index)) / _dt * 100).round(0).astype(int)
+    _daily = _daily.reset_index()
+    _daily["date_lbl"] = pd.to_datetime(_daily["obs_date_dt"]).dt.strftime("%a %-d %b")
+
+    # Build grouped bar chart — clearer than lines for ≤10 data points
+    _state_cfg = [
         ("pct_win",  "🟢 In window",    "#16a34a"),
-        ("pct_cop",  "🟡 Coping",       "#ca8a04"),
+        ("pct_cop",  "🟡 Coping ⚠️",   "#ca8a04"),
         ("pct_hyp",  "🔴 Hyperaroused", "#dc2626"),
         ("pct_hypo", "🔵 Hypoaroused",  "#2563eb"),
     ]
-    for col, name, col_c in trace_map:
-        # Only add trace if this state was ever observed (max > 0)
-        if daily[col].max() > 0:
-            fig2.add_trace(go.Scatter(x=daily["date_lbl"], y=daily[col],
-                mode="lines+markers", name=name,
-                line=dict(color=col_c, width=2.5), marker=dict(size=7, color=col_c),
-                hovertemplate=f"{name}: %{{y}}%<extra></extra>"))
-    fig2.add_hline(y=70, line_dash="dot", line_color="#16a34a", line_width=1.5,
+    fig2 = go.Figure()
+    for col, name, col_c in _state_cfg:
+        if _daily[col].max() > 0:
+            fig2.add_trace(go.Bar(
+                name=name,
+                x=_daily["date_lbl"],
+                y=_daily[col],
+                marker_color=col_c,
+                text=_daily[col].astype(str) + "%",
+                textposition="inside",
+                textfont=dict(color="white", size=11, family="Arial"),
+                hovertemplate=f"{name}: %{{y}}%<extra></extra>",
+            ))
+    fig2.add_hline(y=70, line_dash="dot", line_color="#16a34a", line_width=2,
                    annotation_text="70% in-window target",
-                   annotation_font_color="#16a34a", annotation_position="bottom right")
-    fig2.update_layout(height=320, plot_bgcolor="white", paper_bgcolor="white",
-        yaxis=dict(range=[0,105], tickformat="d", gridcolor="#e2e8f0",
-                   title="% of intervals", ticksuffix="%"),
-        xaxis=dict(gridcolor="#e2e8f0", title=""),
+                   annotation_font_color="#16a34a",
+                   annotation_font_size=11,
+                   annotation_position="bottom right")
+    fig2.update_layout(
+        barmode="group",
+        height=350,
+        plot_bgcolor="white", paper_bgcolor="white",
+        yaxis=dict(range=[0,110], gridcolor="#e2e8f0", title="% of intervals", ticksuffix="%"),
+        xaxis=dict(gridcolor="rgba(0,0,0,0)", title=""),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
-        margin=dict(l=10,r=10,t=55,b=20), hovermode="x unified")
+        margin=dict(l=10,r=10,t=60,b=20),
+        bargap=0.25, bargroupgap=0.05,
+    )
     st.plotly_chart(fig2, use_container_width=True)
-    ss["rpt_fig2"] = _rpt_fig(fig2, height=360, margin_b=60, margin_l=65).to_html(full_html=False, include_plotlyjs=False)
+    ss["rpt_fig2"] = _rpt_fig(fig2, height=380, margin_b=65, margin_l=65).to_html(full_html=False, include_plotlyjs=False)
+    # Make the daily df available for report (re-alias for consistency)
+    daily = _daily
 
     st.markdown("---")
 
@@ -919,12 +939,10 @@ with t_analysis:
     dow = dow.sort_values("sort_k")
     active_states_dow = [s for s in state_order if s in dow["State"].values]
     # Best day = highest % fully IN WINDOW (not coping — coping means struggling)
-    dow_win = filt.groupby("day_of_week").apply(
-        lambda g: round(100*(g["regulated"] == "in_window").sum()/len(g))
-    ).reset_index(name="pct_win")
-    dow_cop = filt.groupby("day_of_week").apply(
-        lambda g: round(100*(g["regulated"] == "coping").sum()/len(g))
-    ).reset_index(name="pct_cop")
+    _dow_counts = filt.groupby(["day_of_week","regulated"]).size().unstack(fill_value=0)
+    _dow_total  = _dow_counts.sum(axis=1)
+    dow_win = (_dow_counts.get("in_window", pd.Series(0, index=_dow_counts.index)) / _dow_total * 100).round(0).astype(int).reset_index(name="pct_win")
+    dow_cop = (_dow_counts.get("coping",    pd.Series(0, index=_dow_counts.index)) / _dow_total * 100).round(0).astype(int).reset_index(name="pct_cop")
     dow_reg = dow_win.merge(dow_cop, on="day_of_week")
     dow_reg["sort_k"] = dow_reg["day_of_week"].apply(lambda d: DAYS.index(d) if d in DAYS else 9)
     dow_reg = dow_reg.sort_values("sort_k")
