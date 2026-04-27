@@ -75,7 +75,7 @@ def get_active_goals(student_name: str):
     try:
         rows = (
             sb.table("smartar_goals")
-            .select("id, smartar_goal, domain, tracking_period")
+            .select("id, smartar_goal, tracking_period")
             .eq("student_name", student_name)
             .eq("active", True)
             .order("created_at")
@@ -213,13 +213,12 @@ for g_idx, goal in enumerate(active_goals):
     goal_id    = goal["id"]
     period     = goal.get("tracking_period") or "All Day"
     sessions   = SESSIONS_FOR_PERIOD.get(period, ["Morning", "Middle", "Afternoon"])
-    domain     = goal.get("domain", "")
     goal_text  = goal.get("smartar_goal") or goal.get("goal_text") or "—"
     display    = goal_text[:85] + "…" if len(goal_text) > 85 else goal_text
 
     st.markdown(
         f'<div class="goal-header">'
-        f'<strong>Goal {g_idx + 1}</strong> · <strong>{domain}</strong>'
+        f'<strong>Goal {g_idx + 1}</strong>'
         f'<span class="period-tag">{period}</span><br>'
         f'<span style="font-size:12px;color:#444">{display}</span>'
         f'</div>',
