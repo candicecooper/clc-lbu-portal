@@ -654,13 +654,15 @@ def _groq_hypothesis(prompt_text):
     return None
 
 
-def _hypothesis_box(text):
-    """Render a teal hypothesis card."""
+def _hypothesis_box(text, key=None):
+    """Render a teal hypothesis card. key stores text in ss for report."""
+    if key:
+        ss[key] = text
     st.markdown(
         f'<div style="background:#EBF4F9;border-left:4px solid #1A6B8A;border-radius:0 8px 8px 0;'
         f'padding:.6rem 1rem;margin:.3rem 0 .7rem;font-size:.82rem;color:#1e3a4a;line-height:1.5;">'
         f'<span style="font-size:.68rem;font-weight:700;color:#1A6B8A;letter-spacing:.05em;">'
-        f'🔍 CLINICAL HYPOTHESIS</span><br>{text}</div>',
+        f'🔍 HYPOTHESIS</span><br>{text}</div>',
         unsafe_allow_html=True)
 
 
@@ -718,19 +720,24 @@ with t_analysis:
     n_hyp  = int((filt["regulated"]=="hyperaroused").sum())
     n_hypo = int((filt["regulated"]=="hypoaroused").sum())
 
-    pct_reg = round(100*(n_win+n_cop)/n_tot) if n_tot else 0
+    pct_inwin = round(100*n_win/n_tot) if n_tot else 0
+    pct_cop_only = round(100*n_cop/n_tot) if n_tot else 0
 
     k1,k2,k3,k4,k5 = st.columns(5)
     k1.markdown(f"<div class='kpi'><div class='val'>{n_tot}</div><div class='lbl'>Total intervals<br><span style='font-size:.58rem;'>15-min windows</span></div></div>", unsafe_allow_html=True)
-    k2.markdown(f"<div class='kpi kpi-g'><div class='val'>{n_win}</div><div class='lbl'>🟢 In window</div></div>", unsafe_allow_html=True)
-    k3.markdown(f"<div class='kpi kpi-y'><div class='val'>{n_cop}</div><div class='lbl'>🟡 Coping</div></div>", unsafe_allow_html=True)
+    k2.markdown(f"<div class='kpi kpi-g'><div class='val'>{n_win}</div><div class='lbl'>🟢 In window<br><span style='font-size:.58rem;'>{pct_inwin}%</span></div></div>", unsafe_allow_html=True)
+    k3.markdown(f"<div class='kpi kpi-y'><div class='val'>{n_cop}</div><div class='lbl'>🟡 Coping<br><span style='font-size:.58rem;'>{pct_cop_only}% — at edge</span></div></div>", unsafe_allow_html=True)
     k4.markdown(f"<div class='kpi kpi-r'><div class='val'>{n_hyp}</div><div class='lbl'>🔴 Hyperaroused</div></div>", unsafe_allow_html=True)
     k5.markdown(f"<div class='kpi kpi-b'><div class='val'>{n_hypo}</div><div class='lbl'>🔵 Hypoaroused</div></div>", unsafe_allow_html=True)
 
     st.markdown(
-        f'<div style="font-size:.8rem;color:#475569;text-align:center;margin:.3rem 0 .6rem;">'
-        f'Across {n_days} observed school days, <strong>{pct_reg}%</strong> of intervals '
-        f'({n_win+n_cop} of {n_tot}) were within or at the edge of the window of tolerance.</div>',
+        f'<div style="font-size:.8rem;color:#475569;text-align:center;margin:.3rem 0 .2rem;">'
+        f'<strong>{pct_inwin}%</strong> of intervals fully within the window of tolerance '
+        f'({n_win} of {n_tot}). &nbsp;'
+        f'<strong>{pct_cop_only}%</strong> coping (at edge — student is managing but struggling).</div>'
+        f'<div style="font-size:.75rem;color:#dc2626;text-align:center;margin:0 0 .6rem;">'
+        f'⚠️ Only <em>In window</em> (green) indicates genuine regulation. '
+        f'A predominantly yellow day is still a difficult day.</div>',
         unsafe_allow_html=True)
 
     st.markdown("---")
@@ -759,29 +766,31 @@ with t_analysis:
     st.plotly_chart(fig1, use_container_width=True)
 
     # Hypothesis: time-of-day
-    best_slot = slot_df[slot_df["State"].str.contains("In window|Coping")].groupby("time_slot")["n"].sum()
+    best_slot = slot_df[slot_df["State"].str.contains("In window")].groupby("time_slot")["n"].sum()
     worst_slot_df = slot_df[slot_df["State"].str.contains("Hyperaroused|Hypoaroused")].groupby("time_slot")["n"].sum()
     best_t  = best_slot.idxmax()  if not best_slot.empty  else None
     worst_t = worst_slot_df.idxmax() if not worst_slot_df.empty else None
     hyp1_prompt = (
         f"Student has {n_tot} intervals recorded between {min_slot} and {max_slot} across {n_days} school days. "
-        f"Regulation breakdown: {n_win} in-window, {n_cop} coping, {n_hyp} hyperaroused, {n_hypo} hypoaroused. "
-        + (f"Best regulated time slot is {best_t}. " if best_t else "")
-        + (f"Most dysregulation observed at {worst_t}. " if worst_t else "")
+        f"Regulation breakdown: {n_win} fully in-window (regulated), {n_cop} coping (at the edge — actively managing but not fully regulated), {n_hyp} hyperaroused, {n_hypo} hypoaroused. "
+        f"Note: 'coping' means the student is at the edge of their window and actively managing — it is NOT a successful state. "
+        + (f"Time slot with highest in-window count: {best_t}. " if best_t else "")
+        + (f"Most dysregulation observed at: {worst_t}. " if worst_t else "")
         + "Interpret this time-of-day pattern and its implications for scheduling and support."
     )
-    with st.spinner("Generating clinical hypothesis…"):
+    with st.spinner("Generating hypothesis…"):
         hyp1 = _groq_hypothesis(hyp1_prompt)
     if hyp1:
-        _hypothesis_box(hyp1)
+        _hypothesis_box(hyp1, key="rpt_hyp_time")
     else:
-        best_str  = f"Best regulation is seen at {best_t}. " if best_t else ""
+        best_str  = f"Best full regulation is seen at {best_t}. " if best_t else ""
         worst_str = f"Dysregulation is most prominent at {worst_t}. " if worst_t else ""
         _hypothesis_box(
             f"{n_win} of {n_tot} intervals ({round(100*n_win/n_tot) if n_tot else 0}%) were fully within the window of tolerance. "
             + best_str + worst_str +
             "This pattern suggests consideration of scheduling demands and staffing intensity "
-            "relative to time of day when planning this student's program."
+            "relative to time of day when planning this student's program.",
+            key="rpt_hyp_time"
         )
 
     st.markdown("---")
@@ -838,16 +847,20 @@ with t_analysis:
     dow["sort_k"] = dow["day_of_week"].apply(lambda d: DAYS.index(d) if d in DAYS else 9)
     dow = dow.sort_values("sort_k")
     active_states_dow = [s for s in state_order if s in dow["State"].values]
-    # Best and worst days
-    dow_reg = filt.groupby("day_of_week").apply(
-        lambda g: round(100*(g["regulated"].isin(["in_window","coping"])).sum()/len(g))
-    ).reset_index(name="pct_reg")
+    # Best day = highest % fully IN WINDOW (not coping — coping means struggling)
+    dow_win = filt.groupby("day_of_week").apply(
+        lambda g: round(100*(g["regulated"] == "in_window").sum()/len(g))
+    ).reset_index(name="pct_win")
+    dow_cop = filt.groupby("day_of_week").apply(
+        lambda g: round(100*(g["regulated"] == "coping").sum()/len(g))
+    ).reset_index(name="pct_cop")
+    dow_reg = dow_win.merge(dow_cop, on="day_of_week")
     dow_reg["sort_k"] = dow_reg["day_of_week"].apply(lambda d: DAYS.index(d) if d in DAYS else 9)
     dow_reg = dow_reg.sort_values("sort_k")
-    best_day  = dow_reg.loc[dow_reg["pct_reg"].idxmax(), "day_of_week"] if not dow_reg.empty else None
-    worst_day = dow_reg.loc[dow_reg["pct_reg"].idxmin(), "day_of_week"] if not dow_reg.empty else None
-    best_pct  = dow_reg["pct_reg"].max() if not dow_reg.empty else 0
-    worst_pct = dow_reg["pct_reg"].min() if not dow_reg.empty else 0
+    best_day  = dow_reg.loc[dow_reg["pct_win"].idxmax(), "day_of_week"] if not dow_reg.empty else None
+    worst_day = dow_reg.loc[dow_reg["pct_win"].idxmin(), "day_of_week"] if not dow_reg.empty else None
+    best_pct  = dow_reg["pct_win"].max() if not dow_reg.empty else 0
+    worst_pct = dow_reg["pct_win"].min() if not dow_reg.empty else 0
 
     fig4 = px.bar(dow, x="day_of_week", y="n", color="State",
         color_discrete_map=colour_map, barmode="stack",
@@ -860,25 +873,45 @@ with t_analysis:
         margin=dict(l=10,r=10,t=50,b=10))
     st.plotly_chart(fig4, use_container_width=True)
 
-    hyp_dow_prompt = (
-        f"Student regulation by day of week (% intervals within or coping): "
-        + ", ".join(f"{r['day_of_week']} {r['pct_reg']}%" for _, r in dow_reg.iterrows()) + ". "
-        + (f"Best day is {best_day} ({best_pct}% regulated). " if best_day else "")
-        + (f"Most difficult day is {worst_day} ({worst_pct}% regulated). " if worst_day else "")
-        + "Interpret this weekly pattern. What might explain differences between days? "
-          "What questions should the team investigate about timetable, staffing, or curriculum on the most difficult day?"
+    # Per-day summary under chart
+    dow_summary_parts = []
+    for _, r in dow_reg.iterrows():
+        dow_summary_parts.append(
+            f"<strong>{r['day_of_week'][:3]}:</strong> {r['pct_win']}% in-window, {r['pct_cop']}% coping"
+        )
+    st.markdown(
+        '<div style="font-size:.75rem;color:#475569;margin:.2rem 0 .5rem;">'
+        + " &nbsp;·&nbsp; ".join(dow_summary_parts) + "</div>",
+        unsafe_allow_html=True)
+    st.caption(
+        "⚠️ 'In window' (green) is the only indicator of genuine regulation. "
+        "'Coping' (yellow) means the student is at the edge of their window and actively managing — "
+        "a predominantly yellow day still represents a student who is struggling."
     )
-    with st.spinner("Generating clinical hypothesis…"):
+
+    hyp_dow_prompt = (
+        f"Student regulation by day of week — % of intervals FULLY IN WINDOW (regulated): "
+        + ", ".join(f"{r['day_of_week']} {r['pct_win']}% in-window / {r['pct_cop']}% coping" for _, r in dow_reg.iterrows()) + ". "
+        + f"IMPORTANT: 'coping' means the student is at the edge of their window and struggling — it is NOT a successful state. "
+        + (f"Best day is {best_day} ({best_pct}% fully in-window). " if best_day else "")
+        + (f"Most difficult day is {worst_day} ({worst_pct}% fully in-window). " if worst_day else "")
+        + "Interpret this weekly pattern using Window of Tolerance framework. "
+          "What might explain why the student is more regulated on certain days? "
+          "Pose specific questions the team should investigate about the most difficult day."
+    )
+    with st.spinner("Generating hypothesis…"):
         hyp_dow = _groq_hypothesis(hyp_dow_prompt)
     if hyp_dow:
-        _hypothesis_box(hyp_dow)
+        _hypothesis_box(hyp_dow, key="rpt_hyp_dow")
     else:
         _hypothesis_box(
-            (f"Data indicates the student is most regulated on {best_day} ({best_pct}% of intervals within or coping). " if best_day else "")
-            + (f"The most challenging day is {worst_day} ({worst_pct}% regulated). " if worst_day and worst_day != best_day else "")
-            + "The team should review what differs between these days — including timetable structure, "
-              "staffing consistency, peer groupings, and transition demands — as these factors are likely "
-              "influencing the student's capacity to remain within their window of tolerance."
+            (f"The student demonstrates the highest proportion of fully regulated intervals on {best_day} ({best_pct}% in-window). " if best_day else "")
+            + (f"The most challenging day is {worst_day}, with only {worst_pct}% of intervals reaching full regulation. " if worst_day and worst_day != best_day else "")
+            + "Note that days with a high proportion of 'coping' intervals still represent a student who is actively struggling — "
+              "coping is the edge of the window, not a position of stability. "
+              "The team should investigate what structural differences exist between the best and worst days: "
+              "timetable, staffing, peer groupings, and the sequence and demands of activities.",
+            key="rpt_hyp_dow"
         )
 
     st.markdown("---")
@@ -913,55 +946,63 @@ with t_analysis:
             margin=dict(l=10,r=10,t=50,b=10))
         st.plotly_chart(fig_grp, use_container_width=True)
 
-        # Percentage heatmap
-        st.markdown("**Regulation rate by support type** — % of intervals in each state")
-        pivot = sup_filt.groupby(["Grouping","State"]).size().unstack(fill_value=0)
-        pivot_pct = pivot.div(pivot.sum(axis=1), axis=0) * 100
-        ordered_cols = [s for s in state_order if s in pivot_pct.columns]
-        if ordered_cols:
-            pivot_pct = pivot_pct[ordered_cols]
-        fig3 = px.imshow(
-            pivot_pct.round(1),
-            color_continuous_scale=["#dc2626","#fef9c3","#16a34a"],
-            zmin=0, zmax=100, aspect="auto", text_auto=".0f",
-            labels=dict(x="Regulation state", y="Support / grouping", color="%"),
+        # Regulation breakdown table (replaces misleading % heatmap)
+        st.markdown("**Regulation breakdown by support type** — counts and percentages")
+        st.caption(
+            "Shows how many 15-minute intervals were recorded in each regulation state per support arrangement. "
+            "⚠️ Rows with fewer than 3 intervals should be interpreted with caution — "
+            "a single interval showing 100% in-window or 100% dysregulated reflects only one moment, not a pattern."
         )
-        fig3.update_layout(
-            height=max(240, len(pivot_pct)*55+80),
-            coloraxis_colorbar=dict(title="%", ticksuffix="%"),
-            margin=dict(l=10,r=80,t=20,b=10),
-            xaxis=dict(side="top"),
-        )
-        st.plotly_chart(fig3, use_container_width=True)
+        # Build a readable table
+        pivot_counts = sup_filt.groupby(["Grouping","State"]).size().unstack(fill_value=0)
+        pivot_counts["Total"] = pivot_counts.sum(axis=1)
+        ordered_state_cols = [s for s in state_order if s in pivot_counts.columns]
+        table_rows = []
+        for grp_name, row in pivot_counts.iterrows():
+            total = int(row["Total"])
+            reliability = "⚠️ low n" if total < 3 else ""
+            row_dict = {"Grouping": grp_name, "n (total)": f"{total} {reliability}"}
+            for sc in ordered_state_cols:
+                cnt = int(row.get(sc, 0))
+                pct = round(100*cnt/total) if total else 0
+                row_dict[sc] = f"{cnt} ({pct}%)" if cnt > 0 else "—"
+            table_rows.append(row_dict)
+        tbl_df = pd.DataFrame(table_rows).set_index("Grouping")
+        st.dataframe(tbl_df, use_container_width=True)
 
         # Build summary for hypothesis
         grp_counts = sup_filt["Grouping"].value_counts()
         top_grp    = grp_counts.index[0] if not grp_counts.empty else "unknown"
         top_grp_n  = int(grp_counts.iloc[0]) if not grp_counts.empty else 0
         top_grp_pct = round(100*top_grp_n/len(sup_filt)) if len(sup_filt) else 0
+        # Use in-window only for regulation rate
+        grp_win_rates = {}
+        for g in sup_filt["Grouping"].unique():
+            sub = sup_filt[sup_filt["Grouping"]==g]
+            if len(sub) >= 3:
+                grp_win_rates[g] = round(100*(sub["regulated"]=="in_window").sum()/len(sub))
         hyp_grp_prompt = (
             f"Student support type distribution across {len(sup_filt)} intervals: "
             + ", ".join(f"{g} ({n} intervals, {round(100*n/len(sup_filt))}%)" for g, n in grp_counts.items()) + ". "
             + f"Most common support arrangement is '{top_grp}' ({top_grp_pct}% of intervals). "
-            + "Regulation rates per support type: "
-            + "; ".join(
-                f"{row.name}: {round(row.get('🟢 In window', 0)+row.get('🟡 Coping', 0), 1)}% regulated"
-                for _, row in pivot_pct.iterrows()
-            ) + ". "
-            + "Interpret what this reveals about the student's dependence on support, "
+            + ("In-window regulation rates (only rows with ≥3 intervals): "
+               + "; ".join(f"{g}: {pct}% in-window" for g, pct in grp_win_rates.items()) + ". "
+               if grp_win_rates else "")
+            + "Interpret what this reveals about the student's dependence on intensive support, "
               "and what the data implies for resourcing, fading support, or building independence."
         )
-        with st.spinner("Generating clinical hypothesis…"):
+        with st.spinner("Generating hypothesis…"):
             hyp_grp = _groq_hypothesis(hyp_grp_prompt)
         if hyp_grp:
-            _hypothesis_box(hyp_grp)
+            _hypothesis_box(hyp_grp, key="rpt_hyp_grp")
         else:
             _hypothesis_box(
                 f"The data shows that {top_grp_pct}% of observed intervals occurred under '{top_grp}' support. "
                 "This indicates the current level of support is the primary context in which this student's "
                 "regulation is being observed and maintained. The team should consider whether this level of "
                 "resourcing is sustainable, what structured plans exist for support-fading, and how the "
-                "student's regulation changes in lower-support contexts."
+                "student's regulation changes in lower-support contexts.",
+                key="rpt_hyp_grp"
             )
     else:
         st.info("Record grouping/support data during observations to see this chart.")
@@ -1023,20 +1064,21 @@ with t_analysis:
                   "Note whether regulation is contingent on activity preference, and question whether "
                   "the student is building capacity for non-preferred tasks."
             )
-            with st.spinner("Generating clinical hypothesis…"):
+            with st.spinner("Generating hypothesis…"):
                 hyp_act = _groq_hypothesis(hyp_act_prompt)
             if hyp_act:
-                _hypothesis_box(hyp_act)
+                _hypothesis_box(hyp_act, key="rpt_hyp_act")
             else:
                 best_act  = max(act_reg_pct, key=act_reg_pct.get) if act_reg_pct else None
                 worst_act = min(act_reg_pct, key=act_reg_pct.get) if act_reg_pct else None
                 _hypothesis_box(
                     f"The majority of observed intervals involved '{top_act}' tasks, predominantly under '{top_grp_for_act}' support. "
-                    + (f"Highest regulation was observed during '{best_act}' activities ({act_reg_pct[best_act]}% regulated). " if best_act else "")
-                    + (f"Greatest dysregulation occurred during '{worst_act}' activities ({act_reg_pct[worst_act]}% regulated). " if worst_act and worst_act != best_act else "")
+                    + (f"Highest in-window regulation was observed during '{best_act}' activities ({act_reg_pct[best_act]}% in-window). " if best_act else "")
+                    + (f"Greatest dysregulation occurred during '{worst_act}' activities ({act_reg_pct[worst_act]}% in-window). " if worst_act and worst_act != best_act else "")
                     + "The team should consider whether regulation during preferred or structured tasks "
                       "is contingent on high levels of 1:1 support, and build a plan to gradually "
-                      "introduce demand and fade support across this student's program."
+                      "introduce demand and fade support across this student's program.",
+                    key="rpt_hyp_act"
                 )
             st.markdown("---")
 
@@ -1044,6 +1086,137 @@ with t_analysis:
     dl["obs_date"] = dl["obs_date_dt"].dt.strftime("%-d/%m/%Y")
     csv = dl[["obs_date","day_of_week","time_slot","regulated","State",
               "grouping_type","activity_types","outcome","created_by"]].to_csv(index=False)
-    st.download_button("📥 Download CSV", csv,
+
+    st.markdown("---")
+
+    # ── Report generator ─────────────────────────────────────────────────────
+    with st.expander("📄 Generate analysis report", expanded=False):
+        st.caption(
+            "Creates a downloadable HTML report containing the observation summary, "
+            "key data, and all hypotheses generated above. "
+            "Open the analysis tab and scroll through all charts first so the hypotheses are generated, "
+            "then click Generate below."
+        )
+        report_title = st.text_input("Report title", value=f"Interval Support Analysis — {student_name}", key="rpt_title")
+        report_author = st.text_input("Prepared by", value=get_staff_name() or "", key="rpt_author")
+
+        if st.button("📄 Generate report", key="rpt_gen_btn", type="primary", use_container_width=True):
+            # Collect all available hypotheses from session state
+            hyp_time = ss.get("rpt_hyp_time", "")
+            hyp_dow_  = ss.get("rpt_hyp_dow", "")
+            hyp_grp_  = ss.get("rpt_hyp_grp", "")
+            hyp_act_  = ss.get("rpt_hyp_act", "")
+
+            def _hyp_section(title, text):
+                if not text:
+                    return ""
+                return f"""
+                <div class="hyp">
+                  <div class="hyp-label">🔍 Hypothesis</div>
+                  <p>{text}</p>
+                </div>"""
+
+            # Build day-of-week table
+            dow_table = ""
+            if not dow_reg.empty:
+                dow_table = "<table><tr><th>Day</th><th>% In window</th><th>% Coping</th></tr>"
+                for _, r in dow_reg.iterrows():
+                    dow_table += f"<tr><td>{r['day_of_week']}</td><td>{r['pct_win']}%</td><td>{r['pct_cop']}%</td></tr>"
+                dow_table += "</table>"
+
+            html_report = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{report_title}</title>
+<style>
+  body {{ font-family: Arial, sans-serif; font-size: 13px; color: #1e293b; margin: 0; padding: 0; background: white; }}
+  .page {{ max-width: 850px; margin: 0 auto; padding: 32px 36px; }}
+  h1 {{ font-size: 1.4rem; color: #1A6B8A; border-bottom: 3px solid #1A6B8A; padding-bottom: .5rem; }}
+  h2 {{ font-size: 1rem; color: #1A6B8A; margin: 1.4rem 0 .3rem; border-bottom: 1px solid #e2e8f0; padding-bottom: .2rem; }}
+  .meta {{ font-size:.78rem; color:#64748b; margin-bottom:1.2rem; }}
+  .obs-box {{ background:#f0f9ff; border:1.5px solid #7dd3fc; border-radius:8px; padding:.6rem 1rem; font-size:.82rem; margin-bottom:1rem; }}
+  .kpi-row {{ display:flex; gap:1rem; margin-bottom:1rem; flex-wrap:wrap; }}
+  .kpi {{ background:white; border-left:4px solid #1A6B8A; border-radius:6px; padding:.5rem .9rem; min-width:100px; text-align:center; box-shadow:0 1px 3px rgba(0,0,0,.08); }}
+  .kpi .val {{ font-size:1.5rem; font-weight:700; color:#1A6B8A; }}
+  .kpi .lbl {{ font-size:.65rem; color:#64748b; }}
+  .kpi.g {{ border-color:#16a34a; }} .kpi.g .val {{ color:#16a34a; }}
+  .kpi.y {{ border-color:#ca8a04; }} .kpi.y .val {{ color:#ca8a04; }}
+  .kpi.r {{ border-color:#dc2626; }} .kpi.r .val {{ color:#dc2626; }}
+  .kpi.b {{ border-color:#2563eb; }} .kpi.b .val {{ color:#2563eb; }}
+  .warn {{ background:#fef9c3; border-left:4px solid #ca8a04; border-radius:0 6px 6px 0; padding:.5rem .9rem; font-size:.8rem; margin-bottom:1rem; }}
+  .hyp {{ background:#EBF4F9; border-left:4px solid #1A6B8A; border-radius:0 8px 8px 0; padding:.6rem 1rem; margin:.5rem 0 1rem; font-size:.82rem; line-height:1.6; }}
+  .hyp-label {{ font-size:.65rem; font-weight:700; color:#1A6B8A; letter-spacing:.06em; margin-bottom:.3rem; }}
+  table {{ border-collapse:collapse; width:100%; margin:.5rem 0 1rem; font-size:.8rem; }}
+  th {{ background:#1A6B8A; color:white; padding:.35rem .6rem; text-align:left; }}
+  td {{ border:1px solid #e2e8f0; padding:.3rem .6rem; }}
+  tr:nth-child(even) td {{ background:#f8fafc; }}
+  .footer {{ font-size:.68rem; color:#94a3b8; border-top:1px solid #e2e8f0; margin-top:2rem; padding-top:.5rem; }}
+  @media print {{ body {{ font-size:11px; }} .page {{ padding:20px; }} }}
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>{report_title}</h1>
+  <div class="meta">
+    {'Prepared by: <strong>' + report_author + '</strong> &nbsp;·&nbsp; ' if report_author else ''}
+    Generated: <strong>{date.today().strftime('%-d %B %Y')}</strong>
+  </div>
+
+  <div class="obs-box">
+    <strong>📅 Observation window:</strong> {date_span} &nbsp;·&nbsp;
+    <strong>{n_days} school day{"s" if n_days != 1 else ""}</strong> with data &nbsp;·&nbsp;
+    <strong>Time range: {min_slot} – {max_slot}</strong>
+  </div>
+
+  <div class="warn">
+    ⚠️ <strong>Reading this report:</strong> Each interval = one 15-minute observation window.
+    Only <em>In window</em> (green) indicates genuine regulation.
+    <em>Coping</em> (yellow) means the student is at the edge of their window and actively managing —
+    a predominantly yellow session still represents a student who is struggling.
+  </div>
+
+  <h2>Overall regulation summary</h2>
+  <div class="kpi-row">
+    <div class="kpi"><div class="val">{n_tot}</div><div class="lbl">Total intervals</div></div>
+    <div class="kpi g"><div class="val">{n_win}</div><div class="lbl">🟢 In window ({pct_inwin}%)</div></div>
+    <div class="kpi y"><div class="val">{n_cop}</div><div class="lbl">🟡 Coping ({pct_cop_only}%)</div></div>
+    <div class="kpi r"><div class="val">{n_hyp}</div><div class="lbl">🔴 Hyperaroused</div></div>
+    <div class="kpi b"><div class="val">{n_hypo}</div><div class="lbl">🔵 Hypoaroused</div></div>
+  </div>
+
+  <h2>Regulation across the day ({min_slot}–{max_slot})</h2>
+  {_hyp_section("Time of day", hyp_time)}
+
+  <h2>Regulation by day of week</h2>
+  {dow_table}
+  {_hyp_section("Day of week", hyp_dow_)}
+
+  <h2>Level of support</h2>
+  {_hyp_section("Support type", hyp_grp_)}
+
+  <h2>Regulation by activity type</h2>
+  {_hyp_section("Activity type", hyp_act_)}
+
+  <div class="footer">
+    Interval Support Tracker &nbsp;·&nbsp; CLC Learning &amp; Behaviour Unit &nbsp;·&nbsp;
+    Generated {date.today().strftime('%-d %B %Y')}
+    {(' &nbsp;·&nbsp; ' + report_author) if report_author else ''}
+  </div>
+</div>
+</body>
+</html>"""
+
+            st.download_button(
+                "⬇️ Download report (HTML)",
+                html_report,
+                file_name=f"IST_Report_{student_name.replace(' ','_')}_{date.today()}.html",
+                mime="text/html",
+                use_container_width=True,
+            )
+            st.caption("Open the downloaded file in any browser to view or print.")
+
+    st.download_button("📥 Download raw data (CSV)", csv,
         file_name=f"IntervalSupport_{student_name.replace(' ','_')}_{date_from}_{date_to}.csv",
         mime="text/csv", use_container_width=True)
