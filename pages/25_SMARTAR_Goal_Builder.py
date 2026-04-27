@@ -41,10 +41,19 @@ integration = check_team_meetings_integration()
 # ── Clients ───────────────────────────────────────────────────────────────────
 @st.cache_resource
 def get_supabase():
-    url = st.secrets.get("BEHAVIOUR_SUPABASE_URL") or st.secrets.get("SUPABASE_URL")
-    key = st.secrets.get("BEHAVIOUR_SUPABASE_KEY") or st.secrets.get("SUPABASE_KEY")
+    # Check all locations the credentials may be stored across different deployment configs
+    url = (
+        st.secrets.get("BEHAVIOUR_SUPABASE_URL")
+        or st.secrets.get("SUPABASE_URL")
+        or st.secrets.get("supabase", {}).get("url")
+    )
+    key = (
+        st.secrets.get("BEHAVIOUR_SUPABASE_KEY")
+        or st.secrets.get("SUPABASE_KEY")
+        or st.secrets.get("supabase", {}).get("key")
+    )
     if not url or not key:
-        st.error("⚠️ Supabase credentials not configured")
+        st.error("⚠️ Supabase credentials not configured. Check BEHAVIOUR_SUPABASE_URL / SUPABASE_URL in secrets.")
         st.stop()
     return create_client(url, key)
 
