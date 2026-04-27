@@ -41,7 +41,7 @@ integration = check_team_meetings_integration()
 # ── Clients ───────────────────────────────────────────────────────────────────
 @st.cache_resource
 def get_supabase():
-    # Check all locations the credentials may be stored across different deployment configs
+    # Try every possible location these credentials could be stored
     url = (
         st.secrets.get("BEHAVIOUR_SUPABASE_URL")
         or st.secrets.get("SUPABASE_URL")
@@ -53,8 +53,10 @@ def get_supabase():
         or st.secrets.get("supabase", {}).get("key")
     )
     if not url or not key:
-        st.error("⚠️ Supabase credentials not configured. Check BEHAVIOUR_SUPABASE_URL / SUPABASE_URL in secrets.")
+        st.error("⚠️ Supabase credentials not found. Check Render environment variables.")
         st.stop()
+    # Debug — remove once working
+    st.sidebar.caption(f"🔌 DB: `{url.split('//')[1].split('.')[0]}`")
     return create_client(url, key)
 
 @st.cache_resource
