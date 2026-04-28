@@ -274,6 +274,13 @@ def del_event(ev_id):
 def event_form(key, default_date=None, existing=None, label="📅 Save Event"):
     ev = existing or {}
     d0 = default_date or today
+    
+    # AGGRESSIVE DEBUG - see what we're actually getting
+    if existing:
+        st.error(f"🔍 DEBUG - Full event data: {ev}")
+        st.error(f"🔍 event_date raw value: {repr(ev.get('event_date'))}")
+        st.error(f"🔍 event_date type: {type(ev.get('event_date'))}")
+    
     with st.form(key, clear_on_submit=(existing is None)):
         c1, c2 = st.columns(2)
         with c1:
@@ -286,39 +293,53 @@ def event_form(key, default_date=None, existing=None, label="📅 Save Event"):
             # ROBUST date parsing - handle all possible formats from Supabase
             date_val = d0
             if existing and ev.get("event_date"):
-                raw_date = str(ev["event_date"])
-                # Try multiple parsing strategies
-                for date_str in [raw_date[:10], raw_date.split('T')[0], raw_date]:
-                    try:
-                        date_val = datetime.strptime(date_str, "%Y-%m-%d").date()
-                        break
-                    except:
+                raw_date = ev["event_date"]
+                
+                # If it's already a date object, use it directly
+                if isinstance(raw_date, date):
+                    date_val = raw_date
+                    st.success(f"✅ Date is already a date object: {date_val}")
+                else:
+                    # Convert to string and try parsing
+                    raw_date_str = str(raw_date)
+                    st.warning(f"Trying to parse string: '{raw_date_str}'")
+                    
+                    # Try multiple parsing strategies
+                    for date_str in [raw_date_str[:10], raw_date_str.split('T')[0], raw_date_str]:
                         try:
-                            date_val = datetime.fromisoformat(date_str).date()
+                            date_val = datetime.strptime(date_str, "%Y-%m-%d").date()
+                            st.success(f"✅ Parsed '{date_str}' as {date_val}")
                             break
-                        except:
-                            continue
+                        except Exception as e1:
+                            try:
+                                date_val = datetime.fromisoformat(date_str).date()
+                                st.success(f"✅ ISO parsed '{date_str}' as {date_val}")
+                                break
+                            except Exception as e2:
+                                st.warning(f"Failed to parse '{date_str}': {e1}, {e2}")
+                                continue
             
+            st.info(f"📅 Final date_val being sent to widget: {date_val} (type: {type(date_val)})")
             ev_date = st.date_input("Date *", value=date_val, key=f"{key}_evdate")
-            
-            # DEBUG: Show what date we loaded (remove this after testing)
-            if existing and ev.get("event_date"):
-                st.caption(f"🔍 Loaded from DB: {ev.get('event_date')} → Parsed as: {date_val}")
             
             # Handle end_date with same robust parsing
             end_date_val = ev_date  # Default to same as start date
             if existing and ev.get("end_date"):
-                raw_end = str(ev["end_date"])
-                for date_str in [raw_end[:10], raw_end.split('T')[0], raw_end]:
-                    try:
-                        end_date_val = datetime.strptime(date_str, "%Y-%m-%d").date()
-                        break
-                    except:
+                raw_end = ev["end_date"]
+                if isinstance(raw_end, date):
+                    end_date_val = raw_end
+                else:
+                    raw_end_str = str(raw_end)
+                    for date_str in [raw_end_str[:10], raw_end_str.split('T')[0], raw_end_str]:
                         try:
-                            end_date_val = datetime.fromisoformat(date_str).date()
+                            end_date_val = datetime.strptime(date_str, "%Y-%m-%d").date()
                             break
                         except:
-                            continue
+                            try:
+                                end_date_val = datetime.fromisoformat(date_str).date()
+                                break
+                            except:
+                                continue
             
             end_date = st.date_input("End date (same for single day)", value=end_date_val, key=f"{key}_enddate")
             location = st.text_input("Location", value=ev.get("location",""))
