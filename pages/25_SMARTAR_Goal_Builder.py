@@ -1049,43 +1049,42 @@ Return ONLY the final goal statement."""
         if final_goal and final_goal != st.session_state.get("refined_goal"):
             st.session_state["refined_goal"] = final_goal
 
-        # ── Auto-generate GAS from goal whenever goal changes ─────────────────
-        goal_for_gas = st.session_state.get("gb_goal_for_gas", "")
-        gas_already_done = bool(st.session_state.get("gas_levels"))
+        # ── Auto-generate GAS when goal is ready and GAS not yet done ──────────
+        _gas_source = st.session_state.get("refined_goal") or current_assembled
+        _gas_done   = bool(st.session_state.get("gas_levels"))
+        _gas_last   = st.session_state.get("gas_last_source", "")
 
-        # Trigger: assembled set but no GAS yet → auto-generate from assembled
-        if current_assembled and not gas_already_done and not goal_for_gas and groq_client:
-            st.session_state["gb_goal_for_gas"] = current_assembled
-            goal_for_gas = current_assembled
+        # Generate when: source exists, AI available, and source has changed or GAS never done
+        if _gas_source and groq_client and (not _gas_done or _gas_source != _gas_last):
+            if not _gas_done:  # only auto-run if GAS is empty
+                with st.spinner("🤖 Auto-generating GAS performance levels…"):
+                    try:
+                        gas_raw = groq_call(
+                            f"""Create a Goal Attainment Scale (GAS) for this SMARTAR goal.
 
-        if goal_for_gas and not gas_already_done and groq_client:
-            with st.spinner("🤖 Auto-generating GAS performance levels…"):
-                try:
-                    gas_raw = groq_call(
-                        f"""Create a Goal Attainment Scale (GAS) for this SMARTAR goal.
+Goal: {_gas_source}
 
-Goal: {goal_for_gas}
-
-The EXPECTED level (0) IS the goal exactly as written.
-Scale above and below ONLY by changing the rate/frequency/success criteria — keep all other wording identical.
+The EXPECTED level (0) IS the goal exactly as written — copy it verbatim.
+Scale above and below by changing ONLY the rate/frequency/success criteria.
 
 Return ONLY valid JSON, no markdown, no extra text:
 {{
-  "EXCEEDING": "...",
-  "ABOVE": "...",
-  "EXPECTED": "...",
-  "BELOW": "...",
-  "NOT_YET": "..."
+  "EXCEEDING": "Goal text with higher rate/criteria",
+  "ABOVE": "Goal text with slightly higher rate/criteria",
+  "EXPECTED": "Exact goal text as written",
+  "BELOW": "Goal text with slightly lower rate/criteria",
+  "NOT_YET": "Goal text with much lower rate/criteria"
 }}"""
-                    )
-                    gas_clean  = gas_raw.strip().strip("```json").strip("```").strip()
-                    gas_parsed = json.loads(gas_clean)
-                    if "NOT_YET" in gas_parsed:
-                        gas_parsed["NOT YET"] = gas_parsed.pop("NOT_YET")
-                    st.session_state["gas_levels"] = gas_parsed
-                    st.rerun()
-                except Exception:
-                    pass  # GAS fields stay blank — staff fill manually
+                        )
+                        gas_clean  = gas_raw.strip().strip("```json").strip("```").strip()
+                        gas_parsed = json.loads(gas_clean)
+                        if "NOT_YET" in gas_parsed:
+                            gas_parsed["NOT YET"] = gas_parsed.pop("NOT_YET")
+                        st.session_state["gas_levels"]     = gas_parsed
+                        st.session_state["gas_last_source"] = _gas_source
+                        st.rerun()
+                    except Exception as ex:
+                        st.caption(f"⚠️ GAS auto-generate failed ({ex}) — fill in manually below.")
 
         # ── Step 4: Tracking Period ────────────────────────────────────────────
         st.markdown("---")
@@ -1156,15 +1155,22 @@ No markdown, no explanation, pure JSON only."""
 
         gas_levels = st.session_state.get("gas_levels", {})
         edited_gas = {}
+        # Use a version counter in the key so widgets re-render when gas_levels changes
+        _gas_ver = hash(str(sorted(gas_levels.items()))) if gas_levels else 0
         if gas_levels:
             st.markdown("**Review GAS Performance Levels:**")
+            st.caption("Auto-filled from your goal. Edit any field before saving.")
+        else:
+            st.caption("Fill in skill/behaviour above — GAS levels will auto-generate.")
         for lvl in LEVEL_ORDER:
-            key     = lvl if lvl in gas_levels else lvl.replace(" ", "_")
-            default = gas_levels.get(lvl, gas_levels.get(key, ""))
+            _key    = lvl if lvl in gas_levels else lvl.replace(" ", "_")
+            default = gas_levels.get(lvl, gas_levels.get(_key, ""))
             color   = LEVEL_COLOR[lvl]
+            # Dynamic key forces widget to re-render with new value when gas_levels changes
             edited_gas[lvl] = st.text_area(
                 f"{LEVEL_EMOJI[lvl]} {lvl}",
-                value=default, height=70, key=f"gas_edit_{lvl}",
+                value=default, height=70,
+                key=f"gas_edit_{lvl}_{_gas_ver}",
             )
 
         # ── Save ──────────────────────────────────────────────────────────────
@@ -1554,7 +1560,7 @@ elif view == "⚙️ Admin Panel":
         "👥 Manage Students", "📝 Edit Goals", "➕ Pre-populate Goals",
     ])
 
-    # ── Manage Students ───────────────────────────────────────────────────────
+    # -- Manage Students --------------------------------------------------------
     with tab_students:
         st.subheader("Add New Student")
         col1, col2, col3 = st.columns([3, 1, 1])
@@ -1564,11 +1570,12 @@ elif view == "⚙️ Admin Panel":
             if new_sname.strip():
                 try:
                     sb.table("smartar_students").insert({
-                        "student_name": new_sname.strip(),
-                        "program":      new_sprog,
-                        "active":       True,
+                        "student_name":    new_sname.strip(),
+                        "program":         new_sprog,
+                        "active":          True,
+                        "placement_ended": False,
                     }).execute()
-                    st.success(f"✅ {new_sname.strip()} added to {new_sprog}.")
+                    st.success(f"Added {new_sname.strip()} to {new_sprog}.")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
@@ -1576,51 +1583,106 @@ elif view == "⚙️ Admin Panel":
                 st.warning("Please enter a student name.")
 
         st.markdown("---")
-        show_archived = st.checkbox("Show archived students", value=False)
-        students_all  = get_students(include_archived=show_archived)
-        active_s      = [s for s in students_all if s.get("active", True)]
-        archived_s    = [s for s in students_all if not s.get("active", True)]
+        st.caption("Active = on placement. Archived = goal archived, student still accessible. Placement Ended = student left CLC, hidden from tools but data preserved.")
 
-        st.info(f"📊 {len(active_s)} active" +
-                (f" | 📦 {len(archived_s)} archived" if show_archived and archived_s else ""))
+        col_show1, col_show2 = st.columns(2)
+        show_archived  = col_show1.checkbox("Show archived students", value=False)
+        show_placement = col_show2.checkbox("Show placement-ended students", value=False)
 
-        student_list = students_all if show_archived else active_s
-        snames       = [s["student_name"] + (" [ARCHIVED]" if not s.get("active", True) else "")
-                        for s in student_list]
-        sel_s        = st.selectbox("Select student to manage", ["— Select —"] + snames,
-                                    key="admin_edit_select")
+        students_all = get_students(include_archived=True)
+        active_s   = [s for s in students_all
+                      if s.get("active", True) and not s.get("placement_ended", False)]
+        archived_s = [s for s in students_all
+                      if not s.get("active", True) and not s.get("placement_ended", False)]
+        ended_s    = [s for s in students_all if s.get("placement_ended", False)]
 
-        if sel_s != "— Select —":
-            clean = sel_s.replace(" [ARCHIVED]", "")
-            s     = next(x for x in student_list if x["student_name"] == clean)
-            is_arch = not s.get("active", True)
+        st.info(
+            f"{len(active_s)} active"
+            + (f"  |  {len(archived_s)} goal-archived" if show_archived else "")
+            + (f"  |  {len(ended_s)} placement ended" if show_placement else "")
+        )
+
+        display_students = list(active_s)
+        if show_archived:
+            display_students += archived_s
+        if show_placement:
+            display_students += ended_s
+
+        def _s_label(s):
+            if s.get("placement_ended", False): return s["student_name"] + " [PLACEMENT ENDED]"
+            if not s.get("active", True): return s["student_name"] + " [ARCHIVED]"
+            return s["student_name"]
+
+        snames = [_s_label(s) for s in display_students]
+        sel_s  = st.selectbox("Select student to manage", ["-- Select --"] + snames,
+                              key="admin_edit_select")
+
+        if sel_s != "-- Select --":
+            clean   = sel_s.replace(" [ARCHIVED]", "").replace(" [PLACEMENT ENDED]", "")
+            s       = next(x for x in display_students if x["student_name"] == clean)
+            is_end  = s.get("placement_ended", False)
+            is_arch = not s.get("active", True) and not is_end
 
             goals_s = get_goals(s["student_name"])
-            st.markdown(f"### {s['student_name']}" + (" 📦 [ARCHIVED]" if is_arch else ""))
-            st.caption(f"{len(goals_s)} active goals")
+            status_tag = " [PLACEMENT ENDED]" if is_end else " [ARCHIVED]" if is_arch else ""
+            st.markdown(f"### {s['student_name']}{status_tag}")
+            st.caption(f"Program: {s.get('program','--')} · {len(goals_s)} active goals")
 
-            c1, c2 = st.columns([2, 1])
-            prog_idx = PROGRAMS.index(s.get("program","JP")) if s.get("program") in PROGRAMS else 0
-            new_prog_s = c1.selectbox("Program", PROGRAMS, index=prog_idx,
-                                      key=f"prog_{s['id']}", disabled=is_arch)
-            if c2.button("Update", key=f"prog_upd_{s['id']}", disabled=is_arch):
-                sb.table("smartar_students").update({"program": new_prog_s})\
-                  .eq("id", s["id"]).execute()
-                st.success("Updated.")
-                st.rerun()
+            if not is_arch and not is_end:
+                c1, c2 = st.columns([2, 1])
+                prog_idx   = PROGRAMS.index(s.get("program","JP")) if s.get("program") in PROGRAMS else 0
+                new_prog_s = c1.selectbox("Program", PROGRAMS, index=prog_idx,
+                                          key=f"prog_{s['id']}")
+                if c2.button("Update Program", key=f"prog_upd_{s['id']}"):
+                    sb.table("smartar_students").update({"program": new_prog_s}).eq("id", s["id"]).execute()
+                    st.success("Updated.")
+                    st.rerun()
 
             st.markdown("---")
-            if is_arch:
-                if st.button(f"♻️ Restore {s['student_name']}", key=f"restore_s_{s['id']}", type="primary"):
-                    sb.table("smartar_students").update({"active": True}).eq("id", s["id"]).execute()
-                    st.success("Restored.")
-                    st.rerun()
-            else:
-                if st.button(f"📦 Archive {s['student_name']}", key=f"archive_s_{s['id']}"):
-                    sb.table("smartar_students").update({"active": False}).eq("id", s["id"]).execute()
-                    st.success("Archived — data preserved.")
+
+            if is_end:
+                st.warning("This student has left CLC. All data is preserved.")
+                if st.button("Restore to Active", key=f"restore_end_{s['id']}", type="primary"):
+                    sb.table("smartar_students").update({"active": True, "placement_ended": False}).eq("id", s["id"]).execute()
+                    st.success("Restored to active.")
                     st.rerun()
 
+            elif is_arch:
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("Restore to Active", key=f"restore_s_{s['id']}", type="primary"):
+                        sb.table("smartar_students").update({"active": True}).eq("id", s["id"]).execute()
+                        st.success("Restored.")
+                        st.rerun()
+                with c2:
+                    if st.button("Mark Placement Ended", key=f"end_s_{s['id']}"):
+                        sb.table("smartar_students").update({"active": False, "placement_ended": True}).eq("id", s["id"]).execute()
+                        st.success("Marked as placement ended.")
+                        st.rerun()
+
+            else:
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button(f"Archive {s['student_name']}", key=f"archive_s_{s['id']}"):
+                        sb.table("smartar_students").update({"active": False}).eq("id", s["id"]).execute()
+                        st.success("Archived — still accessible in Admin.")
+                        st.rerun()
+                with c2:
+                    if st.button("End Placement", key=f"end_active_{s['id']}"):
+                        st.session_state[f"confirm_end_{s['id']}"] = True
+                if st.session_state.get(f"confirm_end_{s['id']}"):
+                    st.warning(f"This will hide {s['student_name']} from all tools. All data preserved. Continue?")
+                    ca, cb = st.columns(2)
+                    with ca:
+                        if st.button("Confirm End Placement", key=f"end_conf_{s['id']}", type="primary"):
+                            sb.table("smartar_students").update({"active": False, "placement_ended": True}).eq("id", s["id"]).execute()
+                            st.session_state.pop(f"confirm_end_{s['id']}", None)
+                            st.success(f"{s['student_name']} marked as placement ended.")
+                            st.rerun()
+                    with cb:
+                        if st.button("Cancel", key=f"end_cancel_{s['id']}"):
+                            st.session_state.pop(f"confirm_end_{s['id']}", None)
+                            st.rerun()
     # ── Edit Goals ────────────────────────────────────────────────────────────
     with tab_edit:
         st.subheader("Edit Existing Goals")
