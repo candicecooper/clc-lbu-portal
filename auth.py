@@ -72,9 +72,9 @@ def require_auth(app_title="CLC LBU", app_icon="🏫"):
         name_input = st.text_input("Your name", placeholder="Enter your name", key="auth_name")
 
     try:
-        correct_pw = st.secrets.get("ADMIN_PASSWORD", "") or st.secrets.get("APP_PASSWORD", "")
+        correct_pw = st.secrets.get("APP_PASSWORD", "")
     except Exception:
-        correct_pw = os.environ.get("ADMIN_PASSWORD", "") or os.environ.get("APP_PASSWORD", "")
+        correct_pw = os.environ.get("APP_PASSWORD", "")
 
     password_input = st.text_input("Password", type="password", placeholder="Staff password", key="auth_password")
     
