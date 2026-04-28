@@ -283,28 +283,42 @@ def event_form(key, default_date=None, existing=None, label="📅 Save Event"):
                                  if ev.get("event_type") in EVENT_TYPES else len(EVENT_TYPES)-1)
             who   = st.text_input("Added by *", value=ev.get("added_by","") or get_staff_name())
         with c2:
-            # Better date parsing for existing events - FIXED
+            # ROBUST date parsing - handle all possible formats from Supabase
+            date_val = d0
             if existing and ev.get("event_date"):
-                try:
-                    date_val = datetime.strptime(str(ev["event_date"])[:10], "%Y-%m-%d").date()
-                except:
+                raw_date = str(ev["event_date"])
+                # Try multiple parsing strategies
+                for date_str in [raw_date[:10], raw_date.split('T')[0], raw_date]:
                     try:
-                        date_val = datetime.fromisoformat(str(ev["event_date"])[:10]).date()
+                        date_val = datetime.strptime(date_str, "%Y-%m-%d").date()
+                        break
                     except:
-                        date_val = d0
-            else:
-                date_val = d0
+                        try:
+                            date_val = datetime.fromisoformat(date_str).date()
+                            break
+                        except:
+                            continue
             
             ev_date = st.date_input("Date *", value=date_val, key=f"{key}_evdate")
             
-            # Handle end_date for existing events - FIXED
+            # DEBUG: Show what date we loaded (remove this after testing)
+            if existing and ev.get("event_date"):
+                st.caption(f"🔍 Loaded from DB: {ev.get('event_date')} → Parsed as: {date_val}")
+            
+            # Handle end_date with same robust parsing
+            end_date_val = ev_date  # Default to same as start date
             if existing and ev.get("end_date"):
-                try:
-                    end_date_val = datetime.strptime(str(ev["end_date"])[:10], "%Y-%m-%d").date()
-                except:
-                    end_date_val = ev_date
-            else:
-                end_date_val = ev_date
+                raw_end = str(ev["end_date"])
+                for date_str in [raw_end[:10], raw_end.split('T')[0], raw_end]:
+                    try:
+                        end_date_val = datetime.strptime(date_str, "%Y-%m-%d").date()
+                        break
+                    except:
+                        try:
+                            end_date_val = datetime.fromisoformat(date_str).date()
+                            break
+                        except:
+                            continue
             
             end_date = st.date_input("End date (same for single day)", value=end_date_val, key=f"{key}_enddate")
             location = st.text_input("Location", value=ev.get("location",""))
@@ -318,23 +332,37 @@ def event_form(key, default_date=None, existing=None, label="📅 Save Event"):
             program   = st.selectbox("Program", prog_opts,
                                      index=prog_opts.index(ev.get("program","")) if ev.get("program","") in prog_opts else 0)
         
-        # Handle existing event times - FIXED
+        # Handle existing event times with robust parsing
         c3, c4 = st.columns(2)
         with c3:
             start_t_val = None
             if existing and ev.get("start_time"):
-                try:
-                    start_t_val = datetime.strptime(str(ev["start_time"])[:5], "%H:%M").time()
-                except:
-                    start_t_val = None
+                raw_time = str(ev["start_time"])
+                for time_str in [raw_time[:8], raw_time[:5]]:
+                    try:
+                        start_t_val = datetime.strptime(time_str, "%H:%M:%S").time()
+                        break
+                    except:
+                        try:
+                            start_t_val = datetime.strptime(time_str, "%H:%M").time()
+                            break
+                        except:
+                            continue
             start_t = st.time_input("Start time (optional)", value=start_t_val, key=f"{key}_startt")
         with c4:
             end_t_val = None
             if existing and ev.get("end_time"):
-                try:
-                    end_t_val = datetime.strptime(str(ev["end_time"])[:5], "%H:%M").time()
-                except:
-                    end_t_val = None
+                raw_time = str(ev["end_time"])
+                for time_str in [raw_time[:8], raw_time[:5]]:
+                    try:
+                        end_t_val = datetime.strptime(time_str, "%H:%M:%S").time()
+                        break
+                    except:
+                        try:
+                            end_t_val = datetime.strptime(time_str, "%H:%M").time()
+                            break
+                        except:
+                            continue
             end_t = st.time_input("End time (optional)", value=end_t_val, key=f"{key}_endt")
         
         notes = st.text_area("Notes", value=ev.get("notes",""), height=64)
@@ -423,7 +451,14 @@ def render_event_row(ev, key_prefix="m"):
         if can_edit:
             st.write("")
             if st.button("✏️", key=f"{key_prefix}_ed_{eid}", help="Edit"):
-                st.session_state.edit_event_id = eid if st.session_state.edit_event_id != eid else None
+                if st.session_state.edit_event_id != eid:
+                    # Store the event being edited in session state
+                    st.session_state.edit_event_id = eid
+                    st.session_state[f"editing_event_{eid}"] = ev.copy()
+                else:
+                    st.session_state.edit_event_id = None
+                    if f"editing_event_{eid}" in st.session_state:
+                        del st.session_state[f"editing_event_{eid}"]
                 st.rerun()
     with ev_cols[3]:
         if can_del:
@@ -445,10 +480,15 @@ def render_event_row(ev, key_prefix="m"):
 
     if st.session_state.edit_event_id == eid and can_edit:
         st.markdown("**✏️ Edit event:**")
-        ok, data = event_form(f"{key_prefix}_ef_{eid}", existing=ev, label="💾 Save Changes")
+        # Use the cached event from session state, not the fresh DB data
+        event_to_edit = st.session_state.get(f"editing_event_{eid}", ev)
+        ok, data = event_form(f"{key_prefix}_ef_{eid}", existing=event_to_edit, label="💾 Save Changes")
         if ok:
             upd_event(eid, data)
             st.session_state.edit_event_id = None
+            # Clear the cached event
+            if f"editing_event_{eid}" in st.session_state:
+                del st.session_state[f"editing_event_{eid}"]
             st.success("✅ Updated!")
             st.rerun()
 
