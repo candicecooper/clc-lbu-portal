@@ -1,39 +1,41 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, date
-import sys
-import os
 
-# Add parent directory to path for imports
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
-
-# Try to import auth - handle different possible function names
+# ══════════════════════════════════════════════════════════════════════════════
+# AUTHENTICATION
+# ══════════════════════════════════════════════════════════════════════════════
 try:
+    import sys
+    import os
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(current_dir)
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
+    
     import auth
-    # Try common authentication function names
-    if hasattr(auth, 'check_authentication'):
-        auth.check_authentication()
-    elif hasattr(auth, 'check_password'):
+    if hasattr(auth, 'check_password'):
         if not auth.check_password():
             st.stop()
-    elif hasattr(auth, 'authenticate'):
-        auth.authenticate()
-    elif hasattr(auth, 'require_authentication'):
-        auth.require_authentication()
-except ImportError:
-    st.warning("⚠️ Auth module not found - continuing without authentication")
-except Exception as e:
-    st.warning(f"⚠️ Auth check failed: {e}")
+    elif hasattr(auth, 'check_authentication'):
+        auth.check_authentication()
+except:
+    pass  # Continue without auth if not available
 
-# Import database
+# ══════════════════════════════════════════════════════════════════════════════
+# SUPABASE CONNECTION
+# ══════════════════════════════════════════════════════════════════════════════
 try:
-    from database import get_supabase_client
-    supabase = get_supabase_client()
-except ImportError:
-    st.error("⚠️ Database module not available")
+    from supabase import create_client, Client
+    
+    # Get Supabase credentials from Streamlit secrets
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY = st.secrets["SUPABASE_SERVICE_KEY"]
+    
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+except Exception as e:
+    st.error(f"⚠️ Database connection failed: {e}")
+    st.info("Please ensure SUPABASE_URL and SUPABASE_SERVICE_KEY are set in Streamlit secrets")
     st.stop()
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -549,7 +551,7 @@ elif mode == "📥 Dashboard Export":
         st.info("""
         **💡 How to Use:**
         
-        1. Download the Excel dashboard template
+        1. Download the Excel dashboard template below
         2. Open in Excel or Google Sheets
         3. Go to the **Data_Model** sheet
         4. Paste your allocation data or manually enter records
@@ -560,63 +562,28 @@ elif mode == "📥 Dashboard Export":
     
     st.markdown("---")
     
-    st.warning("📥 Download link will be added here - upload the Excel dashboard to your OneDrive and add the link")
+    st.warning("📥 Upload the Excel dashboard to OneDrive and add download link here")
     
     st.markdown("---")
     
-    st.markdown("### 🔄 Sync Data to Dashboard")
+    st.markdown("### 🔄 Export Current Database")
     
     df = fetch_all_records()
     if not df.empty:
-        st.info(f"✅ You have **{len(df)} records** in the database ready to export to Excel")
+        st.info(f"✅ You have **{len(df)} records** in the database")
         
-        if st.button("📤 Export Current Database to Excel Format"):
-            # Export current database to Excel format matching the dashboard structure
-            excel_export = df.copy()
-            
-            # Rename columns to match Excel dashboard
-            column_mapping = {
-                "student_name": "Student_Name",
-                "dob": "DOB",
-                "gender": "Gender",
-                "referring_school": "Referring_School",
-                "referral_date": "Referral_Date",
-                "allocation_status": "Allocation_Status",
-                "allocated_program": "Allocated_Program",
-                "placement_start": "Placement_Start",
-                "placement_end": "Placement_End",
-                "partnership_area": "Partnership_Area",
-                "previous_clc_placement": "Previous_CLC_Placement",
-                "previous_other_lc": "Previous_Other_LC",
-                "other_lc_name": "Other_LC_Name",
-                "total_previous_placements": "Total_Previous_Placements",
-                "placement_history_notes": "Placement_History_Notes",
-                "priority_level": "Priority_Level",
-                "current_status": "Current_Status",
-                "exit_reason": "Exit_Reason",
-                "transition_plan": "Transition_Plan",
-                "notes": "Notes"
-            }
-            
-            excel_export = excel_export.rename(columns=column_mapping)
-            
-            # Convert flags to Yes/No
-            flag_cols = ["flag_asd", "flag_adhd", "flag_mental_health", "flag_odd_cd", 
-                        "flag_care_cps", "flag_aboriginal", "flag_eald", "flag_other"]
-            for col in flag_cols:
-                if col in excel_export.columns:
-                    excel_export[col] = excel_export[col].map({True: "Yes", False: "No", None: "No"})
-            
-            csv_export = excel_export.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                "📥 Download Data Export (CSV for Excel)",
-                csv_export,
-                f"allocation_data_export_{datetime.now().strftime('%Y%m%d')}.csv",
-                "text/csv",
-                help="Import this CSV into the Data_Model sheet of your dashboard"
-            )
-            
-            st.success("✅ Export ready! Import this file into the Data_Model sheet of your Excel dashboard.")
+        # Export current database to CSV format
+        csv_export = df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            "📥 Download All Data (CSV)",
+            csv_export,
+            f"allocation_data_export_{datetime.now().strftime('%Y%m%d')}.csv",
+            "text/csv",
+            help="Download all allocation data to import into Excel dashboard",
+            use_container_width=False
+        )
+        
+        st.caption("💡 Import this CSV into the Data_Model sheet of your Excel dashboard")
     else:
         st.warning("📭 No records in database to export")
 
