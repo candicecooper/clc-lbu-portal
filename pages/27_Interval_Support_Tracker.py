@@ -63,7 +63,7 @@ SLOT_TIMES = _gen_slots()
 REG_STATES = {
     "in_window":    {"label": "In window",    "emoji": "🟢", "short": "W",   "bg": "#dcfce7", "fg": "#16a34a", "desc": "Regulated — learning ready | Examples: on task, following instructions, engaged with activity, responding to requests, maintaining focus, calm body, appropriate interactions"},
     "coping":       {"label": "Coping",        "emoji": "🟡", "short": "C",   "bg": "#fef9c3", "fg": "#ca8a04", "desc": "At edge — actively managing, dysregulated | Examples: fidgeting, tapping, rocking, making noises, ignoring instructions, moving around, slow to respond, avoiding eye contact, restless, grumbling"},
-    "hyperaroused": {"label": "Hyperaroused",  "emoji": "🔴", "short": "H+",  "bg": "#fee2e2", "fg": "#dc2626", "desc": "Above window — fight/flight response | Examples: yelling, swearing, aggression, throwing objects, running, refusing loudly, pacing, crying, rapid speech, impulsive behaviour, unable to hear instructions"},
+    "hyperaroused": {"label": "Hyperaroused",  "emoji": "🔴", "short": "H+",  "bg": "#fee2e2", "fg": "#dc2626", "desc": "Above window — fight/flight response | Physiological: dilated pupils, dry mouth, shallow breathing, faster heartbeat, sweating, tensed muscles, butterflies in stomach | Behavioural: agitated movement, unable to find stillness, hyper-vigilant, impulsive, emotionally flooded, reactive, defensive, self-destructive"},
     "hypoaroused":  {"label": "Hypoaroused",   "emoji": "🔵", "short": "H-",  "bg": "#dbeafe", "fg": "#2563eb", "desc": "Below window — shutdown/freeze response | Examples: staring blankly, non-responsive, slumped posture, minimal movement, very slow responses, appearing asleep or zoned out, refusing to engage, head down, monosyllabic or mute"},
 }
 
@@ -556,9 +556,9 @@ with t_record:
     <span style="font-weight:700;color:#ca8a04;">🟡 Coping</span>
     <span class="eg"> — fidgeting, tapping, noises, ignoring, restless, avoiding</span>
   </div>
-  <div class="reg-tip" style="background:#fee2e2;border-left:3px solid #dc2626;" title="Yelling · Swearing · Aggression · Throwing · Running · Refusing loudly · Pacing · Crying · Impulsive">
+  <div class="reg-tip" style="background:#fee2e2;border-left:3px solid #dc2626;" title="Physiological: dilated pupils · dry mouth · shallow breathing · faster heartbeat · sweating · tensed muscles | Behavioural: agitated movement · unable to find stillness · hyper-vigilant · impulsive · emotionally flooded · reactive · defensive · self-destructive">
     <span style="font-weight:700;color:#dc2626;">🔴 Hyperaroused</span>
-    <span class="eg"> — yelling, aggression, throwing, pacing, refusing loudly</span>
+    <span class="eg"> — agitated, impulsive, reactive, hyper-vigilant, can't find stillness</span>
   </div>
   <div class="reg-tip" style="background:#dbeafe;border-left:3px solid #2563eb;" title="Staring blankly · Non-responsive · Slumped · Very slow · Head down · Zoned out · Mute · Shutdown">
     <span style="font-weight:700;color:#2563eb;">🔵 Hypoaroused</span>
