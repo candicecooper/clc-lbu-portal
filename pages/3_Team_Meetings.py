@@ -42,10 +42,13 @@ st.sidebar.markdown(
 # ── Supabase ──────────────────────────────────────────────────────────────────
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+# Use service_role key to bypass RLS (this is an internal staff tool)
+SUPABASE_SERVICE_KEY = st.secrets.get("SUPABASE_SERVICE_KEY", SUPABASE_KEY)
 ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "CLC2026admin")
 GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
 
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+# Create Supabase client with service_role key to avoid RLS issues
+supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 # ── Programs ──────────────────────────────────────────────────────────────────
 PROGRAMS = {
