@@ -30,12 +30,21 @@ try:
     
     # Get Supabase credentials from Streamlit secrets
     SUPABASE_URL = st.secrets["SUPABASE_URL"]
-    SUPABASE_KEY = st.secrets["SUPABASE_SERVICE_KEY"]
+    
+    # Try different possible key names
+    if "SUPABASE_SERVICE_ROLE_KEY" in st.secrets:
+        SUPABASE_KEY = st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
+    elif "SUPABASE_SERVICE_KEY" in st.secrets:
+        SUPABASE_KEY = st.secrets["SUPABASE_SERVICE_KEY"]
+    elif "SUPABASE_KEY" in st.secrets:
+        SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+    else:
+        st.error("⚠️ Could not find Supabase key in secrets. Looking for: SUPABASE_SERVICE_ROLE_KEY, SUPABASE_SERVICE_KEY, or SUPABASE_KEY")
+        st.stop()
     
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 except Exception as e:
     st.error(f"⚠️ Database connection failed: {e}")
-    st.info("Please ensure SUPABASE_URL and SUPABASE_SERVICE_KEY are set in Streamlit secrets")
     st.stop()
 
 # ══════════════════════════════════════════════════════════════════════════════
