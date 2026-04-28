@@ -2,7 +2,7 @@ import streamlit as st
 import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent))
-from auth import check_authentication
+from auth import require_auth, logout_button, get_staff_name
 from database import get_supabase_client
 from datetime import datetime, date, time, timedelta
 import json
@@ -26,8 +26,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-if not check_authentication():
-    st.stop()
+require_auth("Behaviour Support", "🎯")
+logout_button("sidebar")
 
 # Check for Quick Incident Log mode
 query_params = st.query_params
@@ -292,7 +292,7 @@ def render_quick_incident_log():
                         'consequence': consequence if consequence else None,
                         'severity': severity,
                         'window_zone': 'Yellow Zone - Hyper-arousal',  # Default
-                        'logged_by': st.session_state.get('username', 'Unknown'),
+                        'logged_by': get_staff_name(),
                         'logged_at': datetime.now().isoformat()
                     }
                     
@@ -430,7 +430,7 @@ def render_incident_log_tab(student):
                         'consequence': consequence,
                         'severity': severity,
                         'window_zone': window_zone,
-                        'logged_by': st.session_state.get('username', 'Unknown'),
+                        'logged_by': get_staff_name(),
                         'logged_at': datetime.now().isoformat()
                     }
                     
@@ -697,7 +697,7 @@ def render_historical_import_tab():
                             saved_count = 0
                             for inc in incidents_to_save:
                                 inc['student_name'] = st.session_state.current_student
-                                inc['logged_by'] = f"{st.session_state.get('username', 'Unknown')} (imported)"
+                                inc['logged_by'] = f"{get_staff_name()} (imported)"
                                 inc['logged_at'] = datetime.now().isoformat()
                                 
                                 # Get student_id if possible
