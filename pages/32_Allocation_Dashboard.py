@@ -84,8 +84,8 @@ with col1:
 
 with col2:
     st.link_button(
-        "📝 Open Excel File (OneDrive)",
-        "YOUR_ONEDRIVE_LINK_HERE",
+        "📝 Open Excel File (SharePoint)",
+        "https://schoolssaedu-my.sharepoint.com/:x:/g/personal/candice_cooper330_schools_sa_edu_au/IQBhW-ZIsUHVRqPS9dTnsMCjAbVOnHlaDm42f3L0uv17gZo?email=Annette.Balestrin13%40schools.sa.edu.au&e=Fw3KpR",
         help="Opens the allocation tracking Excel file for data entry",
         use_container_width=True
     )
