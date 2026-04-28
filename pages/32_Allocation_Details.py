@@ -2,12 +2,20 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, date
 import sys
-sys.path.append('/mount/src/clc-lbu-portal')
+import os
+
+# Add parent directory to path for imports
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
 try:
     from auth import check_authentication
     from database import get_supabase_client
-except ImportError:
-    st.error("⚠️ Core modules not available")
+except ImportError as e:
+    st.error(f"⚠️ Core modules not available: {e}")
+    st.info("Please ensure auth.py and database.py are in the root directory")
     st.stop()
 
 check_authentication()
