@@ -1002,72 +1002,155 @@ def render_program_meeting(program):
         st.markdown("---")
 
         st.markdown("#### ⏱ 25–40 min | SMARTAR GOAL SPOTLIGHT — 4 Students")
-        st.caption("Rule: No update without evidence. What data or artefact supports this?")
+        st.caption("Click student name to open Goal Builder, or add new student")
         
-        # SMARTAR integration status - Simplified messaging
-        if student_names:
-            st.caption(f"💡 {len(student_names)} students loaded. Type any name — not on the list? Just type it in.")
+        # Create minimal meeting record immediately if needed for SMARTAR links
+        if not st.session_state.current_meeting_id:
+            # Create bare minimum meeting record to get ID
+            minimal_meeting = {
+                "program": program,
+                "meeting_date": str(pm_date),
+                "term": pm_term.strip() or "T1",
+                "week_number": int(pm_week),
+                "week_type": "A" if is_week_a else "B",
+                "facilitator": pm_facilitator.strip() or get_staff_name(),
+                "attendees": "",
+                "checkin_notes": "",
+                "student_concerns": "[]",
+                "smartar_spotlight": "[]",
+                "reports_tac_notes": "",
+                "priority_focus": "[]",
+                "meeting_minutes": "",
+                "actions": "[]",
+            }
+            try:
+                result = supabase.table('tm_program_meetings').insert(minimal_meeting).execute()
+                if result.data:
+                    st.session_state.current_meeting_id = result.data[0]['id']
+                    st.success(f"✅ Meeting initialized - ID: {st.session_state.current_meeting_id}")
+            except Exception as e:
+                st.error(f"⚠️ Could not create meeting: {e}")
+                st.info("💡 You can still use SMARTAR Goal Builder - goals will sync when meeting is saved")
 
+        if student_names:
+            st.caption(f"💡 {len(student_names)} students loaded")
+
+        # SMARTAR student selection - REDESIGNED with buttons
+        st.markdown("**Select students for goal spotlight:**")
+        
         smartar_key = f"pm_smartar_{program}"
         if smartar_key not in st.session_state:
-            st.session_state[smartar_key] = [{"student_name": "", "notes": ""} for _ in range(4)]
-
+            st.session_state[smartar_key] = []
+        
         smartar = st.session_state[smartar_key]
-        for idx, row in enumerate(smartar):
-            st.markdown(f"**Student {idx + 1}**")
-            col_name, col_link, col_status = st.columns([3, 1, 1])
-            
-            with col_name:
-                row["student_name"] = st.text_input("Student name", 
-                    value=row.get("student_name", ""),
-                    key=f"sm_name_{program}_{idx}",
-                    label_visibility="collapsed",
-                    placeholder="Enter student name")
-            
-            with col_link:
-                # Show link immediately if we have student name
-                if row.get("student_name"):
-                    # If no meeting_id yet, show message to trigger initialization
-                    if not st.session_state.current_meeting_id:
-                        st.caption("↓ Enter more info")
-                    else:
+        
+        # Display existing students with Goal Builder buttons
+        if smartar:
+            for idx, student_data in enumerate(smartar):
+                student_name = student_data.get("student_name", "")
+                if not student_name:
+                    continue
+                    
+                col_name, col_goal_btn, col_status, col_remove = st.columns([3, 2, 1.5, 0.5])
+                
+                with col_name:
+                    st.markdown(f"**{idx + 1}. {student_name}**")
+                
+                with col_goal_btn:
+                    if st.session_state.current_meeting_id:
                         smartar_url = get_smartar_goal_link(
-                            row["student_name"], 
+                            student_name, 
                             st.session_state.current_meeting_id,
                             program,
-                            pm_term,
+                            pm_term or "T1",
                             pm_week
                         )
-                        st.markdown(f"[🎯 Goal Tool]({smartar_url})")
-            
-            with col_status:
-                # Check for synced goal
-                if row.get("student_name") and st.session_state.current_meeting_id:
-                    synced_goal = fetch_synced_smartar_goal(row["student_name"], st.session_state.current_meeting_id)
-                    if synced_goal:
-                        st.success("✓ Synced")
-                        # Update notes with synced goal if not already there
-                        if "SMARTAR Goal:" not in row.get("notes", ""):
-                            row["notes"] = f"SMARTAR Goal: {synced_goal}\n\n{row.get('notes', '')}"
-            
-            col_notes, col_del = st.columns([11, 0.5])
-            with col_notes:
-                row["notes"] = st.text_area(
-                    f"Goal notes for {row.get('student_name', 'Student') or 'Student'}",
-                    value=row.get("notes", ""),
-                    key=f"sm_notes_{program}_{idx}",
-                    height=100,
-                    placeholder="Goal area · Current level / evidence · Next adjustment · Responsible",
+                        st.markdown(f"[🎯 Open Goal Builder]({smartar_url})", unsafe_allow_html=True)
+                    else:
+                        st.caption("Initializing...")
+                
+                with col_status:
+                    if st.session_state.current_meeting_id:
+                        synced_goal = fetch_synced_smartar_goal(student_name, st.session_state.current_meeting_id)
+                        if synced_goal:
+                            st.success("✓ Synced")
+                            # Update notes with synced goal
+                            if "SMARTAR Goal:" not in student_data.get("notes", ""):
+                                student_data["notes"] = f"SMARTAR Goal: {synced_goal}\n\n{student_data.get('notes', '')}"
+                        else:
+                            st.info("No goal yet")
+                
+                with col_remove:
+                    if st.button("✕", key=f"sm_remove_{program}_{idx}"):
+                        smartar.pop(idx)
+                        st.rerun()
+                
+                # Optional notes field (collapsed)
+                with st.expander(f"📝 Notes for {student_name}", expanded=False):
+                    student_data["notes"] = st.text_area(
+                        f"Notes for {student_name}",
+                        value=student_data.get("notes", ""),
+                        key=f"sm_notes_{program}_{idx}",
+                        height=80,
+                        placeholder="Additional notes about this student's goals...",
+                        label_visibility="collapsed"
+                    )
+        
+        st.markdown("---")
+        
+        # Add student section - SIMPLIFIED
+        st.markdown("**Add student to spotlight:**")
+        
+        col_select, col_add = st.columns([4, 1])
+        
+        with col_select:
+            # Student selector with autocomplete
+            new_student_name = st.selectbox(
+                "Select student",
+                options=[""] + student_names,
+                key=f"new_student_select_{program}",
+                label_visibility="collapsed"
+            )
+            # OR manual entry
+            if not new_student_name:
+                new_student_name = st.text_input(
+                    "Or type student name",
+                    key=f"new_student_manual_{program}",
+                    placeholder="Type student name if not in list...",
                     label_visibility="collapsed"
                 )
-            with col_del:
-                st.markdown("<div style='margin-top:2rem;'></div>", unsafe_allow_html=True)
-                if len(smartar) > 1:
-                    if st.button("✕", key=f"sm_del_{program}_{idx}"):
-                        smartar.pop(idx); st.rerun()
         
-        if st.button("➕ Add SMARTAR row", key=f"sm_add_{program}"):
-            smartar.append({"student_name": "", "notes": ""}); st.rerun()
+        with col_add:
+            st.markdown("<div style='margin-top:1.8rem;'></div>", unsafe_allow_html=True)
+            if st.button("➕ Add & Open Goal Builder", key=f"add_student_{program}", type="primary"):
+                if new_student_name and new_student_name.strip():
+                    # Add to smartar list
+                    smartar.append({"student_name": new_student_name.strip(), "notes": ""})
+                    
+                    # Open SMARTAR Goal Builder immediately
+                    if st.session_state.current_meeting_id:
+                        smartar_url = get_smartar_goal_link(
+                            new_student_name.strip(), 
+                            st.session_state.current_meeting_id,
+                            program,
+                            pm_term or "T1",
+                            pm_week
+                        )
+                        st.markdown(f"""
+                        <meta http-equiv="refresh" content="0; url={smartar_url}">
+                        <div style="background:#dbeafe;border-left:4px solid #0284c7;border-radius:8px;
+                                    padding:12px 16px;margin:12px 0;font-size:14px;">
+                          🎯 <strong>Opening SMARTAR Goal Builder for {new_student_name}...</strong><br>
+                          If it doesn't open automatically, <a href="{smartar_url}" target="_blank">click here</a>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.warning("⚠️ Meeting not initialized yet - fill in meeting details first")
+                else:
+                    st.warning("⚠️ Please select or enter a student name")
+        
         st.markdown("---")
 
         st.markdown("#### ⏱ 40–45 min | REPORTS / TAC / TRANSITIONS")
@@ -1107,67 +1190,143 @@ def render_program_meeting(program):
 
         # SMARTAR for Week B (same as Week A)
         st.markdown("#### ⏱ 30–45 min | SMARTAR GOAL SPOTLIGHT — 4 Students")
-        st.caption("Rule: No update without evidence.")
+        st.caption("Click student name to open Goal Builder, or add new student")
+        
+        # Create minimal meeting record immediately if needed
+        if not st.session_state.current_meeting_id:
+            minimal_meeting = {
+                "program": program,
+                "meeting_date": str(pm_date),
+                "term": pm_term.strip() or "T1",
+                "week_number": int(pm_week),
+                "week_type": "A" if is_week_a else "B",
+                "facilitator": pm_facilitator.strip() or get_staff_name(),
+                "attendees": "",
+                "checkin_notes": "",
+                "student_concerns": "[]",
+                "smartar_spotlight": "[]",
+                "reports_tac_notes": "",
+                "priority_focus": "[]",
+                "meeting_minutes": "",
+                "actions": "[]",
+            }
+            try:
+                result = supabase.table('tm_program_meetings').insert(minimal_meeting).execute()
+                if result.data:
+                    st.session_state.current_meeting_id = result.data[0]['id']
+                    st.success(f"✅ Meeting initialized - ID: {st.session_state.current_meeting_id}")
+            except Exception as e:
+                st.error(f"⚠️ Could not create meeting: {e}")
 
         if student_names:
-            st.caption(f"💡 {len(student_names)} students loaded.")
+            st.caption(f"💡 {len(student_names)} students loaded")
 
         smartar_key = f"pm_smartar_{program}"
         if smartar_key not in st.session_state:
-            st.session_state[smartar_key] = [{"student_name": "", "notes": ""} for _ in range(4)]
+            st.session_state[smartar_key] = []
 
         smartar = st.session_state[smartar_key]
-        for idx, row in enumerate(smartar):
-            st.markdown(f"**Student {idx + 1}**")
-            col_name, col_link, col_status = st.columns([3, 1, 1])
-            
-            with col_name:
-                row["student_name"] = st.text_input("Student name", 
-                    value=row.get("student_name", ""),
-                    key=f"sm_name_{program}_{idx}",
-                    label_visibility="collapsed",
-                    placeholder="Enter student name")
-            
-            with col_link:
-                if row.get("student_name"):
-                    if not st.session_state.current_meeting_id:
-                        st.caption("↓ Enter more info")
-                    else:
+        
+        # Display existing students
+        if smartar:
+            for idx, student_data in enumerate(smartar):
+                student_name = student_data.get("student_name", "")
+                if not student_name:
+                    continue
+                    
+                col_name, col_goal_btn, col_status, col_remove = st.columns([3, 2, 1.5, 0.5])
+                
+                with col_name:
+                    st.markdown(f"**{idx + 1}. {student_name}**")
+                
+                with col_goal_btn:
+                    if st.session_state.current_meeting_id:
                         smartar_url = get_smartar_goal_link(
-                            row["student_name"], 
+                            student_name, 
                             st.session_state.current_meeting_id,
                             program,
-                            pm_term,
+                            pm_term or "T1",
                             pm_week
                         )
-                        st.markdown(f"[🎯 Goal Tool]({smartar_url})")
-            
-            with col_status:
-                if row.get("student_name") and st.session_state.current_meeting_id:
-                    synced_goal = fetch_synced_smartar_goal(row["student_name"], st.session_state.current_meeting_id)
-                    if synced_goal:
-                        st.success("✓ Synced")
-                        if "SMARTAR Goal:" not in row.get("notes", ""):
-                            row["notes"] = f"SMARTAR Goal: {synced_goal}\n\n{row.get('notes', '')}"
-            
-            col_notes, col_del = st.columns([11, 0.5])
-            with col_notes:
-                row["notes"] = st.text_area(
-                    f"Goal notes for {row.get('student_name', 'Student') or 'Student'}",
-                    value=row.get("notes", ""),
-                    key=f"sm_notes_{program}_{idx}",
-                    height=100,
-                    placeholder="Goal area · Current level / evidence · Next adjustment · Responsible",
+                        st.markdown(f"[🎯 Open Goal Builder]({smartar_url})", unsafe_allow_html=True)
+                    else:
+                        st.caption("Initializing...")
+                
+                with col_status:
+                    if st.session_state.current_meeting_id:
+                        synced_goal = fetch_synced_smartar_goal(student_name, st.session_state.current_meeting_id)
+                        if synced_goal:
+                            st.success("✓ Synced")
+                            if "SMARTAR Goal:" not in student_data.get("notes", ""):
+                                student_data["notes"] = f"SMARTAR Goal: {synced_goal}\n\n{student_data.get('notes', '')}"
+                        else:
+                            st.info("No goal yet")
+                
+                with col_remove:
+                    if st.button("✕", key=f"sm_remove_b_{program}_{idx}"):
+                        smartar.pop(idx)
+                        st.rerun()
+                
+                with st.expander(f"📝 Notes for {student_name}", expanded=False):
+                    student_data["notes"] = st.text_area(
+                        f"Notes for {student_name}",
+                        value=student_data.get("notes", ""),
+                        key=f"sm_notes_b_{program}_{idx}",
+                        height=80,
+                        placeholder="Additional notes about this student's goals...",
+                        label_visibility="collapsed"
+                    )
+        
+        st.markdown("---")
+        
+        # Add student section
+        st.markdown("**Add student to spotlight:**")
+        
+        col_select, col_add = st.columns([4, 1])
+        
+        with col_select:
+            new_student_name = st.selectbox(
+                "Select student",
+                options=[""] + student_names,
+                key=f"new_student_select_b_{program}",
+                label_visibility="collapsed"
+            )
+            if not new_student_name:
+                new_student_name = st.text_input(
+                    "Or type student name",
+                    key=f"new_student_manual_b_{program}",
+                    placeholder="Type student name if not in list...",
                     label_visibility="collapsed"
                 )
-            with col_del:
-                st.markdown("<div style='margin-top:2rem;'></div>", unsafe_allow_html=True)
-                if len(smartar) > 1:
-                    if st.button("✕", key=f"sm_del_{program}_{idx}"):
-                        smartar.pop(idx); st.rerun()
         
-        if st.button("➕ Add SMARTAR row", key=f"sm_add_{program}"):
-            smartar.append({"student_name": "", "notes": ""}); st.rerun()
+        with col_add:
+            st.markdown("<div style='margin-top:1.8rem;'></div>", unsafe_allow_html=True)
+            if st.button("➕ Add & Open Goal Builder", key=f"add_student_b_{program}", type="primary"):
+                if new_student_name and new_student_name.strip():
+                    smartar.append({"student_name": new_student_name.strip(), "notes": ""})
+                    
+                    if st.session_state.current_meeting_id:
+                        smartar_url = get_smartar_goal_link(
+                            new_student_name.strip(), 
+                            st.session_state.current_meeting_id,
+                            program,
+                            pm_term or "T1",
+                            pm_week
+                        )
+                        st.markdown(f"""
+                        <meta http-equiv="refresh" content="0; url={smartar_url}">
+                        <div style="background:#dbeafe;border-left:4px solid #0284c7;border-radius:8px;
+                                    padding:12px 16px;margin:12px 0;font-size:14px;">
+                          🎯 <strong>Opening SMARTAR Goal Builder for {new_student_name}...</strong><br>
+                          If it doesn't open automatically, <a href="{smartar_url}" target="_blank">click here</a>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.warning("⚠️ Meeting not initialized yet - fill in meeting details first")
+                else:
+                    st.warning("⚠️ Please select or enter a student name")
 
         pm_reports = ""
         concerns = []
