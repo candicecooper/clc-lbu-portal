@@ -797,7 +797,9 @@ elif view == "📋 Goal Builder":
         selected_name  = st.selectbox("Select student", list(student_options.keys()),
                                       index=default_idx)
         student        = student_options[selected_name]
-        existing_goals = get_goals(selected_name)
+        existing_goals  = get_goals(selected_name, active_only=True)
+        archived_goals  = get_goals(selected_name, active_only=False)
+        archived_goals  = [g for g in archived_goals if not g.get("active", True)]
 
         st.markdown(
             f'<div class="student-header"><b>{selected_name}</b> · '
@@ -879,6 +881,37 @@ elif view == "📋 Goal Builder":
                                 st.session_state.pop(f"arch_gb_{g['id']}", None)
                                 st.rerun()
 
+        # ── ARCHIVED GOALS — restore button ──────────────────────────────────
+        if archived_goals:
+            st.markdown("---")
+            st.markdown(f"**🗃️ Archived Goals ({len(archived_goals)})**")
+            st.caption("These goals are preserved with all tracking data. Restore to make active again.")
+            for ag in archived_goals:
+                ag_text  = ag.get("smartar_goal", "—")
+                ag_date  = (ag.get("archived_at") or "")[:10]
+                ag_reason = ag.get("archive_reason", "")
+                with st.expander(
+                    f"🟠 {_short(ag_text, 70)} — archived {ag_date}",
+                    expanded=False,
+                ):
+                    st.markdown(
+                        f'<div class="archived-box">🎯 <b>SMARTAR Goal:</b> {ag_text}</div>',
+                        unsafe_allow_html=True,
+                    )
+                    if ag_reason:
+                        st.caption(f"Archive reason: {ag_reason}")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button("♻️ Restore this Goal", key=f"restore_gb_{ag['id']}", type="primary"):
+                            if restore_goal(ag["id"]):
+                                st.success("✅ Goal restored to Active.")
+                                st.rerun()
+                    with c2:
+                        if st.button("➕ Build Updated Goal from this", key=f"upd_gb_{ag['id']}"):
+                            st.session_state["build_new_after_archive"] = True
+                            st.session_state["archived_excl_goal"] = ag.get("exclusion_goal", "")
+                            st.rerun()
+
         # ── NEW GOAL FORM ─────────────────────────────────────────────────────
         st.markdown("---")
 
@@ -950,41 +983,89 @@ elif view == "📋 Goal Builder":
         st.markdown("**Step 3 — Refine and Finalise the SMARTAR Goal**")
 
         # AI refinement
-        if assembled:
-            if st.button("✨ Refine Goal with AI", type="primary", key="refine_btn"):
-                with st.spinner("Refining goal…"):
-                    refined = groq_call(
-                        f"""You are an expert at writing SMARTAR goals for students in alternative education settings.
+        goal_to_refine = assembled or st.session_state.get("refined_goal", "")
+        refine_col, _ = st.columns([2, 3])
+        with refine_col:
+            refine_disabled = not goal_to_refine.strip()
+            if st.button("✨ Refine Goal with AI", type="primary",
+                         key="refine_btn", disabled=refine_disabled):
+                if not groq_client:
+                    st.warning("⚠️ AI unavailable — GROQ_API_KEY not set in secrets. Edit the goal manually below.")
+                else:
+                    with st.spinner("Refining goal…"):
+                        try:
+                            refined = groq_call(
+                                f"""You are an expert at writing SMARTAR goals for students in alternative education settings (trauma-informed, PBS framework).
 
-Rewrite this assembled goal into a single, fluent, professional goal statement suitable for an IEP.
+Rewrite this assembled goal into ONE fluent, professional goal statement suitable for an IEP/support plan.
+
 Rules:
-- Fix any repeated or doubled words (e.g. "during during" → "during")
-- Use "{student_first}" as the subject, starting with "{student_first} will..."
-- Keep ALL specific details: the skill/behaviour, grouping, task type, setting, prompt level, and success rate
-- Write in one clear sentence — no preamble, no explanation, just the goal
-- Language must be trauma-informed and strengths-based
-- Do NOT add words like "appropriately", "independently" unless they were in the original
+- Fix any repeated or doubled words (e.g. "during during" → "during", "the the" → "the")
+- Subject is "{student_first}" — start with "{student_first} will..."
+- Keep ALL specific details: the exact skill/behaviour, grouping context, task type, setting, prompt level, and success rate
+- One sentence only — no preamble, no explanation, no bullet points
+- Trauma-informed and strengths-based language
+- Do NOT add "appropriately" or "independently" unless already present
 
-Assembled goal to refine:
-{assembled}
+Goal to refine:
+{goal_to_refine}
 
-Return ONLY the final goal statement."""
-                    )
-                    if refined and "[AI unavailable" not in refined:
-                        st.session_state["refined_goal"] = refined
-                        st.session_state.pop("gb_ai_period", None)
-                        st.rerun()
-                    else:
-                        st.warning("AI unavailable — edit the assembled goal manually below.")
-        elif not skill:
-            st.caption("💡 Fill in the skill/behaviour field above to enable AI refinement.")
-
+Return ONLY the final goal statement, nothing else."""
+                            )
+                            if refined and len(refined) > 20 and "[AI unavailable" not in refined:
+                                # Strip any accidental quotes around the returned text
+                                refined = refined.strip().strip('"').strip("'")
+                                st.session_state["refined_goal"] = refined
+                                st.session_state.pop("gb_ai_period", None)
+                                st.session_state.pop("gas_levels", None)  # clear old GAS so it auto-regenerates
+                                st.rerun()
+                            else:
+                                st.warning("AI returned an unexpected response — edit the goal manually below.")
+                        except Exception as e:
+                            st.error(f"AI error: {e} — edit the goal manually below.")
+        if refine_disabled:
+            st.caption("💡 Complete the skill/behaviour field above to enable AI refinement.")
 
         refined_goal = st.session_state.get("refined_goal", assembled)
         final_goal   = st.text_area(
             "Final SMARTAR Goal (edit if needed)",
             value=refined_goal, height=100, key="final_goal_text",
         )
+
+        # Auto-generate GAS when refined goal is freshly set and GAS not yet done
+        if (refined_goal and refined_goal == st.session_state.get("refined_goal")
+                and not st.session_state.get("gas_levels")
+                and groq_client
+                and not st.session_state.get("gas_auto_running")):
+            st.session_state["gas_auto_running"] = True
+            with st.spinner("Auto-generating GAS performance levels from goal…"):
+                try:
+                    gas_raw = groq_call(
+                        f"""Create a Goal Attainment Scale (GAS) for this SMARTAR goal:
+
+"{refined_goal}"
+
+The EXPECTED level (0) IS the goal exactly as written — copy it verbatim for that level.
+Scale the other levels by only modifying the rate/frequency/success criteria.
+
+Return ONLY valid JSON with these exact keys (no markdown, no extra text):
+{{
+  "EXCEEDING": "...",
+  "ABOVE": "...",
+  "EXPECTED": "...",
+  "BELOW": "...",
+  "NOT_YET": "..."
+}}"""
+                    )
+                    gas_clean = gas_raw.strip().strip("```json").strip("```").strip()
+                    gas_parsed = json.loads(gas_clean)
+                    if "NOT_YET" in gas_parsed:
+                        gas_parsed["NOT YET"] = gas_parsed.pop("NOT_YET")
+                    st.session_state["gas_levels"] = gas_parsed
+                    st.session_state.pop("gas_auto_running", None)
+                    st.rerun()
+                except Exception:
+                    st.session_state.pop("gas_auto_running", None)
 
         # ── Tracking Period ───────────────────────────────────────────────────
         st.markdown("---")
@@ -1027,7 +1108,7 @@ Return ONLY the final goal statement."""
         st.markdown("**Step 5 — Goal Attainment Scaling (GAS)**")
 
         if groq_client and final_goal:
-            if st.button("🎚 Generate GAS Performance Levels with AI",
+            if st.button("🔄 Re-generate GAS Levels with AI",
                          type="secondary", key="gen_gas_btn"):
                 with st.spinner("Generating GAS levels…"):
                     gas_prompt = f"""Create a Goal Attainment Scale (GAS) for this SMARTAR goal:
@@ -1098,31 +1179,6 @@ No markdown, no explanation, pure JSON only."""
                     "week":       integration["week"],
                 })
 
-            # Auto-generate GAS if not already filled
-            if not any(edited_gas.values()) and final_goal.strip() and groq_client:
-                with st.spinner("Auto-generating GAS performance levels…"):
-                    gas_prompt = f"""Create a Goal Attainment Scale (GAS) for this SMARTAR goal:
-
-"{final_goal.strip()}"
-
-The EXPECTED level (0) IS the goal as written. Scale above and below it.
-Only modify the rate/frequency/success criteria to show each level.
-
-Return ONLY valid JSON with these exact keys: EXCEEDING, ABOVE, EXPECTED, BELOW, NOT_YET
-No markdown, no preamble, pure JSON only."""
-                    raw = groq_call(gas_prompt)
-                    try:
-                        raw_clean  = raw.strip().strip("```json").strip("```").strip()
-                        gas_parsed = json.loads(raw_clean)
-                        if "NOT_YET" in gas_parsed:
-                            gas_parsed["NOT YET"] = gas_parsed.pop("NOT_YET")
-                        new_goal["gas_exceeding"] = gas_parsed.get("EXCEEDING","")
-                        new_goal["gas_above"]     = gas_parsed.get("ABOVE","")
-                        new_goal["gas_expected"]  = gas_parsed.get("EXPECTED","")
-                        new_goal["gas_below"]     = gas_parsed.get("BELOW","")
-                        new_goal["gas_not_yet"]   = gas_parsed.get("NOT YET","")
-                    except Exception:
-                        pass  # Save without GAS if AI fails
 
             sb.table("smartar_goals").insert(new_goal).execute()
 
