@@ -73,10 +73,46 @@ def get_current_term_week():
     week_num = min(delta // 7 + 1, TERM_WEEKS)
     return "T1", week_num
 
-# ── Auto-save helper ──────────────────────────────────────────────────────────
+# ── Auto-initialization & Auto-save helpers ───────────────────────────────────
+def auto_initialize_meeting(program, meeting_data):
+    """Create meeting ID immediately if it doesn't exist and there's any content."""
+    if st.session_state.current_meeting_id:
+        return True  # Already initialized
+    
+    # Check if there's ANY content worth initializing for
+    has_any_content = any([
+        meeting_data.get("meeting_date"),
+        meeting_data.get("facilitator"),
+        meeting_data.get("attendees"),
+        meeting_data.get("checkin_notes"),
+        meeting_data.get("student_concerns"),
+        meeting_data.get("smartar_spotlight"),
+        meeting_data.get("actions")
+    ])
+    
+    if has_any_content:
+        try:
+            # Create minimal meeting record to get ID
+            result = supabase.table('tm_program_meetings').insert(meeting_data).execute()
+            if result.data:
+                st.session_state.current_meeting_id = result.data[0]['id']
+                st.session_state.autosave_message = f"✅ Meeting initialized (ID: {st.session_state.current_meeting_id}) - SMARTAR links now active!"
+                return True
+        except Exception as e:
+            # If DB save fails, create temporary ID so SMARTAR links work
+            import random
+            st.session_state.current_meeting_id = f"temp_{random.randint(100000, 999999)}"
+            st.session_state.autosave_message = f"⚠️ Temp ID created for SMARTAR - save manually to persist data"
+            return False
+    
+    return False
+
 def trigger_autosave(program, meeting_data):
     """Trigger auto-save if 2 minutes have passed since last save."""
     current_time = time.time()
+    
+    # First, ensure meeting is initialized
+    auto_initialize_meeting(program, meeting_data)
     
     # Check if we should auto-save (every 2 minutes = 120 seconds)
     if st.session_state.last_autosave_time is None or \
@@ -90,23 +126,16 @@ def trigger_autosave(program, meeting_data):
             meeting_data.get("actions")
         ])
         
-        if has_content:
+        if has_content and st.session_state.current_meeting_id:
             try:
-                if st.session_state.current_meeting_id:
-                    # Update existing
+                # Always update (never insert here - initialization handles that)
+                if not str(st.session_state.current_meeting_id).startswith("temp_"):
                     supabase.table('tm_program_meetings').update(meeting_data).eq('id', st.session_state.current_meeting_id).execute()
-                else:
-                    # Create new - if this fails due to schema, will be caught below
-                    result = supabase.table('tm_program_meetings').insert(meeting_data).execute()
-                    if result.data:
-                        st.session_state.current_meeting_id = result.data[0]['id']
-                
-                st.session_state.last_autosave_time = current_time
-                st.session_state.autosave_message = f"✓ Auto-saved at {datetime.datetime.now().strftime('%I:%M %p')}"
-                return True
+                    st.session_state.last_autosave_time = current_time
+                    st.session_state.autosave_message = f"✓ Auto-saved at {datetime.datetime.now().strftime('%I:%M %p')}"
+                    return True
             except Exception as e:
-                # Schema error - skip auto-save, will save on manual save
-                st.session_state.autosave_message = f"⚠ Auto-save skipped (click Save button to create meeting)"
+                st.session_state.autosave_message = f"⚠ Auto-save failed - save manually"
                 return False
     
     return False
@@ -396,7 +425,7 @@ def render_specialist_meeting():
         st.markdown("""
         <div style="background:#e0f2fe;border-left:4px solid #0284c7;border-radius:0 8px 8px 0;
                     padding:8px 14px;margin-bottom:12px;font-size:13px;color:#075985;">
-          ℹ️ <strong>New Meeting:</strong> Meeting ID will be created when you save below.
+          ℹ️ <strong>New Meeting:</strong> Meeting ID will be created automatically when you start entering content.
         </div>
         """, unsafe_allow_html=True)
     else:
@@ -720,14 +749,14 @@ def render_specialist_meeting():
         "actions": _json.dumps(actions_data),
     }
 
-    # Trigger auto-save
+    # Trigger auto-save/auto-initialization
     trigger_autosave("SPECIALIST", meeting_data)
 
     # Manual save button
     save_button_text = "💾 Update Meeting Record" if st.session_state.current_meeting_id else "💾 Save Meeting Record"
     if st.button(save_button_text, type="primary", use_container_width=True, key="sp_save"):
         try:
-            if st.session_state.current_meeting_id:
+            if st.session_state.current_meeting_id and not str(st.session_state.current_meeting_id).startswith("temp_"):
                 supabase.table('tm_program_meetings').update(meeting_data).eq('id', st.session_state.current_meeting_id).execute()
                 st.success("✅ Meeting record updated!")
             else:
@@ -919,13 +948,13 @@ def render_program_meeting(program):
         &nbsp;·&nbsp; ☑ Clear actions + ownership &nbsp;·&nbsp; ☑ Stick to time
     </div>""", unsafe_allow_html=True)
     
-    # AUTO-CREATE MEETING ID (no button needed)
+    # STATUS DISPLAY - Updated messaging
     if not st.session_state.current_meeting_id:
         st.markdown("""
         <div style="background:#e0f2fe;border-left:4px solid #0284c7;border-radius:0 8px 8px 0;
                     padding:8px 14px;margin-bottom:12px;font-size:13px;color:#075985;">
-          ℹ️ <strong>New Meeting:</strong> Meeting ID will be created when you start entering content below. 
-          SMARTAR links will appear automatically.
+          ℹ️ <strong>New Meeting:</strong> Meeting ID will be created automatically when you start entering content. 
+          SMARTAR links will appear as soon as you enter a student name below.
         </div>
         """, unsafe_allow_html=True)
     else:
@@ -972,21 +1001,7 @@ def render_program_meeting(program):
         st.markdown("#### ⏱ 25–40 min | SMARTAR GOAL SPOTLIGHT — 4 Students")
         st.caption("Rule: No update without evidence. What data or artefact supports this?")
         
-        # SMARTAR integration status
-        if not st.session_state.current_meeting_id:
-            st.markdown("""
-            <div style="background:#fef3c7;border-left:4px solid #f59e0b;border-radius:0 8px 8px 0;
-                        padding:8px 14px;margin-bottom:12px;font-size:13px;color:#92400e;">
-              ⚠️ <strong>Save meeting first:</strong> Scroll down and click "💾 Save Meeting Record" button to create meeting ID and enable SMARTAR Goal Tool links.
-            </div>""", unsafe_allow_html=True)
-        else:
-            st.markdown("""
-            <div style="background:#ede9fe;border-left:4px solid #7c3aed;border-radius:0 8px 8px 0;
-                        padding:8px 14px;margin-bottom:12px;font-size:13px;color:#5b21b6;">
-              🎯 <strong>SMARTAR Integration Active:</strong> Enter student name, then click "Open Goal Tool" to develop/update goals. 
-              Updated goals sync back here automatically.
-            </div>""", unsafe_allow_html=True)
-
+        # SMARTAR integration status - Simplified messaging
         if student_names:
             st.caption(f"💡 {len(student_names)} students loaded. Type any name — not on the list? Just type it in.")
 
@@ -1007,18 +1022,20 @@ def render_program_meeting(program):
                     placeholder="Enter student name")
             
             with col_link:
-                # Show link if we have meeting_id AND student name
-                if row.get("student_name") and st.session_state.current_meeting_id:
-                    smartar_url = get_smartar_goal_link(
-                        row["student_name"], 
-                        st.session_state.current_meeting_id,
-                        program,
-                        pm_term,
-                        pm_week
-                    )
-                    st.markdown(f"[🔗 Open Goal Tool]({smartar_url})")
-                elif row.get("student_name") and not st.session_state.current_meeting_id:
-                    st.caption("↑ Initialize first")
+                # Show link immediately if we have student name
+                if row.get("student_name"):
+                    # If no meeting_id yet, show message to trigger initialization
+                    if not st.session_state.current_meeting_id:
+                        st.caption("↓ Enter more info")
+                    else:
+                        smartar_url = get_smartar_goal_link(
+                            row["student_name"], 
+                            st.session_state.current_meeting_id,
+                            program,
+                            pm_term,
+                            pm_week
+                        )
+                        st.markdown(f"[🎯 Goal Tool]({smartar_url})")
             
             with col_status:
                 # Check for synced goal
@@ -1088,19 +1105,6 @@ def render_program_meeting(program):
         # SMARTAR for Week B (same as Week A)
         st.markdown("#### ⏱ 30–45 min | SMARTAR GOAL SPOTLIGHT — 4 Students")
         st.caption("Rule: No update without evidence.")
-        
-        if not st.session_state.current_meeting_id:
-            st.markdown("""
-            <div style="background:#fef3c7;border-left:4px solid #f59e0b;border-radius:0 8px 8px 0;
-                        padding:8px 14px;margin-bottom:12px;font-size:13px;color:#92400e;">
-              ⚠️ <strong>Save meeting first:</strong> Scroll down and click "💾 Save Meeting Record" button.
-            </div>""", unsafe_allow_html=True)
-        else:
-            st.markdown("""
-            <div style="background:#ede9fe;border-left:4px solid #7c3aed;border-radius:0 8px 8px 0;
-                        padding:8px 14px;margin-bottom:12px;font-size:13px;color:#5b21b6;">
-              🎯 <strong>SMARTAR Integration Active:</strong> Enter student name, then click "Open Goal Tool".
-            </div>""", unsafe_allow_html=True)
 
         if student_names:
             st.caption(f"💡 {len(student_names)} students loaded.")
@@ -1122,17 +1126,18 @@ def render_program_meeting(program):
                     placeholder="Enter student name")
             
             with col_link:
-                if row.get("student_name") and st.session_state.current_meeting_id:
-                    smartar_url = get_smartar_goal_link(
-                        row["student_name"], 
-                        st.session_state.current_meeting_id,
-                        program,
-                        pm_term,
-                        pm_week
-                    )
-                    st.markdown(f"[🔗 Open Goal Tool]({smartar_url})")
-                elif row.get("student_name") and not st.session_state.current_meeting_id:
-                    st.caption("↑ Initialize first")
+                if row.get("student_name"):
+                    if not st.session_state.current_meeting_id:
+                        st.caption("↓ Enter more info")
+                    else:
+                        smartar_url = get_smartar_goal_link(
+                            row["student_name"], 
+                            st.session_state.current_meeting_id,
+                            program,
+                            pm_term,
+                            pm_week
+                        )
+                        st.markdown(f"[🎯 Goal Tool]({smartar_url})")
             
             with col_status:
                 if row.get("student_name") and st.session_state.current_meeting_id:
@@ -1246,14 +1251,14 @@ def render_program_meeting(program):
         "actions": _json.dumps(actions_data),
     }
 
-    # Trigger auto-save
+    # Trigger auto-save/auto-initialization
     trigger_autosave(program, meeting_data)
 
     # Manual save button
-    save_button_text = "💾 Update Meeting Record" if st.session_state.current_meeting_id else "💾 Save Meeting Record"
+    save_button_text = "💾 Update Meeting Record" if st.session_state.current_meeting_id and not str(st.session_state.current_meeting_id).startswith("temp_") else "💾 Save Meeting Record"
     if st.button(save_button_text, type="primary", use_container_width=True, key=f"pm_save_{program}"):
         try:
-            if st.session_state.current_meeting_id:
+            if st.session_state.current_meeting_id and not str(st.session_state.current_meeting_id).startswith("temp_"):
                 supabase.table('tm_program_meetings').update(meeting_data).eq('id', st.session_state.current_meeting_id).execute()
                 st.success("✅ Meeting record updated!")
             else:
@@ -1272,13 +1277,6 @@ def render_program_meeting(program):
             st.rerun()
         except Exception as e:
             st.error(f"⚠️ Database save failed: {e}")
-            st.warning("**Workaround:** Creating temporary meeting ID for SMARTAR integration. Your data won't be saved to database until schema is fixed.")
-            
-            # Create temporary meeting_id so SMARTAR links work
-            import random
-            st.session_state.current_meeting_id = random.randint(900000, 999999)
-            st.info(f"✅ Temporary Meeting ID: {st.session_state.current_meeting_id} - SMARTAR links now active!")
-            st.rerun()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
