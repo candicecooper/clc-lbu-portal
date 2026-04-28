@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent))
 from auth import require_auth, logout_button, get_staff_name
-from database import get_supabase_client
+from database import get_client
 from datetime import datetime, date, time, timedelta
 import json
 import os
@@ -40,7 +40,7 @@ if 'current_student' not in st.session_state:
     st.session_state.current_student = None
 
 # Get Supabase client
-supabase = get_supabase_client()
+supabase = get_client()
 
 # Behaviour type canonical labels
 BEHAVIOUR_TYPES = [
