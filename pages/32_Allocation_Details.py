@@ -124,6 +124,15 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# Security notice
+st.markdown("""
+<div style="background-color: #FEF3D9; border-left: 4px solid #C8760A; padding: 1rem; border-radius: 5px; margin-bottom: 1.5rem;">
+    <strong>🔒 Confidential Student Data</strong><br>
+    This system contains sensitive student information. All data is securely stored in encrypted database. 
+    Exercise caution when exporting data - treat downloads as confidential documents.
+</div>
+""", unsafe_allow_html=True)
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Table name
 TABLE_NAME = "allocation_tracker"
@@ -517,17 +526,26 @@ elif mode == "📊 View Database":
         
         # Export options
         st.markdown("---")
+        
+        st.warning("⚠️ **Data Security Reminder:** Exported files contain confidential student information. Handle securely and delete when no longer needed.")
+        
+        # Export confirmation
+        export_confirmed = st.checkbox("I understand this data is confidential and will handle it securely", key="export_confirm_view")
+        
         col1, col2 = st.columns([1, 4])
         
         with col1:
-            csv = filtered_df.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                "📥 Export to CSV",
-                csv,
-                f"allocation_data_{datetime.now().strftime('%Y%m%d')}.csv",
-                "text/csv",
-                use_container_width=True
-            )
+            if export_confirmed:
+                csv = filtered_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    "📥 Export to CSV",
+                    csv,
+                    f"CONFIDENTIAL_allocation_data_{datetime.now().strftime('%Y%m%d')}.csv",
+                    "text/csv",
+                    use_container_width=True
+                )
+            else:
+                st.button("📥 Export to CSV", disabled=True, use_container_width=True, help="Confirm security acknowledgment above to enable export")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MODE 3: DASHBOARD EXPORT
@@ -577,25 +595,39 @@ elif mode == "📥 Dashboard Export":
     
     st.markdown("### 🔄 Export Current Database")
     
+    st.error("⚠️ **CONFIDENTIAL STUDENT DATA** - Exported files must be handled according to DfE privacy and data protection policies. Do not email unencrypted or store on unsecured devices.")
+    
     df = fetch_all_records()
     if not df.empty:
         st.info(f"✅ You have **{len(df)} records** in the database")
         
-        # Export current database to CSV format
-        csv_export = df.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            "📥 Download All Data (CSV)",
-            csv_export,
-            f"allocation_data_export_{datetime.now().strftime('%Y%m%d')}.csv",
-            "text/csv",
-            help="Download all allocation data to import into Excel dashboard",
-            use_container_width=False
-        )
+        # Security acknowledgment
+        export_confirmed = st.checkbox("I confirm I will handle this confidential student data securely and in accordance with DfE policies", key="export_confirm_dashboard")
         
-        st.caption("💡 Import this CSV into the Data_Model sheet of your Excel dashboard")
+        if export_confirmed:
+            # Export current database to CSV format
+            csv_export = df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                "📥 Download All Data (CSV)",
+                csv_export,
+                f"CONFIDENTIAL_allocation_export_{datetime.now().strftime('%Y%m%d')}.csv",
+                "text/csv",
+                help="Download all allocation data to import into Excel dashboard",
+                use_container_width=False
+            )
+            
+            st.caption("💡 Import this CSV into the Data_Model sheet of your Excel dashboard")
+            st.caption("🔒 Delete this file from your downloads folder when no longer needed")
+        else:
+            st.button("📥 Download All Data (CSV)", disabled=True, help="Confirm security acknowledgment above to enable export")
     else:
         st.warning("📭 No records in database to export")
 
 # Footer
 st.markdown("---")
-st.caption("📊 Allocation Details & Tracking | Cowandilla Learning Centre LBU")
+st.markdown("""
+<div style="text-align: center; color: #666; font-size: 0.85rem;">
+    <p>📊 Allocation Details & Tracking | Cowandilla Learning Centre LBU</p>
+    <p style="color: #C8760A; font-weight: 600;">🔒 All data encrypted and securely stored | Handle exports according to DfE privacy policies</p>
+</div>
+""", unsafe_allow_html=True)
