@@ -61,10 +61,10 @@ def _gen_slots():
 SLOT_TIMES = _gen_slots()
 
 REG_STATES = {
-    "in_window":    {"label": "In window",    "emoji": "🟢", "short": "W",   "bg": "#dcfce7", "fg": "#16a34a", "desc": "Regulated — learning ready"},
-    "coping":       {"label": "Coping",        "emoji": "🟡", "short": "C",   "bg": "#fef9c3", "fg": "#ca8a04", "desc": "At edge — strategies working"},
-    "hyperaroused": {"label": "Hyperaroused",  "emoji": "🔴", "short": "H+",  "bg": "#fee2e2", "fg": "#dc2626", "desc": "Above window — fight/flight"},
-    "hypoaroused":  {"label": "Hypoaroused",   "emoji": "🔵", "short": "H-",  "bg": "#dbeafe", "fg": "#2563eb", "desc": "Below window — shutdown/freeze"},
+    "in_window":    {"label": "In window",    "emoji": "🟢", "short": "W",   "bg": "#dcfce7", "fg": "#16a34a", "desc": "Regulated — learning ready | Examples: on task, following instructions, engaged with activity, responding to requests, maintaining focus, calm body, appropriate interactions"},
+    "coping":       {"label": "Coping",        "emoji": "🟡", "short": "C",   "bg": "#fef9c3", "fg": "#ca8a04", "desc": "At edge — actively managing, dysregulated | Examples: fidgeting, tapping, rocking, making noises, ignoring instructions, moving around, slow to respond, avoiding eye contact, restless, grumbling"},
+    "hyperaroused": {"label": "Hyperaroused",  "emoji": "🔴", "short": "H+",  "bg": "#fee2e2", "fg": "#dc2626", "desc": "Above window — fight/flight response | Examples: yelling, swearing, aggression, throwing objects, running, refusing loudly, pacing, crying, rapid speech, impulsive behaviour, unable to hear instructions"},
+    "hypoaroused":  {"label": "Hypoaroused",   "emoji": "🔵", "short": "H-",  "bg": "#dbeafe", "fg": "#2563eb", "desc": "Below window — shutdown/freeze response | Examples: staring blankly, non-responsive, slumped posture, minimal movement, very slow responses, appearing asleep or zoned out, refusing to engage, head down, monosyllabic or mute"},
 }
 
 SUPPORT_TYPES = [
@@ -537,6 +537,36 @@ with t_record:
     with fa1:
         st.markdown('<div style="font-size:.65rem;font-weight:700;color:#1A6B8A;margin-bottom:.1rem;">'
                     'REGULATION STATE</div>', unsafe_allow_html=True)
+        # Behaviour guide — shows on hover via CSS title, plus a compact visual reference
+        st.markdown("""
+<style>
+.reg-guide { display:flex; flex-direction:column; gap:3px; margin-bottom:.4rem; }
+.reg-tip {
+    font-size:.65rem; padding:.25rem .45rem; border-radius:5px;
+    cursor:default; line-height:1.4; position:relative;
+}
+.reg-tip .eg { color:#64748b; font-style:italic; }
+</style>
+<div class="reg-guide">
+  <div class="reg-tip" style="background:#dcfce7;border-left:3px solid #16a34a;" title="On task · Following instructions · Engaged · Calm body · Responding appropriately">
+    <span style="font-weight:700;color:#16a34a;">🟢 In window</span>
+    <span class="eg"> — on task, following instructions, engaged, calm body</span>
+  </div>
+  <div class="reg-tip" style="background:#fef9c3;border-left:3px solid #ca8a04;" title="Fidgeting · Tapping · Rocking · Making noises · Ignoring · Moving around · Avoiding · Restless">
+    <span style="font-weight:700;color:#ca8a04;">🟡 Coping</span>
+    <span class="eg"> — fidgeting, tapping, noises, ignoring, restless, avoiding</span>
+  </div>
+  <div class="reg-tip" style="background:#fee2e2;border-left:3px solid #dc2626;" title="Yelling · Swearing · Aggression · Throwing · Running · Refusing loudly · Pacing · Crying · Impulsive">
+    <span style="font-weight:700;color:#dc2626;">🔴 Hyperaroused</span>
+    <span class="eg"> — yelling, aggression, throwing, pacing, refusing loudly</span>
+  </div>
+  <div class="reg-tip" style="background:#dbeafe;border-left:3px solid #2563eb;" title="Staring blankly · Non-responsive · Slumped · Very slow · Head down · Zoned out · Mute · Shutdown">
+    <span style="font-weight:700;color:#2563eb;">🔵 Hypoaroused</span>
+    <span class="eg"> — staring, non-responsive, slumped, zoned out, shutdown</span>
+  </div>
+</div>
+<div style="font-size:.62rem;color:#94a3b8;margin-bottom:.35rem;">👆 Hover over each for more examples · then click a button to record</div>
+""", unsafe_allow_html=True)
         for val, cfg in REG_STATES.items():
             is_sel = (cur_reg == val)
             col_a, col_b = st.columns([5,1]) if is_sel else [st.container(), None]
@@ -1641,4 +1671,3 @@ with t_analysis:
     st.download_button("📥 Download raw data (CSV)", csv,
         file_name=f"IntervalSupport_{student_name.replace(' ','_')}_{date_from}_{date_to}.csv",
         mime="text/csv", use_container_width=True)
-
