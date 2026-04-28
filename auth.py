@@ -71,10 +71,15 @@ def require_auth(app_title="CLC LBU", app_icon="🏫"):
     else:
         name_input = st.text_input("Your name", placeholder="Enter your name", key="auth_name")
 
+    # Get staff password - with fallback
     try:
         correct_pw = st.secrets.get("APP_PASSWORD", "")
     except Exception:
         correct_pw = os.environ.get("APP_PASSWORD", "")
+    
+    # Emergency fallback if no password is set
+    if not correct_pw:
+        correct_pw = "clcstaff2026"
 
     password_input = st.text_input("Password", type="password", placeholder="Staff password", key="auth_password")
     
@@ -141,6 +146,10 @@ def require_admin(message="This section requires admin access."):
         admin_pw = st.secrets.get("ADMIN_PASSWORD", "")
     except Exception:
         admin_pw = os.environ.get("ADMIN_PASSWORD", "")
+    
+    # Emergency fallback
+    if not admin_pw:
+        admin_pw = "Admin123!"
     
     if st.session_state.get("is_portal_admin"):
         return True
