@@ -10,15 +10,31 @@ parent_dir = os.path.dirname(current_dir)
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
+# Try to import auth - handle different possible function names
 try:
-    from auth import check_authentication
-    from database import get_supabase_client
-except ImportError as e:
-    st.error(f"⚠️ Core modules not available: {e}")
-    st.info("Please ensure auth.py and database.py are in the root directory")
-    st.stop()
+    import auth
+    # Try common authentication function names
+    if hasattr(auth, 'check_authentication'):
+        auth.check_authentication()
+    elif hasattr(auth, 'check_password'):
+        if not auth.check_password():
+            st.stop()
+    elif hasattr(auth, 'authenticate'):
+        auth.authenticate()
+    elif hasattr(auth, 'require_authentication'):
+        auth.require_authentication()
+except ImportError:
+    st.warning("⚠️ Auth module not found - continuing without authentication")
+except Exception as e:
+    st.warning(f"⚠️ Auth check failed: {e}")
 
-check_authentication()
+# Import database
+try:
+    from database import get_supabase_client
+    supabase = get_supabase_client()
+except ImportError:
+    st.error("⚠️ Database module not available")
+    st.stop()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG
@@ -98,10 +114,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SUPABASE CONNECTION
-# ══════════════════════════════════════════════════════════════════════════════
-supabase = get_supabase_client()
-
 # Table name
 TABLE_NAME = "allocation_tracker"
 
@@ -548,15 +560,7 @@ elif mode == "📥 Dashboard Export":
     
     st.markdown("---")
     
-    # Link to download the enhanced dashboard
-    with open("/mnt/user-data/outputs/CLC_Allocation_Dashboard_2026_Enhanced.xlsx", "rb") as file:
-        st.download_button(
-            label="📥 Download Visual Dashboard (Excel)",
-            data=file,
-            file_name=f"CLC_Allocation_Dashboard_{datetime.now().strftime('%Y%m%d')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=False
-        )
+    st.warning("📥 Download link will be added here - upload the Excel dashboard to your OneDrive and add the link")
     
     st.markdown("---")
     
