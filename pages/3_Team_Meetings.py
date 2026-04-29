@@ -1591,6 +1591,9 @@ def render_staff_meeting():
     """Staff Meeting - DfE format with bulletin integration and transcript upload"""
     import json as _json
     
+    # VERSION INDICATOR
+    st.sidebar.success("🚀 Version: AGENDA_OPTIONAL_v2")
+    
     program = "STAFF"
     accent = PROGRAMS[program]["color"]
 
@@ -1799,11 +1802,11 @@ def render_staff_meeting():
             st.info("📭 No agenda items yet. Add items below.")
         
         st.markdown("---")
-    
-    # Add new agenda item
-    st.markdown("**➕ Add New Agenda Item:**")
-    
-    col_add1, col_add2 = st.columns([3, 1])
+        
+        # Add new agenda item
+        st.markdown("**➕ Add New Agenda Item:**")
+        
+        col_add1, col_add2 = st.columns([3, 1])
     
     with col_add1:
         new_topic = st.text_input(
