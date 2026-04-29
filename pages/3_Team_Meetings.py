@@ -1583,6 +1583,381 @@ def render_meeting_archive(program):
                     pass
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# STAFF MEETING - DfE Template with Bulletin Integration
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render_staff_meeting():
+    """Staff Meeting - DfE format with bulletin integration and transcript upload"""
+    import json as _json
+    
+    program = "STAFF"
+    accent = PROGRAMS[program]["color"]
+
+    # Auto-save status display
+    if st.session_state.autosave_message:
+        st.caption(st.session_state.autosave_message)
+
+    # Fetch past meetings
+    past_meetings = fetch("tm_program_meetings", {"program": "STAFF"}, "meeting_date")
+    
+    # Meeting selection
+    st.markdown("#### 📂 Select Meeting")
+    meeting_options = ["➕ New Meeting"] + [
+        f"{rec.get('meeting_date','')} - Term {rec.get('term','')} W{rec.get('week_number','')}"
+        for rec in reversed(past_meetings[-20:])
+    ]
+    
+    selected_meeting = st.selectbox(
+        "Choose a meeting to edit or create new",
+        options=meeting_options,
+        key="meeting_select_staff"
+    )
+    
+    # Load existing meeting if selected
+    selected_record = None
+    if selected_meeting != "➕ New Meeting":
+        selected_idx = meeting_options.index(selected_meeting) - 1
+        selected_record = list(reversed(past_meetings[-20:]))[selected_idx]
+        
+        if not st.session_state.current_meeting_id or st.session_state.current_meeting_id != selected_record['id']:
+            st.session_state.current_meeting_id = selected_record['id']
+        
+        st.info(f"✏️ Editing existing meeting - Meeting ID: {selected_record['id']}")
+        
+        if selected_record.get('meeting_minutes'):
+            with st.expander("📄 View Saved Minutes from This Meeting", expanded=False):
+                st.markdown(selected_record['meeting_minutes'])
+    else:
+        if selected_meeting == "➕ New Meeting" and st.session_state.current_meeting_id:
+            st.session_state.current_meeting_id = None
+    
+    st.markdown("---")
+
+    st.markdown(f"""<div style="background:#ccfbf1;border-left:5px solid #1e6f75;
+        border-radius:0 8px 8px 0;padding:8px 14px;margin-bottom:12px;font-size:13px;color:#134e4a;">
+        👥 <strong>STAFF MEETING</strong> · All CLC-LBU Staff · Fortnightly
+    </div>""", unsafe_allow_html=True)
+
+    st.markdown("#### 📋 Meeting Details")
+    mc1, mc2, mc3 = st.columns(3)
+    
+    default_date = datetime.date.fromisoformat(selected_record['meeting_date']) if selected_record else datetime.date.today()
+    default_term = selected_record.get('term', '') if selected_record else ''
+    default_week = selected_record.get('week_number', 1) if selected_record else 1
+    
+    with mc1: staff_date = st.date_input("Date", value=default_date, key="staff_date")
+    with mc2: staff_term = st.text_input("Term", value=default_term, placeholder="T1", key="staff_term")
+    with mc3: staff_week = st.number_input("Week #", min_value=1, max_value=11, value=default_week, key="staff_week")
+    
+    st.markdown("---")
+    
+    # ── SECTION 1: BULLETIN INTEGRATION ──
+    st.markdown("### 📰 WEEKLY BULLETIN")
+    st.caption("Published bulletin for this week (if available)")
+    
+    # Try to fetch bulletin for this week
+    bulletin_content = None
+    try:
+        # Check if there's a bulletin for this date
+        # Assuming bulletins are stored in a 'bulletins' table with a 'week_start_date' field
+        week_start = staff_date - datetime.timedelta(days=staff_date.weekday())
+        
+        bulletin_result = supabase.table('bulletins').select('*').eq('week_start_date', str(week_start)).execute()
+        if bulletin_result.data:
+            bulletin_content = bulletin_result.data[0].get('content', '')
+    except Exception as e:
+        pass  # Bulletin table might not exist yet
+    
+    if bulletin_content:
+        st.success("✅ Bulletin found for this week")
+        with st.expander("📄 View Weekly Bulletin", expanded=True):
+            st.markdown(bulletin_content)
+    else:
+        st.info("📋 No published bulletin for this week")
+        with st.expander("➕ Add Bulletin Content Manually (Optional)", expanded=False):
+            manual_bulletin = st.text_area(
+                "Paste bulletin content",
+                height=150,
+                key="manual_bulletin",
+                placeholder="Paste the weekly bulletin content here if you want to reference it in the meeting...",
+                label_visibility="collapsed"
+            )
+    
+    st.markdown("---")
+    
+    # ── SECTION 2: DfE MEETING TEMPLATE ──
+    st.markdown("### 📝 MEETING RECORD (DfE Template)")
+    
+    # Minute Taker
+    default_minute_taker = selected_record.get('facilitator', get_staff_name()) if selected_record else get_staff_name()
+    minute_taker = st.text_input("**Minute Taker**", value=default_minute_taker, key="staff_minute_taker")
+    
+    st.markdown("---")
+    
+    # Attendees
+    st.markdown("**Attendees**")
+    default_attendees = selected_record.get('attendees', '') if selected_record else ''
+    staff_attendees = st.text_area(
+        "Present",
+        value=default_attendees,
+        height=80,
+        key="staff_attendees",
+        placeholder="List all staff members present (names separated by commas or new lines)",
+        label_visibility="collapsed"
+    )
+    
+    # Apologies
+    st.markdown("**Apologies**")
+    default_apologies = ""
+    if selected_record and selected_record.get('checkin_notes'):
+        try:
+            checkin_data = _json.loads(selected_record['checkin_notes'])
+            default_apologies = checkin_data.get('apologies', '')
+        except:
+            pass
+    
+    staff_apologies = st.text_area(
+        "Apologies",
+        value=default_apologies,
+        height=60,
+        key="staff_apologies",
+        placeholder="Names of staff who sent apologies",
+        label_visibility="collapsed"
+    )
+    
+    st.markdown("---")
+    
+    # Acknowledgement of Country
+    st.markdown("**Acknowledgement of Country**")
+    default_acknowledgement = ""
+    if selected_record and selected_record.get('checkin_notes'):
+        try:
+            checkin_data = _json.loads(selected_record['checkin_notes'])
+            default_acknowledgement = checkin_data.get('acknowledgement', '')
+        except:
+            pass
+    
+    acknowledgement_done = st.checkbox(
+        "Acknowledgement of Country delivered",
+        value=bool(default_acknowledgement),
+        key="acknowledgement_done"
+    )
+    
+    if acknowledgement_done:
+        acknowledgement_by = st.text_input(
+            "Delivered by",
+            value=default_acknowledgement,
+            key="acknowledgement_by",
+            placeholder="Name of person who delivered acknowledgement"
+        )
+    else:
+        acknowledgement_by = ""
+    
+    st.markdown("---")
+    
+    # Ice Breaker
+    st.markdown("**Ice Breaker / Team Building Activity**")
+    default_icebreaker = ""
+    if selected_record and selected_record.get('checkin_notes'):
+        try:
+            checkin_data = _json.loads(selected_record['checkin_notes'])
+            default_icebreaker = checkin_data.get('icebreaker', '')
+        except:
+            pass
+    
+    staff_icebreaker = st.text_area(
+        "Ice breaker activity",
+        value=default_icebreaker,
+        height=80,
+        key="staff_icebreaker",
+        placeholder="Describe the ice breaker or team building activity used this week",
+        label_visibility="collapsed"
+    )
+    
+    st.markdown("---")
+    
+    # ── SECTION 3: TRANSCRIPT UPLOAD & AI PARSING ──
+    st.markdown("### 🎙️ MEETING TRANSCRIPT → AI MINUTES")
+    st.caption("Upload or paste transcript - AI will structure it into formal minutes")
+    
+    # Transcript input
+    col_upload, col_paste = st.columns(2)
+    
+    transcript_text = ""
+    
+    with col_upload:
+        st.markdown("**Upload Transcript File**")
+        uploaded_file = st.file_uploader(
+            "Upload transcript",
+            type=['txt', 'docx'],
+            key="transcript_upload",
+            label_visibility="collapsed"
+        )
+        
+        if uploaded_file:
+            if uploaded_file.name.endswith('.txt'):
+                transcript_text = uploaded_file.read().decode('utf-8')
+                st.success(f"✅ Loaded {len(transcript_text)} characters")
+            elif uploaded_file.name.endswith('.docx'):
+                from docx import Document as DocxDocument
+                doc = DocxDocument(io.BytesIO(uploaded_file.read()))
+                transcript_text = '\n'.join([para.text for para in doc.paragraphs])
+                st.success(f"✅ Loaded {len(transcript_text)} characters")
+    
+    with col_paste:
+        st.markdown("**Or Paste Transcript**")
+        pasted_transcript = st.text_area(
+            "Paste transcript",
+            height=150,
+            key="transcript_paste",
+            placeholder="Paste meeting transcript here...",
+            label_visibility="collapsed"
+        )
+        if pasted_transcript:
+            transcript_text = pasted_transcript
+    
+    # AI Processing
+    if transcript_text:
+        st.markdown("**📋 Raw Transcript Preview:**")
+        st.text_area("Preview", value=transcript_text[:500] + "..." if len(transcript_text) > 500 else transcript_text, 
+                     height=100, disabled=True, label_visibility="collapsed")
+        
+        if st.button("🤖 Generate Structured Minutes with AI", type="primary", key="generate_minutes"):
+            with st.spinner("Processing transcript with AI..."):
+                # Use bulletin content if available for context
+                bulletin_context = bulletin_content if bulletin_content else (manual_bulletin if 'manual_bulletin' in st.session_state else "")
+                
+                structured_minutes = improve_with_ai(
+                    transcript_text,
+                    "STAFF",
+                    str(staff_date),
+                    bulletin_context
+                )
+                
+                st.session_state['generated_minutes'] = structured_minutes
+                st.success("✅ Minutes generated! Review below and edit as needed.")
+                st.rerun()
+    
+    st.markdown("---")
+    
+    # ── SECTION 4: MEETING MINUTES (Editable) ──
+    st.markdown("### 📄 MEETING MINUTES")
+    st.caption("Structured meeting minutes - edit as needed")
+    
+    # Check if we have generated minutes or existing minutes
+    default_minutes = ""
+    if 'generated_minutes' in st.session_state:
+        default_minutes = st.session_state['generated_minutes']
+    elif selected_record and selected_record.get('meeting_minutes'):
+        default_minutes = selected_record['meeting_minutes']
+    
+    staff_minutes = st.text_area(
+        "Meeting minutes",
+        value=default_minutes,
+        height=400,
+        key="staff_minutes_editor",
+        placeholder="""Meeting minutes will appear here after AI processing, or you can write them manually.
+
+Expected structure:
+## AGENDA ITEMS
+
+### Item 1: [Topic]
+Discussion points...
+
+### Item 2: [Topic]
+Discussion points...
+
+## ACTIONS
+| Action | Assigned To | Due Date |
+|--------|-------------|----------|
+| ... | ... | ... |
+
+## NEXT MEETING
+Date and time of next meeting
+""",
+        label_visibility="collapsed"
+    )
+    
+    st.markdown("---")
+    
+    # ── SECTION 5: ACTIONS ──
+    st.markdown("### ✅ ACTIONS")
+    st.caption("Actions arising from this meeting")
+    
+    actions_key = "staff_actions"
+    if actions_key not in st.session_state:
+        st.session_state[actions_key] = [{"action":"","who":"","by_when":"","done":False}]
+    
+    actions = st.session_state[actions_key]
+    
+    ah_cols = st.columns([4,2,1.5,0.7,0.5])
+    for h, label in zip(ah_cols, ["Action","Assigned To","Due Date","✓ Done",""]):
+        h.markdown(f"**{label}**" if label else "")
+    
+    for idx, row in enumerate(actions):
+        a1,a2,a3,a4,a5 = st.columns([4,2,1.5,0.7,0.5])
+        with a1: row["action"]  = st.text_input("Act", value=row.get("action",""),  key=f"sa_a_{idx}", label_visibility="collapsed", placeholder="Action item")
+        with a2: row["who"]     = st.text_input("Who", value=row.get("who",""),     key=f"sa_w_{idx}", label_visibility="collapsed", placeholder="Person")
+        with a3: row["by_when"] = st.text_input("By",  value=row.get("by_when",""), key=f"sa_by_{idx}", label_visibility="collapsed", placeholder="Date")
+        with a4: row["done"]    = st.checkbox("✓",    value=row.get("done",False),  key=f"sa_done_{idx}")
+        with a5:
+            if len(actions) > 1:
+                if st.button("✕", key=f"sa_del_{idx}"):
+                    actions.pop(idx)
+                    st.rerun()
+    
+    if st.button("➕ Add action", key="sa_add"):
+        actions.append({"action":"","who":"","by_when":"","done":False})
+        st.rerun()
+    
+    st.markdown("---")
+    
+    # Prepare meeting data
+    meeting_data = {
+        "program": "STAFF",
+        "meeting_date": str(staff_date),
+        "term": staff_term.strip(),
+        "week_number": int(staff_week),
+        "week_type": "STAFF",
+        "facilitator": minute_taker.strip(),
+        "attendees": staff_attendees.strip(),
+        "checkin_notes": _json.dumps({
+            "apologies": staff_apologies.strip(),
+            "acknowledgement": acknowledgement_by.strip() if acknowledgement_done else "",
+            "icebreaker": staff_icebreaker.strip()
+        }),
+        "meeting_minutes": staff_minutes.strip(),
+        "actions": _json.dumps(actions),
+        "student_concerns": "[]",
+        "smartar_spotlight": "[]",
+        "reports_tac_notes": "",
+        "priority_focus": "[]",
+    }
+    
+    # Manual save button
+    save_button_text = "💾 Update Meeting Record" if st.session_state.current_meeting_id else "💾 Save Meeting Record"
+    if st.button(save_button_text, type="primary", use_container_width=True, key="staff_save"):
+        try:
+            if st.session_state.current_meeting_id and not str(st.session_state.current_meeting_id).startswith("temp_"):
+                supabase.table('tm_program_meetings').update(meeting_data).eq('id', st.session_state.current_meeting_id).execute()
+                st.success("✅ Meeting record updated!")
+            else:
+                result = supabase.table('tm_program_meetings').insert(meeting_data).execute()
+                if result.data:
+                    st.session_state.current_meeting_id = result.data[0]['id']
+                st.success("✅ Meeting record saved!")
+            
+            # Clear generated minutes from session state
+            if 'generated_minutes' in st.session_state:
+                del st.session_state['generated_minutes']
+            
+            st.session_state.pop(actions_key, None)
+            st.rerun()
+        except Exception as e:
+            st.error(f"⚠️ Database save failed: {e}")
+
+
 def main():
     program   = get_program_from_params()
     prog_info = PROGRAMS[program]
@@ -1622,6 +1997,20 @@ def main():
         tab_meeting, tab_archive = st.tabs(["🎨 Specialist Meeting", "📚 Archive"])
         with tab_meeting:
             render_specialist_meeting()
+        with tab_archive:
+            render_meeting_archive(program)
+    
+    elif program == "STAFF":
+        tab_meeting, tab_archive = st.tabs(["👥 Staff Meeting", "📚 Archive"])
+        with tab_meeting:
+            render_staff_meeting()
+        with tab_archive:
+            render_meeting_archive(program)
+    
+    elif program == "ADMIN":
+        tab_meeting, tab_archive = st.tabs(["🏢 Admin Meeting", "📚 Archive"])
+        with tab_meeting:
+            st.info("📋 Admin meeting template - to be implemented")
         with tab_archive:
             render_meeting_archive(program)
             
