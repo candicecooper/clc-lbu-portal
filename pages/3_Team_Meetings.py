@@ -1636,7 +1636,7 @@ def render_staff_meeting():
 
     st.markdown(f"""<div style="background:#ccfbf1;border-left:5px solid #1e6f75;
         border-radius:0 8px 8px 0;padding:8px 14px;margin-bottom:12px;font-size:13px;color:#134e4a;">
-        👥 <strong>STAFF MEETING</strong> · All CLC-LBU Staff · Fortnightly
+        👥 <strong>STAFF MEETING</strong> · All CLC-LBU Staff · Weekly
     </div>""", unsafe_allow_html=True)
 
     st.markdown("#### 📋 Meeting Details")
@@ -1649,6 +1649,10 @@ def render_staff_meeting():
     with mc1: staff_date = st.date_input("Date", value=default_date, key="staff_date")
     with mc2: staff_term = st.text_input("Term", value=default_term, placeholder="T1", key="staff_term")
     with mc3: staff_week = st.number_input("Week #", min_value=1, max_value=11, value=default_week, key="staff_week")
+    
+    # Minute Taker - MOVED HERE so it's available for agenda section
+    default_minute_taker = selected_record.get('facilitator', get_staff_name()) if selected_record else get_staff_name()
+    minute_taker = st.text_input("**Minute Taker**", value=default_minute_taker, key="staff_minute_taker")
     
     st.markdown("---")
     
@@ -1895,13 +1899,7 @@ def render_staff_meeting():
     # ── SECTION 3: DfE MEETING TEMPLATE ──
     st.markdown("### 📝 MEETING RECORD (DfE Template)")
     
-    # Minute Taker
-    default_minute_taker = selected_record.get('facilitator', get_staff_name()) if selected_record else get_staff_name()
-    minute_taker = st.text_input("**Minute Taker**", value=default_minute_taker, key="staff_minute_taker")
-    
-    st.markdown("---")
-    
-    # Attendees
+    # Attendees (minute taker already defined above)
     st.markdown("**Attendees**")
     default_attendees = selected_record.get('attendees', '') if selected_record else ''
     staff_attendees = st.text_area(
