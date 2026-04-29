@@ -1690,42 +1690,55 @@ def render_staff_meeting():
     
     st.markdown("---")
     
-    # ── SECTION 2: COLLABORATIVE AGENDA BUILDER ──
+    # ── SECTION 2: COLLABORATIVE AGENDA BUILDER (OPTIONAL) ──
     st.markdown("### 📋 COLLABORATIVE AGENDA")
-    st.caption("Staff can add agenda items here before the meeting. Chair works through them during the meeting.")
     
-    # Determine if this is upcoming or current meeting
-    is_upcoming_meeting = staff_date >= datetime.date.today()
-    
-    if is_upcoming_meeting:
-        st.markdown("""
-        <div style="background:#dbeafe;border-left:4px solid #0284c7;border-radius:0 8px 8px 0;
-                    padding:8px 14px;margin-bottom:12px;font-size:13px;color:#075985;">
-          ℹ️ <strong>Upcoming Meeting:</strong> Staff can add agenda items below. Items will be available when meeting starts.
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.markdown("""
-        <div style="background:#fef3c7;border-left:4px solid #f59e0b;border-radius:0 8px 8px 0;
-                    padding:8px 14px;margin-bottom:12px;font-size:13px;color:#92400e;">
-          📅 <strong>Past/Current Meeting:</strong> Viewing agenda items from this meeting.
-        </div>
-        """, unsafe_allow_html=True)
-    
-    # Load existing agenda items for this meeting
+    # Check if agenda table is available
+    agenda_available = False
     agenda_items = []
-    if st.session_state.current_meeting_id:
-        try:
+    
+    try:
+        # Test if table exists and is accessible
+        if st.session_state.current_meeting_id:
+            result = supabase.table('staff_agenda_items').select('*').eq('meeting_id', st.session_state.current_meeting_id).limit(1).execute()
+            agenda_available = True
+            # Now get all items
             result = supabase.table('staff_agenda_items').select('*').eq('meeting_id', st.session_state.current_meeting_id).order('created_at').execute()
             if result.data:
                 agenda_items = result.data
-        except Exception:
-            # Table might not exist yet - will create on first save
-            pass
+    except Exception as e:
+        # Table not available - show info message but don't block meeting
+        st.info("📋 Collaborative agenda feature not yet available. Continue with meeting below.")
+        if st.session_state.get("admin"):
+            with st.expander("🔧 Admin: Enable Agenda Feature"):
+                st.code("CREATE TABLE staff_agenda_items (...)")
+                st.caption(f"Error: {e}")
+        agenda_available = False
     
-    # Display existing agenda items
-    if agenda_items:
-        st.markdown(f"**📌 Agenda Items ({len(agenda_items)} submitted):**")
+    if agenda_available:
+        st.caption("Staff can add agenda items here before the meeting. Chair works through them during the meeting.")
+        
+        # Determine if this is upcoming or current meeting
+        is_upcoming_meeting = staff_date >= datetime.date.today()
+        
+        if is_upcoming_meeting:
+            st.markdown("""
+            <div style="background:#dbeafe;border-left:4px solid #0284c7;border-radius:0 8px 8px 0;
+                        padding:8px 14px;margin-bottom:12px;font-size:13px;color:#075985;">
+              ℹ️ <strong>Upcoming Meeting:</strong> Staff can add agenda items below. Items will be available when meeting starts.
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div style="background:#fef3c7;border-left:4px solid #f59e0b;border-radius:0 8px 8px 0;
+                        padding:8px 14px;margin-bottom:12px;font-size:13px;color:#92400e;">
+              📅 <strong>Past/Current Meeting:</strong> Viewing agenda items from this meeting.
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # Display existing agenda items
+        if agenda_items:
+            st.markdown(f"**📌 Agenda Items ({len(agenda_items)} submitted):**")
         
         for idx, item in enumerate(agenda_items):
             with st.expander(
@@ -1781,11 +1794,11 @@ def render_staff_meeting():
         if discussed_count > 0:
             progress = discussed_count / len(agenda_items)
             st.progress(progress, text=f"Progress: {discussed_count}/{len(agenda_items)} items discussed")
-    
-    else:
-        st.info("📭 No agenda items yet. Add items below.")
-    
-    st.markdown("---")
+        
+        else:
+            st.info("📭 No agenda items yet. Add items below.")
+        
+        st.markdown("---")
     
     # Add new agenda item
     st.markdown("**➕ Add New Agenda Item:**")
@@ -1842,31 +1855,23 @@ def render_staff_meeting():
         if not new_topic:
             st.warning("⚠️ Please enter a topic")
         else:
-            # Create meeting if doesn't exist yet
+            # Create meeting if doesn't exist yet - ABSOLUTE MINIMUM FIELDS
             if not st.session_state.current_meeting_id:
                 minimal_meeting = {
                     "program": "STAFF",
                     "meeting_date": str(staff_date),
                     "term": staff_term.strip() or "T1",
                     "week_number": int(staff_week),
-                    "week_type": "STAFF",
-                    "facilitator": minute_taker.strip() or get_staff_name(),
-                    "attendees": "",
-                    "checkin_notes": "{}",
-                    # REMOVED problematic columns that cause schema cache errors:
-                    # "meeting_minutes": "",
-                    # "actions": "[]",
-                    # "student_concerns": "[]",
-                    # "smartar_spotlight": "[]",
-                    # "reports_tac_notes": "",
-                    # "priority_focus": "[]",
+                    "facilitator": minute_taker.strip() or get_staff_name()
                 }
                 try:
                     result = supabase.table('tm_program_meetings').insert(minimal_meeting).execute()
                     if result.data:
                         st.session_state.current_meeting_id = result.data[0]['id']
+                        st.success(f"✅ Meeting initialized (ID: {st.session_state.current_meeting_id})")
                 except Exception as e:
                     st.error(f"Could not create meeting: {e}")
+                    st.warning("💡 Your database table needs to be recreated. See create_basic_table.sql")
             
             # Add agenda item
             if st.session_state.current_meeting_id:
@@ -1894,6 +1899,21 @@ def render_staff_meeting():
                 except Exception as e:
                     st.error(f"⚠️ Failed to add agenda item: {e}")
                     st.info("💡 The staff_agenda_items table may need to be created. See setup SQL.")
+    
+    else:
+        # Agenda feature not available yet - show simple message
+        st.markdown("**Collaborative Agenda Feature**")
+        st.info("📋 The collaborative agenda feature will be available once the database schema cache refreshes (usually within a few minutes). You can continue with the meeting using the sections below.")
+        if st.session_state.get("admin"):
+            with st.expander("🔧 Admin: How to Enable"):
+                st.markdown("""
+                The `staff_agenda_items` table exists but Supabase's schema cache hasn't refreshed yet.
+                
+                **Usually fixes itself in 2-5 minutes.** You can:
+                1. Wait a few minutes and refresh the page
+                2. Or restart your Render service again
+                3. The meeting functionality below works fine - agenda is just a bonus feature
+                """)
     
     st.markdown("---")
     
