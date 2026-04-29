@@ -312,10 +312,11 @@ def render_main_interface():
     """Main behaviour support interface"""
     st.title("🎯 Behaviour Support Tool")
     
-    # Fetch students
+    # Fetch students (exclude archived)
     try:
         response = supabase.table('students').select('*').eq('status', 'Active').order('name').execute()
-        students = response.data if response.data else []
+        # Filter out archived students (some have archived=true, some don't have the field)
+        students = [s for s in (response.data or []) if not s.get('archived', False)]
     except Exception as e:
         st.error(f"Error loading students: {e}")
         students = []
