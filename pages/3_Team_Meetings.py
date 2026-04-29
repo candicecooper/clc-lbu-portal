@@ -1853,12 +1853,13 @@ def render_staff_meeting():
                     "facilitator": minute_taker.strip() or get_staff_name(),
                     "attendees": "",
                     "checkin_notes": "{}",
-                    "meeting_minutes": "",
-                    "actions": "[]",
-                    "student_concerns": "[]",
-                    "smartar_spotlight": "[]",
-                    "reports_tac_notes": "",
-                    "priority_focus": "[]",
+                    # REMOVED problematic columns that cause schema cache errors:
+                    # "meeting_minutes": "",
+                    # "actions": "[]",
+                    # "student_concerns": "[]",
+                    # "smartar_spotlight": "[]",
+                    # "reports_tac_notes": "",
+                    # "priority_focus": "[]",
                 }
                 try:
                     result = supabase.table('tm_program_meetings').insert(minimal_meeting).execute()
@@ -2117,7 +2118,7 @@ Date and time of next meeting
     
     st.markdown("---")
     
-    # Prepare meeting data
+    # Prepare meeting data - only include fields that definitely exist
     meeting_data = {
         "program": "STAFF",
         "meeting_date": str(staff_date),
@@ -2131,13 +2132,24 @@ Date and time of next meeting
             "acknowledgement": acknowledgement_by.strip() if acknowledgement_done else "",
             "icebreaker": staff_icebreaker.strip()
         }),
-        "meeting_minutes": staff_minutes.strip(),
-        "actions": _json.dumps(actions),
-        "student_concerns": "[]",
-        "smartar_spotlight": "[]",
-        "reports_tac_notes": "",
-        "priority_focus": "[]",
     }
+    
+    # Add optional fields only if they have content
+    if staff_minutes.strip():
+        meeting_data["meeting_minutes"] = staff_minutes.strip()
+    
+    if actions:
+        meeting_data["actions"] = _json.dumps(actions)
+    
+    # Add empty defaults for other fields to avoid errors
+    if "student_concerns" not in meeting_data:
+        meeting_data["student_concerns"] = "[]"
+    if "smartar_spotlight" not in meeting_data:
+        meeting_data["smartar_spotlight"] = "[]"
+    if "reports_tac_notes" not in meeting_data:
+        meeting_data["reports_tac_notes"] = ""
+    if "priority_focus" not in meeting_data:
+        meeting_data["priority_focus"] = "[]"
     
     # Manual save button
     save_button_text = "💾 Update Meeting Record" if st.session_state.current_meeting_id else "💾 Save Meeting Record"
