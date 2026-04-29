@@ -5282,6 +5282,15 @@ def render_student_analysis_page():
     _so_recs       = _so_data_lens.get("recommendations", []) or []
     _so_seeking    = _so_data_lens.get("sensory_seeking", []) or []
     _so_strategies = _so_data_lens.get("regulation_strategies", []) or []
+    _sens_kw_lens  = ["noise","sound","crowd","touch","bright","light","texture",
+                      "smell","movement","propriocep","vestibular","tactile",
+                      "auditory","visual","sensory","hungry","food","thirsty"]
+    _n_sensory_ants   = (
+        int(full_df["antecedent"].dropna().str.lower()
+            .apply(lambda a: any(kw in a for kw in _sens_kw_lens)).sum())
+        if "antecedent" in full_df.columns and len(full_df) > 0 else 0
+    )
+    _sensory_prominent = _n_sensory_ants >= max(1, int(len(full_df) * 0.25))
 
     # ══════════════════════════════════════════════════════════════════════════
     # TEACHING LENS
