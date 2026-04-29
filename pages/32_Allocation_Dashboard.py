@@ -87,7 +87,7 @@ col1, col2 = st.columns(2)
 with col1:
     st.link_button(
         "📝 Open Excel File (SharePoint)",
-        "https://schoolssaedu-my.sharepoint.com/:x:/g/personal/candice_cooper330_schools_sa_edu_au/IQBhW-ZIsUHVRqPS9dTnsMCjAbVOnHlaDm42f3L0uv17gZo?email=Annette.Balestrin13%40schools.sa.edu.au&e=Fw3KpR",
+        "https://schoolssaedu.sharepoint.com/:x:/r/sites/CowandillaLearningCentre/Shared%20Documents/CLC_Allocation_Dashboard_2026_WithNames_1.xlsx?d=wd70361ce9d2944a18e6698bd4e5660c7&csf=1&web=1&e=JcpnEI",
         help="Opens the allocation tracking Excel file",
         use_container_width=True
     )
