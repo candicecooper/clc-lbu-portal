@@ -1686,7 +1686,213 @@ def render_staff_meeting():
     
     st.markdown("---")
     
-    # ── SECTION 2: DfE MEETING TEMPLATE ──
+    # ── SECTION 2: COLLABORATIVE AGENDA BUILDER ──
+    st.markdown("### 📋 COLLABORATIVE AGENDA")
+    st.caption("Staff can add agenda items here before the meeting. Chair works through them during the meeting.")
+    
+    # Determine if this is upcoming or current meeting
+    is_upcoming_meeting = staff_date >= datetime.date.today()
+    
+    if is_upcoming_meeting:
+        st.markdown("""
+        <div style="background:#dbeafe;border-left:4px solid #0284c7;border-radius:0 8px 8px 0;
+                    padding:8px 14px;margin-bottom:12px;font-size:13px;color:#075985;">
+          ℹ️ <strong>Upcoming Meeting:</strong> Staff can add agenda items below. Items will be available when meeting starts.
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div style="background:#fef3c7;border-left:4px solid #f59e0b;border-radius:0 8px 8px 0;
+                    padding:8px 14px;margin-bottom:12px;font-size:13px;color:#92400e;">
+          📅 <strong>Past/Current Meeting:</strong> Viewing agenda items from this meeting.
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Load existing agenda items for this meeting
+    agenda_items = []
+    if st.session_state.current_meeting_id:
+        try:
+            result = supabase.table('staff_agenda_items').select('*').eq('meeting_id', st.session_state.current_meeting_id).order('created_at').execute()
+            if result.data:
+                agenda_items = result.data
+        except Exception:
+            # Table might not exist yet - will create on first save
+            pass
+    
+    # Display existing agenda items
+    if agenda_items:
+        st.markdown(f"**📌 Agenda Items ({len(agenda_items)} submitted):**")
+        
+        for idx, item in enumerate(agenda_items):
+            with st.expander(
+                f"**{idx+1}. {item.get('topic', 'Untitled')}** — *{item.get('presenter', 'No presenter')}* ({item.get('time_allocation', '5')} min)",
+                expanded=False
+            ):
+                col_info, col_actions = st.columns([4, 1])
+                
+                with col_info:
+                    st.markdown(f"**Submitted by:** {item.get('submitted_by', 'Unknown')}")
+                    st.markdown(f"**Time:** {item.get('created_at', '')[:10]}")
+                    if item.get('details'):
+                        st.markdown("**Details:**")
+                        st.markdown(item.get('details'))
+                    if item.get('attachments'):
+                        st.markdown(f"**Attachments:** {item.get('attachments')}")
+                
+                with col_actions:
+                    # Mark as discussed
+                    discussed_key = f"discussed_{item['id']}"
+                    if discussed_key not in st.session_state:
+                        st.session_state[discussed_key] = item.get('discussed', False)
+                    
+                    discussed = st.checkbox(
+                        "✓ Discussed",
+                        value=st.session_state[discussed_key],
+                        key=f"discuss_check_{item['id']}"
+                    )
+                    
+                    if discussed != st.session_state[discussed_key]:
+                        st.session_state[discussed_key] = discussed
+                        try:
+                            supabase.table('staff_agenda_items').update({
+                                'discussed': discussed,
+                                'discussed_at': datetime.datetime.now().isoformat() if discussed else None
+                            }).eq('id', item['id']).execute()
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to update: {e}")
+                    
+                    # Delete option (admin only)
+                    if st.session_state.get("admin"):
+                        if st.button("🗑️ Delete", key=f"del_agenda_{item['id']}"):
+                            try:
+                                supabase.table('staff_agenda_items').delete().eq('id', item['id']).execute()
+                                st.success("Item deleted")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Failed to delete: {e}")
+        
+        # Progress indicator
+        discussed_count = len([i for i in agenda_items if i.get('discussed', False)])
+        if discussed_count > 0:
+            progress = discussed_count / len(agenda_items)
+            st.progress(progress, text=f"Progress: {discussed_count}/{len(agenda_items)} items discussed")
+    
+    else:
+        st.info("📭 No agenda items yet. Add items below.")
+    
+    st.markdown("---")
+    
+    # Add new agenda item
+    st.markdown("**➕ Add New Agenda Item:**")
+    
+    col_add1, col_add2 = st.columns([3, 1])
+    
+    with col_add1:
+        new_topic = st.text_input(
+            "Topic/Item",
+            key="new_agenda_topic",
+            placeholder="e.g., Term 2 Planning, Professional Development Update, Student Wellbeing..."
+        )
+    
+    with col_add2:
+        new_time = st.number_input(
+            "Time (min)",
+            min_value=1,
+            max_value=60,
+            value=5,
+            key="new_agenda_time"
+        )
+    
+    col_add3, col_add4 = st.columns(2)
+    
+    with col_add3:
+        new_presenter = st.text_input(
+            "Presenter/Lead",
+            value=get_staff_name(),
+            key="new_agenda_presenter",
+            placeholder="Who will present this item?"
+        )
+    
+    with col_add4:
+        new_category = st.selectbox(
+            "Category",
+            options=["General", "Student Matters", "Professional Development", "Policy/Procedure", "Events/Activities", "Urgent", "Other"],
+            key="new_agenda_category"
+        )
+    
+    new_details = st.text_area(
+        "Details/Notes",
+        height=80,
+        key="new_agenda_details",
+        placeholder="Additional context, background, or questions for discussion..."
+    )
+    
+    new_attachments = st.text_input(
+        "Attachments/Links (optional)",
+        key="new_agenda_attachments",
+        placeholder="URLs or file names to reference..."
+    )
+    
+    if st.button("➕ Add Agenda Item", type="primary", use_container_width=True, key="add_agenda_btn"):
+        if not new_topic:
+            st.warning("⚠️ Please enter a topic")
+        else:
+            # Create meeting if doesn't exist yet
+            if not st.session_state.current_meeting_id:
+                minimal_meeting = {
+                    "program": "STAFF",
+                    "meeting_date": str(staff_date),
+                    "term": staff_term.strip() or "T1",
+                    "week_number": int(staff_week),
+                    "week_type": "STAFF",
+                    "facilitator": minute_taker.strip() or get_staff_name(),
+                    "attendees": "",
+                    "checkin_notes": "{}",
+                    "meeting_minutes": "",
+                    "actions": "[]",
+                    "student_concerns": "[]",
+                    "smartar_spotlight": "[]",
+                    "reports_tac_notes": "",
+                    "priority_focus": "[]",
+                }
+                try:
+                    result = supabase.table('tm_program_meetings').insert(minimal_meeting).execute()
+                    if result.data:
+                        st.session_state.current_meeting_id = result.data[0]['id']
+                except Exception as e:
+                    st.error(f"Could not create meeting: {e}")
+            
+            # Add agenda item
+            if st.session_state.current_meeting_id:
+                agenda_data = {
+                    "meeting_id": str(st.session_state.current_meeting_id),
+                    "topic": new_topic.strip(),
+                    "presenter": new_presenter.strip(),
+                    "time_allocation": new_time,
+                    "category": new_category,
+                    "details": new_details.strip(),
+                    "attachments": new_attachments.strip(),
+                    "submitted_by": get_staff_name(),
+                    "created_at": datetime.datetime.now().isoformat(),
+                    "discussed": False
+                }
+                
+                try:
+                    supabase.table('staff_agenda_items').insert(agenda_data).execute()
+                    st.success(f"✅ Added agenda item: {new_topic}")
+                    # Clear form
+                    st.session_state.pop("new_agenda_topic", None)
+                    st.session_state.pop("new_agenda_details", None)
+                    st.session_state.pop("new_agenda_attachments", None)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"⚠️ Failed to add agenda item: {e}")
+                    st.info("💡 The staff_agenda_items table may need to be created. See setup SQL.")
+    
+    st.markdown("---")
+    
+    # ── SECTION 3: DfE MEETING TEMPLATE ──
     st.markdown("### 📝 MEETING RECORD (DfE Template)")
     
     # Minute Taker
