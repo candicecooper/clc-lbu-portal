@@ -36,13 +36,24 @@ tab1, tab2 = st.tabs(["👥 Manage Students", "🔧 System Settings"])
 with tab1:
     st.subheader("Student Records")
     
-    # Fetch all students
+    # Fetch all students (including archived)
     try:
         response = supabase.table('students').select('*').order('name').execute()
-        students = response.data if response.data else []
+        all_students = response.data if response.data else []
     except Exception as e:
         st.error(f"Error loading students: {e}")
-        students = []
+        all_students = []
+    
+    # Filter options
+    col1, col2, col3 = st.columns([2, 2, 2])
+    with col1:
+        show_archived = st.checkbox("Show archived students", value=False, key="show_archived")
+    
+    # Apply filter
+    if show_archived:
+        students = all_students
+    else:
+        students = [s for s in all_students if not s.get('archived', False)]
     
     # Add new student button
     col1, col2 = st.columns([3, 1])
@@ -140,6 +151,7 @@ with tab1:
                         edit_status = st.selectbox("Status", ["Active", "Inactive", "Exited"], 
                                                   index=["Active", "Inactive", "Exited"].index(student.get('status', 'Active')),
                                                   key=f"edit_status_{student_id}")
+                        edit_archived = st.checkbox("Archived", value=student.get('archived', False), key=f"edit_archived_{student_id}")
                         edit_notes = st.text_area("Notes", value=student.get('notes', ''), key=f"edit_notes_{student_id}", height=100)
                     
                     col1, col2, col3 = st.columns([1, 1, 4])
@@ -159,6 +171,7 @@ with tab1:
                                     'program': edit_program,
                                     'start_date': edit_start_date.isoformat(),
                                     'status': edit_status,
+                                    'archived': edit_archived,
                                     'notes': edit_notes if edit_notes else None
                                 }
                                 supabase.table('students').update(update_data).eq('id', student_id).execute()
@@ -179,7 +192,8 @@ with tab1:
                     
                     with col1:
                         status_emoji = "🟢" if student.get('status') == 'Active' else "🔴" if student.get('status') == 'Exited' else "🟡"
-                        st.markdown(f"**{status_emoji} {student.get('name')}**")
+                        archived_badge = " 📦" if student.get('archived') else ""
+                        st.markdown(f"**{status_emoji} {student.get('name')}{archived_badge}**")
                     
                     with col2:
                         dob = student.get('dob')
