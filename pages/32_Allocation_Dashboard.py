@@ -72,44 +72,79 @@ st.markdown("""
 
 st.markdown("### 📁 Data Source")
 
-col1, col2 = st.columns([2, 1])
+st.info("""
+📊 **To view the dashboard:**
+
+1. Download the latest Excel file from SharePoint (click button below)
+2. Upload it using the file uploader below
+3. Dashboard will display with de-identified data
+
+The Excel file is the source of truth - all allocation data is stored there.
+""")
+
+col1, col2 = st.columns(2)
 
 with col1:
-    st.markdown("""
-    <div class="info-box">
-    <strong>📊 Excel File Location</strong><br>
-    This dashboard reads from the shared allocation tracking Excel file. Upload the file below or enter allocation data directly in the Excel file stored on OneDrive.
-    </div>
-    """, unsafe_allow_html=True)
-
-with col2:
     st.link_button(
         "📝 Open Excel File (SharePoint)",
         "https://schoolssaedu-my.sharepoint.com/:x:/g/personal/candice_cooper330_schools_sa_edu_au/IQBhW-ZIsUHVRqPS9dTnsMCjAbVOnHlaDm42f3L0uv17gZo?email=Annette.Balestrin13%40schools.sa.edu.au&e=Fw3KpR",
-        help="Opens the allocation tracking Excel file for data entry",
+        help="Opens the allocation tracking Excel file",
         use_container_width=True
     )
 
+with col2:
+    st.caption("📥 After opening, go to File → Download → Download a Copy")
+
+st.markdown("---")
+
 # File upload
+st.markdown("### 📤 Upload Excel File to View Dashboard")
+
 uploaded_file = st.file_uploader(
-    "Upload Allocation Excel File",
+    "Upload the allocation Excel file from SharePoint",
     type=['xlsx'],
     help="Upload the CLC_Allocation_Dashboard Excel file to view analytics"
 )
 
 if uploaded_file:
     try:
+        st.info(f"📁 File received: {uploaded_file.name} ({uploaded_file.size / 1024:.1f} KB)")
+        
         # Read the Data_Model sheet
         df = pd.read_excel(uploaded_file, sheet_name='Data_Model')
+        
+        st.success(f"✅ Successfully read Data_Model sheet")
         
         # Remove any empty rows
         df = df.dropna(how='all')
         
+        # Remove header row if it exists as data
+        if 'Student_ID' in df['Student_ID'].values or 'Student_Name' in df['Student_Name'].values:
+            df = df[~df['Student_ID'].isin(['Student_ID'])]
+        
+        # Filter to rows with actual data
+        df = df[df['Referring_School'].notna()]
+        
         if df.empty or len(df) == 0:
-            st.warning("📭 No data found in Excel file. Add student records to the Data_Model sheet.")
+            st.warning("⚠️ No student data found in the Data_Model sheet. Please ensure data has been entered in the Excel file.")
+            st.info("""
+            **To add data to the Excel file:**
+            1. Click the SharePoint link above to open the file
+            2. Go to the 'Data_Model' sheet
+            3. Add student allocation records (one row per student)
+            4. Save the file
+            5. Download and upload it here
+            """)
             st.stop()
         
         st.success(f"✅ Loaded {len(df)} allocation records from Excel file")
+        
+        # Show column info for debugging
+        with st.expander("🔍 Debug Info - File Structure"):
+            st.write(f"Columns found: {df.columns.tolist()[:10]}...")
+            st.write(f"Total rows: {len(df)}")
+            st.write(f"Sample data:")
+            st.dataframe(df.head(3))
         
         # ══════════════════════════════════════════════════════════════════
         # KEY METRICS
