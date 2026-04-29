@@ -5276,6 +5276,13 @@ def render_student_analysis_page():
 
     st.markdown("---")
 
+    # ── Sensory overview variables (re-read from session_state for Teaching / Support lenses)
+    _so_data_lens  = st.session_state.get(f"sensory_overview_{student_id}", {})
+    _has_sensory   = bool(_so_data_lens)
+    _so_recs       = _so_data_lens.get("recommendations", []) or []
+    _so_seeking    = _so_data_lens.get("sensory_seeking", []) or []
+    _so_strategies = _so_data_lens.get("regulation_strategies", []) or []
+
     # ══════════════════════════════════════════════════════════════════════════
     # TEACHING LENS
     # ══════════════════════════════════════════════════════════════════════════
