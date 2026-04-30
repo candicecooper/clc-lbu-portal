@@ -40,10 +40,11 @@ st.sidebar.markdown(
 )
 
 # ── Supabase ──────────────────────────────────────────────────────────────────
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+# Team Meetings uses the MEETINGS database (cmqyrfekxgjdtuloseri project)
+SUPABASE_URL = st.secrets.get("SUPABASE_URL_MEETINGS", st.secrets["SUPABASE_URL"])
+SUPABASE_KEY = st.secrets.get("SUPABASE_KEY_MEETINGS", st.secrets["SUPABASE_KEY"])
 # Use service_role key to bypass RLS (this is an internal staff tool)
-SUPABASE_SERVICE_KEY = st.secrets.get("SUPABASE_SERVICE_KEY", SUPABASE_KEY)
+SUPABASE_SERVICE_KEY = st.secrets.get("SUPABASE_SERVICE_KEY_MEETINGS", SUPABASE_KEY)
 ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "CLC2026admin")
 GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
 
