@@ -5506,6 +5506,10 @@ def render_student_analysis_page():
     st.markdown("### 🗑️ Delete an Incident")
     st.caption("Remove an incorrectly logged or duplicate incident from this student's full data set. This includes regular incidents AND critical incidents. Deletions are permanent and will affect all charts and analysis.")
 
+    # Show deletion success banner if set by a previous rerun
+    if st.session_state.get("incident_deleted_msg"):
+        st.success(st.session_state.pop("incident_deleted_msg"))
+
     reg_incidents = [i for i in st.session_state.incidents if i["student_id"] == student_id]
     crit_incidents = [c for c in st.session_state.critical_incidents if c["student_id"] == student_id]
 
@@ -5587,6 +5591,10 @@ def render_student_analysis_page():
                     st.rerun()
 
         else:
+            # Show success banner BEFORE the confirmation UI if deletion just completed
+            if st.session_state.get("incident_deleted_msg"):
+                st.success(st.session_state.pop("incident_deleted_msg"))
+
             st.error(
                 f"**Step 2 of 2 — FINAL CONFIRMATION**\n\n"
                 f"Click the red button below to permanently delete this record from the database. "
@@ -5596,25 +5604,39 @@ def render_student_analysis_page():
             with col_final:
                 if st.button("🔴 YES — permanently delete this incident", type="primary",
                              key=f"final_del_{selected_id}", use_container_width=True):
-                    deleted = False
                     if supabase:
                         try:
                             table = "critical_incidents" if selected_type == "critical" else "incidents"
-                            supabase.table(table).delete().eq("id", selected_id).execute()
-                            deleted = True
+                            response = supabase.table(table).delete().eq("id", selected_id).execute()
+                            # response.data contains the deleted rows — empty means RLS blocked it
+                            if response.data:
+                                # Strip from session_state cache
+                                if selected_type == "regular":
+                                    st.session_state.incidents = [
+                                        i for i in st.session_state.incidents if i["id"] != selected_id
+                                    ]
+                                else:
+                                    st.session_state.critical_incidents = [
+                                        c for c in st.session_state.critical_incidents if c["id"] != selected_id
+                                    ]
+                                for k in [confirm_key, confirm2_key, f"confirm_chk_{selected_id}",
+                                          "delete_incident_select"]:
+                                    st.session_state.pop(k, None)
+                                # Store message in session_state so it survives the rerun
+                                st.session_state["incident_deleted_msg"] = (
+                                    f"✅ Incident deleted — removed from {student['name']}'s record."
+                                )
+                                st.rerun()
+                            else:
+                                st.error(
+                                    "❌ Deletion was not completed — the database did not confirm the record "
+                                    "was removed. This is usually a permissions issue. Please contact your "
+                                    "portal administrator."
+                                )
                         except Exception as e:
-                            st.error(f"Delete failed: {e}")
+                            st.error(f"❌ Delete failed: {e}")
                     else:
-                        deleted = True
-                    if deleted:
-                        if selected_type == "regular":
-                            st.session_state.incidents = [i for i in st.session_state.incidents if i["id"] != selected_id]
-                        else:
-                            st.session_state.critical_incidents = [c for c in st.session_state.critical_incidents if c["id"] != selected_id]
-                        for k in [confirm_key, confirm2_key, f"confirm_chk_{selected_id}"]:
-                            st.session_state.pop(k, None)
-                        st.success("✅ Incident permanently deleted and removed from the data set.")
-                        st.rerun()
+                        st.error("❌ No database connection. Cannot delete.")
             with col_back:
                 if st.button("❌ Cancel — keep this incident", key=f"cancel2_{selected_id}", use_container_width=True):
                     for k in [confirm_key, confirm2_key]:
