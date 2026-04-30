@@ -94,7 +94,7 @@ def auto_initialize_meeting(program, meeting_data):
     if has_any_content:
         try:
             # Create minimal meeting record to get ID
-            result = supabase.table('tm_program_meetings').insert(meeting_data).execute()
+            result = supabase.table('clc_team_meetings').insert(meeting_data).execute()
             if result.data:
                 st.session_state.current_meeting_id = result.data[0]['id']
                 st.session_state.autosave_message = f"✅ Meeting initialized (ID: {st.session_state.current_meeting_id}) - SMARTAR links now active!"
@@ -131,7 +131,7 @@ def trigger_autosave(program, meeting_data):
             try:
                 # Always update (never insert here - initialization handles that)
                 if not str(st.session_state.current_meeting_id).startswith("temp_"):
-                    supabase.table('tm_program_meetings').update(meeting_data).eq('id', st.session_state.current_meeting_id).execute()
+                    supabase.table('clc_team_meetings').update(meeting_data).eq('id', st.session_state.current_meeting_id).execute()
                     st.session_state.last_autosave_time = current_time
                     st.session_state.autosave_message = f"✓ Auto-saved at {datetime.datetime.now().strftime('%I:%M %p')}"
                     return True
@@ -360,7 +360,7 @@ def render_specialist_meeting():
         st.caption(st.session_state.autosave_message)
 
     # Fetch past meetings for Specialist
-    past_meetings = fetch("tm_program_meetings", {"program": "SPECIALIST"}, "meeting_date")
+    past_meetings = fetch("clc_team_meetings", {"program": "SPECIALIST"}, "meeting_date")
     
     # Meeting selection - New or Edit existing
     st.markdown("#### 📂 Select Meeting")
@@ -758,10 +758,10 @@ def render_specialist_meeting():
     if st.button(save_button_text, type="primary", use_container_width=True, key="sp_save"):
         try:
             if st.session_state.current_meeting_id and not str(st.session_state.current_meeting_id).startswith("temp_"):
-                supabase.table('tm_program_meetings').update(meeting_data).eq('id', st.session_state.current_meeting_id).execute()
+                supabase.table('clc_team_meetings').update(meeting_data).eq('id', st.session_state.current_meeting_id).execute()
                 st.success("✅ Meeting record updated!")
             else:
-                result = supabase.table('tm_program_meetings').insert(meeting_data).execute()
+                result = supabase.table('clc_team_meetings').insert(meeting_data).execute()
                 if result.data:
                     st.session_state.current_meeting_id = result.data[0]['id']
                 st.success("✅ Meeting record saved!")
@@ -791,7 +791,7 @@ def render_program_meeting(program):
         st.caption(st.session_state.autosave_message)
 
     # Fetch past meetings for this program
-    past_meetings = fetch("tm_program_meetings", {"program": program}, "meeting_date")
+    past_meetings = fetch("clc_team_meetings", {"program": program}, "meeting_date")
     
     # Meeting selection - New or Edit existing
     st.markdown("#### 📂 Select Meeting")
@@ -876,7 +876,7 @@ def render_program_meeting(program):
 
     student_names = fetch_students(program)
 
-    last_records = fetch("tm_program_meetings", {"program": program}, "meeting_date")
+    last_records = fetch("clc_team_meetings", {"program": program}, "meeting_date")
     last_week_type = None
     last_actions = []
     if last_records:
@@ -1022,7 +1022,7 @@ def render_program_meeting(program):
                 "actions": "[]",
             }
             try:
-                result = supabase.table('tm_program_meetings').insert(minimal_meeting).execute()
+                result = supabase.table('clc_team_meetings').insert(minimal_meeting).execute()
                 if result.data:
                     st.session_state.current_meeting_id = result.data[0]['id']
                     st.success(f"✅ Meeting initialized - ID: {st.session_state.current_meeting_id}")
@@ -1209,7 +1209,7 @@ def render_program_meeting(program):
                 "actions": "[]",
             }
             try:
-                result = supabase.table('tm_program_meetings').insert(minimal_meeting).execute()
+                result = supabase.table('clc_team_meetings').insert(minimal_meeting).execute()
                 if result.data:
                     st.session_state.current_meeting_id = result.data[0]['id']
                     st.success(f"✅ Meeting initialized - ID: {st.session_state.current_meeting_id}")
@@ -1419,10 +1419,10 @@ def render_program_meeting(program):
     if st.button(save_button_text, type="primary", use_container_width=True, key=f"pm_save_{program}"):
         try:
             if st.session_state.current_meeting_id and not str(st.session_state.current_meeting_id).startswith("temp_"):
-                supabase.table('tm_program_meetings').update(meeting_data).eq('id', st.session_state.current_meeting_id).execute()
+                supabase.table('clc_team_meetings').update(meeting_data).eq('id', st.session_state.current_meeting_id).execute()
                 st.success("✅ Meeting record updated!")
             else:
-                result = supabase.table('tm_program_meetings').insert(meeting_data).execute()
+                result = supabase.table('clc_team_meetings').insert(meeting_data).execute()
                 if result.data:
                     st.session_state.current_meeting_id = result.data[0]['id']
                 st.success("✅ Meeting record saved!")
@@ -1451,7 +1451,7 @@ def render_meeting_archive(program):
     st.caption(f"Browse and edit past {PROGRAMS[program]['label']} meetings")
     
     # Fetch all past meetings
-    all_meetings = fetch("tm_program_meetings", {"program": program}, "meeting_date")
+    all_meetings = fetch("clc_team_meetings", {"program": program}, "meeting_date")
     
     if not all_meetings:
         st.info("No past meetings found. Start recording meetings in the Program Meeting tab!")
@@ -1551,7 +1551,7 @@ def render_meeting_archive(program):
                 with col_save:
                     if st.button("💾 Save Changes", key=f"save_minutes_{meeting_id}", type="primary"):
                         try:
-                            supabase.table('tm_program_meetings').update({
+                            supabase.table('clc_team_meetings').update({
                                 'meeting_minutes': edited_minutes
                             }).eq('id', meeting_id).execute()
                             st.success("✅ Minutes updated!")
