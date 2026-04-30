@@ -25,10 +25,10 @@ st.set_page_config(
 try:
     @st.cache_resource
     def get_supabase():
-        return create_client(
-            st.secrets["SUPABASE_URL"],
-            st.secrets["SUPABASE_KEY"]
-        )
+        # STAFF Meetings uses the MEETINGS database (cmqyrfekxgjdtuloseri project)
+        url = st.secrets.get("SUPABASE_URL_MEETINGS", st.secrets["SUPABASE_URL"])
+        key = st.secrets.get("SUPABASE_KEY_MEETINGS", st.secrets["SUPABASE_KEY"])
+        return create_client(url, key)
     supabase = get_supabase()
 except Exception as e:
     st.error(f"Database connection error: {e}")
@@ -66,7 +66,7 @@ st.subheader("📅 Select Meeting")
 
 # Load existing meetings
 try:
-    result = supabase.table('clc_staff_meetings').select('*').order('meeting_date', desc=True).limit(20).execute()
+    result = supabase.table('staff_meetings').select('*').order('meeting_date', desc=True).limit(20).execute()
     existing_meetings = result.data if result.data else []
 except Exception as e:
     st.warning(f"Could not load meetings: {e}")
@@ -194,11 +194,11 @@ if st.button("💾 Save Meeting", type="primary", use_container_width=True, key=
     try:
         if st.session_state.current_staff_meeting_id:
             # Update existing
-            supabase.table('clc_staff_meetings').update(meeting_data).eq('id', st.session_state.current_staff_meeting_id).execute()
+            supabase.table('staff_meetings').update(meeting_data).eq('id', st.session_state.current_staff_meeting_id).execute()
             st.success(f"✅ Meeting updated! (ID: {st.session_state.current_staff_meeting_id})")
         else:
             # Create new
-            result = supabase.table('clc_staff_meetings').insert(meeting_data).execute()
+            result = supabase.table('staff_meetings').insert(meeting_data).execute()
             if result.data:
                 st.session_state.current_staff_meeting_id = result.data[0]['id']
                 st.success(f"✅ Meeting created! (ID: {st.session_state.current_staff_meeting_id})")
