@@ -5279,9 +5279,12 @@ def render_student_analysis_page():
     # ── Sensory overview variables (re-read from session_state for Teaching / Support lenses)
     _so_data_lens  = st.session_state.get(f"sensory_overview_{student_id}", {})
     _has_sensory   = bool(_so_data_lens)
+    _so_summary    = _so_data_lens.get("summary", "") or ""
     _so_recs       = _so_data_lens.get("recommendations", []) or []
     _so_seeking    = _so_data_lens.get("sensory_seeking", []) or []
     _so_strategies = _so_data_lens.get("regulation_strategies", []) or []
+    _so_avoiding   = _so_data_lens.get("sensory_avoiding", []) or []
+    _so_triggers   = _so_data_lens.get("triggers", []) or []
     _sens_kw_lens  = ["noise","sound","crowd","touch","bright","light","texture",
                       "smell","movement","propriocep","vestibular","tactile",
                       "auditory","visual","sensory","hungry","food","thirsty"]
