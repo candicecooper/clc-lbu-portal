@@ -4,6 +4,13 @@ from supabase import create_client
 import datetime
 import json
 
+# For transcript upload
+try:
+    import docx
+    DOCX_AVAILABLE = True
+except:
+    DOCX_AVAILABLE = False
+
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(page_title="STAFF Meetings | CLC-LBU", page_icon="👥", layout="wide")
 apply_clc_theme()
@@ -25,8 +32,89 @@ st.sidebar.markdown(
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 SUPABASE_SERVICE_KEY = st.secrets.get("SUPABASE_SERVICE_KEY", SUPABASE_KEY)
+GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+# ── BSEM Icebreakers (5-minute activities) ────────────────────────────────────
+BSEM_ICEBREAKERS = [
+    {
+        "week": 1,
+        "name": "Two Truths and a Lie",
+        "instructions": "Each person shares three statements about themselves - two true, one false. Group guesses which is the lie.",
+        "time": "5 mins"
+    },
+    {
+        "week": 2,
+        "name": "Gratitude Round",
+        "instructions": "Each person shares one thing they're grateful for this week (personal or professional).",
+        "time": "5 mins"
+    },
+    {
+        "week": 3,
+        "name": "Brain Break: Draw Your Weekend",
+        "instructions": "60 seconds to draw something from your weekend. Share with the group.",
+        "time": "5 mins"
+    },
+    {
+        "week": 4,
+        "name": "Quick Check-In: Rate Your Week",
+        "instructions": "Rate your week 1-10 and share one word to describe it.",
+        "time": "5 mins"
+    },
+    {
+        "week": 5,
+        "name": "Wins & Learnings",
+        "instructions": "Share one win and one thing you learned this week.",
+        "time": "5 mins"
+    },
+    {
+        "week": 6,
+        "name": "Would You Rather?",
+        "instructions": "Facilitator poses a 'Would you rather...' question. Quick votes and brief sharing.",
+        "time": "5 mins"
+    },
+    {
+        "week": 7,
+        "name": "Rose, Thorn, Bud",
+        "instructions": "Share: Rose (highlight), Thorn (challenge), Bud (something you're looking forward to).",
+        "time": "5 mins"
+    },
+    {
+        "week": 8,
+        "name": "Quick Movement Break",
+        "instructions": "Stand up stretch or brief movement activity. Can be led by different staff member each week.",
+        "time": "5 mins"
+    },
+    {
+        "week": 9,
+        "name": "Shout-Outs",
+        "instructions": "Acknowledge someone who helped you this week or did something great.",
+        "time": "5 mins"
+    },
+    {
+        "week": 10,
+        "name": "What's In Your Cup?",
+        "instructions": "Share what's filling your emotional cup or draining it this week.",
+        "time": "5 mins"
+    },
+    {
+        "week": 11,
+        "name": "Reflection Round",
+        "instructions": "One word to describe this term. Quick round-robin.",
+        "time": "5 mins"
+    }
+]
+
+# Standing agenda items
+STANDING_AGENDA_ITEMS = [
+    "Transition Coordinator Info",
+    "Manager Info",
+    "PAC (Pastoral Care)",
+    "WHS (Work Health & Safety)",
+    "Social Club",
+    "Finance"
+]
 
 # ── Session state ──────────────────────────────────────────────────────────────
 if 'current_staff_meeting_id' not in st.session_state:
@@ -72,56 +160,278 @@ else:
 st.markdown("---")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MEETING FORM
+# TABS: CURRENT MEETING / ARCHIVE
 # ══════════════════════════════════════════════════════════════════════════════
 
-st.subheader("📋 Meeting Details")
+tab1, tab2 = st.tabs(["📝 Current Meeting", "📚 Meeting Archive"])
 
-col1, col2, col3 = st.columns(3)
+with tab2:
+    st.subheader("📚 Past STAFF Meetings")
+    
+    if existing_meetings:
+        for meeting in existing_meetings:
+            with st.expander(f"📅 {meeting['meeting_date']} - T{meeting.get('term', '?')} W{meeting.get('week_number', '?')} - {meeting.get('minute_taker', 'Unknown')}"):
+                st.write(f"**Attendees:** {meeting.get('attendees', 'Not recorded')}")
+                st.write(f"**Apologies:** {meeting.get('apologies', 'None')}")
+                st.markdown("---")
+                st.write("**Minutes:**")
+                st.write(meeting.get('minutes', 'No minutes recorded'))
+                
+                if meeting.get('actions'):
+                    st.markdown("---")
+                    st.write("**Actions:**")
+                    try:
+                        actions = json.loads(meeting['actions']) if isinstance(meeting['actions'], str) else meeting['actions']
+                        for action in actions:
+                            st.write(f"- {action.get('action', '')} - **{action.get('owner', '')}** - Due: {action.get('due_date', '')}")
+                    except:
+                        pass
+    else:
+        st.info("No archived meetings yet.")
 
-# Defaults
-if selected_record:
-    default_date = datetime.date.fromisoformat(selected_record['meeting_date'])
-    default_term = selected_record.get('term', '')
-    default_week = selected_record.get('week_number', 1)
-else:
-    default_date = datetime.date.today()
-    default_term = ''
-    default_week = 1
+with tab1:
+    st.markdown("---")
+    
+    # ══════════════════════════════════════════════════════════════════════════════
+    # MEETING FORM
+    # ══════════════════════════════════════════════════════════════════════════════
+    
+    st.subheader("📋 Meeting Details")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    # Defaults
+    if selected_record:
+        default_date = datetime.date.fromisoformat(selected_record['meeting_date'])
+        default_term = selected_record.get('term', '')
+        default_week = selected_record.get('week_number', 1)
+    else:
+        default_date = datetime.date.today()
+        default_term = ''
+        default_week = 1
+    
+    with col1:
+        meeting_date = st.date_input("Meeting Date", value=default_date, key="staff_date")
+    
+    with col2:
+        term = st.text_input("Term", value=default_term, placeholder="T1", key="staff_term")
+    
+    with col3:
+        week_number = st.number_input("Week Number", min_value=1, max_value=11, value=default_week, key="staff_week")
+    
+    default_minute_taker = selected_record.get('minute_taker', get_staff_name()) if selected_record else get_staff_name()
+    minute_taker = st.text_input("Minute Taker", value=default_minute_taker, key="minute_taker")
+    
+    st.markdown("---")
+    
+    # ══════════════════════════════════════════════════════════════════════════════
+    # 1. STAFF BULLETIN FOR THE WEEK
+    # ══════════════════════════════════════════════════════════════════════════════
+    
+    st.subheader("📋 Staff Bulletin (This Week)")
+    
+    with st.expander("📰 View Weekly Bulletin", expanded=False):
+        # Try to fetch bulletin for this week
+        try:
+            # Look for bulletin matching this meeting date
+            bulletin_result = supabase.table('clc_events').select('*').gte('date', str(meeting_date)).lte('date', str(meeting_date)).execute()
+            
+            if bulletin_result.data:
+                st.success("✅ Bulletin found for this week")
+                for item in bulletin_result.data[:5]:  # Show first 5 items
+                    st.write(f"**{item.get('title', 'Event')}** - {item.get('date', '')}")
+                    if item.get('description'):
+                        st.caption(item['description'])
+            else:
+                st.info("ℹ️ No bulletin items found for this week")
+        except:
+            st.warning("⚠️ Could not load bulletin (may not be available yet)")
+    
+    st.markdown("---")
+    
+    # ══════════════════════════════════════════════════════════════════════════════
+    # 2. ATTENDANCE
+    # ══════════════════════════════════════════════════════════════════════════════
+    
+    st.subheader("👥 Attendance")
+    
+    default_attendees = selected_record.get('attendees', '') if selected_record else ''
+    attendees = st.text_area("Attendees Present", value=default_attendees, height=80, key="attendees", 
+                             placeholder="List staff members present...")
+    
+    default_apologies = selected_record.get('apologies', '') if selected_record else ''
+    apologies = st.text_area("Apologies", value=default_apologies, height=60, key="apologies",
+                             placeholder="List staff members with apologies...")
+    
+    st.markdown("---")
+    
+    # ══════════════════════════════════════════════════════════════════════════════
+    # 3. ACKNOWLEDGEMENT OF COUNTRY
+    # ══════════════════════════════════════════════════════════════════════════════
+    
+    st.subheader("🪃 Acknowledgement of Country")
+    
+    st.info("📹 **Video placeholder** - You can add the Acknowledgement video here later")
+    acknowledgement_done = st.checkbox("✅ Acknowledgement completed", value=selected_record.get('acknowledgement_done', False) if selected_record else False)
+    acknowledgement_by = st.text_input("Led by", value=selected_record.get('acknowledgement_by', '') if selected_record else '', placeholder="Who led the Acknowledgement?")
+    
+    st.markdown("---")
+    
+    # ══════════════════════════════════════════════════════════════════════════════
+    # 4. ICEBREAKER / BSEM ACTIVITY (5 mins)
+    # ══════════════════════════════════════════════════════════════════════════════
+    
+    st.subheader("🎯 Icebreaker / BSEM Activity (5 mins)")
+    
+    # Get icebreaker for this week
+    week_idx = (int(week_number) - 1) % len(BSEM_ICEBREAKERS)
+    icebreaker = BSEM_ICEBREAKERS[week_idx]
+    
+    with st.expander(f"💡 Suggested Activity: **{icebreaker['name']}**", expanded=True):
+        st.write(f"**Time:** {icebreaker['time']}")
+        st.write(f"**Instructions:** {icebreaker['instructions']}")
+    
+    icebreaker_notes = st.text_area("Icebreaker Notes (optional)", 
+                                    value=selected_record.get('icebreaker', '') if selected_record else '',
+                                    height=80, 
+                                    placeholder="Any notes about how the icebreaker went...",
+                                    key="icebreaker")
+    
+    st.markdown("---")
+    
+    # ══════════════════════════════════════════════════════════════════════════════
+    # 5. AGENDA ITEMS
+    # ══════════════════════════════════════════════════════════════════════════════
+    
+    st.subheader("📑 Meeting Agenda")
+    
+    # Standing agenda items
+    st.write("**Standing Items:**")
+    
+    # Load agenda data
+    if selected_record and selected_record.get('agenda_items'):
+        try:
+            agenda_data = json.loads(selected_record['agenda_items']) if isinstance(selected_record['agenda_items'], str) else selected_record['agenda_items']
+        except:
+            agenda_data = {}
+    else:
+        agenda_data = {}
+    
+    for item in STANDING_AGENDA_ITEMS:
+        with st.expander(f"📌 {item}"):
+            agenda_data[item] = st.text_area(
+                f"Notes for {item}", 
+                value=agenda_data.get(item, ''),
+                height=100,
+                key=f"agenda_{item.replace(' ', '_')}",
+                placeholder=f"Add information/updates for {item}..."
+            )
+    
+    # Additional agenda items
+    st.write("**Additional Items:**")
+    
+    if 'additional_agenda' not in agenda_data:
+        agenda_data['additional_agenda'] = []
+    
+    additional_items = agenda_data.get('additional_agenda', [])
+    
+    for idx, item in enumerate(additional_items):
+        col_a, col_b = st.columns([5, 1])
+        with col_a:
+            additional_items[idx] = st.text_input(f"Item {idx+1}", value=item, key=f"additional_item_{idx}")
+        with col_b:
+            st.write("")
+            st.write("")
+            if st.button("🗑️", key=f"delete_agenda_{idx}"):
+                additional_items.pop(idx)
+                st.rerun()
+    
+    if st.button("➕ Add Agenda Item"):
+        additional_items.append("")
+        st.rerun()
+    
+    agenda_data['additional_agenda'] = additional_items
+    
+    st.markdown("---")
+    
+    # ══════════════════════════════════════════════════════════════════════════════
+    # 6. MINUTES (Manual OR AI Transcript)
+    # ══════════════════════════════════════════════════════════════════════════════
+    
+    st.subheader("📄 Meeting Minutes")
+    
+    minutes_method = st.radio("Minutes Entry Method", options=["✍️ Manual Entry", "🤖 AI from Transcript"], horizontal=True)
+    
+    if minutes_method == "✍️ Manual Entry":
+        default_minutes = selected_record.get('minutes', '') if selected_record else ''
+        minutes = st.text_area("Minutes", value=default_minutes, height=400, key="minutes",
+                               placeholder="Enter meeting minutes here...")
+    
+    else:  # AI from Transcript
+        st.write("**Upload Transcript (.txt or .docx)**")
+        
+        transcript_file = st.file_uploader("Upload meeting transcript", type=['txt', 'docx'], key="transcript_upload")
+        
+        if transcript_file:
+            # Read transcript
+            if transcript_file.name.endswith('.txt'):
+                transcript_text = transcript_file.read().decode('utf-8')
+            else:  # .docx
+                if DOCX_AVAILABLE:
+                    try:
+                        doc = docx.Document(transcript_file)
+                        transcript_text = '\n'.join([para.text for para in doc.paragraphs])
+                    except Exception as e:
+                        st.error(f"Could not read .docx file: {e}")
+                        transcript_text = ""
+                else:
+                    st.error("python-docx not installed. Please use .txt file.")
+                    transcript_text = ""
+            
+            if transcript_text and GROQ_KEY:
+                if st.button("🤖 Extract Minutes with AI", type="primary"):
+                    with st.spinner("Processing transcript with AI..."):
+                        try:
+                            from groq import Groq
+                            client = Groq(api_key=GROQ_KEY)
+                            
+                            prompt = f"""Extract structured meeting minutes from this transcript.
 
-with col1:
-    meeting_date = st.date_input("Meeting Date", value=default_date, key="staff_date")
+Organize into sections matching these agenda items:
+{', '.join(STANDING_AGENDA_ITEMS)}
 
-with col2:
-    term = st.text_input("Term", value=default_term, placeholder="T1", key="staff_term")
+Plus any additional items discussed.
 
-with col3:
-    week_number = st.number_input("Week Number", min_value=1, max_value=11, value=default_week, key="staff_week")
+Transcript:
+{transcript_text}
 
-default_minute_taker = selected_record.get('minute_taker', get_staff_name()) if selected_record else get_staff_name()
-minute_taker = st.text_input("Minute Taker", value=default_minute_taker, key="minute_taker")
+Format the output as clear meeting minutes with each agenda item as a heading and bullet points under each."""
 
-st.markdown("---")
-
-st.subheader("👥 Attendance")
-
-default_attendees = selected_record.get('attendees', '') if selected_record else ''
-attendees = st.text_area("Attendees Present", value=default_attendees, height=80, key="attendees", 
-                         placeholder="List staff members present...")
-
-default_apologies = selected_record.get('apologies', '') if selected_record else ''
-apologies = st.text_area("Apologies", value=default_apologies, height=60, key="apologies",
-                         placeholder="List staff members with apologies...")
-
-st.markdown("---")
-
-st.subheader("📄 Meeting Minutes")
-
-default_minutes = selected_record.get('minutes', '') if selected_record else ''
-minutes = st.text_area("Minutes", value=default_minutes, height=400, key="minutes",
-                       placeholder="Enter meeting minutes here...")
-
-st.markdown("---")
+                            response = client.chat.completions.create(
+                                model="llama-3.3-70b-versatile",
+                                messages=[{"role": "user", "content": prompt}],
+                                temperature=0.3,
+                                max_tokens=4000
+                            )
+                            
+                            extracted_minutes = response.choices[0].message.content
+                            
+                            st.success("✅ Minutes extracted!")
+                            minutes = st.text_area("Edit AI-Generated Minutes", value=extracted_minutes, height=400, key="ai_minutes")
+                            
+                        except Exception as e:
+                            st.error(f"AI extraction failed: {e}")
+                            minutes = st.text_area("Manual entry (AI failed)", height=400, key="fallback_minutes")
+            elif not GROQ_KEY:
+                st.warning("⚠️ GROQ_API_KEY not configured. Using manual entry.")
+                minutes = st.text_area("Minutes", height=400, key="manual_minutes_fallback")
+            else:
+                minutes = ""
+        else:
+            st.info("Upload a transcript file to use AI extraction")
+            minutes = ""
+    
+    st.markdown("---")
 
 st.subheader("✅ Actions")
 
@@ -189,7 +499,11 @@ if st.button("💾 Save Meeting", type="primary", use_container_width=True, key=
         "minute_taker": minute_taker.strip(),
         "attendees": attendees.strip(),
         "apologies": apologies.strip(),
-        "minutes": minutes.strip(),
+        "acknowledgement_done": acknowledgement_done,
+        "acknowledgement_by": acknowledgement_by.strip(),
+        "icebreaker": icebreaker_notes.strip(),
+        "agenda_items": json.dumps(agenda_data),
+        "minutes": minutes.strip() if minutes else '',
         "actions": json.dumps(actions) if actions else '[]'
     }
     
