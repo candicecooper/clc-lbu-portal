@@ -156,6 +156,31 @@ else:
     idx = meeting_options.index(selected_option) - 1
     selected_record = existing_meetings[idx]
     st.session_state.current_staff_meeting_id = selected_record['id']
+    
+    # Delete meeting option (only for existing meetings)
+    with st.expander("🗑️ Delete This Meeting", expanded=False):
+        st.warning("⚠️ **Warning:** This will permanently delete this meeting record!")
+        
+        delete_confirmation = st.text_input(
+            "Type 'DELETE' to confirm deletion",
+            key="delete_confirm",
+            placeholder="Type DELETE here"
+        )
+        
+        col_del1, col_del2 = st.columns([1, 3])
+        with col_del1:
+            if st.button("🗑️ Delete Meeting", type="secondary", disabled=(delete_confirmation != "DELETE")):
+                try:
+                    supabase.table('staff_meetings').delete().eq('id', st.session_state.current_staff_meeting_id).execute()
+                    st.success("✅ Meeting deleted successfully!")
+                    st.session_state.current_staff_meeting_id = None
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"⚠️ Could not delete meeting: {e}")
+        
+        with col_del2:
+            if delete_confirmation != "DELETE":
+                st.caption("Type DELETE above to enable deletion")
 
 st.markdown("---")
 
@@ -363,6 +388,39 @@ with tab1:
     # Additional agenda items
     st.write("**Additional Items:**")
     
+    # Load pending agenda items from staff
+    col_load1, col_load2 = st.columns([1, 3])
+    with col_load1:
+        if st.button("📥 Load Staff Submissions", key="load_pending_items", type="secondary"):
+            try:
+                # Fetch pending items for this week/term
+                pending_result = supabase.table('staff_agenda_items').select('*').eq('status', 'pending').execute()
+                
+                if pending_result.data:
+                    # Filter by week/term if available
+                    matching_items = [
+                        item for item in pending_result.data
+                        if (not week_number or item.get('week_number') == week_number) and
+                           (not term or item.get('term') == term)
+                    ]
+                    
+                    if matching_items:
+                        for item in matching_items:
+                            item_text = f"{item['item_text']} (submitted by {item['submitted_by']})"
+                            if item_text not in additional_items:
+                                additional_items.append(item_text)
+                        st.success(f"✅ Loaded {len(matching_items)} pending agenda item(s)!")
+                        st.rerun()
+                    else:
+                        st.info("No pending items found for this week/term")
+                else:
+                    st.info("No pending agenda items")
+            except Exception as e:
+                st.warning(f"Could not load agenda items: {e}")
+    
+    with col_load2:
+        st.caption("Load agenda items submitted by staff for this week")
+    
     if 'additional_agenda' not in agenda_data:
         agenda_data['additional_agenda'] = []
     
@@ -558,6 +616,10 @@ with st.expander("📁 Attach Files to Meeting", expanded=False):
     if meeting_uploaded_files:
         st.write(f"**{len(meeting_uploaded_files)} file(s) selected**")
         
+        # Show selected files
+        for f in meeting_uploaded_files:
+            st.caption(f"📄 {f.name}")
+        
         # Description for all files
         meeting_batch_desc = st.text_input("Description for all files (optional)", 
                                           key="meeting_batch_desc",
@@ -573,8 +635,9 @@ with st.expander("📁 Attach Files to Meeting", expanded=False):
                     "type": file.type,
                     "uploaded_date": str(datetime.date.today())
                 })
-            st.success(f"✅ Added {len(meeting_uploaded_files)} file(s) to meeting!")
-            st.info("💡 Note: File metadata saved. For full file storage, integrate with Supabase Storage.")
+            st.success(f"✅ Successfully added {len(meeting_uploaded_files)} file(s) to meeting!")
+            st.info("💡 Files recorded. Click 'Save Meeting' at the bottom to save changes.")
+            st.info("ℹ️ Note: File metadata saved. For full file storage, integrate with Supabase Storage.")
             st.rerun()
 
 st.markdown("---")
@@ -719,6 +782,10 @@ Format as clear, structured notes."""
     if uploaded_files:
         st.write(f"**{len(uploaded_files)} file(s) selected**")
         
+        # Show selected files
+        for f in uploaded_files:
+            st.caption(f"📄 {f.name}")
+        
         # Description for all files (optional)
         batch_description = st.text_input("Description for all files (optional)", 
                                          key="pd_batch_desc",
@@ -734,8 +801,9 @@ Format as clear, structured notes."""
                     "type": file.type,
                     "uploaded_date": str(datetime.date.today())
                 })
-            st.success(f"✅ Added {len(uploaded_files)} attachment(s)!")
-            st.info("💡 Note: File metadata saved. For full file storage, integrate with Supabase Storage.")
+            st.success(f"✅ Successfully added {len(uploaded_files)} file(s) to PD!")
+            st.info("💡 Files recorded. Click 'Save Meeting' at the bottom to save changes.")
+            st.info("ℹ️ Note: File metadata saved. For full file storage, integrate with Supabase Storage.")
             st.rerun()
 
 st.markdown("---")
