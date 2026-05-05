@@ -187,6 +187,18 @@ with tab2:
                     except:
                         pass
                 
+                # Show meeting attachments if present
+                if meeting.get('meeting_attachments'):
+                    st.markdown("---")
+                    st.write("**📎 Meeting Attachments:**")
+                    try:
+                        attachments = json.loads(meeting['meeting_attachments']) if isinstance(meeting['meeting_attachments'], str) else meeting['meeting_attachments']
+                        if attachments:
+                            for att in attachments:
+                                st.write(f"📎 {att.get('name', '')} - {att.get('description', '')}")
+                    except:
+                        pass
+                
                 # Show PD information if present
                 if meeting.get('pd_notes') or meeting.get('pd_attendees'):
                     st.markdown("---")
@@ -508,6 +520,66 @@ with col_a4:
 st.markdown("---")
 
 # ══════════════════════════════════════════════════════════════════════════════
+# MEETING ATTACHMENTS (General)
+# ══════════════════════════════════════════════════════════════════════════════
+
+st.subheader("📎 Meeting Attachments")
+
+with st.expander("📁 Attach Files to Meeting", expanded=False):
+    
+    # Load existing meeting attachments
+    if selected_record and selected_record.get('meeting_attachments'):
+        try:
+            meeting_attachments = json.loads(selected_record['meeting_attachments']) if isinstance(selected_record['meeting_attachments'], str) else selected_record['meeting_attachments']
+        except:
+            meeting_attachments = []
+    else:
+        meeting_attachments = []
+    
+    # Display existing attachments
+    if meeting_attachments:
+        st.write("**Attached Files:**")
+        for idx, attachment in enumerate(meeting_attachments):
+            col_m1, col_m2 = st.columns([4, 1])
+            with col_m1:
+                st.write(f"📎 {attachment.get('name', 'Unnamed file')} ({attachment.get('filename', '')}) - {attachment.get('description', 'No description')}")
+            with col_m2:
+                if st.button("🗑️", key=f"delete_meeting_attachment_{idx}"):
+                    meeting_attachments.pop(idx)
+                    st.rerun()
+    
+    # Add multiple attachments at once
+    st.write("**Add Files:**")
+    meeting_uploaded_files = st.file_uploader("Upload files (select multiple)", 
+                                             type=['pdf', 'docx', 'pptx', 'txt', 'jpg', 'png', 'xlsx', 'csv', 'mp4', 'mov'],
+                                             accept_multiple_files=True,
+                                             key="meeting_file_upload")
+    
+    if meeting_uploaded_files:
+        st.write(f"**{len(meeting_uploaded_files)} file(s) selected**")
+        
+        # Description for all files
+        meeting_batch_desc = st.text_input("Description for all files (optional)", 
+                                          key="meeting_batch_desc",
+                                          placeholder="E.g., Budget documents, Policy drafts")
+        
+        if st.button("➕ Add All Files", key="add_all_meeting_attachments", type="secondary"):
+            for file in meeting_uploaded_files:
+                meeting_attachments.append({
+                    "name": file.name,
+                    "description": meeting_batch_desc if meeting_batch_desc else "",
+                    "filename": file.name,
+                    "size": file.size,
+                    "type": file.type,
+                    "uploaded_date": str(datetime.date.today())
+                })
+            st.success(f"✅ Added {len(meeting_uploaded_files)} file(s) to meeting!")
+            st.info("💡 Note: File metadata saved. For full file storage, integrate with Supabase Storage.")
+            st.rerun()
+
+st.markdown("---")
+
+# ══════════════════════════════════════════════════════════════════════════════
 # 7. PROFESSIONAL DEVELOPMENT
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -631,46 +703,40 @@ Format as clear, structured notes."""
         for idx, attachment in enumerate(pd_attachments):
             col_att1, col_att2 = st.columns([4, 1])
             with col_att1:
-                st.write(f"📎 {attachment.get('name', 'Unnamed file')} - {attachment.get('description', 'No description')}")
+                st.write(f"📎 {attachment.get('name', 'Unnamed file')} ({attachment.get('filename', '')}) - {attachment.get('description', 'No description')}")
             with col_att2:
-                if st.button("🗑️", key=f"delete_attachment_{idx}"):
+                if st.button("🗑️", key=f"delete_pd_attachment_{idx}"):
                     pd_attachments.pop(idx)
                     st.rerun()
     
-    # Add new attachment
-    st.write("**Add New Attachment:**")
-    uploaded_file = st.file_uploader("Upload file", type=['pdf', 'docx', 'pptx', 'txt', 'jpg', 'png'], 
-                                    key="pd_file_upload")
+    # Add multiple attachments at once
+    st.write("**Add New Attachments:**")
+    uploaded_files = st.file_uploader("Upload files (select multiple)", 
+                                     type=['pdf', 'docx', 'pptx', 'txt', 'jpg', 'png', 'xlsx', 'mp4', 'mov'],
+                                     accept_multiple_files=True,
+                                     key="pd_file_upload")
     
-    col_att_a, col_att_b, col_att_c = st.columns([3, 2, 1])
-    
-    with col_att_a:
-        attachment_name = st.text_input("File Name", key="attachment_name", 
-                                      value=uploaded_file.name if uploaded_file else "",
-                                      placeholder="Name for this attachment")
-    
-    with col_att_b:
-        attachment_desc = st.text_input("Description", key="attachment_desc",
-                                      placeholder="Brief description")
-    
-    with col_att_c:
-        st.write("")
-        st.write("")
-        if st.button("➕ Add", key="add_attachment_btn", disabled=not uploaded_file):
-            if uploaded_file and attachment_name:
-                # Note: In production, upload to Supabase Storage
-                # For now, storing metadata only
+    if uploaded_files:
+        st.write(f"**{len(uploaded_files)} file(s) selected**")
+        
+        # Description for all files (optional)
+        batch_description = st.text_input("Description for all files (optional)", 
+                                         key="pd_batch_desc",
+                                         placeholder="E.g., Restorative Practices Resources")
+        
+        if st.button("➕ Add All Files", key="add_all_pd_attachments", type="secondary"):
+            for file in uploaded_files:
                 pd_attachments.append({
-                    "name": attachment_name,
-                    "description": attachment_desc,
-                    "filename": uploaded_file.name,
-                    "size": uploaded_file.size,
-                    "type": uploaded_file.type,
+                    "name": file.name,
+                    "description": batch_description if batch_description else "",
+                    "filename": file.name,
+                    "size": file.size,
+                    "type": file.type,
                     "uploaded_date": str(datetime.date.today())
                 })
-                st.success(f"✅ Attachment '{attachment_name}' recorded!")
-                st.info("💡 Note: File metadata saved. For full file storage, integrate with Supabase Storage.")
-                st.rerun()
+            st.success(f"✅ Added {len(uploaded_files)} attachment(s)!")
+            st.info("💡 Note: File metadata saved. For full file storage, integrate with Supabase Storage.")
+            st.rerun()
 
 st.markdown("---")
 
@@ -693,6 +759,7 @@ if st.button("💾 Save Meeting", type="primary", use_container_width=True, key=
         "agenda_items": json.dumps(agenda_data),
         "minutes": minutes.strip() if minutes else '',
         "actions": json.dumps(actions) if actions else '[]',
+        "meeting_attachments": json.dumps(meeting_attachments) if meeting_attachments else '[]',
         "pd_attendees": pd_attendees.strip(),
         "pd_absent": pd_absent.strip(),
         "pd_notes": pd_notes.strip() if pd_notes else '',
