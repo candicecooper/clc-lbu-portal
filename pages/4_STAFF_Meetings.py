@@ -3,6 +3,7 @@ import streamlit as st
 from supabase import create_client
 import datetime
 import json
+import os
 
 # For transcript upload
 try:
@@ -329,8 +330,8 @@ with tab1:
     
     st.subheader("🪃 Acknowledgement of Country")
     
-    # Video playback
-    VIDEO_URL = st.secrets.get("ACKNOWLEDGEMENT_VIDEO_URL", "")
+    # Video playback - Read from environment variable
+    VIDEO_URL = os.environ.get("ACKNOWLEDGEMENT_VIDEO_URL", "") or st.secrets.get("ACKNOWLEDGEMENT_VIDEO_URL", "")
     
     if VIDEO_URL:
         with st.expander("📹 Watch Acknowledgement of Country Video", expanded=False):
