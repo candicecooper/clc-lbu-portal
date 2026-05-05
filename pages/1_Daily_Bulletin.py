@@ -864,6 +864,19 @@ with page_tab:
                 st.session_state.selected_date = d; st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
+    # Jump to Date
+    st.markdown('<div style="background:#f8fdf6;border:1.5px solid #d8ead2;border-radius:10px;padding:.6rem 1rem;margin:.75rem 0;">', unsafe_allow_html=True)
+    jump_col1, jump_col2, jump_col3 = st.columns([1,2,1])
+    with jump_col1:
+        st.markdown('<div style="font-size:.8rem;font-weight:600;color:#4a8f33;padding-top:.5rem;">📅 Jump to Date:</div>', unsafe_allow_html=True)
+    with jump_col2:
+        jump_date = st.date_input("Select date", value=current_date, key="jump_date_picker", label_visibility="collapsed")
+    with jump_col3:
+        if st.button("→ Go", key="jump_to_date", use_container_width=True, type="primary"):
+            st.session_state.selected_date = jump_date
+            st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+
     # Edit controls
     ctrl_cols = st.columns([1,1,1,3,1])
     if st.session_state.authenticated:
