@@ -329,7 +329,16 @@ with tab1:
     
     st.subheader("🪃 Acknowledgement of Country")
     
-    st.info("📹 **Video placeholder** - You can add the Acknowledgement video here later")
+    # Video playback
+    VIDEO_URL = st.secrets.get("ACKNOWLEDGEMENT_VIDEO_URL", "")
+    
+    if VIDEO_URL:
+        with st.expander("📹 Watch Acknowledgement of Country Video", expanded=False):
+            st.video(VIDEO_URL)
+            st.caption("Play this video at the start of the meeting")
+    else:
+        st.info("📹 **Video not configured yet** - Add ACKNOWLEDGEMENT_VIDEO_URL to Render environment variables to enable video playback")
+    
     acknowledgement_done = st.checkbox("✅ Acknowledgement completed", value=selected_record.get('acknowledgement_done', False) if selected_record else False)
     acknowledgement_by = st.text_input("Led by", value=selected_record.get('acknowledgement_by', '') if selected_record else '', placeholder="Who led the Acknowledgement?")
     
