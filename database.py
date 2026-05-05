@@ -32,24 +32,24 @@ def get_supabase() -> Client:
 
 def get_bulletin(bulletin_date: date):
     sb = get_supabase()
-    result = sb.table("daily_bulletins").select("*").eq("bulletin_date", str(bulletin_date)).execute()
+    result = sb.table("daily_bulletins").select("*").eq("date", str(bulletin_date)).execute()
     return result.data[0] if result.data else None
 
 def save_bulletin(bulletin_date: date, data: dict):
     sb = get_supabase()
     existing = get_bulletin(bulletin_date)
-    data["bulletin_date"] = str(bulletin_date)
+    data["date"] = str(bulletin_date)
     data["updated_at"] = datetime.utcnow().isoformat()
     
     if existing:
-        sb.table("daily_bulletins").update(data).eq("bulletin_date", str(bulletin_date)).execute()
+        sb.table("daily_bulletins").update(data).eq("date", str(bulletin_date)).execute()
     else:
         data["created_at"] = datetime.utcnow().isoformat()
         sb.table("daily_bulletins").insert(data).execute()
 
 def get_bulletins_range(start: date, end: date):
     sb = get_supabase()
-    result = sb.table("daily_bulletins").select("bulletin_date, fun_fact").gte("bulletin_date", str(start)).lte("bulletin_date", str(end)).order("bulletin_date", desc=True).execute()
+    result = sb.table("daily_bulletins").select("date, fun_fact").gte("date", str(start)).lte("date", str(end)).order("date", desc=True).execute()
     return result.data
 
 def search_bulletins(keyword: str):
@@ -65,8 +65,8 @@ def search_bulletins(keyword: str):
 
 def get_all_bulletin_dates():
     sb = get_supabase()
-    result = sb.table("daily_bulletins").select("bulletin_date").order("bulletin_date", desc=True).execute()
-    return [row["bulletin_date"] for row in result.data]
+    result = sb.table("daily_bulletins").select("date").order("date", desc=True).execute()
+    return [row["date"] for row in result.data]
 
 # ══════════════════════════════════════════════════════════════════════════════
 # BULLETIN NOTICES FUNCTIONS
