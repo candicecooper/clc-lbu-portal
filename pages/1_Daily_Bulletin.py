@@ -149,15 +149,15 @@ def load_bulletin(d):
         data["vehicle_bookings"] = converted
     sr = data.get("staff_responsibilities", {})
     resp_keys = ["kitchen_duties", "meeting_pd_focus", "chair", "minutes"]
-    is_empty = not any(sr.get(k, "").strip() for k in resp_keys)
+    is_empty = not any((sr.get(k) or "").strip() for k in resp_keys)
     monday = d - timedelta(days=d.weekday())
     if is_empty and d != monday:
         monday_data = db.get_bulletin(monday)
         if monday_data:
             monday_sr = monday_data.get("staff_responsibilities", {})
-            if any(monday_sr.get(k, "").strip() for k in resp_keys):
+            if any((monday_sr.get(k) or "").strip() for k in resp_keys):
                 data["staff_responsibilities"] = monday_sr
-    if not data.get("fun_fact", "").strip():
+    if not (data.get("fun_fact") or "").strip():
         data["fun_fact"] = daily_fun_fact(d)
     return data
 
@@ -388,7 +388,7 @@ def load_scheduled_meetings(for_date=None):
         res = _get_sb().table("tm_schedules").select("*").eq("show_in_bulletin", True).execute()
         meetings = []
         for r in (res.data or []):
-            if r.get("day_of_week","").strip().lower() == day_name.lower():
+            if (r.get("day_of_week") or "").strip().lower() == day_name.lower():
                 prog = r.get("program","")
                 prog_label = {"JP":"Junior Primary","PY":"Primary Years","SY":"Senior Years",
                               "STAFF":"All Staff","ADMIN":"Admin"}.get(prog, prog)
@@ -690,8 +690,8 @@ if params.get("display") == "true":
     with r1c1:
         # ── SPLIT: Staff Absent and Student Absent as two separate tables ──
         _sa = d_data.get("staff_absent", [])
-        _staff_rows   = [r for r in _sa if r.get("Staff Absence", "").strip()]
-        _student_rows = [r for r in _sa if r.get("Student Absence", "").strip()]
+        _staff_rows   = [r for r in _sa if (r.get("Staff Absence") or "").strip()]
+        _student_rows = [r for r in _sa if (r.get("Student Absence") or "").strip()]
         st.markdown(
             f'<div class="dp"><div class="dp-header green">🙅 Staff Absent</div>'
             f'<div class="dp-body"><table class="dt">'
@@ -928,7 +928,7 @@ with page_tab:
         import pandas as pd
         if edit:
             auto_fact = daily_fun_fact(current_date)
-            current_fact = bulletin_data.get("fun_fact","").strip()
+            current_fact = (bulletin_data.get("fun_fact") or "").strip()
             fc1, fc2 = st.columns([5,1])
             with fc1:
                 new_fact = st.text_input("💡 Fun Fact of the Day", value=current_fact if current_fact else auto_fact)
@@ -949,8 +949,8 @@ with page_tab:
                 st.markdown('</div></div>', unsafe_allow_html=True)
             else:
                 _sa = bulletin_data["staff_absent"]
-                _s_rows = [r for r in _sa if r.get("Staff Absence","").strip()]
-                _st_rows = [r for r in _sa if r.get("Student Absence","").strip()]
+                _s_rows = [r for r in _sa if (r.get("Staff Absence") or "").strip()]
+                _st_rows = [r for r in _sa if (r.get("Student Absence") or "").strip()]
                 # Staff Absent card
                 st.markdown('<div class="section-card"><div class="section-card-header green"><h3>🙅 Staff Absent</h3></div><div class="section-card-body">', unsafe_allow_html=True)
                 if _s_rows:
