@@ -110,7 +110,7 @@ BSEM_ICEBREAKERS = [
 STANDING_AGENDA_ITEMS = [
     "Transition Coordinator Info",
     "Manager Info",
-    "PAC (Pastoral Care)",
+    "PAC (Personnel Advisory Committee)",
     "WHS (Work Health & Safety)",
     "Social Club",
     "Finance"
@@ -186,6 +186,27 @@ with tab2:
                             st.write(f"- {action.get('action', '')} - **{action.get('owner', '')}** - Due: {action.get('due_date', '')}")
                     except:
                         pass
+                
+                # Show PD information if present
+                if meeting.get('pd_notes') or meeting.get('pd_attendees'):
+                    st.markdown("---")
+                    st.write("**🎓 Professional Development:**")
+                    if meeting.get('pd_attendees'):
+                        st.write(f"**PD Attendees:** {meeting['pd_attendees']}")
+                    if meeting.get('pd_absent'):
+                        st.write(f"**PD Absent:** {meeting['pd_absent']}")
+                    if meeting.get('pd_notes'):
+                        st.write("**PD Notes:**")
+                        st.write(meeting['pd_notes'])
+                    if meeting.get('pd_attachments'):
+                        try:
+                            attachments = json.loads(meeting['pd_attachments']) if isinstance(meeting['pd_attachments'], str) else meeting['pd_attachments']
+                            if attachments:
+                                st.write("**PD Attachments:**")
+                                for att in attachments:
+                                    st.write(f"📎 {att.get('name', '')} - {att.get('description', '')}")
+                        except:
+                            pass
     else:
         st.info("No archived meetings yet.")
 
@@ -487,6 +508,173 @@ with col_a4:
 st.markdown("---")
 
 # ══════════════════════════════════════════════════════════════════════════════
+# 7. PROFESSIONAL DEVELOPMENT
+# ══════════════════════════════════════════════════════════════════════════════
+
+st.subheader("🎓 Professional Development Component")
+
+with st.expander("📚 PD Session Details", expanded=True):
+    
+    # PD Attendance (auto-populated but editable)
+    st.write("**PD Attendance** (Auto-filled from meeting attendance - edit if needed)")
+    
+    col_pd1, col_pd2 = st.columns(2)
+    
+    with col_pd1:
+        # Pre-fill with meeting attendees but allow editing
+        default_pd_attendees = selected_record.get('pd_attendees', attendees) if selected_record else attendees
+        pd_attendees = st.text_area("PD Attendees", value=default_pd_attendees, height=80, key="pd_attendees",
+                                   placeholder="Staff who attended PD session...")
+    
+    with col_pd2:
+        default_pd_absent = selected_record.get('pd_absent', apologies) if selected_record else apologies
+        pd_absent = st.text_area("PD Absentees/Left Early", value=default_pd_absent, height=80, key="pd_absent",
+                                placeholder="Staff who missed PD or left early...")
+    
+    st.markdown("---")
+    
+    # PD Content Entry Method
+    st.write("**PD Content Entry:**")
+    pd_method = st.radio("Choose entry method", options=["✍️ Manual Entry", "🤖 AI from Transcript"], 
+                       horizontal=True, key="pd_method")
+    
+    if pd_method == "✍️ Manual Entry":
+        default_pd_notes = selected_record.get('pd_notes', '') if selected_record else ''
+        pd_notes = st.text_area("PD Main Points / Notes", value=default_pd_notes, height=300, key="pd_notes",
+                               placeholder="Document key points from the PD session...")
+    
+    else:  # AI from Transcript
+        st.write("**Upload PD Transcript**")
+        
+        pd_transcript_file = st.file_uploader("Upload PD transcript (.txt or .docx)", 
+                                             type=['txt', 'docx'], 
+                                             key="pd_transcript_upload")
+        
+        if pd_transcript_file:
+            # Read transcript
+            if pd_transcript_file.name.endswith('.txt'):
+                pd_transcript_text = pd_transcript_file.read().decode('utf-8')
+            else:  # .docx
+                if DOCX_AVAILABLE:
+                    try:
+                        pd_doc = docx.Document(pd_transcript_file)
+                        pd_transcript_text = '\n'.join([para.text for para in pd_doc.paragraphs])
+                    except Exception as e:
+                        st.error(f"Could not read .docx file: {e}")
+                        pd_transcript_text = ""
+                else:
+                    st.error("python-docx not installed. Please use .txt file.")
+                    pd_transcript_text = ""
+            
+            if pd_transcript_text and GROQ_KEY:
+                if st.button("🤖 Extract PD Notes with AI", type="secondary", key="extract_pd_ai"):
+                    with st.spinner("Processing PD transcript..."):
+                        try:
+                            from groq import Groq
+                            client = Groq(api_key=GROQ_KEY)
+                            
+                            prompt = f"""Extract the main points and key learnings from this professional development session transcript.
+
+Structure the output with:
+- Topic/Title of PD session
+- Key points covered (bullet points)
+- Main takeaways
+- Any action items or next steps
+
+Transcript:
+{pd_transcript_text}
+
+Format as clear, structured notes."""
+
+                            response = client.chat.completions.create(
+                                model="llama-3.3-70b-versatile",
+                                messages=[{"role": "user", "content": prompt}],
+                                temperature=0.3,
+                                max_tokens=3000
+                            )
+                            
+                            extracted_pd = response.choices[0].message.content
+                            
+                            st.success("✅ PD notes extracted!")
+                            pd_notes = st.text_area("Edit AI-Generated PD Notes", value=extracted_pd, 
+                                                   height=300, key="ai_pd_notes")
+                            
+                        except Exception as e:
+                            st.error(f"AI extraction failed: {e}")
+                            pd_notes = st.text_area("Manual entry (AI failed)", height=300, key="fallback_pd_notes")
+            elif not GROQ_KEY:
+                st.warning("⚠️ GROQ_API_KEY not configured. Using manual entry.")
+                pd_notes = st.text_area("PD Notes", height=300, key="manual_pd_notes_fallback")
+            else:
+                pd_notes = ""
+        else:
+            st.info("Upload a transcript to use AI extraction")
+            pd_notes = ""
+    
+    st.markdown("---")
+    
+    # PD Attachments
+    st.write("**PD Attachments / Resources:**")
+    
+    # Load existing attachments
+    if selected_record and selected_record.get('pd_attachments'):
+        try:
+            pd_attachments = json.loads(selected_record['pd_attachments']) if isinstance(selected_record['pd_attachments'], str) else selected_record['pd_attachments']
+        except:
+            pd_attachments = []
+    else:
+        pd_attachments = []
+    
+    # Display existing attachments
+    if pd_attachments:
+        st.write("**Uploaded Attachments:**")
+        for idx, attachment in enumerate(pd_attachments):
+            col_att1, col_att2 = st.columns([4, 1])
+            with col_att1:
+                st.write(f"📎 {attachment.get('name', 'Unnamed file')} - {attachment.get('description', 'No description')}")
+            with col_att2:
+                if st.button("🗑️", key=f"delete_attachment_{idx}"):
+                    pd_attachments.pop(idx)
+                    st.rerun()
+    
+    # Add new attachment
+    st.write("**Add New Attachment:**")
+    uploaded_file = st.file_uploader("Upload file", type=['pdf', 'docx', 'pptx', 'txt', 'jpg', 'png'], 
+                                    key="pd_file_upload")
+    
+    col_att_a, col_att_b, col_att_c = st.columns([3, 2, 1])
+    
+    with col_att_a:
+        attachment_name = st.text_input("File Name", key="attachment_name", 
+                                      value=uploaded_file.name if uploaded_file else "",
+                                      placeholder="Name for this attachment")
+    
+    with col_att_b:
+        attachment_desc = st.text_input("Description", key="attachment_desc",
+                                      placeholder="Brief description")
+    
+    with col_att_c:
+        st.write("")
+        st.write("")
+        if st.button("➕ Add", key="add_attachment_btn", disabled=not uploaded_file):
+            if uploaded_file and attachment_name:
+                # Note: In production, upload to Supabase Storage
+                # For now, storing metadata only
+                pd_attachments.append({
+                    "name": attachment_name,
+                    "description": attachment_desc,
+                    "filename": uploaded_file.name,
+                    "size": uploaded_file.size,
+                    "type": uploaded_file.type,
+                    "uploaded_date": str(datetime.date.today())
+                })
+                st.success(f"✅ Attachment '{attachment_name}' recorded!")
+                st.info("💡 Note: File metadata saved. For full file storage, integrate with Supabase Storage.")
+                st.rerun()
+
+st.markdown("---")
+
+# ══════════════════════════════════════════════════════════════════════════════
 # SAVE BUTTON
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -504,7 +692,11 @@ if st.button("💾 Save Meeting", type="primary", use_container_width=True, key=
         "icebreaker": icebreaker_notes.strip(),
         "agenda_items": json.dumps(agenda_data),
         "minutes": minutes.strip() if minutes else '',
-        "actions": json.dumps(actions) if actions else '[]'
+        "actions": json.dumps(actions) if actions else '[]',
+        "pd_attendees": pd_attendees.strip(),
+        "pd_absent": pd_absent.strip(),
+        "pd_notes": pd_notes.strip() if pd_notes else '',
+        "pd_attachments": json.dumps(pd_attachments) if pd_attachments else '[]'
     }
     
     try:
