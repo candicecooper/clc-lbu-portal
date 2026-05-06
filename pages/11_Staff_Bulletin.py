@@ -528,6 +528,138 @@ Open Staff Bulletin →</a></p>
     except Exception:
         return False
 
+def get_sa_term(d: date) -> str:
+    """Best-guess SA school term from a date."""
+    y = d.year
+    ranges = [
+        (date(y, 1, 20),  date(y, 4, 18),  "Term 1"),
+        (date(y, 4, 28),  date(y, 7, 4),   "Term 2"),
+        (date(y, 7, 21),  date(y, 9, 26),  "Term 3"),
+        (date(y, 10, 13), date(y, 12, 12), "Term 4"),
+    ]
+    for start, end, label in ranges:
+        if start <= d <= end:
+            return label
+    return "Term ?"
+
+def generate_bulletin_html(edition, notices, term_override=None) -> str:
+    monday    = date.fromisoformat(str(edition["week_start"]))
+    term      = term_override or get_sa_term(monday)
+    pub_date  = fmt_date(edition.get("published_at")) or adl_today().strftime("%-d %B %Y")
+    week_lbl  = edition["week_label"]
+
+    CAT_COLOURS = {
+        "action":   ("#991b1b", "#fee2e2", "#dc2626"),
+        "whs":      ("#065f46", "#d1fae5", "#059669"),
+        "policy":   ("#1e40af", "#dbeafe", "#2563eb"),
+        "reminder": ("#92400e", "#fef3c7", "#d97706"),
+        "info":     ("#5b21b6", "#ede9fe", "#7c3aed"),
+        "general":  ("#374151", "#f3f4f6", "#9ca3af"),
+    }
+    CAT_NAMES = {
+        "action": "Action Required", "whs": "WHS", "policy": "Policy Update",
+        "reminder": "Reminder", "info": "Information", "general": "General",
+    }
+
+    notice_html = ""
+    for n in notices:
+        cat    = n.get("category", "general")
+        fg, bg, border = CAT_COLOURS.get(cat, CAT_COLOURS["general"])
+        label  = CAT_NAMES.get(cat, cat.title())
+        body   = re.sub('<[^<]+?>', '', n.get("content", "")).replace("\n", "<br>")
+        notice_html += f"""
+        <div style="border:1px solid #e5e7eb;border-left:5px solid {border};
+                    border-radius:8px;padding:18px 22px;margin-bottom:14px;
+                    background:#ffffff;page-break-inside:avoid;">
+          <div style="margin-bottom:10px;">
+            <span style="background:{bg};color:{fg};border-radius:20px;
+                         padding:3px 12px;font-size:11px;font-weight:700;
+                         text-transform:uppercase;letter-spacing:0.05em;">{label}</span>
+            <span style="font-size:12px;color:#6b7280;margin-left:10px;">from {n.get('author','')}</span>
+          </div>
+          <div style="font-size:16px;font-weight:700;color:#111827;margin-bottom:8px;">{n['title']}</div>
+          <div style="font-size:14px;color:#374151;line-height:1.75;">{body}</div>
+        </div>"""
+
+    if not notice_html:
+        notice_html = '<p style="color:#6b7280;font-style:italic;">No items this week.</p>'
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CLC Staff Bulletin — {week_lbl}</title>
+<style>
+  * {{ box-sizing:border-box; margin:0; padding:0; }}
+  body {{ font-family: 'Segoe UI', Arial, sans-serif; background:#f3f4f6; color:#111827; }}
+  .page {{ max-width:780px; margin:0 auto; background:#fff; }}
+  @media print {{
+    body {{ background:#fff; }}
+    .page {{ box-shadow:none; }}
+    .no-print {{ display:none; }}
+  }}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- HEADER BANNER -->
+  <div style="background:linear-gradient(135deg,#0f3460,#1a5276);padding:32px 40px 28px;color:#fff;">
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;
+                letter-spacing:0.15em;color:rgba(255,255,255,0.55);margin-bottom:6px;">
+      Cowandilla Learning Centre · Learning and Behaviour Unit
+    </div>
+    <div style="font-size:30px;font-weight:800;margin-bottom:4px;">📋 CLC Staff Bulletin</div>
+    <div style="font-size:16px;font-weight:600;color:rgba(255,255,255,0.85);margin-bottom:14px;">
+      {week_lbl}
+    </div>
+    <div style="display:flex;gap:24px;flex-wrap:wrap;">
+      <div style="background:rgba(255,255,255,0.12);border-radius:8px;padding:8px 16px;">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.1em;
+                    color:rgba(255,255,255,0.55);margin-bottom:2px;">Term</div>
+        <div style="font-size:15px;font-weight:700;">{term}</div>
+      </div>
+      <div style="background:rgba(255,255,255,0.12);border-radius:8px;padding:8px 16px;">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.1em;
+                    color:rgba(255,255,255,0.55);margin-bottom:2px;">Issued</div>
+        <div style="font-size:15px;font-weight:700;">{pub_date}</div>
+      </div>
+      <div style="background:rgba(255,255,255,0.12);border-radius:8px;padding:8px 16px;">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.1em;
+                    color:rgba(255,255,255,0.55);margin-bottom:2px;">Items</div>
+        <div style="font-size:15px;font-weight:700;">{len(notices)}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TEAL ACCENT BAR -->
+  <div style="background:#0e9f8e;height:5px;"></div>
+
+  <!-- CONTENT -->
+  <div style="padding:32px 40px 40px;">
+    <div style="font-size:12px;color:#6b7280;margin-bottom:20px;
+                padding-bottom:12px;border-bottom:1px solid #e5e7eb;">
+      Please read all items below and acknowledge receipt via the staff portal.
+    </div>
+    {notice_html}
+  </div>
+
+  <!-- FOOTER -->
+  <div style="background:#f9fafb;border-top:1px solid #e5e7eb;
+              padding:16px 40px;display:flex;justify-content:space-between;align-items:center;">
+    <div style="font-size:11px;color:#9ca3af;">
+      CLC–LBU Staff Bulletin · {term} · {week_lbl}
+    </div>
+    <div style="font-size:11px;color:#9ca3af;">
+      Cowandilla Learning Centre
+    </div>
+  </div>
+
+</div>
+</body>
+</html>"""
+
+
 def show_compose():
     app_header()
     nav_bar("compose")
@@ -667,6 +799,29 @@ def show_compose():
                     st.rerun()
 
     if is_sent:
+        st.markdown("---")
+        st.markdown("#### Download Bulletin")
+        dl_col1, dl_col2 = st.columns([2, 3])
+        with dl_col1:
+            term_choice = st.selectbox(
+                "Term", ["Term 1", "Term 2", "Term 3", "Term 4"],
+                index=["Term 1","Term 2","Term 3","Term 4"].index(
+                    get_sa_term(date.fromisoformat(str(edition["week_start"])))
+                ) if get_sa_term(date.fromisoformat(str(edition["week_start"]))) in
+                    ["Term 1","Term 2","Term 3","Term 4"] else 1,
+                key="dl_term"
+            )
+        with dl_col2:
+            html_bytes = generate_bulletin_html(edition, notices, term_override=term_choice).encode("utf-8")
+            filename   = "CLC_Staff_Bulletin_" + edition["week_start"] + ".html"
+            st.write("")
+            st.download_button(
+                "⬇️ Download Bulletin (HTML → open & Print to PDF)",
+                data=html_bytes,
+                file_name=filename,
+                mime="text/html",
+                use_container_width=True,
+            )
         st.markdown("---")
         st.markdown("#### Acknowledgements")
         rows    = db_get_ack_summary(edition["id"])
