@@ -886,12 +886,15 @@ with st.expander("📚 PD Session Details", expanded=True):
     
     # PD Content Entry Method
     st.write("**PD Content Entry:**")
+    
+    # Initialize pd_notes (will be set in either manual or AI path)
+    pd_notes = selected_record.get('pd_notes', '') if selected_record else ''
+    
     pd_method = st.radio("Choose entry method", options=["✍️ Manual Entry", "🤖 AI from Transcript"], 
                        horizontal=True, key="pd_method")
     
     if pd_method == "✍️ Manual Entry":
-        default_pd_notes = selected_record.get('pd_notes', '') if selected_record else ''
-        pd_notes = st.text_area("PD Main Points / Notes", value=default_pd_notes, height=300, key="pd_notes",
+        pd_notes = st.text_area("PD Main Points / Notes", value=pd_notes, height=300, key="pd_notes",
                                placeholder="Document key points from the PD session...")
     
     else:  # AI from Transcript
