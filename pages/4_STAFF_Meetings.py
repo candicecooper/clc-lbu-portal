@@ -548,17 +548,31 @@ with tab1:
                             from groq import Groq
                             client = Groq(api_key=GROQ_KEY)
                             
-                            prompt = f"""Extract structured meeting minutes from this transcript.
+                            # ENHANCED PROMPT - Extract minutes with sections
+                            prompt = f"""You are analyzing a staff meeting transcript. Extract structured meeting minutes with the following format:
 
-Organize into sections matching these agenda items:
-{', '.join(STANDING_AGENDA_ITEMS)}
+**MEETING OVERVIEW**
+- Brief summary of key topics discussed (2-3 sentences)
 
-Plus any additional items discussed.
+**DISCUSSION BY AGENDA ITEM**
+
+For each topic discussed, create a section with:
+- Clear heading (the agenda item/topic)
+- Key points discussed (bullet points)
+- Decisions made (if any)
+- Actions required (if any)
+
+**ACTION ITEMS**
+List all action items mentioned in clear format:
+- [Person responsible] - [Action to take] - [Deadline if mentioned]
+
+**ADDITIONAL TOPICS**
+Any other items discussed not covered above.
 
 Transcript:
 {transcript_text}
 
-Format the output as clear meeting minutes with each agenda item as a heading and bullet points under each."""
+Format clearly with markdown headings (##) and bullet points."""
 
                             response = client.chat.completions.create(
                                 model="llama-3.3-70b-versatile",
@@ -570,6 +584,56 @@ Format the output as clear meeting minutes with each agenda item as a heading an
                             extracted_minutes = response.choices[0].message.content
                             
                             st.success("✅ Minutes extracted!")
+                            
+                            # Extract agenda items mentioned (for auto-population)
+                            agenda_prompt = f"""From this meeting transcript, list ONLY the specific agenda items or topics that were discussed. 
+
+Return them as a simple list, one per line, with no bullet points or numbering. Just the topic names.
+
+Examples of good output:
+Speech pathology support
+SMARTAR goal tracking
+WHS update
+Budget review
+
+Transcript:
+{transcript_text}
+
+List the agenda items discussed (one per line):"""
+
+                            agenda_response = client.chat.completions.create(
+                                model="llama-3.3-70b-versatile",
+                                messages=[{"role": "user", "content": agenda_prompt}],
+                                temperature=0.2,
+                                max_tokens=500
+                            )
+                            
+                            suggested_agenda = agenda_response.choices[0].message.content.strip()
+                            
+                            # Show suggested agenda items
+                            if suggested_agenda:
+                                with st.expander("📋 Agenda Items Detected in Transcript (Click to Auto-Fill)", expanded=False):
+                                    st.write("**AI detected these topics were discussed:**")
+                                    st.code(suggested_agenda)
+                                    
+                                    if st.button("➕ Add These to Additional Agenda", type="secondary"):
+                                        # Parse suggested items and add to agenda
+                                        suggested_items = [item.strip() for item in suggested_agenda.split('\n') if item.strip()]
+                                        
+                                        # Get current items
+                                        current_items_text = st.session_state.get('simple_agenda_items', '')
+                                        current_items = [line.strip() for line in current_items_text.split('\n') if line.strip()]
+                                        
+                                        # Add new items that aren't already there
+                                        for item in suggested_items:
+                                            if item not in current_items:
+                                                current_items.append(item)
+                                        
+                                        # Update session state
+                                        st.session_state['simple_agenda_items'] = '\n'.join(current_items)
+                                        st.success(f"✅ Added {len(suggested_items)} agenda items!")
+                                        st.rerun()
+                            
                             minutes = st.text_area("Edit AI-Generated Minutes", value=extracted_minutes, height=400, key="ai_minutes")
                             
                         except Exception as e:
@@ -599,6 +663,79 @@ if selected_record and selected_record.get('actions'):
         actions = []
 else:
     actions = []
+
+# AI Action Extraction option (if minutes exist)
+if minutes and minutes.strip() and GROQ_KEY:
+    with st.expander("🤖 Extract Actions from Minutes with AI", expanded=False):
+        st.caption("AI will scan the minutes and extract action items automatically")
+        
+        if st.button("🤖 Extract Actions", type="secondary", key="extract_actions_ai"):
+            with st.spinner("Extracting actions from minutes..."):
+                try:
+                    from groq import Groq
+                    client = Groq(api_key=GROQ_KEY)
+                    
+                    action_prompt = f"""From these meeting minutes, extract all action items.
+
+For each action, identify:
+1. What needs to be done (the action)
+2. Who is responsible (name if mentioned, otherwise "Unassigned")
+3. Deadline (if mentioned, otherwise leave blank)
+
+Return ONLY a JSON array in this exact format:
+[
+  {{"action": "action description", "owner": "person name", "due_date": "YYYY-MM-DD or blank"}},
+  {{"action": "action description", "owner": "person name", "due_date": "YYYY-MM-DD or blank"}}
+]
+
+If no actions found, return: []
+
+Meeting Minutes:
+{minutes}
+
+JSON array of actions:"""
+
+                    response = client.chat.completions.create(
+                        model="llama-3.3-70b-versatile",
+                        messages=[{"role": "user", "content": action_prompt}],
+                        temperature=0.2,
+                        max_tokens=2000
+                    )
+                    
+                    extracted_text = response.choices[0].message.content.strip()
+                    
+                    # Try to parse JSON
+                    import re
+                    # Extract JSON array from response
+                    json_match = re.search(r'\[.*\]', extracted_text, re.DOTALL)
+                    if json_match:
+                        extracted_actions = json.loads(json_match.group())
+                        
+                        if extracted_actions:
+                            st.success(f"✅ Found {len(extracted_actions)} action items!")
+                            
+                            # Show preview
+                            for action in extracted_actions:
+                                st.write(f"• {action.get('action', '')} - **{action.get('owner', 'Unassigned')}** - {action.get('due_date', 'No deadline')}")
+                            
+                            if st.button("➕ Add All Actions", key="add_extracted_actions"):
+                                # Add to actions list
+                                for action in extracted_actions:
+                                    actions.append({
+                                        "action": action.get('action', ''),
+                                        "owner": action.get('owner', 'Unassigned'),
+                                        "due_date": action.get('due_date', ''),
+                                        "done": False
+                                    })
+                                st.success(f"Added {len(extracted_actions)} actions!")
+                                st.rerun()
+                        else:
+                            st.info("No action items found in minutes")
+                    else:
+                        st.warning("Could not parse AI response. Add actions manually below.")
+                        
+                except Exception as e:
+                    st.error(f"Action extraction failed: {e}")
 
 # Display existing actions
 if actions:
