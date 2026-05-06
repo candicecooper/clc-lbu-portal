@@ -54,7 +54,7 @@ PROGRAM_COLORS = {
     "SY": {"color": "#a16207", "bg": "#fef9c3", "label": "Senior Years"},
 }
 
-DAYS    = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+DAYS     = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 DAY_KEYS = ["mon", "tue", "wed", "thu", "fri"]
 
 PLACEMENT_TYPES = [
@@ -171,7 +171,7 @@ def schedule_events(d_from=None, d_to=None):
         cur += timedelta(days=1)
     return out
 
-# ── Student placements table ──────────────────────────────────────────────────
+# ── Student placements ────────────────────────────────────────────────────────
 def db_placements(initials=None):
     try:
         q = supabase.table("student_placements").select("*").order("start_date")
@@ -274,13 +274,7 @@ def del_event(ev_id):
 def event_form(key, default_date=None, existing=None, label="📅 Save Event"):
     ev = existing or {}
     d0 = default_date or today
-    
-    # AGGRESSIVE DEBUG - see what we're actually getting
-    if existing:
-        st.error(f"🔍 DEBUG - Full event data: {ev}")
-        st.error(f"🔍 event_date raw value: {repr(ev.get('event_date'))}")
-        st.error(f"🔍 event_date type: {type(ev.get('event_date'))}")
-    
+
     with st.form(key, clear_on_submit=(existing is None)):
         c1, c2 = st.columns(2)
         with c1:
@@ -290,40 +284,25 @@ def event_form(key, default_date=None, existing=None, label="📅 Save Event"):
                                  if ev.get("event_type") in EVENT_TYPES else len(EVENT_TYPES)-1)
             who   = st.text_input("Added by *", value=ev.get("added_by","") or get_staff_name())
         with c2:
-            # ROBUST date parsing - handle all possible formats from Supabase
             date_val = d0
             if existing and ev.get("event_date"):
                 raw_date = ev["event_date"]
-                
-                # If it's already a date object, use it directly
                 if isinstance(raw_date, date):
                     date_val = raw_date
-                    st.success(f"✅ Date is already a date object: {date_val}")
                 else:
-                    # Convert to string and try parsing
                     raw_date_str = str(raw_date)
-                    st.warning(f"Trying to parse string: '{raw_date_str}'")
-                    
-                    # Try multiple parsing strategies
                     for date_str in [raw_date_str[:10], raw_date_str.split('T')[0], raw_date_str]:
                         try:
-                            date_val = datetime.strptime(date_str, "%Y-%m-%d").date()
-                            st.success(f"✅ Parsed '{date_str}' as {date_val}")
-                            break
-                        except Exception as e1:
+                            date_val = datetime.strptime(date_str, "%Y-%m-%d").date(); break
+                        except:
                             try:
-                                date_val = datetime.fromisoformat(date_str).date()
-                                st.success(f"✅ ISO parsed '{date_str}' as {date_val}")
-                                break
-                            except Exception as e2:
-                                st.warning(f"Failed to parse '{date_str}': {e1}, {e2}")
+                                date_val = datetime.fromisoformat(date_str).date(); break
+                            except:
                                 continue
-            
-            st.info(f"📅 Final date_val being sent to widget: {date_val} (type: {type(date_val)})")
+
             ev_date = st.date_input("Date *", value=date_val, key=f"{key}_evdate")
-            
-            # Handle end_date with same robust parsing
-            end_date_val = ev_date  # Default to same as start date
+
+            end_date_val = ev_date
             if existing and ev.get("end_date"):
                 raw_end = ev["end_date"]
                 if isinstance(raw_end, date):
@@ -332,15 +311,13 @@ def event_form(key, default_date=None, existing=None, label="📅 Save Event"):
                     raw_end_str = str(raw_end)
                     for date_str in [raw_end_str[:10], raw_end_str.split('T')[0], raw_end_str]:
                         try:
-                            end_date_val = datetime.strptime(date_str, "%Y-%m-%d").date()
-                            break
+                            end_date_val = datetime.strptime(date_str, "%Y-%m-%d").date(); break
                         except:
                             try:
-                                end_date_val = datetime.fromisoformat(date_str).date()
-                                break
+                                end_date_val = datetime.fromisoformat(date_str).date(); break
                             except:
                                 continue
-            
+
             end_date = st.date_input("End date (same for single day)", value=end_date_val, key=f"{key}_enddate")
             location = st.text_input("Location", value=ev.get("location",""))
 
@@ -352,8 +329,7 @@ def event_form(key, default_date=None, existing=None, label="📅 Save Event"):
             prog_opts = ["", "JP", "PY", "SY"]
             program   = st.selectbox("Program", prog_opts,
                                      index=prog_opts.index(ev.get("program","")) if ev.get("program","") in prog_opts else 0)
-        
-        # Handle existing event times with robust parsing
+
         c3, c4 = st.columns(2)
         with c3:
             start_t_val = None
@@ -361,12 +337,10 @@ def event_form(key, default_date=None, existing=None, label="📅 Save Event"):
                 raw_time = str(ev["start_time"])
                 for time_str in [raw_time[:8], raw_time[:5]]:
                     try:
-                        start_t_val = datetime.strptime(time_str, "%H:%M:%S").time()
-                        break
+                        start_t_val = datetime.strptime(time_str, "%H:%M:%S").time(); break
                     except:
                         try:
-                            start_t_val = datetime.strptime(time_str, "%H:%M").time()
-                            break
+                            start_t_val = datetime.strptime(time_str, "%H:%M").time(); break
                         except:
                             continue
             start_t = st.time_input("Start time (optional)", value=start_t_val, key=f"{key}_startt")
@@ -376,16 +350,14 @@ def event_form(key, default_date=None, existing=None, label="📅 Save Event"):
                 raw_time = str(ev["end_time"])
                 for time_str in [raw_time[:8], raw_time[:5]]:
                     try:
-                        end_t_val = datetime.strptime(time_str, "%H:%M:%S").time()
-                        break
+                        end_t_val = datetime.strptime(time_str, "%H:%M:%S").time(); break
                     except:
                         try:
-                            end_t_val = datetime.strptime(time_str, "%H:%M").time()
-                            break
+                            end_t_val = datetime.strptime(time_str, "%H:%M").time(); break
                         except:
                             continue
             end_t = st.time_input("End time (optional)", value=end_t_val, key=f"{key}_endt")
-        
+
         notes = st.text_area("Notes", value=ev.get("notes",""), height=64)
         ok = st.form_submit_button(label, type="primary", use_container_width=True)
         if ok:
@@ -398,12 +370,11 @@ def event_form(key, default_date=None, existing=None, label="📅 Save Event"):
 
 # ─── SHARED RENDER HELPERS ────────────────────────────────────────────────────────
 def _ev_style(ev):
-    """Return (color, bg, cfg) for an event."""
     cfg  = EVENT_TYPES.get(ev.get("event_type","Other"), EVENT_TYPES["Other"])
     prog = ev.get("program","")
     if prog and ev.get("event_type") in STUDENT_EVENT_TYPES:
-        pc   = PROGRAM_COLORS.get(prog, {})
-        col  = pc.get("color", cfg["color"]); bg = pc.get("bg", cfg["bg"])
+        pc  = PROGRAM_COLORS.get(prog, {})
+        col = pc.get("color", cfg["color"]); bg = pc.get("bg", cfg["bg"])
     else:
         col = cfg["color"]; bg = cfg["bg"]
     return col, bg, cfg
@@ -440,7 +411,6 @@ def render_detail_card(ev):
         f'</div>{notes_html}</div>', unsafe_allow_html=True)
 
 def render_event_row(ev, key_prefix="m"):
-    """Render event card + expand / edit / delete controls."""
     eid   = ev.get("id","")
     pac   = str(eid).startswith("pac_")
     sched = ev.get("_from_schedule", False)
@@ -473,7 +443,6 @@ def render_event_row(ev, key_prefix="m"):
             st.write("")
             if st.button("✏️", key=f"{key_prefix}_ed_{eid}", help="Edit"):
                 if st.session_state.edit_event_id != eid:
-                    # Store the event being edited in session state
                     st.session_state.edit_event_id = eid
                     st.session_state[f"editing_event_{eid}"] = ev.copy()
                 else:
@@ -501,19 +470,17 @@ def render_event_row(ev, key_prefix="m"):
 
     if st.session_state.edit_event_id == eid and can_edit:
         st.markdown("**✏️ Edit event:**")
-        # Use the cached event from session state, not the fresh DB data
         event_to_edit = st.session_state.get(f"editing_event_{eid}", ev)
         ok, data = event_form(f"{key_prefix}_ef_{eid}", existing=event_to_edit, label="💾 Save Changes")
         if ok:
             upd_event(eid, data)
             st.session_state.edit_event_id = None
-            # Clear the cached event
             if f"editing_event_{eid}" in st.session_state:
                 del st.session_state[f"editing_event_{eid}"]
             st.success("✅ Updated!")
             st.rerun()
 
-# ─── DAY CELL HTML (month + week) ────────────────────────────────────────────────
+# ─── DAY CELL HTML ────────────────────────────────────────────────────────────────
 def _chips(day_evs, max_chips=2):
     html = ""
     for ev in day_evs[:max_chips]:
@@ -589,7 +556,6 @@ with ph1:
         if st.session_state.cal_month == 1: yr = st.session_state.cal_year - 1
         st.session_state.cal_month = mo
         st.session_state.cal_year  = yr
-        # FIX: update selected_date so day panel matches navigated month
         try: st.session_state.selected_date = date(yr, mo, 1)
         except: pass
         st.rerun()
@@ -650,7 +616,6 @@ with tab_month:
 
     st.markdown("---")
 
-    # ── Day panel ──
     sel   = st.session_state.selected_date
     d_evs = db_events(sel, sel) + schedule_events(sel, sel) + pac_events(db_pac(), sel, sel)
     d_evs.sort(key=lambda x: str(x.get("start_time","")))
@@ -677,7 +642,6 @@ with tab_week:
     with wp:
         if st.button("◀ Prev", use_container_width=True, key="w_prev"):
             st.session_state.cal_week_start -= timedelta(weeks=1)
-            # FIX: move selected_date to Monday of new week
             st.session_state.selected_date = st.session_state.cal_week_start
             st.rerun()
     with wt:
@@ -706,10 +670,10 @@ with tab_week:
         with wc:
             st.markdown(week_day_cell(d, day_evs, itod, isel, dnames[i]), unsafe_allow_html=True)
             n = len(day_evs)
-            if isel:    lbl = "✅ Selected"; bg_b = "#1a2e44"; col_b = "white"
-            elif itod:  lbl = f"📍 {n} event{'s' if n!=1 else ''}" if n else "📍 Today"; bg_b = "#d4af37"; col_b = "white"
-            elif n:     lbl = f"👁 {n} event{'s' if n!=1 else ''}"; bg_b = "#2d4a6e"; col_b = "white"
-            else:       lbl = "➕ Add"; bg_b = "#6b7280"; col_b = "white"
+            if isel:   lbl = "✅ Selected"; bg_b = "#1a2e44"; col_b = "white"
+            elif itod: lbl = f"📍 {n} event{'s' if n!=1 else ''}" if n else "📍 Today"; bg_b = "#d4af37"; col_b = "white"
+            elif n:    lbl = f"👁 {n} event{'s' if n!=1 else ''}"; bg_b = "#2d4a6e"; col_b = "white"
+            else:      lbl = "➕ Add"; bg_b = "#6b7280"; col_b = "white"
             st.markdown(
                 f"<style>div[data-testid='column']:nth-child({i+1}) "
                 f"button[data-testid='baseButton-secondary'] {{"
@@ -836,7 +800,6 @@ def render_student_timeline(students_data, yr):
 .tl-ll{width:2px;height:13px;border-radius:1px;flex-shrink:0;background:#ef4444;}
 </style>"""
 
-    # Axis
     axis = '<div class="tl-axis">'
     for t in terms:
         sp = pct(t["start"]); ep = pct(t["end"]); wp = max(0.0, ep-sp)
@@ -866,15 +829,12 @@ def render_student_timeline(students_data, yr):
 
         rows += '<div class="tl-row-area"><div class="tl-bg-track"></div>'
 
-        # Term shading
         for t in terms:
             sp = pct(t["start"]); ep = pct(t["end"]); wp = max(0.0, ep-sp)
             rows += f'<div class="tl-term-shade" style="left:{sp:.2f}%;width:{wp:.2f}%;background:{t["color"]};"></div>'
 
-        # Today
         rows += f'<div class="tl-today-marker" style="left:{today_pct:.2f}%;"></div>'
 
-        # Placement bars
         for pl in placements:
             sp = pct(pl.get("start_date","")); ep = pct(pl.get("end_date",""))
             if sp < 0 or ep < 0: continue
@@ -883,7 +843,6 @@ def render_student_timeline(students_data, yr):
             rows += (f'<div class="tl-placement-bar" title="{tip}" '
                      f'style="left:{sp:.2f}%;width:{wp:.2f}%;background:{pc["color"]};"></div>')
 
-        # Transition week bars
         for tr in transitions:
             try: wmon = datetime.strptime(tr.get("week_start_date","")[:10], "%Y-%m-%d").date()
             except: continue
@@ -895,7 +854,6 @@ def render_student_timeline(students_data, yr):
             rows += (f'<div class="tl-transition-bar" title="{tip}" '
                      f'style="left:{sp:.2f}%;width:{wp:.2f}%;background:{pc["color"]};"></div>')
 
-        # Meeting pins
         for mtg in meetings:
             try: md = datetime.strptime(str(mtg.get("event_date",""))[:10], "%Y-%m-%d").date()
             except: continue
@@ -925,7 +883,6 @@ def render_student_timeline(students_data, yr):
 with tab_students:
     st.markdown("### 👨‍🎓 Student Placements & Meetings")
     st_timeline, st_place, st_trans, st_mtg = st.tabs(["📊 Student Timeline", "📋 Placement Details", "🔄 Transition Schedule", "📅 Student Meetings"])
-
 
     # ════ STUDENT TIMELINE ═════════════════════════════════════════════════════
     with st_timeline:
@@ -966,20 +923,361 @@ with tab_students:
             st.markdown(f"<div style=background:#f0fdf4;border-left:4px solid #15803d;border-radius:8px;padding:0.6rem 1rem;font-size:0.82rem;color:#14532d;margin-bottom:1rem;><b>{count} student{chr(115) if count!=1 else ''}</b> shown. Hover bars and dots for details. <b>Faint bar</b> = placement period &nbsp;|&nbsp; <b>Solid bar</b> = transition weeks at mainstream &nbsp;|&nbsp; <b>Dots</b> = meetings.</div>", unsafe_allow_html=True)
             st.markdown(render_student_timeline(sorted_students, tl_year), unsafe_allow_html=True)
 
-    # ════ PLACEMENT DETAILS (abbreviated for length) ════════════════════════════
+    # ════ PLACEMENT DETAILS ══════════════════════════════════════════════════════
     with st_place:
         st.markdown(
             '<div style="background:#f0f9ff;border-left:4px solid #0e7490;border-radius:8px;'
             'padding:0.7rem 1rem;margin-bottom:1rem;font-size:0.84rem;color:#0e4a5e;">'
             '📋 Record full placement details here — school, support arrangements, funding, goals and contacts. '
-            'Placements auto-appear in the timeline view above.</div>', unsafe_allow_html=True)
+            'Placements auto-appear in the Student Timeline above.</div>', unsafe_allow_html=True)
 
-        # Abbreviated placement section - keeping it simple
-        st.info("Placement details section - edit forms work correctly with proper date handling")
+        with st.expander("➕ Add New Placement", expanded=True):
+            with st.form("place_add_form", clear_on_submit=True):
+                pa1, pa2 = st.columns(2)
+                with pa1:
+                    pa_init   = st.text_input("Student initials *", placeholder="e.g. J.S.", key="pa_init")
+                    pa_prog   = st.selectbox("Program *", ["", "JP", "PY", "SY"], key="pa_prog")
+                    pa_type   = st.selectbox("Placement type", PLACEMENT_TYPES, key="pa_type")
+                    pa_school = st.text_input("School / placement site *", placeholder="e.g. Findon Primary School", key="pa_school")
+                    pa_fund   = st.selectbox("Funding type", FUNDING_TYPES, key="pa_fund")
+                with pa2:
+                    pa_start   = st.date_input("Start date *", value=today, key="pa_start")
+                    pa_end     = st.date_input("End date *",   value=today + timedelta(weeks=10), key="pa_end")
+                    pa_contact = st.text_input("Contact person", placeholder="e.g. Jane Smith (Principal)", key="pa_contact")
+                    pa_phone   = st.text_input("Contact phone", placeholder="e.g. 08 8123 4567", key="pa_phone")
+                    pa_email   = st.text_input("Contact email", placeholder="e.g. j.smith@schools.sa.edu.au", key="pa_email")
 
-    # ════ TRANSITIONS (abbreviated) ══════════════════════════════════════════
+                pa_support = st.text_area("Support arrangements", height=64,
+                                          placeholder="e.g. 1:1 SSO support Tues–Thurs, check-ins with class teacher, sensory breaks as needed",
+                                          key="pa_support")
+                pa_goals   = st.text_area("Placement goals", height=64,
+                                          placeholder="e.g. Build peer relationships, participate in structured activities independently, develop self-regulation strategies",
+                                          key="pa_goals")
+                pa_notes   = st.text_area("Additional notes", height=48, key="pa_notes")
+
+                if st.form_submit_button("✅ Save Placement", type="primary", use_container_width=True):
+                    if not pa_init.strip():     st.warning("Student initials are required.")
+                    elif not pa_prog:           st.warning("Please select a program.")
+                    elif not pa_school.strip(): st.warning("School / placement site is required.")
+                    elif pa_end < pa_start:     st.warning("End date must be on or after start date.")
+                    else:
+                        save_placement({
+                            "student_initials":     pa_init.strip(),
+                            "program":              pa_prog,
+                            "placement_type":       pa_type,
+                            "placement_school":     pa_school.strip(),
+                            "funding_type":         pa_fund,
+                            "start_date":           str(pa_start),
+                            "end_date":             str(pa_end),
+                            "contact_person":       pa_contact.strip(),
+                            "contact_phone":        pa_phone.strip(),
+                            "contact_email":        pa_email.strip(),
+                            "support_arrangements": pa_support.strip(),
+                            "goals":                pa_goals.strip(),
+                            "notes":                pa_notes.strip(),
+                        })
+                        st.success(f"✅ Placement saved for {pa_init.strip()} at {pa_school.strip()}!")
+                        st.rerun()
+
+        st.markdown("---")
+        st.markdown("#### 📋 Existing Placements")
+
+        pf1, pf2 = st.columns(2)
+        with pf1: pf_prog = st.multiselect("Filter program", ["JP","PY","SY"], default=["JP","PY","SY"], key="pf_prog")
+        with pf2: pf_init = st.text_input("Filter by initials", placeholder="Leave blank for all", key="pf_init")
+
+        all_pls = db_placements(pf_init.strip() if pf_init.strip() else None)
+        if pf_prog != ["JP","PY","SY"]:
+            all_pls = [p for p in all_pls if p.get("program","") in pf_prog]
+
+        if not all_pls:
+            st.markdown('<p style="color:#888;">No placements found. Add one above.</p>', unsafe_allow_html=True)
+        else:
+            st.markdown(f"**{len(all_pls)} placement{'s' if len(all_pls)!=1 else ''} found**")
+            for pl in all_pls:
+                pid   = pl.get("id","")
+                prog  = pl.get("program","")
+                pc    = PROGRAM_COLORS.get(prog, {"color":"#374151","bg":"#f3f4f6"})
+                ptype = pl.get("placement_type","") or "Placement"
+                dur   = f"{fmt_date(pl.get('start_date',''))} → {fmt_date(pl.get('end_date',''))}"
+
+                with st.expander(f"[{prog}] {pl.get('student_initials','?')} · {ptype} · {pl.get('placement_school','')} · {dur}"):
+                    badge_html = (f'<span style="background:{pc["bg"]};color:{pc["color"]};font-size:0.68rem;'
+                                  f'font-weight:800;padding:0.12rem 0.4rem;border-radius:6px;">{prog}</span> '
+                                  if prog else "")
+                    st.markdown(
+                        f'<div style="background:{pc["bg"]};border-left:4px solid {pc["color"]};'
+                        f'border-radius:8px;padding:0.75rem 1rem;margin-bottom:0.75rem;font-size:0.84rem;">'
+                        f'{badge_html}<b style="color:{pc["color"]};">{pl.get("student_initials","")}</b>'
+                        f' — {ptype} at <b>{pl.get("placement_school","")}</b><br>'
+                        f'<span style="color:#555;">📅 {dur}</span>'
+                        f'{(" &nbsp;|&nbsp; 💰 "+pl["funding_type"]) if pl.get("funding_type") else ""}'
+                        f'{("<br>👤 Contact: "+pl["contact_person"]) if pl.get("contact_person") else ""}'
+                        f'{(" · 📞 "+pl["contact_phone"]) if pl.get("contact_phone") else ""}'
+                        f'{(" · ✉️ "+pl["contact_email"]) if pl.get("contact_email") else ""}'
+                        f'</div>', unsafe_allow_html=True)
+                    if pl.get("support_arrangements"):
+                        st.markdown(f"**Support arrangements:** {pl['support_arrangements']}")
+                    if pl.get("goals"):
+                        st.markdown(f"**Placement goals:** {pl['goals']}")
+                    if pl.get("notes"):
+                        st.markdown(f"**Notes:** {pl['notes']}")
+
+                    ec1, ec2 = st.columns(2)
+                    with ec1:
+                        ek = f"pl_edit_{pid}"
+                        if st.button("✏️ Edit", key=f"pl_ed_{pid}"):
+                            st.session_state[ek] = not st.session_state.get(ek, False)
+                            st.rerun()
+                        if st.session_state.get(ek):
+                            with st.form(f"pl_ef_{pid}", clear_on_submit=False):
+                                e1, e2 = st.columns(2)
+                                with e1:
+                                    e_init   = st.text_input("Student initials", value=pl.get("student_initials",""))
+                                    e_prog   = st.selectbox("Program", ["","JP","PY","SY"],
+                                                            index=["","JP","PY","SY"].index(pl.get("program","")) if pl.get("program","") in ["","JP","PY","SY"] else 0)
+                                    e_type   = st.selectbox("Placement type", PLACEMENT_TYPES,
+                                                            index=PLACEMENT_TYPES.index(pl.get("placement_type","")) if pl.get("placement_type","") in PLACEMENT_TYPES else 0)
+                                    e_school = st.text_input("School / site", value=pl.get("placement_school",""))
+                                    e_fund   = st.selectbox("Funding", FUNDING_TYPES,
+                                                            index=FUNDING_TYPES.index(pl.get("funding_type","")) if pl.get("funding_type","") in FUNDING_TYPES else 0)
+                                with e2:
+                                    try:    e_start = st.date_input("Start date", value=datetime.strptime(str(pl.get("start_date",""))[:10], "%Y-%m-%d").date())
+                                    except: e_start = st.date_input("Start date", value=today)
+                                    try:    e_end   = st.date_input("End date",   value=datetime.strptime(str(pl.get("end_date",""))[:10],   "%Y-%m-%d").date())
+                                    except: e_end   = st.date_input("End date",   value=today)
+                                    e_contact = st.text_input("Contact person", value=pl.get("contact_person",""))
+                                    e_phone   = st.text_input("Phone",          value=pl.get("contact_phone",""))
+                                    e_email   = st.text_input("Email",          value=pl.get("contact_email",""))
+                                e_support = st.text_area("Support arrangements", value=pl.get("support_arrangements",""), height=56)
+                                e_goals   = st.text_area("Goals",               value=pl.get("goals",""),                height=56)
+                                e_notes   = st.text_area("Notes",               value=pl.get("notes",""),                height=40)
+                                if st.form_submit_button("💾 Save Changes", type="primary"):
+                                    upd_placement(pid, {
+                                        "student_initials":     e_init.strip(),
+                                        "program":              e_prog,
+                                        "placement_type":       e_type,
+                                        "placement_school":     e_school.strip(),
+                                        "funding_type":         e_fund,
+                                        "start_date":           str(e_start),
+                                        "end_date":             str(e_end),
+                                        "contact_person":       e_contact.strip(),
+                                        "contact_phone":        e_phone.strip(),
+                                        "contact_email":        e_email.strip(),
+                                        "support_arrangements": e_support.strip(),
+                                        "goals":                e_goals.strip(),
+                                        "notes":                e_notes.strip(),
+                                    })
+                                    st.session_state[ek] = False
+                                    st.success("✅ Updated!")
+                                    st.rerun()
+                    with ec2:
+                        dk = f"pl_del_{pid}"
+                        if st.session_state.get(dk):
+                            if st.button("✅ Confirm delete", key=f"pl_delc_{pid}", type="primary"):
+                                del_placement(pid)
+                                st.session_state[dk] = False
+                                st.rerun()
+                        else:
+                            if st.button("🗑️ Delete", key=f"pl_del_btn_{pid}"):
+                                st.session_state[dk] = True
+                                st.rerun()
+
+    # ════ TRANSITION SCHEDULE ═══════════════════════════════════════════════════
     with st_trans:
-        st.info("Transition schedule section - edit forms work correctly with proper date handling")
+        st.markdown(
+            '<div style="background:#fefce8;border-left:4px solid #ca8a04;border-radius:8px;'
+            'padding:0.7rem 1rem;margin-bottom:1rem;font-size:0.84rem;color:#713f12;">'
+            '🔄 Record each week a student attends their mainstream school during transition. '
+            'Enter the days and times they are <b>at mainstream</b> — leave a day blank if they are at CLC all day. '
+            'Transition weeks appear as solid bars on the Student Timeline.</div>', unsafe_allow_html=True)
+
+        with st.expander("➕ Add Transition Week", expanded=True):
+            with st.form("trans_add_form", clear_on_submit=True):
+                tr1, tr2, tr3 = st.columns(3)
+                with tr1:
+                    tr_init   = st.text_input("Student initials *", placeholder="e.g. J.S.", key="tr_init")
+                    tr_prog   = st.selectbox("Program *", ["","JP","PY","SY"], key="tr_prog")
+                with tr2:
+                    tr_school = st.text_input("Mainstream school *", placeholder="e.g. Findon Primary", key="tr_school")
+                    tr_label  = st.text_input("Week label", placeholder="e.g. Week 3 T2, Trial Week 1", key="tr_label")
+                with tr3:
+                    tr_wstart = st.date_input("Week starting (Monday) *",
+                                              value=today - timedelta(days=today.weekday()), key="tr_wstart")
+                    tr_notes  = st.text_input("Notes", placeholder="Optional", key="tr_notes_field")
+
+                st.markdown("**Days at mainstream school** — enter the times for each day they attend:")
+                th0, th1, th2, th3, th4, th5 = st.columns([1.5, 1, 1, 1, 1, 1])
+                with th0: st.markdown("<div style='font-size:0.78rem;font-weight:700;padding-top:0.5rem;'>Day</div>", unsafe_allow_html=True)
+                for h, day in zip([th1, th2, th3, th4, th5], DAYS):
+                    with h: st.markdown(f"<div style='font-size:0.78rem;font-weight:700;text-align:center;padding-top:0.5rem;'>{day[:3]}</div>", unsafe_allow_html=True)
+
+                times = {}
+                for row_label, dkk in [("From", "start"), ("To", "end")]:
+                    rc0, rc1, rc2, rc3, rc4, rc5 = st.columns([1.5, 1, 1, 1, 1, 1])
+                    with rc0: st.markdown(f"<div style='font-size:0.78rem;padding-top:0.5rem;'>{row_label}</div>", unsafe_allow_html=True)
+                    for col, dkey in zip([rc1, rc2, rc3, rc4, rc5], DAY_KEYS):
+                        with col:
+                            times[f"{dkey}_{dkk}"] = st.time_input(" ", value=None,
+                                                                    key=f"tr_{dkey}_{dkk}",
+                                                                    label_visibility="collapsed")
+
+                if st.form_submit_button("✅ Save Transition Week", type="primary", use_container_width=True):
+                    if not tr_init.strip():     st.warning("Student initials are required.")
+                    elif not tr_prog:           st.warning("Please select a program.")
+                    elif not tr_school.strip(): st.warning("Mainstream school is required.")
+                    elif tr_wstart.weekday() != 0: st.warning("Week start date should be a Monday.")
+                    else:
+                        row = {
+                            "student_initials":  tr_init.strip(),
+                            "program":           tr_prog,
+                            "mainstream_school": tr_school.strip(),
+                            "week_label":        tr_label.strip(),
+                            "week_start_date":   str(tr_wstart),
+                            "notes":             tr_notes.strip(),
+                        }
+                        for dkey in DAY_KEYS:
+                            row[f"{dkey}_start"] = str(times[f"{dkey}_start"]) if times.get(f"{dkey}_start") else None
+                            row[f"{dkey}_end"]   = str(times[f"{dkey}_end"])   if times.get(f"{dkey}_end")   else None
+                        save_transition(row)
+                        st.success(f"✅ Transition week saved for {tr_init.strip()} — week of {fmt_date(tr_wstart)}!")
+                        st.rerun()
+
+        st.markdown("---")
+        st.markdown("#### 🔄 Recorded Transition Weeks")
+
+        tf1, tf2 = st.columns(2)
+        with tf1: tf_prog = st.multiselect("Filter program", ["JP","PY","SY"], default=["JP","PY","SY"], key="tf_prog_trans")
+        with tf2: tf_init = st.text_input("Filter by initials", placeholder="Leave blank for all", key="tf_init_trans")
+
+        all_trs = db_transitions(tf_init.strip() if tf_init.strip() else None)
+        if tf_prog != ["JP","PY","SY"]:
+            all_trs = [t for t in all_trs if t.get("program","") in tf_prog]
+
+        if not all_trs:
+            st.markdown('<p style="color:#888;">No transition weeks found. Add one above.</p>', unsafe_allow_html=True)
+        else:
+            st.markdown(f"**{len(all_trs)} transition week{'s' if len(all_trs)!=1 else ''} found**")
+
+            by_student = defaultdict(list)
+            for t in all_trs:
+                by_student[t.get("student_initials","?")].append(t)
+
+            for sinit, s_trs in by_student.items():
+                prog = s_trs[0].get("program","")
+                pc   = PROGRAM_COLORS.get(prog, {"color":"#374151","bg":"#f3f4f6"})
+                st.markdown(
+                    f'<div style="margin:0.75rem 0 0.25rem;">'
+                    f'<span style="background:{pc["bg"]};color:{pc["color"]};font-size:0.7rem;font-weight:800;'
+                    f'padding:0.12rem 0.4rem;border-radius:6px;margin-right:4px;">{prog}</span>'
+                    f'<b style="color:{pc["color"]};font-size:0.9rem;">{sinit}</b> &nbsp;'
+                    f'<span style="color:#888;font-size:0.8rem;">· {s_trs[0].get("mainstream_school","")} '
+                    f'· {len(s_trs)} week{"s" if len(s_trs)!=1 else ""}</span></div>',
+                    unsafe_allow_html=True)
+
+                # Column header
+                st.markdown(
+                    "<div style='display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr;"
+                    "gap:4px;font-size:0.72rem;font-weight:700;color:#555;"
+                    "background:#f3f4f6;border-radius:6px;padding:0.35rem 0.5rem;margin-bottom:2px;'>"
+                    "<div>Week</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div>"
+                    "<div></div><div></div></div>",
+                    unsafe_allow_html=True)
+
+                for tr in s_trs:
+                    tid = tr.get("id","")
+
+                    def fmt_slot(dkey, _tr=tr):
+                        s = _tr.get(f"{dkey}_start"); e = _tr.get(f"{dkey}_end")
+                        if not s: return "<span style='color:#ccc;'>—</span>"
+                        return f"<span style='font-size:0.68rem;'>{fmt_time_short(s)}<br>{fmt_time_short(e)}</span>"
+
+                    wlbl = tr.get("week_label","") or fmt_date(tr.get("week_start_date",""))
+                    st.markdown(
+                        "<div style='display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr;"
+                        "gap:4px;font-size:0.76rem;align-items:center;"
+                        "border-bottom:1px solid #f0f0f0;padding:0.3rem 0.5rem;'>"
+                        f"<div><b style='font-size:0.78rem;'>{wlbl}</b>"
+                        f"{'<br><span style=color:#aaa;font-size:0.66rem;>'+tr.get('notes','')+'</span>' if tr.get('notes') else ''}"
+                        f"</div>"
+                        f"<div>{fmt_slot('mon')}</div><div>{fmt_slot('tue')}</div>"
+                        f"<div>{fmt_slot('wed')}</div><div>{fmt_slot('thu')}</div>"
+                        f"<div>{fmt_slot('fri')}</div>"
+                        f"<div></div><div></div></div>",
+                        unsafe_allow_html=True)
+
+                    ek = f"tr_edit_{tid}"
+                    bt1, bt2, bt3 = st.columns([1, 1, 8])
+                    with bt1:
+                        if st.button("✏️", key=f"tr_ed_{tid}", help="Edit this week"):
+                            st.session_state[ek] = not st.session_state.get(ek, False)
+                            st.rerun()
+                    with bt2:
+                        dk2 = f"tr_del_{tid}"
+                        if st.session_state.get(dk2):
+                            if st.button("✅", key=f"tr_delc_{tid}", help="Confirm delete", type="primary"):
+                                del_transition(tid)
+                                st.session_state[dk2] = False
+                                st.rerun()
+                        else:
+                            if st.button("🗑️", key=f"tr_del_btn_{tid}", help="Delete"):
+                                st.session_state[dk2] = True
+                                st.rerun()
+
+                    if st.session_state.get(ek):
+                        with st.form(f"tr_ef_{tid}", clear_on_submit=False):
+                            e1, e2, e3 = st.columns(3)
+                            with e1:
+                                ei = st.text_input("Student initials", value=tr.get("student_initials",""))
+                                ep = st.selectbox("Program", ["","JP","PY","SY"],
+                                                  index=["","JP","PY","SY"].index(tr.get("program",""))
+                                                  if tr.get("program","") in ["","JP","PY","SY"] else 0)
+                            with e2:
+                                es  = st.text_input("Mainstream school", value=tr.get("mainstream_school",""))
+                                el  = st.text_input("Week label", value=tr.get("week_label",""))
+                            with e3:
+                                try:    ews = st.date_input("Week start (Mon)", value=datetime.strptime(str(tr.get("week_start_date",""))[:10], "%Y-%m-%d").date())
+                                except: ews = st.date_input("Week start (Mon)", value=today - timedelta(days=today.weekday()))
+                                en  = st.text_input("Notes", value=tr.get("notes",""))
+
+                            st.markdown("**Times at mainstream:**")
+                            eth0, eth1, eth2, eth3, eth4, eth5 = st.columns([1.5, 1, 1, 1, 1, 1])
+                            with eth0: st.markdown("<div style='font-size:0.76rem;font-weight:700;'>Day</div>", unsafe_allow_html=True)
+                            for h, day in zip([eth1, eth2, eth3, eth4, eth5], DAYS):
+                                with h: st.markdown(f"<div style='font-size:0.76rem;font-weight:700;text-align:center;'>{day[:3]}</div>", unsafe_allow_html=True)
+
+                            etimes = {}
+                            for row_label, dkk in [("From","start"),("To","end")]:
+                                er0, er1, er2, er3, er4, er5 = st.columns([1.5, 1, 1, 1, 1, 1])
+                                with er0: st.markdown(f"<div style='font-size:0.76rem;'>{row_label}</div>", unsafe_allow_html=True)
+                                for col, dkey in zip([er1, er2, er3, er4, er5], DAY_KEYS):
+                                    existing_time = None
+                                    raw = tr.get(f"{dkey}_{dkk}")
+                                    if raw:
+                                        try: existing_time = datetime.strptime(str(raw)[:5], "%H:%M").time()
+                                        except: pass
+                                    with col:
+                                        etimes[f"{dkey}_{dkk}"] = st.time_input(
+                                            " ", value=existing_time,
+                                            key=f"tref_{tid}_{dkey}_{dkk}",
+                                            label_visibility="collapsed")
+
+                            if st.form_submit_button("💾 Save Changes", type="primary"):
+                                upd_row = {
+                                    "student_initials":  ei.strip(),
+                                    "program":           ep,
+                                    "mainstream_school": es.strip(),
+                                    "week_label":        el.strip(),
+                                    "week_start_date":   str(ews),
+                                    "notes":             en.strip(),
+                                }
+                                for dkey in DAY_KEYS:
+                                    upd_row[f"{dkey}_start"] = str(etimes[f"{dkey}_start"]) if etimes.get(f"{dkey}_start") else None
+                                    upd_row[f"{dkey}_end"]   = str(etimes[f"{dkey}_end"])   if etimes.get(f"{dkey}_end")   else None
+                                upd_transition(tid, upd_row)
+                                st.session_state[ek] = False
+                                st.success("✅ Updated!")
+                                st.rerun()
 
     # ════ STUDENT MEETINGS ══════════════════════════════════════════════════════
     with st_mtg:
@@ -1036,8 +1334,8 @@ with tab_students:
 
         all_mtgs = [e for e in db_events(mf_from, today+timedelta(weeks=52))
                     if e.get("event_type") in STUDENT_MEETING_TYPES]
-        if mf_prog != ["JP","PY","SY"]:         all_mtgs = [e for e in all_mtgs if e.get("program","") in mf_prog]
-        if mf_type != STUDENT_MEETING_TYPES:     all_mtgs = [e for e in all_mtgs if e.get("event_type") in mf_type]
+        if mf_prog != ["JP","PY","SY"]:     all_mtgs = [e for e in all_mtgs if e.get("program","") in mf_prog]
+        if mf_type != STUDENT_MEETING_TYPES: all_mtgs = [e for e in all_mtgs if e.get("event_type") in mf_type]
         all_mtgs.sort(key=lambda x: str(x.get("event_date","")), reverse=True)
 
         if not all_mtgs:
