@@ -424,6 +424,12 @@ with tab1:
     # Additional agenda items
     st.write("**Additional Items:**")
     
+    # Initialize additional_items FIRST (before Load button)
+    if 'additional_agenda' not in agenda_data:
+        agenda_data['additional_agenda'] = []
+    
+    additional_items = agenda_data.get('additional_agenda', [])
+    
     # Load pending agenda items from staff
     col_load1, col_load2 = st.columns([1, 3])
     with col_load1:
@@ -442,6 +448,7 @@ with tab1:
                             loaded_count += 1
                     
                     if loaded_count > 0:
+                        agenda_data['additional_agenda'] = additional_items  # Save back
                         st.success(f"✅ Loaded {loaded_count} pending agenda item(s)!")
                         st.rerun()
                     else:
@@ -454,10 +461,6 @@ with tab1:
     with col_load2:
         st.caption("Load agenda items submitted by staff for this week")
     
-    if 'additional_agenda' not in agenda_data:
-        agenda_data['additional_agenda'] = []
-    
-    additional_items = agenda_data.get('additional_agenda', [])
     
     for idx, item in enumerate(additional_items):
         col_a, col_b = st.columns([5, 1])
