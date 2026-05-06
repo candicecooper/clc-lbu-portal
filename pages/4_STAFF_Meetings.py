@@ -451,62 +451,39 @@ with tab1:
         if st.button("📥 Load Staff Submissions", key="load_pending_items", type="secondary"):
             try:
                 loaded_count = 0
-                errors = []
-                loaded_ids = []  # Track which items we loaded
+                loaded_ids = []
                 
-                # Try MEETINGS database first
+                # Load from OPERATIONAL database (where items actually are)
                 try:
-                    st.info("🔍 Checking MEETINGS database...")
-                    pending_result = supabase.table('staff_agenda_items').select('*').eq('status', 'pending').execute()
-                    st.info(f"Found {len(pending_result.data) if pending_result.data else 0} items in MEETINGS DB")
+                    pending_result = supabase_ops.table('staff_agenda_items').select('*').eq('status', 'pending').execute()
+                    
                     if pending_result.data:
                         for item in pending_result.data:
                             item_text = f"{item['item_text']} (submitted by {item['submitted_by']})"
                             if item_text not in additional_items:
                                 additional_items.append(item_text)
-                                loaded_ids.append(item['id'])  # Track this item
+                                loaded_ids.append(item['id'])
                                 loaded_count += 1
                 except Exception as e:
-                    errors.append(f"MEETINGS DB: {str(e)}")
-                    st.warning(f"MEETINGS DB error: {e}")
-                
-                # Also try OPERATIONAL database (for old items)
-                try:
-                    st.info("🔍 Checking OPERATIONAL database...")
-                    pending_result_ops = supabase_ops.table('staff_agenda_items').select('*').eq('status', 'pending').execute()
-                    st.info(f"Found {len(pending_result_ops.data) if pending_result_ops.data else 0} items in OPERATIONAL DB")
-                    if pending_result_ops.data:
-                        for item in pending_result_ops.data:
-                            item_text = f"{item['item_text']} (submitted by {item['submitted_by']})"
-                            if item_text not in additional_items:
-                                additional_items.append(item_text)
-                                loaded_ids.append(item['id'])  # Track this item
-                                loaded_count += 1
-                except Exception as e:
-                    errors.append(f"OPERATIONAL DB: {str(e)}")
-                    st.warning(f"OPERATIONAL DB error: {e}")
+                    st.error(f"Error loading items: {e}")
                 
                 if loaded_count > 0:
-                    agenda_data['additional_agenda'] = additional_items  # Save back
+                    agenda_data['additional_agenda'] = additional_items
                     
-                    # UPDATE STATUS: Change loaded items from 'pending' to 'added'
+                    # Update status to 'added'
                     for item_id in loaded_ids:
                         try:
-                            # Try updating in MEETINGS database
-                            supabase.table('staff_agenda_items').update({'status': 'added'}).eq('id', item_id).execute()
+                            supabase_ops.table('staff_agenda_items').update({'status': 'added'}).eq('id', item_id).execute()
                         except:
-                            # Also try OPERATIONAL database
-                            try:
-                                supabase_ops.table('staff_agenda_items').update({'status': 'added'}).eq('id', item_id).execute()
-                            except:
-                                pass
+                            pass
                     
-                    st.success(f"✅ Loaded {loaded_count} pending agenda item(s)! Status updated to 'added'")
+                    st.success(f"✅ Loaded {loaded_count} agenda item(s)!")
                     st.rerun()
                 else:
-                    st.error(f"❌ No pending items found. Errors: {'; '.join(errors) if errors else 'None'}")
+                    st.info("No pending agenda items found")
+                    
             except Exception as e:
-                st.error(f"⚠️ Could not load agenda items: {e}")
+                st.error(f"⚠️ Error: {e}")
     
     with col_load2:
         st.caption("Load agenda items submitted by staff for this week")
