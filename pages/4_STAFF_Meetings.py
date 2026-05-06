@@ -652,7 +652,7 @@ List the agenda items discussed (one per line):"""
                                 
                                 minutes = st.text_area("Edit AI-Generated Minutes", value=extracted_minutes, height=400, key="ai_minutes")
                                 
-                                except Exception as e:
+                            except Exception as e:
                                 st.error(f"AI extraction failed: {e}")
                                 minutes = st.text_area("Manual entry (AI failed)", height=400, key="fallback_minutes")
                 elif not GROQ_KEY:
