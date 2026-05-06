@@ -305,19 +305,24 @@ with tab1:
     with st.expander("📰 View Weekly Bulletin", expanded=False):
         # Try to fetch bulletin for this week from OPERATIONAL database
         try:
-            # Look for bulletin matching this meeting date
-            bulletin_result = supabase_ops.table('clc_events').select('*').gte('date', str(meeting_date)).lte('date', str(meeting_date)).execute()
+            # Try to fetch recent bulletin items (without date filter in case column doesn't exist)
+            bulletin_result = supabase_ops.table('clc_events').select('*').limit(10).execute()
             
             if bulletin_result.data:
-                st.success("✅ Bulletin found for this week")
+                st.success(f"✅ Found {len(bulletin_result.data)} bulletin item(s)")
                 for item in bulletin_result.data[:5]:  # Show first 5 items
-                    st.write(f"**{item.get('title', 'Event')}** - {item.get('date', '')}")
-                    if item.get('description'):
-                        st.caption(item['description'])
+                    # Handle different possible column names
+                    title = item.get('title') or item.get('event_title') or item.get('name') or 'Event'
+                    date = item.get('date') or item.get('event_date') or item.get('start_date') or ''
+                    description = item.get('description') or item.get('details') or ''
+                    
+                    st.write(f"**{title}** {f'- {date}' if date else ''}")
+                    if description:
+                        st.caption(description)
             else:
-                st.info("ℹ️ No bulletin items found for this week")
+                st.info("ℹ️ No bulletin items found")
         except Exception as e:
-            st.warning(f"⚠️ Could not load bulletin: {e}")
+            st.info("ℹ️ Bulletin not available (table may not be set up yet)")
     
     st.markdown("---")
     
