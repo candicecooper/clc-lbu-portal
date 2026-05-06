@@ -538,25 +538,25 @@ with tab1:
             transcript_file = st.file_uploader("Upload meeting transcript", type=['txt', 'docx'], key="transcript_upload")
             
             if transcript_file:
-            # Read transcript
-            if transcript_file.name.endswith('.txt'):
-                transcript_text = transcript_file.read().decode('utf-8')
-            else:  # .docx
-                if DOCX_AVAILABLE:
-                    try:
-                        doc = docx.Document(transcript_file)
-                        transcript_text = '\n'.join([para.text for para in doc.paragraphs])
-                    except Exception as e:
-                        st.error(f"Could not read .docx file: {e}")
-                        transcript_text = ""
-                else:
-                    st.error("python-docx not installed. Please use .txt file.")
-                    transcript_text = ""
-            
-            if transcript_text and GROQ_KEY:
-                if st.button("🤖 Extract Minutes with AI", type="primary"):
-                    with st.spinner("Processing transcript with AI..."):
+                # Read transcript
+                if transcript_file.name.endswith('.txt'):
+                    transcript_text = transcript_file.read().decode('utf-8')
+                else:  # .docx
+                    if DOCX_AVAILABLE:
                         try:
+                            doc = docx.Document(transcript_file)
+                            transcript_text = '\n'.join([para.text for para in doc.paragraphs])
+                        except Exception as e:
+                            st.error(f"Could not read .docx file: {e}")
+                            transcript_text = ""
+                    else:
+                        st.error("python-docx not installed. Please use .txt file.")
+                        transcript_text = ""
+                
+                if transcript_text and GROQ_KEY:
+                    if st.button("🤖 Extract Minutes with AI", type="primary"):
+                        with st.spinner("Processing transcript with AI..."):
+                            try:
                             from groq import Groq
                             client = Groq(api_key=GROQ_KEY)
                             
@@ -655,14 +655,14 @@ List the agenda items discussed (one per line):"""
                         except Exception as e:
                             st.error(f"AI extraction failed: {e}")
                             minutes = st.text_area("Manual entry (AI failed)", height=400, key="fallback_minutes")
-            elif not GROQ_KEY:
-                st.warning("⚠️ GROQ_API_KEY not configured. Using manual entry.")
-                minutes = st.text_area("Minutes", height=400, key="manual_minutes_fallback")
+                elif not GROQ_KEY:
+                    st.warning("⚠️ GROQ_API_KEY not configured. Using manual entry.")
+                    minutes = st.text_area("Minutes", height=400, key="manual_minutes_fallback")
+                else:
+                    minutes = ""
             else:
+                st.info("Upload a transcript file to use AI extraction")
                 minutes = ""
-        else:
-            st.info("Upload a transcript file to use AI extraction")
-            minutes = ""
     
     # Close the expander
     st.markdown("---")
