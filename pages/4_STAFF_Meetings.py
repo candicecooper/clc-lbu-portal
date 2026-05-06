@@ -4,6 +4,7 @@ from supabase import create_client
 import datetime
 import json
 import os
+import time
 
 # For transcript upload
 try:
@@ -212,9 +213,15 @@ with tab2:
             with st.expander(f"📅 {meeting['meeting_date']} - T{meeting.get('term', '?')} W{meeting.get('week_number', '?')} - {meeting.get('minute_taker', 'Unknown')}"):
                 st.write(f"**Attendees:** {meeting.get('attendees', 'Not recorded')}")
                 st.write(f"**Apologies:** {meeting.get('apologies', 'None')}")
+                
                 st.markdown("---")
-                st.write("**Minutes:**")
-                st.write(meeting.get('minutes', 'No minutes recorded'))
+                st.write("**📄 Minutes:**")
+                meeting_minutes = meeting.get('minutes', 'No minutes recorded')
+                if meeting_minutes and meeting_minutes != 'No minutes recorded':
+                    # Show formatted minutes
+                    st.markdown(meeting_minutes)
+                else:
+                    st.info("No minutes recorded for this meeting")
                 
                 if meeting.get('actions'):
                     st.markdown("---")
@@ -248,7 +255,7 @@ with tab2:
                         st.write(f"**PD Absent:** {meeting['pd_absent']}")
                     if meeting.get('pd_notes'):
                         st.write("**PD Notes:**")
-                        st.write(meeting['pd_notes'])
+                        st.markdown(meeting['pd_notes'])
                     if meeting.get('pd_attachments'):
                         try:
                             attachments = json.loads(meeting['pd_attachments']) if isinstance(meeting['pd_attachments'], str) else meeting['pd_attachments']
@@ -511,23 +518,26 @@ with tab1:
     # 6. MINUTES (Manual OR AI Transcript)
     # ══════════════════════════════════════════════════════════════════════════════
     
-    st.subheader("📄 Meeting Minutes")
-    
     # Initialize minutes variable (will be set in either manual or AI path)
     minutes = selected_record.get('minutes', '') if selected_record else ''
     
-    minutes_method = st.radio("Minutes Entry Method", options=["✍️ Manual Entry", "🤖 AI from Transcript"], horizontal=True)
+    # Check if minutes already exist (for collapsing)
+    has_existing_minutes = bool(minutes and minutes.strip())
     
-    if minutes_method == "✍️ Manual Entry":
-        minutes = st.text_area("Minutes", value=minutes, height=400, key="minutes",
-                               placeholder="Enter meeting minutes here...")
-    
-    else:  # AI from Transcript
-        st.write("**Upload Transcript (.txt or .docx)**")
+    with st.expander("📄 Meeting Minutes", expanded=not has_existing_minutes):
         
-        transcript_file = st.file_uploader("Upload meeting transcript", type=['txt', 'docx'], key="transcript_upload")
+        minutes_method = st.radio("Minutes Entry Method", options=["✍️ Manual Entry", "🤖 AI from Transcript"], horizontal=True)
         
-        if transcript_file:
+        if minutes_method == "✍️ Manual Entry":
+            minutes = st.text_area("Minutes", value=minutes, height=400, key="minutes",
+                                   placeholder="Enter meeting minutes here...")
+        
+        else:  # AI from Transcript
+            st.write("**Upload Transcript (.txt or .docx)**")
+            
+            transcript_file = st.file_uploader("Upload meeting transcript", type=['txt', 'docx'], key="transcript_upload")
+            
+            if transcript_file:
             # Read transcript
             if transcript_file.name.endswith('.txt'):
                 transcript_text = transcript_file.read().decode('utf-8')
@@ -585,9 +595,13 @@ Format clearly with markdown headings (##) and bullet points."""
                             
                             extracted_minutes = response.choices[0].message.content
                             
-                            st.success("✅ Minutes extracted!")
+                            # Show formatted preview
+                            st.success("✅ Minutes extracted successfully!")
                             
-                            # Extract agenda items mentioned (for auto-population)
+                            with st.expander("👁️ Preview Formatted Minutes", expanded=True):
+                                st.markdown(extracted_minutes)
+                            
+                            # Agenda detection prompt
                             agenda_prompt = f"""From this meeting transcript, list ONLY the specific agenda items or topics that were discussed. 
 
 Return them as a simple list, one per line, with no bullet points or numbering. Just the topic names.
@@ -650,6 +664,7 @@ List the agenda items discussed (one per line):"""
             st.info("Upload a transcript file to use AI extraction")
             minutes = ""
     
+    # Close the expander
     st.markdown("---")
 
 st.subheader("✅ Actions")
@@ -1039,13 +1054,18 @@ if st.button("💾 Save Meeting", type="primary", use_container_width=True, key=
         if st.session_state.current_staff_meeting_id:
             # Update existing
             result = supabase.table('staff_meetings').update(meeting_data).eq('id', st.session_state.current_staff_meeting_id).execute()
-            st.success(f"✅ Meeting updated! (ID: {st.session_state.current_staff_meeting_id})")
+            st.success("✅ **Meeting Saved Successfully!**")
+            st.info("📄 Minutes, agenda, and actions have been saved. The Minutes section will collapse on next page load.")
+            time.sleep(2)
+            st.rerun()
         else:
             # Create new
             result = supabase.table('staff_meetings').insert(meeting_data).execute()
             if result.data:
                 st.session_state.current_staff_meeting_id = result.data[0]['id']
-                st.success(f"✅ Meeting created! (ID: {st.session_state.current_staff_meeting_id})")
+                st.success("✅ **New Meeting Created & Saved!**")
+                st.info("📄 All meeting details saved successfully.")
+                time.sleep(2)
                 st.rerun()
     
     except Exception as e:
