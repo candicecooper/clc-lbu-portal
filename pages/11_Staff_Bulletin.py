@@ -5,9 +5,8 @@ import time
 import pandas as pd
 from datetime import datetime, date, timedelta
 
-# Staff/auth functions come from database.py — these work fine across all pages
 from database import (
-    get_staff_names, get_staff_list, add_staff_member, remove_staff_member,
+    get_staff_list, add_staff_member, remove_staff_member,
     set_staff_pin, verify_pin,
 )
 
@@ -32,7 +31,8 @@ def get_sb():
 # ── Auth — delegated to database.py ──────────────────────────────────────────
 def db_get_staff_names():
     try:
-        return get_staff_names()
+        res = get_sb().table("staff").select("name").order("name").execute()
+        return [r["name"] for r in res.data] if res.data else []
     except Exception:
         return []
 
