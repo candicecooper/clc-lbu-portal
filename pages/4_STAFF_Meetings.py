@@ -513,11 +513,13 @@ with tab1:
     
     st.subheader("📄 Meeting Minutes")
     
+    # Initialize minutes variable (will be set in either manual or AI path)
+    minutes = selected_record.get('minutes', '') if selected_record else ''
+    
     minutes_method = st.radio("Minutes Entry Method", options=["✍️ Manual Entry", "🤖 AI from Transcript"], horizontal=True)
     
     if minutes_method == "✍️ Manual Entry":
-        default_minutes = selected_record.get('minutes', '') if selected_record else ''
-        minutes = st.text_area("Minutes", value=default_minutes, height=400, key="minutes",
+        minutes = st.text_area("Minutes", value=minutes, height=400, key="minutes",
                                placeholder="Enter meeting minutes here...")
     
     else:  # AI from Transcript
