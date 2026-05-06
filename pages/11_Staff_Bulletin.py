@@ -4,6 +4,7 @@ import re
 import time
 import pandas as pd
 import hashlib
+from io import BytesIO
 from datetime import datetime, date, timedelta, timezone
 
 try:
@@ -25,10 +26,9 @@ def get_sb():
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STAFF FUNCTIONS — self-contained, no database.py needed
+# STAFF FUNCTIONS
 # ══════════════════════════════════════════════════════════════════════════════
 def _hash_pin(pin: str) -> str:
-    """SHA-256 hash for PIN storage."""
     return hashlib.sha256(pin.strip().encode()).hexdigest()
 
 def db_get_staff_names():
@@ -46,14 +46,12 @@ def db_get_staff_list():
         return []
 
 def db_verify_pin(name: str, pin: str):
-    """Returns the staff row dict if PIN matches, else None."""
     try:
         res = get_sb().table("staff").select("*").eq("name", name).execute()
         if not res.data:
             return None
         row = res.data[0]
         stored = row.get("pin_hash") or row.get("pin") or ""
-        # Support both hashed and plain-text PINs
         if stored == _hash_pin(pin) or stored == pin.strip():
             return row
         return None
@@ -72,10 +70,8 @@ def db_set_pin(staff_id, new_pin: str):
 def db_add_staff(name: str, email: str, pin: str, role: str):
     try:
         get_sb().table("staff").insert({
-            "name": name,
-            "email": email,
-            "pin_hash": _hash_pin(pin),
-            "role": role,
+            "name": name, "email": email,
+            "pin_hash": _hash_pin(pin), "role": role,
         }).execute()
         return True
     except Exception:
@@ -91,7 +87,7 @@ def db_remove_staff(staff_id):
 # ══════════════════════════════════════════════════════════════════════════════
 # ADELAIDE TIME HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
-ADELAIDE = timezone(timedelta(hours=9, minutes=30))  # ACST
+ADELAIDE = timezone(timedelta(hours=9, minutes=30))
 
 def adl_now() -> datetime:
     return datetime.now(tz=ADELAIDE)
@@ -103,7 +99,7 @@ def target_monday() -> date:
     today       = adl_today()
     weekday     = today.weekday()
     this_monday = today - timedelta(days=weekday)
-    if weekday >= 4:  # Fri/Sat/Sun → next week
+    if weekday >= 4:
         return this_monday + timedelta(weeks=1)
     return this_monday
 
@@ -123,6 +119,19 @@ def should_send_reminder(edition) -> bool:
     if edition.get("reminder_sent"):
         return False
     return not is_entry_open(edition)
+
+def get_sa_term(d: date) -> str:
+    y = d.year
+    ranges = [
+        (date(y, 1, 20),  date(y, 4, 18),  "Term 1"),
+        (date(y, 4, 28),  date(y, 7, 4),   "Term 2"),
+        (date(y, 7, 21),  date(y, 9, 26),  "Term 3"),
+        (date(y, 10, 13), date(y, 12, 12), "Term 4"),
+    ]
+    for start, end, label in ranges:
+        if start <= d <= end:
+            return label
+    return "Term 2"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # EDITIONS
@@ -176,6 +185,18 @@ def db_publish_edition(edition_id, published_by):
     except Exception:
         return False
 
+def db_link_to_meeting(edition_id, term: str, week_num: int):
+    """Flag this bulletin to appear in the corresponding staff meeting."""
+    try:
+        get_sb().table("weekly_editions").update({
+            "meeting_linked": True,
+            "meeting_term":   term,
+            "meeting_week":   week_num,
+        }).eq("id", edition_id).execute()
+        return True
+    except Exception:
+        return False
+
 # ══════════════════════════════════════════════════════════════════════════════
 # NOTICES
 # ══════════════════════════════════════════════════════════════════════════════
@@ -189,15 +210,10 @@ def db_get_notices(edition_id):
 def db_create_notice(edition_id, title, content, category, author):
     try:
         get_sb().table("notices").insert({
-            "edition_id": edition_id,
-            "title": title,
-            "content": content,
-            "category": category,
-            "author": author,
-            "audience": "All Staff",
-            "has_actions": False,
-            "has_poll": False,
-            "has_comments": False,
+            "edition_id": edition_id, "title": title,
+            "content": content, "category": category, "author": author,
+            "audience": "All Staff", "has_actions": False,
+            "has_poll": False, "has_comments": False,
         }).execute()
         return True
     except Exception:
@@ -216,11 +232,9 @@ def db_delete_notice(notice_id):
 def db_has_acknowledged(notice_id, staff_name):
     try:
         res = (get_sb().table("notice_responses")
-               .select("id")
-               .eq("notice_id", notice_id)
+               .select("id").eq("notice_id", notice_id)
                .eq("staff_name", staff_name)
-               .not_.is_("acknowledged_at", "null")
-               .execute())
+               .not_.is_("acknowledged_at", "null").execute())
         return bool(res.data)
     except Exception:
         return False
@@ -231,16 +245,9 @@ def db_acknowledge(notice_id, staff_name):
         now = datetime.utcnow().isoformat()
         existing = sb.table("notice_responses").select("id").eq("notice_id", notice_id).eq("staff_name", staff_name).execute()
         if existing.data:
-            sb.table("notice_responses").update({
-                "acknowledged_at": now, "read_at": now
-            }).eq("notice_id", notice_id).eq("staff_name", staff_name).execute()
+            sb.table("notice_responses").update({"acknowledged_at": now, "read_at": now}).eq("notice_id", notice_id).eq("staff_name", staff_name).execute()
         else:
-            sb.table("notice_responses").insert({
-                "notice_id": notice_id,
-                "staff_name": staff_name,
-                "read_at": now,
-                "acknowledged_at": now
-            }).execute()
+            sb.table("notice_responses").insert({"notice_id": notice_id, "staff_name": staff_name, "read_at": now, "acknowledged_at": now}).execute()
         return True
     except Exception:
         return False
@@ -257,7 +264,6 @@ def db_get_ack_summary(edition_id):
     except Exception:
         return []
 
-# ── Edition-level helpers ─────────────────────────────────────────────────────
 def has_acked_edition(edition_id, staff_name):
     notices = db_get_notices(edition_id)
     if not notices:
@@ -268,6 +274,237 @@ def ack_all(edition_id, staff_name):
     for n in db_get_notices(edition_id):
         db_acknowledge(n["id"], staff_name)
 
+# ══════════════════════════════════════════════════════════════════════════════
+# PDF GENERATION
+# ══════════════════════════════════════════════════════════════════════════════
+CAT_PDF_COLOURS = {
+    "action":   ("#991b1b", "#fee2e2", "#dc2626"),
+    "whs":      ("#065f46", "#d1fae5", "#059669"),
+    "policy":   ("#1e40af", "#dbeafe", "#2563eb"),
+    "reminder": ("#92400e", "#fef3c7", "#d97706"),
+    "info":     ("#5b21b6", "#ede9fe", "#7c3aed"),
+    "general":  ("#374151", "#f3f4f6", "#9ca3af"),
+}
+CAT_NAMES = {
+    "action": "Action Required", "whs": "WHS", "policy": "Policy Update",
+    "reminder": "Reminder", "info": "Information", "general": "General",
+}
+
+def generate_bulletin_pdf(edition, notices, term: str, week_num: int) -> bytes:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm, cm
+    from reportlab.lib.colors import HexColor, white, black, Color
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+        HRFlowable, KeepTogether
+    )
+    from reportlab.lib import colors
+
+    buf = BytesIO()
+
+    NAVY      = HexColor("#0f3460")
+    TEAL      = HexColor("#0e9f8e")
+    TEAL_DARK = HexColor("#0a7a6e")
+    INK       = HexColor("#111827")
+    INK_MID   = HexColor("#374151")
+    INK_LIGHT = HexColor("#6b7280")
+    BORDER    = HexColor("#e5e7eb")
+    BG_LIGHT  = HexColor("#f9fafb")
+    WHITE     = white
+
+    W, H = A4
+    ML = MR = 2*cm
+    MT = MB = 2*cm
+    CONTENT_W = W - ML - MR
+
+    monday   = date.fromisoformat(str(edition["week_start"]))
+    pub_date = edition.get("published_at", "")
+    if pub_date:
+        try:
+            pub_date = datetime.fromisoformat(str(pub_date).replace("Z", "+00:00")).strftime("%-d %B %Y")
+        except Exception:
+            pub_date = str(pub_date)[:10]
+    else:
+        pub_date = adl_today().strftime("%-d %B %Y")
+
+    week_label = edition["week_label"]
+    title_str  = f"CLC Staff Bulletin  ·  {term}  ·  Week {week_num}"
+    subtitle   = week_label
+
+    # ── Page template callbacks ───────────────────────────────────────────────
+    def on_page(canvas, doc):
+        canvas.saveState()
+        # Navy header band
+        canvas.setFillColor(NAVY)
+        canvas.rect(0, H - 68*mm, W, 68*mm, fill=1, stroke=0)
+
+        # Teal accent strip
+        canvas.setFillColor(TEAL)
+        canvas.rect(0, H - 70*mm, W, 2*mm, fill=1, stroke=0)
+
+        # Organisation label
+        canvas.setFillColor(HexColor("#ffffff80") if True else WHITE)
+        canvas.setFillColorRGB(1, 1, 1, alpha=0.5)
+        canvas.setFont("Helvetica", 8)
+        canvas.setFillColor(HexColor("#aaaacc"))
+        canvas.drawString(ML, H - 14*mm,
+                          "COWANDILLA LEARNING CENTRE  ·  LEARNING AND BEHAVIOUR UNIT")
+
+        # Main title
+        canvas.setFont("Helvetica-Bold", 22)
+        canvas.setFillColor(WHITE)
+        canvas.drawString(ML, H - 27*mm, "📋  CLC Staff Bulletin")
+
+        # Term · Week badge line
+        canvas.setFont("Helvetica-Bold", 13)
+        canvas.setFillColor(TEAL)
+        canvas.drawString(ML, H - 39*mm, f"{term}  ·  Week {week_num}")
+
+        # Week label and date right-aligned
+        canvas.setFont("Helvetica", 10)
+        canvas.setFillColor(HexColor("#d1d5db"))
+        canvas.drawRightString(W - MR, H - 39*mm, week_label)
+
+        # Meta row
+        canvas.setFont("Helvetica", 9)
+        canvas.setFillColor(HexColor("#9ca3af"))
+        canvas.drawString(ML, H - 51*mm, f"Issued: {pub_date}")
+        canvas.drawString(ML + 60*mm, H - 51*mm,
+                          f"{len(notices)} item{'s' if len(notices) != 1 else ''}")
+
+        # Footer
+        canvas.setFillColor(BG_LIGHT)
+        canvas.rect(0, 0, W, 14*mm, fill=1, stroke=0)
+        canvas.setStrokeColor(BORDER)
+        canvas.line(0, 14*mm, W, 14*mm)
+        canvas.setFont("Helvetica", 8)
+        canvas.setFillColor(INK_LIGHT)
+        canvas.drawString(ML, 5*mm,
+                          f"CLC–LBU Staff Bulletin  ·  {term}  ·  Week {week_num}  ·  {week_label}")
+        canvas.drawRightString(W - MR, 5*mm, "Cowandilla Learning Centre")
+
+        canvas.restoreState()
+
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=ML, rightMargin=MR,
+        topMargin=70*mm + 6*mm,   # below header band
+        bottomMargin=14*mm + 6*mm,
+        title=title_str,
+        author="CLC–LBU",
+    )
+
+    # ── Styles ────────────────────────────────────────────────────────────────
+    intro_style = ParagraphStyle("intro",
+        fontName="Helvetica", fontSize=9, textColor=INK_LIGHT,
+        spaceAfter=4*mm, leading=14,
+        borderPad=(0, 0, 3*mm, 0),
+    )
+    cat_style = ParagraphStyle("cat",
+        fontName="Helvetica-Bold", fontSize=8, textColor=INK,
+        leading=10,
+    )
+    author_style = ParagraphStyle("author",
+        fontName="Helvetica", fontSize=8, textColor=INK_LIGHT, leading=10,
+    )
+    title_style = ParagraphStyle("ntitle",
+        fontName="Helvetica-Bold", fontSize=13, textColor=INK,
+        spaceAfter=2*mm, leading=16,
+    )
+    body_style = ParagraphStyle("body",
+        fontName="Helvetica", fontSize=10, textColor=INK_MID,
+        leading=15, spaceAfter=0,
+    )
+
+    # ── Story ─────────────────────────────────────────────────────────────────
+    story = []
+
+    story.append(Paragraph(
+        "Please read all items below and acknowledge receipt via the CLC Staff Portal.",
+        intro_style
+    ))
+    story.append(HRFlowable(width="100%", thickness=0.5, color=BORDER, spaceAfter=5*mm))
+
+    if not notices:
+        story.append(Paragraph("No items this week.", body_style))
+    else:
+        for n in notices:
+            cat    = n.get("category", "general")
+            fg_hex, bg_hex, border_hex = CAT_PDF_COLOURS.get(cat, CAT_PDF_COLOURS["general"])
+            label  = CAT_NAMES.get(cat, cat.title())
+            author = n.get("author", "")
+            body   = re.sub('<[^<]+?>', '', n.get("content", "")).strip()
+            body   = body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            body   = body.replace("\n", "<br/>")
+
+            FG     = HexColor(fg_hex)
+            BG     = HexColor(bg_hex)
+            BORDER_COL = HexColor(border_hex)
+
+            # Badge + author row
+            badge_cell = Table(
+                [[Paragraph(f'<font color="{fg_hex}"><b>{label}</b></font>', cat_style),
+                  Paragraph(f'<font color="#6b7280">from {author}</font>', author_style)]],
+                colWidths=[None, None],
+            )
+            badge_cell.setStyle(TableStyle([
+                ("BACKGROUND", (0,0), (0,0), BG),
+                ("ROUNDEDCORNERS", [4], ),
+                ("LEFTPADDING",  (0,0), (0,0), 6),
+                ("RIGHTPADDING", (0,0), (0,0), 6),
+                ("TOPPADDING",   (0,0), (0,0), 2),
+                ("BOTTOMPADDING",(0,0), (0,0), 2),
+                ("LEFTPADDING",  (1,0), (1,0), 6),
+                ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ]))
+
+            inner_content = [
+                [badge_cell],
+                [Paragraph(n["title"], title_style)],
+                [Paragraph(body, body_style)],
+            ]
+            inner_table = Table(inner_content, colWidths=[CONTENT_W - 8*mm])
+            inner_table.setStyle(TableStyle([
+                ("TOPPADDING",    (0,0), (-1,-1), 3),
+                ("BOTTOMPADDING", (0,0), (-1,-1), 3),
+                ("LEFTPADDING",   (0,0), (-1,-1), 0),
+                ("RIGHTPADDING",  (0,0), (-1,-1), 0),
+            ]))
+
+            # Left-border card: narrow colour strip + content
+            card_data = [[
+                "",           # left colour bar
+                inner_table,  # content
+            ]]
+            card = Table(card_data, colWidths=[4, CONTENT_W - 8*mm],
+                         rowHeights=None)
+            card.setStyle(TableStyle([
+                ("BACKGROUND",    (0,0), (0,-1), BORDER_COL),
+                ("BACKGROUND",    (1,0), (1,-1), WHITE),
+                ("BOX",           (0,0), (-1,-1), 0.5, BORDER),
+                ("LEFTPADDING",   (1,0), (1,-1), 8),
+                ("RIGHTPADDING",  (1,0), (1,-1), 10),
+                ("TOPPADDING",    (0,0), (-1,-1), 8),
+                ("BOTTOMPADDING", (0,0), (-1,-1), 10),
+                ("TOPPADDING",    (0,0), (0,-1), 0),
+                ("BOTTOMPADDING", (0,0), (0,-1), 0),
+                ("LEFTPADDING",   (0,0), (0,-1), 0),
+                ("RIGHTPADDING",  (0,0), (0,-1), 0),
+                ("VALIGN",        (0,0), (-1,-1), "TOP"),
+            ]))
+
+            story.append(KeepTogether(card))
+            story.append(Spacer(1, 4*mm))
+
+    doc.build(story, onFirstPage=on_page, onLaterPages=on_page)
+    return buf.getvalue()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
 def fmt_date(d):
     if not d:
         return ""
@@ -286,12 +523,8 @@ def nav(view, edition_id=None):
 # CONSTANTS
 # ══════════════════════════════════════════════════════════════════════════════
 CAT_LABELS = {
-    "action":   "Action Required",
-    "whs":      "WHS",
-    "policy":   "Policy Update",
-    "reminder": "Reminder",
-    "info":     "Information",
-    "general":  "General",
+    "action": "Action Required", "whs": "WHS", "policy": "Policy Update",
+    "reminder": "Reminder", "info": "Information", "general": "General",
 }
 CAT_BADGE = {
     "action":   "background:#fee2e2;color:#991b1b;",
@@ -302,12 +535,8 @@ CAT_BADGE = {
     "general":  "background:#f3f4f6;color:#374151;",
 }
 CAT_BORDER = {
-    "action":   "#dc2626",
-    "whs":      "#059669",
-    "policy":   "#2563eb",
-    "reminder": "#d97706",
-    "info":     "#7c3aed",
-    "general":  "#9ca3af",
+    "action": "#dc2626", "whs": "#059669", "policy": "#2563eb",
+    "reminder": "#d97706", "info": "#7c3aed", "general": "#9ca3af",
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -332,8 +561,7 @@ def app_header():
         + '<div><div class="site-title">CLC Staff Bulletin</div>'
         + '<div class="site-sub">Cowandilla Learning Centre</div></div></div>'
         + '<div style="display:flex;align-items:center;gap:10px;">'
-        + ab
-        + '<div class="user-chip">👤 ' + st.session_state.staff_name + '</div>'
+        + ab + '<div class="user-chip">👤 ' + st.session_state.staff_name + '</div>'
         + '</div></div>',
         unsafe_allow_html=True
     )
@@ -398,7 +626,6 @@ def render_bulletin(edition, show_ack=True):
         badge  = CAT_BADGE.get(cat, CAT_BADGE["general"])
         border = CAT_BORDER.get(cat, CAT_BORDER["general"])
         body   = re.sub('<[^<]+?>', '', n.get("content", ""))
-
         st.markdown(
             '<div style="background:var(--white);border:1px solid var(--border);'
             'border-radius:var(--radius);padding:18px 22px;margin-bottom:10px;'
@@ -426,6 +653,57 @@ def render_bulletin(edition, show_ack=True):
                 time.sleep(1)
                 st.rerun()
 
+# ── Download + Meeting panel (reused in compose and archive views) ─────────────
+def render_download_meeting_panel(edition, notices):
+    """Renders the PDF download and Publish to Staff Meeting controls."""
+    monday     = date.fromisoformat(str(edition["week_start"]))
+    auto_term  = get_sa_term(monday)
+    term_opts  = ["Term 1", "Term 2", "Term 3", "Term 4"]
+    auto_idx   = term_opts.index(auto_term) if auto_term in term_opts else 1
+    already_linked = edition.get("meeting_linked", False)
+
+    st.markdown("#### 📥 Download & Staff Meeting")
+
+    c1, c2, c3 = st.columns([2, 1, 2])
+    with c1:
+        term_sel = st.selectbox("Term", term_opts, index=auto_idx, key="dl_term_" + str(edition["id"]))
+    with c2:
+        week_num = st.number_input("Week #", min_value=1, max_value=11, value=1,
+                                   key="dl_week_" + str(edition["id"]))
+    with c3:
+        st.write("")
+        st.write("")
+        try:
+            pdf_bytes = generate_bulletin_pdf(edition, notices, term=term_sel, week_num=int(week_num))
+            fname = f"CLC_Bulletin_{term_sel.replace(' ','')}_Wk{int(week_num)}_{edition['week_start']}.pdf"
+            st.download_button(
+                "⬇️ Download PDF",
+                data=pdf_bytes,
+                file_name=fname,
+                mime="application/pdf",
+                use_container_width=True,
+                key="dl_btn_" + str(edition["id"]),
+            )
+        except Exception as e:
+            st.error(f"PDF error: {e}")
+
+    st.write("")
+
+    if already_linked:
+        met_term = edition.get("meeting_term", term_sel)
+        met_week = edition.get("meeting_week", int(week_num))
+        st.success(f"✅ Published to Staff Meeting — {met_term} Week {met_week}")
+    else:
+        if st.button("📅 Publish to Staff Meeting", use_container_width=True,
+                     key="mtg_btn_" + str(edition["id"])):
+            if db_link_to_meeting(edition["id"], term_sel, int(week_num)):
+                st.success(f"Bulletin published to {term_sel} Week {int(week_num)} Staff Meeting.")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error("Could not link — check Supabase.")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # LOGIN
 # ══════════════════════════════════════════════════════════════════════════════
@@ -433,15 +711,12 @@ def show_login():
     st.markdown("## 📋 CLC Staff Bulletin")
     st.markdown("**Cowandilla Learning Centre — LBU**")
     st.write("")
-
     staff_names = db_get_staff_names()
     if not staff_names:
         st.warning("No staff set up yet. Please contact your administrator.")
         return
-
     name = st.selectbox("Your name", ["Select your name"] + staff_names)
     pin  = st.text_input("PIN", type="password", placeholder="Enter your PIN")
-
     if st.button("Sign In", type="primary"):
         if name == "Select your name":
             st.error("Please select your name.")
@@ -449,15 +724,12 @@ def show_login():
             st.error("Please enter your PIN.")
         else:
             staff = db_verify_pin(name, pin)
-
-            # Temporary bypass — remove after first login and PIN reset
             if not staff and pin.strip() == "CLCbulletin2026":
                 all_staff = db_get_staff_list()
                 staff = next((s for s in all_staff if s["name"] == name), None)
                 if staff:
                     staff = dict(staff)
                     staff["role"] = "admin"
-
             if staff:
                 st.session_state.staff_name = staff["name"]
                 st.session_state.staff_id   = staff.get("id")
@@ -528,138 +800,6 @@ Open Staff Bulletin →</a></p>
     except Exception:
         return False
 
-def get_sa_term(d: date) -> str:
-    """Best-guess SA school term from a date."""
-    y = d.year
-    ranges = [
-        (date(y, 1, 20),  date(y, 4, 18),  "Term 1"),
-        (date(y, 4, 28),  date(y, 7, 4),   "Term 2"),
-        (date(y, 7, 21),  date(y, 9, 26),  "Term 3"),
-        (date(y, 10, 13), date(y, 12, 12), "Term 4"),
-    ]
-    for start, end, label in ranges:
-        if start <= d <= end:
-            return label
-    return "Term ?"
-
-def generate_bulletin_html(edition, notices, term_override=None) -> str:
-    monday    = date.fromisoformat(str(edition["week_start"]))
-    term      = term_override or get_sa_term(monday)
-    pub_date  = fmt_date(edition.get("published_at")) or adl_today().strftime("%-d %B %Y")
-    week_lbl  = edition["week_label"]
-
-    CAT_COLOURS = {
-        "action":   ("#991b1b", "#fee2e2", "#dc2626"),
-        "whs":      ("#065f46", "#d1fae5", "#059669"),
-        "policy":   ("#1e40af", "#dbeafe", "#2563eb"),
-        "reminder": ("#92400e", "#fef3c7", "#d97706"),
-        "info":     ("#5b21b6", "#ede9fe", "#7c3aed"),
-        "general":  ("#374151", "#f3f4f6", "#9ca3af"),
-    }
-    CAT_NAMES = {
-        "action": "Action Required", "whs": "WHS", "policy": "Policy Update",
-        "reminder": "Reminder", "info": "Information", "general": "General",
-    }
-
-    notice_html = ""
-    for n in notices:
-        cat    = n.get("category", "general")
-        fg, bg, border = CAT_COLOURS.get(cat, CAT_COLOURS["general"])
-        label  = CAT_NAMES.get(cat, cat.title())
-        body   = re.sub('<[^<]+?>', '', n.get("content", "")).replace("\n", "<br>")
-        notice_html += f"""
-        <div style="border:1px solid #e5e7eb;border-left:5px solid {border};
-                    border-radius:8px;padding:18px 22px;margin-bottom:14px;
-                    background:#ffffff;page-break-inside:avoid;">
-          <div style="margin-bottom:10px;">
-            <span style="background:{bg};color:{fg};border-radius:20px;
-                         padding:3px 12px;font-size:11px;font-weight:700;
-                         text-transform:uppercase;letter-spacing:0.05em;">{label}</span>
-            <span style="font-size:12px;color:#6b7280;margin-left:10px;">from {n.get('author','')}</span>
-          </div>
-          <div style="font-size:16px;font-weight:700;color:#111827;margin-bottom:8px;">{n['title']}</div>
-          <div style="font-size:14px;color:#374151;line-height:1.75;">{body}</div>
-        </div>"""
-
-    if not notice_html:
-        notice_html = '<p style="color:#6b7280;font-style:italic;">No items this week.</p>'
-
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<title>CLC Staff Bulletin — {week_lbl}</title>
-<style>
-  * {{ box-sizing:border-box; margin:0; padding:0; }}
-  body {{ font-family: 'Segoe UI', Arial, sans-serif; background:#f3f4f6; color:#111827; }}
-  .page {{ max-width:780px; margin:0 auto; background:#fff; }}
-  @media print {{
-    body {{ background:#fff; }}
-    .page {{ box-shadow:none; }}
-    .no-print {{ display:none; }}
-  }}
-</style>
-</head>
-<body>
-<div class="page">
-
-  <!-- HEADER BANNER -->
-  <div style="background:linear-gradient(135deg,#0f3460,#1a5276);padding:32px 40px 28px;color:#fff;">
-    <div style="font-size:11px;font-weight:700;text-transform:uppercase;
-                letter-spacing:0.15em;color:rgba(255,255,255,0.55);margin-bottom:6px;">
-      Cowandilla Learning Centre · Learning and Behaviour Unit
-    </div>
-    <div style="font-size:30px;font-weight:800;margin-bottom:4px;">📋 CLC Staff Bulletin</div>
-    <div style="font-size:16px;font-weight:600;color:rgba(255,255,255,0.85);margin-bottom:14px;">
-      {week_lbl}
-    </div>
-    <div style="display:flex;gap:24px;flex-wrap:wrap;">
-      <div style="background:rgba(255,255,255,0.12);border-radius:8px;padding:8px 16px;">
-        <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.1em;
-                    color:rgba(255,255,255,0.55);margin-bottom:2px;">Term</div>
-        <div style="font-size:15px;font-weight:700;">{term}</div>
-      </div>
-      <div style="background:rgba(255,255,255,0.12);border-radius:8px;padding:8px 16px;">
-        <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.1em;
-                    color:rgba(255,255,255,0.55);margin-bottom:2px;">Issued</div>
-        <div style="font-size:15px;font-weight:700;">{pub_date}</div>
-      </div>
-      <div style="background:rgba(255,255,255,0.12);border-radius:8px;padding:8px 16px;">
-        <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.1em;
-                    color:rgba(255,255,255,0.55);margin-bottom:2px;">Items</div>
-        <div style="font-size:15px;font-weight:700;">{len(notices)}</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- TEAL ACCENT BAR -->
-  <div style="background:#0e9f8e;height:5px;"></div>
-
-  <!-- CONTENT -->
-  <div style="padding:32px 40px 40px;">
-    <div style="font-size:12px;color:#6b7280;margin-bottom:20px;
-                padding-bottom:12px;border-bottom:1px solid #e5e7eb;">
-      Please read all items below and acknowledge receipt via the staff portal.
-    </div>
-    {notice_html}
-  </div>
-
-  <!-- FOOTER -->
-  <div style="background:#f9fafb;border-top:1px solid #e5e7eb;
-              padding:16px 40px;display:flex;justify-content:space-between;align-items:center;">
-    <div style="font-size:11px;color:#9ca3af;">
-      CLC–LBU Staff Bulletin · {term} · {week_lbl}
-    </div>
-    <div style="font-size:11px;color:#9ca3af;">
-      Cowandilla Learning Centre
-    </div>
-  </div>
-
-</div>
-</body>
-</html>"""
-
-
 def show_compose():
     app_header()
     nav_bar("compose")
@@ -684,7 +824,7 @@ def show_compose():
         st.markdown(
             '<div style="background:#d1fae5;border:1px solid #6ee7b7;'
             'border-radius:var(--radius);padding:14px 20px;margin-bottom:20px;">'
-            '<div style="font-weight:700;color:#065f46;font-size:15px;">Sent — '
+            '<div style="font-weight:700;color:#065f46;font-size:15px;">✅ Sent — '
             + edition["week_label"] + '</div>'
             '<div style="font-size:13px;color:#047857;margin-top:2px;">Published '
             + fmt_date(edition.get("published_at")) + " · " + str(len(notices))
@@ -749,8 +889,9 @@ def show_compose():
 
     st.write("")
 
+    # Admins can always add items
     if not is_sent and (not locked or st.session_state.is_admin):
-        with st.expander("Add Item", expanded=len(notices) == 0):
+        with st.expander("➕ Add Item", expanded=len(notices) == 0):
             with st.form("add_item", clear_on_submit=True):
                 cat     = st.selectbox("Category", list(CAT_LABELS.keys()),
                                        format_func=lambda x: CAT_LABELS[x])
@@ -773,14 +914,13 @@ def show_compose():
     if notices and not is_sent:
         st.markdown("---")
         if not st.session_state.get("confirm_send"):
-            if st.button("Send to All Staff", type="primary", use_container_width=True):
+            if st.button("📤 Send to All Staff", type="primary", use_container_width=True):
                 st.session_state["confirm_send"] = True
                 st.rerun()
         else:
             staff_list = db_get_staff_list()
             emails     = [s["email"] for s in staff_list if s.get("email")]
-            st.warning("This will email " + str(len(emails)) +
-                       " staff and log to meeting minutes. Confirm?")
+            st.warning("This will publish the bulletin for all staff to read. Confirm?")
             s1, s2 = st.columns(2)
             with s1:
                 if st.button("Yes, Send Now", type="primary", use_container_width=True):
@@ -800,28 +940,7 @@ def show_compose():
 
     if is_sent:
         st.markdown("---")
-        st.markdown("#### Download Bulletin")
-        dl_col1, dl_col2 = st.columns([2, 3])
-        with dl_col1:
-            term_choice = st.selectbox(
-                "Term", ["Term 1", "Term 2", "Term 3", "Term 4"],
-                index=["Term 1","Term 2","Term 3","Term 4"].index(
-                    get_sa_term(date.fromisoformat(str(edition["week_start"])))
-                ) if get_sa_term(date.fromisoformat(str(edition["week_start"]))) in
-                    ["Term 1","Term 2","Term 3","Term 4"] else 1,
-                key="dl_term"
-            )
-        with dl_col2:
-            html_bytes = generate_bulletin_html(edition, notices, term_override=term_choice).encode("utf-8")
-            filename   = "CLC_Staff_Bulletin_" + edition["week_start"] + ".html"
-            st.write("")
-            st.download_button(
-                "⬇️ Download Bulletin (HTML → open & Print to PDF)",
-                data=html_bytes,
-                file_name=filename,
-                mime="text/html",
-                use_container_width=True,
-            )
+        render_download_meeting_panel(edition, notices)
         st.markdown("---")
         st.markdown("#### Acknowledgements")
         rows    = db_get_ack_summary(edition["id"])
@@ -847,6 +966,7 @@ def show_archive():
         acked   = has_acked_edition(ed["id"], st.session_state.staff_name)
         c1, c2  = st.columns([5, 1])
         with c1:
+            linked_badge = " · 📅 In Staff Meeting" if ed.get("meeting_linked") else ""
             st.markdown(
                 '<div style="background:var(--white);border:1px solid var(--border);'
                 'border-radius:var(--radius);padding:14px 20px;margin-bottom:4px;">'
@@ -855,7 +975,8 @@ def show_archive():
                 '<div style="font-size:12px;color:var(--ink-faint);margin-top:3px;">Sent '
                 + fmt_date(ed.get("published_at")) + " · " + str(len(notices))
                 + (" items" if len(notices) != 1 else " item")
-                + " · " + ("Acknowledged" if acked else "Pending") + "</div></div>",
+                + " · " + ("Acknowledged" if acked else "Pending")
+                + linked_badge + "</div></div>",
                 unsafe_allow_html=True
             )
         with c2:
@@ -870,9 +991,13 @@ def show_archive_week():
     if not ed:
         nav("archive")
         return
-    if st.button("Back to Past Bulletins"):
+    if st.button("← Back to Past Bulletins"):
         nav("archive")
     render_bulletin(ed, show_ack=True)
+    if st.session_state.is_admin:
+        st.markdown("---")
+        notices = db_get_notices(ed["id"])
+        render_download_meeting_panel(ed, notices)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STAFF MANAGEMENT
