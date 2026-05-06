@@ -104,7 +104,7 @@ def init_state():
 init_state()
 ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "clcstaff2026")
 
-TRANSPORT_OPTIONS = ["Taxi","Parent/Carer","Bus","Uber/Rideshare","Staff vehicle","Walking","Other"]
+TRANSPORT_OPTIONS = ["Taxi","Parent/Carer","Other"]
 CHANGE_TYPE_OPTIONS = ["Early Departure","Late Arrival","No Show","Alternative Pickup","Alternative Drop-off","Absent - not attending","Other"]
 
 def _migrate_travel_rows(rows):
