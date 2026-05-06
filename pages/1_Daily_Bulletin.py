@@ -179,6 +179,15 @@ def load_bulletin(d):
         data["student_absent"] = [{"Student": r.get("Student Absence",""), "Program": r.get("Program",""), "Reason": r.get("Reason","")} for r in old_sa if (r.get("Student Absence") or "").strip()]
         if not data["staff_absent"]:   data["staff_absent"]   = [{"Staff Member":"","TRT":""} for _ in range(4)]
         if not data["student_absent"]: data["student_absent"] = [{"Student":"","Program":"","Reason":""} for _ in range(4)]
+    # Migrate old additional_messages → Staff Member / Information
+    old_am = data.get("additional_messages", [])
+    if old_am and isinstance(old_am[0], dict) and any(k in old_am[0] for k in ("Visitor","Reason","Arriving/Departing","Staff Name","Details")):
+        migrated_am = []
+        for r in old_am:
+            staff = r.get("Staff Member","") or r.get("Staff Name","")
+            info_parts = [v for k,v in r.items() if k not in ("Staff Member","Staff Name") and (v or "").strip()]
+            migrated_am.append({"Staff Member": staff, "Information": " — ".join(info_parts)})
+        data["additional_messages"] = migrated_am if migrated_am else [{"Staff Member":"","Information":""} for _ in range(4)]
     sr = data.get("staff_responsibilities", {})
     resp_keys = ["kitchen_duties", "meeting_pd_focus", "chair", "minutes"]
     is_empty = not any((sr.get(k) or "").strip() for k in resp_keys)
