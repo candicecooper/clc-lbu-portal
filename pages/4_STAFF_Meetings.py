@@ -488,22 +488,21 @@ with tab1:
     with col_load2:
         st.caption("Load agenda items submitted by staff for this week")
     
+    # EMERGENCY SIMPLE VERSION - Just type items, one per line
+    st.write("**Type agenda items below (one per line):**")
     
-    for idx, item in enumerate(additional_items):
-        col_a, col_b = st.columns([5, 1])
-        with col_a:
-            additional_items[idx] = st.text_input(f"Item {idx+1}", value=item, key=f"additional_item_{idx}")
-        with col_b:
-            st.write("")
-            st.write("")
-            if st.button("🗑️", key=f"delete_agenda_{idx}"):
-                additional_items.pop(idx)
-                st.rerun()
+    default_items = "\n".join(additional_items) if additional_items else ""
+    items_text = st.text_area(
+        "Additional Agenda Items",
+        value=default_items,
+        height=150,
+        placeholder="Type each agenda item on a new line...\n\nExample:\nSpeech Buy In Support - Catherine\nSmartar Goal tracking\nWHS update",
+        help="Just type your agenda items here - one per line. No buttons needed.",
+        key="simple_agenda_items"
+    )
     
-    if st.button("➕ Add Agenda Item"):
-        additional_items.append("")
-        st.rerun()
-    
+    # Convert text back to list
+    additional_items = [line.strip() for line in items_text.split('\n') if line.strip()]
     agenda_data['additional_agenda'] = additional_items
     
     st.markdown("---")
