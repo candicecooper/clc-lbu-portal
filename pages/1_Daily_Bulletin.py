@@ -138,7 +138,8 @@ def term_label(d):
 def default_bulletin():
     return {
         "fun_fact": "",
-        "staff_absent": [{"Staff Absence":"","TRT":"","Student Absence":"","Program":"","Reason":""} for _ in range(4)],
+        "staff_absent": [{"Staff Member":"","TRT":""} for _ in range(4)],
+        "student_absent": [{"Student":"","Program":"","Reason":""} for _ in range(4)],
         "excursions": [{"Program":"","Staff Member":"","Time Departing":"","Time Returning":"","Location":""} for _ in range(4)],
         "staff_meetings": [{"Type":"","Staff Member":"","Location":"","Time Departing":"","Time Returning":"","Student":""} for _ in range(4)],
         "entry_meetings": [{"Time":"","Program":"","Student":""} for _ in range(4)],
@@ -171,6 +172,13 @@ def load_bulletin(d):
         data["vehicle_bookings"] = converted
     for tk in ("travel_jp","travel_py","travel_sy"):
         data[tk] = _migrate_travel_rows(data.get(tk, []))
+    # Migrate old combined staff_absent → separate staff_absent + student_absent
+    old_sa = data.get("staff_absent", [])
+    if old_sa and isinstance(old_sa[0], dict) and "Staff Absence" in old_sa[0]:
+        data["staff_absent"]   = [{"Staff Member": r.get("Staff Absence",""), "TRT": r.get("TRT","")} for r in old_sa if (r.get("Staff Absence") or "").strip()]
+        data["student_absent"] = [{"Student": r.get("Student Absence",""), "Program": r.get("Program",""), "Reason": r.get("Reason","")} for r in old_sa if (r.get("Student Absence") or "").strip()]
+        if not data["staff_absent"]:   data["staff_absent"]   = [{"Staff Member":"","TRT":""} for _ in range(4)]
+        if not data["student_absent"]: data["student_absent"] = [{"Student":"","Program":"","Reason":""} for _ in range(4)]
     sr = data.get("staff_responsibilities", {})
     resp_keys = ["kitchen_duties", "meeting_pd_focus", "chair", "minutes"]
     is_empty = not any((sr.get(k) or "").strip() for k in resp_keys)
@@ -524,10 +532,9 @@ if params.get("display") == "true":
 
     r1c1, r1c2, r1c3, r1c4, r1c5 = st.columns([2,2,2.5,1.5,2])
     with r1c1:
-        _sa = d_data.get("staff_absent", [])
-        _staff_rows = [r for r in _sa if (r.get("Staff Absence") or "").strip()]
-        _student_rows = [r for r in _sa if (r.get("Student Absence") or "").strip()]
-        st.markdown(f'<div class="dp"><div class="dp-header green">\U0001f645 Staff Absent</div><div class="dp-body"><table class="dt"><tr><th>Staff</th><th>TRT</th><th>Reason</th></tr>{tbl_rows(_staff_rows, ["Staff Absence","TRT","Reason"])}</table></div></div><div style="height:6px;"></div><div class="dp"><div class="dp-header blue">\U0001f392 Student Absent</div><div class="dp-body"><table class="dt"><tr><th>Student</th><th>Program</th><th>Reason</th></tr>{tbl_rows(_student_rows, ["Student Absence","Program","Reason"])}</table></div></div>', unsafe_allow_html=True)
+        _staff_rows   = [r for r in d_data.get("staff_absent",  []) if (r.get("Staff Member") or "").strip()]
+        _student_rows = [r for r in d_data.get("student_absent", []) if (r.get("Student") or "").strip()]
+        st.markdown(f'<div class="dp"><div class="dp-header green">\U0001f645 Staff Absent</div><div class="dp-body"><table class="dt"><tr><th>Staff</th><th>TRT</th></tr>{tbl_rows(_staff_rows, ["Staff Member","TRT"])}</table></div></div><div style="height:6px;"></div><div class="dp"><div class="dp-header blue">\U0001f392 Student Absent</div><div class="dp-body"><table class="dt"><tr><th>Student</th><th>Program</th><th>Reason</th></tr>{tbl_rows(_student_rows, ["Student","Program","Reason"])}</table></div></div>', unsafe_allow_html=True)
     with r1c2:
         st.markdown(f'<div class="dp"><div class="dp-header blue">\U0001f68c Excursions</div><div class="dp-body"><table class="dt"><tr><th>Program</th><th>Staff</th><th>Depart</th><th>Return</th><th>Location</th></tr>{tbl_rows(d_data.get("excursions",[]), ["Program","Staff Member","Time Departing","Time Returning","Location"])}</table></div></div>', unsafe_allow_html=True)
     with r1c3:
@@ -740,24 +747,27 @@ with page_tab:
 
         col_left, col_right = st.columns(2)
         with col_left:
+            st.markdown('<div class="section-card"><div class="section-card-header green"><h3>\U0001f645 Staff Absent</h3></div><div class="section-card-body">', unsafe_allow_html=True)
             if edit:
-                st.markdown('<div class="section-card"><div class="section-card-header green"><h3>\U0001f645 Staff & Student Absent</h3></div><div class="section-card-body">', unsafe_allow_html=True)
-                df = pd.DataFrame(bulletin_data["staff_absent"])
-                edited = st.data_editor(df, key="sa_editor", hide_index=True, use_container_width=True, num_rows="dynamic", column_config={c: st.column_config.TextColumn(c) for c in df.columns})
-                bulletin_data["staff_absent"] = edited.to_dict("records")
-                st.markdown('</div></div>', unsafe_allow_html=True)
+                sa_df = pd.DataFrame(bulletin_data["staff_absent"])
+                sa_edited = st.data_editor(sa_df, key="sa_editor", hide_index=True, use_container_width=True, num_rows="dynamic")
+                bulletin_data["staff_absent"] = sa_edited.to_dict("records")
             else:
-                _sa = bulletin_data["staff_absent"]
-                _s_rows = [r for r in _sa if (r.get("Staff Absence") or "").strip()]
-                _st_rows = [r for r in _sa if (r.get("Student Absence") or "").strip()]
-                st.markdown('<div class="section-card"><div class="section-card-header green"><h3>\U0001f645 Staff Absent</h3></div><div class="section-card-body">', unsafe_allow_html=True)
-                if _s_rows: st.markdown('<table class="data-table"><tr><th>Staff</th><th>TRT</th><th>Reason</th></tr>'+"".join([f"<tr><td>{r.get('Staff Absence','')}</td><td>{r.get('TRT','')}</td><td>{r.get('Reason','')}</td></tr>" for r in _s_rows])+"</table>", unsafe_allow_html=True)
+                _s_rows = [r for r in bulletin_data["staff_absent"] if (r.get("Staff Member") or "").strip()]
+                if _s_rows: st.markdown('<table class="data-table"><tr><th>Staff Member</th><th>TRT</th></tr>'+"".join([f"<tr><td><strong>{r.get('Staff Member','')}</strong></td><td>{r.get('TRT','')}</td></tr>" for r in _s_rows])+"</table>", unsafe_allow_html=True)
                 else: st.markdown('<div class="empty-state"><div class="icon">\u2705</div>No staff absent today</div>', unsafe_allow_html=True)
-                st.markdown('</div></div>', unsafe_allow_html=True)
-                st.markdown('<div class="section-card"><div class="section-card-header blue"><h3>\U0001f392 Student Absent</h3></div><div class="section-card-body">', unsafe_allow_html=True)
-                if _st_rows: st.markdown('<table class="data-table"><tr><th>Student</th><th>Program</th><th>Reason</th></tr>'+"".join([f"<tr><td>{r.get('Student Absence','')}</td><td>{r.get('Program','')}</td><td>{r.get('Reason','')}</td></tr>" for r in _st_rows])+"</table>", unsafe_allow_html=True)
+            st.markdown('</div></div>', unsafe_allow_html=True)
+
+            st.markdown('<div class="section-card"><div class="section-card-header blue"><h3>\U0001f392 Student Absent</h3></div><div class="section-card-body">', unsafe_allow_html=True)
+            if edit:
+                st_df = pd.DataFrame(bulletin_data["student_absent"])
+                st_edited = st.data_editor(st_df, key="st_editor", hide_index=True, use_container_width=True, num_rows="dynamic")
+                bulletin_data["student_absent"] = st_edited.to_dict("records")
+            else:
+                _st_rows = [r for r in bulletin_data["student_absent"] if (r.get("Student") or "").strip()]
+                if _st_rows: st.markdown('<table class="data-table"><tr><th>Student</th><th>Program</th><th>Reason</th></tr>'+"".join([f"<tr><td><strong>{r.get('Student','')}</strong></td><td>{r.get('Program','')}</td><td>{r.get('Reason','')}</td></tr>" for r in _st_rows])+"</table>", unsafe_allow_html=True)
                 else: st.markdown('<div class="empty-state"><div class="icon">\u2705</div>No students absent today</div>', unsafe_allow_html=True)
-                st.markdown('</div></div>', unsafe_allow_html=True)
+            st.markdown('</div></div>', unsafe_allow_html=True)
 
             st.markdown('<div class="section-card"><div class="section-card-header blue"><h3>\U0001f68c Excursions</h3></div><div class="section-card-body">', unsafe_allow_html=True)
             if edit:
