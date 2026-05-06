@@ -429,30 +429,27 @@ with tab1:
     with col_load1:
         if st.button("📥 Load Staff Submissions", key="load_pending_items", type="secondary"):
             try:
-                # Fetch pending items for this week/term
+                # Fetch ALL pending items
                 pending_result = supabase.table('staff_agenda_items').select('*').eq('status', 'pending').execute()
                 
                 if pending_result.data:
-                    # Filter by week/term if available
-                    matching_items = [
-                        item for item in pending_result.data
-                        if (not week_number or item.get('week_number') == week_number) and
-                           (not term or item.get('term') == term)
-                    ]
+                    # Load ALL pending items (no week/term filter)
+                    loaded_count = 0
+                    for item in pending_result.data:
+                        item_text = f"{item['item_text']} (submitted by {item['submitted_by']})"
+                        if item_text not in additional_items:
+                            additional_items.append(item_text)
+                            loaded_count += 1
                     
-                    if matching_items:
-                        for item in matching_items:
-                            item_text = f"{item['item_text']} (submitted by {item['submitted_by']})"
-                            if item_text not in additional_items:
-                                additional_items.append(item_text)
-                        st.success(f"✅ Loaded {len(matching_items)} pending agenda item(s)!")
+                    if loaded_count > 0:
+                        st.success(f"✅ Loaded {loaded_count} pending agenda item(s)!")
                         st.rerun()
                     else:
-                        st.info("No pending items found for this week/term")
+                        st.info("All pending items already added")
                 else:
                     st.info("No pending agenda items")
             except Exception as e:
-                st.warning(f"Could not load agenda items: {e}")
+                st.error(f"⚠️ Could not load agenda items: {e}")
     
     with col_load2:
         st.caption("Load agenda items submitted by staff for this week")
