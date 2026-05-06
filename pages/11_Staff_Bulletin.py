@@ -617,7 +617,7 @@ def show_compose():
 
     st.write("")
 
-    if not is_sent and not locked:
+    if not is_sent and (not locked or st.session_state.is_admin):
         with st.expander("Add Item", expanded=len(notices) == 0):
             with st.form("add_item", clear_on_submit=True):
                 cat     = st.selectbox("Category", list(CAT_LABELS.keys()),
