@@ -557,11 +557,11 @@ with tab1:
                     if st.button("🤖 Extract Minutes with AI", type="primary"):
                         with st.spinner("Processing transcript with AI..."):
                             try:
-                            from groq import Groq
-                            client = Groq(api_key=GROQ_KEY)
-                            
-                            # ENHANCED PROMPT - Extract minutes with sections
-                            prompt = f"""You are analyzing a staff meeting transcript. Extract structured meeting minutes with the following format:
+                                from groq import Groq
+                                client = Groq(api_key=GROQ_KEY)
+                                
+                                # ENHANCED PROMPT - Extract minutes with sections
+                                prompt = f"""You are analyzing a staff meeting transcript. Extract structured meeting minutes with the following format:
 
 **MEETING OVERVIEW**
 - Brief summary of key topics discussed (2-3 sentences)
@@ -586,23 +586,23 @@ Transcript:
 
 Format clearly with markdown headings (##) and bullet points."""
 
-                            response = client.chat.completions.create(
-                                model="llama-3.3-70b-versatile",
-                                messages=[{"role": "user", "content": prompt}],
-                                temperature=0.3,
-                                max_tokens=4000
-                            )
-                            
-                            extracted_minutes = response.choices[0].message.content
-                            
-                            # Show formatted preview
-                            st.success("✅ Minutes extracted successfully!")
-                            
-                            with st.expander("👁️ Preview Formatted Minutes", expanded=True):
-                                st.markdown(extracted_minutes)
-                            
-                            # Agenda detection prompt
-                            agenda_prompt = f"""From this meeting transcript, list ONLY the specific agenda items or topics that were discussed. 
+                                response = client.chat.completions.create(
+                                    model="llama-3.3-70b-versatile",
+                                    messages=[{"role": "user", "content": prompt}],
+                                    temperature=0.3,
+                                    max_tokens=4000
+                                )
+                                
+                                extracted_minutes = response.choices[0].message.content
+                                
+                                # Show formatted preview
+                                st.success("✅ Minutes extracted successfully!")
+                                
+                                with st.expander("👁️ Preview Formatted Minutes", expanded=True):
+                                    st.markdown(extracted_minutes)
+                                
+                                # Agenda detection prompt
+                                agenda_prompt = f"""From this meeting transcript, list ONLY the specific agenda items or topics that were discussed. 
 
 Return them as a simple list, one per line, with no bullet points or numbering. Just the topic names.
 
@@ -617,44 +617,44 @@ Transcript:
 
 List the agenda items discussed (one per line):"""
 
-                            agenda_response = client.chat.completions.create(
-                                model="llama-3.3-70b-versatile",
-                                messages=[{"role": "user", "content": agenda_prompt}],
-                                temperature=0.2,
-                                max_tokens=500
-                            )
-                            
-                            suggested_agenda = agenda_response.choices[0].message.content.strip()
-                            
-                            # Show suggested agenda items
-                            if suggested_agenda:
-                                with st.expander("📋 Agenda Items Detected in Transcript (Click to Auto-Fill)", expanded=False):
-                                    st.write("**AI detected these topics were discussed:**")
-                                    st.code(suggested_agenda)
-                                    
-                                    if st.button("➕ Add These to Additional Agenda", type="secondary"):
-                                        # Parse suggested items and add to agenda
-                                        suggested_items = [item.strip() for item in suggested_agenda.split('\n') if item.strip()]
+                                agenda_response = client.chat.completions.create(
+                                    model="llama-3.3-70b-versatile",
+                                    messages=[{"role": "user", "content": agenda_prompt}],
+                                    temperature=0.2,
+                                    max_tokens=500
+                                )
+                                
+                                suggested_agenda = agenda_response.choices[0].message.content.strip()
+                                
+                                # Show suggested agenda items
+                                if suggested_agenda:
+                                    with st.expander("📋 Agenda Items Detected in Transcript (Click to Auto-Fill)", expanded=False):
+                                        st.write("**AI detected these topics were discussed:**")
+                                        st.code(suggested_agenda)
                                         
-                                        # Get current items
-                                        current_items_text = st.session_state.get('simple_agenda_items', '')
-                                        current_items = [line.strip() for line in current_items_text.split('\n') if line.strip()]
-                                        
-                                        # Add new items that aren't already there
-                                        for item in suggested_items:
-                                            if item not in current_items:
-                                                current_items.append(item)
-                                        
-                                        # Update session state
-                                        st.session_state['simple_agenda_items'] = '\n'.join(current_items)
-                                        st.success(f"✅ Added {len(suggested_items)} agenda items!")
-                                        st.rerun()
-                            
-                            minutes = st.text_area("Edit AI-Generated Minutes", value=extracted_minutes, height=400, key="ai_minutes")
-                            
-                        except Exception as e:
-                            st.error(f"AI extraction failed: {e}")
-                            minutes = st.text_area("Manual entry (AI failed)", height=400, key="fallback_minutes")
+                                        if st.button("➕ Add These to Additional Agenda", type="secondary"):
+                                            # Parse suggested items and add to agenda
+                                            suggested_items = [item.strip() for item in suggested_agenda.split('\n') if item.strip()]
+                                            
+                                            # Get current items
+                                            current_items_text = st.session_state.get('simple_agenda_items', '')
+                                            current_items = [line.strip() for line in current_items_text.split('\n') if line.strip()]
+                                            
+                                            # Add new items that aren't already there
+                                            for item in suggested_items:
+                                                if item not in current_items:
+                                                    current_items.append(item)
+                                            
+                                            # Update session state
+                                            st.session_state['simple_agenda_items'] = '\n'.join(current_items)
+                                            st.success(f"✅ Added {len(suggested_items)} agenda items!")
+                                            st.rerun()
+                                
+                                minutes = st.text_area("Edit AI-Generated Minutes", value=extracted_minutes, height=400, key="ai_minutes")
+                                
+                                except Exception as e:
+                                st.error(f"AI extraction failed: {e}")
+                                minutes = st.text_area("Manual entry (AI failed)", height=400, key="fallback_minutes")
                 elif not GROQ_KEY:
                     st.warning("⚠️ GROQ_API_KEY not configured. Using manual entry.")
                     minutes = st.text_area("Minutes", height=400, key="manual_minutes_fallback")
