@@ -21,10 +21,10 @@ st.sidebar.markdown(
 )
 
 # ── Supabase ──────────────────────────────────────────────────────────────────
-# Submit Agenda Items uses the MEETINGS database (same as STAFF Meetings)
-SUPABASE_URL = st.secrets.get("SUPABASE_URL_MEETINGS", st.secrets["SUPABASE_URL"])
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY_MEETINGS", st.secrets["SUPABASE_KEY"])
-SUPABASE_SERVICE_KEY = st.secrets.get("SUPABASE_SERVICE_KEY_MEETINGS", SUPABASE_KEY)
+# Use OPERATIONAL database (where all data lives)
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+SUPABASE_SERVICE_KEY = st.secrets.get("SUPABASE_SERVICE_KEY", SUPABASE_KEY)
 
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
