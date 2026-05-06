@@ -3,12 +3,8 @@ import streamlit as st
 import re
 import time
 import pandas as pd
-from datetime import datetime, date, timedelta
-
-from database import (
-    get_staff_list, add_staff_member, remove_staff_member,
-    set_staff_pin, verify_pin,
-)
+import hashlib
+from datetime import datetime, date, timedelta, timezone
 
 try:
     from email_utils import send_edition_notification
@@ -21,14 +17,20 @@ st.set_page_config(page_title="CLC Staff Bulletin", page_icon="📋",
 apply_clc_theme()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SUPABASE — direct client, no database.py
+# SUPABASE — direct client only, no database.py
 # ══════════════════════════════════════════════════════════════════════════════
 @st.cache_resource
 def get_sb():
     from supabase import create_client
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
-# ── Auth — delegated to database.py ──────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# STAFF FUNCTIONS — self-contained, no database.py needed
+# ══════════════════════════════════════════════════════════════════════════════
+def _hash_pin(pin: str) -> str:
+    """SHA-256 hash for PIN storage."""
+    return hashlib.sha256(pin.strip().encode()).hexdigest()
+
 def db_get_staff_names():
     try:
         res = get_sb().table("staff").select("name").order("name").execute()
@@ -36,40 +38,60 @@ def db_get_staff_names():
     except Exception:
         return []
 
-def db_verify_pin(name, pin):
-    try:
-        return verify_pin(name, pin)
-    except Exception:
-        return None
-
-def db_set_pin(staff_id, new_pin):
-    try:
-        return set_staff_pin(staff_id, new_pin)
-    except Exception:
-        return False
-
 def db_get_staff_list():
     try:
-        return get_staff_list()
+        res = get_sb().table("staff").select("*").order("name").execute()
+        return res.data or []
     except Exception:
         return []
 
-def db_add_staff(name, email, pin, role):
+def db_verify_pin(name: str, pin: str):
+    """Returns the staff row dict if PIN matches, else None."""
     try:
-        return add_staff_member(name, email, pin, role)
+        res = get_sb().table("staff").select("*").eq("name", name).execute()
+        if not res.data:
+            return None
+        row = res.data[0]
+        stored = row.get("pin_hash") or row.get("pin") or ""
+        # Support both hashed and plain-text PINs
+        if stored == _hash_pin(pin) or stored == pin.strip():
+            return row
+        return None
+    except Exception:
+        return None
+
+def db_set_pin(staff_id, new_pin: str):
+    try:
+        get_sb().table("staff").update(
+            {"pin_hash": _hash_pin(new_pin)}
+        ).eq("id", staff_id).execute()
+        return True
+    except Exception:
+        return False
+
+def db_add_staff(name: str, email: str, pin: str, role: str):
+    try:
+        get_sb().table("staff").insert({
+            "name": name,
+            "email": email,
+            "pin_hash": _hash_pin(pin),
+            "role": role,
+        }).execute()
+        return True
     except Exception:
         return False
 
 def db_remove_staff(staff_id):
     try:
-        return remove_staff_member(staff_id)
+        get_sb().table("staff").delete().eq("id", staff_id).execute()
+        return True
     except Exception:
         return False
 
-# ── Adelaide time helpers ─────────────────────────────────────────────────────
-from datetime import timezone
-
-ADELAIDE = timezone(timedelta(hours=9, minutes=30))  # ACST (standard; ACDT=+10:30)
+# ══════════════════════════════════════════════════════════════════════════════
+# ADELAIDE TIME HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+ADELAIDE = timezone(timedelta(hours=9, minutes=30))  # ACST
 
 def adl_now() -> datetime:
     return datetime.now(tz=ADELAIDE)
@@ -78,17 +100,10 @@ def adl_today() -> date:
     return adl_now().date()
 
 def target_monday() -> date:
-    """
-    Which week's edition should be active right now?
-    - Fri/Sat/Sun  → NEXT week (open for early entry)
-    - Mon–Tue 3pm  → THIS week (still accepting entries)
-    - Tue 3pm+     → THIS week locked; next week draft already created
-    - Wed/Thu      → THIS week (published or about to be)
-    """
-    today   = adl_today()
-    weekday = today.weekday()  # 0=Mon … 6=Sun
+    today       = adl_today()
+    weekday     = today.weekday()
     this_monday = today - timedelta(days=weekday)
-    if weekday >= 4:           # Fri=4, Sat=5, Sun=6
+    if weekday >= 4:  # Fri/Sat/Sun → next week
         return this_monday + timedelta(weeks=1)
     return this_monday
 
@@ -96,7 +111,6 @@ def edition_week_label(monday: date) -> str:
     return monday.strftime("Week of %-d %B %Y")
 
 def is_entry_open(edition) -> bool:
-    """True if staff can still add items (before Tuesday 3pm Adelaide)."""
     try:
         monday   = date.fromisoformat(str(edition["week_start"]))
         deadline = datetime(monday.year, monday.month, monday.day,
@@ -106,12 +120,13 @@ def is_entry_open(edition) -> bool:
         return True
 
 def should_send_reminder(edition) -> bool:
-    """True if it's past Tuesday 3pm and reminder hasn't been sent yet."""
     if edition.get("reminder_sent"):
         return False
     return not is_entry_open(edition)
 
-# ── Editions ──────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# EDITIONS
+# ══════════════════════════════════════════════════════════════════════════════
 def db_get_or_create_edition():
     try:
         sb     = get_sb()
@@ -161,7 +176,9 @@ def db_publish_edition(edition_id, published_by):
     except Exception:
         return False
 
-# ── Notices ───────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# NOTICES
+# ══════════════════════════════════════════════════════════════════════════════
 def db_get_notices(edition_id):
     try:
         res = get_sb().table("notices").select("*").eq("edition_id", edition_id).order("created_at").execute()
@@ -193,7 +210,9 @@ def db_delete_notice(notice_id):
     except Exception:
         return False
 
-# ── Acknowledgements ──────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# ACKNOWLEDGEMENTS
+# ══════════════════════════════════════════════════════════════════════════════
 def db_has_acknowledged(notice_id, staff_name):
     try:
         res = (get_sb().table("notice_responses")
@@ -210,13 +229,13 @@ def db_acknowledge(notice_id, staff_name):
     try:
         sb  = get_sb()
         now = datetime.utcnow().isoformat()
-        existing = sb.table("responses").select("id").eq("notice_id", notice_id).eq("staff_name", staff_name).execute()
+        existing = sb.table("notice_responses").select("id").eq("notice_id", notice_id).eq("staff_name", staff_name).execute()
         if existing.data:
-            sb.table("responses").update({
+            sb.table("notice_responses").update({
                 "acknowledged_at": now, "read_at": now
             }).eq("notice_id", notice_id).eq("staff_name", staff_name).execute()
         else:
-            sb.table("responses").insert({
+            sb.table("notice_responses").insert({
                 "notice_id": notice_id,
                 "staff_name": staff_name,
                 "read_at": now,
@@ -407,7 +426,6 @@ def render_bulletin(edition, show_ack=True):
                 time.sleep(1)
                 st.rerun()
 
-
 # ══════════════════════════════════════════════════════════════════════════════
 # LOGIN
 # ══════════════════════════════════════════════════════════════════════════════
@@ -449,7 +467,6 @@ def show_login():
                 st.error("Incorrect PIN. Please try again.")
     st.caption("Forgotten your PIN? Contact your administrator.")
 
-
 # ══════════════════════════════════════════════════════════════════════════════
 # THIS WEEK'S BULLETIN
 # ══════════════════════════════════════════════════════════════════════════════
@@ -470,14 +487,12 @@ def show_bulletin():
         return
     render_bulletin(published, show_ack=True)
 
-
 # ══════════════════════════════════════════════════════════════════════════════
 # COMPOSE AND SEND
 # ══════════════════════════════════════════════════════════════════════════════
 def send_reminder_email(edition):
-    """Send Tuesday close-of-entries reminder to admin."""
     try:
-        staff_list = db_get_staff_list()
+        staff_list   = db_get_staff_list()
         admin_emails = [s["email"] for s in staff_list if s.get("role") == "admin" and s.get("email")]
         if not admin_emails:
             admin_emails = [s["email"] for s in staff_list if s.get("email")][:1]
@@ -508,7 +523,6 @@ Open Staff Bulletin →</a></p>
                     s.sendmail(msg["From"], email, msg.as_string())
             except Exception:
                 pass
-        # Mark reminder sent
         get_sb().table("weekly_editions").update({"reminder_sent": True}).eq("id", edition["id"]).execute()
         return True
     except Exception:
@@ -526,14 +540,12 @@ def show_compose():
         st.error("Could not load current edition. Check Supabase connection.")
         return
 
-    notices = db_get_notices(edition["id"])
+    notices  = db_get_notices(edition["id"])
     is_sent  = edition.get("status") == "published"
     locked   = not is_entry_open(edition) and not is_sent
 
-    # ── Auto-send Tuesday reminder if due ────────────────────────────────────
     if locked and should_send_reminder(edition) and st.session_state.is_admin:
-        sent = send_reminder_email(edition)
-        if sent:
+        if send_reminder_email(edition):
             st.toast("📧 Reminder email sent — entries are now closed for this week.")
 
     if is_sent:
@@ -576,12 +588,12 @@ def show_compose():
     if notices:
         st.markdown("#### Items")
         for n in notices:
-            cat    = n.get("category", "general")
-            label  = CAT_LABELS.get(cat, cat.title())
-            badge  = CAT_BADGE.get(cat, CAT_BADGE["general"])
-            body   = re.sub('<[^<]+?>', '', n.get("content", ""))
+            cat     = n.get("category", "general")
+            label   = CAT_LABELS.get(cat, cat.title())
+            badge   = CAT_BADGE.get(cat, CAT_BADGE["general"])
+            body    = re.sub('<[^<]+?>', '', n.get("content", ""))
             preview = body[:120] + ("..." if len(body) > 120 else "")
-            c1, c2 = st.columns([11, 1])
+            c1, c2  = st.columns([11, 1])
             with c1:
                 st.markdown(
                     '<div style="background:var(--white);border:1px solid var(--border);'
@@ -663,7 +675,6 @@ def show_compose():
         if rows:
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-
 # ══════════════════════════════════════════════════════════════════════════════
 # PAST BULLETINS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -707,7 +718,6 @@ def show_archive_week():
     if st.button("Back to Past Bulletins"):
         nav("archive")
     render_bulletin(ed, show_ack=True)
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STAFF MANAGEMENT
@@ -813,7 +823,6 @@ def show_staff():
             else:
                 if db_set_pin(st.session_state.staff_id, new_pin.strip()):
                     st.success("PIN updated.")
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ROUTER
