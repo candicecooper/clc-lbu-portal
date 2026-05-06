@@ -29,13 +29,26 @@ st.sidebar.markdown(
     unsafe_allow_html=True
 )
 
-# ── Supabase (same as Team Meetings) ──────────────────────────────────────────
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-SUPABASE_SERVICE_KEY = st.secrets.get("SUPABASE_SERVICE_KEY", SUPABASE_KEY)
-GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
+# ── Supabase Connections ──────────────────────────────────────────────────────
+# STAFF Meetings uses TWO databases:
+# 1. MEETINGS database (cmqyrfekxgjdtuloseri) - for meeting records and agenda items
+# 2. OPERATIONAL database (lvzaebjrxrgguypqvdcq) - for bulletin (clc_events)
 
-supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+# Primary connection: MEETINGS database (meeting records, agenda items)
+SUPABASE_URL_MEETINGS = st.secrets.get("SUPABASE_URL_MEETINGS", st.secrets["SUPABASE_URL"])
+SUPABASE_KEY_MEETINGS = st.secrets.get("SUPABASE_KEY_MEETINGS", st.secrets["SUPABASE_KEY"])
+SUPABASE_SERVICE_KEY_MEETINGS = st.secrets.get("SUPABASE_SERVICE_KEY_MEETINGS", SUPABASE_KEY_MEETINGS)
+
+supabase = create_client(SUPABASE_URL_MEETINGS, SUPABASE_SERVICE_KEY_MEETINGS)
+
+# Secondary connection: OPERATIONAL database (for bulletin)
+SUPABASE_URL_OPERATIONAL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY_OPERATIONAL = st.secrets["SUPABASE_KEY"]
+SUPABASE_SERVICE_KEY_OPERATIONAL = st.secrets.get("SUPABASE_SERVICE_KEY", SUPABASE_KEY_OPERATIONAL)
+
+supabase_ops = create_client(SUPABASE_URL_OPERATIONAL, SUPABASE_SERVICE_KEY_OPERATIONAL)
+
+GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
 
 # ── BSEM Icebreakers (5-minute activities) ────────────────────────────────────
 BSEM_ICEBREAKERS = [
@@ -290,10 +303,10 @@ with tab1:
     st.subheader("📋 Staff Bulletin (This Week)")
     
     with st.expander("📰 View Weekly Bulletin", expanded=False):
-        # Try to fetch bulletin for this week
+        # Try to fetch bulletin for this week from OPERATIONAL database
         try:
             # Look for bulletin matching this meeting date
-            bulletin_result = supabase.table('clc_events').select('*').gte('date', str(meeting_date)).lte('date', str(meeting_date)).execute()
+            bulletin_result = supabase_ops.table('clc_events').select('*').gte('date', str(meeting_date)).lte('date', str(meeting_date)).execute()
             
             if bulletin_result.data:
                 st.success("✅ Bulletin found for this week")
@@ -303,8 +316,8 @@ with tab1:
                         st.caption(item['description'])
             else:
                 st.info("ℹ️ No bulletin items found for this week")
-        except:
-            st.warning("⚠️ Could not load bulletin (may not be available yet)")
+        except Exception as e:
+            st.warning(f"⚠️ Could not load bulletin: {e}")
     
     st.markdown("---")
     
