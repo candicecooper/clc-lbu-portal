@@ -143,7 +143,7 @@ def default_bulletin():
         "excursions": [{"Program":"","Staff Member":"","Time Departing":"","Time Returning":"","Location":""} for _ in range(4)],
         "staff_meetings": [{"Type":"","Staff Member":"","Location":"","Time Departing":"","Time Returning":"","Student":""} for _ in range(4)],
         "entry_meetings": [{"Time":"","Program":"","Student":""} for _ in range(4)],
-        "additional_messages": [{"Staff Name":"","Details":""} for _ in range(4)],
+        "additional_messages": [{"Staff Member":"","Information":""} for _ in range(4)],
         "visitors_on_site": [{"Visitor Name":"","Reason":"","Staff Responsible":"","Arriving":"","Departing":"","Location":""} for _ in range(4)],
         "travel_jp": [{"Student":"","Arrival Time":"","Departure Time":"","Transport":""} for _ in range(5)],
         "travel_py": [{"Student":"","Arrival Time":"","Departure Time":"","Transport":""} for _ in range(5)],
@@ -802,7 +802,7 @@ with page_tab:
                 df = pd.DataFrame(bulletin_data["additional_messages"]); edited = st.data_editor(df, key="msg_editor", hide_index=True, use_container_width=True, num_rows="dynamic"); bulletin_data["additional_messages"] = edited.to_dict("records")
             else:
                 rows = bulletin_data["additional_messages"]; has_data = any(any(v for v in r.values()) for r in rows)
-                if has_data: st.markdown('<table class="data-table"><tr><th>Staff</th><th>Details</th></tr>'+"".join([f"<tr><td><strong>{r.get('Staff Name','')}</strong></td><td>{r.get('Details','')}</td></tr>" for r in rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
+                if has_data: st.markdown('<table class="data-table"><tr><th>Staff Member</th><th>Information</th></tr>'+"".join([f"<tr><td><strong>{r.get('Staff Member','')}</strong></td><td>{r.get('Information','')}</td></tr>" for r in rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
                 else: st.markdown('<div class="empty-state"><div class="icon">\U0001f4ad</div>No additional messages</div>', unsafe_allow_html=True)
             st.markdown('</div></div>', unsafe_allow_html=True)
 
