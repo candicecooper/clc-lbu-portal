@@ -340,6 +340,19 @@ with tab1:
     else:
         st.info("📹 **Video not configured yet** - Add ACKNOWLEDGEMENT_VIDEO_URL to Render environment variables to enable video playback")
     
+    # Text version option
+    with st.expander("📄 Or Read Acknowledgement of Country (Text Version)", expanded=False):
+        st.markdown("""
+        *"Before we begin, I acknowledge the Kaurna people as the Traditional Custodians of this land, and pay my respects to their Elders past, present, and emerging.*
+        
+        *As a Learning and Behaviour Unit, we recognise that many of our students carry trauma — and we acknowledge the particular trauma that colonisation has caused and continues to cause for Aboriginal and Torres Strait Islander peoples.*
+        
+        *We are committed to trauma-informed, culturally responsive practice that honours the strengths, resilience, and cultures of all our students and their families.*
+        
+        *I extend my respect to any Aboriginal and Torres Strait Islander people present today."*
+        """)
+        st.caption("Chair can read this aloud at the start of the meeting")
+    
     acknowledgement_done = st.checkbox("✅ Acknowledgement completed", value=selected_record.get('acknowledgement_done', False) if selected_record else False)
     acknowledgement_by = st.text_input("Led by", value=selected_record.get('acknowledgement_by', '') if selected_record else '', placeholder="Who led the Acknowledgement?")
     
