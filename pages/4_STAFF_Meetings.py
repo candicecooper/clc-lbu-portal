@@ -305,24 +305,50 @@ with tab1:
     with st.expander("📰 View Weekly Bulletin", expanded=False):
         # Try to fetch bulletin for this week from OPERATIONAL database
         try:
-            # Try to fetch recent bulletin items (without date filter in case column doesn't exist)
-            bulletin_result = supabase_ops.table('clc_events').select('*').limit(10).execute()
+            # Fetch recent bulletin items (we'll filter by date in Python)
+            bulletin_result = supabase_ops.table('clc_events').select('*').limit(50).execute()
             
             if bulletin_result.data:
-                st.success(f"✅ Found {len(bulletin_result.data)} bulletin item(s)")
-                for item in bulletin_result.data[:5]:  # Show first 5 items
-                    # Handle different possible column names
-                    title = item.get('title') or item.get('event_title') or item.get('name') or 'Event'
-                    date = item.get('date') or item.get('event_date') or item.get('start_date') or ''
-                    description = item.get('description') or item.get('details') or ''
+                # Filter items by meeting date/week in Python (handles different column names)
+                week_items = []
+                for item in bulletin_result.data:
+                    # Try different possible date column names
+                    item_date = item.get('date') or item.get('event_date') or item.get('start_date') or item.get('created_at')
                     
-                    st.write(f"**{title}** {f'- {date}' if date else ''}")
-                    if description:
-                        st.caption(description)
+                    if item_date:
+                        # Convert to date if it's a string
+                        if isinstance(item_date, str):
+                            try:
+                                from datetime import datetime
+                                item_date = datetime.fromisoformat(item_date.replace('Z', '+00:00')).date()
+                            except:
+                                continue
+                        
+                        # Check if item is within same week as meeting
+                        if isinstance(item_date, str):
+                            continue
+                            
+                        # Calculate week difference
+                        days_diff = abs((item_date - meeting_date).days)
+                        if days_diff <= 3:  # Within 3 days of meeting = same week
+                            week_items.append(item)
+                
+                if week_items:
+                    st.success(f"✅ Found {len(week_items)} bulletin item(s) for this week")
+                    for item in week_items[:5]:  # Show first 5 items
+                        title = item.get('title') or item.get('event_title') or item.get('name') or 'Event'
+                        date = item.get('date') or item.get('event_date') or item.get('start_date') or ''
+                        description = item.get('description') or item.get('details') or ''
+                        
+                        st.write(f"**{title}** {f'- {date}' if date else ''}")
+                        if description:
+                            st.caption(description)
+                else:
+                    st.info("ℹ️ No bulletin items found for this week")
             else:
                 st.info("ℹ️ No bulletin items found")
         except Exception as e:
-            st.info("ℹ️ Bulletin not available (table may not be set up yet)")
+            st.info(f"ℹ️ Bulletin not available: {str(e)}")
     
     st.markdown("---")
     
@@ -440,26 +466,38 @@ with tab1:
     with col_load1:
         if st.button("📥 Load Staff Submissions", key="load_pending_items", type="secondary"):
             try:
-                # Fetch ALL pending items
-                pending_result = supabase.table('staff_agenda_items').select('*').eq('status', 'pending').execute()
+                loaded_count = 0
                 
-                if pending_result.data:
-                    # Load ALL pending items (no week/term filter)
-                    loaded_count = 0
-                    for item in pending_result.data:
-                        item_text = f"{item['item_text']} (submitted by {item['submitted_by']})"
-                        if item_text not in additional_items:
-                            additional_items.append(item_text)
-                            loaded_count += 1
-                    
-                    if loaded_count > 0:
-                        agenda_data['additional_agenda'] = additional_items  # Save back
-                        st.success(f"✅ Loaded {loaded_count} pending agenda item(s)!")
-                        st.rerun()
-                    else:
-                        st.info("All pending items already added")
+                # Try MEETINGS database first
+                try:
+                    pending_result = supabase.table('staff_agenda_items').select('*').eq('status', 'pending').execute()
+                    if pending_result.data:
+                        for item in pending_result.data:
+                            item_text = f"{item['item_text']} (submitted by {item['submitted_by']})"
+                            if item_text not in additional_items:
+                                additional_items.append(item_text)
+                                loaded_count += 1
+                except:
+                    pass  # Table might not exist in meetings DB yet
+                
+                # Also try OPERATIONAL database (for old items)
+                try:
+                    pending_result_ops = supabase_ops.table('staff_agenda_items').select('*').eq('status', 'pending').execute()
+                    if pending_result_ops.data:
+                        for item in pending_result_ops.data:
+                            item_text = f"{item['item_text']} (submitted by {item['submitted_by']})"
+                            if item_text not in additional_items:
+                                additional_items.append(item_text)
+                                loaded_count += 1
+                except:
+                    pass  # Table might not exist in operational DB
+                
+                if loaded_count > 0:
+                    agenda_data['additional_agenda'] = additional_items  # Save back
+                    st.success(f"✅ Loaded {loaded_count} pending agenda item(s)!")
+                    st.rerun()
                 else:
-                    st.info("No pending agenda items")
+                    st.info("No pending agenda items found")
             except Exception as e:
                 st.error(f"⚠️ Could not load agenda items: {e}")
     
