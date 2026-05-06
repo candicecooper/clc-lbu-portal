@@ -106,6 +106,7 @@ ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "clcstaff2026")
 
 TRANSPORT_OPTIONS = ["Taxi","Parent/Carer","Other"]
 CHANGE_TYPE_OPTIONS = ["Early Departure","Late Arrival","No Show","Alternative Pickup","Alternative Drop-off","Absent - not attending","Other"]
+VISITOR_REASON_OPTIONS = ["Student Observation","Meeting with Leadership","Meeting with Teacher","TAC","Review/Transition Meeting","Support","Other"]
 
 def _migrate_travel_rows(rows):
     migrated = []
@@ -141,7 +142,8 @@ def default_bulletin():
         "excursions": [{"Program":"","Staff Member":"","Time Departing":"","Time Returning":"","Location":""} for _ in range(4)],
         "staff_meetings": [{"Type":"","Staff Member":"","Location":"","Time Departing":"","Time Returning":"","Student":""} for _ in range(4)],
         "entry_meetings": [{"Time":"","Program":"","Student":""} for _ in range(4)],
-        "additional_messages": [{"Staff Member":"","Visitor":"","Reason":"","Arriving/Departing":""} for _ in range(4)],
+        "additional_messages": [{"Staff Name":"","Details":""} for _ in range(4)],
+        "visitors_on_site": [{"Visitor Name":"","Reason":"","Staff Responsible":"","Arriving":"","Departing":"","Location":""} for _ in range(4)],
         "travel_jp": [{"Student":"","Arrival Time":"","Departure Time":"","Transport":""} for _ in range(5)],
         "travel_py": [{"Student":"","Arrival Time":"","Departure Time":"","Transport":""} for _ in range(5)],
         "travel_sy": [{"Student":"","Arrival Time":"","Departure Time":"","Transport":""} for _ in range(5)],
@@ -537,6 +539,11 @@ if params.get("display") == "true":
         kitchen = sr.get("kitchen_duties","") or "\u2014"
         st.markdown(f'<div class="dp"><div class="dp-header amber">\u2b50 Staff Responsibilities</div><div class="dp-body"><div style="margin-bottom:.35rem;"><span class="kitchen-val">\U0001f373 Kitchen: {kitchen}</span></div><div style="margin-bottom:.2rem;"><span class="resp-label">\U0001f4cc PD Focus</span><br><span class="resp-val">{sr.get("meeting_pd_focus","") or "\u2014"}</span></div><div style="margin-bottom:.2rem;"><span class="resp-label">\U0001fa91 Chair</span><br><span class="resp-val">{sr.get("chair","") or "\u2014"}</span></div><div><span class="resp-label">\U0001f4dd Minutes</span><br><span class="resp-val">{sr.get("minutes","") or "\u2014"}</span></div></div></div>', unsafe_allow_html=True)
 
+    _vis_rows = [r for r in d_data.get("visitors_on_site", []) if any(r.get(k,"") for k in ["Visitor Name","Reason","Staff Responsible"])]
+    if _vis_rows:
+        _vis_html = "".join([f'<tr><td><strong style="color:#1a2e44;">{r.get("Visitor Name","")}</strong></td><td style="font-size:.6rem;">{r.get("Reason","")}</td><td style="font-size:.6rem;">{r.get("Staff Responsible","")}</td><td style="font-size:.6rem;">{r.get("Arriving","")}</td><td style="font-size:.6rem;">{r.get("Departing","")}</td><td style="font-size:.6rem;">{r.get("Location","")}</td></tr>' for r in _vis_rows])
+        st.markdown(f'<div class="dp"><div class="dp-header green">\U0001f465 Visitors on Site</div><div class="dp-body"><table class="dt"><tr><th>Visitor</th><th>Reason</th><th>Staff</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>{_vis_html}</table></div></div>', unsafe_allow_html=True)
+
     r2c1, r2c2, r2c3, r2c4, r2c5 = st.columns([2,2,2,1.5,1])
     with r2c1:
         st.markdown(f'<div class="dp"><div class="dp-header blue">\U0001f7e6 JP \u2013 Travel</div><div class="dp-body"><table class="dt"><tr><th>Student</th><th>Arrives</th><th>Departs</th><th>Transport</th></tr>{tbl_rows(d_data.get("travel_jp",[]), ["Student","Arrival Time","Departure Time","Transport"])}</table></div></div>', unsafe_allow_html=True)
@@ -785,8 +792,20 @@ with page_tab:
                 df = pd.DataFrame(bulletin_data["additional_messages"]); edited = st.data_editor(df, key="msg_editor", hide_index=True, use_container_width=True, num_rows="dynamic"); bulletin_data["additional_messages"] = edited.to_dict("records")
             else:
                 rows = bulletin_data["additional_messages"]; has_data = any(any(v for v in r.values()) for r in rows)
-                if has_data: st.markdown('<table class="data-table"><tr><th>Staff</th><th>Visitor</th><th>Reason</th><th>Arriving/Departing</th></tr>'+"".join([f"<tr><td>{r.get('Staff Member','')}</td><td>{r.get('Visitor','')}</td><td>{r.get('Reason','')}</td><td>{r.get('Arriving/Departing','')}</td></tr>" for r in rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
+                if has_data: st.markdown('<table class="data-table"><tr><th>Staff</th><th>Details</th></tr>'+"".join([f"<tr><td><strong>{r.get('Staff Name','')}</strong></td><td>{r.get('Details','')}</td></tr>" for r in rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
                 else: st.markdown('<div class="empty-state"><div class="icon">\U0001f4ad</div>No additional messages</div>', unsafe_allow_html=True)
+            st.markdown('</div></div>', unsafe_allow_html=True)
+
+            st.markdown('<div class="section-card"><div class="section-card-header green"><h3>\U0001f465 Visitors on Site</h3></div><div class="section-card-body">', unsafe_allow_html=True)
+            if edit:
+                vis_df = pd.DataFrame(bulletin_data.get("visitors_on_site", []))
+                vis_edited = st.data_editor(vis_df, key="vis_editor", hide_index=True, use_container_width=True, num_rows="dynamic",
+                    column_config={"Reason": st.column_config.SelectboxColumn("Reason", options=VISITOR_REASON_OPTIONS, required=False)})
+                bulletin_data["visitors_on_site"] = vis_edited.to_dict("records")
+            else:
+                vis_rows = bulletin_data.get("visitors_on_site", []); has_vis = any(any(v for v in r.values()) for r in vis_rows)
+                if has_vis: st.markdown('<table class="data-table"><tr><th>Visitor</th><th>Reason</th><th>Staff Responsible</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>'+"".join([f"<tr><td><strong>{r.get('Visitor Name','')}</strong></td><td>{r.get('Reason','')}</td><td>{r.get('Staff Responsible','')}</td><td>{r.get('Arriving','')}</td><td>{r.get('Departing','')}</td><td>{r.get('Location','')}</td></tr>" for r in vis_rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
+                else: st.markdown('<div class="empty-state"><div class="icon">\U0001f6b6</div>No visitors today</div>', unsafe_allow_html=True)
             st.markdown('</div></div>', unsafe_allow_html=True)
 
     with s2:
