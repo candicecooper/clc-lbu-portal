@@ -694,6 +694,9 @@ with page_tab:
         if st.button("\u2192 Go", key="jump_to_date", use_container_width=True, type="primary"): st.session_state.selected_date = jump_date; st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
+    if st.session_state.pop("_save_ok", False):
+        st.success("\u2705 Bulletin saved successfully!")
+
     ctrl_cols = st.columns([1,1,1,3,1])
     if st.session_state.authenticated:
         with ctrl_cols[0]:
@@ -747,7 +750,7 @@ with page_tab:
         if edit:
             auto_fact = daily_fun_fact(current_date); current_fact = (bulletin_data.get("fun_fact") or "").strip()
             fc1, fc2 = st.columns([5,1])
-            with fc1: new_fact = st.text_input("\U0001f4a1 Fun Fact of the Day", value=current_fact if current_fact else auto_fact)
+            with fc1: new_fact = st.text_input("\U0001f4a1 Fun Fact of the Day", value=current_fact if current_fact else auto_fact, key="fun_fact_input")
             with fc2:
                 st.markdown("<div style='padding-top:1.85rem;'>", unsafe_allow_html=True)
                 if st.button("\U0001f3b2 New", key="new_fact", use_container_width=True): bulletin_data["fun_fact"] = auto_fact; st.rerun()
@@ -817,7 +820,10 @@ with page_tab:
 
             st.markdown('<div class="section-card"><div class="section-card-header green"><h3>\U0001f465 Visitors on Site</h3></div><div class="section-card-body">', unsafe_allow_html=True)
             if edit:
-                vis_df = pd.DataFrame(bulletin_data.get("visitors_on_site", []))
+                _vis_raw = bulletin_data.get("visitors_on_site") or []
+                if not _vis_raw:
+                    _vis_raw = [{"Visitor Name":"","Reason":"","Staff Responsible":"","Arriving":"","Departing":"","Location":""} for _ in range(4)]
+                vis_df = pd.DataFrame(_vis_raw)
                 vis_edited = st.data_editor(vis_df, key="vis_editor", hide_index=True, use_container_width=True, num_rows="dynamic",
                     column_config={"Reason": st.column_config.SelectboxColumn("Reason", options=VISITOR_REASON_OPTIONS, required=False)})
                 bulletin_data["visitors_on_site"] = vis_edited.to_dict("records")
@@ -854,8 +860,10 @@ with page_tab:
 
         st.markdown('<div style="font-size:.8rem;font-weight:600;color:#c0392b;margin:.75rem 0 .5rem;">\U0001f504 Travel Plan Changes \u2014 update if a student\u2019s plan changes during the day</div>', unsafe_allow_html=True)
         st.markdown('<div class="section-card"><div class="section-card-header red"><h3>\U0001f504 Travel Plan Changes</h3></div><div class="section-card-body">', unsafe_allow_html=True)
-        tc_rows = bulletin_data.get("travel_changes", [])
+        tc_rows = bulletin_data.get("travel_changes") or []
         if edit:
+            if not tc_rows:
+                tc_rows = [{"Student":"","Program":"","Change Type":"","Reason":"","Time":"","How Departed":""} for _ in range(3)]
             tc_df = pd.DataFrame(tc_rows)
             tc_edited = st.data_editor(tc_df, key="tc_editor", hide_index=True, use_container_width=True, num_rows="dynamic",
                 column_config={
@@ -920,7 +928,7 @@ with page_tab:
         with nit_col:
             st.markdown('<div class="section-card"><div class="section-card-header green"><h3>\U0001f4cb Additional NIT Booking</h3></div><div class="section-card-body">', unsafe_allow_html=True)
             if edit:
-                bulletin_data["nit_booking"] = st.text_area("NIT Booking Details", value=bulletin_data.get("nit_booking",""), height=120, label_visibility="collapsed")
+                bulletin_data["nit_booking"] = st.text_area("NIT Booking Details", value=bulletin_data.get("nit_booking",""), height=120, label_visibility="collapsed", key="nit_booking_input")
             else:
                 nit = bulletin_data.get("nit_booking","")
                 st.markdown(f'<p style="font-size:.85rem;color:#2a3a2a;line-height:1.6;">{nit}</p>' if nit else '<div class="empty-state"><div class="icon">\U0001f4cb</div>No NIT bookings today</div>', unsafe_allow_html=True)
@@ -1127,12 +1135,22 @@ with page_tab:
 
     if st.session_state.get("_pending_save"):
         st.session_state["_pending_save"] = False
-        save_data = {k: v for k, v in bulletin_data.items() if k != "id"}
-        db.save_bulletin(current_date, save_data)
-        st.session_state.edit_mode = False; st.success("\u2705 Bulletin saved!")
-        if st.query_params.get("from_display") == "true":
-            st.markdown('<meta http-equiv="refresh" content="2;url=/?display=true">', unsafe_allow_html=True); st.info("\u21a9\ufe0f Returning to staff room display in 2 seconds...")
-        st.rerun()
+        import math as _math
+        def _sane(o):
+            if isinstance(o, dict): return {k2: _sane(v2) for k2, v2 in o.items()}
+            if isinstance(o, list): return [_sane(i) for i in o]
+            if isinstance(o, float) and _math.isnan(o): return ""
+            return o
+        save_data = _sane({k: v for k, v in bulletin_data.items() if k != "id"})
+        try:
+            db.save_bulletin(current_date, save_data)
+            st.session_state.edit_mode = False
+            st.session_state["_save_ok"] = True
+            if st.query_params.get("from_display") == "true":
+                st.markdown('<meta http-equiv="refresh" content="2;url=/?display=true">', unsafe_allow_html=True); st.info("\u21a9\ufe0f Returning to staff room display in 2 seconds...")
+            st.rerun()
+        except Exception as _save_err:
+            st.error(f"\u26a0\ufe0f Bulletin could not be saved \u2014 {_save_err}")
 
 
 with quickadd_tab:
