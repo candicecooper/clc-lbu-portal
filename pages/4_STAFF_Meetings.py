@@ -357,6 +357,37 @@ with tab1:
                         st.write(notice.get('content', ''))
             else:
                 st.info("Bulletin published but no items added yet")
+
+            # Allow admin to remove the bulletin link so it can be re-published
+            st.write("")
+            edition_id_str = str(edition['id'])
+            if not st.session_state.get(f"mtg_unlink_confirm_{edition_id_str}"):
+                if st.button("🗑️ Remove bulletin from this meeting", key=f"mtg_unlink_{edition_id_str}",
+                             help="Detaches this bulletin so it can be re-linked or replaced"):
+                    st.session_state[f"mtg_unlink_confirm_{edition_id_str}"] = True
+                    st.rerun()
+            else:
+                st.warning(f"Remove the **{edition.get('week_label', '')}** bulletin from this meeting? "
+                           "It can be re-linked from the Staff Bulletin tool at any time.")
+                cu1, cu2 = st.columns(2)
+                with cu1:
+                    if st.button("Yes, remove it", key=f"mtg_unlink_yes_{edition_id_str}", type="primary"):
+                        try:
+                            supabase_ops.table('weekly_editions').update({
+                                "meeting_linked": False,
+                                "meeting_term": None,
+                                "meeting_week": None,
+                            }).eq('id', edition['id']).execute()
+                            st.session_state.pop(f"mtg_unlink_confirm_{edition_id_str}", None)
+                            st.success("Bulletin removed from this meeting.")
+                            time.sleep(1)
+                            st.rerun()
+                        except Exception as ue:
+                            st.error(f"Could not remove: {ue}")
+                with cu2:
+                    if st.button("Cancel", key=f"mtg_unlink_cancel_{edition_id_str}"):
+                        st.session_state.pop(f"mtg_unlink_confirm_{edition_id_str}", None)
+                        st.rerun()
         else:
             st.info(f"ℹ️ No bulletin linked for {term_long} Week {int(week_number)} yet")
             st.caption("Bulletin items appear here once you publish the bulletin and click 'Add to Meeting' in the Staff Bulletin tool")
