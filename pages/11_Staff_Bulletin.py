@@ -654,54 +654,105 @@ def render_bulletin(edition, show_ack=True):
                 st.rerun()
 
 # ── Download + Meeting panel (reused in compose and archive views) ─────────────
+def _on_download_click(eid):
+    """Called when the Download PDF button is clicked — flags that we should show the meeting prompt."""
+    st.session_state[f"dl_clicked_{eid}"] = True
+
+
 def render_download_meeting_panel(edition, notices):
-    """Renders the PDF download and Publish to Staff Meeting controls."""
+    """Renders the PDF download and (post-download) Publish to Staff Meeting flow."""
     monday     = date.fromisoformat(str(edition["week_start"]))
     auto_term  = get_sa_term(monday)
     term_opts  = ["Term 1", "Term 2", "Term 3", "Term 4"]
     auto_idx   = term_opts.index(auto_term) if auto_term in term_opts else 1
     already_linked = edition.get("meeting_linked", False)
+    eid        = str(edition["id"])
 
-    st.markdown("#### 📥 Download & Staff Meeting")
+    st.markdown("#### 📥 Download & Distribute")
 
-    c1, c2, c3 = st.columns([2, 1, 2])
+    # ── Term / Week selectors ─────────────────────────────────────────────────
+    c1, c2 = st.columns([2, 1])
     with c1:
-        term_sel = st.selectbox("Term", term_opts, index=auto_idx, key="dl_term_" + str(edition["id"]))
+        term_sel = st.selectbox("Term", term_opts, index=auto_idx, key="dl_term_" + eid)
     with c2:
         week_num = st.number_input("Week #", min_value=1, max_value=11, value=1,
-                                   key="dl_week_" + str(edition["id"]))
-    with c3:
-        st.write("")
-        st.write("")
-        try:
-            pdf_bytes = generate_bulletin_pdf(edition, notices, term=term_sel, week_num=int(week_num))
-            fname = f"CLC_Bulletin_{term_sel.replace(' ','')}_Wk{int(week_num)}_{edition['week_start']}.pdf"
-            st.download_button(
-                "⬇️ Download PDF",
-                data=pdf_bytes,
-                file_name=fname,
-                mime="application/pdf",
-                use_container_width=True,
-                key="dl_btn_" + str(edition["id"]),
-            )
-        except Exception as e:
-            st.error(f"PDF error: {e}")
+                                   key="dl_week_" + eid)
+
+    # ── PDF download button ───────────────────────────────────────────────────
+    try:
+        pdf_bytes = generate_bulletin_pdf(edition, notices, term=term_sel, week_num=int(week_num))
+        fname = f"CLC_Bulletin_{term_sel.replace(' ','')}_Wk{int(week_num)}_{edition['week_start']}.pdf"
+        st.download_button(
+            "⬇️ Download PDF  (then email to staff)",
+            data=pdf_bytes,
+            file_name=fname,
+            mime="application/pdf",
+            use_container_width=True,
+            key="dl_btn_" + eid,
+            on_click=_on_download_click,
+            args=(eid,),
+        )
+    except Exception as e:
+        st.error(f"PDF error: {e}")
 
     st.write("")
 
+    # ── Already linked badge ──────────────────────────────────────────────────
     if already_linked:
         met_term = edition.get("meeting_term", term_sel)
         met_week = edition.get("meeting_week", int(week_num))
-        st.success(f"✅ Published to Staff Meeting — {met_term} Week {met_week}")
-    else:
-        if st.button("📅 Publish to Staff Meeting", use_container_width=True,
-                     key="mtg_btn_" + str(edition["id"])):
-            if db_link_to_meeting(edition["id"], term_sel, int(week_num)):
-                st.success(f"Bulletin published to {term_sel} Week {int(week_num)} Staff Meeting.")
-                time.sleep(1)
+        st.markdown(
+            '<div style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:8px;'
+            'padding:14px 18px;display:flex;align-items:center;gap:10px;">'
+            '<span style="font-size:20px;">✅</span>'
+            '<div><div style="font-weight:700;color:#065f46;font-size:14px;">'
+            f'Bulletin is in Staff Meeting — {met_term} Week {met_week}</div>'
+            '<div style="font-size:12px;color:#047857;margin-top:2px;">'
+            'Bulletin items will appear under this week\'s staff meeting agenda.</div></div></div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    # ── Post-download meeting prompt ──────────────────────────────────────────
+    dl_was_clicked = st.session_state.get(f"dl_clicked_{eid}", False)
+
+    if dl_was_clicked:
+        # Prominent prompt appears after download
+        st.markdown(
+            '<div style="background:#eff6ff;border:2px solid #3b82f6;border-radius:10px;'
+            'padding:18px 22px;margin-top:4px;">'
+            '<div style="font-size:15px;font-weight:700;color:#1e40af;margin-bottom:6px;">'
+            '📅 Push this bulletin to Staff Meeting minutes?</div>'
+            '<div style="font-size:13px;color:#1d4ed8;line-height:1.5;">'
+            f'This will add the <strong>{edition["week_label"]}</strong> bulletin items directly '
+            f'into the <strong>{term_sel} Week {int(week_num)}</strong> staff meeting agenda — '
+            'so you don\'t need to copy anything across manually.'
+            '</div></div>',
+            unsafe_allow_html=True,
+        )
+        st.write("")
+        pa, pb, pc = st.columns([2, 2, 3])
+        with pa:
+            if st.button("✅ Yes, add to meeting", type="primary",
+                         use_container_width=True, key="mtg_yes_" + eid):
+                if db_link_to_meeting(edition["id"], term_sel, int(week_num)):
+                    st.session_state[f"dl_clicked_{eid}"] = False
+                    st.success(f"Bulletin added to {term_sel} Week {int(week_num)} staff meeting.")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error("Could not link — check Supabase.")
+        with pb:
+            if st.button("Maybe later", use_container_width=True, key="mtg_no_" + eid):
+                st.session_state[f"dl_clicked_{eid}"] = False
                 st.rerun()
-            else:
-                st.error("Could not link — check Supabase.")
+    else:
+        # Subtle manual option for before/without downloading
+        st.markdown(
+            '<div style="font-size:12px;color:#9ca3af;margin-top:2px;">'
+            '💡 After downloading, you\'ll be prompted to add the bulletin to Staff Meeting minutes.</div>',
+            unsafe_allow_html=True,
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
