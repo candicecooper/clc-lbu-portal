@@ -227,6 +227,13 @@ def select_day(d):
     st.session_state.selected_date = d
     st.session_state.edit_event_id = None
 
+def _show_save_notification():
+    """Display and clear any pending save success/error messages that survived rerun."""
+    if "_cal_save_ok" in st.session_state:
+        st.success(st.session_state.pop("_cal_save_ok"))
+    if "_cal_save_err" in st.session_state:
+        st.error(st.session_state.pop("_cal_save_err"))
+
 # ─── SAVE / UPDATE / DELETE EVENTS ──────────────────────────────────────────────
 def save_event(d):
     try:
@@ -243,10 +250,16 @@ def save_event(d):
             "program":          d.get("program",""),
             "student_initials": d.get("student_initials",""),
         }).execute()
-        st.success(f"✅ Event saved for {d['ev_date'].strftime('%-d %B %Y')}!")
+        # Store success message in session state so it survives st.rerun()
+        try:
+            date_label = d['ev_date'].strftime('%-d %B %Y')
+        except Exception:
+            date_label = str(d.get('ev_date', ''))
+        st.session_state["_cal_save_ok"] = f"✅ '{d['title'].strip()}' saved for {date_label}!"
         return True
     except Exception as e:
-        st.error(f"❌ Could not save event: {e}"); return False
+        st.session_state["_cal_save_err"] = f"❌ Could not save event: {e}"
+        return False
 
 def upd_event(ev_id, d):
     supabase.table("clc_events").update({
@@ -627,6 +640,7 @@ with tab_month:
         render_event_row(ev, "m")
 
     st.markdown(f"#### ➕ Add event on {sel.strftime('%-d %B %Y')}")
+    _show_save_notification()
     ok, data = event_form(f"madd_{sel.year}_{sel.month}_{sel.day}", default_date=sel)
     if ok:
         if save_event(data):
@@ -696,8 +710,11 @@ with tab_week:
     for ev in d_evs:
         render_event_row(ev, "w")
     with st.expander(f"➕ Add event on {sel.strftime('%-d %B')}", expanded=(not d_evs and sel != today)):
+        _show_save_notification()
         ok, data = event_form(f"wadd_{str(sel)}", default_date=sel)
-        if ok: save_event(data); st.rerun()
+        if ok:
+            if save_event(data):
+                st.rerun()
 
 # ═══════════════ LIST / AGENDA VIEW ═══════════════════════════════════════════
 with tab_list:
@@ -707,8 +724,11 @@ with tab_list:
     with lc3: tf = st.multiselect("Filter type", list(EVENT_TYPES.keys()), default=list(EVENT_TYPES.keys()), key="tf")
 
     with st.expander("➕ Add New Event"):
+        _show_save_notification()
         ok, data = event_form("ladd")
-        if ok: save_event(data); st.rerun()
+        if ok:
+            if save_event(data):
+                st.rerun()
 
     st.markdown("---")
     levs = [e for e in (db_events(ls, le) + schedule_events(ls, le) + pac_events(db_pac(), ls, le))
@@ -1289,6 +1309,7 @@ with tab_students:
             '</div>', unsafe_allow_html=True)
 
         with st.expander("➕ Log a Student Meeting", expanded=True):
+            _show_save_notification()
             with st.form("mtg_add_form", clear_on_submit=True):
                 mg1, mg2 = st.columns(2)
                 with mg1:
@@ -1321,7 +1342,8 @@ with tab_students:
                             program=mtg_prog, student_initials=mtg_init.strip()
                         )
                         if save_event(evt):
-                            st.success(f"✅ {mtg_type} logged for {mtg_init.strip()} on {fmt_date(mtg_date)} — now visible in calendar!")
+                            # Override generic save message with a meeting-specific one
+                            st.session_state["_cal_save_ok"] = f"✅ {mtg_type} logged for {mtg_init.strip()} on {fmt_date(mtg_date)} — now visible in calendar!"
                             st.rerun()
 
         st.markdown("---")
