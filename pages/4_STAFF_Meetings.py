@@ -51,6 +51,27 @@ supabase_ops = create_client(SUPABASE_URL_OPERATIONAL, SUPABASE_SERVICE_KEY_OPER
 
 GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
 
+# ── Term normalisation ─────────────────────────────────────────────────────────
+# Staff Meetings stores term as "T2"; Staff Bulletin stores it as "Term 2".
+# These helpers keep the two tools in sync.
+
+def normalise_term_long(raw: str) -> str:
+    """Convert any term format to 'Term N' (used by Staff Bulletin)."""
+    raw = raw.strip()
+    mapping = {"T1": "Term 1", "T2": "Term 2", "T3": "Term 3", "T4": "Term 4"}
+    if raw in mapping:
+        return mapping[raw]
+    # Already in long form ("Term 1" etc.) — return as-is
+    return raw
+
+def normalise_term_short(raw: str) -> str:
+    """Convert any term format to 'TN' (used by Staff Meetings)."""
+    raw = raw.strip()
+    mapping = {"Term 1": "T1", "Term 2": "T2", "Term 3": "T3", "Term 4": "T4"}
+    if raw in mapping:
+        return mapping[raw]
+    return raw
+
 # ── BSEM Icebreakers (5-minute activities) ────────────────────────────────────
 BSEM_ICEBREAKERS = [
     {
@@ -310,8 +331,10 @@ with tab1:
     
     # Auto-load bulletin from Staff Bulletin tool based on term and week
     try:
+        # Normalise term to "Term N" format (Staff Bulletin always stores it that way)
+        term_long = normalise_term_long(term)
         # Find bulletin edition linked to this meeting's term/week
-        bulletin_result = supabase_ops.table('weekly_editions').select('*').eq('meeting_linked', True).eq('meeting_term', term).eq('meeting_week', int(week_number)).execute()
+        bulletin_result = supabase_ops.table('weekly_editions').select('*').eq('meeting_linked', True).eq('meeting_term', term_long).eq('meeting_week', int(week_number)).execute()
         
         if bulletin_result.data and len(bulletin_result.data) > 0:
             edition = bulletin_result.data[0]
@@ -335,8 +358,8 @@ with tab1:
             else:
                 st.info("Bulletin published but no items added yet")
         else:
-            st.info(f"ℹ️ No bulletin published for {term} Week {week_number} yet")
-            st.caption("Bulletin items will appear here when published via Staff Bulletin tool")
+            st.info(f"ℹ️ No bulletin linked for {term_long} Week {int(week_number)} yet")
+            st.caption("Bulletin items appear here once you publish the bulletin and click 'Add to Meeting' in the Staff Bulletin tool")
     
     except Exception as e:
         st.warning(f"Could not load bulletin: {e}")
