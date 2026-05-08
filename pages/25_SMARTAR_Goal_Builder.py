@@ -941,13 +941,241 @@ elif view == "📋 Goal Builder":
             height=80,
         )
 
+        # ── STEP 2: AI-ASSISTED GOAL GENERATION ──────────────────────────────
         st.markdown("---")
-        st.markdown(
-            "**Step 2 — Build the SMARTAR Goal using the Hierarchy of Prompts**"
-        )
+        st.markdown("**Step 2 — AI-Assisted Goal Generation** 🤖")
         st.caption(
-            "Complete each field. The goal statement will be assembled automatically "
-            "from your selections, then refined by AI."
+            "Describe the behaviour of concern and Groq will draft a SMARTAR goal using the "
+            "hierarchy of prompts. You can then edit it directly or add missing elements and have "
+            "Groq recreate it — then click **Use this Goal** to move forward."
+        )
+
+        ai_student_first = st.text_input(
+            "Student first name (for goal)",
+            value=selected_name.split()[0],
+            key="ai_student_first",
+        )
+
+        boc_text = st.text_area(
+            "📝 Describe the behaviour of concern",
+            placeholder=(
+                "e.g. Frequently refuses to start written tasks during literacy, calls out "
+                "and leaves seat, requires multiple prompts before engaging with structured "
+                "activities. Needs a goal around initiating tasks with reduced prompting…"
+            ),
+            height=110,
+            key="boc_description",
+        )
+
+        with st.expander(
+            "🔧 Guide the AI with hierarchy preferences (optional — leave as 'AI decides' to let Groq choose)",
+            expanded=False,
+        ):
+            ah_col1, ah_col2 = st.columns(2)
+            with ah_col1:
+                ah_grouping  = st.selectbox("Grouping",               ["AI decides"] + GROUPINGS,    key="ah_grouping")
+                ah_task_type = st.selectbox("Task type",               ["AI decides"] + TASK_TYPES,   key="ah_task_type")
+                ah_setting   = st.selectbox("Setting",                 ["AI decides"] + SETTINGS,     key="ah_setting")
+            with ah_col2:
+                ah_prompts   = st.selectbox("Prompt level",            ["AI decides"] + PROMPT_TYPES, key="ah_prompts")
+                ah_rate      = st.selectbox("Rate / success criteria", ["AI decides"] + RATE_OPTIONS, key="ah_rate")
+
+        gen_btn_col, _ = st.columns([2, 3])
+        with gen_btn_col:
+            if st.button(
+                "🤖 Generate SMARTAR Goal from Description",
+                type="primary",
+                key="gen_from_boc_btn",
+                disabled=not (boc_text.strip() and ai_student_first.strip()),
+            ):
+                if not groq_client:
+                    st.warning("⚠️ AI unavailable — GROQ_API_KEY not configured.")
+                else:
+                    hierarchy_context = ""
+                    if ah_grouping  != "AI decides": hierarchy_context += f"\n- Grouping: {ah_grouping}"
+                    if ah_task_type != "AI decides": hierarchy_context += f"\n- Task type: {ah_task_type}"
+                    if ah_setting   != "AI decides": hierarchy_context += f"\n- Setting: {ah_setting}"
+                    if ah_prompts   != "AI decides": hierarchy_context += f"\n- Prompt level: {ah_prompts}"
+                    if ah_rate      != "AI decides": hierarchy_context += f"\n- Rate / success criteria: {ah_rate}"
+
+                    if not hierarchy_context:
+                        hierarchy_context = (
+                            "\n(Choose the most appropriate hierarchy elements based on "
+                            "the behaviour description)"
+                        )
+
+                    gen_prompt = f"""You are an expert at writing SMARTAR goals for students in alternative education settings using a trauma-informed, PBS (Positive Behaviour Support) framework aligned with BSEM.
+
+Student name: {ai_student_first}
+Behaviour of concern: {boc_text}
+
+Preferred hierarchy elements (use these; if not specified, choose the most appropriate):{hierarchy_context}
+
+Available hierarchy options to draw from:
+- Groupings: {', '.join(GROUPINGS)}
+- Task types: {', '.join(TASK_TYPES)}
+- Settings: {', '.join(SETTINGS)}
+- Prompt levels (hierarchy of prompts): {', '.join(PROMPT_TYPES)}
+- Rate / success criteria options: {', '.join(RATE_OPTIONS)}
+
+SMARTAR requirements:
+- Specific: names the student, the replacement skill/behaviour, setting, grouping, task type, prompt level
+- Measurable: includes a clear success rate from the options above
+- Achievable: realistic for an alternative education setting with high-needs students
+- Relevant: directly addresses the behaviour of concern as a POSITIVE replacement behaviour
+- Time-bound: success criteria references a time period
+- Aspirational + Reviewed: strengths-based language, implies ongoing monitoring
+
+Rules:
+- Write ONE fluent, professional goal statement
+- Start with "{ai_student_first} will..."
+- Frame positively — what the student WILL do (replacement behaviour), not what they won't
+- Trauma-informed, strengths-based language (BSEM: Regulate, Relate, Reason)
+- Do NOT use the word "appropriately" unless essential
+- One sentence only — no preamble, no explanation, no bullet points
+
+Return ONLY the goal statement."""
+
+                    with st.spinner("🤖 Generating SMARTAR goal…"):
+                        try:
+                            generated = groq_call(gen_prompt)
+                            if generated and len(generated) > 20 and "[AI unavailable" not in generated:
+                                generated = generated.strip().strip('"').strip("'")
+                                st.session_state["ai_generated_goal"]         = generated
+                                st.session_state["ai_generated_goal_current"] = generated
+                                st.session_state.pop("ai_additional_elements", None)
+                                st.rerun()
+                            else:
+                                st.warning(
+                                    "Unexpected AI response — try describing the behaviour "
+                                    "in more detail or adjusting the hierarchy options."
+                                )
+                        except Exception as e:
+                            st.error(f"AI error: {e}")
+
+        if not (boc_text.strip() and ai_student_first.strip()):
+            st.caption("💡 Enter a student name and describe the behaviour to enable AI generation.")
+
+        # ── Generated goal: review, edit, add elements, recreate ─────────────
+        if st.session_state.get("ai_generated_goal"):
+            st.markdown("---")
+            st.markdown("**✨ AI-Generated Goal — Review & Refine**")
+
+            _cur_ai = st.session_state["ai_generated_goal"]
+            _ai_edit_key = f"ai_goal_edit_{hash(_cur_ai)}"
+            ai_goal_edited = st.text_area(
+                "Edit the generated goal directly:",
+                value=_cur_ai,
+                height=100,
+                key=_ai_edit_key,
+            )
+            # Keep a running copy of what the user has manually edited
+            if ai_goal_edited and ai_goal_edited != _cur_ai:
+                st.session_state["ai_generated_goal_current"] = ai_goal_edited
+
+            st.markdown("**🔧 Add any missing elements or adjustments:**")
+            st.caption(
+                "Describe anything that was missed or needs changing — "
+                "e.g. *'change setting to during maths lessons'*, "
+                "*'prompt level should be gestural not verbal'*, "
+                "*'add that he uses a visual schedule to self-prompt'*"
+            )
+            additional_elements = st.text_area(
+                "Additional elements / modifications to incorporate:",
+                placeholder=(
+                    "e.g. The goal should specify that Jake uses a visual schedule, "
+                    "and the setting should be during morning maths not literacy…"
+                ),
+                height=90,
+                key="ai_additional_elements",
+            )
+
+            rc_col, use_col, clear_col = st.columns([2, 1, 1])
+            with rc_col:
+                if st.button(
+                    "🔄 Recreate Goal with Modifications",
+                    key="recreate_ai_goal_btn",
+                    disabled=not additional_elements.strip(),
+                    type="secondary",
+                ):
+                    if not groq_client:
+                        st.warning("⚠️ AI unavailable.")
+                    else:
+                        base_goal = (
+                            st.session_state.get("ai_generated_goal_current")
+                            or ai_goal_edited
+                            or _cur_ai
+                        )
+                        _ai_sname = st.session_state.get("ai_student_first") or selected_name.split()[0]
+                        recreate_prompt = f"""You are an expert at writing SMARTAR goals for students in alternative education settings (trauma-informed, PBS framework).
+
+Recreate this SMARTAR goal incorporating ALL of the requested modifications.
+
+Current goal:
+{base_goal}
+
+Modifications / additional elements to incorporate:
+{additional_elements}
+
+Requirements:
+- Return ONE fluent, professional goal statement
+- Preserve all specificity from the original that hasn't been changed
+- Incorporate every modification requested — do not silently drop any
+- Start with "{_ai_sname} will..."
+- Maintain trauma-informed, strengths-based language
+- One sentence only — no preamble, no explanation, no bullet points
+
+Return ONLY the final goal statement."""
+                        with st.spinner("🔄 Recreating goal with your modifications…"):
+                            try:
+                                recreated = groq_call(recreate_prompt)
+                                if recreated and len(recreated) > 20 and "[AI unavailable" not in recreated:
+                                    recreated = recreated.strip().strip('"').strip("'")
+                                    st.session_state["ai_generated_goal"]         = recreated
+                                    st.session_state["ai_generated_goal_current"] = recreated
+                                    st.session_state.pop("ai_additional_elements", None)
+                                    st.rerun()
+                                else:
+                                    st.warning("Unexpected AI response — try again.")
+                            except Exception as e:
+                                st.error(f"AI error: {e}")
+
+            with use_col:
+                if st.button("✅ Use this Goal", key="use_ai_goal_btn", type="primary"):
+                    goal_to_use = (
+                        st.session_state.get("ai_generated_goal_current")
+                        or ai_goal_edited
+                        or _cur_ai
+                    )
+                    st.session_state["refined_goal"]   = goal_to_use
+                    st.session_state["gb_assembled"]   = goal_to_use
+                    # clear AI state
+                    for _k in ["ai_generated_goal", "ai_generated_goal_current",
+                                "ai_additional_elements", "gas_levels",
+                                "gb_ai_period", "gas_last_source"]:
+                        st.session_state.pop(_k, None)
+                    st.rerun()
+
+            with clear_col:
+                if st.button("🗑 Clear", key="clear_ai_goal_btn"):
+                    for _k in ["ai_generated_goal", "ai_generated_goal_current",
+                                "ai_additional_elements"]:
+                        st.session_state.pop(_k, None)
+                    st.rerun()
+
+            st.markdown(
+                '<div class="success-box">✅ Happy with the goal? Click '
+                '<strong>Use this Goal</strong> above to set it as the final goal — '
+                'then complete the Tracking Period and GAS levels below.</div>',
+                unsafe_allow_html=True,
+            )
+
+        # ── MANUAL ALTERNATIVE ────────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("**Or: Build Manually Using the Hierarchy of Prompts**")
+        st.caption(
+            "Complete each field below to assemble a goal statement manually, "
+            "then use AI to refine it — or use the AI generator above."
         )
 
         col1, col2 = st.columns(2)
