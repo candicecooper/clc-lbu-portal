@@ -197,6 +197,18 @@ def db_link_to_meeting(edition_id, term: str, week_num: int):
     except Exception:
         return False
 
+def db_unlink_from_meeting(edition_id):
+    """Remove this bulletin from the staff meeting (can be re-linked later)."""
+    try:
+        get_sb().table("weekly_editions").update({
+            "meeting_linked": False,
+            "meeting_term":   None,
+            "meeting_week":   None,
+        }).eq("id", edition_id).execute()
+        return True
+    except Exception:
+        return False
+
 # ══════════════════════════════════════════════════════════════════════════════
 # NOTICES
 # ══════════════════════════════════════════════════════════════════════════════
@@ -711,6 +723,30 @@ def render_download_meeting_panel(edition, notices):
             'Bulletin items will appear under this week\'s staff meeting agenda.</div></div></div>',
             unsafe_allow_html=True,
         )
+        st.write("")
+        # Allow unlinking so the bulletin can be re-published to a different week
+        if not st.session_state.get(f"confirm_unlink_{eid}"):
+            if st.button("🔗 Remove from Staff Meeting", key=f"unlink_{eid}",
+                         help="Detach this bulletin from the meeting so it can be re-linked"):
+                st.session_state[f"confirm_unlink_{eid}"] = True
+                st.rerun()
+        else:
+            st.warning("This will remove the bulletin from the staff meeting. You can re-link it at any time.")
+            ua, ub = st.columns(2)
+            with ua:
+                if st.button("Yes, remove it", key=f"unlink_yes_{eid}", type="primary"):
+                    if db_unlink_from_meeting(edition["id"]):
+                        st.session_state.pop(f"confirm_unlink_{eid}", None)
+                        st.session_state.pop(f"dl_clicked_{eid}", None)
+                        st.success("Bulletin removed from staff meeting.")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error("Could not unlink — check Supabase.")
+            with ub:
+                if st.button("Cancel", key=f"unlink_cancel_{eid}"):
+                    st.session_state.pop(f"confirm_unlink_{eid}", None)
+                    st.rerun()
         return
 
     # ── Post-download meeting prompt ──────────────────────────────────────────
