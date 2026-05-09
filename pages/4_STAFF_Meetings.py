@@ -56,20 +56,22 @@ GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
 # These helpers keep the two tools in sync.
 
 def normalise_term_long(raw: str) -> str:
-    """Convert any term format to 'Term N' (used by Staff Bulletin)."""
-    raw = raw.strip()
-    mapping = {"T1": "Term 1", "T2": "Term 2", "T3": "Term 3", "T4": "Term 4"}
-    if raw in mapping:
-        return mapping[raw]
-    # Already in long form ("Term 1" etc.) — return as-is
+    """Convert ANY term format to 'Term N' (used by Staff Bulletin).
+    Handles: 'T2', '2', 'term2', 'Term 2', 'TERM2', etc."""
+    import re
+    raw = str(raw).strip()
+    m = re.search(r'(\d)', raw)
+    if m:
+        return f"Term {m.group(1)}"
     return raw
 
 def normalise_term_short(raw: str) -> str:
-    """Convert any term format to 'TN' (used by Staff Meetings)."""
-    raw = raw.strip()
-    mapping = {"Term 1": "T1", "Term 2": "T2", "Term 3": "T3", "Term 4": "T4"}
-    if raw in mapping:
-        return mapping[raw]
+    """Convert ANY term format to 'TN' (used by Staff Meetings)."""
+    import re
+    raw = str(raw).strip()
+    m = re.search(r'(\d)', raw)
+    if m:
+        return f"T{m.group(1)}"
     return raw
 
 # ── BSEM Icebreakers (5-minute activities) ────────────────────────────────────
@@ -303,18 +305,21 @@ with tab1:
     # Defaults
     if selected_record:
         default_date = datetime.date.fromisoformat(selected_record['meeting_date'])
-        default_term = selected_record.get('term', '')
+        default_term = selected_record.get('term', 'T2')
         default_week = selected_record.get('week_number', 1)
     else:
         default_date = datetime.date.today()
-        default_term = ''
+        default_term = 'T2'
         default_week = 1
-    
+
+    _term_opts = ["T1", "T2", "T3", "T4"]
+    _term_idx  = _term_opts.index(normalise_term_short(default_term)) if normalise_term_short(default_term) in _term_opts else 1
+
     with col1:
         meeting_date = st.date_input("Meeting Date", value=default_date, key="staff_date")
-    
+
     with col2:
-        term = st.text_input("Term", value=default_term, placeholder="T1", key="staff_term")
+        term = st.selectbox("Term", options=_term_opts, index=_term_idx, key="staff_term")
     
     with col3:
         week_number = st.number_input("Week Number", min_value=1, max_value=11, value=default_week, key="staff_week")
