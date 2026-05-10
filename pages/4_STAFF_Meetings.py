@@ -341,15 +341,33 @@ with tab1:
         # Find bulletin edition linked to this meeting's term/week
         bulletin_result = supabase_ops.table('weekly_editions').select('*').eq('meeting_linked', True).eq('meeting_term', term_long).eq('meeting_week', int(week_number)).execute()
 
-        # ── DEBUG expander (remove once confirmed working) ────────────────────
+        # ── DEBUG + REPAIR expander ───────────────────────────────────────────
         with st.expander("🔍 Debug: bulletin query", expanded=False):
             st.write(f"**Querying:** meeting_linked=True, meeting_term=`{term_long}`, meeting_week=`{int(week_number)}`")
-            # Also show ALL linked editions so we can see what's actually stored
-            all_linked = supabase_ops.table('weekly_editions').select('id,week_label,meeting_linked,meeting_term,meeting_week').eq('meeting_linked', True).execute()
+            all_linked = supabase_ops.table('weekly_editions').select('id,week_label,week_start,meeting_linked,meeting_term,meeting_week').eq('meeting_linked', True).execute()
             st.write("**All linked editions in Supabase:**")
             if all_linked.data:
+                import re as _re
+                from datetime import date as _date, timedelta as _td
+                _TERM_STARTS = {"Term 1": _date(2026,1,27), "Term 2": _date(2026,4,27),
+                                "Term 3": _date(2026,7,20), "Term 4": _date(2026,10,12)}
                 for row in all_linked.data:
-                    st.write(f"- `{row.get('week_label')}` → term=`{repr(row.get('meeting_term'))}` week=`{repr(row.get('meeting_week'))}` (type: {type(row.get('meeting_week')).__name__})")
+                    st.write(f"- `{row.get('week_label')}` → term=`{repr(row.get('meeting_term'))}` week=`{repr(row.get('meeting_week'))}`")
+                    # Offer repair if week looks wrong
+                    ws = row.get('week_start')
+                    stored_term = row.get('meeting_term', '')
+                    if ws and stored_term in _TERM_STARTS:
+                        d = _date.fromisoformat(str(ws))
+                        correct_week = (d - _TERM_STARTS[stored_term]).days // 7 + 1
+                        correct_week = max(1, correct_week)
+                        if correct_week != row.get('meeting_week'):
+                            st.warning(f"  ⚠️ Week should be **{correct_week}** (stored as {row.get('meeting_week')})")
+                            if st.button(f"🔧 Fix to Week {correct_week}", key=f"repair_{row['id']}"):
+                                supabase_ops.table('weekly_editions').update(
+                                    {"meeting_week": correct_week}
+                                ).eq('id', row['id']).execute()
+                                st.success(f"Fixed! Now week {correct_week}")
+                                st.rerun()
             else:
                 st.write("None found — nothing is linked at all in Supabase")
             st.write(f"**Query result:** {bulletin_result.data}")
