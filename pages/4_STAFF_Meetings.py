@@ -241,8 +241,15 @@ with tab2:
                 st.write("**📄 Minutes:**")
                 meeting_minutes = meeting.get('minutes', 'No minutes recorded')
                 if meeting_minutes and meeting_minutes != 'No minutes recorded':
-                    # Show formatted minutes
-                    st.markdown(meeting_minutes)
+                    st.markdown('''<style>
+.clc-minutes { font-family: "Segoe UI", Arial, sans-serif !important; font-size: 14px !important; line-height: 1.7 !important; color: #1a1a1a !important; }
+.clc-minutes p, .clc-minutes li, .clc-minutes td, .clc-minutes th, .clc-minutes strong, .clc-minutes em { font-family: "Segoe UI", Arial, sans-serif !important; font-size: 14px !important; }
+.clc-minutes h1,.clc-minutes h2,.clc-minutes h3,.clc-minutes h4 { font-family: "Segoe UI", Arial, sans-serif !important; font-size: 15px !important; font-weight: 700 !important; margin-top: 1em; }
+.clc-minutes table { border-collapse: collapse; width: 100%; }
+.clc-minutes th { background: #f0f0f0; padding: 6px 10px; border: 1px solid #ddd; }
+.clc-minutes td { padding: 6px 10px; border: 1px solid #ddd; }
+</style>''', unsafe_allow_html=True)
+                    st.markdown(f'<div class="clc-minutes">' + meeting_minutes + '</div>', unsafe_allow_html=True)
                 else:
                     st.info("No minutes recorded for this meeting")
                 
@@ -341,8 +348,8 @@ with tab1:
         # Find bulletin edition linked to this meeting's term/week
         bulletin_result = supabase_ops.table('weekly_editions').select('*').eq('meeting_linked', True).eq('meeting_term', term_long).eq('meeting_week', int(week_number)).execute()
 
-        # ── DEBUG + REPAIR expander ───────────────────────────────────────────
-        with st.expander("🔍 Debug: bulletin query", expanded=False):
+        # ── Bulletin link status ──────────────────────────────────────────────
+        with st.expander("🗓️ Bulletin link status", expanded=False):
             st.write(f"**Querying:** meeting_linked=True, meeting_term=`{term_long}`, meeting_week=`{int(week_number)}`")
             all_linked = supabase_ops.table('weekly_editions').select('id,week_label,week_start,meeting_linked,meeting_term,meeting_week').eq('meeting_linked', True).execute()
             st.write("**All linked editions in Supabase:**")
@@ -609,154 +616,196 @@ with tab1:
     # 6. MINUTES (Manual OR AI Transcript)
     # ══════════════════════════════════════════════════════════════════════════════
     
-    # Initialize minutes variable (will be set in either manual or AI path)
     minutes = selected_record.get('minutes', '') if selected_record else ''
-    
-    # Check if minutes already exist (for collapsing)
     has_existing_minutes = bool(minutes and minutes.strip())
     
     with st.expander("📄 Meeting Minutes", expanded=not has_existing_minutes):
         
-        minutes_method = st.radio("Minutes Entry Method", options=["✍️ Manual Entry", "🤖 AI from Transcript"], horizontal=True)
+        minutes_method = st.radio("Minutes Entry Method",
+                                  options=["✍️ Manual Entry", "🤖 AI from Transcript"],
+                                  horizontal=True)
         
         if minutes_method == "✍️ Manual Entry":
             minutes = st.text_area("Minutes", value=minutes, height=400, key="minutes",
                                    placeholder="Enter meeting minutes here...")
         
         else:  # AI from Transcript
-            st.write("**Upload Transcript (.txt or .docx)**")
-            
-            transcript_file = st.file_uploader("Upload meeting transcript", type=['txt', 'docx'], key="transcript_upload")
-            
-            if transcript_file:
-                # Read transcript
+            st.markdown("**Paste your transcript below, or upload a file (.txt / .docx)**")
+
+            # ── Paste or upload ───────────────────────────────────────────────
+            transcript_text = ""
+
+            pasted = st.text_area(
+                "Paste transcript here",
+                height=180,
+                key="transcript_paste",
+                placeholder="Paste your meeting transcript or voice-to-text output here…"
+            )
+            if pasted.strip():
+                transcript_text = pasted.strip()
+
+            transcript_file = st.file_uploader(
+                "Or upload a file",
+                type=['txt', 'docx'],
+                key="transcript_upload",
+                label_visibility="collapsed"
+            )
+            if transcript_file and not transcript_text:
                 if transcript_file.name.endswith('.txt'):
                     transcript_text = transcript_file.read().decode('utf-8')
-                else:  # .docx
+                else:
                     if DOCX_AVAILABLE:
                         try:
                             doc = docx.Document(transcript_file)
-                            transcript_text = '\n'.join([para.text for para in doc.paragraphs])
+                            transcript_text = '\n'.join([p.text for p in doc.paragraphs])
                         except Exception as e:
-                            st.error(f"Could not read .docx file: {e}")
-                            transcript_text = ""
+                            st.error(f"Could not read .docx: {e}")
                     else:
-                        st.error("python-docx not installed. Please use .txt file.")
-                        transcript_text = ""
-                
-                if transcript_text and GROQ_KEY:
-                    if st.button("🤖 Extract Minutes with AI", type="primary"):
-                        with st.spinner("Processing transcript with AI..."):
-                            try:
-                                from groq import Groq
-                                client = Groq(api_key=GROQ_KEY)
-                                
-                                # ENHANCED PROMPT - Extract minutes with sections
-                                prompt = f"""You are analyzing a staff meeting transcript. Extract structured meeting minutes with the following format:
+                        st.error("python-docx not installed — please paste the transcript instead.")
 
-**MEETING OVERVIEW**
-- Brief summary of key topics discussed (2-3 sentences)
+            # ── Generate button ───────────────────────────────────────────────
+            if transcript_text and GROQ_KEY:
+                if st.button("🤖 Generate Structured Minutes", type="primary"):
 
-**DISCUSSION BY AGENDA ITEM**
+                    # Pull meeting header fields already entered above
+                    _title   = st.session_state.get("staff_meeting_title", "CLC Staff Meeting")
+                    _date    = str(meeting_date)
+                    _chair   = st.session_state.get("chairperson_name", "")
+                    _taker   = st.session_state.get("minute_taker", "")
 
-For each topic discussed, create a section with:
-- Clear heading (the agenda item/topic)
-- Key points discussed (bullet points)
-- Decisions made (if any)
-- Actions required (if any)
+                    standing_list = "\n".join(f"- {s}" for s in STANDING_AGENDA_ITEMS)
 
-**ACTION ITEMS**
-List all action items mentioned in clear format:
-- [Person responsible] - [Action to take] - [Deadline if mentioned]
+                    with st.spinner("Generating structured minutes…"):
+                        try:
+                            from groq import Groq
+                            client = Groq(api_key=GROQ_KEY)
 
-**ADDITIONAL TOPICS**
-Any other items discussed not covered above.
+                            prompt = f"""You are producing formal school staff meeting minutes.
 
-Transcript:
+MEETING DETAILS (use exactly as provided):
+- Title: {_title}
+- Date: {_date}
+- Chair: {_chair}
+- Minute Taker: {_taker}
+- Term: {term}, Week: {week_number}
+
+STANDING AGENDA ITEMS for this organisation:
+{standing_list}
+
+TASK:
+Read the transcript below and produce minutes using EXACTLY this structure and format. Do not deviate from it.
+
+---
+
+**Meeting Title:** [from details above]
+**Date:** [from details above]
+**Time:** [extract from transcript, or leave blank]
+**Venue/Location:** [extract from transcript, or leave blank]
+**Chairperson:** [from details above]
+**Minute Taker:** [from details above]
+**Attendees:** [extract all names mentioned as present]
+**Apologies:** [extract any apologies mentioned]
+
+---
+
+**1. Welcome and Apologies**
+[Who was welcomed; any apologies received]
+
+**2. Confirmation of Previous Minutes**
+[Were previous minutes accepted, amended, or are there matters arising]
+
+**3. Business Arising from Previous Minutes**
+[Any outstanding business from previous meeting]
+
+**4. Agenda Items**
+
+For EACH of the standing agenda items below, include a section ONLY if it was discussed in the transcript. If it was not discussed, omit it entirely.
+
+For each discussed item use this sub-format:
+
+**4.X [Item Title]**
+**Discussion:** [what was discussed]
+**Decisions/Outcomes:** [any decisions made]
+**Action(s) Required:** [specific actions, or "Nil"]
+**Responsible Person:** [who is responsible, or "Nil"]
+**Due Date:** [deadline if mentioned, or "Nil"]
+
+After all standing items, include any additional topics from the transcript that don't fit the standing items, using the same sub-format and continuing the numbering.
+
+**5. Other Business**
+[Any items raised under other business]
+
+**6. Next Meeting**
+**Date:** [if mentioned]
+**Time:** [if mentioned]
+**Location:** [if mentioned]
+
+**7. Meeting Closed**
+**Time:** [if mentioned]
+
+---
+
+**Actions Summary**
+
+| Action Item | Responsible Person | Due Date | Status |
+|---|---|---|---|
+[one row per action — populate from all sections above]
+
+---
+
+**Minute Taker:** {_taker}
+**Minutes Approved by:** [leave blank]
+
+---
+
+TRANSCRIPT:
 {transcript_text}
 
-Format clearly with markdown headings (##) and bullet points."""
+Return ONLY the formatted minutes above. No preamble, no commentary, no extra headings."""
 
-                                response = client.chat.completions.create(
-                                    model="llama-3.3-70b-versatile",
-                                    messages=[{"role": "user", "content": prompt}],
-                                    temperature=0.3,
-                                    max_tokens=4000
-                                )
-                                
-                                extracted_minutes = response.choices[0].message.content
-                                
-                                # Show formatted preview
-                                st.success("✅ Minutes extracted successfully!")
-                                
-                                with st.expander("👁️ Preview Formatted Minutes", expanded=True):
-                                    st.markdown(extracted_minutes)
-                                
-                                # Agenda detection prompt
-                                agenda_prompt = f"""From this meeting transcript, list ONLY the specific agenda items or topics that were discussed. 
+                            response = client.chat.completions.create(
+                                model="llama-3.3-70b-versatile",
+                                messages=[{"role": "user", "content": prompt}],
+                                temperature=0.2,
+                                max_tokens=4000
+                            )
+                            extracted_minutes = response.choices[0].message.content
+                            st.session_state["ai_minutes_draft"] = extracted_minutes
+                            st.success("✅ Minutes generated!")
 
-Return them as a simple list, one per line, with no bullet points or numbering. Just the topic names.
+                        except Exception as e:
+                            st.error(f"AI extraction failed: {e}")
 
-Examples of good output:
-Speech pathology support
-SMARTAR goal tracking
-WHS update
-Budget review
+            elif transcript_text and not GROQ_KEY:
+                st.warning("⚠️ GROQ_API_KEY not configured.")
 
-Transcript:
-{transcript_text}
+            # ── Preview + editable output ─────────────────────────────────────
+            draft = st.session_state.get("ai_minutes_draft", "")
+            if draft:
+                st.markdown("---")
+                st.markdown("#### 👁️ Preview")
 
-List the agenda items discussed (one per line):"""
+                # Styled preview — renders markdown with consistent font/size
+                st.markdown('''<style>
+.clc-minutes { font-family: "Segoe UI", Arial, sans-serif !important; font-size: 14px !important; line-height: 1.7 !important; color: #1a1a1a !important; }
+.clc-minutes p, .clc-minutes li, .clc-minutes td, .clc-minutes th, .clc-minutes strong, .clc-minutes em { font-family: "Segoe UI", Arial, sans-serif !important; font-size: 14px !important; }
+.clc-minutes h1,.clc-minutes h2,.clc-minutes h3,.clc-minutes h4 { font-family: "Segoe UI", Arial, sans-serif !important; font-size: 15px !important; font-weight: 700 !important; margin-top: 1em; }
+.clc-minutes table { border-collapse: collapse; width: 100%; }
+.clc-minutes th { background: #f0f0f0; padding: 6px 10px; border: 1px solid #ddd; }
+.clc-minutes td { padding: 6px 10px; border: 1px solid #ddd; }
+</style>''', unsafe_allow_html=True)
+                st.markdown(f'<div class="clc-minutes">' + draft + '</div>', unsafe_allow_html=True)
 
-                                agenda_response = client.chat.completions.create(
-                                    model="llama-3.3-70b-versatile",
-                                    messages=[{"role": "user", "content": agenda_prompt}],
-                                    temperature=0.2,
-                                    max_tokens=500
-                                )
-                                
-                                suggested_agenda = agenda_response.choices[0].message.content.strip()
-                                
-                                # Show suggested agenda items
-                                if suggested_agenda:
-                                    with st.expander("📋 Agenda Items Detected in Transcript (Click to Auto-Fill)", expanded=False):
-                                        st.write("**AI detected these topics were discussed:**")
-                                        st.code(suggested_agenda)
-                                        
-                                        if st.button("➕ Add These to Additional Agenda", type="secondary"):
-                                            # Parse suggested items and add to agenda
-                                            suggested_items = [item.strip() for item in suggested_agenda.split('\n') if item.strip()]
-                                            
-                                            # Get current items
-                                            current_items_text = st.session_state.get('simple_agenda_items', '')
-                                            current_items = [line.strip() for line in current_items_text.split('\n') if line.strip()]
-                                            
-                                            # Add new items that aren't already there
-                                            for item in suggested_items:
-                                                if item not in current_items:
-                                                    current_items.append(item)
-                                            
-                                            # Update session state
-                                            st.session_state['simple_agenda_items'] = '\n'.join(current_items)
-                                            st.success(f"✅ Added {len(suggested_items)} agenda items!")
-                                            st.rerun()
-                                
-                                minutes = st.text_area("Edit AI-Generated Minutes", value=extracted_minutes, height=400, key="ai_minutes")
-                                
-                            except Exception as e:
-                                st.error(f"AI extraction failed: {e}")
-                                minutes = st.text_area("Manual entry (AI failed)", height=400, key="fallback_minutes")
-                elif not GROQ_KEY:
-                    st.warning("⚠️ GROQ_API_KEY not configured. Using manual entry.")
-                    minutes = st.text_area("Minutes", height=400, key="manual_minutes_fallback")
-                else:
-                    minutes = ""
-            else:
-                st.info("Upload a transcript file to use AI extraction")
-                minutes = ""
-    
-    # Close the expander
-    st.markdown("---")
+                st.markdown("")
+                minutes = st.text_area(
+                    "Edit minutes before saving",
+                    value=draft,
+                    height=400,
+                    key="ai_minutes_edit"
+                )
+            elif not transcript_text:
+                st.info("Paste or upload a transcript, then click **Generate Structured Minutes**.")
+                minutes = minutes  # keep any existing saved minutes
 
 st.subheader("✅ Actions")
 
