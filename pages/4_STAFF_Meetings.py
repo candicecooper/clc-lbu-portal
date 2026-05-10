@@ -340,6 +340,20 @@ with tab1:
         term_long = normalise_term_long(term)
         # Find bulletin edition linked to this meeting's term/week
         bulletin_result = supabase_ops.table('weekly_editions').select('*').eq('meeting_linked', True).eq('meeting_term', term_long).eq('meeting_week', int(week_number)).execute()
+
+        # ── DEBUG expander (remove once confirmed working) ────────────────────
+        with st.expander("🔍 Debug: bulletin query", expanded=False):
+            st.write(f"**Querying:** meeting_linked=True, meeting_term=`{term_long}`, meeting_week=`{int(week_number)}`")
+            # Also show ALL linked editions so we can see what's actually stored
+            all_linked = supabase_ops.table('weekly_editions').select('id,week_label,meeting_linked,meeting_term,meeting_week').eq('meeting_linked', True).execute()
+            st.write("**All linked editions in Supabase:**")
+            if all_linked.data:
+                for row in all_linked.data:
+                    st.write(f"- `{row.get('week_label')}` → term=`{repr(row.get('meeting_term'))}` week=`{repr(row.get('meeting_week'))}` (type: {type(row.get('meeting_week')).__name__})")
+            else:
+                st.write("None found — nothing is linked at all in Supabase")
+            st.write(f"**Query result:** {bulletin_result.data}")
+        # ─────────────────────────────────────────────────────────────────────
         
         if bulletin_result.data and len(bulletin_result.data) > 0:
             edition = bulletin_result.data[0]
