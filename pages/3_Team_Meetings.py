@@ -1003,34 +1003,9 @@ def render_program_meeting(program):
 
         st.markdown("#### ⏱ 25–40 min | SMARTAR GOAL SPOTLIGHT — 4 Students")
         st.caption("Click student name to open Goal Builder, or add new student")
-        
-        # Create minimal meeting record immediately if needed for SMARTAR links
+
         if not st.session_state.current_meeting_id:
-            # Create bare minimum meeting record to get ID
-            minimal_meeting = {
-                "program": program,
-                "meeting_date": str(pm_date),
-                "term": pm_term.strip() or "T1",
-                "week_number": int(pm_week),
-                "week_type": "A" if is_week_a else "B",
-                "facilitator": pm_facilitator.strip() or get_staff_name(),
-                "attendees": "",
-                "checkin_notes": "",
-                "student_concerns": "[]",
-                "smartar_spotlight": "[]",
-                "reports_tac_notes": "",
-                "priority_focus": "[]",
-                "meeting_minutes": "",
-                "actions": "[]",
-            }
-            try:
-                result = supabase.table('tm_program_meetings').insert(minimal_meeting).execute()
-                if result.data:
-                    st.session_state.current_meeting_id = result.data[0]['id']
-                    st.success(f"✅ Meeting initialized - ID: {st.session_state.current_meeting_id}")
-            except Exception as e:
-                st.error(f"⚠️ Could not create meeting: {e}")
-                st.info("💡 You can still use SMARTAR Goal Builder - goals will sync when meeting is saved")
+            st.info("💡 Save the meeting details above first — SMARTAR links will activate once the meeting has an ID.")
 
         if student_names:
             st.caption(f"💡 {len(student_names)} students loaded")
@@ -1285,32 +1260,9 @@ Raw input:
         # SMARTAR for Week B (same as Week A)
         st.markdown("#### ⏱ 30–45 min | SMARTAR GOAL SPOTLIGHT — 4 Students")
         st.caption("Click student name to open Goal Builder, or add new student")
-        
-        # Create minimal meeting record immediately if needed
+
         if not st.session_state.current_meeting_id:
-            minimal_meeting = {
-                "program": program,
-                "meeting_date": str(pm_date),
-                "term": pm_term.strip() or "T1",
-                "week_number": int(pm_week),
-                "week_type": "A" if is_week_a else "B",
-                "facilitator": pm_facilitator.strip() or get_staff_name(),
-                "attendees": "",
-                "checkin_notes": "",
-                "student_concerns": "[]",
-                "smartar_spotlight": "[]",
-                "reports_tac_notes": "",
-                "priority_focus": "[]",
-                "meeting_minutes": "",
-                "actions": "[]",
-            }
-            try:
-                result = supabase.table('tm_program_meetings').insert(minimal_meeting).execute()
-                if result.data:
-                    st.session_state.current_meeting_id = result.data[0]['id']
-                    st.success(f"✅ Meeting initialized - ID: {st.session_state.current_meeting_id}")
-            except Exception as e:
-                st.error(f"⚠️ Could not create meeting: {e}")
+            st.info("💡 Save the meeting details above first — SMARTAR links will activate once the meeting has an ID.")
 
         if student_names:
             st.caption(f"💡 {len(student_names)} students loaded")
@@ -1883,21 +1835,15 @@ def render_meeting_archive(program):
                                     key=f"arch_done_{meeting_id}_{aidx}"
                                 )
 
-                st.caption("Add new action:")
+                st.caption("Add new action (will be included when you save):")
                 new_act_cols = st.columns([3, 1.5, 1, 1])
                 new_act_action = new_act_cols[0].text_input("Action", key=f"arch_new_act_{meeting_id}", label_visibility="collapsed", placeholder="New action item")
                 new_act_who   = new_act_cols[1].text_input("Who",    key=f"arch_new_who_{meeting_id}", label_visibility="collapsed", placeholder="Person")
                 new_act_when  = new_act_cols[2].text_input("By",     key=f"arch_new_when_{meeting_id}", label_visibility="collapsed", placeholder="Date/week")
                 new_act_pri   = new_act_cols[3].selectbox("Pri",     ["Medium","Low","High","Urgent"], key=f"arch_new_pri_{meeting_id}", label_visibility="collapsed")
 
-                if new_act_action.strip():
-                    existing_actions.append({
-                        "action": new_act_action.strip(),
-                        "who": new_act_who.strip(),
-                        "by_when": new_act_when.strip(),
-                        "priority": new_act_pri,
-                        "done": False
-                    })
+                # NOTE: new action is appended only inside the Save block below, not here,
+                # to prevent it being duplicated on every rerun.
 
                 st.markdown("---")
 
@@ -1905,6 +1851,15 @@ def render_meeting_archive(program):
                 col_sv, col_cn = st.columns([1, 1])
                 with col_sv:
                     if st.button("💾 Save All Changes", key=f"arch_save_{meeting_id}", type="primary", use_container_width=True):
+                        # Append new action only at save time
+                        if new_act_action.strip():
+                            existing_actions.append({
+                                "action": new_act_action.strip(),
+                                "who": new_act_who.strip(),
+                                "by_when": new_act_when.strip(),
+                                "priority": new_act_pri,
+                                "done": False
+                            })
                         try:
                             update_payload = {
                                 "meeting_date": str(ed_date),
