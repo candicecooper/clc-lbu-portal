@@ -123,15 +123,34 @@ def should_send_reminder(edition) -> bool:
 def get_sa_term(d: date) -> str:
     y = d.year
     ranges = [
-        (date(y, 1, 20),  date(y, 4, 18),  "Term 1"),
-        (date(y, 4, 28),  date(y, 7, 4),   "Term 2"),
-        (date(y, 7, 21),  date(y, 9, 26),  "Term 3"),
-        (date(y, 10, 13), date(y, 12, 12), "Term 4"),
+        (date(y, 1, 27),  date(y, 4, 11),  "Term 1"),
+        (date(y, 4, 27),  date(y, 7, 4),   "Term 2"),
+        (date(y, 7, 20),  date(y, 9, 26),  "Term 3"),
+        (date(y, 10, 12), date(y, 12, 12), "Term 4"),
     ]
     for start, end, label in ranges:
         if start <= d <= end:
             return label
     return "Term 2"
+
+# Term 2 2026 starts Mon 27 Apr — week number calculated from first Monday of each term
+_SA_TERM_STARTS = {
+    "Term 1": date(2026, 1, 27),
+    "Term 2": date(2026, 4, 27),
+    "Term 3": date(2026, 7, 20),
+    "Term 4": date(2026, 10, 12),
+}
+
+def get_sa_week(d: date) -> int:
+    """Return the SA school week number (1-based) for a given date."""
+    term = get_sa_term(d)
+    term_start = _SA_TERM_STARTS.get(term)
+    if not term_start:
+        return 1
+    # Find the Monday of the given date's week
+    monday = d - timedelta(days=d.weekday())
+    week_num = (monday - term_start).days // 7 + 1
+    return max(1, week_num)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # EDITIONS
@@ -675,6 +694,7 @@ def render_download_meeting_panel(edition, notices):
     """Renders the PDF download and (post-download) Publish to Staff Meeting flow."""
     monday     = date.fromisoformat(str(edition["week_start"]))
     auto_term  = get_sa_term(monday)
+    auto_week  = get_sa_week(monday)          # ← calculated from date, not defaulting to 1
     term_opts  = ["Term 1", "Term 2", "Term 3", "Term 4"]
     auto_idx   = term_opts.index(auto_term) if auto_term in term_opts else 1
     already_linked = edition.get("meeting_linked", False)
@@ -687,7 +707,7 @@ def render_download_meeting_panel(edition, notices):
     with c1:
         term_sel = st.selectbox("Term", term_opts, index=auto_idx, key="dl_term_" + eid)
     with c2:
-        week_num = st.number_input("Week #", min_value=1, max_value=11, value=1,
+        week_num = st.number_input("Week #", min_value=1, max_value=11, value=auto_week,
                                    key="dl_week_" + eid)
 
     # ── PDF download button ───────────────────────────────────────────────────
