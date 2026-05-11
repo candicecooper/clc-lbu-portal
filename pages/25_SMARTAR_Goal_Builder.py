@@ -792,36 +792,37 @@ elif view == "🆕 New Student Setup":
         key="ns_excl",
     )
 
-    # ── Step 3: Entry SMARTAR goal ────────────────────────────────────────────
+    # ── Step 3: Entry SMARTAR goals ──────────────────────────────────────────
     st.markdown("---")
-    st.subheader("Step 3 — Entry SMARTAR Goal")
+    st.subheader("Step 3 — Entry SMARTAR Goals")
     st.caption(
-        "Enter the initial SMARTAR goal for this student. This is the starting point — "
-        "teachers will refine this further using the hierarchy of prompts or AI tools in the Goal Builder. "
-        "Type directly or use the AI helper below."
+        "Enter one or more initial SMARTAR goals for this student. Each goal targets a single "
+        "behaviour. Teachers will refine these further in the Goal Builder. "
+        "Add as many goals as needed before saving."
     )
 
-    # Optional AI help for entry goal
+    # Initialise goal list in session state
+    if "ns_goal_list" not in st.session_state:
+        st.session_state["ns_goal_list"] = [{"text": "", "id": 0}]
+
+    # Optional AI help — drafts into a staging area, user picks which slot to use
     if groq_client:
-        with st.expander("✨ Need help writing the entry goal? Use AI to draft it.", expanded=False):
+        with st.expander("✨ AI Goal Drafter — describe a behaviour, get a draft goal", expanded=False):
             st.caption(
-                "Briefly describe what you know so far about the key behaviour of concern "
-                "and the AI will draft a starting SMARTAR goal."
+                "Describe a behaviour of concern and the AI will draft a single SMARTAR goal. "
+                "You can use it multiple times to generate drafts for different behaviours, "
+                "then add each to the goal list below."
             )
             _ns_beh = st.text_area(
-                "What is the primary behaviour of concern?",
+                "What is the behaviour of concern?",
                 placeholder=(
                     "e.g. Student has been excluded for frequent physical altercations with peers "
                     "during unstructured time. Has difficulty regulating when frustrated…"
                 ),
-                height=80,
-                key="ns_beh_brief",
+                height=80, key="ns_beh_brief",
             )
-            if st.button(
-                "🤖 Draft Entry Goal",
-                key="ns_draft_btn",
-                disabled=not _ns_beh.strip(),
-            ):
+            if st.button("🤖 Draft Goal from this Behaviour", key="ns_draft_btn",
+                         disabled=not _ns_beh.strip()):
                 with st.spinner("Drafting entry SMARTAR goal…"):
                     _ns_draft_prompt = f"""You are an expert at writing initial SMARTAR goals for students being enrolled in an alternative education setting (CLC Learning and Behaviour Unit, Adelaide SA).
 
@@ -833,7 +834,7 @@ Rules:
 - Target the REPLACEMENT behaviour (what the student WILL DO)
 - Be achievable as an entry-level goal — don't set the bar too high initially
 - Use trauma-informed, strengths-based language (PBS/BSEM framework)
-- One sentence only — no preamble
+- ONE sentence only — no preamble, no "and" joining two separate actions
 - Include a realistic prompt level and success rate for an entry goal
 
 Return ONLY the goal sentence — nothing else."""
@@ -852,45 +853,91 @@ Return ONLY the goal sentence — nothing else."""
 
             if st.session_state.get("ns_entry_draft"):
                 st.markdown(
-                    f'<div class="smartar-box">🤖 <b>AI Draft:</b> {st.session_state["ns_entry_draft"]}</div>',
+                    f'<div class="smartar-box">🤖 <b>AI Draft:</b> '
+                    f'{st.session_state["ns_entry_draft"]}</div>',
                     unsafe_allow_html=True,
                 )
-                if st.button("✅ Use this as my entry goal", key="ns_use_draft"):
-                    st.session_state["ns_entry_goal_prefill"] = st.session_state["ns_entry_draft"]
-                    st.rerun()
+                _add_col, _dis_col = st.columns([2, 2])
+                with _add_col:
+                    if st.button("➕ Add to Goal List", key="ns_add_draft_to_list", type="primary"):
+                        # Add as a new goal entry, or fill the first empty slot
+                        _gl = st.session_state["ns_goal_list"]
+                        _filled = False
+                        for _gi2 in range(len(_gl)):
+                            if not _gl[_gi2]["text"].strip():
+                                st.session_state["ns_goal_list"][_gi2]["text"] = st.session_state["ns_entry_draft"]
+                                _filled = True
+                                break
+                        if not _filled:
+                            _new_id = max(g["id"] for g in _gl) + 1
+                            st.session_state["ns_goal_list"].append(
+                                {"text": st.session_state["ns_entry_draft"], "id": _new_id}
+                            )
+                        st.session_state.pop("ns_entry_draft", None)
+                        st.rerun()
+                with _dis_col:
+                    if st.button("✖ Discard Draft", key="ns_discard_draft"):
+                        st.session_state.pop("ns_entry_draft", None)
+                        st.rerun()
 
-    _ns_goal_default = st.session_state.get("ns_entry_goal_prefill", "")
-    ns_entry_goal = st.text_area(
-        "🎯 Entry SMARTAR Goal",
-        value=_ns_goal_default,
-        placeholder=(
-            "e.g. Jordan will use a calm-down card to request a break when feeling "
-            "overwhelmed during structured tasks in the classroom, one to one, with a "
-            "verbal prompt from an adult, on 3 out of 5 opportunities."
-        ),
-        height=110,
-        key=f"ns_entry_goal_{hash(_ns_goal_default)}",
-    )
+    # ── Goal list ─────────────────────────────────────────────────────────────
+    st.markdown("**Entry SMARTAR Goals**")
+    _gl = st.session_state["ns_goal_list"]
+    _to_del = []
+
+    for _gi, _gentry in enumerate(_gl):
+        _gcol1, _gcol2 = st.columns([11, 1])
+        with _gcol1:
+            _new_text = st.text_area(
+                f"Goal {_gi + 1}",
+                value=_gentry["text"],
+                placeholder=(
+                    "e.g. Jordan will use a calm-down card to request a break when feeling "
+                    "overwhelmed, one to one in the classroom, with a verbal prompt, on 3 out of 5 opportunities."
+                ),
+                height=90,
+                key=f"ns_goal_text_{_gentry['id']}",
+            )
+            if _new_text != _gentry["text"]:
+                st.session_state["ns_goal_list"][_gi]["text"] = _new_text
+        with _gcol2:
+            st.markdown("<div style='margin-top:28px'>", unsafe_allow_html=True)
+            if len(_gl) > 1:
+                if st.button("🗑", key=f"ns_goal_del_{_gentry['id']}",
+                             help="Remove this goal"):
+                    _to_del.append(_gi)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    if _to_del:
+        st.session_state["ns_goal_list"] = [g for i, g in enumerate(_gl) if i not in _to_del]
+        st.rerun()
+
+    if st.button("➕ Add Another Goal", key="ns_add_goal"):
+        _new_id2 = max(g["id"] for g in st.session_state["ns_goal_list"]) + 1
+        st.session_state["ns_goal_list"].append({"text": "", "id": _new_id2})
+        st.rerun()
+
+    _filled_goals = [g["text"].strip() for g in st.session_state["ns_goal_list"] if g["text"].strip()]
+    if _filled_goals:
+        st.caption(f"✅ {len(_filled_goals)} goal{'s' if len(_filled_goals) != 1 else ''} ready to save.")
+    else:
+        st.caption("💡 Enter at least one entry SMARTAR goal to enable save.")
 
     # ── Save ──────────────────────────────────────────────────────────────────
     st.markdown("---")
     _ns_ready = (
         ns_name.strip()
-        and ns_entry_goal.strip()
+        and bool(_filled_goals)
         and ns_name.strip().lower() not in _existing_names
     )
     if not ns_name.strip():
         st.caption("💡 Enter a student name to enable save.")
     elif ns_name.strip().lower() in _existing_names:
         st.caption("⚠️ Student already exists — go to Goal Builder.")
-    elif not ns_entry_goal.strip():
-        st.caption("💡 Enter an entry SMARTAR goal (Step 3) to enable save.")
 
     if st.button(
-        "💾 Save Student & Entry Goal",
-        type="primary",
-        key="ns_save",
-        disabled=not _ns_ready,
+        f"💾 Save Student & {len(_filled_goals)} Goal{'s' if len(_filled_goals) != 1 else ''}",
+        type="primary", key="ns_save", disabled=not _ns_ready,
     ):
         try:
             # 1. Create student record
@@ -899,23 +946,24 @@ Return ONLY the goal sentence — nothing else."""
                 "program":      ns_prog,
                 "active":       True,
             }).execute()
-            # 2. Create initial goal record
-            _ns_goal_rec = {
-                "student_name":  ns_name.strip(),
-                "exclusion_goal": ns_excl.strip() if ns_excl.strip() else None,
-                "smartar_goal":  ns_entry_goal.strip(),
-                "tracking_period": "All Day",
-                "active":        True,
-                "status":        "Active",
-                "start_date":    date.today().isoformat(),
-            }
-            sb.table("smartar_goals").insert(_ns_goal_rec).execute()
-            # Clear draft state
-            for _nk in ["ns_entry_draft", "ns_entry_goal_prefill"]:
+            # 2. Create one goal record per filled goal
+            for _fg in _filled_goals:
+                sb.table("smartar_goals").insert({
+                    "student_name":    ns_name.strip(),
+                    "exclusion_goal":  ns_excl.strip() if ns_excl.strip() else None,
+                    "smartar_goal":    _fg,
+                    "tracking_period": "All Day",
+                    "active":          True,
+                    "status":          "Active",
+                    "start_date":      date.today().isoformat(),
+                }).execute()
+            # Clear state
+            for _nk in ["ns_entry_draft", "ns_entry_goal_prefill", "ns_goal_list"]:
                 st.session_state.pop(_nk, None)
             st.success(
-                f"✅ **{ns_name.strip()}** added to **{ns_prog}** with entry goal saved. "
-                f"Teachers can now open this student in the Goal Builder to refine the goal."
+                f"✅ **{ns_name.strip()}** added to **{ns_prog}** with "
+                f"**{len(_filled_goals)} entry goal{'s' if len(_filled_goals) != 1 else ''}** saved. "
+                f"Teachers can now open this student in the Goal Builder."
             )
             st.balloons()
         except Exception as _ns_err:
