@@ -78,69 +78,11 @@ def get_current_term_week():
 
 # ── Auto-initialization & Auto-save helpers ───────────────────────────────────
 def auto_initialize_meeting(program, meeting_data):
-    """Create meeting ID immediately if it doesn't exist and there's any content."""
-    if st.session_state.current_meeting_id:
-        return True  # Already initialized
-    
-    # Check if there's ANY content worth initializing for
-    has_any_content = any([
-        meeting_data.get("meeting_date"),
-        meeting_data.get("facilitator"),
-        meeting_data.get("attendees"),
-        meeting_data.get("checkin_notes"),
-        meeting_data.get("student_concerns"),
-        meeting_data.get("smartar_spotlight"),
-        meeting_data.get("actions")
-    ])
-    
-    if has_any_content:
-        try:
-            # Create minimal meeting record to get ID
-            result = supabase.table('tm_program_meetings').insert(meeting_data).execute()
-            if result.data:
-                st.session_state.current_meeting_id = result.data[0]['id']
-                st.session_state.autosave_message = f"✅ Meeting initialized (ID: {st.session_state.current_meeting_id}) - SMARTAR links now active!"
-                return True
-        except Exception as e:
-            # If DB save fails, create temporary ID so SMARTAR links work
-            import random
-            st.session_state.current_meeting_id = f"temp_{random.randint(100000, 999999)}"
-            st.session_state.autosave_message = f"⚠️ Temp ID created for SMARTAR - save manually to persist data"
-            return False
-    
-    return False
+    """DISABLED — auto-init caused duplicates in multi-tab Streamlit. Save-only model."""
+    return bool(st.session_state.current_meeting_id)
 
 def trigger_autosave(program, meeting_data):
-    """Trigger auto-save if 2 minutes have passed since last save."""
-    current_time = time.time()
-    
-    # First, ensure meeting is initialized
-    auto_initialize_meeting(program, meeting_data)
-    
-    # Check if we should auto-save (every 2 minutes = 120 seconds)
-    if st.session_state.last_autosave_time is None or \
-       (current_time - st.session_state.last_autosave_time) >= 120:
-        
-        # Only auto-save if there's actual content
-        has_content = any([
-            meeting_data.get("checkin_notes"),
-            meeting_data.get("student_concerns"),
-            meeting_data.get("smartar_spotlight"),
-            meeting_data.get("actions")
-        ])
-        
-        if has_content and st.session_state.current_meeting_id:
-            try:
-                # Always update (never insert here - initialization handles that)
-                if not str(st.session_state.current_meeting_id).startswith("temp_"):
-                    supabase.table('tm_program_meetings').update(meeting_data).eq('id', st.session_state.current_meeting_id).execute()
-                    st.session_state.last_autosave_time = current_time
-                    st.session_state.autosave_message = f"✓ Auto-saved at {datetime.datetime.now().strftime('%I:%M %p')}"
-                    return True
-            except Exception as e:
-                st.session_state.autosave_message = f"⚠ Auto-save failed - save manually"
-                return False
-    
+    """DISABLED — autosave caused duplicates in multi-tab Streamlit. Save-only model."""
     return False
 
 # ── SMARTAR Goal Integration helpers ──────────────────────────────────────────
