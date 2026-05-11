@@ -631,7 +631,7 @@ if integration["active"]:
 
 view = st.sidebar.radio(
     "View",
-    ["🏫 Class Dashboard", "📋 Goal Builder",
+    ["🏫 Class Dashboard", "🆕 New Student Setup", "📋 Goal Builder",
      "📊 Daily Tracking", "📈 Progress Report", "⚙️ Admin Panel"],
 )
 st.sidebar.markdown("---")
@@ -738,233 +738,578 @@ if view == "🏫 Class Dashboard":
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 2. GOAL BUILDER
+# 2. NEW STUDENT SETUP  (leadership)
+# ══════════════════════════════════════════════════════════════════════════════
+elif view == "🆕 New Student Setup":
+    st.title("🆕 New Student Setup")
+    st.caption(
+        "Complete this form when a new student is admitted to set up their student record, "
+        "record the exclusion goal from their home school, and enter the initial entry SMARTAR goal. "
+        "Teachers will then see this information in the Goal Builder."
+    )
+
+    st.markdown(
+        '<div class="admin-panel">'
+        '🔒 <b>Leadership / Coordinator use</b> — this section creates the student record and '
+        'entry-level documentation. Teachers build and refine goals from the Goal Builder tab.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Step 1: Student details ───────────────────────────────────────────────
+    st.subheader("Step 1 — Student Details")
+    ns_c1, ns_c2 = st.columns([3, 1])
+    ns_name = ns_c1.text_input(
+        "Student first name (as it will appear in all goals)",
+        placeholder="e.g. Jordan",
+        key="ns_name",
+    )
+    ns_prog = ns_c2.selectbox("Program", PROGRAMS, key="ns_prog")
+
+    # Check for duplicate
+    _existing_students = get_students()
+    _existing_names    = [s["student_name"].lower() for s in _existing_students]
+    if ns_name.strip() and ns_name.strip().lower() in _existing_names:
+        st.warning(
+            f"⚠️ A student named **{ns_name.strip()}** already exists in the system. "
+            f"Go to Goal Builder to view and manage their goals."
+        )
+
+    # ── Step 2: Exclusion goal ────────────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("Step 2 — Exclusion Goal from Home School")
+    st.caption(
+        "Paste the exclusion goal exactly as received from the student's home school. "
+        "This will be visible to all staff in the Goal Builder."
+    )
+    ns_excl = st.text_area(
+        "🏫 Exclusion Goal",
+        placeholder=(
+            "e.g. The student will reduce incidents of physical aggression towards peers "
+            "to fewer than 2 per week across a 4-week period…"
+        ),
+        height=100,
+        key="ns_excl",
+    )
+
+    # ── Step 3: Entry SMARTAR goal ────────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("Step 3 — Entry SMARTAR Goal")
+    st.caption(
+        "Enter the initial SMARTAR goal for this student. This is the starting point — "
+        "teachers will refine this further using the hierarchy of prompts or AI tools in the Goal Builder. "
+        "Type directly or use the AI helper below."
+    )
+
+    # Optional AI help for entry goal
+    if groq_client:
+        with st.expander("✨ Need help writing the entry goal? Use AI to draft it.", expanded=False):
+            st.caption(
+                "Briefly describe what you know so far about the key behaviour of concern "
+                "and the AI will draft a starting SMARTAR goal."
+            )
+            _ns_beh = st.text_area(
+                "What is the primary behaviour of concern?",
+                placeholder=(
+                    "e.g. Student has been excluded for frequent physical altercations with peers "
+                    "during unstructured time. Has difficulty regulating when frustrated…"
+                ),
+                height=80,
+                key="ns_beh_brief",
+            )
+            if st.button(
+                "🤖 Draft Entry Goal",
+                key="ns_draft_btn",
+                disabled=not _ns_beh.strip(),
+            ):
+                with st.spinner("Drafting entry SMARTAR goal…"):
+                    _ns_draft_prompt = f"""You are an expert at writing initial SMARTAR goals for students being enrolled in an alternative education setting (CLC Learning and Behaviour Unit, Adelaide SA).
+
+Write ONE entry-level SMARTAR goal based on this behaviour of concern:
+{_ns_beh.strip()}
+
+Rules:
+- Use "[Student]" as a placeholder for the student's name
+- Target the REPLACEMENT behaviour (what the student WILL DO)
+- Be achievable as an entry-level goal — don't set the bar too high initially
+- Use trauma-informed, strengths-based language (PBS/BSEM framework)
+- One sentence only — no preamble
+- Include a realistic prompt level and success rate for an entry goal
+
+Return ONLY the goal sentence — nothing else."""
+                    try:
+                        _ns_draft = groq_call(_ns_draft_prompt)
+                        if _ns_draft and len(_ns_draft) > 20 and "[AI unavailable" not in _ns_draft:
+                            _ns_draft = (_ns_draft.strip().strip('"').strip("'")
+                                         .replace("[Student]", ns_name.strip().split()[0] if ns_name.strip() else "[Student]")
+                                         .replace("[student]", ns_name.strip().split()[0] if ns_name.strip() else "[Student]"))
+                            st.session_state["ns_entry_draft"] = _ns_draft
+                            st.rerun()
+                        else:
+                            st.warning("Unexpected AI response — type the goal manually below.")
+                    except Exception as _nd_e:
+                        st.error(f"AI error: {_nd_e}")
+
+            if st.session_state.get("ns_entry_draft"):
+                st.markdown(
+                    f'<div class="smartar-box">🤖 <b>AI Draft:</b> {st.session_state["ns_entry_draft"]}</div>',
+                    unsafe_allow_html=True,
+                )
+                if st.button("✅ Use this as my entry goal", key="ns_use_draft"):
+                    st.session_state["ns_entry_goal_prefill"] = st.session_state["ns_entry_draft"]
+                    st.rerun()
+
+    _ns_goal_default = st.session_state.get("ns_entry_goal_prefill", "")
+    ns_entry_goal = st.text_area(
+        "🎯 Entry SMARTAR Goal",
+        value=_ns_goal_default,
+        placeholder=(
+            "e.g. Jordan will use a calm-down card to request a break when feeling "
+            "overwhelmed during structured tasks in the classroom, one to one, with a "
+            "verbal prompt from an adult, on 3 out of 5 opportunities."
+        ),
+        height=110,
+        key=f"ns_entry_goal_{hash(_ns_goal_default)}",
+    )
+
+    # ── Save ──────────────────────────────────────────────────────────────────
+    st.markdown("---")
+    _ns_ready = (
+        ns_name.strip()
+        and ns_entry_goal.strip()
+        and ns_name.strip().lower() not in _existing_names
+    )
+    if not ns_name.strip():
+        st.caption("💡 Enter a student name to enable save.")
+    elif ns_name.strip().lower() in _existing_names:
+        st.caption("⚠️ Student already exists — go to Goal Builder.")
+    elif not ns_entry_goal.strip():
+        st.caption("💡 Enter an entry SMARTAR goal (Step 3) to enable save.")
+
+    if st.button(
+        "💾 Save Student & Entry Goal",
+        type="primary",
+        key="ns_save",
+        disabled=not _ns_ready,
+    ):
+        try:
+            # 1. Create student record
+            sb.table("smartar_students").insert({
+                "student_name": ns_name.strip(),
+                "program":      ns_prog,
+                "active":       True,
+            }).execute()
+            # 2. Create initial goal record
+            _ns_goal_rec = {
+                "student_name":  ns_name.strip(),
+                "exclusion_goal": ns_excl.strip() if ns_excl.strip() else None,
+                "smartar_goal":  ns_entry_goal.strip(),
+                "tracking_period": "All Day",
+                "active":        True,
+                "status":        "Active",
+                "start_date":    date.today().isoformat(),
+            }
+            sb.table("smartar_goals").insert(_ns_goal_rec).execute()
+            # Clear draft state
+            for _nk in ["ns_entry_draft", "ns_entry_goal_prefill"]:
+                st.session_state.pop(_nk, None)
+            st.success(
+                f"✅ **{ns_name.strip()}** added to **{ns_prog}** with entry goal saved. "
+                f"Teachers can now open this student in the Goal Builder to refine the goal."
+            )
+            st.balloons()
+        except Exception as _ns_err:
+            st.error(f"Save error: {_ns_err}")
+
+    # ── Existing students quick view ──────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("Current Students")
+    _all_students = get_students()
+    if _all_students:
+        for _s in _all_students:
+            _sg = get_goals(_s["student_name"], active_only=True)
+            _sc1, _sc2, _sc3 = st.columns([3, 1, 1])
+            _sc1.write(f"**{_s['student_name']}** — {_s.get('program','?')} — {len(_sg)} active goal(s)")
+            _sc2.caption(_s.get("created_at","")[:10] or "")
+            if _sc3.button("Archive Student", key=f"ns_arch_{_s['id']}"):
+                sb.table("smartar_students").update({"active": False}).eq("id", _s["id"]).execute()
+                st.success(f"Archived {_s['student_name']}")
+                st.rerun()
+    else:
+        st.info("No students yet — add your first student above.")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 3. GOAL BUILDER  (teachers)
 # ══════════════════════════════════════════════════════════════════════════════
 elif view == "📋 Goal Builder":
     st.title("📋 SMARTAR Goal Builder")
-    st.caption("Build goals using the hierarchy of prompts — from exclusion goal through to GAS levels.")
+    st.caption(
+        "Select a student to view their current goals, then refine using the hierarchy builder or AI tool."
+    )
 
-    tab_build, tab_students = st.tabs(["➕ Add / Edit Goals", "👥 Manage Students"])
+    students = get_students()
+    if not students:
+        st.info("No students set up yet. Ask your coordinator to add students via **New Student Setup**.")
+        st.stop()
 
-    # ── Manage Students ───────────────────────────────────────────────────────
-    with tab_students:
-        st.subheader("Add New Student")
-        c1, c2, c3 = st.columns([3, 1, 1])
-        new_name = c1.text_input("Student first name", key="new_student_name")
-        new_prog = c2.selectbox("Program", PROGRAMS, key="new_prog")
-        if c3.button("Add Student", type="primary"):
-            if new_name.strip():
-                sb.table("smartar_students").insert({
-                    "student_name": new_name.strip(),
-                    "program":      new_prog,
-                    "active":       True,
-                }).execute()
-                st.success(f"✅ {new_name.strip()} added to {new_prog}.")
-                st.rerun()
-            else:
-                st.warning("Please enter a student name.")
+    student_options = {s["student_name"]: s for s in students}
+    if integration["active"] and integration["student"]:
+        default_idx = (list(student_options.keys()).index(integration["student"])
+                       if integration["student"] in student_options else 0)
+    else:
+        default_idx = 0
 
-        st.subheader("Current Students")
-        students = get_students()
-        if students:
-            for s in students:
-                goals_s = get_goals(s["student_name"])
-                sc1, sc2 = st.columns([4, 1])
-                sc1.write(f"**{s['student_name']}** — {s.get('program','❓')} — {len(goals_s)} active goals")
-                if sc2.button("Archive", key=f"arch_s_{s['id']}"):
-                    sb.table("smartar_students").update({"active": False}).eq("id", s["id"]).execute()
-                    st.success(f"Archived {s['student_name']}")
-                    st.rerun()
-        else:
-            st.info("No students yet.")
+    selected_name  = st.selectbox("Select student", list(student_options.keys()), index=default_idx)
+    student        = student_options[selected_name]
+    existing_goals = get_goals(selected_name, active_only=True)
+    archived_goals = [g for g in get_goals(selected_name, active_only=False) if not g.get("active", True)]
 
-    # ── Goal Builder form ─────────────────────────────────────────────────────
-    with tab_build:
-        students = get_students()
-        if not students:
-            st.info("Add a student first in the **Manage Students** tab.")
-            st.stop()
+    st.markdown(
+        f'<div class="student-header"><b>{selected_name}</b> · '
+        f'{student.get("program","?")} · {len(existing_goals)} active goal(s)</div>',
+        unsafe_allow_html=True,
+    )
 
-        student_options = {s["student_name"]: s for s in students}
-
-        # Pre-select from Team Meetings integration
-        if integration["active"] and integration["student"]:
-            default_idx = list(student_options.keys()).index(integration["student"]) \
-                if integration["student"] in student_options else 0
-        else:
-            default_idx = 0
-
-        selected_name  = st.selectbox("Select student", list(student_options.keys()),
-                                      index=default_idx)
-        student        = student_options[selected_name]
-        existing_goals  = get_goals(selected_name, active_only=True)
-        archived_goals  = get_goals(selected_name, active_only=False)
-        archived_goals  = [g for g in archived_goals if not g.get("active", True)]
-
-        st.markdown(
-            f'<div class="student-header"><b>{selected_name}</b> · '
-            f'{student.get("program","?")} · {len(existing_goals)} active goals</div>',
-            unsafe_allow_html=True,
-        )
-
-        # Show existing goals
-        if existing_goals:
-            st.subheader("Current Goals")
-            for idx, g in enumerate(existing_goals, 1):
-                goal_text    = g.get("smartar_goal", "No goal text")
-                needs_ref, low_c = check_goal_needs_refinement(g["id"])
-                period       = g.get("tracking_period", "All Day")
-
-                with st.expander(
-                    f"Goal {idx} — {_short(goal_text, 80)}"
-                    + (" ⚠️ NEEDS REFINEMENT" if needs_ref else ""),
-                ):
-                    if needs_ref:
-                        st.markdown(
-                            f'<div class="alert-box">⚠️ <b>Action Required:</b> {low_c} recent '
-                            f'sessions show NOT YET. Please refine this goal.</div>',
-                            unsafe_allow_html=True,
-                        )
-                    if g.get("exclusion_goal"):
-                        st.markdown(
-                            f'<div class="exclusion-box">🏫 <b>Exclusion Goal:</b> '
-                            f'{g.get("exclusion_goal","—")}</div>',
-                            unsafe_allow_html=True,
-                        )
+    # ── Current goals: show exclusion + SMARTAR prominently ──────────────────
+    if existing_goals:
+        st.subheader("Current Goals")
+        for idx, g in enumerate(existing_goals, 1):
+            goal_text        = g.get("smartar_goal", "No goal text")
+            needs_ref, low_c = check_goal_needs_refinement(g["id"])
+            period           = g.get("tracking_period", "All Day")
+            with st.expander(
+                f"Goal {idx} — {_short(goal_text, 80)}" + (" ⚠️ NEEDS REFINEMENT" if needs_ref else ""),
+                expanded=True,
+            ):
+                if needs_ref:
                     st.markdown(
-                        f'<div class="smartar-box">🎯 <b>SMARTAR Goal:</b> {goal_text}</div>',
-                        unsafe_allow_html=True,
+                        f'<div class="alert-box">⚠️ <b>Action Required:</b> {low_c} recent sessions '
+                        f'show NOT YET. Please refine this goal.</div>', unsafe_allow_html=True,
                     )
+                if g.get("exclusion_goal"):
                     st.markdown(
-                        f'<div class="period-box">📅 Tracking period: <strong>{period}</strong>'
-                        f' — {", ".join(SESSIONS_FOR_PERIOD.get(period, ALL_SESSIONS))}</div>',
-                        unsafe_allow_html=True,
+                        f'<div class="exclusion-box">🏫 <b>Exclusion Goal from Home School:</b> '
+                        f'{g.get("exclusion_goal","—")}</div>', unsafe_allow_html=True,
                     )
-
-                    gas = get_gas_dict(g)
-                    if any(gas.values()):
-                        st.markdown("**GAS Performance Levels:**")
+                st.markdown(
+                    f'<div class="smartar-box">🎯 <b>Current SMARTAR Goal:</b> {goal_text}</div>',
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    f'<div class="period-box">📅 Tracking period: <strong>{period}</strong>'
+                    f' — {", ".join(SESSIONS_FOR_PERIOD.get(period, ALL_SESSIONS))}</div>',
+                    unsafe_allow_html=True,
+                )
+                gas = get_gas_dict(g)
+                if any(gas.values()):
+                    with st.expander("📊 GAS Performance Levels"):
                         for lvl in LEVEL_ORDER:
                             desc = gas.get(lvl, "")
                             if desc:
-                                color = LEVEL_COLOR[lvl]
                                 st.markdown(
-                                    f'<div class="gas-level-bar">'
-                                    f'<span class="gas-level-label" style="color:{color}">'
-                                    f'{LEVEL_EMOJI[lvl]} {lvl}</span>'
+                                    f'<div class="gas-level-bar"><span class="gas-level-label" '
+                                    f'style="color:{LEVEL_COLOR[lvl]}">{LEVEL_EMOJI[lvl]} {lvl}</span>'
                                     f'<span class="gas-level-desc">{desc}</span></div>',
                                     unsafe_allow_html=True,
                                 )
-                    if g.get("meeting_id"):
-                        st.caption(f"📋 Created from {g.get('program','')} Team Meeting · "
-                                   f"Term {g.get('term','')} Week {g.get('week','')}")
+                if g.get("meeting_id"):
+                    st.caption(f"📋 {g.get('program','')} Team Meeting · Term {g.get('term','')} Week {g.get('week','')}")
 
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        if st.button(f"🗑 Archive Goal {idx}", key=f"del_{g['id']}"):
-                            st.session_state[f"arch_gb_{g['id']}"] = True
-                    if st.session_state.get(f"arch_gb_{g['id']}"):
-                        reason = st.text_input("Archive reason (optional):",
-                                               key=f"arch_gb_r_{g['id']}")
-                        ca, cb = st.columns(2)
-                        with ca:
-                            if st.button("Confirm Archive", key=f"arch_gb_d_{g['id']}", type="primary"):
-                                if archive_goal(g["id"], reason):
-                                    st.session_state.pop(f"arch_gb_{g['id']}", None)
-                                    # Pre-fill exclusion goal from archived goal for new build
-                                    st.session_state["build_new_after_archive"] = True
-                                    st.session_state["archived_excl_goal"] = g.get("exclusion_goal","")
-                                    st.session_state["archived_student"] = g.get("student_name","")
-                                    st.rerun()
-                        with cb:
-                            if st.button("Cancel", key=f"arch_gb_x_{g['id']}"):
+                if st.button(f"🗑 Archive Goal {idx}", key=f"del_{g['id']}"):
+                    st.session_state[f"arch_gb_{g['id']}"] = True
+                if st.session_state.get(f"arch_gb_{g['id']}"):
+                    reason = st.text_input("Archive reason (optional):", key=f"arch_gb_r_{g['id']}")
+                    ca, cb = st.columns(2)
+                    with ca:
+                        if st.button("Confirm Archive", key=f"arch_gb_d_{g['id']}", type="primary"):
+                            if archive_goal(g["id"], reason):
                                 st.session_state.pop(f"arch_gb_{g['id']}", None)
+                                st.session_state["build_new_after_archive"]  = True
+                                st.session_state["archived_excl_goal"]       = g.get("exclusion_goal","")
+                                st.session_state["archived_student"]         = g.get("student_name","")
+                                st.session_state["archived_smartar_goal"]    = goal_text
                                 st.rerun()
-
-        # ── ARCHIVED GOALS — restore button ──────────────────────────────────
-        if archived_goals:
-            st.markdown("---")
-            st.markdown(f"**🗃️ Archived Goals ({len(archived_goals)})**")
-            st.caption("These goals are preserved with all tracking data. Restore to make active again.")
-            for ag in archived_goals:
-                ag_text  = ag.get("smartar_goal", "—")
-                ag_date  = (ag.get("archived_at") or "")[:10]
-                ag_reason = ag.get("archive_reason", "")
-                with st.expander(
-                    f"🟠 {_short(ag_text, 70)} — archived {ag_date}",
-                    expanded=False,
-                ):
-                    st.markdown(
-                        f'<div class="archived-box">🎯 <b>SMARTAR Goal:</b> {ag_text}</div>',
-                        unsafe_allow_html=True,
-                    )
-                    if ag_reason:
-                        st.caption(f"Archive reason: {ag_reason}")
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        if st.button("♻️ Restore this Goal", key=f"restore_gb_{ag['id']}", type="primary"):
-                            if restore_goal(ag["id"]):
-                                st.success("✅ Goal restored to Active.")
-                                st.rerun()
-                    with c2:
-                        if st.button("➕ Build Updated Goal from this", key=f"upd_gb_{ag['id']}"):
-                            st.session_state["build_new_after_archive"] = True
-                            st.session_state["archived_excl_goal"] = ag.get("exclusion_goal", "")
+                    with cb:
+                        if st.button("Cancel", key=f"arch_gb_x_{g['id']}"):
+                            st.session_state.pop(f"arch_gb_{g['id']}", None)
                             st.rerun()
 
-        # ── NEW GOAL FORM ─────────────────────────────────────────────────────
+    # ── Archived goals ────────────────────────────────────────────────────────
+    if archived_goals:
+        with st.expander(f"🗃️ Archived Goals ({len(archived_goals)})", expanded=False):
+            st.caption("Preserved with all tracking data.")
+            for ag in archived_goals:
+                ag_text = ag.get("smartar_goal","—")
+                with st.expander(f"🟠 {_short(ag_text, 70)} — archived {(ag.get('archived_at') or '')[:10]}", expanded=False):
+                    st.markdown(f'<div class="archived-box">🎯 {ag_text}</div>', unsafe_allow_html=True)
+                    if ag.get("archive_reason"):
+                        st.caption(f"Reason: {ag['archive_reason']}")
+                    rc1, rc2 = st.columns(2)
+                    with rc1:
+                        if st.button("♻️ Restore", key=f"restore_gb_{ag['id']}", type="primary"):
+                            if restore_goal(ag["id"]):
+                                st.success("✅ Goal restored.")
+                                st.rerun()
+                    with rc2:
+                        if st.button("➕ Build Updated Goal from this", key=f"upd_gb_{ag['id']}"):
+                            st.session_state["build_new_after_archive"] = True
+                            st.session_state["archived_excl_goal"]      = ag.get("exclusion_goal","")
+                            st.session_state["archived_smartar_goal"]   = ag.get("smartar_goal","")
+                            st.rerun()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # REFINE / ADD GOAL — three-tab structure
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    build_after_archive = st.session_state.get("build_new_after_archive", False)
+    _archived_excl      = st.session_state.get("archived_excl_goal", "")
+    _archived_smartar   = st.session_state.get("archived_smartar_goal", "")
+    _current_smartar    = existing_goals[0].get("smartar_goal","") if existing_goals else ""
+    _current_excl       = existing_goals[0].get("exclusion_goal","") if existing_goals else ""
+
+    if build_after_archive:
+        st.markdown(
+            f'<div class="success-box">✅ Goal archived. Build an updated SMARTAR goal for '
+            f'<strong>{selected_name}</strong> using one of the paths below.</div>',
+            unsafe_allow_html=True,
+        )
+        if st.button("✖ Cancel", key="cancel_new_after_arch"):
+            for _ck in ["build_new_after_archive","archived_excl_goal","archived_student","archived_smartar_goal"]:
+                st.session_state.pop(_ck, None)
+            st.rerun()
+
+    st.subheader("Refine or Add a Goal")
+    _ref_tab, _ai_tab, _mgmt_tab = st.tabs([
+        "📐 Manual — Hierarchy Builder",
+        "✨ AI Goal Tool",
+        "⚙️ Manage Student",
+    ])
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # TAB 1: MANUAL HIERARCHY BUILDER
+    # ─────────────────────────────────────────────────────────────────────────
+    with _ref_tab:
+        st.caption("Build a precise SMARTAR goal by selecting each element of the hierarchy of prompts.")
+        excl_goal_default = _archived_excl or _current_excl
+        if excl_goal_default:
+            st.markdown(
+                f'<div class="exclusion-box">🏫 <b>Exclusion Goal (reference):</b> '
+                f'{excl_goal_default}</div>', unsafe_allow_html=True,
+            )
+        excl_goal = st.text_area(
+            "🏫 Exclusion Goal — update if changed (leave blank to keep existing)",
+            value=excl_goal_default, height=70, key="hb_excl_goal",
+            placeholder="Paste updated exclusion goal, or leave as-is…",
+        )
+
+        st.markdown("**Build the SMARTAR Goal using the Hierarchy of Prompts**")
+        _ai_skill_hint = st.session_state.get("ai_prefill_skill","")
+        _ai_task_hint  = st.session_state.get("ai_prefill_task","")
+        if _ai_skill_hint or _ai_task_hint:
+            st.caption(f"💡 AI suggestions — Skill: *{_ai_skill_hint}*" +
+                       (f"  ·  Task type: **{_ai_task_hint}**" if _ai_task_hint else ""))
+
+        col1, col2 = st.columns(2)
+        with col1:
+            student_first = st.text_input("Student first name", value=selected_name.split()[0], key="hb_first")
+            skill = st.text_area("Expected skill / behaviour", value=_ai_skill_hint,
+                                  placeholder="e.g. use a break card to request a break",
+                                  height=80, key="hb_skill")
+            grouping  = st.selectbox("Grouping", GROUPINGS, key="hb_grouping")
+            _task_idx = TASK_TYPES.index(_ai_task_hint) if _ai_task_hint in TASK_TYPES else 0
+            task_type = st.selectbox("Task type", TASK_TYPES, index=_task_idx, key="hb_task")
+        with col2:
+            setting = st.selectbox("Setting", SETTINGS, key="hb_setting")
+            prompts = st.selectbox("Prompt level (Hierarchy of Prompts)", PROMPT_TYPES, key="hb_prompts")
+            rate    = st.selectbox("Rate / success criteria", RATE_OPTIONS, key="hb_rate")
+
+        assembled = (
+            f"{student_first} will {skill} {grouping.lower()} during {task_type.lower()} "
+            f"in the {setting.lower()} with {prompts.lower()}, demonstrating successful use on {rate}."
+            if skill and student_first else ""
+        )
+        if assembled:
+            st.session_state["gb_assembled"] = assembled
+        current_assembled = st.session_state.get("gb_assembled","")
+        if current_assembled:
+            st.markdown("**Assembled Goal Preview:**")
+            st.info(current_assembled)
+
+        st.markdown("---")
+        st.markdown("**Refine and Finalise**")
+        refine_col, _ = st.columns([2, 3])
+        with refine_col:
+            if st.button("✨ Refine with AI", type="primary", key="hb_refine_btn",
+                         disabled=not current_assembled.strip()):
+                if not groq_client:
+                    st.warning("⚠️ AI unavailable.")
+                else:
+                    with st.spinner("Refining…"):
+                        try:
+                            refined = groq_call(
+                                f"""Rewrite into ONE fluent professional SMARTAR goal sentence.
+Rules: fix doubled words; start "{student_first} will..."; keep ALL specific details;
+one sentence only; trauma-informed strengths-based language (PBS/BSEM);
+do NOT add "appropriately" or "independently" unless already present.
+Goal: {current_assembled}
+Return ONLY the final goal statement."""
+                            )
+                            if refined and len(refined) > 20 and "[AI unavailable" not in refined:
+                                st.session_state["refined_goal"]    = refined.strip().strip('"').strip("'")
+                                st.session_state["gb_goal_for_gas"] = st.session_state["refined_goal"]
+                                st.session_state.pop("gas_levels", None)
+                                st.session_state.pop("gb_ai_period", None)
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"AI error: {e}")
+        if not current_assembled.strip():
+            st.caption("💡 Complete skill/behaviour above to enable AI refinement.")
+
+        _goal_default = st.session_state.get("refined_goal") or current_assembled or ""
+        final_goal    = st.text_area("Final SMARTAR Goal (edit if needed)", value=_goal_default,
+                                     height=100, key=f"hb_final_goal_{hash(_goal_default)}")
+        if final_goal and final_goal != st.session_state.get("refined_goal"):
+            st.session_state["refined_goal"] = final_goal
+
+        # Auto GAS
+        _gas_source = st.session_state.get("refined_goal") or current_assembled
+        if _gas_source and groq_client and not st.session_state.get("gas_levels"):
+            with st.spinner("🤖 Auto-generating GAS levels…"):
+                try:
+                    _gr = groq_call(
+                        f"""GAS for: "{_gas_source}"
+EXPECTED (0) = goal verbatim. Scale only rate/criteria.
+Return ONLY JSON: {{"EXCEEDING":"...","ABOVE":"...","EXPECTED":"...","BELOW":"...","NOT_YET":"..."}}"""
+                    )
+                    _gp = json.loads(_gr.strip().strip("```json").strip("```").strip())
+                    if "NOT_YET" in _gp:
+                        _gp["NOT YET"] = _gp.pop("NOT_YET")
+                    st.session_state["gas_levels"]      = _gp
+                    st.session_state["gas_last_source"] = _gas_source
+                    st.rerun()
+                except Exception:
+                    pass
+
+        # Tracking period
+        st.markdown("---")
+        st.markdown("**Tracking Period**")
+        ai_period_result = st.session_state.get("gb_ai_period")
+        if final_goal.strip():
+            if st.button("🤖 Check with AI", key="hb_check_period"):
+                with st.spinner("Analysing…"):
+                    ai_period_result = ai_check_period(final_goal)
+                    st.session_state["gb_ai_period"] = ai_period_result
+                    st.rerun()
+        suggested = "All Day"
+        if ai_period_result:
+            st.info(f"**AI Recommendation:** {ai_period_result['period']}\n\n"
+                    f"*{ai_period_result.get('reasoning','')}*  \nConfidence: {ai_period_result.get('confidence','Low')}")
+            suggested = ai_period_result.get("period","All Day")
+            if suggested not in TRACKING_PERIODS:
+                suggested = "All Day"
+        tracking_period = st.selectbox("Tracking Period", TRACKING_PERIODS,
+                                       index=TRACKING_PERIODS.index(suggested), key="hb_tracking_period")
+        st.caption(f"📅 Sessions: **{', '.join(SESSIONS_FOR_PERIOD[tracking_period])}**")
+
+        # GAS levels
+        st.markdown("---")
+        st.markdown("**Goal Attainment Scaling (GAS)**")
+        if groq_client and final_goal:
+            if st.button("🔄 Re-generate GAS", key="hb_gen_gas"):
+                with st.spinner("Generating…"):
+                    try:
+                        _rg = json.loads(groq_call(
+                            f"""GAS for: "{final_goal}"
+EXPECTED = goal verbatim. Scale only rate/criteria.
+Return ONLY JSON: {{"EXCEEDING":"...","ABOVE":"...","EXPECTED":"...","BELOW":"...","NOT_YET":"..."}}"""
+                        ).strip().strip("```json").strip("```").strip())
+                        if "NOT_YET" in _rg:
+                            _rg["NOT YET"] = _rg.pop("NOT_YET")
+                        st.session_state["gas_levels"] = _rg
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Parse error: {e}")
+
+        gas_levels = st.session_state.get("gas_levels",{})
+        edited_gas = {}
+        _gas_ver   = hash(str(sorted(gas_levels.items()))) if gas_levels else 0
+        for lvl in LEVEL_ORDER:
+            _key    = lvl if lvl in gas_levels else lvl.replace(" ","_")
+            default = gas_levels.get(lvl, gas_levels.get(_key,""))
+            edited_gas[lvl] = st.text_area(f"{LEVEL_EMOJI[lvl]} {lvl}", value=default, height=70,
+                                           key=f"hb_gas_edit_{lvl}_{_gas_ver}")
+
+        # Save
+        st.markdown("---")
+        if st.button("💾 Save Goal", type="primary", disabled=not final_goal, key="hb_save_goal"):
+            new_goal = {
+                "student_name":    selected_name,
+                "exclusion_goal":  excl_goal.strip() if excl_goal.strip() else None,
+                "smartar_goal":    final_goal.strip(),
+                "skill":           skill.strip() if skill else None,
+                "grouping":        grouping, "task_type": task_type,
+                "setting":         setting,  "prompts":   prompts, "rate": rate,
+                "tracking_period": tracking_period,
+                "active":          True, "status": "Active",
+                "start_date":      date.today().isoformat(),
+                "gas_exceeding":   edited_gas.get("EXCEEDING",""),
+                "gas_above":       edited_gas.get("ABOVE",""),
+                "gas_expected":    edited_gas.get("EXPECTED",""),
+                "gas_below":       edited_gas.get("BELOW",""),
+                "gas_not_yet":     edited_gas.get("NOT YET",""),
+            }
+            if integration["active"]:
+                new_goal.update({"meeting_id": integration["meeting_id"],
+                                 "program": integration["program"],
+                                 "term": integration["term"], "week": integration["week"]})
+            try:
+                sb.table("smartar_goals").insert(new_goal).execute()
+                for k in ["refined_goal","gas_levels","gb_ai_period","gb_assembled","gb_goal_for_gas",
+                          "build_new_after_archive","archived_excl_goal","archived_student",
+                          "archived_smartar_goal","ai_gen_goals","ai_gen_analysis","ai_gen_multiple",
+                          "ai_gen_count","ai_queued_goals","ai_prefill_skill","ai_prefill_task",
+                          "ai_mod_result","ai_mod_gas"]:
+                    st.session_state.pop(k, None)
+                st.success(f"✅ Goal saved for {selected_name}!")
+                if integration["active"]:
+                    st.markdown(f"[← Return to Team Meeting](https://clc-lbu-portal.onrender.com/Team_Meetings?program={integration['program']})")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Save error: {e}")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # TAB 2: AI GOAL TOOL
+    # ─────────────────────────────────────────────────────────────────────────
+    with _ai_tab:
+        if not groq_client:
+            st.warning("⚠️ Groq AI is not configured — GROQ_API_KEY missing.")
+            st.stop()
+
+        _ai_mode_options = [
+            "🔧 Modify / refine the current SMARTAR goal",
+            "🔄 Create a new replacement goal based on observed behaviours",
+        ]
+        if not existing_goals and not build_after_archive:
+            st.info("No current goal found — using 'Create new replacement goal' mode.")
+            _ai_mode = _ai_mode_options[1]
+        else:
+            _ai_mode = st.radio("What would you like to do?", _ai_mode_options, key="ai_tool_mode")
+
         st.markdown("---")
 
-        build_after_archive = st.session_state.get("build_new_after_archive", False)
-
-        if build_after_archive:
-            st.markdown(
-                f'<div class="success-box">✅ Goal archived. Now build an updated '
-                f'SMARTAR goal for <strong>{selected_name}</strong> using the hierarchy of prompts below.</div>',
-                unsafe_allow_html=True,
-            )
-            if st.button("✖ Cancel — go back", key="cancel_new_after_arch"):
-                st.session_state.pop("build_new_after_archive", None)
-                st.session_state.pop("archived_excl_goal", None)
-                st.rerun()
-            excl_goal_default = st.session_state.get("archived_excl_goal", "")
-            st.subheader("Build Updated Goal")
-        else:
-            st.subheader("Add New Goal")
-            excl_goal_default = ""
-
-        # ── AI BEHAVIOUR-TO-GOAL GENERATOR ────────────────────────────────────
-        # Helper: replace [Student] placeholder
         def _replace_student(text):
-            return (text
-                    .replace("[Student]", selected_name.split()[0])
-                    .replace("[student]", selected_name.split()[0]))
+            return (text.replace("[Student]", selected_name.split()[0])
+                        .replace("[student]", selected_name.split()[0]))
 
-        # Helper: auto-generate GAS for a goal text, returns dict or {}
-        def _gen_gas(goal_text):
-            if not groq_client:
-                return {}
+        def _gen_gas_ai(goal_text):
             try:
                 _gr = groq_client.chat.completions.create(
                     model="llama-3.3-70b-versatile",
-                    messages=[{"role": "user", "content": f"""Create a Goal Attainment Scale (GAS) for this SMARTAR goal.
-
-Goal: {goal_text}
-
-The EXPECTED level (0) IS the goal exactly as written — copy it verbatim.
-Scale above and below by changing ONLY the rate/frequency/success criteria.
-
-Return ONLY valid JSON, no markdown, no extra text:
-{{
-  "EXCEEDING": "Goal text with higher rate/criteria",
-  "ABOVE": "Goal text with slightly higher rate/criteria",
-  "EXPECTED": "Exact goal text as written",
-  "BELOW": "Goal text with slightly lower rate/criteria",
-  "NOT_YET": "Goal text with much lower rate/criteria"
-}}"""}],
-                    response_format={"type": "json_object"},
-                    max_tokens=500,
-                    temperature=0.1,
+                    messages=[{"role":"user","content":
+                        f"""GAS for: {goal_text}
+EXPECTED (0) = goal verbatim. Scale only rate/criteria above and below.
+Return ONLY valid JSON: {{"EXCEEDING":"...","ABOVE":"...","EXPECTED":"...","BELOW":"...","NOT_YET":"..."}}"""}],
+                    response_format={"type":"json_object"}, max_tokens=500, temperature=0.1,
                 )
                 _gp = json.loads(_gr.choices[0].message.content.strip())
                 if "NOT_YET" in _gp:
@@ -973,857 +1318,469 @@ Return ONLY valid JSON, no markdown, no extra text:
             except Exception:
                 return {}
 
-        _gen_expanded = not bool(
-            st.session_state.get("refined_goal") or
-            st.session_state.get("ai_queued_goals")
-        )
-        with st.expander(
-            "✨ AI Goal Generator — describe the behaviour, get draft SMARTAR goals",
-            expanded=_gen_expanded,
-        ):
-            st.caption(
-                "Describe what the student is doing (the behaviours of concern) and the context. "
-                "Groq will analyse whether multiple distinct goals are needed, generate one per behaviour, "
-                "and flag when more than one is identified."
-            )
-
-            if not groq_client:
-                st.warning("⚠️ Groq AI is not configured — GROQ_API_KEY missing. "
-                           "Skip this section and build the goal manually below.")
+        # ── MODE A: MODIFY ────────────────────────────────────────────────────
+        if _ai_mode == _ai_mode_options[0]:
+            st.markdown("**🔧 Modify / refine the current SMARTAR goal**")
+            st.caption("The AI modifies the existing goal based on what you describe — same student, evolved skill.")
+            _base_goal = _archived_smartar or _current_smartar
+            if _base_goal:
+                st.markdown(
+                    f'<div class="smartar-box">🎯 <b>Current goal (base):</b> {_base_goal}</div>',
+                    unsafe_allow_html=True,
+                )
             else:
-                beh_desc = st.text_area(
-                    "📝 Describe the behaviour(s) of concern",
-                    placeholder=(
-                        "e.g. The student frequently leaves their seat during structured "
-                        "learning activities, calls out without permission, and also struggles "
-                        "significantly with peer conflict at recess — these feel like very "
-                        "different problems happening in different contexts."
-                    ),
-                    height=130,
-                    key="beh_desc_input",
-                )
+                st.warning("No current SMARTAR goal found.")
 
-                bg1, bg2 = st.columns(2)
-                with bg1:
-                    beh_setting  = st.selectbox("Primary setting where behaviour occurs",
-                                                SETTINGS, key="beh_setting_input")
-                    beh_grouping = st.selectbox("Grouping context",
-                                                GROUPINGS, key="beh_grouping_input")
-                with bg2:
-                    beh_prompt = st.selectbox("Target prompt level",
-                                              PROMPT_TYPES, key="beh_prompt_input")
-                    beh_rate   = st.selectbox("Target success rate",
-                                              RATE_OPTIONS, key="beh_rate_input")
+            _mod_desc = st.text_area(
+                "📝 What behaviours are you observing? What needs to change in the goal?",
+                placeholder=(
+                    "e.g. The student now manages the initial break request but struggles to return "
+                    "to task after the break. Goal should now focus on returning to work within 5 minutes…"
+                ),
+                height=120, key="ai_mod_desc",
+            )
+            _mod_c1, _mod_c2 = st.columns(2)
+            with _mod_c1:
+                _mod_prompt  = st.selectbox("Target prompt level", PROMPT_TYPES, key="ai_mod_prompt")
+                _mod_rate    = st.selectbox("Target success rate",  RATE_OPTIONS,  key="ai_mod_rate")
+            with _mod_c2:
+                _mod_setting  = st.selectbox("Setting",  SETTINGS,  key="ai_mod_setting")
+                _mod_grouping = st.selectbox("Grouping", GROUPINGS, key="ai_mod_grouping")
 
-                beh_extras = st.text_area(
-                    "Additional context (optional — triggers, strengths, strategies tried)",
-                    placeholder=(
-                        "e.g. student responds well to visual supports, peer conflict "
-                        "is a common trigger, previous success with movement breaks…"
-                    ),
-                    height=65,
-                    key="beh_extras_input",
-                )
+            if st.button("🤖 Generate Modified Goal", type="primary", key="ai_mod_generate",
+                         disabled=not (_mod_desc.strip() and _base_goal)):
+                with st.spinner("Generating…"):
+                    _mp = f"""You are an expert at writing SMARTAR goals (trauma-informed, PBS, BSEM, alternative education).
 
-                gen_col, _ = st.columns([3, 2])
-                with gen_col:
-                    if st.button(
-                        "🤖 Analyse & Generate Goals",
-                        type="primary", key="gen_from_beh",
-                        disabled=not st.session_state.get("beh_desc_input", "").strip(),
-                    ):
-                        with st.spinner(
-                            "Step 1: Identifying distinct behaviours…"
-                        ):
-                            _extras_line = (
-                                f"\nAdditional context: {beh_extras.strip()}"
-                                if beh_extras.strip() else ""
-                            )
-                            _raw_desc = st.session_state.get("beh_desc_input","").strip()
+CURRENT GOAL: {_base_goal}
 
-                            # ── PASS 1: Split into distinct behaviours only ────
-                            _split_system = (
-                                "You are a specialist in PBS/ABA behaviour support for students "
-                                "in alternative education. Your only job right now is to IDENTIFY "
-                                "and SEPARATE distinct behaviours — you are NOT writing goals yet."
-                            )
-                            _split_user = f"""Read this behaviour description and list every DISTINCT behaviour that would require its own separate SMARTAR goal.
+OBSERVED BEHAVIOURS / REQUESTED CHANGES: {_mod_desc.strip()}
 
-BEHAVIOUR DESCRIPTION:
-{_raw_desc}
-{_extras_line}
+UPDATED CONTEXT:
+- Setting: {_mod_setting} | Grouping: {_mod_grouping}
+- Prompt level: {_mod_prompt} | Success rate: {_mod_rate}
 
-RULES FOR SPLITTING:
-- Each distinct ACTION gets its own entry (e.g. "leaves seat" is separate from "calls out")
-- Behaviours in DIFFERENT settings always get separate entries
-- Behaviours requiring DIFFERENT skills always get separate entries
-- Do NOT group behaviours together just because they happen to the same student
-- Do NOT write goals yet — only name the behaviours
-
-GOOD SPLIT EXAMPLE:
-Input: "student leaves seat, calls out, and struggles at recess with peers"
-Output: 3 behaviours → "Leaving seat during structured tasks", "Calling out without permission", "Managing peer conflict at recess"
-
-BAD SPLIT EXAMPLE:
-Input: same
-Output: 1 behaviour → "Classroom disruption and social difficulties" ← TOO VAGUE, groups everything
-
-Return ONLY valid JSON:
-{{
-  "behaviours": [
-    {{"label": "Short descriptive label", "description": "One sentence describing just this behaviour"}}
-  ]
-}}"""
-                            try:
-                                _split_resp = groq_client.chat.completions.create(
-                                    model="llama-3.3-70b-versatile",
-                                    messages=[
-                                        {"role": "system", "content": _split_system},
-                                        {"role": "user",   "content": _split_user},
-                                    ],
-                                    response_format={"type": "json_object"},
-                                    max_tokens=600,
-                                    temperature=0.1,
-                                )
-                                _split_parsed = json.loads(
-                                    _split_resp.choices[0].message.content.strip()
-                                )
-                                _behaviours_list = _split_parsed.get("behaviours", [])
-                            except Exception as _se:
-                                st.error(f"Behaviour analysis error: {_se}")
-                                _behaviours_list = []
-
-                        if _behaviours_list:
-                            # ── PASS 2: Write one goal per behaviour ──────────
-                            with st.spinner(
-                                f"Step 2: Writing {len(_behaviours_list)} goal(s)…"
-                            ):
-                                _goal_system = (
-                                    "You are an expert at writing SMARTAR goals for students in "
-                                    "alternative education (PBS/ABA, trauma-informed, BSEM). "
-                                    "You write ONE goal per call. Goals are single sentences. "
-                                    "A goal NEVER contains 'and' connecting two separate actions. "
-                                    "A goal targets ONE skill only."
-                                )
-                                _goals_out = []
-                                for _beh in _behaviours_list:
-                                    _goal_user = f"""Write ONE SMARTAR goal for this single behaviour:
-
-BEHAVIOUR: {_beh.get('description', _beh.get('label',''))}
-
-CONTEXT:
-- Setting: {beh_setting}
-- Grouping: {beh_grouping}
-- Prompt level: {beh_prompt}
-- Success rate: {beh_rate}
-
-STRICT RULES — the goal MUST:
-✅ Target exactly ONE replacement/target behaviour (what the student WILL DO)
-✅ Start with "[Student] will..."
-✅ Be ONE sentence only
-✅ Embed setting, grouping, prompt level, and success rate naturally
-✅ Use trauma-informed, strengths-based language
-
-The goal MUST NOT:
-❌ Contain "and" joining two separate actions (e.g. "will request a break AND remain seated" — FORBIDDEN)
-❌ List multiple steps or conditions
-❌ Describe what the student will STOP doing
-❌ Include preamble, explanation, or bullet points
-
-VALID EXAMPLE: "[Student] will use a break card to request a break when feeling overwhelmed, working independently during structured tasks in the classroom, with a verbal prompt, on 3 out of 5 opportunities."
-INVALID EXAMPLE: "[Student] will remain in their seat and use a break card and stay calm during tasks." ← contains "and" linking multiple actions — FORBIDDEN
-
-Return ONLY valid JSON:
-{{
-  "goal": "The complete single SMARTAR goal sentence",
-  "task_type": "Best fit from: {', '.join(TASK_TYPES)}",
-  "skill": "The ONE core skill being targeted (5-10 words)"
-}}"""
-                                    try:
-                                        _goal_resp = groq_client.chat.completions.create(
-                                            model="llama-3.3-70b-versatile",
-                                            messages=[
-                                                {"role": "system", "content": _goal_system},
-                                                {"role": "user",   "content": _goal_user},
-                                            ],
-                                            response_format={"type": "json_object"},
-                                            max_tokens=300,
-                                            temperature=0.2,
-                                        )
-                                        _gp = json.loads(
-                                            _goal_resp.choices[0].message.content.strip()
-                                        )
-                                        _raw_g = _replace_student(_gp.get("goal",""))
-                                        _goals_out.append({
-                                            "behaviour_label": _beh.get("label",""),
-                                            "goal":            _raw_g,
-                                            "edited_goal":     _raw_g,
-                                            "task_type":       _gp.get("task_type",""),
-                                            "skill":           _gp.get("skill",""),
-                                        })
-                                    except Exception as _ge:
-                                        st.warning(
-                                            f"Could not generate goal for '{_beh.get('label','')}': {_ge}"
-                                        )
-
-                                if _goals_out:
-                                    # ── Post-generation: flag any goal still containing
-                                    # "and" linking distinct actions so user is aware ──
-                                    import re as _re
-                                    for _gitem in _goals_out:
-                                        _gt = _gitem.get("goal","")
-                                        # Heuristic: "will [verb]... and [verb]" pattern
-                                        if _re.search(
-                                            r'\bwill\b.+\band\b.+(?:ing|se|se|ain|rn|ck|out|ort)\b',
-                                            _gt, _re.IGNORECASE
-                                        ):
-                                            _gitem["_and_warning"] = True
-                                    st.session_state["ai_gen_goals"]    = _goals_out
-                                    st.session_state["ai_gen_multiple"] = len(_goals_out) > 1
-                                    st.session_state["ai_gen_count"]    = len(_goals_out)
-                                    st.session_state["ai_gen_analysis"] = (
-                                        f"{len(_goals_out)} distinct behaviour(s) identified: "
-                                        + ", ".join(b.get("label","") for b in _behaviours_list)
-                                    )
-                                    st.session_state.pop("ai_queued_goals", None)
-                                    st.rerun()
-
-                if not st.session_state.get("beh_desc_input", "").strip():
-                    st.caption("💡 Describe the behaviour(s) of concern above to enable AI analysis.")
-
-                # ── Results: multi-goal or single ─────────────────────────────
-                _gen_goals = st.session_state.get("ai_gen_goals", [])
-                if _gen_goals:
-                    st.markdown("---")
-                    _is_multi   = st.session_state.get("ai_gen_multiple", False)
-                    _beh_count  = st.session_state.get("ai_gen_count", 1)
-                    _analysis   = st.session_state.get("ai_gen_analysis", "")
-
-                    if _is_multi:
-                        st.markdown(
-                            f'<div class="alert-box">'
-                            f'⚠️ <b>{_beh_count} distinct behaviours identified</b> — '
-                            f'each requires a separate SMARTAR goal.<br>'
-                            f'<span style="font-size:0.88rem">{_analysis}</span>'
-                            f'</div>',
-                            unsafe_allow_html=True,
-                        )
-                        st.caption(
-                            "Review each goal below. Refine individually, then queue the ones "
-                            "you want to save. Queued goals appear below the generator — "
-                            "each can be individually saved with its own GAS and tracking period."
-                        )
-                    else:
-                        st.markdown(
-                            f'<div class="success-box">'
-                            f'✅ <b>One behaviour identified</b> — a single SMARTAR goal has been generated.<br>'
-                            f'<span style="font-size:0.88rem">{_analysis}</span>'
-                            f'</div>',
-                            unsafe_allow_html=True,
-                        )
-
-                    # ── Per-goal cards ─────────────────────────────────────────
-                    for _gi, _goal_item in enumerate(_gen_goals):
-                        _glabel = _goal_item.get("behaviour_label", f"Goal {_gi + 1}")
-                        _gver   = hash(_goal_item.get("edited_goal", "") + str(_gi))
-
-                        with st.expander(
-                            f"{'📌' if _is_multi else '🎯'} {'Goal ' + str(_gi+1) + ' — ' if _is_multi else ''}{_glabel}",
-                            expanded=True,
-                        ):
-                            st.caption(
-                                f"Skill: *{_goal_item.get('skill','')}*  ·  "
-                                f"Task type: **{_goal_item.get('task_type','')}**"
-                            )
-
-                            # Warn if AI still snuck "and" into goal
-                            if _goal_item.get("_and_warning"):
-                                st.markdown(
-                                    '<div class="alert-box">⚠️ <b>Check this goal</b> — it may still '
-                                    'contain "and" linking multiple actions. Edit directly or use '
-                                    '🔄 Regenerate to fix.</div>',
-                                    unsafe_allow_html=True,
-                                )
-
-                            # Editable goal text
-                            _edited = st.text_area(
-                                "Edit goal directly if needed",
-                                value=_goal_item.get("edited_goal", _goal_item["goal"]),
-                                height=95,
-                                key=f"ai_goal_edit_{_gi}_{_gver}",
-                            )
-                            # Sync edits back into session state list
-                            if _edited.strip() and _edited != _goal_item.get("edited_goal"):
-                                st.session_state["ai_gen_goals"][_gi]["edited_goal"] = _edited
-
-                            # Add missing elements
-                            _add_key = f"ai_add_elements_{_gi}"
-                            _add_el = st.text_area(
-                                "➕ Add missing elements or request changes (optional)",
-                                placeholder=(
-                                    "e.g. specify morning only; change success rate to 4/5; "
-                                    "add that student will use a calm-down tool first…"
-                                ),
-                                height=60,
-                                key=_add_key,
-                            )
-
-                            _gc1, _gc2, _gc3 = st.columns([2, 2, 2])
-                            with _gc1:
-                                if st.button(
-                                    "🔄 Regenerate",
-                                    key=f"regen_goal_{_gi}",
-                                    disabled=not _edited.strip(),
-                                ):
-                                    with st.spinner("Regenerating…"):
-                                        _regen_extras = (
-                                            f"\nChanges to incorporate: {_add_el.strip()}"
-                                            if _add_el.strip()
-                                            else "\nNo specific changes — tighten and polish only."
-                                        )
-                                        _rp = f"""You are an expert at writing SMARTAR goals (trauma-informed, PBS framework, alternative education).
-
-Current goal:
-{_edited}
-{_regen_extras}
-
-Rewrite as ONE fluent sentence targeting ONE behaviour/skill only.
-
-MUST NOT:
-❌ Contain "and" connecting two separate actions
-❌ List multiple steps, conditions, or skills
-❌ Include preamble or explanation
-
-MUST:
-✅ One sentence, one skill, one measurable outcome
+TASK: Modify the current goal to address the described changes.
+✅ ONE sentence, ONE target behaviour/skill
+✅ Build on the existing goal unless change is fundamental
 ✅ Keep the student name exactly as written
 ✅ Trauma-informed, strengths-based language
+❌ Never contain "and" joining two separate actions
+❌ No preamble, no explanation
 
-Return ONLY the new goal sentence — nothing else."""
-                                        try:
-                                            _rr = groq_call(_rp)
-                                            if _rr and len(_rr) > 20 and "[AI unavailable" not in _rr:
-                                                st.session_state["ai_gen_goals"][_gi]["edited_goal"] = (
-                                                    _rr.strip().strip('"').strip("'")
-                                                )
-                                                st.rerun()
-                                        except Exception as _re:
-                                            st.error(f"Regeneration error: {_re}")
-
-                            with _gc2:
-                                # Check if already queued
-                                _queued = st.session_state.get("ai_queued_goals", [])
-                                _already_queued = any(q["_idx"] == _gi for q in _queued)
-                                if _already_queued:
-                                    st.success("✅ Queued")
-                                else:
-                                    if st.button(
-                                        "📋 Queue to Save",
-                                        type="primary",
-                                        key=f"queue_goal_{_gi}",
-                                        disabled=not _edited.strip(),
-                                    ):
-                                        # Auto-generate GAS at queue time
-                                        with st.spinner("Generating GAS levels…"):
-                                            _qgas = _gen_gas(_edited.strip())
-                                        _qitem = {
-                                            "_idx":           _gi,
-                                            "behaviour_label": _glabel,
-                                            "goal":           _edited.strip(),
-                                            "task_type":      _goal_item.get("task_type", ""),
-                                            "skill":          _goal_item.get("skill", ""),
-                                            "gas":            _qgas,
-                                            "tracking_period": "All Day",
-                                        }
-                                        _q = st.session_state.get("ai_queued_goals", [])
-                                        _q.append(_qitem)
-                                        st.session_state["ai_queued_goals"] = _q
-                                        st.rerun()
-
-                            with _gc3:
-                                # Single-goal shortcut: load directly into builder
-                                if not _is_multi:
-                                    if st.button(
-                                        "✅ Use this Goal →",
-                                        key=f"use_direct_{_gi}",
-                                        disabled=not _edited.strip(),
-                                    ):
-                                        st.session_state["refined_goal"]     = _edited.strip()
-                                        st.session_state["gb_goal_for_gas"]  = _edited.strip()
-                                        st.session_state["ai_prefill_skill"] = _goal_item.get("skill","")
-                                        st.session_state["ai_prefill_task"]  = _goal_item.get("task_type","")
-                                        st.session_state.pop("gas_levels", None)
-                                        st.session_state.pop("gb_ai_period", None)
-                                        st.rerun()
-
-                    # Clear all
-                    if st.button("🗑 Clear & Start Over", key="clear_ai_gen"):
-                        for _k in ["ai_gen_goals", "ai_gen_analysis", "ai_gen_multiple",
-                                   "ai_gen_count", "ai_queued_goals",
-                                   "ai_prefill_skill", "ai_prefill_task"]:
-                            st.session_state.pop(_k, None)
-                        st.rerun()
-
-        # ── QUEUED GOALS — save section ────────────────────────────────────────
-        _queued_goals = st.session_state.get("ai_queued_goals", [])
-        if _queued_goals:
-            st.markdown("---")
-            st.markdown(
-                f'<div style="background:#eff6ff;border-left:4px solid #3b82f6;'
-                f'padding:12px 16px;border-radius:0 8px 8px 0;margin-bottom:12px;">'
-                f'📋 <b>{len(_queued_goals)} goal{"s" if len(_queued_goals)!=1 else ""} queued to save</b>'
-                f' — review each below, then save individually.</div>',
-                unsafe_allow_html=True,
-            )
-
-            # Shared exclusion goal for queued goals
-            _q_excl = st.text_area(
-                "🏫 Exclusion goal from home school (shared across all queued goals — leave blank if not applicable)",
-                placeholder="Paste the exclusion goal as received from the main school…",
-                height=70,
-                key="queue_shared_excl",
-            )
-
-            _to_remove = []
-            for _qi, _qg in enumerate(_queued_goals):
-                _qver = hash(_qg["goal"] + str(_qi))
-                with st.expander(
-                    f"📌 Goal {_qi+1} — {_qg['behaviour_label']}",
-                    expanded=True,
-                ):
-                    # Editable goal text
-                    _q_goal_edit = st.text_area(
-                        "SMARTAR Goal",
-                        value=_qg["goal"],
-                        height=90,
-                        key=f"qgoal_edit_{_qi}_{_qver}",
-                    )
-                    if _q_goal_edit.strip() and _q_goal_edit != _qg["goal"]:
-                        st.session_state["ai_queued_goals"][_qi]["goal"] = _q_goal_edit.strip()
-
-                    # Add missing elements + regenerate
-                    _qadd = st.text_area(
-                        "➕ Add missing elements or request changes (optional)",
-                        placeholder="e.g. specify morning only; change success rate…",
-                        height=55,
-                        key=f"qadd_{_qi}",
-                    )
-                    _qr1, _qr2 = st.columns([2, 4])
-                    with _qr1:
-                        if st.button("🔄 Regenerate", key=f"qregen_{_qi}"):
-                            with st.spinner("Regenerating…"):
-                                _qrp = f"""Rewrite this SMARTAR goal as ONE fluent sentence (trauma-informed, PBS framework).
-Current goal: {_q_goal_edit}
-{"Changes to incorporate: " + _qadd.strip() if _qadd.strip() else "No changes — tighten and polish only."}
-Return ONLY the new goal sentence."""
-                                try:
-                                    _qrr = groq_call(_qrp)
-                                    if _qrr and len(_qrr) > 20 and "[AI unavailable" not in _qrr:
-                                        st.session_state["ai_queued_goals"][_qi]["goal"] = (
-                                            _qrr.strip().strip('"').strip("'")
-                                        )
-                                        # Regenerate GAS for updated goal
-                                        with st.spinner("Updating GAS levels…"):
-                                            st.session_state["ai_queued_goals"][_qi]["gas"] = (
-                                                _gen_gas(st.session_state["ai_queued_goals"][_qi]["goal"])
-                                            )
-                                        st.rerun()
-                                except Exception as _qre:
-                                    st.error(f"Error: {_qre}")
-
-                    st.markdown("**Tracking Period**")
-                    _qperiod_idx = TRACKING_PERIODS.index(_qg.get("tracking_period","All Day")) \
-                        if _qg.get("tracking_period","All Day") in TRACKING_PERIODS else 0
-                    _qperiod = st.selectbox(
-                        "Tracking period for this goal",
-                        TRACKING_PERIODS, index=_qperiod_idx,
-                        key=f"qperiod_{_qi}",
-                    )
-                    if _qperiod != _qg.get("tracking_period"):
-                        st.session_state["ai_queued_goals"][_qi]["tracking_period"] = _qperiod
-
-                    # GAS levels
-                    _qgas = _qg.get("gas", {})
-                    if _qgas:
-                        with st.expander("📊 GAS Performance Levels (auto-generated — edit if needed)"):
-                            _edited_qgas = {}
-                            _qgver = hash(str(sorted(_qgas.items())))
-                            for _qlvl in LEVEL_ORDER:
-                                _qk    = _qlvl if _qlvl in _qgas else _qlvl.replace(" ","_")
-                                _qdefv = _qgas.get(_qlvl, _qgas.get(_qk, ""))
-                                _edited_qgas[_qlvl] = st.text_area(
-                                    f"{LEVEL_EMOJI[_qlvl]} {_qlvl}",
-                                    value=_qdefv, height=60,
-                                    key=f"qgas_{_qi}_{_qlvl}_{_qgver}",
-                                )
-                            # Persist edits
-                            st.session_state["ai_queued_goals"][_qi]["gas_edited"] = _edited_qgas
-                    else:
-                        if st.button("🔄 Generate GAS Levels", key=f"qgas_gen_{_qi}"):
-                            with st.spinner("Generating GAS…"):
-                                st.session_state["ai_queued_goals"][_qi]["gas"] = _gen_gas(_q_goal_edit)
-                                st.rerun()
-
-                    # Save / remove buttons
-                    _qs1, _qs2 = st.columns([2, 2])
-                    with _qs1:
-                        if st.button(
-                            f"💾 Save Goal {_qi+1}",
-                            type="primary", key=f"qsave_{_qi}",
-                            disabled=not _q_goal_edit.strip(),
-                        ):
-                            _final_qgas = _qg.get("gas_edited") or _qg.get("gas", {})
-                            _qnew = {
-                                "student_name":    selected_name,
-                                "exclusion_goal":  _q_excl.strip() or None,
-                                "smartar_goal":    _q_goal_edit.strip(),
-                                "tracking_period": _qperiod,
-                                "gas_exceeding":   _final_qgas.get("EXCEEDING",""),
-                                "gas_above":       _final_qgas.get("ABOVE",""),
-                                "gas_expected":    _final_qgas.get("EXPECTED",""),
-                                "gas_below":       _final_qgas.get("BELOW",""),
-                                "gas_not_yet":     _final_qgas.get("NOT YET",""),
-                                "active":          True,
-                                "status":          "Active",
-                                "start_date":      date.today().isoformat(),
-                            }
-                            if integration["active"]:
-                                _qnew.update({
-                                    "meeting_id": integration["meeting_id"],
-                                    "program":    integration["program"],
-                                    "term":       integration["term"],
-                                    "week":       integration["week"],
-                                })
-                            try:
-                                sb.table("smartar_goals").insert(_qnew).execute()
-                                st.success(f"✅ Goal {_qi+1} saved for {selected_name}!")
-                                _to_remove.append(_qi)
-                            except Exception as _qse:
-                                st.error(f"Save error: {_qse}")
-                    with _qs2:
-                        if st.button(f"🗑 Remove from Queue", key=f"qremove_{_qi}"):
-                            _to_remove.append(_qi)
-
-            # Process removals after rendering
-            if _to_remove:
-                _new_q = [g for i, g in enumerate(_queued_goals) if i not in _to_remove]
-                st.session_state["ai_queued_goals"] = _new_q
-                st.rerun()
-
-            if all(
-                st.session_state.get(f"qsave_{i}_done") for i in range(len(_queued_goals))
-            ):
-                st.session_state.pop("ai_queued_goals", None)
-
-        # ── Step 1 label ──────────────────────────────────────────────────────
-        if not build_after_archive:
-            st.markdown("**Step 1 — Exclusion Goal from Home School**")
-
-        excl_goal = st.text_area(
-            "🏫 Exclusion Goal (from main school)",
-            value=excl_goal_default,
-            placeholder="Paste the exclusion goal as received from the main school…",
-            height=80,
-        )
-
-        st.markdown("---")
-        st.markdown(
-            "**Step 2 — Build the SMARTAR Goal using the Hierarchy of Prompts**"
-        )
-        st.caption(
-            "Complete each field. The goal statement will be assembled automatically "
-            "from your selections, then refined by AI."
-        )
-
-        # Pre-fill hints from AI generator (shown inline, user can override)
-        _ai_skill_hint = st.session_state.get("ai_prefill_skill", "")
-        _ai_task_hint  = st.session_state.get("ai_prefill_task", "")
-        if _ai_skill_hint or _ai_task_hint:
-            st.caption(
-                f"💡 AI suggestions — Skill: *{_ai_skill_hint}*"
-                + (f"  ·  Task type: **{_ai_task_hint}**" if _ai_task_hint else "")
-                + "  (used as defaults below)"
-            )
-
-        col1, col2 = st.columns(2)
-        with col1:
-            student_first = st.text_input(
-                "Student first name (as it appears in goal)",
-                value=selected_name.split()[0],
-            )
-            skill = st.text_area(
-                "Expected skill / behaviour",
-                value=_ai_skill_hint,
-                placeholder="e.g. use a break card to request a break",
-                height=80,
-            )
-            grouping  = st.selectbox("Grouping", GROUPINGS)
-            _task_idx = TASK_TYPES.index(_ai_task_hint) if _ai_task_hint in TASK_TYPES else 0
-            task_type = st.selectbox("Task type", TASK_TYPES, index=_task_idx)
-
-        with col2:
-            setting = st.selectbox("Setting", SETTINGS)
-            prompts = st.selectbox("Prompt level (Hierarchy of Prompts)", PROMPT_TYPES)
-            rate    = st.selectbox("Rate / success criteria", RATE_OPTIONS)
-
-        # Auto-assembled preview
-        if skill and student_first:
-            assembled = (
-                f"{student_first} will {skill} {grouping.lower()} during "
-                f"{task_type.lower()} in the {setting.lower()} with "
-                f"{prompts.lower()}, demonstrating successful use on {rate}."
-            )
-        else:
-            assembled = ""
-
-        # ── Step 3: Refine ────────────────────────────────────────────────────
-        st.markdown("---")
-        st.markdown("**Step 3 — Refine and Finalise the SMARTAR Goal**")
-
-        # Keep assembled in session state so it persists across reruns
-        if assembled:
-            st.session_state["gb_assembled"] = assembled
-        current_assembled = st.session_state.get("gb_assembled", "")
-
-        # Show assembled preview
-        if current_assembled:
-            st.markdown("**Assembled Goal Preview:**")
-            st.info(current_assembled)
-
-        refine_col, _ = st.columns([2, 3])
-        with refine_col:
-            if st.button("✨ Refine Goal with AI", type="primary",
-                         key="refine_btn", disabled=not current_assembled.strip()):
-                if not groq_client:
-                    st.warning("⚠️ AI unavailable — GROQ_API_KEY not configured. Edit manually below.")
-                else:
-                    with st.spinner("Refining goal…"):
-                        try:
-                            refined = groq_call(
-                                f"""You are an expert at writing SMARTAR goals for students in alternative education (trauma-informed, PBS framework).
-
-Rewrite this assembled goal into ONE fluent, professional goal statement for an IEP/support plan.
-
-Rules:
-- Fix repeated/doubled words (e.g. "during during" → "during", "the the" → "the")
-- Start with "{student_first} will..."
-- Keep ALL specific details: skill/behaviour, grouping, task type, setting, prompt level, success rate
-- One sentence only — no preamble, no explanation, no bullet points
-- Trauma-informed, strengths-based language
-- Do NOT add "appropriately" or "independently" unless already in the original
-
-Goal to refine:
-{current_assembled}
-
-Return ONLY the final goal statement."""
-                            )
-                            if refined and len(refined) > 20 and "[AI unavailable" not in refined:
-                                refined = refined.strip().strip('"').strip("'")
-                                st.session_state["refined_goal"] = refined
-                                st.session_state["gb_goal_for_gas"] = refined
-                                st.session_state.pop("gas_levels", None)
-                                st.session_state.pop("gb_ai_period", None)
-                                st.rerun()
-                            else:
-                                st.warning("Unexpected AI response — edit manually below.")
-                        except Exception as e:
-                            st.error(f"AI error: {e}")
-        if not current_assembled.strip():
-            st.caption("💡 Complete skill/behaviour in Step 2 to enable AI refinement.")
-
-        # Final goal text area — driven by session state so value persists
-        # Prefer: refined_goal > assembled > empty
-        _goal_default = (st.session_state.get("refined_goal")
-                         or current_assembled
-                         or "")
-        # Use a dynamic key so the widget re-renders when refined_goal changes
-        _goal_key = f"final_goal_{hash(_goal_default)}"
-        final_goal = st.text_area(
-            "Final SMARTAR Goal (edit if needed)",
-            value=_goal_default,
-            height=100,
-            key=_goal_key,
-        )
-        # Keep session state in sync with any manual edits
-        if final_goal and final_goal != st.session_state.get("refined_goal"):
-            st.session_state["refined_goal"] = final_goal
-
-        # ── Auto-generate GAS when goal is ready and GAS not yet done ──────────
-        _gas_source = st.session_state.get("refined_goal") or current_assembled
-        _gas_done   = bool(st.session_state.get("gas_levels"))
-        _gas_last   = st.session_state.get("gas_last_source", "")
-
-        # Generate when: source exists, AI available, and source has changed or GAS never done
-        if _gas_source and groq_client and (not _gas_done or _gas_source != _gas_last):
-            if not _gas_done:  # only auto-run if GAS is empty
-                with st.spinner("🤖 Auto-generating GAS performance levels…"):
+Return ONLY the modified goal sentence."""
                     try:
-                        gas_raw = groq_call(
-                            f"""Create a Goal Attainment Scale (GAS) for this SMARTAR goal.
+                        _mr = groq_call(_mp)
+                        if _mr and len(_mr) > 20 and "[AI unavailable" not in _mr:
+                            st.session_state["ai_mod_result"] = _mr.strip().strip('"').strip("'")
+                            st.rerun()
+                    except Exception as _me:
+                        st.error(f"AI error: {_me}")
 
-Goal: {_gas_source}
+            if not (_mod_desc.strip() and _base_goal):
+                st.caption("💡 Describe the behaviours / changes above to enable generation.")
 
-The EXPECTED level (0) IS the goal exactly as written — copy it verbatim.
-Scale above and below by changing ONLY the rate/frequency/success criteria.
+            if st.session_state.get("ai_mod_result"):
+                st.markdown("---")
+                st.markdown("**✅ Modified Goal — Review and Save:**")
+                _mod_ver  = hash(st.session_state.get("ai_mod_result",""))
+                _mod_edit = st.text_area("Edit directly if needed",
+                                         value=st.session_state["ai_mod_result"], height=95,
+                                         key=f"ai_mod_edit_{_mod_ver}")
+                if _mod_edit.strip() and _mod_edit != st.session_state.get("ai_mod_result"):
+                    st.session_state["ai_mod_result"] = _mod_edit.strip()
 
-Return ONLY valid JSON, no markdown, no extra text:
-{{
-  "EXCEEDING": "Goal text with higher rate/criteria",
-  "ABOVE": "Goal text with slightly higher rate/criteria",
-  "EXPECTED": "Exact goal text as written",
-  "BELOW": "Goal text with slightly lower rate/criteria",
-  "NOT_YET": "Goal text with much lower rate/criteria"
-}}"""
-                        )
-                        gas_clean  = gas_raw.strip().strip("```json").strip("```").strip()
-                        gas_parsed = json.loads(gas_clean)
-                        if "NOT_YET" in gas_parsed:
-                            gas_parsed["NOT YET"] = gas_parsed.pop("NOT_YET")
-                        st.session_state["gas_levels"]     = gas_parsed
-                        st.session_state["gas_last_source"] = _gas_source
+                _mod_excl   = st.text_area("🏫 Exclusion goal (leave blank to keep existing)",
+                                           value=_archived_excl or _current_excl, height=65,
+                                           key="ai_mod_excl")
+                _mod_period = st.selectbox("Tracking period", TRACKING_PERIODS, key="ai_mod_period")
+
+                if not st.session_state.get("ai_mod_gas"):
+                    if st.button("📊 Auto-generate GAS", key="ai_mod_gen_gas"):
+                        with st.spinner("Generating GAS…"):
+                            st.session_state["ai_mod_gas"] = _gen_gas_ai(_mod_edit)
+                            st.rerun()
+
+                _mod_gas = st.session_state.get("ai_mod_gas",{})
+                _mod_edited_gas = {}
+                if _mod_gas:
+                    with st.expander("📊 GAS Levels (edit if needed)"):
+                        _mgver = hash(str(sorted(_mod_gas.items())))
+                        for _lvl in LEVEL_ORDER:
+                            _mk    = _lvl if _lvl in _mod_gas else _lvl.replace(" ","_")
+                            _mod_edited_gas[_lvl] = st.text_area(
+                                f"{LEVEL_EMOJI[_lvl]} {_lvl}",
+                                value=_mod_gas.get(_lvl, _mod_gas.get(_mk,"")), height=60,
+                                key=f"mod_gas_{_lvl}_{_mgver}",
+                            )
+
+                if st.button("💾 Save Modified Goal", type="primary", key="ai_mod_save",
+                             disabled=not _mod_edit.strip()):
+                    _fmgas = _mod_edited_gas or _mod_gas
+                    try:
+                        sb.table("smartar_goals").insert({
+                            "student_name":    selected_name,
+                            "exclusion_goal":  _mod_excl.strip() or _current_excl or None,
+                            "smartar_goal":    _mod_edit.strip(),
+                            "tracking_period": _mod_period,
+                            "active":          True, "status": "Active",
+                            "start_date":      date.today().isoformat(),
+                            "gas_exceeding":   _fmgas.get("EXCEEDING",""),
+                            "gas_above":       _fmgas.get("ABOVE",""),
+                            "gas_expected":    _fmgas.get("EXPECTED",""),
+                            "gas_below":       _fmgas.get("BELOW",""),
+                            "gas_not_yet":     _fmgas.get("NOT YET",""),
+                        }).execute()
+                        for _mk2 in ["ai_mod_result","ai_mod_gas","build_new_after_archive",
+                                     "archived_excl_goal","archived_smartar_goal"]:
+                            st.session_state.pop(_mk2, None)
+                        st.success(f"✅ Modified goal saved for {selected_name}!")
                         st.rerun()
-                    except Exception as ex:
-                        st.caption(f"⚠️ GAS auto-generate failed ({ex}) — fill in manually below.")
+                    except Exception as _mse:
+                        st.error(f"Save error: {_mse}")
 
-        # ── Step 4: Tracking Period ────────────────────────────────────────────
-        st.markdown("---")
-        st.markdown("**Step 4 — Tracking Period**")
-        st.caption(
-            "Determines which sessions Quick Track shows for this goal. "
-            "AI checks the goal text for time-specific language."
-        )
+        # ── MODE B: NEW REPLACEMENT GOAL ──────────────────────────────────────
+        else:
+            st.markdown("**🔄 Create new replacement goal based on observed behaviours**")
+            st.caption(
+                "Describe what you are observing. The AI analyses the behaviours, "
+                "identifies if multiple distinct goals are needed, and generates one per behaviour."
+            )
+            if _current_excl or _archived_excl:
+                st.markdown(
+                    f'<div class="exclusion-box">🏫 <b>Exclusion Goal (reference):</b> '
+                    f'{_current_excl or _archived_excl}</div>', unsafe_allow_html=True,
+                )
 
-        ai_period_result = st.session_state.get("gb_ai_period")
+            beh_desc = st.text_area(
+                "📝 Describe the behaviour(s) of concern you are observing",
+                placeholder=(
+                    "e.g. The student frequently leaves their seat during structured tasks, "
+                    "calls out without permission, and also struggles with peer conflict at recess…"
+                ),
+                height=130, key="beh_desc_input",
+            )
+            _bg1, _bg2 = st.columns(2)
+            with _bg1:
+                beh_setting  = st.selectbox("Primary setting", SETTINGS,   key="beh_setting_input")
+                beh_grouping = st.selectbox("Grouping context", GROUPINGS, key="beh_grouping_input")
+            with _bg2:
+                beh_prompt = st.selectbox("Target prompt level", PROMPT_TYPES, key="beh_prompt_input")
+                beh_rate   = st.selectbox("Target success rate",  RATE_OPTIONS,  key="beh_rate_input")
+            beh_extras = st.text_area(
+                "Additional context (optional)",
+                placeholder="e.g. responds well to visual supports; peer conflict is a trigger…",
+                height=60, key="beh_extras_input",
+            )
 
-        if final_goal.strip():
-            if st.button("🤖 Check Tracking Period with AI", key="check_period_btn"):
-                with st.spinner("Analysing goal for time context…"):
-                    ai_period_result = ai_check_period(final_goal)
-                    st.session_state["gb_ai_period"] = ai_period_result
+            if st.button("🤖 Analyse & Generate Goals", type="primary", key="gen_from_beh",
+                         disabled=not st.session_state.get("beh_desc_input","").strip()):
+                with st.spinner("Step 1: Identifying distinct behaviours…"):
+                    _extras_line  = (f"\nAdditional context: {beh_extras.strip()}" if beh_extras.strip() else "")
+                    _raw_desc     = st.session_state.get("beh_desc_input","").strip()
+                    _split_system = ("You are a PBS/ABA specialist. Your only job right now is to "
+                                     "IDENTIFY and SEPARATE distinct behaviours — NOT to write goals.")
+                    _split_user   = f"""List every DISTINCT behaviour from this description that requires its own SMARTAR goal.
+
+DESCRIPTION: {_raw_desc}{_extras_line}
+
+RULES: Each distinct ACTION = own entry. Different settings = separate entries. Different skills = separate entries.
+GOOD SPLIT: "leaves seat, calls out, peer conflict at recess" → 3 entries.
+BAD SPLIT: same → "Classroom disruption" (too vague, groups everything).
+
+Return ONLY valid JSON: {{"behaviours": [{{"label": "Short label", "description": "One sentence"}}]}}"""
+                    try:
+                        _sr = groq_client.chat.completions.create(
+                            model="llama-3.3-70b-versatile",
+                            messages=[{"role":"system","content":_split_system},
+                                      {"role":"user","content":_split_user}],
+                            response_format={"type":"json_object"}, max_tokens=600, temperature=0.1,
+                        )
+                        _behaviours_list = json.loads(_sr.choices[0].message.content.strip()).get("behaviours",[])
+                    except Exception as _se:
+                        st.error(f"Behaviour analysis error: {_se}")
+                        _behaviours_list = []
+
+                if _behaviours_list:
+                    with st.spinner(f"Step 2: Writing {len(_behaviours_list)} goal(s)…"):
+                        _goal_system = ("Expert SMARTAR goal writer (PBS/ABA, trauma-informed, BSEM). "
+                                        "ONE goal per call. ONE skill per goal. "
+                                        "NEVER 'and' joining two separate actions.")
+                        _goals_out = []
+                        for _beh in _behaviours_list:
+                            _gu = f"""Write ONE SMARTAR goal for this single behaviour:
+BEHAVIOUR: {_beh.get('description', _beh.get('label',''))}
+CONTEXT: Setting: {beh_setting} | Grouping: {beh_grouping} | Prompt: {beh_prompt} | Rate: {beh_rate}
+✅ ONE replacement behaviour | start "[Student] will..." | one sentence | embed all context naturally | trauma-informed
+❌ No "and" joining two actions | no preamble
+EXAMPLE: "[Student] will use a break card to request a break when overwhelmed, working independently, with a verbal prompt, on 3 out of 5 opportunities."
+Return ONLY JSON: {{"goal":"...","task_type":"Best fit from: {', '.join(TASK_TYPES)}","skill":"ONE core skill (5-10 words)"}}"""
+                            try:
+                                _gr2 = groq_client.chat.completions.create(
+                                    model="llama-3.3-70b-versatile",
+                                    messages=[{"role":"system","content":_goal_system},
+                                              {"role":"user","content":_gu}],
+                                    response_format={"type":"json_object"}, max_tokens=300, temperature=0.2,
+                                )
+                                _gp2   = json.loads(_gr2.choices[0].message.content.strip())
+                                _raw_g = _replace_student(_gp2.get("goal",""))
+                                _goals_out.append({
+                                    "behaviour_label": _beh.get("label",""),
+                                    "goal": _raw_g, "edited_goal": _raw_g,
+                                    "task_type": _gp2.get("task_type",""), "skill": _gp2.get("skill",""),
+                                })
+                            except Exception as _ge:
+                                st.warning(f"Could not generate goal for '{_beh.get('label','')}': {_ge}")
+
+                        if _goals_out:
+                            import re as _re
+                            for _gitem in _goals_out:
+                                if _re.search(r'\bwill\b.+\band\b.+(?:ing|se|ain|rn|ck|out|ort)\b',
+                                              _gitem.get("goal",""), _re.IGNORECASE):
+                                    _gitem["_and_warning"] = True
+                            st.session_state["ai_gen_goals"]    = _goals_out
+                            st.session_state["ai_gen_multiple"] = len(_goals_out) > 1
+                            st.session_state["ai_gen_count"]    = len(_goals_out)
+                            st.session_state["ai_gen_analysis"] = (
+                                f"{len(_goals_out)} distinct behaviour(s): " +
+                                ", ".join(b.get("label","") for b in _behaviours_list)
+                            )
+                            st.session_state.pop("ai_queued_goals", None)
+                            st.rerun()
+
+            if not st.session_state.get("beh_desc_input","").strip():
+                st.caption("💡 Describe the behaviour(s) above to enable AI analysis.")
+
+            # Generated goals
+            _gen_goals = st.session_state.get("ai_gen_goals",[])
+            if _gen_goals:
+                st.markdown("---")
+                _is_multi  = st.session_state.get("ai_gen_multiple", False)
+                _analysis  = st.session_state.get("ai_gen_analysis","")
+                _beh_count = st.session_state.get("ai_gen_count", 1)
+                if _is_multi:
+                    st.markdown(
+                        f'<div class="alert-box">⚠️ <b>{_beh_count} distinct behaviours identified</b> — '
+                        f'each needs a separate SMARTAR goal.<br>'
+                        f'<span style="font-size:0.88rem">{_analysis}</span></div>',
+                        unsafe_allow_html=True,
+                    )
+                    st.caption("Review each goal, then queue to save.")
+                else:
+                    st.markdown(
+                        f'<div class="success-box">✅ <b>One behaviour identified.</b> '
+                        f'<span style="font-size:0.88rem">{_analysis}</span></div>',
+                        unsafe_allow_html=True,
+                    )
+
+                for _gi, _goal_item in enumerate(_gen_goals):
+                    _glabel = _goal_item.get("behaviour_label", f"Goal {_gi+1}")
+                    _gver   = hash(_goal_item.get("edited_goal","") + str(_gi))
+                    with st.expander(
+                        f"{'📌' if _is_multi else '🎯'} {'Goal '+str(_gi+1)+' — ' if _is_multi else ''}{_glabel}",
+                        expanded=True,
+                    ):
+                        st.caption(f"Skill: *{_goal_item.get('skill','')}*  ·  Task type: **{_goal_item.get('task_type','')}**")
+                        if _goal_item.get("_and_warning"):
+                            st.markdown(
+                                '<div class="alert-box">⚠️ This goal may still contain "and" '
+                                'linking multiple actions — edit or regenerate.</div>',
+                                unsafe_allow_html=True,
+                            )
+                        _edited = st.text_area("Edit directly if needed",
+                                               value=_goal_item.get("edited_goal", _goal_item["goal"]),
+                                               height=95, key=f"ai_goal_edit_{_gi}_{_gver}")
+                        if _edited.strip() and _edited != _goal_item.get("edited_goal"):
+                            st.session_state["ai_gen_goals"][_gi]["edited_goal"] = _edited
+
+                        _add_el = st.text_area("➕ Add missing elements or request changes (optional)",
+                                               placeholder="e.g. specify morning only; change success rate to 4/5…",
+                                               height=55, key=f"ai_add_elements_{_gi}")
+                        _gc1, _gc2, _gc3 = st.columns([2,2,2])
+                        with _gc1:
+                            if st.button("🔄 Regenerate", key=f"regen_goal_{_gi}",
+                                         disabled=not _edited.strip()):
+                                with st.spinner("Regenerating…"):
+                                    _rp2 = f"""Rewrite as ONE fluent sentence (trauma-informed, PBS).
+Goal: {_edited}
+{"Changes: " + _add_el.strip() if _add_el.strip() else "Polish only."}
+✅ One sentence | one skill | keep student name
+❌ No "and" joining two separate actions
+Return ONLY the new goal sentence."""
+                                    try:
+                                        _rr2 = groq_call(_rp2)
+                                        if _rr2 and len(_rr2) > 20 and "[AI unavailable" not in _rr2:
+                                            st.session_state["ai_gen_goals"][_gi]["edited_goal"] = (
+                                                _rr2.strip().strip('"').strip("'"))
+                                            st.rerun()
+                                    except Exception as _re3:
+                                        st.error(f"Error: {_re3}")
+                        with _gc2:
+                            _queued        = st.session_state.get("ai_queued_goals",[])
+                            _already_qued  = any(q["_idx"] == _gi for q in _queued)
+                            if _already_qued:
+                                st.success("✅ Queued")
+                            else:
+                                if st.button("📋 Queue to Save", type="primary",
+                                             key=f"queue_goal_{_gi}", disabled=not _edited.strip()):
+                                    with st.spinner("Generating GAS…"):
+                                        _qgas = _gen_gas_ai(_edited.strip())
+                                    _q2 = st.session_state.get("ai_queued_goals",[])
+                                    _q2.append({
+                                        "_idx": _gi, "behaviour_label": _glabel,
+                                        "goal": _edited.strip(), "task_type": _goal_item.get("task_type",""),
+                                        "skill": _goal_item.get("skill",""), "gas": _qgas,
+                                        "tracking_period": "All Day",
+                                    })
+                                    st.session_state["ai_queued_goals"] = _q2
+                                    st.rerun()
+                        with _gc3:
+                            if not _is_multi:
+                                if st.button("✅ Use this Goal →", key=f"use_direct_{_gi}",
+                                             disabled=not _edited.strip()):
+                                    st.session_state["refined_goal"]     = _edited.strip()
+                                    st.session_state["gb_goal_for_gas"]  = _edited.strip()
+                                    st.session_state["ai_prefill_skill"] = _goal_item.get("skill","")
+                                    st.session_state["ai_prefill_task"]  = _goal_item.get("task_type","")
+                                    st.session_state.pop("gas_levels", None)
+                                    st.rerun()
+
+                if st.button("🗑 Clear & Start Over", key="clear_ai_gen"):
+                    for _k in ["ai_gen_goals","ai_gen_analysis","ai_gen_multiple","ai_gen_count",
+                               "ai_queued_goals","ai_prefill_skill","ai_prefill_task"]:
+                        st.session_state.pop(_k, None)
                     st.rerun()
 
-        suggested = "All Day"
-        if ai_period_result:
-            conf = ai_period_result.get("confidence", "Low")
-            st.info(
-                f"**AI Recommendation:** {ai_period_result['period']}\n\n"
-                f"*{ai_period_result.get('reasoning','')}*  \nConfidence: {conf}"
-            )
-            suggested = ai_period_result.get("period", "All Day")
-            if suggested not in TRACKING_PERIODS:
-                suggested = "All Day"
+            # Queued goals
+            _queued_goals = st.session_state.get("ai_queued_goals",[])
+            if _queued_goals:
+                st.markdown("---")
+                st.markdown(
+                    f'<div style="background:#eff6ff;border-left:4px solid #3b82f6;padding:12px 16px;'
+                    f'border-radius:0 8px 8px 0;margin-bottom:12px;">📋 <b>{len(_queued_goals)} '
+                    f'goal{"s" if len(_queued_goals)!=1 else ""} queued to save</b></div>',
+                    unsafe_allow_html=True,
+                )
+                _q_excl = st.text_area("🏫 Exclusion goal (shared across queued goals)",
+                                       value=_current_excl or _archived_excl or "",
+                                       height=65, key="queue_shared_excl")
+                _to_remove = []
+                for _qi, _qg in enumerate(_queued_goals):
+                    _qver = hash(_qg["goal"] + str(_qi))
+                    with st.expander(f"📌 Goal {_qi+1} — {_qg['behaviour_label']}", expanded=True):
+                        _q_goal_edit = st.text_area("SMARTAR Goal", value=_qg["goal"], height=90,
+                                                    key=f"qgoal_edit_{_qi}_{_qver}")
+                        if _q_goal_edit.strip() and _q_goal_edit != _qg["goal"]:
+                            st.session_state["ai_queued_goals"][_qi]["goal"] = _q_goal_edit.strip()
+                        _qadd = st.text_area("➕ Changes (optional)", height=50, key=f"qadd_{_qi}",
+                                             placeholder="e.g. morning only; change success rate…")
+                        if st.button("🔄 Regenerate", key=f"qregen_{_qi}"):
+                            with st.spinner("…"):
+                                try:
+                                    _qrr2 = groq_call(
+                                        f"""Rewrite as ONE sentence (PBS, trauma-informed).
+Goal: {_q_goal_edit}
+{"Changes: " + _qadd.strip() if _qadd.strip() else "Polish only."}
+No "and" joining two actions. Return ONLY new goal sentence."""
+                                    )
+                                    if _qrr2 and len(_qrr2) > 20 and "[AI unavailable" not in _qrr2:
+                                        st.session_state["ai_queued_goals"][_qi]["goal"] = (
+                                            _qrr2.strip().strip('"').strip("'"))
+                                        with st.spinner("Updating GAS…"):
+                                            st.session_state["ai_queued_goals"][_qi]["gas"] = (
+                                                _gen_gas_ai(st.session_state["ai_queued_goals"][_qi]["goal"]))
+                                        st.rerun()
+                                except Exception as _qre2:
+                                    st.error(f"Error: {_qre2}")
 
-        tracking_period = st.selectbox(
-            "Tracking Period", TRACKING_PERIODS,
-            index=TRACKING_PERIODS.index(suggested),
-            key="gb_tracking_period",
-            help="Override AI recommendation if needed.",
-        )
-        st.caption(f"📅 Sessions to track: **{', '.join(SESSIONS_FOR_PERIOD[tracking_period])}**")
+                        _qperiod_idx = (TRACKING_PERIODS.index(_qg.get("tracking_period","All Day"))
+                                        if _qg.get("tracking_period","All Day") in TRACKING_PERIODS else 0)
+                        _qperiod = st.selectbox("Tracking period", TRACKING_PERIODS,
+                                                index=_qperiod_idx, key=f"qperiod_{_qi}")
+                        if _qperiod != _qg.get("tracking_period"):
+                            st.session_state["ai_queued_goals"][_qi]["tracking_period"] = _qperiod
 
-        # ── Step 5: GAS Levels ─────────────────────────────────────────────────
+                        _qgas    = _qg.get("gas",{})
+                        _qed_gas = {}
+                        if _qgas:
+                            with st.expander("📊 GAS Levels (edit if needed)"):
+                                _qgver = hash(str(sorted(_qgas.items())))
+                                for _qlvl in LEVEL_ORDER:
+                                    _qk    = _qlvl if _qlvl in _qgas else _qlvl.replace(" ","_")
+                                    _qed_gas[_qlvl] = st.text_area(
+                                        f"{LEVEL_EMOJI[_qlvl]} {_qlvl}",
+                                        value=_qgas.get(_qlvl, _qgas.get(_qk,"")), height=60,
+                                        key=f"qgas_{_qi}_{_qlvl}_{_qgver}",
+                                    )
+                                st.session_state["ai_queued_goals"][_qi]["gas_edited"] = _qed_gas
+                        else:
+                            if st.button("🔄 Generate GAS", key=f"qgas_gen_{_qi}"):
+                                with st.spinner("…"):
+                                    st.session_state["ai_queued_goals"][_qi]["gas"] = _gen_gas_ai(_q_goal_edit)
+                                    st.rerun()
+
+                        _qs1, _qs2 = st.columns([2,2])
+                        with _qs1:
+                            if st.button(f"💾 Save Goal {_qi+1}", type="primary",
+                                         key=f"qsave_{_qi}", disabled=not _q_goal_edit.strip()):
+                                _fqgas = _qg.get("gas_edited") or _qg.get("gas",{})
+                                try:
+                                    sb.table("smartar_goals").insert({
+                                        "student_name":    selected_name,
+                                        "exclusion_goal":  _q_excl.strip() or None,
+                                        "smartar_goal":    _q_goal_edit.strip(),
+                                        "tracking_period": _qperiod,
+                                        "active": True, "status": "Active",
+                                        "start_date": date.today().isoformat(),
+                                        "gas_exceeding": _fqgas.get("EXCEEDING",""),
+                                        "gas_above":     _fqgas.get("ABOVE",""),
+                                        "gas_expected":  _fqgas.get("EXPECTED",""),
+                                        "gas_below":     _fqgas.get("BELOW",""),
+                                        "gas_not_yet":   _fqgas.get("NOT YET",""),
+                                    }).execute()
+                                    st.success(f"✅ Goal {_qi+1} saved!")
+                                    _to_remove.append(_qi)
+                                except Exception as _qse2:
+                                    st.error(f"Save error: {_qse2}")
+                        with _qs2:
+                            if st.button("🗑 Remove from Queue", key=f"qremove_{_qi}"):
+                                _to_remove.append(_qi)
+
+                if _to_remove:
+                    st.session_state["ai_queued_goals"] = [
+                        g for i, g in enumerate(_queued_goals) if i not in _to_remove
+                    ]
+                    st.rerun()
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # TAB 3: MANAGE STUDENT
+    # ─────────────────────────────────────────────────────────────────────────
+    with _mgmt_tab:
+        st.caption("Archive this student. To add a new student, use **New Student Setup** in the sidebar.")
+        st.subheader(f"Student: {selected_name}")
+        st.markdown(f'Program: **{student.get("program","?")}** · Active: **{len(existing_goals)}** · '
+                    f'Archived: **{len(archived_goals)}**')
         st.markdown("---")
-        st.markdown("**Step 5 — Goal Attainment Scaling (GAS)**")
-        st.caption("Auto-filled from the SMARTAR goal. Edit any field before saving.")
+        if st.button(f"🗑 Archive student — {selected_name}", key="mgmt_archive_student"):
+            st.session_state["mgmt_arch_confirm"] = True
+        if st.session_state.get("mgmt_arch_confirm"):
+            st.warning(f"⚠️ This will archive **{selected_name}**. All data is preserved.")
+            mc1, mc2 = st.columns(2)
+            with mc1:
+                if st.button("Confirm Archive", type="primary", key="mgmt_arch_confirm_btn"):
+                    sb.table("smartar_students").update({"active":False}).eq("id", student["id"]).execute()
+                    st.session_state.pop("mgmt_arch_confirm", None)
+                    st.success(f"✅ {selected_name} archived.")
+                    st.rerun()
+            with mc2:
+                if st.button("Cancel", key="mgmt_arch_cancel"):
+                    st.session_state.pop("mgmt_arch_confirm", None)
+                    st.rerun()
 
-        if groq_client and final_goal:
-            if st.button("🔄 Re-generate GAS Levels with AI",
-                         type="secondary", key="gen_gas_btn"):
-                with st.spinner("Generating GAS levels…"):
-                    gas_prompt = f"""Create a Goal Attainment Scale (GAS) for this SMARTAR goal:
-
-"{final_goal}"
-
-Create 5 performance level descriptions that logically scale above and below the EXPECTED level.
-The EXPECTED level IS the goal as written.
-
-Return ONLY a JSON object with these exact keys: EXCEEDING, ABOVE, EXPECTED, BELOW, NOT_YET
-Each value should be a brief modified version of the goal at that level.
-Only modify the rate/frequency/success criteria to show each level.
-No markdown, no explanation, pure JSON only."""
-                    raw = groq_call(gas_prompt)
-                    try:
-                        raw_clean  = raw.strip().strip("```json").strip("```").strip()
-                        gas_parsed = json.loads(raw_clean)
-                        if "NOT_YET" in gas_parsed and "NOT YET" not in gas_parsed:
-                            gas_parsed["NOT YET"] = gas_parsed.pop("NOT_YET")
-                        st.session_state["gas_levels"] = gas_parsed
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Couldn't parse GAS levels. Try again. ({e})")
-
-        gas_levels = st.session_state.get("gas_levels", {})
-        edited_gas = {}
-        # Use a version counter in the key so widgets re-render when gas_levels changes
-        _gas_ver = hash(str(sorted(gas_levels.items()))) if gas_levels else 0
-        if gas_levels:
-            st.markdown("**Review GAS Performance Levels:**")
-            st.caption("Auto-filled from your goal. Edit any field before saving.")
-        else:
-            st.caption("Fill in skill/behaviour above — GAS levels will auto-generate.")
-        for lvl in LEVEL_ORDER:
-            _key    = lvl if lvl in gas_levels else lvl.replace(" ", "_")
-            default = gas_levels.get(lvl, gas_levels.get(_key, ""))
-            color   = LEVEL_COLOR[lvl]
-            # Dynamic key forces widget to re-render with new value when gas_levels changes
-            edited_gas[lvl] = st.text_area(
-                f"{LEVEL_EMOJI[lvl]} {lvl}",
-                value=default, height=70,
-                key=f"gas_edit_{lvl}_{_gas_ver}",
-            )
-
-        # ── Save ──────────────────────────────────────────────────────────────
-        st.markdown("---")
-        if st.button("💾 Save Goal", type="primary", disabled=not final_goal,
-                     key="save_goal_btn"):
-            new_goal = {
-                "student_name":    selected_name,
-                "exclusion_goal":  excl_goal.strip() if excl_goal else None,
-                "smartar_goal":    final_goal.strip(),
-                "skill":           skill.strip() if skill else None,
-                "grouping":        grouping,
-                "task_type":       task_type,
-                "setting":         setting,
-                "prompts":         prompts,
-                "rate":            rate,
-                "tracking_period": tracking_period,
-                "active":          True,
-                "status":          "Active",
-                "start_date":      date.today().isoformat(),
-            }
-            if edited_gas:
-                new_goal["gas_exceeding"] = edited_gas.get("EXCEEDING", "")
-                new_goal["gas_above"]     = edited_gas.get("ABOVE", "")
-                new_goal["gas_expected"]  = edited_gas.get("EXPECTED", "")
-                new_goal["gas_below"]     = edited_gas.get("BELOW", "")
-                new_goal["gas_not_yet"]   = edited_gas.get("NOT YET", "")
-            if integration["active"]:
-                new_goal.update({
-                    "meeting_id": integration["meeting_id"],
-                    "program":    integration["program"],
-                    "term":       integration["term"],
-                    "week":       integration["week"],
-                })
-
-
-            sb.table("smartar_goals").insert(new_goal).execute()
-
-            for k in ["refined_goal", "gas_levels", "gb_ai_period",
-                      "gb_assembled", "gb_goal_for_gas",
-                      "build_new_after_archive", "archived_excl_goal", "archived_student",
-                      "ai_gen_goal", "ai_gen_task_type", "ai_gen_skill",
-                      "ai_prefill_skill", "ai_prefill_task"]:
-                st.session_state.pop(k, None)
-
-            st.success(f"✅ Goal saved for {selected_name}!")
-            if integration["active"]:
-                meeting_url = f"https://clc-lbu-portal.onrender.com/Team_Meetings?program={integration['program']}"
-                st.markdown(f"[← Return to Team Meeting]({meeting_url})")
-            st.rerun()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 3. DAILY TRACKING
+# 4. DAILY TRACKING
 # ══════════════════════════════════════════════════════════════════════════════
 elif view == "📊 Daily Tracking":
     st.title("📊 Daily Tracking")
