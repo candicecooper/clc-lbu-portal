@@ -1188,9 +1188,11 @@ RAW TRANSCRIPT:
                                     minutes_text = parts[1].strip()
                                     break
 
-                            # Write to pending keys — never touch widget keys directly
+                            # Write to pending keys AND delete widget keys so value= re-applies on next render
                             st.session_state[f"pr_notes_pending_{program}"] = focus_text
                             st.session_state[f"pm_minutes_pending_{program}"] = minutes_text
+                            st.session_state.pop(f"pr_notes_{program}", None)
+                            st.session_state.pop(f"pm_minutes_{program}", None)
                             st.rerun()
                         except Exception as _e:
                             st.error(f"Groq error: {_e}")
@@ -1714,9 +1716,10 @@ def render_meeting_archive(program):
                                             max_tokens=1500
                                         )
                                         _new_text = _r.choices[0].message.content
-                                        # Write to pending key — NOT the widget key
+                                        # Write to pending key AND delete widget key so value= re-applies
                                         _pf_pk = f"arch_pf_pending_{meeting_id}"
                                         st.session_state[_pf_pk] = (ed_pf + "\n\n--- AI ---\n" + _new_text).strip() if ed_pf.strip() else _new_text
+                                        st.session_state.pop(f"arch_pf_{meeting_id}", None)
                                         st.rerun()
                                     except Exception as _e:
                                         st.error(f"Groq error: {_e}")
@@ -1787,11 +1790,12 @@ def render_meeting_archive(program):
                                         max_tokens=2500
                                     )
                                     _new_min = _r2.choices[0].message.content
-                                    # Write to pending key — NOT the widget key
+                                    # Write to pending key AND delete widget key so value= re-applies
                                     st.session_state[_min_pk] = (
                                         (ed_minutes + "\n\n--- AI Generated ---\n" + _new_min).strip()
                                         if ed_minutes.strip() else _new_min
                                     )
+                                    st.session_state.pop(f"arch_minutes_{meeting_id}", None)
                                     st.rerun()
                                 except Exception as _e:
                                     st.error(f"Groq error: {_e}")
