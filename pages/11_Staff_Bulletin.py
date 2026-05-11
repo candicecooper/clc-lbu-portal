@@ -972,8 +972,9 @@ def show_compose():
 
     notices  = db_get_notices(edition["id"])
     is_sent  = edition.get("status") == "published"
-    # locked only affects regular staff submissions — admins always have full access
-    locked   = not is_entry_open(edition) and not is_sent and not st.session_state.is_admin
+    # Admins can always edit regardless of sent status
+    can_edit = st.session_state.is_admin
+    locked   = not is_entry_open(edition) and not is_sent and not can_edit
 
     if locked and should_send_reminder(edition) and st.session_state.is_admin:
         if send_reminder_email(edition):
@@ -1038,9 +1039,9 @@ def show_compose():
                     unsafe_allow_html=True
                 )
             with c2:
-                if not is_sent:
+                if can_edit:
                     st.write("")
-                    if st.button("X", key="del_" + str(n["id"]), help="Remove"):
+                    if st.button("✕", key="del_" + str(n["id"]), help="Remove"):
                         db_delete_notice(n["id"])
                         st.rerun()
     elif not is_sent:
@@ -1056,8 +1057,8 @@ def show_compose():
         except Exception:
             pass
 
-    # Admin can always add items until bulletin is sent
-    if not is_sent:
+    # Admin can always add and edit items
+    if can_edit:
         st.markdown("#### ➕ Add Item")
         with st.form("add_item", clear_on_submit=True):
             cat     = st.selectbox("Category", list(CAT_LABELS.keys()),
@@ -1078,7 +1079,7 @@ def show_compose():
                     time.sleep(0.3)
                     st.rerun()
 
-    if notices and not is_sent:
+    if notices and can_edit and not is_sent:
         st.markdown("---")
         if not st.session_state.get("confirm_send"):
             if st.button("📤 Send to All Staff", type="primary", use_container_width=True):
@@ -1105,10 +1106,9 @@ def show_compose():
                     st.session_state["confirm_send"] = False
                     st.rerun()
 
-    # ── Download & Meeting panel — always visible (draft or sent) ─────────────
+    # ── Download & Meeting panel — always visible ─────────────────────────────
     st.markdown("---")
     if not is_sent and notices:
-        # Show live meeting status while still drafting
         met_term = edition.get("meeting_term", "")
         met_week = edition.get("meeting_week", "")
         if edition.get("meeting_linked") and met_term and met_week:
