@@ -188,13 +188,11 @@ with col1:
                             additional.append(item_label)
                         agenda['additional_agenda'] = additional
 
-                        # Save back and mark item as 'added'
+                        # Save agenda back to meeting record
                         supabase_mtg.table('staff_meetings').update({
                             "agenda_items": json.dumps(agenda)
                         }).eq('id', meeting_id).execute()
-                        supabase.table('staff_agenda_items').update({
-                            'status': 'added'
-                        }).eq('id', item_id).execute()
+                        # Leave status as 'pending' — Staff Meetings Load button handles marking as added
 
                         if was_created:
                             st.success(f"✅ Submitted! A new staff meeting has been created for {auto_term} Week {auto_week} ({auto_date}).")
@@ -232,31 +230,44 @@ st.markdown("---")
 # VIEW PENDING ITEMS
 # ══════════════════════════════════════════════════════════════════════════════
 
-st.subheader("📋 Pending Agenda Items (All Staff)")
+st.subheader("📋 Submitted Agenda Items")
 
 try:
-    pending_result = supabase.table('staff_agenda_items').select('*').eq('status', 'pending').order('created_at', desc=True).execute()
-    
-    if pending_result.data:
-        st.write(f"**{len(pending_result.data)} pending item(s)**")
-        
-        for item in pending_result.data:
-            with st.expander(f"📌 {item['item_text'][:60]}..." if len(item['item_text']) > 60 else f"📌 {item['item_text']}"):
-                st.write(f"**Submitted by:** {item['submitted_by']}")
-                st.write(f"**Date:** {item['date_submitted']}")
-                if item.get('week_number'):
-                    st.write(f"**Week:** {item['week_number']}")
-                if item.get('term'):
-                    st.write(f"**Term:** {item['term']}")
-                if item.get('category'):
-                    st.write(f"**Category:** {item['category']}")
-                st.markdown("---")
-                st.write(f"**Item:** {item['item_text']}")
+    all_result = supabase.table('staff_agenda_items').select('*') \
+                         .in_('status', ['pending', 'added']) \
+                         .order('created_at', desc=True).execute()
+
+    if all_result.data:
+        pending_items = [i for i in all_result.data if i['status'] == 'pending']
+        added_items   = [i for i in all_result.data if i['status'] == 'added']
+
+        if pending_items:
+            st.markdown(f"**⏳ Awaiting meeting — {len(pending_items)} item(s)**")
+            for item in pending_items:
+                label = item['item_text'][:60] + '…' if len(item['item_text']) > 60 else item['item_text']
+                with st.expander(f"📌 {label}"):
+                    st.write(f"**Submitted by:** {item['submitted_by']}")
+                    st.write(f"**Date:** {item['date_submitted']}")
+                    if item.get('term'): st.write(f"**Term/Week:** {item['term']} Wk {item.get('week_number','?')}")
+                    if item.get('category'): st.write(f"**Category:** {item['category']}")
+                    st.write(f"**Item:** {item['item_text']}")
+
+        if added_items:
+            st.markdown(f"**✅ Added to meeting — {len(added_items)} item(s)**")
+            for item in added_items[:5]:   # show last 5 only
+                label = item['item_text'][:60] + '…' if len(item['item_text']) > 60 else item['item_text']
+                with st.expander(f"✅ {label}", expanded=False):
+                    st.write(f"**Submitted by:** {item['submitted_by']}")
+                    if item.get('term'): st.write(f"**Term/Week:** {item['term']} Wk {item.get('week_number','?')}")
+                    st.write(f"**Item:** {item['item_text']}")
+
+        if not pending_items and not added_items:
+            st.info("No agenda items submitted yet.")
     else:
-        st.info("No pending agenda items at the moment.")
+        st.info("No agenda items submitted yet.")
 
 except Exception as e:
-    st.warning(f"Could not load pending items: {e}")
+    st.warning(f"Could not load items: {e}")
 
 st.markdown("---")
 st.caption("🏫 Cowandilla Learning Centre · LBU · Staff Agenda Submission")
