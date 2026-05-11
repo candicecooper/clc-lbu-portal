@@ -987,51 +987,142 @@ Return ONLY the goal sentence — nothing else."""
         st.info("No students yet — add your first student above.")
 
     # ── Archived students ─────────────────────────────────────────────────────
-    _archived_s_list = [s for s in get_students(include_archived=True) if not s.get("active", True)]
-    if _archived_s_list:
-        st.markdown("---")
-        with st.expander(f"🗃️ Archived Students ({len(_archived_s_list)}) — restore or permanently delete", expanded=False):
-            st.caption("Archived students are hidden from Goal Builder and tracking views but all data is preserved unless permanently deleted.")
-            for _as in _archived_s_list:
-                _asg = get_goals(_as["student_name"], active_only=False)
-                _ac1, _ac2, _ac3 = st.columns([3, 1, 1])
-                _ac1.write(f"**{_as['student_name']}** — {_as.get('program','?')} — {len(_asg)} goal(s)")
-                with _ac2:
-                    if st.button("♻️ Restore", key=f"ns_restore_{_as['id']}"):
-                        sb.table("smartar_students").update({"active": True}).eq("id", _as["id"]).execute()
-                        st.success(f"✅ {_as['student_name']} restored.")
-                        st.rerun()
-                with _ac3:
-                    if st.button("🗑 Delete", key=f"ns_del_{_as['id']}"):
-                        st.session_state[f"ns_del_confirm_{_as['id']}"] = True
+    _archived_s_list = [s for s in get_students(include_archived=True)
+                        if not s.get("active", True) and not s.get("placement_ended", False)]
+    _ended_s_list    = [s for s in get_students(include_archived=True)
+                        if s.get("placement_ended", False)]
 
-                if st.session_state.get(f"ns_del_confirm_{_as['id']}"):
+    _total_non_active = len(_archived_s_list) + len(_ended_s_list)
+    if _total_non_active:
+        st.markdown("---")
+        with st.expander(
+            f"🗃️ Non-Active Students ({_total_non_active}) — archived · placement ended · delete",
+            expanded=False,
+        ):
+            st.caption(
+                "**Archived** — hidden from Goal Builder and tracking but data is intact. "
+                "Choose what to do with each student below.\n\n"
+                "🏁 **End Placement** — student has left CLC. Data is preserved in the archive "
+                "permanently but the student will no longer appear in any active views.\n\n"
+                "🗑 **Permanently Delete** — for students entered in error. Removes the student "
+                "record, all goals, and all tracking data. Cannot be undone."
+            )
+
+            if _archived_s_list:
+                st.markdown("**Archived students**")
+                for _as in _archived_s_list:
+                    _asg = get_goals(_as["student_name"], active_only=False)
+                    with st.container():
+                        st.markdown(
+                            f'<div style="background:#f8fafc;border:1px solid #e2e8f0;'
+                            f'border-radius:8px;padding:10px 14px;margin-bottom:10px;">'
+                            f'<b>{_as["student_name"]}</b> &nbsp;·&nbsp; {_as.get("program","?")} '
+                            f'&nbsp;·&nbsp; {len(_asg)} goal(s)</div>',
+                            unsafe_allow_html=True,
+                        )
+                        _ab1, _ab2, _ab3 = st.columns(3)
+                        with _ab1:
+                            if st.button("♻️ Restore to Active",
+                                         key=f"ns_restore_{_as['id']}"):
+                                sb.table("smartar_students").update({"active": True}).eq(
+                                    "id", _as["id"]
+                                ).execute()
+                                st.success(f"✅ {_as['student_name']} restored.")
+                                st.rerun()
+                        with _ab2:
+                            if st.button("🏁 End Placement",
+                                         key=f"ns_endplacement_{_as['id']}"):
+                                st.session_state[f"ns_end_confirm_{_as['id']}"] = True
+                        with _ab3:
+                            if st.button("🗑 Delete Permanently",
+                                         key=f"ns_del_{_as['id']}"):
+                                st.session_state[f"ns_del_confirm_{_as['id']}"] = True
+
+                        # End Placement confirmation
+                        if st.session_state.get(f"ns_end_confirm_{_as['id']}"):
+                            st.markdown(
+                                f'<div class="period-box">🏁 <b>End placement for '
+                                f'{_as["student_name"]}?</b><br>'
+                                f'This student will be marked as placement ended. '
+                                f'All goals and tracking data are permanently preserved in the archive '
+                                f'but the student will not appear in any active views.</div>',
+                                unsafe_allow_html=True,
+                            )
+                            _ea, _eb = st.columns(2)
+                            with _ea:
+                                if st.button(f"Yes — end placement",
+                                             key=f"ns_end_conf_{_as['id']}", type="primary"):
+                                    sb.table("smartar_students").update({
+                                        "active": False, "placement_ended": True
+                                    }).eq("id", _as["id"]).execute()
+                                    st.session_state.pop(f"ns_end_confirm_{_as['id']}", None)
+                                    st.success(f"🏁 {_as['student_name']} — placement ended. Data preserved.")
+                                    st.rerun()
+                            with _eb:
+                                if st.button("Cancel", key=f"ns_end_cancel_{_as['id']}"):
+                                    st.session_state.pop(f"ns_end_confirm_{_as['id']}", None)
+                                    st.rerun()
+
+                        # Delete confirmation
+                        if st.session_state.get(f"ns_del_confirm_{_as['id']}"):
+                            st.markdown(
+                                f'<div class="alert-box">⚠️ <b>Permanently delete '
+                                f'{_as["student_name"]}?</b><br>'
+                                f'Use this only if the student was entered in error. '
+                                f'This will permanently remove the student record, all goals, '
+                                f'and all tracking data. This cannot be undone.</div>',
+                                unsafe_allow_html=True,
+                            )
+                            _da, _db = st.columns(2)
+                            with _da:
+                                if st.button(f"Yes — permanently delete",
+                                             key=f"ns_del_conf_{_as['id']}", type="primary"):
+                                    try:
+                                        _del_gs = sb.table("smartar_goals").select("id").eq(
+                                            "student_name", _as["student_name"]
+                                        ).execute().data or []
+                                        for _dg in _del_gs:
+                                            sb.table("smartar_tracking").delete().eq(
+                                                "goal_id", _dg["id"]
+                                            ).execute()
+                                        sb.table("smartar_goals").delete().eq(
+                                            "student_name", _as["student_name"]
+                                        ).execute()
+                                        sb.table("smartar_students").delete().eq(
+                                            "id", _as["id"]
+                                        ).execute()
+                                        st.session_state.pop(f"ns_del_confirm_{_as['id']}", None)
+                                        st.success(f"✅ {_as['student_name']} permanently deleted.")
+                                        st.rerun()
+                                    except Exception as _nde:
+                                        st.error(f"Delete error: {_nde}")
+                            with _db:
+                                if st.button("Cancel", key=f"ns_del_cancel_{_as['id']}"):
+                                    st.session_state.pop(f"ns_del_confirm_{_as['id']}", None)
+                                    st.rerun()
+
+            if _ended_s_list:
+                if _archived_s_list:
+                    st.markdown("---")
+                st.markdown("**Placement ended students** — data preserved permanently")
+                for _es in _ended_s_list:
+                    _esg = get_goals(_es["student_name"], active_only=False)
                     st.markdown(
-                        f'<div class="alert-box">⚠️ <b>Permanently delete {_as["student_name"]}?</b><br>'
-                        f'This will delete the student record, all goals, and all tracking data. '
-                        f'This cannot be undone.</div>',
+                        f'<div style="background:#f0fdf4;border:1px solid #bbf7d0;'
+                        f'border-radius:8px;padding:10px 14px;margin-bottom:8px;">'
+                        f'🏁 <b>{_es["student_name"]}</b> &nbsp;·&nbsp; {_es.get("program","?")} '
+                        f'&nbsp;·&nbsp; {len(_esg)} goal(s) &nbsp;·&nbsp; '
+                        f'<span style="color:#16a34a">Placement ended — data archived</span></div>',
                         unsafe_allow_html=True,
                     )
-                    _nda, _ndb = st.columns(2)
-                    with _nda:
-                        if st.button(f"Yes — permanently delete {_as['student_name']}",
-                                     key=f"ns_del_conf_{_as['id']}", type="primary"):
-                            try:
-                                _del_gs = sb.table("smartar_goals").select("id").eq(
-                                    "student_name", _as["student_name"]
-                                ).execute().data or []
-                                for _dg in _del_gs:
-                                    sb.table("smartar_tracking").delete().eq("goal_id", _dg["id"]).execute()
-                                sb.table("smartar_goals").delete().eq("student_name", _as["student_name"]).execute()
-                                sb.table("smartar_students").delete().eq("id", _as["id"]).execute()
-                                st.session_state.pop(f"ns_del_confirm_{_as['id']}", None)
-                                st.success(f"✅ {_as['student_name']} permanently deleted.")
-                                st.rerun()
-                            except Exception as _nde:
-                                st.error(f"Delete error: {_nde}")
-                    with _ndb:
-                        if st.button("Cancel", key=f"ns_del_cancel_{_as['id']}"):
-                            st.session_state.pop(f"ns_del_confirm_{_as['id']}", None)
+                    _pb1, _pb2 = st.columns([2, 4])
+                    with _pb1:
+                        if st.button("♻️ Restore to Active",
+                                     key=f"ns_restore_end_{_es['id']}"):
+                            sb.table("smartar_students").update({
+                                "active": True, "placement_ended": False
+                            }).eq("id", _es["id"]).execute()
+                            st.success(f"✅ {_es['student_name']} restored to active.")
                             st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2302,34 +2393,68 @@ elif view == "⚙️ Admin Panel":
                     st.rerun()
 
             elif is_arch:
+                st.markdown(
+                    '<div class="period-box" style="margin-bottom:10px;">'
+                    'This student is archived — hidden from active views but all data is intact. '
+                    'Choose an action below.</div>',
+                    unsafe_allow_html=True,
+                )
                 c1, c2, c3 = st.columns(3)
                 with c1:
-                    if st.button("Restore to Active", key=f"restore_s_{s['id']}", type="primary"):
+                    if st.button("♻️ Restore to Active",
+                                 key=f"restore_s_{s['id']}", type="primary",
+                                 help="Return student to active — they will reappear in Goal Builder and tracking"):
                         sb.table("smartar_students").update({"active": True}).eq("id", s["id"]).execute()
-                        st.success("Restored.")
+                        st.success("✅ Restored to active.")
                         st.rerun()
                 with c2:
-                    if st.button("Mark Placement Ended", key=f"end_s_{s['id']}"):
-                        sb.table("smartar_students").update({"active": False, "placement_ended": True}).eq("id", s["id"]).execute()
-                        st.success("Marked as placement ended.")
-                        st.rerun()
+                    if st.button("🏁 End Placement",
+                                 key=f"end_s_{s['id']}",
+                                 help="Student has left CLC — data preserved permanently, no longer tracked"):
+                        st.session_state[f"confirm_end_s_{s['id']}"] = True
                 with c3:
-                    if st.button("🗑 Permanently Delete", key=f"del_s_{s['id']}"):
+                    if st.button("🗑 Permanently Delete",
+                                 key=f"del_s_{s['id']}",
+                                 help="For students entered in error — removes all data and cannot be undone"):
                         st.session_state[f"confirm_delete_s_{s['id']}"] = True
 
+                # End Placement confirmation
+                if st.session_state.get(f"confirm_end_s_{s['id']}"):
+                    st.markdown(
+                        f'<div class="period-box">🏁 <b>End placement for {s["student_name"]}?</b><br>'
+                        f'All goals and tracking data will be preserved permanently in the archive. '
+                        f'The student will no longer appear in Goal Builder, tracking, or reports.</div>',
+                        unsafe_allow_html=True,
+                    )
+                    _ea, _eb = st.columns(2)
+                    with _ea:
+                        if st.button("Yes — end placement",
+                                     key=f"end_s_conf_{s['id']}", type="primary"):
+                            sb.table("smartar_students").update({
+                                "active": False, "placement_ended": True
+                            }).eq("id", s["id"]).execute()
+                            st.session_state.pop(f"confirm_end_s_{s['id']}", None)
+                            st.success(f"🏁 {s['student_name']} — placement ended. Data preserved.")
+                            st.rerun()
+                    with _eb:
+                        if st.button("Cancel", key=f"end_s_cancel_{s['id']}"):
+                            st.session_state.pop(f"confirm_end_s_{s['id']}", None)
+                            st.rerun()
+
+                # Permanent delete confirmation
                 if st.session_state.get(f"confirm_delete_s_{s['id']}"):
                     st.markdown(
                         f'<div class="alert-box">⚠️ <b>Permanently delete {s["student_name"]}?</b><br>'
-                        f'This will delete the student record, <b>all goals</b>, and <b>all tracking data</b>. '
-                        f'This cannot be undone.</div>',
+                        f'Use this only if the student was <b>entered in error</b>. '
+                        f'This will permanently remove the student record, <b>all goals</b>, '
+                        f'and <b>all tracking data</b>. This cannot be undone.</div>',
                         unsafe_allow_html=True,
                     )
                     _da, _db = st.columns(2)
                     with _da:
-                        if st.button(f"Yes, permanently delete {s['student_name']}",
+                        if st.button(f"Yes — permanently delete",
                                      key=f"del_s_conf_{s['id']}", type="primary"):
                             try:
-                                # Cascade: tracking → goals → student
                                 _del_goals = sb.table("smartar_goals").select("id").eq(
                                     "student_name", s["student_name"]
                                 ).execute().data or []
@@ -2344,7 +2469,7 @@ elif view == "⚙️ Admin Panel":
                                     "id", s["id"]
                                 ).execute()
                                 st.session_state.pop(f"confirm_delete_s_{s['id']}", None)
-                                st.success(f"✅ {s['student_name']} and all associated data permanently deleted.")
+                                st.success(f"✅ {s['student_name']} and all data permanently deleted.")
                                 st.rerun()
                             except Exception as _de:
                                 st.error(f"Delete error: {_de}")
