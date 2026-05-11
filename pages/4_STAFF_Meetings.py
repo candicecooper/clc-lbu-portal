@@ -549,87 +549,114 @@ with tab1:
                 placeholder=f"Add information/updates for {item}..."
             )
     
-    # Additional agenda items
-    st.write("**Additional Items:**")
-    
-    # Initialize additional_items FIRST (before Load button)
+    # ── ADDITIONAL AGENDA ITEMS ───────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 📋 Additional Agenda Items")
+
+    # Initialise in agenda_data
     if 'additional_agenda' not in agenda_data:
         agenda_data['additional_agenda'] = []
-    
-    additional_items = agenda_data.get('additional_agenda', [])
-    
-    # Load pending agenda items from staff
-    col_load1, col_load2 = st.columns([1, 3])
+
+    # Use session state as the live list so changes survive widget rerenders
+    ss_key = f"addl_items_{st.session_state.current_staff_meeting_id or 'new'}"
+    if ss_key not in st.session_state:
+        st.session_state[ss_key] = list(agenda_data.get('additional_agenda', []))
+
+    additional_items = st.session_state[ss_key]
+
+    # ── Load Staff Submissions button ─────────────────────────────────────────
+    col_load1, col_load2 = st.columns([2, 3])
     with col_load1:
-        if st.button("📥 Load Staff Submissions", key="load_pending_items", type="secondary"):
+        if st.button("📥 Load Staff Submissions", key="load_pending_items", type="secondary",
+                     use_container_width=True):
             try:
-                loaded_count = 0
-                loaded_ids = []
-                
-                # Load from OPERATIONAL database (where items actually are)
-                try:
-                    pending_result = supabase_ops.table('staff_agenda_items').select('*').eq('status', 'pending').execute()
-                    
-                    if pending_result.data:
-                        for item in pending_result.data:
-                            item_text = f"{item['item_text']} (submitted by {item['submitted_by']})"
-                            if item_text not in additional_items:
-                                additional_items.append(item_text)
-                                loaded_ids.append(item['id'])
-                                loaded_count += 1
-                except Exception as e:
-                    st.error(f"Error loading items: {e}")
-                
-                if loaded_count > 0:
-                    agenda_data['additional_agenda'] = additional_items
-                    
-                    # Mark items as added in operational DB
-                    for item_id in loaded_ids:
-                        try:
-                            supabase_ops.table('staff_agenda_items').update({'status': 'added'}).eq('id', item_id).execute()
-                        except:
-                            pass
-                    
-                    # Save updated agenda_data to the meeting record NOW so it survives rerun
+                pending_result = supabase_ops.table('staff_agenda_items') \
+                                             .select('*').eq('status', 'pending').execute()
+                if pending_result.data:
+                    loaded_count = 0
+                    for item in pending_result.data:
+                        label = f"📌 {item['item_text']}  — submitted by {item['submitted_by']}"
+                        if label not in additional_items:
+                            additional_items.append(label)
+                            loaded_count += 1
+                        supabase_ops.table('staff_agenda_items') \
+                                    .update({'status': 'added'}).eq('id', item['id']).execute()
+
+                    st.session_state[ss_key] = additional_items
+
                     if st.session_state.current_staff_meeting_id:
-                        try:
-                            supabase.table('staff_meetings').update({
-                                "agenda_items": json.dumps(agenda_data)
-                            }).eq('id', st.session_state.current_staff_meeting_id).execute()
-                        except Exception as save_err:
-                            st.warning(f"Items loaded but could not auto-save: {save_err}")
+                        agenda_data['additional_agenda'] = additional_items
+                        supabase.table('staff_meetings').update({
+                            "agenda_items": json.dumps(agenda_data)
+                        }).eq('id', st.session_state.current_staff_meeting_id).execute()
 
-                    # ← KEY FIX: override session state so the text area shows the new items
-                    st.session_state['simple_agenda_items'] = "\n".join(additional_items)
-
-                    st.success(f"✅ Loaded {loaded_count} agenda item(s)!")
+                    if loaded_count:
+                        st.success(f"✅ {loaded_count} item(s) loaded!")
+                    else:
+                        st.info("No new pending submissions.")
                     st.rerun()
                 else:
-                    st.info("No pending agenda items found")
-                    
+                    st.info("No pending agenda items found.")
             except Exception as e:
-                st.error(f"⚠️ Error: {e}")
-    
+                st.error(f"Error: {e}")
     with col_load2:
-        st.caption("Load agenda items submitted by staff for this week")
-    
-    # EMERGENCY SIMPLE VERSION - Just type items, one per line
-    st.write("**Type agenda items below (one per line):**")
-    
-    default_items = "\n".join(additional_items) if additional_items else ""
-    items_text = st.text_area(
-        "Additional Agenda Items",
-        value=default_items,
-        height=150,
-        placeholder="Type each agenda item on a new line...\n\nExample:\nSpeech Buy In Support - Catherine\nSmartar Goal tracking\nWHS update",
-        help="Just type your agenda items here - one per line. No buttons needed.",
-        key="simple_agenda_items"
-    )
-    
-    # Convert text back to list
-    additional_items = [line.strip() for line in items_text.split('\n') if line.strip()]
+        st.caption("Pulls items submitted by staff via the Submit Agenda Item tool")
+
+    st.write("")
+
+    # ── Display current items as cards ────────────────────────────────────────
+    if additional_items:
+        st.markdown(
+            f'<div style="font-size:13px;color:#6b7280;margin-bottom:8px;">'
+            f'{len(additional_items)} item(s) on agenda</div>',
+            unsafe_allow_html=True
+        )
+        items_to_remove = []
+        for i, item_text in enumerate(additional_items):
+            col_item, col_del = st.columns([11, 1])
+            with col_item:
+                st.markdown(
+                    f'<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;'
+                    f'padding:10px 14px;font-family:Segoe UI,Arial,sans-serif;font-size:14px;'
+                    f'color:#14532d;margin-bottom:4px;">{item_text}</div>',
+                    unsafe_allow_html=True
+                )
+            with col_del:
+                if st.button("✕", key=f"remove_item_{i}", help="Remove this item"):
+                    items_to_remove.append(i)
+
+        if items_to_remove:
+            for idx in sorted(items_to_remove, reverse=True):
+                additional_items.pop(idx)
+            st.session_state[ss_key] = additional_items
+            st.rerun()
+    else:
+        st.markdown(
+            '<div style="background:#f9fafb;border:1px dashed #d1d5db;border-radius:8px;'
+            'padding:16px;text-align:center;color:#9ca3af;font-size:13px;">'
+            'No additional items yet — load staff submissions or add one below</div>',
+            unsafe_allow_html=True
+        )
+
+    # ── Manual add ────────────────────────────────────────────────────────────
+    st.write("")
+    col_new, col_add = st.columns([4, 1])
+    with col_new:
+        new_item = st.text_input("Add an agenda item", key="new_agenda_item",
+                                 placeholder="Type item and click Add →",
+                                 label_visibility="collapsed")
+    with col_add:
+        if st.button("➕ Add", key="add_agenda_item", use_container_width=True):
+            if new_item.strip():
+                additional_items.append(new_item.strip())
+                st.session_state[ss_key] = additional_items
+                st.session_state['new_agenda_item'] = ""
+                st.rerun()
+
+    # Keep agenda_data in sync with session state list
+    additional_items = st.session_state[ss_key]
     agenda_data['additional_agenda'] = additional_items
-    
+
     st.markdown("---")
     
     # ══════════════════════════════════════════════════════════════════════════════
