@@ -1077,130 +1077,160 @@ def render_program_meeting(program):
         priority_rows = []
 
     else:  # Week B - System Lens
-        st.markdown("#### ⏱ 10–30 min | CLC PRIORITY FOCUS — Implementation Fidelity")
+        st.markdown("#### ⏱ 10–45 min | WEEK B — SYSTEM LENS")
         st.caption("Align to: Implementation Plan · PDP Focus Areas · LBU Priorities")
 
         priority_key = f"pm_priority_{program}"
-        # Migrate legacy list format → dict with free text
+
+        # Initialise from saved record if first load
         if priority_key not in st.session_state:
-            # Try to load existing priority_focus from selected_record
             raw_pf = selected_record.get('priority_focus', '') if selected_record else ''
-            existing_text = ""
+            existing_focus = ""
             if raw_pf:
                 try:
                     import json as _json_pf
                     pf_data = _json_pf.loads(raw_pf)
                     if isinstance(pf_data, dict):
-                        existing_text = pf_data.get("notes", "")
+                        existing_focus = pf_data.get("notes", "")
                     elif isinstance(pf_data, list) and pf_data:
-                        # Legacy row format — convert to readable text block
                         lines = []
                         for r in pf_data:
                             if isinstance(r, dict):
                                 parts = [v for v in r.values() if v]
                                 if parts:
                                     lines.append("• " + " | ".join(parts))
-                        existing_text = "\n".join(lines)
+                        existing_focus = "\n".join(lines)
                 except Exception:
-                    existing_text = str(raw_pf)
-            st.session_state[priority_key] = {"notes": existing_text}
+                    existing_focus = str(raw_pf)
+            st.session_state[priority_key] = {"notes": existing_focus}
 
         priority_store = st.session_state[priority_key]
         if not isinstance(priority_store, dict):
             priority_store = {"notes": ""}
             st.session_state[priority_key] = priority_store
 
-        # ── Main free-text focus area ──────────────────────────────────────
-        st.markdown("**📝 Focus Area Notes**")
-        st.caption("Type freely — what was the focus, what's working, gaps, adjustments, who owns what.")
-        priority_store["notes"] = st.text_area(
+        # ── SINGLE TRANSCRIPT DROP ZONE ────────────────────────────────────
+        st.markdown("**📋 Drop Transcript / Raw Notes**")
+        st.caption(
+            "Paste a voice transcript, rough notes, or dot points from the whole meeting. "
+            "AI will read it and split content into the **Focus Area** summary and **Meeting Minutes** below."
+        )
+        transcript_raw = st.text_area(
+            "Transcript",
+            height=200,
+            key=f"pr_transcript_{program}",
+            label_visibility="collapsed",
+            placeholder=(
+                "Paste full meeting transcript or rough notes here…\n\n"
+                "e.g. 'We talked about BSEM implementation — Brenton said check-ins are happening but "
+                "not all staff using the language consistently. Candice to model it next week. "
+                "Also discussed upcoming reports — due end of week 8. Tom will send the template out by Thursday.'"
+            )
+        )
+
+        if st.button("✨ Process with AI → Split into Focus Area + Minutes", key=f"pr_groq_{program}", type="primary"):
+            if transcript_raw.strip():
+                if GROQ_KEY:
+                    with st.spinner("Reading transcript and sorting content…"):
+                        try:
+                            _groq_client = Groq(api_key=GROQ_KEY)
+                            _prompt = f"""You are a professional minute-taker for Cowandilla Learning Centre (CLC), Learning & Behaviour Unit — an alternative education school in South Australia.
+
+A raw transcript or rough notes from a Week B 'System Lens' team meeting for the {PROGRAMS[program]['label']} program is provided below.
+
+Your job: Read the full transcript and produce TWO clearly separated sections.
+
+---
+SECTION 1 — FOCUS AREA SUMMARY
+Extract anything about implementation fidelity, frameworks, staff practice, LBU priorities, or systemic/program concerns. Format as:
+
+FOCUS AREA: [topic]
+WHAT'S WORKING: [strengths observed]
+GAP IDENTIFIED: [what needs attention]
+ADJUSTMENT / NEXT STEP: [what will change and how]
+EVIDENCE TO COLLECT: [how progress will be measured]
+WHO & WHEN: [responsible person and timeline]
+
+Repeat for each distinct focus area discussed.
+
+---
+SECTION 2 — MEETING MINUTES
+Everything else — general discussion, decisions, announcements, upcoming events, staff matters, reports, TAC, transitions, any other business. Format as clear professional minutes with numbered items.
+
+Rules:
+- Trauma-informed, strengths-based, plain English
+- Preserve ALL factual content — do not add or fabricate anything
+- Be concise — one sentence per point unless more detail is essential
+- Clearly label the two sections with the headings above
+
+RAW TRANSCRIPT:
+{transcript_raw}"""
+                            _resp = _groq_client.chat.completions.create(
+                                model="llama-3.3-70b-versatile",
+                                messages=[{"role": "user", "content": _prompt}],
+                                max_tokens=3000
+                            )
+                            full_output = _resp.choices[0].message.content
+
+                            # Split on the SECTION 2 heading
+                            split_markers = [
+                                "SECTION 2 — MEETING MINUTES",
+                                "SECTION 2 - MEETING MINUTES",
+                                "---\nSECTION 2",
+                                "\n\nSECTION 2",
+                            ]
+                            focus_text = full_output
+                            minutes_text = ""
+                            for marker in split_markers:
+                                if marker in full_output:
+                                    parts = full_output.split(marker, 1)
+                                    focus_text = parts[0].replace("SECTION 1 — FOCUS AREA SUMMARY", "").replace("SECTION 1 - FOCUS AREA SUMMARY", "").strip()
+                                    minutes_text = parts[1].strip()
+                                    break
+
+                            # Write to pending keys — never touch widget keys directly
+                            st.session_state[f"pr_notes_pending_{program}"] = focus_text
+                            st.session_state[f"pm_minutes_pending_{program}"] = minutes_text
+                            st.rerun()
+                        except Exception as _e:
+                            st.error(f"Groq error: {_e}")
+                else:
+                    st.warning("⚠️ Groq API key not configured.")
+            else:
+                st.warning("⚠️ Paste a transcript first.")
+
+        st.markdown("---")
+
+        # ── Focus Area notes (populated by AI or typed manually) ───────────
+        st.markdown("**📝 Focus Area Summary**")
+        st.caption("AI-populated from your transcript, or type freely. Edit before saving.")
+        _pf_pending = st.session_state.pop(f"pr_notes_pending_{program}", None)
+        _pf_val = _pf_pending if _pf_pending is not None else priority_store.get("notes", "")
+        _focus_notes = st.text_area(
             "Focus area notes",
-            value=priority_store.get("notes", ""),
-            height=220,
+            value=_pf_val,
+            height=200,
             key=f"pr_notes_{program}",
             label_visibility="collapsed",
             placeholder=(
                 "e.g.\n"
-                "FOCUS: Implementation fidelity — Regulate-Relate-Reason framework\n"
-                "WORKING: Morning regulation check-ins consistent across SY\n"
-                "GAP: Inconsistent use of Window of Tolerance language in SY afternoon sessions\n"
-                "ADJUSTMENT: Candice to model WoT language in SY team meeting next week\n"
-                "EVIDENCE: Student regulation data from Scatter Plot — Brenton by W7"
+                "FOCUS AREA: BSEM implementation fidelity\n"
+                "WHAT'S WORKING: Morning check-ins happening consistently\n"
+                "GAP: WoT language not yet embedded in afternoon sessions\n"
+                "ADJUSTMENT: Candice to model language at next team meeting\n"
+                "EVIDENCE: Scatter Plot regulation data — Brenton by W7"
             )
         )
+        # Keep priority_store in sync for save
+        priority_store["notes"] = _focus_notes
+        st.session_state[priority_key] = priority_store
 
-        # ── Transcript drop + Groq recalibration ──────────────────────────
-        with st.expander("📋 Drop Transcript / Raw Notes → Recalibrate with AI", expanded=False):
-            st.caption(
-                "Paste rough notes, a voice transcript, or bullet points. "
-                "Groq will reshape them into structured focus-area minutes."
-            )
-            transcript_raw = st.text_area(
-                "Paste transcript or raw notes here",
-                height=180,
-                key=f"pr_transcript_{program}",
-                label_visibility="collapsed",
-                placeholder="Paste meeting transcript, voice-to-text, or rough dot points here..."
-            )
-            if st.button("✨ Recalibrate with AI", key=f"pr_groq_{program}", type="primary"):
-                if transcript_raw.strip():
-                    if GROQ_KEY:
-                        with st.spinner("Recalibrating with Groq…"):
-                            try:
-                                _groq_client = Groq(api_key=GROQ_KEY)
-                                _prompt = f"""You are a professional minute-taker for Cowandilla Learning Centre (CLC), Learning & Behaviour Unit — an alternative education setting in South Australia.
-
-The following is a raw transcript or rough notes from a Week B 'System Lens' team meeting for the {PROGRAMS[program]['label']} program.
-
-Your job: Transform these notes into clear, structured focus-area minutes. Use this format:
-
-FOCUS AREA: [what was discussed]
-WHAT'S WORKING: [strengths, positives]
-GAP IDENTIFIED: [what needs attention]
-ADJUSTMENT / NEXT STEP: [specific action or change]
-EVIDENCE TO COLLECT: [how progress will be measured]
-WHO & WHEN: [responsible person and timeline]
-
-Rules:
-- Use professional but warm, plain-English language
-- Trauma-informed, strengths-based framing
-- Preserve ALL factual content — do not add or fabricate
-- If multiple focus areas were discussed, repeat the structure for each
-- Keep it concise and actionable
-
-Raw input:
-{transcript_raw}"""
-                                _resp = _groq_client.chat.completions.create(
-                                    model="llama-3.3-70b-versatile",
-                                    messages=[{"role": "user", "content": _prompt}],
-                                    max_tokens=2000
-                                )
-                                recalibrated = _resp.choices[0].message.content
-                                # Append to existing notes or replace if empty
-                                if priority_store.get("notes", "").strip():
-                                    priority_store["notes"] = (
-                                        priority_store["notes"].strip()
-                                        + "\n\n--- AI Recalibration ---\n"
-                                        + recalibrated
-                                    )
-                                else:
-                                    priority_store["notes"] = recalibrated
-                                st.session_state[priority_key] = priority_store
-                                st.success("✅ Recalibrated! Review and edit above before saving.")
-                                st.rerun()
-                            except Exception as _e:
-                                st.error(f"Groq error: {_e}")
-                    else:
-                        st.warning("⚠️ Groq API key not configured — cannot recalibrate.")
-                else:
-                    st.warning("⚠️ Paste some content first.")
-
-        # priority_rows used downstream for save — wrap in list for compatibility
-        priority_rows = [{"notes": priority_store.get("notes", "")}]
+        # priority_rows used downstream for save
+        priority_rows = [{"notes": _focus_notes}]
         st.markdown("---")
 
         # SMARTAR for Week B (same as Week A)
-        st.markdown("#### ⏱ 30–45 min | SMARTAR GOAL SPOTLIGHT — 4 Students")
+        st.markdown("#### ⏱ SMARTAR GOAL SPOTLIGHT — 4 Students")
         st.caption("Click student name to open Goal Builder, or add new student")
 
         if not st.session_state.current_meeting_id:
@@ -1320,15 +1350,18 @@ Raw input:
         concerns = []
 
     st.markdown("---")
-    
+
     # MEETING MINUTES / NOTES SECTION
     st.markdown("#### 📝 MEETING MINUTES / NOTES")
-    st.caption("Comprehensive meeting notes - discussions, decisions, key points raised")
-    
+    st.caption("For Week B: AI-populated from transcript above. For Week A: type manually. Edit freely before saving.")
+
     default_minutes = selected_record.get('meeting_minutes', '') if selected_record else ''
+    # Pending key carries AI output from transcript processor without touching the widget key
+    _min_pending = st.session_state.pop(f"pm_minutes_pending_{program}", None)
+    _min_val = _min_pending if _min_pending is not None else default_minutes
     pm_minutes = st.text_area(
         "Meeting minutes",
-        value=default_minutes,
+        value=_min_val,
         height=200,
         key=f"pm_minutes_{program}",
         label_visibility="collapsed",
