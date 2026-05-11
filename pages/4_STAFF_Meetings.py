@@ -276,9 +276,11 @@ with tab2:
                         pass
                 
                 # Show PD information if present
-                if meeting.get('pd_notes') or meeting.get('pd_attendees'):
+                if meeting.get('pd_notes') or meeting.get('pd_attendees') or meeting.get('pd_title'):
                     st.markdown("---")
                     st.write("**🎓 Professional Development:**")
+                    if meeting.get('pd_title'):
+                        st.write(f"**Session Title:** {meeting['pd_title']}")
                     if meeting.get('pd_attendees'):
                         st.write(f"**PD Attendees:** {meeting['pd_attendees']}")
                     if meeting.get('pd_absent'):
@@ -1052,8 +1054,12 @@ st.markdown("---")
 st.subheader("🎓 Professional Development Component")
 
 with st.expander("📚 PD Session Details", expanded=True):
-    
-    # PD Attendance (auto-populated but editable)
+
+    # PD Title
+    default_pd_title = selected_record.get('pd_title', '') if selected_record else ''
+    pd_title = st.text_input("PD Session Title", value=default_pd_title, key="pd_title",
+                             placeholder="e.g. Sounds-Write Introduction, Berry Street Module 3, WHS Refresher…")
+
     st.write("**PD Attendance** (Auto-filled from meeting attendance - edit if needed)")
     
     col_pd1, col_pd2 = st.columns(2)
@@ -1237,6 +1243,7 @@ if st.button("💾 Save Meeting", type="primary", use_container_width=True, key=
         "pd_attendees": pd_attendees.strip(),
         "pd_absent": pd_absent.strip(),
         "pd_notes": pd_notes.strip() if pd_notes else '',
+        "pd_title": pd_title.strip() if pd_title else '',
         "pd_attachments": json.dumps(pd_attachments) if pd_attachments else '[]'
     }
     
