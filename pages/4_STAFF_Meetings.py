@@ -575,12 +575,21 @@ with tab1:
                 if loaded_count > 0:
                     agenda_data['additional_agenda'] = additional_items
                     
-                    # Update status to 'added'
+                    # Mark items as added in operational DB
                     for item_id in loaded_ids:
                         try:
                             supabase_ops.table('staff_agenda_items').update({'status': 'added'}).eq('id', item_id).execute()
                         except:
                             pass
+                    
+                    # Save updated agenda_data to the meeting record NOW so it survives rerun
+                    if st.session_state.current_staff_meeting_id:
+                        try:
+                            supabase.table('staff_meetings').update({
+                                "agenda_items": json.dumps(agenda_data)
+                            }).eq('id', st.session_state.current_staff_meeting_id).execute()
+                        except Exception as save_err:
+                            st.warning(f"Items loaded but could not auto-save: {save_err}")
                     
                     st.success(f"✅ Loaded {loaded_count} agenda item(s)!")
                     st.rerun()
