@@ -1528,9 +1528,8 @@ def render_meeting_archive(program):
         else:
             header = f"🎨 Specialist | {meeting_date} | Term {term} W{week_num} | {facilitator}"
 
-        with st.expander(header, expanded=False):
-
-            in_edit_mode = st.session_state.get(edit_key, False)
+        in_edit_mode = st.session_state.get(edit_key, False)
+        with st.expander(header, expanded=in_edit_mode):
 
             if not in_edit_mode:
                 # ── READ VIEW ──────────────────────────────────────────────
