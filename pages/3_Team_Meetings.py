@@ -232,9 +232,9 @@ Raw input:
 {raw_text}"""
 
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="llama-3.1-8b-instant",
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=4000
+        max_tokens=1800
     )
     return response.choices[0].message.content
 
@@ -1166,9 +1166,9 @@ Rules:
 RAW TRANSCRIPT:
 {transcript_raw}"""
                             _resp = _groq_client.chat.completions.create(
-                                model="llama-3.3-70b-versatile",
+                                model="llama-3.1-8b-instant",
                                 messages=[{"role": "user", "content": _prompt}],
-                                max_tokens=3000
+                                max_tokens=2000
                             )
                             full_output = _resp.choices[0].message.content
 
@@ -1707,12 +1707,12 @@ def render_meeting_archive(program):
                                     try:
                                         _gc = Groq(api_key=GROQ_KEY)
                                         _r = _gc.chat.completions.create(
-                                            model="llama-3.3-70b-versatile",
+                                            model="llama-3.1-8b-instant",
                                             messages=[{"role": "user", "content":
                                                 f"Transform these rough meeting notes into structured CLC focus-area minutes. "
                                                 f"Use headings: FOCUS AREA, WHAT'S WORKING, GAP, ADJUSTMENT, EVIDENCE, WHO & WHEN. "
                                                 f"Trauma-informed, strengths-based, plain English. Preserve all facts.\n\n{arch_transcript}"}],
-                                            max_tokens=1500
+                                            max_tokens=1200
                                         )
                                         _new_text = _r.choices[0].message.content
                                         # Write to pending key AND delete widget key so value= re-applies
@@ -1781,12 +1781,12 @@ def render_meeting_archive(program):
                                 try:
                                     _gc2 = Groq(api_key=GROQ_KEY)
                                     _r2 = _gc2.chat.completions.create(
-                                        model="llama-3.3-70b-versatile",
+                                        model="llama-3.1-8b-instant",
                                         messages=[{"role": "user", "content":
                                             f"Transform these notes into polished professional meeting minutes for "
                                             f"Cowandilla Learning Centre ({PROGRAMS[program]['label']} team meeting, {meeting_date}). "
                                             f"Structured, trauma-informed, plain English. Preserve all facts.\n\n{arch_min_transcript}"}],
-                                        max_tokens=2500
+                                        max_tokens=1800
                                     )
                                     _new_min = _r2.choices[0].message.content
                                     # Write to pending key AND delete widget key so value= re-applies
