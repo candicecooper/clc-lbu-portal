@@ -1646,9 +1646,13 @@ def render_meeting_archive(program):
                                 existing_pf = "\n".join(lines)
                         except Exception:
                             existing_pf = str(raw_pf)
+                    _pf_pk = f"arch_pf_pending_{meeting_id}"
+                    _pf_val = st.session_state.pop(_pf_pk, None)
+                    if _pf_val is None:
+                        _pf_val = existing_pf
                     ed_pf = st.text_area(
                         "Priority focus",
-                        value=existing_pf,
+                        value=_pf_val,
                         height=160,
                         key=f"arch_pf_{meeting_id}",
                         label_visibility="collapsed",
@@ -1677,7 +1681,9 @@ def render_meeting_archive(program):
                                             max_tokens=1500
                                         )
                                         _new_text = _r.choices[0].message.content
-                                        st.session_state[f"arch_pf_{meeting_id}"] = (ed_pf + "\n\n--- AI ---\n" + _new_text).strip() if ed_pf.strip() else _new_text
+                                        # Write to pending key — NOT the widget key
+                                        _pf_pk = f"arch_pf_pending_{meeting_id}"
+                                        st.session_state[_pf_pk] = (ed_pf + "\n\n--- AI ---\n" + _new_text).strip() if ed_pf.strip() else _new_text
                                         st.rerun()
                                     except Exception as _e:
                                         st.error(f"Groq error: {_e}")
@@ -1711,9 +1717,14 @@ def render_meeting_archive(program):
                 # ── Meeting minutes ──
                 st.markdown("**📝 Meeting Minutes**")
                 st.caption("Edit existing minutes or append new content — add your notes at the bottom.")
+                # Pending key carries Groq output across reruns without touching the widget key
+                _min_pk = f"arch_minutes_pending_{meeting_id}"
+                _min_val = st.session_state.pop(_min_pk, None)
+                if _min_val is None:
+                    _min_val = meeting.get('meeting_minutes', '')
                 ed_minutes = st.text_area(
                     "Meeting minutes",
-                    value=meeting.get('meeting_minutes',''),
+                    value=_min_val,
                     height=280,
                     key=f"arch_minutes_{meeting_id}",
                     label_visibility="collapsed",
@@ -1743,7 +1754,8 @@ def render_meeting_archive(program):
                                         max_tokens=2500
                                     )
                                     _new_min = _r2.choices[0].message.content
-                                    st.session_state[f"arch_minutes_{meeting_id}"] = (
+                                    # Write to pending key — NOT the widget key
+                                    st.session_state[_min_pk] = (
                                         (ed_minutes + "\n\n--- AI Generated ---\n" + _new_min).strip()
                                         if ed_minutes.strip() else _new_min
                                     )
