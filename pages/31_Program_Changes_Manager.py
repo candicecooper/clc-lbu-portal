@@ -58,6 +58,8 @@ if 'num_blocks' not in st.session_state:
     st.session_state.num_blocks = 1
 if 'show_mobile_view' not in st.session_state:
     st.session_state.show_mobile_view = False
+if 'pending_edit_preload' not in st.session_state:
+    st.session_state.pending_edit_preload = False
 
 # Staff list — Tom replaces "New Teacher (TBD)"
 STAFF_LIST = [
@@ -70,6 +72,62 @@ PROGRAM_OPTIONS = [
     "JP", "PY", "SY", "NIT", "PRT",
     "Meeting", "Own Lunch", "Lunch Release", "Other"
 ]
+
+# ─────────────────────────────────────────────
+# Edit pre-population — MUST run before any widget is instantiated.
+# When an edit button is clicked we set pending_edit_preload=True and rerun.
+# On the very next run this block fires first, writes all widget keys, then
+# clears the flag so it only applies once.
+# ─────────────────────────────────────────────
+if st.session_state.pending_edit_preload and st.session_state.editing_change_data:
+    _ed = st.session_state.editing_change_data
+    _edit_staff = _ed.get('staff_name', '')
+
+    # Radio + staff selector
+    if _edit_staff in STAFF_LIST:
+        st.session_state['staff_type_selector'] = "Regular Staff"
+        st.session_state['staff_select_main'] = _edit_staff
+    else:
+        st.session_state['staff_type_selector'] = "TRT/Relief"
+        st.session_state['trt_name_main'] = _edit_staff
+
+    # Reason / notes / covered_by
+    st.session_state['form_reason'] = _ed.get('reason', '')
+    st.session_state['form_covered_by'] = _ed.get('covered_by') or ''
+    st.session_state['form_notes'] = _ed.get('notes') or ''
+
+    # Time blocks
+    _edit_blocks = _ed.get('time_blocks', [])
+    st.session_state.num_blocks = max(1, len(_edit_blocks))
+    for _i, _blk in enumerate(_edit_blocks):
+        _prog = _blk.get('program_type', 'JP')
+        _rb = _blk.get('released_by', '')
+
+        # parse_time not yet defined here — inline the logic
+        def _pt(ts):
+            try:
+                if isinstance(ts, time):
+                    return ts
+                parts = str(ts).split(':')
+                return time(int(parts[0]), int(parts[1]))
+            except Exception:
+                return time(9, 0)
+
+        st.session_state[f'start_{_i}'] = _pt(_blk.get('start_time', '09:00:00'))
+        st.session_state[f'end_{_i}'] = _pt(_blk.get('end_time', '10:00:00'))
+        st.session_state[f'program_type_{_i}'] = (
+            _prog if _prog in PROGRAM_OPTIONS else PROGRAM_OPTIONS[0]
+        )
+        _release_options = ["N/A"] + [s for s in STAFF_LIST if s != _edit_staff]
+        if _rb in STAFF_LIST:
+            st.session_state[f'released_by_{_i}'] = _rb
+            st.session_state[f'released_by_manual_{_i}'] = ''
+        else:
+            st.session_state[f'released_by_{_i}'] = 'N/A'
+            st.session_state[f'released_by_manual_{_i}'] = _rb
+
+    # Clear flag — preload done
+    st.session_state.pending_edit_preload = False
 
 # ─────────────────────────────────────────────
 # Helper functions
@@ -674,41 +732,10 @@ else:
                 if change.get('covered_by'):
                     st.markdown(f"**Covered by:** {change.get('covered_by')}")
             with col2:
-                if st.button("✏️ Edit", key=f"edit_{change['id']}", use_container_width=True):
-                    # Store editing context
+                if st.button("\u270f\ufe0f Edit", key=f"edit_{change['id']}", use_container_width=True):
                     st.session_state.editing_change_id = change['id']
                     st.session_state.editing_change_data = change
-
-                    # Pre-populate staff selector
-                    edit_staff = change.get('staff_name', '')
-                    if edit_staff in STAFF_LIST:
-                        st.session_state['staff_type_selector'] = "Regular Staff"
-                        st.session_state['staff_select_main'] = edit_staff
-                    else:
-                        st.session_state['staff_type_selector'] = "TRT/Relief"
-                        st.session_state['trt_name_main'] = edit_staff
-
-                    # Pre-populate reason / notes / covered_by
-                    st.session_state['form_reason'] = change.get('reason', '')
-                    st.session_state['form_covered_by'] = change.get('covered_by') or ''
-                    st.session_state['form_notes'] = change.get('notes') or ''
-
-                    # Pre-populate time blocks
-                    edit_blocks = change.get('time_blocks', [])
-                    st.session_state.num_blocks = max(1, len(edit_blocks))
-                    for i, block in enumerate(edit_blocks):
-                        st.session_state[f'start_{i}'] = parse_time(block.get('start_time', '09:00:00'))
-                        st.session_state[f'end_{i}'] = parse_time(block.get('end_time', '10:00:00'))
-                        prog = block.get('program_type', 'JP')
-                        st.session_state[f'program_type_{i}'] = prog if prog in PROGRAM_OPTIONS else PROGRAM_OPTIONS[0]
-                        stored_rb = block.get('released_by', '')
-                        if stored_rb in STAFF_LIST:
-                            st.session_state[f'released_by_{i}'] = stored_rb
-                            st.session_state[f'released_by_manual_{i}'] = ''
-                        else:
-                            st.session_state[f'released_by_{i}'] = 'N/A'
-                            st.session_state[f'released_by_manual_{i}'] = stored_rb
-
+                    st.session_state.pending_edit_preload = True
                     st.rerun()
 
             with col3:
