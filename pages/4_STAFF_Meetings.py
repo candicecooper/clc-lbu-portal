@@ -387,24 +387,39 @@ with tab1:
             
             # Get all notices for this edition
             notices_result = supabase_ops.table('notices').select('*').eq('edition_id', edition['id']).order('created_at').execute()
-            
+
+            is_draft = edition.get('status', 'draft') == 'draft'
+
+            # Status badge
+            if is_draft:
+                st.markdown(
+                    '<div style="background:#fef9c3;border:1px solid #fde047;border-radius:6px;'
+                    'padding:8px 14px;font-size:13px;color:#854d0e;margin-bottom:10px;">'
+                    '🟡 <strong>Bulletin is in draft</strong> — items are live here as they are added. '
+                    'Staff will see the full bulletin once you click Send.</div>',
+                    unsafe_allow_html=True
+                )
+            else:
+                st.markdown(
+                    '<div style="background:#dcfce7;border:1px solid #86efac;border-radius:6px;'
+                    'padding:8px 14px;font-size:13px;color:#14532d;margin-bottom:10px;">'
+                    '✅ <strong>Bulletin sent</strong> — all items confirmed.</div>',
+                    unsafe_allow_html=True
+                )
+
             if notices_result.data:
-                st.success(f"✅ {len(notices_result.data)} bulletin item(s) loaded from Staff Bulletin")
-                
-                # Display each notice
                 for notice in notices_result.data:
                     category = notice.get('category', 'general')
-                    author = notice.get('author', 'Staff')
-                    
+                    author   = notice.get('author', 'Staff')
                     with st.expander(f"📌 {notice['title']} ({category.upper()})"):
                         st.write(f"**From:** {author}")
                         st.write(f"**Category:** {category.title()}")
                         st.markdown("---")
                         st.write(notice.get('content', ''))
             else:
-                st.info("Bulletin published but no items added yet")
+                st.info("No bulletin items added yet — they will appear here as they are added in the Bulletin tool.")
 
-            # Allow admin to remove the bulletin link so it can be re-published
+            # Allow admin to remove the bulletin link
             st.write("")
             edition_id_str = str(edition['id'])
             if not st.session_state.get(f"mtg_unlink_confirm_{edition_id_str}"):
@@ -421,8 +436,8 @@ with tab1:
                         try:
                             supabase_ops.table('weekly_editions').update({
                                 "meeting_linked": False,
-                                "meeting_term": None,
-                                "meeting_week": None,
+                                "meeting_term":   None,
+                                "meeting_week":   None,
                             }).eq('id', edition['id']).execute()
                             st.session_state.pop(f"mtg_unlink_confirm_{edition_id_str}", None)
                             st.success("Bulletin removed from this meeting.")
@@ -436,7 +451,7 @@ with tab1:
                         st.rerun()
         else:
             st.info(f"ℹ️ No bulletin linked for {term_long} Week {int(week_number)} yet")
-            st.caption("Bulletin items appear here once you publish the bulletin and click 'Add to Meeting' in the Staff Bulletin tool")
+            st.caption("The bulletin will appear here automatically once the Staff Bulletin tool opens this week's edition.")
     
     except Exception as e:
         st.warning(f"Could not load bulletin: {e}")
