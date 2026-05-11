@@ -171,28 +171,15 @@ def db_get_or_create_edition():
         label  = edition_week_label(monday)
         res    = sb.table("weekly_editions").select("*").eq("week_start", monday.isoformat()).execute()
         if res.data:
-            edition = res.data[0]
-            # If not yet linked, auto-link now (catches editions created before this feature)
-            if not edition.get("meeting_linked"):
-                _auto_link_edition(edition)
-                res2 = sb.table("weekly_editions").select("*").eq("week_start", monday.isoformat()).execute()
-                return res2.data[0] if res2.data else edition
-            return edition
-
-        # Create fresh edition
+            return res.data[0]
         ins = sb.table("weekly_editions").insert({
             "week_start": monday.isoformat(),
             "week_label": label,
             "status":     "draft"
         }).execute()
-        edition = ins.data[0] if ins.data else None
-        if edition:
-            _auto_link_edition(edition)
-            # Reload to get updated meeting_linked fields
-            res3 = sb.table("weekly_editions").select("*").eq("id", edition["id"]).execute()
-            return res3.data[0] if res3.data else edition
-        return edition
-    except Exception:
+        return ins.data[0] if ins.data else None
+    except Exception as e:
+        st.error(f"Supabase error in db_get_or_create_edition: {e}")
         return None
 
 def _auto_link_edition(edition):
@@ -1061,27 +1048,35 @@ def show_compose():
 
     st.write("")
 
+    # ── Auto-link to staff meeting (safe, non-blocking) ──────────────────────
+    if not edition.get("meeting_linked"):
+        try:
+            _auto_link_edition(edition)
+            edition = db_get_or_create_edition() or edition
+        except Exception:
+            pass
+
     # Admin can always add items until bulletin is sent
     if not is_sent:
-        with st.expander("➕ Add Item", expanded=len(notices) == 0):
-            with st.form("add_item", clear_on_submit=True):
-                cat     = st.selectbox("Category", list(CAT_LABELS.keys()),
-                                       format_func=lambda x: CAT_LABELS[x])
-                title   = st.text_input("Subject / Title",
-                                        placeholder="e.g. Reminder: Staff PD next Friday")
-                content = st.text_area("Body", height=140,
-                                       placeholder="Write your message here...")
-                if st.form_submit_button("Add to Bulletin", type="primary", use_container_width=True):
-                    if not title.strip():
-                        st.error("Please enter a title.")
-                    elif not content.strip():
-                        st.error("Please enter a body.")
-                    else:
-                        db_create_notice(edition["id"], title.strip(), content.strip(),
-                                         cat, st.session_state.staff_name)
-                        st.success("Added")
-                        time.sleep(0.3)
-                        st.rerun()
+        st.markdown("#### ➕ Add Item")
+        with st.form("add_item", clear_on_submit=True):
+            cat     = st.selectbox("Category", list(CAT_LABELS.keys()),
+                                   format_func=lambda x: CAT_LABELS[x])
+            title   = st.text_input("Subject / Title",
+                                    placeholder="e.g. Reminder: Staff PD next Friday")
+            content = st.text_area("Body", height=140,
+                                   placeholder="Write your message here...")
+            if st.form_submit_button("Add to Bulletin", type="primary", use_container_width=True):
+                if not title.strip():
+                    st.error("Please enter a title.")
+                elif not content.strip():
+                    st.error("Please enter a body.")
+                else:
+                    db_create_notice(edition["id"], title.strip(), content.strip(),
+                                     cat, st.session_state.staff_name)
+                    st.success("Added ✅")
+                    time.sleep(0.3)
+                    st.rerun()
 
     if notices and not is_sent:
         st.markdown("---")
