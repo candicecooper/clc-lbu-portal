@@ -21,12 +21,78 @@ st.sidebar.markdown(
 )
 
 # ── Supabase ──────────────────────────────────────────────────────────────────
-# Use OPERATIONAL database (where all data lives)
+# Operational DB — stores staff_agenda_items
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 SUPABASE_SERVICE_KEY = st.secrets.get("SUPABASE_SERVICE_KEY", SUPABASE_KEY)
-
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+# Meetings DB — stores staff_meetings (auto-create upcoming meeting)
+SUPABASE_URL_MEETINGS = st.secrets.get("SUPABASE_URL_MEETINGS", SUPABASE_URL)
+SUPABASE_KEY_MEETINGS = st.secrets.get("SUPABASE_SERVICE_KEY_MEETINGS",
+                         st.secrets.get("SUPABASE_KEY_MEETINGS", SUPABASE_KEY))
+supabase_mtg = create_client(SUPABASE_URL_MEETINGS, SUPABASE_KEY_MEETINGS)
+
+# ── SA term/week helpers ──────────────────────────────────────────────────────
+import re as _re
+
+_TERM_STARTS_2026 = {
+    "T1": datetime.date(2026, 1, 27),
+    "T2": datetime.date(2026, 4, 27),
+    "T3": datetime.date(2026, 7, 20),
+    "T4": datetime.date(2026, 10, 12),
+}
+_TERM_ENDS_2026 = {
+    "T1": datetime.date(2026, 4, 11),
+    "T2": datetime.date(2026, 7, 4),
+    "T3": datetime.date(2026, 9, 26),
+    "T4": datetime.date(2026, 12, 12),
+}
+
+def _get_upcoming_term_week():
+    """Return (term_short, week_num, meeting_date) for the next school Monday."""
+    today = datetime.date.today()
+    # Find next Monday (or today if it's Monday)
+    days_ahead = (7 - today.weekday()) % 7
+    next_monday = today + datetime.timedelta(days=days_ahead if days_ahead else 7)
+    for term, start in _TERM_STARTS_2026.items():
+        end = _TERM_ENDS_2026[term]
+        if start <= next_monday <= end:
+            week_num = (next_monday - start).days // 7 + 1
+            return term, max(1, week_num), next_monday
+    # Fallback — closest term
+    for term, start in _TERM_STARTS_2026.items():
+        if next_monday < start:
+            return term, 1, start
+    return "T4", 1, next_monday
+
+def _ensure_staff_meeting(term: str, week_num: int, meeting_date: datetime.date):
+    """Create a staff meeting record if one doesn't exist for this term/week."""
+    import json
+    try:
+        existing = (supabase_mtg.table('staff_meetings')
+                    .select('id')
+                    .eq('term', term)
+                    .eq('week_number', week_num)
+                    .execute())
+        if existing.data:
+            return existing.data[0]['id'], False   # already exists
+        # Create a skeleton meeting
+        result = supabase_mtg.table('staff_meetings').insert({
+            "meeting_date": str(meeting_date),
+            "term": term,
+            "week_number": week_num,
+            "minute_taker": "",
+            "attendees": "",
+            "apologies": "",
+            "agenda_items": json.dumps({"additional_agenda": []}),
+            "minutes": "",
+            "actions": "[]",
+        }).execute()
+        if result.data:
+            return result.data[0]['id'], True   # newly created
+    except Exception as e:
+        return None, False
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HEADER
@@ -55,12 +121,15 @@ with col1:
     )
     
     col_a, col_b = st.columns(2)
-    
     with col_a:
-        term = st.text_input("Term (optional)", placeholder="T1, T2, etc.", key="term")
-    
+        term = st.selectbox("Term", options=["Auto-detect", "T1", "T2", "T3", "T4"],
+                            index=0, key="term",
+                            help="Leave as Auto-detect to target the upcoming school week")
+        term = "" if term == "Auto-detect" else term
     with col_b:
-        week_number = st.number_input("Week Number (optional)", min_value=0, max_value=11, value=0, key="week")
+        week_number = st.number_input("Week Number (0 = auto)", min_value=0, max_value=11,
+                                      value=0, key="week",
+                                      help="Leave as 0 to auto-detect the upcoming week")
     
     category = st.selectbox(
         "Category (optional)",
@@ -71,25 +140,72 @@ with col1:
     if st.button("📤 Submit Agenda Item", type="primary", use_container_width=True):
         if agenda_item.strip():
             try:
+                import json
+
+                # ── Work out which meeting this belongs to ────────────────────
+                # Use user-supplied term/week if provided, otherwise auto-detect
+                if term.strip() and week_number > 0:
+                    raw = _re.search(r'(\d)', term.strip())
+                    auto_term = f"T{raw.group(1)}" if raw else "T2"
+                    auto_week = week_number
+                    auto_date = _TERM_STARTS_2026.get(auto_term, datetime.date.today()) + \
+                                datetime.timedelta(weeks=auto_week - 1)
+                else:
+                    auto_term, auto_week, auto_date = _get_upcoming_term_week()
+
+                # ── Submit the agenda item to operational DB ──────────────────
                 submission_data = {
                     "submitted_by": staff_name,
                     "item_text": agenda_item.strip(),
                     "date_submitted": str(datetime.date.today()),
-                    "week_number": week_number if week_number > 0 else None,
-                    "term": term.strip() if term.strip() else None,
+                    "week_number": auto_week,
+                    "term": auto_term,
                     "status": "pending",
                     "category": category if category else None
                 }
-                
                 result = supabase.table('staff_agenda_items').insert(submission_data).execute()
-                
+
                 if result.data:
-                    st.success("✅ Your agenda item has been submitted!")
-                    st.info("It will appear in the next staff meeting agenda.")
+                    item_id = result.data[0]['id']
+
+                    # ── Ensure the staff meeting exists, create if not ─────────
+                    meeting_id, was_created = _ensure_staff_meeting(auto_term, auto_week, auto_date)
+
+                    if meeting_id:
+                        # Load current agenda_items for this meeting
+                        mtg = supabase_mtg.table('staff_meetings').select('agenda_items') \
+                                          .eq('id', meeting_id).execute()
+                        raw_agenda = mtg.data[0].get('agenda_items', '{}') if mtg.data else '{}'
+                        try:
+                            agenda = json.loads(raw_agenda) if isinstance(raw_agenda, str) else raw_agenda
+                        except Exception:
+                            agenda = {}
+                        additional = agenda.get('additional_agenda', [])
+
+                        # Add this item if not already there
+                        item_label = f"{agenda_item.strip()} (submitted by {staff_name})"
+                        if item_label not in additional:
+                            additional.append(item_label)
+                        agenda['additional_agenda'] = additional
+
+                        # Save back and mark item as 'added'
+                        supabase_mtg.table('staff_meetings').update({
+                            "agenda_items": json.dumps(agenda)
+                        }).eq('id', meeting_id).execute()
+                        supabase.table('staff_agenda_items').update({
+                            'status': 'added'
+                        }).eq('id', item_id).execute()
+
+                        if was_created:
+                            st.success(f"✅ Submitted! A new staff meeting has been created for {auto_term} Week {auto_week} ({auto_date}).")
+                        else:
+                            st.success(f"✅ Submitted and added to the {auto_term} Week {auto_week} staff meeting.")
+                    else:
+                        st.success("✅ Agenda item submitted! It will be loaded into the meeting manually.")
+
                     st.balloons()
-                    # Clear the form
                     st.rerun()
-            
+
             except Exception as e:
                 st.error(f"⚠️ Could not submit agenda item: {e}")
         else:
