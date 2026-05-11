@@ -985,7 +985,8 @@ def show_compose():
 
     notices  = db_get_notices(edition["id"])
     is_sent  = edition.get("status") == "published"
-    locked   = not is_entry_open(edition) and not is_sent
+    # locked only affects regular staff submissions — admins always have full access
+    locked   = not is_entry_open(edition) and not is_sent and not st.session_state.is_admin
 
     if locked and should_send_reminder(edition) and st.session_state.is_admin:
         if send_reminder_email(edition):
@@ -1002,7 +1003,7 @@ def show_compose():
             + (" items" if len(notices) != 1 else " item") + "</div></div>",
             unsafe_allow_html=True
         )
-    elif locked:
+    elif locked and not st.session_state.is_admin:
         monday = date.fromisoformat(str(edition["week_start"]))
         deadline_str = (monday + timedelta(days=1)).strftime("Tuesday %-d %B") + " at 3:00pm"
         st.markdown(
@@ -1060,8 +1061,8 @@ def show_compose():
 
     st.write("")
 
-    # Admins can always add items
-    if not is_sent and (not locked or st.session_state.is_admin):
+    # Admin can always add items until bulletin is sent
+    if not is_sent:
         with st.expander("➕ Add Item", expanded=len(notices) == 0):
             with st.form("add_item", clear_on_submit=True):
                 cat     = st.selectbox("Category", list(CAT_LABELS.keys()),
