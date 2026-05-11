@@ -25,6 +25,15 @@ def get_sb():
     from supabase import create_client
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
+@st.cache_resource
+def get_sb_mtg():
+    """Client for the meetings DB — auto-creates staff meeting records."""
+    from supabase import create_client
+    url = st.secrets.get("SUPABASE_URL_MEETINGS", st.secrets["SUPABASE_URL"])
+    key = st.secrets.get("SUPABASE_SERVICE_KEY_MEETINGS",
+          st.secrets.get("SUPABASE_KEY_MEETINGS", st.secrets["SUPABASE_KEY"]))
+    return create_client(url, key)
+
 # ══════════════════════════════════════════════════════════════════════════════
 # STAFF FUNCTIONS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -162,15 +171,70 @@ def db_get_or_create_edition():
         label  = edition_week_label(monday)
         res    = sb.table("weekly_editions").select("*").eq("week_start", monday.isoformat()).execute()
         if res.data:
-            return res.data[0]
+            edition = res.data[0]
+            # If not yet linked, auto-link now (catches editions created before this feature)
+            if not edition.get("meeting_linked"):
+                _auto_link_edition(edition)
+                res2 = sb.table("weekly_editions").select("*").eq("week_start", monday.isoformat()).execute()
+                return res2.data[0] if res2.data else edition
+            return edition
+
+        # Create fresh edition
         ins = sb.table("weekly_editions").insert({
             "week_start": monday.isoformat(),
             "week_label": label,
-            "status": "draft"
+            "status":     "draft"
         }).execute()
-        return ins.data[0] if ins.data else None
+        edition = ins.data[0] if ins.data else None
+        if edition:
+            _auto_link_edition(edition)
+            # Reload to get updated meeting_linked fields
+            res3 = sb.table("weekly_editions").select("*").eq("id", edition["id"]).execute()
+            return res3.data[0] if res3.data else edition
+        return edition
     except Exception:
         return None
+
+def _auto_link_edition(edition):
+    """Calculate term/week from edition date, link edition, and ensure staff meeting exists."""
+    import json
+    try:
+        monday   = date.fromisoformat(str(edition["week_start"]))
+        term_lng = get_sa_term(monday)    # "Term 2"
+        week_num = get_sa_week(monday)    # 3
+        # Normalise to short form for staff_meetings table ("T2")
+        import re as _re
+        m = _re.search(r'(\d)', term_lng)
+        term_sht = f"T{m.group(1)}" if m else "T2"
+
+        # 1. Mark edition as linked in bulletin DB
+        get_sb().table("weekly_editions").update({
+            "meeting_linked": True,
+            "meeting_term":   term_lng,
+            "meeting_week":   week_num,
+        }).eq("id", edition["id"]).execute()
+
+        # 2. Ensure a staff meeting record exists in meetings DB
+        try:
+            sb_mtg = get_sb_mtg()
+            existing = sb_mtg.table("staff_meetings").select("id") \
+                             .eq("term", term_sht).eq("week_number", week_num).execute()
+            if not existing.data:
+                sb_mtg.table("staff_meetings").insert({
+                    "meeting_date": str(monday),
+                    "term":         term_sht,
+                    "week_number":  week_num,
+                    "minute_taker": "",
+                    "attendees":    "",
+                    "apologies":    "",
+                    "agenda_items": json.dumps({"additional_agenda": []}),
+                    "minutes":      "",
+                    "actions":      "[]",
+                }).execute()
+        except Exception:
+            pass  # meetings DB unavailable — edition still linked
+    except Exception:
+        pass
 
 def db_get_current_published():
     try:
@@ -1045,9 +1109,23 @@ def show_compose():
                     st.session_state["confirm_send"] = False
                     st.rerun()
 
+    # ── Download & Meeting panel — always visible (draft or sent) ─────────────
+    st.markdown("---")
+    if not is_sent and notices:
+        # Show live meeting status while still drafting
+        met_term = edition.get("meeting_term", "")
+        met_week = edition.get("meeting_week", "")
+        if edition.get("meeting_linked") and met_term and met_week:
+            st.markdown(
+                f'<div style="background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;'
+                f'padding:12px 16px;font-size:13px;color:#1e40af;margin-bottom:12px;">'
+                f'🔴 <strong>Live in Staff Meeting</strong> — {met_term} Week {met_week}. '
+                f'Items you add here appear in real time in the staff meeting bulletin section.</div>',
+                unsafe_allow_html=True
+            )
+    render_download_meeting_panel(edition, notices)
+
     if is_sent:
-        st.markdown("---")
-        render_download_meeting_panel(edition, notices)
         st.markdown("---")
         st.markdown("#### Acknowledgements")
         rows    = db_get_ack_summary(edition["id"])
