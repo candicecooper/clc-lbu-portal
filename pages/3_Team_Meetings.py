@@ -1189,9 +1189,9 @@ RAW TRANSCRIPT:
                                     minutes_text = parts[1].strip()
                                     break
 
-                            # Write directly to widget keys before rerun
-                            st.session_state[f"pr_notes_{program}"] = focus_text
-                            st.session_state[f"pm_minutes_{program}"] = minutes_text
+                            # Stage results — transferred to widget keys before render
+                            st.session_state[f"_stage_pr_notes_{program}"] = focus_text
+                            st.session_state[f"_stage_pm_minutes_{program}"] = minutes_text
                             st.rerun()
                         except Exception as _e:
                             st.error(f"Groq error: {_e}")
@@ -1205,7 +1205,10 @@ RAW TRANSCRIPT:
         # ── Focus Area notes (populated by AI or typed manually) ───────────
         st.markdown("**📝 Focus Area Summary**")
         st.caption("AI-populated from your transcript, or type freely. Edit before saving.")
-        if f"pr_notes_{program}" not in st.session_state:
+        _stage_pn = st.session_state.pop(f"_stage_pr_notes_{program}", None)
+        if _stage_pn is not None:
+            st.session_state[f"pr_notes_{program}"] = _stage_pn
+        elif f"pr_notes_{program}" not in st.session_state:
             st.session_state[f"pr_notes_{program}"] = priority_store.get("notes", "")
         _focus_notes = st.text_area(
             "Focus area notes",
@@ -1356,7 +1359,10 @@ RAW TRANSCRIPT:
     st.caption("For Week B: AI-populated from transcript above. For Week A: type manually. Edit freely before saving.")
 
     default_minutes = selected_record.get('meeting_minutes', '') if selected_record else ''
-    if f"pm_minutes_{program}" not in st.session_state:
+    _stage_min = st.session_state.pop(f"_stage_pm_minutes_{program}", None)
+    if _stage_min is not None:
+        st.session_state[f"pm_minutes_{program}"] = _stage_min
+    elif f"pm_minutes_{program}" not in st.session_state:
         st.session_state[f"pm_minutes_{program}"] = default_minutes
     pm_minutes = st.text_area(
         "Meeting minutes",
@@ -1676,7 +1682,10 @@ def render_meeting_archive(program):
                                 existing_pf = "\n".join(lines)
                         except Exception:
                             existing_pf = str(raw_pf)
-                    if f"arch_pf_{meeting_id}" not in st.session_state:
+                    _stage_pf = st.session_state.pop(f"_stage_arch_pf_{meeting_id}", None)
+                    if _stage_pf is not None:
+                        st.session_state[f"arch_pf_{meeting_id}"] = _stage_pf
+                    elif f"arch_pf_{meeting_id}" not in st.session_state:
                         st.session_state[f"arch_pf_{meeting_id}"] = existing_pf
                     ed_pf = st.text_area(
                         "Priority focus",
@@ -1708,7 +1717,7 @@ def render_meeting_archive(program):
                                             max_tokens=800
                                         )
                                         _new_text = _r.choices[0].message.content
-                                        st.session_state[f"arch_pf_{meeting_id}"] = (ed_pf + "\n\n--- AI ---\n" + _new_text).strip() if ed_pf.strip() else _new_text
+                                        st.session_state[f"_stage_arch_pf_{meeting_id}"] = (ed_pf + "\n\n--- AI ---\n" + _new_text).strip() if ed_pf.strip() else _new_text
                                         st.rerun()
                                     except Exception as _e:
                                         st.error(f"Groq error: {_e}")
@@ -1743,7 +1752,10 @@ def render_meeting_archive(program):
                 st.markdown("**📝 Meeting Minutes**")
                 st.caption("Edit existing minutes or append new content — add your notes at the bottom.")
                 # Pending key carries Groq output across reruns without touching the widget key
-                if f"arch_minutes_{meeting_id}" not in st.session_state:
+                _stage_am = st.session_state.pop(f"_stage_arch_min_{meeting_id}", None)
+                if _stage_am is not None:
+                    st.session_state[f"arch_minutes_{meeting_id}"] = _stage_am
+                elif f"arch_minutes_{meeting_id}" not in st.session_state:
                     st.session_state[f"arch_minutes_{meeting_id}"] = meeting.get('meeting_minutes', '') or ''
                 ed_minutes = st.text_area(
                     "Meeting minutes",
@@ -1776,8 +1788,7 @@ def render_meeting_archive(program):
                                         max_tokens=900
                                     )
                                     _new_min = _r2.choices[0].message.content
-                                    # Write directly to widget key before rerun
-                                    st.session_state[f"arch_minutes_{meeting_id}"] = (
+                                    st.session_state[f"_stage_arch_min_{meeting_id}"] = (
                                         (ed_minutes + "\n\n--- AI Generated ---\n" + _new_min).strip()
                                         if ed_minutes.strip() else _new_min
                                     )
