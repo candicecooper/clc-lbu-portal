@@ -546,9 +546,9 @@ with st.expander("⚙️ Student settings & day status", expanded=False):
                     set_day_status(student_name, day_date, "holiday")
                     st.rerun()
             with col3:
-                if st.button("Not attending", key=f"day_notattend_{day_date}", use_container_width=True,
-                           type="primary" if current_status == "not_attending" else "secondary"):
-                    set_day_status(student_name, day_date, "not_attending")
+                if st.button("Transition", key=f"day_transition_{day_date}", use_container_width=True,
+                           type="primary" if current_status == "transition" else "secondary"):
+                    set_day_status(student_name, day_date, "transition")
                     st.rerun()
             with col4:
                 if current_status and st.button("Clear", key=f"day_clear_{day_date}", use_container_width=True):
