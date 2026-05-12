@@ -90,12 +90,13 @@ ACTIVITY_TYPES = [
 ]
 
 OUTCOMES = {
-    "on_task":          {"label": "On task",          "short": "T",  "bg": "#dcfce7", "fg": "#16a34a"},
-    "partial":          {"label": "Partial",          "short": "P",  "bg": "#fef9c3", "fg": "#ca8a04"},
-    "escalated":        {"label": "Escalated",        "short": "E",  "bg": "#fee2e2", "fg": "#dc2626"},
-    "avoidance":        {"label": "Avoidance",        "short": "A",  "bg": "#fef9c3", "fg": "#ca8a04"},
-    "seeking_input":    {"label": "Seeking input",    "short": "SI", "bg": "#dcfce7", "fg": "#16a34a"},
-    "seeking_attention": {"label": "Seeking attention", "short": "SA", "bg": "#fef9c3", "fg": "#ca8a04"},
+    "on_task":           {"label": "On task",           "short": "T",  "bg": "#dcfce7", "fg": "#16a34a"},
+    "partial":           {"label": "Partial",           "short": "P",  "bg": "#fef9c3", "fg": "#ca8a04"},
+    "escalated":         {"label": "Escalated",         "short": "E",  "bg": "#fee2e2", "fg": "#dc2626"},
+    "avoidance":         {"label": "Avoidance",         "short": "A",  "bg": "#fef9c3", "fg": "#ca8a04"},
+    "seeking_input":     {"label": "Seeking input",     "short": "SI", "bg": "#dcfce7", "fg": "#16a34a"},
+    "seeking_attention":  {"label": "Seeking attention",  "short": "SA", "bg": "#fef9c3", "fg": "#ca8a04"},
+    "passive_observation": {"label": "Passive observation", "short": "PO", "bg": "#dcfce7", "fg": "#16a34a"},
 }
 
 
@@ -625,7 +626,7 @@ with t_record:
 
     with fb2:
         st.markdown('<div style="font-size:.65rem;font-weight:700;color:#1A6B8A;margin-bottom:.1rem;">'
-                    'OUTCOME</div>', unsafe_allow_html=True)
+                    'OBSERVABLE BEHAVIOUR</div>', unsafe_allow_html=True)
         for val, cfg in OUTCOMES.items():
             is_sel = (cur_out == val)
             if st.button(cfg["label"], key=f"of_{val}_{sel_time}_{sel_day}",
@@ -813,7 +814,7 @@ with t_analysis:
     # ── What does "interval" mean? ────────────────────────────────────────────
     st.info(
         "ℹ️ **What is an interval?** Each interval represents one 15-minute observation window "
-        "during the school day. Staff record regulation state, grouping, activity type, and outcome "
+        "during the school day. Staff record regulation state, grouping, activity type, and observable behaviour "
         "for each interval in which they observe the student. Intervals outside the observation "
         f"window ({min_slot}–{max_slot}) were not collected and are not represented in these charts."
     )
