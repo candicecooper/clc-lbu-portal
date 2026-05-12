@@ -215,10 +215,14 @@ HYPOTHESIS_FUNCTIONS = ["To get", "To avoid"]
 HYPOTHESIS_ITEMS = ["Tangible", "Activity", "Sensory", "Attention"]
 
 def generate_time_options():
-    """Generate time options in 5-minute intervals"""
+    """Generate time options in 5-minute intervals from 8:00am to 3:30pm"""
     times = []
-    for hour in range(24):
+    # Start at 8:00am (hour=8) and end at 3:30pm (hour=15, minute=30)
+    for hour in range(8, 16):  # 8am to 3pm (hour 15)
         for minute in range(0, 60, 5):
+            # Stop at 3:30pm
+            if hour == 15 and minute > 30:
+                break
             t = time(hour, minute)
             times.append(t.strftime("%H:%M:%S"))
     return times
