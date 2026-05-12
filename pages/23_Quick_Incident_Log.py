@@ -6,7 +6,25 @@ Writes directly to the same `incidents` table as the Behaviour Support Tool.
 """
 import streamlit as st
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, time
+
+# ── Helper functions ──────────────────────────────────────────────────────────
+def generate_time_options():
+    """Generate time options in 5-minute intervals"""
+    times = []
+    for hour in range(24):
+        for minute in range(0, 60, 5):
+            t = time(hour, minute)
+            times.append(t.strftime("%H:%M:%S"))
+    return times
+
+def format_location_display(location_field):
+    """Format location field (string or list) for display"""
+    if isinstance(location_field, list):
+        return ", ".join(location_field) if location_field else "N/A"
+    elif isinstance(location_field, str):
+        return location_field if location_field else "N/A"
+    return "N/A"
 
 st.set_page_config(
     page_title="Quick Incident Log — CLC LBU",
@@ -82,6 +100,12 @@ ANTECEDENTS = [
     "Transition - from play/yard to classroom",
     "Transition - from home to the program",
     "Transition - off a device",
+    "Transition - from carpark to CLC on arrival",
+    "Transition - from CLC to carpark",
+    "Transition - separating from parent/caregiver to CLC",
+    "Transition - from preferred to non-preferred activity",
+    "Transition - recess/lunch play back into class",
+    "Transition - class teacher to NIT/TRT teacher",
     "--- INSTRUCTIONS ---",
     "Instructions - following instructions given by an adult",
     "Instructions - following task demands",
@@ -112,9 +136,9 @@ ANTECEDENTS = [
 ]
 
 LOCATIONS = [
-    "JP Room", "PY Room", "SY Room", "Yard", "Playground",
-    "Library", "Kitchen", "Office", "Student Gate", "Toilets",
-    "Transition area", "Other",
+    "JP Room", "PY Room", "SY Room", "Yard", "Playground", "Library", "Kitchen", "Office", 
+    "Student Gate", "Toilets", "Transition area", "CLC carpark", "Outside of CLC admin entrance", 
+    "JP spillout room", "SY spillout room", "PY spillout room", "Other",
 ]
 
 INTERVENTIONS = [
@@ -127,6 +151,9 @@ INTERVENTIONS = [
     "Co-regulation",
     "Prompted coping skill",
     "Redirection",
+    "Lock down called",
+    "Distraction",
+    "Providing Time",
 ]
 
 SESSIONS = {
@@ -223,12 +250,25 @@ with st.form("quick_log_form", clear_on_submit=True):
     with d_col1:
         inc_date = st.date_input("📅 Date *", value=date.today())
     with d_col2:
-        inc_time = st.time_input("🕐 Approximate time *", value=datetime.now().replace(second=0, microsecond=0).time())
+        # Generate time options in 5-minute intervals
+        time_options = generate_time_options()
+        # Round current time to nearest 5 minutes
+        now = datetime.now()
+        current_minutes = (now.minute // 5) * 5
+        current_time_str = time(now.hour, current_minutes).strftime("%H:%M:%S")
+        default_time_idx = time_options.index(current_time_str) if current_time_str in time_options else 0
+        inc_time_str = st.selectbox(
+            "🕐 Approximate time *",
+            options=time_options,
+            index=default_time_idx,
+            format_func=lambda x: datetime.strptime(x, "%H:%M:%S").strftime("%I:%M %p"),
+        )
+        inc_time = datetime.strptime(inc_time_str, "%H:%M:%S").time()
     with d_col3:
         session_label = st.selectbox("⏰ Session *", list(SESSIONS.keys()))
 
-    # ── Location
-    location = st.selectbox("📍 Location *", LOCATIONS)
+    # ── Location (multiselect to match Behaviour Support tool)
+    location = st.multiselect("📍 Location * (select one or more)", LOCATIONS)
 
     st.markdown("<hr style='margin:.6rem 0;border-color:#e2e8f0;'>", unsafe_allow_html=True)
 
@@ -331,6 +371,8 @@ if submitted:
     errors = []
     if not reported_by.strip():
         errors.append("Please enter your name.")
+    if not location:
+        errors.append("Please select at least one location.")
     if antecedent.startswith("---"):
         errors.append("Please select an antecedent (not a category header).")
     if behaviour.startswith("---"):
@@ -407,7 +449,7 @@ if submitted:
                 f"<b>Student:</b> {student_name}<br>"
                 f"<b>Date/Time:</b> {inc_date.strftime('%-d %b %Y')} at {inc_time.strftime('%H:%M')}"
                 f" — {session_label}<br>"
-                f"<b>Location:</b> {location}<br>"
+                f"<b>Location:</b> {format_location_display(location)}<br>"
                 f"<b>Behaviour:</b> {behaviour}<br>"
                 f"<b>Antecedent:</b> {antecedent}<br>"
                 f"<b>Severity:</b> <span style='background:{sev_col};color:white;padding:.1rem .4rem;"
