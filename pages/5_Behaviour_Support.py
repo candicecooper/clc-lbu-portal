@@ -121,6 +121,12 @@ ANTECEDENTS = [
     "Transition - from play/yard to classroom",
     "Transition - from home to the program",
     "Transition - off a device",
+    "Transition - from carpark to CLC on arrival",
+    "Transition - from CLC to carpark",
+    "Transition - separating from parent/caregiver to CLC",
+    "Transition - from preferred to non-preferred activity",
+    "Transition - recess/lunch play back into class",
+    "Transition - class teacher to NIT/TRT teacher",
     "--- INSTRUCTIONS ---",
     "Instructions - following instructions given by an adult",
     "Instructions - following task demands",
@@ -198,12 +204,40 @@ def get_clinical_behaviour(raw: str) -> str:
     return raw
 
 INTERVENTIONS = ["CPI Supportive stance", "Offered break", "Reduced demand", "Provided choices",
-                "Removed audience", "Visual supports", "Co-regulation", "Prompted coping skill", "Redirection"]
-LOCATIONS = ["JP Room", "PY Room", "SY Room", "Yard", "Playground", "Library", "Kitchen", "Office", "Student Gate", "Toilets", "Transition area", "Other"]
+                "Removed audience", "Visual supports", "Co-regulation", "Prompted coping skill", "Redirection",
+                "Lock down called", "Distraction", "Providing Time"]
+LOCATIONS = ["JP Room", "PY Room", "SY Room", "Yard", "Playground", "Library", "Kitchen", "Office", 
+             "Student Gate", "Toilets", "Transition area", "CLC carpark", "Outside of CLC admin entrance", 
+             "JP spillout room", "SY spillout room", "PY spillout room", "Other"]
 VALID_PAGES = ["login", "landing", "program_students", "incident_log", "critical_incident", "review_critical", "leader_approve_critical", "student_analysis", "student_dashboard", "admin_portal"]
 
 HYPOTHESIS_FUNCTIONS = ["To get", "To avoid"]
 HYPOTHESIS_ITEMS = ["Tangible", "Activity", "Sensory", "Attention"]
+
+def generate_time_options():
+    """Generate time options in 5-minute intervals"""
+    times = []
+    for hour in range(24):
+        for minute in range(0, 60, 5):
+            t = time(hour, minute)
+            times.append(t.strftime("%H:%M:%S"))
+    return times
+
+def location_contains(location_field, target_location):
+    """Check if a location field (string or list) contains the target location"""
+    if isinstance(location_field, list):
+        return target_location in location_field
+    elif isinstance(location_field, str):
+        return location_field == target_location
+    return False
+
+def format_location_display(location_field):
+    """Format location field (string or list) for display"""
+    if isinstance(location_field, list):
+        return ", ".join(location_field) if location_field else "N/A"
+    elif isinstance(location_field, str):
+        return location_field if location_field else "N/A"
+    return "N/A"
 
 def format_time_12hr(time_str):
     try:
@@ -1715,7 +1749,7 @@ Student: {student['name']} (Grade {student['grade']})
 Program: {PROGRAM_NAMES.get(student['program'], student['program'])}
 
 INCIDENT SUMMARY:
-Location: {primary.get('location', 'N/A')}
+Location: {format_location_display(primary.get('location', 'N/A'))}
 Time: {primary.get('time', 'N/A')}
 Behaviour: {primary.get('behaviour', 'N/A')}
 
@@ -2233,13 +2267,23 @@ def render_incident_log_page():
         col1, col2 = st.columns(2)
         with col1:
             inc_date = st.date_input("Date *", value=date.today(), key="inc_date")
-            inc_time = st.time_input(
+            # Generate time options in 5-minute intervals
+            time_options = generate_time_options()
+            # Round current time to nearest 5 minutes
+            now = datetime.now()
+            current_minutes = (now.minute // 5) * 5
+            current_time_str = time(now.hour, current_minutes).strftime("%H:%M:%S")
+            default_time_idx = time_options.index(current_time_str) if current_time_str in time_options else 0
+            inc_time_str = st.selectbox(
                 "Time * ← update this",
-                value=datetime.now().time(),
+                options=time_options,
+                index=default_time_idx,
+                format_func=lambda x: datetime.strptime(x, "%H:%M:%S").strftime("%I:%M %p"),
                 key="inc_time",
-                help="Time defaults to now — adjust if the incident was earlier"
+                help="Time defaults to now (rounded to nearest 5 minutes) — adjust if the incident was earlier"
             )
-            location = st.selectbox("Location *", [""] + LOCATIONS, index=_loc_idx(), key="inc_loc")
+            inc_time = datetime.strptime(inc_time_str, "%H:%M:%S").time()
+            location = st.multiselect("Location * (select one or more)", LOCATIONS, default=[], key="inc_loc")
         with col2:
             behaviour = st.selectbox("Behaviour Type *", [""] + BEHAVIOUR_TYPES, index=_beh_idx(), key="inc_beh")
             antecedent = st.selectbox("Antecedent/Trigger *", [""] + ANTECEDENTS, index=_ant_idx(), key="inc_ant")
@@ -2327,7 +2371,7 @@ def render_critical_incident_page():
             st.markdown(f"**Date:** {quick_inc['date']}")
             st.markdown(f"**Time:** {format_time_12hr(quick_inc['time'])}")
         with col3:
-            st.markdown(f"**Location:** {quick_inc['location']}")
+            st.markdown(f"**Location:** {format_location_display(quick_inc['location'])}")
             st.markdown(f"**Session:** {quick_inc['session']}")
         with col4:
             st.markdown(f"**Severity:** {quick_inc['severity']}")
@@ -2351,7 +2395,7 @@ def render_critical_incident_page():
     with col_subheader[5]: st.caption("HYPOTHESIS (Function)")
     col_inputs1 = st.columns([1, 1, 1, 1, 2, 2])
     with col_inputs1[0]:
-        location_1 = st.text_input("", value=quick_inc['location'], key="loc_1", label_visibility="collapsed")
+        location_1 = st.text_input("", value=format_location_display(quick_inc['location']), key="loc_1", label_visibility="collapsed")
     with col_inputs1[1]:
         context_1 = st.text_area("", placeholder="What was going on before?", key="context_1", height=100, label_visibility="collapsed")
     with col_inputs1[2]:
@@ -2596,7 +2640,7 @@ def render_review_critical_page():
             st.markdown(f"**Status:** {critical.get('status', 'draft').replace('_', ' ').title()}")
     st.markdown("---")
     with st.expander("📍 ANTECEDENT", expanded=True):
-        st.markdown(f"**Location:** {primary.get('location', 'N/A')}")
+        st.markdown(f"**Location:** {format_location_display(primary.get('location', 'N/A'))}")
         st.markdown(f"**Time:** {primary.get('time', 'N/A')}")
         st.markdown(f"**Context:** {primary.get('context', 'N/A')}")
     with st.expander("🎯 BEHAVIOUR", expanded=True):
@@ -2610,7 +2654,7 @@ def render_review_critical_page():
         st.markdown("---")
         for idx, entry in enumerate(additional):
             with st.expander(f"Continuation Entry {idx + 1}"):
-                st.markdown(f"**Location:** {entry.get('location', 'N/A')}")
+                st.markdown(f"**Location:** {format_location_display(entry.get('location', 'N/A'))}")
                 st.markdown(f"**Time:** {entry.get('time', 'N/A')}")
                 st.markdown(f"**Context:** {entry.get('context', 'N/A')}")
                 st.markdown(f"**Behaviour:** {entry.get('behaviour', 'N/A')}")
@@ -2697,7 +2741,7 @@ def render_leader_approve_critical_page():
     primary = critical.get('ABCH_primary', {})
     with st.expander("📋 View Complete ABCH Form"):
         st.markdown(f"**Severity:** {critical.get('severity', 'N/A')}")
-        st.markdown(f"**Location:** {primary.get('location', 'N/A')}")
+        st.markdown(f"**Location:** {format_location_display(primary.get('location', 'N/A'))}")
         st.markdown(f"**Behaviour:** {primary.get('behaviour', 'N/A')}")
         st.markdown(f"**Hypothesis:** {primary.get('hypothesis', 'N/A')}")
         for outcome in critical.get('intended_outcomes', []):
@@ -4294,12 +4338,35 @@ def render_student_analysis_page():
         st.markdown("#### E — Behaviour by Location")
         st.caption("Where each behaviour occurs most frequently.")
         if "location" in full_df.columns:
-            _top_locs = [l for l in full_df["location"].value_counts().head(6).index.tolist()
-                         if l and str(l).strip()]
+            # Expand location lists into separate rows for proper counting
+            _loc_rows = []
+            for _, row in full_df.iterrows():
+                locs = row.get("location", [])
+                # Handle both string and list formats
+                if isinstance(locs, str):
+                    try: 
+                        locs = json.loads(locs)
+                    except: 
+                        locs = [locs] if locs else []
+                elif not isinstance(locs, list):
+                    locs = [locs] if locs else []
+                beh = row.get("behaviour_type", "")
+                if beh and beh in all_behaviours:
+                    for loc in locs:
+                        _loc_str = str(loc).strip()
+                        if _loc_str and _loc_str.lower() not in ("nan", "none", "", "null"):
+                            _loc_rows.append({"behaviour": beh, "location": _loc_str})
+            
+            if _loc_rows:
+                _loc_df = pd.DataFrame(_loc_rows)
+                _top_locs = _loc_df["location"].value_counts().head(6).index.tolist()
+            else:
+                _top_locs = []
+                
             if _top_locs:
                 _bloc_z, _bloc_text, _bloc_y = [], [], []
                 for b in all_behaviours:
-                    bdf = full_df[full_df["behaviour_type"] == b]
+                    bdf = _loc_df[_loc_df["behaviour"] == b]
                     rz = [int((bdf["location"] == loc).sum()) for loc in _top_locs]
                     rt = [str(n) if n > 0 else "" for n in rz]
                     if any(v > 0 for v in rz):
@@ -4941,37 +5008,67 @@ def render_student_analysis_page():
     st.markdown("---")
 
     st.markdown("### 📍 Location Hotspots")
-    all_locations = full_df["location"].value_counts().head(6).index.tolist()
-    quick_loc_counts = [len(quick_only_df[quick_only_df["location"] == loc]) if not quick_only_df.empty else 0 for loc in all_locations]
-    crit_loc_counts  = [len(crit_only_df[crit_only_df["location"] == loc]) if not crit_only_df.empty else 0 for loc in all_locations]
-    fig5 = go.Figure()
-    fig5.add_trace(go.Bar(y=all_locations, x=quick_loc_counts, name='Regular', orientation='h',
-        marker=dict(color='#3b82f6'), text=quick_loc_counts, textposition='inside',
-        textfont=dict(color='white', size=11, family='Arial Black')))
-    fig5.add_trace(go.Bar(y=all_locations, x=crit_loc_counts, name='Critical', orientation='h',
-        marker=dict(color='#ef4444'), text=crit_loc_counts, textposition='inside',
-        textfont=dict(color='white', size=11, family='Arial Black')))
-    fig5.update_layout(height=350, barmode='stack', xaxis_title="<b>Incident Count</b>",
-        plot_bgcolor='#f8fafc', paper_bgcolor='white', font=dict(color='#0f172a', size=12, family='Arial'),
-        xaxis=dict(tickmode='linear', tick0=0, dtick=1, gridcolor='#e2e8f0', showline=True, linewidth=2, linecolor='#cbd5e1'),
-        yaxis=dict(showline=True, linewidth=2, linecolor='#cbd5e1'),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-    st.plotly_chart(fig5, use_container_width=True)
+    # Expand location lists for proper counting
+    _all_loc_rows = []
+    for _, row in full_df.iterrows():
+        locs = row.get("location", [])
+        if isinstance(locs, str):
+            try: 
+                locs = json.loads(locs)
+            except: 
+                locs = [locs] if locs else []
+        elif not isinstance(locs, list):
+            locs = [locs] if locs else []
+        
+        for loc in locs:
+            _loc_str = str(loc).strip()
+            if _loc_str and _loc_str.lower() not in ("nan", "none", "", "null"):
+                _all_loc_rows.append({
+                    "location": _loc_str,
+                    "is_critical": row.get("is_critical", False)
+                })
+    
+    if _all_loc_rows:
+        _all_loc_df = pd.DataFrame(_all_loc_rows)
+        all_locations = _all_loc_df["location"].value_counts().head(6).index.tolist()
+        quick_loc_counts = [len(_all_loc_df[(_all_loc_df["location"] == loc) & (_all_loc_df["is_critical"] == False)]) for loc in all_locations]
+        crit_loc_counts  = [len(_all_loc_df[(_all_loc_df["location"] == loc) & (_all_loc_df["is_critical"] == True)]) for loc in all_locations]
+    else:
+        all_locations = []
+        quick_loc_counts = []
+        crit_loc_counts = []
+    
     if all_locations:
-        _lh_top = normalise_location(all_locations[0])
-        _lh_top_n = quick_loc_counts[0] + crit_loc_counts[0]
-        _lh_pct = int(_lh_top_n / len(full_df) * 100) if len(full_df) else 0
-        st.markdown(
-            f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;"
-            f"border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
-            f"<b>📊 What this shows:</b> "
-            f"<b>{_lh_top}</b> is the highest-frequency incident location ({_lh_pct}% of all incidents). "
-            "This may reflect specific environmental conditions — crowding, noise levels, "
-            "supervision ratios, or transition demands — that warrant targeted modification. "
-            "Where a single location dominates, environmental audit and proactive supervision "
-            "strategies for that space should be the first priority.</div>",
-            unsafe_allow_html=True
-        )
+        fig5 = go.Figure()
+        fig5.add_trace(go.Bar(y=all_locations, x=quick_loc_counts, name='Regular', orientation='h',
+            marker=dict(color='#3b82f6'), text=quick_loc_counts, textposition='inside',
+            textfont=dict(color='white', size=11, family='Arial Black')))
+        fig5.add_trace(go.Bar(y=all_locations, x=crit_loc_counts, name='Critical', orientation='h',
+            marker=dict(color='#ef4444'), text=crit_loc_counts, textposition='inside',
+            textfont=dict(color='white', size=11, family='Arial Black')))
+        fig5.update_layout(height=350, barmode='stack', xaxis_title="<b>Incident Count</b>",
+            plot_bgcolor='#f8fafc', paper_bgcolor='white', font=dict(color='#0f172a', size=12, family='Arial'),
+            xaxis=dict(tickmode='linear', tick0=0, dtick=1, gridcolor='#e2e8f0', showline=True, linewidth=2, linecolor='#cbd5e1'),
+            yaxis=dict(showline=True, linewidth=2, linecolor='#cbd5e1'),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+        st.plotly_chart(fig5, use_container_width=True)
+        if all_locations:
+            _lh_top = normalise_location(all_locations[0])
+            _lh_top_n = quick_loc_counts[0] + crit_loc_counts[0]
+            _lh_pct = int(_lh_top_n / len(full_df) * 100) if len(full_df) else 0
+            st.markdown(
+                f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;"
+                f"border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
+                f"<b>📊 What this shows:</b> "
+                f"<b>{_lh_top}</b> is the highest-frequency incident location ({_lh_pct}% of all incidents). "
+                "This may reflect specific environmental conditions — crowding, noise levels, "
+                "supervision ratios, or transition demands — that warrant targeted modification. "
+                "Where a single location dominates, environmental audit and proactive supervision "
+                "strategies for that space should be the first priority.</div>",
+                unsafe_allow_html=True
+            )
+    else:
+        st.info("No location data available for analysis.")
     st.markdown("---")
 
     st.markdown("### ⏰ Time of Day Patterns")
@@ -5468,7 +5565,7 @@ def render_student_analysis_page():
         combined.append({
             "id": i["id"],
             "type": "regular",
-            "label": f"[REGULAR]  {i.get('date','?')}  {i.get('time','')[:5]}  |  {i.get('behaviour_type','—')}  |  Severity {i.get('severity','?')}  |  {i.get('location','—')}",
+            "label": f"[REGULAR]  {i.get('date','?')}  {i.get('time','')[:5]}  |  {i.get('behaviour_type','—')}  |  Severity {i.get('severity','?')}  |  {format_location_display(i.get('location','—'))}",
             "date": i.get("date",""),
         })
     for c in crit_incidents:
@@ -5477,7 +5574,7 @@ def render_student_analysis_page():
         combined.append({
             "id": c["id"],
             "type": "critical",
-            "label": f"[CRITICAL]  {created}  {primary.get('time','')[:5]}  |  {primary.get('behaviour','Behaviour not recorded')[:50]}  |  {primary.get('location','—')}",
+            "label": f"[CRITICAL]  {created}  {primary.get('time','')[:5]}  |  {primary.get('behaviour','Behaviour not recorded')[:50]}  |  {format_location_display(primary.get('location','—'))}",
             "date": created,
         })
 
@@ -5617,7 +5714,7 @@ def render_student_analysis_page():
                 f"{inc.get('date','?')}  {t}  |  "
                 f"{inc.get('behaviour_type','—')}  |  "
                 f"Sev {inc.get('severity','?')}  |  "
-                f"{inc.get('location','—')}"
+                f"{format_location_display(inc.get('location','—'))}"
             )
 
         _relog_options = {_relog_label(i): i for i in _relog_incidents}
@@ -5656,13 +5753,35 @@ def render_student_analysis_page():
                 rl_date = st.date_input(
                     "Date *", value=date.today(), key="rl_date"
                 )
-                rl_time = st.time_input(
-                    "Time *", value=_default_time, key="rl_time"
+                # Generate time options in 5-minute intervals
+                time_options = generate_time_options()
+                # Parse default time from source incident
+                try:
+                    _default_time_str = (_src_inc.get("time") or "09:00:00")[:8]
+                    _dt = datetime.strptime(_default_time_str, "%H:%M:%S")
+                    # Round to nearest 5 minutes
+                    _rounded_minutes = (_dt.minute // 5) * 5
+                    _default_time_formatted = time(_dt.hour, _rounded_minutes).strftime("%H:%M:%S")
+                    _default_idx = time_options.index(_default_time_formatted) if _default_time_formatted in time_options else 0
+                except Exception:
+                    _default_idx = 0
+                rl_time_str = st.selectbox(
+                    "Time *",
+                    options=time_options,
+                    index=_default_idx,
+                    format_func=lambda x: datetime.strptime(x, "%H:%M:%S").strftime("%I:%M %p"),
+                    key="rl_time"
                 )
-                rl_location = st.selectbox(
-                    "Location *",
+                rl_time = datetime.strptime(rl_time_str, "%H:%M:%S").time()
+                # Handle location as list or string from source
+                _src_location = _src_inc.get("location", [])
+                if isinstance(_src_location, str):
+                    _src_location = [_src_location] if _src_location else []
+                _valid_locs = [loc for loc in _src_location if loc in LOCATIONS]
+                rl_location = st.multiselect(
+                    "Location * (select one or more)",
                     LOCATIONS,
-                    index=LOCATIONS.index(_src_inc["location"]) if _src_inc.get("location") in LOCATIONS else 0,
+                    default=_valid_locs,
                     key="rl_location"
                 )
             with rl_col2:
@@ -7165,12 +7284,25 @@ def render_quick_incident_log():
         with _dc1:
             _inc_date = st.date_input("📅 Date *", value=date.today())
         with _dc2:
-            _inc_time = st.time_input("🕐 Time *",
-                value=datetime.now().replace(second=0, microsecond=0).time())
+            # Generate time options in 5-minute intervals
+            time_options = generate_time_options()
+            # Round current time to nearest 5 minutes
+            now = datetime.now()
+            current_minutes = (now.minute // 5) * 5
+            current_time_str = time(now.hour, current_minutes).strftime("%H:%M:%S")
+            default_time_idx = time_options.index(current_time_str) if current_time_str in time_options else 0
+            _inc_time_str = st.selectbox(
+                "🕐 Time *",
+                options=time_options,
+                index=default_time_idx,
+                format_func=lambda x: datetime.strptime(x, "%H:%M:%S").strftime("%I:%M %p"),
+                key="ql_time"
+            )
+            _inc_time = datetime.strptime(_inc_time_str, "%H:%M:%S").time()
         with _dc3:
             _sess_lbl = st.selectbox("⏰ Session *", list(_SESSIONS_QL.keys()))
 
-        _location = st.selectbox("📍 Location *", LOCATIONS)
+        _location = st.multiselect("📍 Location * (select one or more)", LOCATIONS)
 
         st.markdown("<hr style='margin:.5rem 0;border-color:#e2e8f0;'>", unsafe_allow_html=True)
 
