@@ -78,6 +78,7 @@ GROUPING_TYPES = {
     "small_group": "Small group",
     "large_group": "Large group (≤10)",
     "leadership_intervention": "Leadership intervention",
+    "with_parent_carer": "With parent/carer",
 }
 
 ACTIVITY_TYPES = [
@@ -87,6 +88,9 @@ ACTIVITY_TYPES = [
     "Preferred task",
     "Non-preferred task",
     "Self directed wandering",
+    "Transition in",
+    "Transition out",
+    "Other",
 ]
 
 OUTCOMES = {
@@ -211,7 +215,10 @@ def get_student_time_window(student_name):
         if res.data:
             return (res.data[0].get("start_time"), res.data[0].get("end_time"))
         return None
-    except Exception:
+    except Exception as e:
+        # Silently return None if table not in schema cache yet
+        if "PGRST205" in str(e) or "schema cache" in str(e):
+            return None
         return None
 
 
@@ -236,7 +243,11 @@ def set_student_time_window(student_name, start_time, end_time):
             }).execute()
         return True
     except Exception as e:
-        st.error(f"Failed to save time window: {e}")
+        error_msg = str(e)
+        if "PGRST205" in error_msg or "schema cache" in error_msg:
+            st.error("⚠️ Tables created but not yet recognized by Supabase API. Please restart the API server in your Supabase dashboard (Settings → API → Restart API) or wait 2-3 minutes and try again.")
+        else:
+            st.error(f"Failed to save time window: {e}")
         return False
 
 
@@ -254,6 +265,7 @@ def get_day_status(student_name, obs_date):
             return res.data[0].get("status")
         return None
     except Exception:
+        # Silently return None if table not in schema cache yet
         return None
 
 
@@ -284,7 +296,11 @@ def set_day_status(student_name, obs_date, status):
                 }).execute()
         return True
     except Exception as e:
-        st.error(f"Failed to save day status: {e}")
+        error_msg = str(e)
+        if "PGRST205" in error_msg or "schema cache" in error_msg:
+            st.error("⚠️ Tables created but not yet recognized by Supabase API. Please restart the API server in your Supabase dashboard (Settings → API → Restart API) or wait 2-3 minutes and try again.")
+        else:
+            st.error(f"Failed to save day status: {e}")
         return False
 
 
@@ -712,6 +728,24 @@ with t_record:
     # ════════════════════════════════════════════════════════════════════
     # RECORDING CARD for selected cell
     # ════════════════════════════════════════════════════════════════════
+    
+    # Show paste prompt if data is copied
+    if ss.ist_copied_interval:
+        paste_col1, paste_col2 = st.columns([3, 1])
+        with paste_col1:
+            copied_reg = ss.ist_copied_interval.get("regulated", "")
+            reg_cfg = REG_STATES.get(copied_reg, {})
+            st.markdown(
+                f'<div style="background:#dcfce7;border:2px solid #16a34a;'
+                f'border-radius:8px;padding:.4rem .8rem;margin-bottom:.5rem;font-size:.85rem;">'
+                f'<span style="font-weight:700;color:#16a34a;">📋 Ready to paste:</span> '
+                f'{reg_cfg.get("emoji", "")} {reg_cfg.get("label", "(data copied)")}'
+                f'</div>', unsafe_allow_html=True)
+        with paste_col2:
+            if st.button("❌ Cancel", key="paste_cancel", use_container_width=True, type="secondary"):
+                ss.ist_copied_interval = None
+                st.rerun()
+    
     cur_cell = cell_data.get(sel_time,{}).get(sel_day,{})
     cur_reg  = cur_cell.get("regulated","") or ""
     cur_out  = cur_cell.get("outcome","") or ""
@@ -723,11 +757,12 @@ with t_record:
     banner_bg = cfg_cur.get("bg", "#EBF4F9") if cur_reg else "#EBF4F9"
 
     st.markdown(
-        f'<div style="background:{banner_bg};border:2px solid {banner_fg};'
+        f'<div style="background:{banner_fg if ss.ist_copied_interval else banner_bg};'
+        f'border:2px solid {banner_fg};'
         f'border-radius:10px;padding:.5rem 1rem;margin-bottom:.5rem;">'
-        f'<span style="font-size:.95rem;font-weight:700;color:{banner_fg};">'
+        f'<span style="font-size:.95rem;font-weight:700;color:{"white" if ss.ist_copied_interval else banner_fg};">'
         f'📍 {sel_time} · {sel_day} {sel_date.strftime("%-d %b")}'
-        + (f'</span> &nbsp;<span style="font-weight:600;color:{banner_fg};">'
+        + (f'</span> &nbsp;<span style="font-weight:600;color:{"white" if ss.ist_copied_interval else banner_fg};">'
            f'{cfg_cur.get("emoji","")} {cfg_cur.get("label","")}</span>' if cur_reg else
            '</span> <span style="color:#94a3b8;font-size:.8rem;">— tap a field to record</span>')
         + '</div>', unsafe_allow_html=True)
@@ -832,42 +867,52 @@ with t_record:
                 upsert_field(student_name, sel_date, sel_day, sel_time,
                              "outcome", "" if is_sel else val); st.rerun()
 
-        if cur_out or cur_reg or cur_grp or cur_acts:
+        if cur_out or cur_reg or cur_grp or cur_acts or ss.ist_copied_interval:
             st.markdown("")
             
-            # Copy/Paste/Clear buttons
-            btn_col1, btn_col2, btn_col3 = st.columns(3)
-            
-            with btn_col1:
-                if st.button("📋 Copy interval", key=f"copy_{sel_time}_{sel_day}",
-                           use_container_width=True, type="secondary"):
-                    copy_interval_data(cur_cell)
-                    st.success("✅ Interval copied!")
-                    st.rerun()
-            
-            with btn_col2:
-                # Show paste button if there's copied data
-                if ss.ist_copied_interval:
-                    if st.button("📥 Paste here", key=f"paste_{sel_time}_{sel_day}",
-                               use_container_width=True, type="secondary"):
+            # If data is copied, show prominent PASTE button
+            if ss.ist_copied_interval:
+                paste_main, paste_copy, paste_clear = st.columns([2, 1, 1])
+                
+                with paste_main:
+                    if st.button("✅ PASTE DATA HERE", key=f"paste_big_{sel_time}_{sel_day}",
+                               use_container_width=True, type="primary"):
                         paste_interval_data(student_name, sel_date, sel_day, sel_time)
                         st.success("✅ Data pasted!")
                         st.rerun()
-                else:
-                    st.button("📥 Paste (copy first)", key=f"paste_dis_{sel_time}_{sel_day}",
-                            use_container_width=True, disabled=True)
+                
+                with paste_copy:
+                    if cur_reg:  # Only show copy if current cell has data
+                        if st.button("📋 Copy from here", key=f"copy_{sel_time}_{sel_day}",
+                                   use_container_width=True, type="secondary"):
+                            copy_interval_data(cur_cell)
+                            st.rerun()
+                
+                with paste_clear:
+                    if cur_reg:  # Only show clear if current cell has data
+                        if st.button("🗑️ Clear", key=f"clr_{sel_time}_{sel_day}",
+                                   use_container_width=True, type="secondary"):
+                            clear_interval(student_name, sel_date, sel_time)
+                            st.rerun()
             
-            with btn_col3:
-                if st.button("🗑️ Clear interval", key=f"clr_{sel_time}_{sel_day}",
-                           use_container_width=True, type="secondary"):
-                    clear_interval(student_name, sel_date, sel_time); st.rerun()
-            
-            # Show what's copied
-            if ss.ist_copied_interval:
-                copied_reg = ss.ist_copied_interval.get("regulated", "")
-                if copied_reg:
-                    reg_cfg = REG_STATES.get(copied_reg, {})
-                    st.caption(f"📋 Copied: {reg_cfg.get('emoji', '')} {reg_cfg.get('label', '')}")
+            # If no data is copied, show copy and clear buttons
+            else:
+                if cur_reg:  # Only show if current cell has data
+                    btn_col1, btn_col2 = st.columns(2)
+                    
+                    with btn_col1:
+                        if st.button("📋 Copy this interval", key=f"copy_{sel_time}_{sel_day}",
+                                   use_container_width=True, type="primary"):
+                            copy_interval_data(cur_cell)
+                            st.success("✅ Copied! Now click any other cell to paste.")
+                            st.rerun()
+                    
+                    with btn_col2:
+                        if st.button("🗑️ Clear interval", key=f"clr_{sel_time}_{sel_day}",
+                                   use_container_width=True, type="secondary"):
+                            clear_interval(student_name, sel_date, sel_time)
+                            st.rerun()
+
 
 
     st.markdown('</div>', unsafe_allow_html=True)
