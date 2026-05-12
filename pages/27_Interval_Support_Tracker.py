@@ -77,6 +77,7 @@ GROUPING_TYPES = {
     "independent": "Independent",
     "small_group": "Small group",
     "large_group": "Large group (≤10)",
+    "leadership_intervention": "Leadership intervention",
 }
 
 ACTIVITY_TYPES = [
@@ -85,12 +86,16 @@ ACTIVITY_TYPES = [
     "Yard play",
     "Preferred task",
     "Non-preferred task",
+    "Self directed wandering",
 ]
 
 OUTCOMES = {
-    "on_task":   {"label": "On task",   "short": "T", "bg": "#dcfce7", "fg": "#16a34a"},
-    "partial":   {"label": "Partial",   "short": "P", "bg": "#fef9c3", "fg": "#ca8a04"},
-    "escalated": {"label": "Escalated", "short": "E", "bg": "#fee2e2", "fg": "#dc2626"},
+    "on_task":          {"label": "On task",          "short": "T",  "bg": "#dcfce7", "fg": "#16a34a"},
+    "partial":          {"label": "Partial",          "short": "P",  "bg": "#fef9c3", "fg": "#ca8a04"},
+    "escalated":        {"label": "Escalated",        "short": "E",  "bg": "#fee2e2", "fg": "#dc2626"},
+    "avoidance":        {"label": "Avoidance",        "short": "A",  "bg": "#fef9c3", "fg": "#ca8a04"},
+    "seeking_input":    {"label": "Seeking input",    "short": "SI", "bg": "#dcfce7", "fg": "#16a34a"},
+    "seeking_attention": {"label": "Seeking attention", "short": "SA", "bg": "#fef9c3", "fg": "#ca8a04"},
 }
 
 
