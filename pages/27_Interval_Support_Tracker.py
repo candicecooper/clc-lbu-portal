@@ -199,6 +199,115 @@ def clear_interval(student_name, sel_date, sel_time):
         pass
 
 
+def get_student_time_window(student_name):
+    """Get custom time window for student. Returns (start_time, end_time) or None."""
+    sb = get_sb()
+    if not sb: return None
+    try:
+        res = (sb.table("interval_student_settings")
+               .select("start_time,end_time")
+               .eq("student_name", student_name)
+               .limit(1).execute())
+        if res.data:
+            return (res.data[0].get("start_time"), res.data[0].get("end_time"))
+        return None
+    except Exception:
+        return None
+
+
+def set_student_time_window(student_name, start_time, end_time):
+    """Set custom time window for student."""
+    sb = get_sb()
+    if not sb: return False
+    try:
+        ex = (sb.table("interval_student_settings")
+              .select("id").eq("student_name", student_name)
+              .limit(1).execute())
+        if ex.data:
+            sb.table("interval_student_settings").update({
+                "start_time": start_time,
+                "end_time": end_time,
+            }).eq("id", ex.data[0]["id"]).execute()
+        else:
+            sb.table("interval_student_settings").insert({
+                "student_name": student_name,
+                "start_time": start_time,
+                "end_time": end_time,
+            }).execute()
+        return True
+    except Exception as e:
+        st.error(f"Failed to save time window: {e}")
+        return False
+
+
+def get_day_status(student_name, obs_date):
+    """Get status for a specific day (absent/holiday/etc). Returns status string or None."""
+    sb = get_sb()
+    if not sb: return None
+    try:
+        res = (sb.table("interval_day_status")
+               .select("status")
+               .eq("student_name", student_name)
+               .eq("obs_date", obs_date.isoformat())
+               .limit(1).execute())
+        if res.data:
+            return res.data[0].get("status")
+        return None
+    except Exception:
+        return None
+
+
+def set_day_status(student_name, obs_date, status):
+    """Set status for a day. Pass empty string to clear."""
+    sb = get_sb()
+    if not sb: return False
+    try:
+        if not status or status.strip() == "":
+            # Clear status
+            sb.table("interval_day_status").delete()\
+              .eq("student_name", student_name)\
+              .eq("obs_date", obs_date.isoformat()).execute()
+        else:
+            ex = (sb.table("interval_day_status")
+                  .select("id").eq("student_name", student_name)
+                  .eq("obs_date", obs_date.isoformat())
+                  .limit(1).execute())
+            if ex.data:
+                sb.table("interval_day_status").update({
+                    "status": status,
+                }).eq("id", ex.data[0]["id"]).execute()
+            else:
+                sb.table("interval_day_status").insert({
+                    "student_name": student_name,
+                    "obs_date": obs_date.isoformat(),
+                    "status": status,
+                }).execute()
+        return True
+    except Exception as e:
+        st.error(f"Failed to save day status: {e}")
+        return False
+
+
+def copy_interval_data(interval_data):
+    """Copy interval data to session state."""
+    ss.ist_copied_interval = {
+        "regulated": interval_data.get("regulated", ""),
+        "grouping_type": interval_data.get("grouping_type", ""),
+        "activity_types": interval_data.get("activity_types", ""),
+        "outcome": interval_data.get("outcome", ""),
+    }
+
+
+def paste_interval_data(student_name, sel_date, sel_day, sel_time):
+    """Paste copied interval data to the selected cell."""
+    if not ss.ist_copied_interval:
+        return False
+    for field, value in ss.ist_copied_interval.items():
+        if value:  # Only paste non-empty fields
+            upsert_field(student_name, sel_date, sel_day, sel_time, field, value)
+    return True
+
+
 # ── Session state ─────────────────────────────────────────────────────────────
 ss = st.session_state
 for k, v in [
@@ -206,6 +315,7 @@ for k, v in [
     ("ist_week", date.today() - timedelta(days=date.today().weekday())),
     ("ist_sel_time", SLOT_TIMES[0]),
     ("ist_sel_day",  DAYS[min(date.today().weekday(), 4)]),
+    ("ist_copied_interval", None),  # For copy/paste functionality
 ]:
     if k not in ss: ss[k] = v
 
@@ -377,6 +487,76 @@ with st.expander("🗄️ Archive / manage student data", expanded=False):
                         ss.ist_name = aname
                         st.rerun()
 
+# ── Student settings ───────────────────────────────────────────────────
+with st.expander("⚙️ Student settings & day status", expanded=False):
+    set_tabs = st.tabs(["⏰ Observation hours", "📅 Mark days"])
+    
+    with set_tabs[0]:
+        st.caption("Set custom observation hours for this student (e.g., part-time attendance)")
+        current_window = get_student_time_window(student_name)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            start_idx = SLOT_TIMES.index(current_window[0]) if current_window and current_window[0] in SLOT_TIMES else 0
+            start_time = st.selectbox("Start time", SLOT_TIMES, index=start_idx, key="ist_start_time")
+        with col2:
+            end_idx = SLOT_TIMES.index(current_window[1]) if current_window and current_window[1] in SLOT_TIMES else len(SLOT_TIMES)-1
+            end_time = st.selectbox("End time", SLOT_TIMES, index=end_idx, key="ist_end_time")
+        
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("💾 Save observation hours", key="ist_save_window", use_container_width=True, type="primary"):
+                if set_student_time_window(student_name, start_time, end_time):
+                    st.success(f"✅ Observation hours set: {start_time}–{end_time}")
+                    st.rerun()
+        with col_b:
+            if current_window and st.button("🔄 Reset to default (9:00–14:30)", key="ist_reset_window", use_container_width=True):
+                if set_student_time_window(student_name, None, None):
+                    st.success("✅ Reset to default hours")
+                    st.rerun()
+        
+        if current_window:
+            st.info(f"ℹ️ Current setting: **{current_window[0]}–{current_window[1]}**  (only these slots will show in the grid)")
+    
+    with set_tabs[1]:
+        st.caption("Mark entire days as absent, holiday, or not in attendance")
+        
+        # Show current week days
+        week_start_here = ss.ist_week
+        week_days = [(week_start_here + timedelta(days=i), DAYS[i]) for i in range(5)]
+        
+        for day_date, day_name in week_days:
+            current_status = get_day_status(student_name, day_date)
+            
+            status_display = f"**{day_name} {day_date.strftime('%-d/%m')}**"
+            if current_status:
+                status_display += f" — <span style='background:#fef9c3;padding:.1rem .4rem;border-radius:4px;font-size:.75rem;'>{current_status.upper()}</span>"
+            
+            st.markdown(status_display, unsafe_allow_html=True)
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                if st.button("Absent", key=f"day_absent_{day_date}", use_container_width=True, 
+                           type="primary" if current_status == "absent" else "secondary"):
+                    set_day_status(student_name, day_date, "absent")
+                    st.rerun()
+            with col2:
+                if st.button("Holiday", key=f"day_holiday_{day_date}", use_container_width=True,
+                           type="primary" if current_status == "holiday" else "secondary"):
+                    set_day_status(student_name, day_date, "holiday")
+                    st.rerun()
+            with col3:
+                if st.button("Not attending", key=f"day_notattend_{day_date}", use_container_width=True,
+                           type="primary" if current_status == "not_attending" else "secondary"):
+                    set_day_status(student_name, day_date, "not_attending")
+                    st.rerun()
+            with col4:
+                if current_status and st.button("Clear", key=f"day_clear_{day_date}", use_container_width=True):
+                    set_day_status(student_name, day_date, "")
+                    st.rerun()
+            
+            st.markdown("<div style='margin-bottom:.5rem;'></div>", unsafe_allow_html=True)
+
 st.markdown("---")
 t_record, t_analysis = st.tabs(["📋  Record & View", "📈  Analysis"])
 
@@ -446,6 +626,16 @@ with t_record:
     # ════════════════════════════════════════════════════════════════════
     # INTERACTIVE GRID — each cell is a Streamlit button
     # ════════════════════════════════════════════════════════════════════
+    
+    # Filter time slots based on student settings
+    student_window = get_student_time_window(student_name)
+    if student_window and student_window[0] and student_window[1]:
+        start_idx = SLOT_TIMES.index(student_window[0]) if student_window[0] in SLOT_TIMES else 0
+        end_idx = SLOT_TIMES.index(student_window[1]) if student_window[1] in SLOT_TIMES else len(SLOT_TIMES)-1
+        display_slots = SLOT_TIMES[start_idx:end_idx+1]
+    else:
+        display_slots = SLOT_TIMES
+    
     hdr_cols = st.columns([1.2] + [1]*5)
     with hdr_cols[0]:
         st.markdown(
@@ -454,20 +644,27 @@ with t_record:
             'text-align:center;">Time</div>', unsafe_allow_html=True)
     for di, d in enumerate(DAYS):
         d_date   = week_start + timedelta(days=di)
+        day_status = get_day_status(student_name, d_date)
         is_td    = (d == today_day and is_this)
         is_sd    = (d == sel_day)
         bg       = "#0f3d5c" if is_td else ("#1d5a7a" if is_sd else "#1A6B8A")
         border   = "3px solid #fbbf24" if is_sd else "none"
+        
+        # Add status badge if day is marked
+        status_badge = ""
+        if day_status:
+            status_badge = f'<br><span style="background:#fbbf24;color:#78350f;font-size:.55rem;padding:.05rem .3rem;border-radius:3px;font-weight:600;">{day_status.upper()}</span>'
+        
         with hdr_cols[di+1]:
             st.markdown(
                 f'<div style="font-size:.68rem;font-weight:700;color:white;'
                 f'background:{bg};border-radius:6px;padding:.3rem .4rem;'
                 f'text-align:center;border:{border};">'
                 f'{d[:3]}<br><span style="font-weight:400;font-size:.6rem;">'
-                f'{d_date.strftime("%-d/%m")}</span></div>',
+                f'{d_date.strftime("%-d/%m")}</span>{status_badge}</div>',
                 unsafe_allow_html=True)
 
-    for t in SLOT_TIMES:
+    for t in display_slots:
         row_cols = st.columns([1.2] + [1]*5)
 
         is_sel_time = (t == sel_time)
@@ -637,9 +834,41 @@ with t_record:
 
         if cur_out or cur_reg or cur_grp or cur_acts:
             st.markdown("")
-            if st.button("🗑️ Clear interval", key=f"clr_{sel_time}_{sel_day}",
-                         use_container_width=True, type="secondary"):
-                clear_interval(student_name, sel_date, sel_time); st.rerun()
+            
+            # Copy/Paste/Clear buttons
+            btn_col1, btn_col2, btn_col3 = st.columns(3)
+            
+            with btn_col1:
+                if st.button("📋 Copy interval", key=f"copy_{sel_time}_{sel_day}",
+                           use_container_width=True, type="secondary"):
+                    copy_interval_data(cur_cell)
+                    st.success("✅ Interval copied!")
+                    st.rerun()
+            
+            with btn_col2:
+                # Show paste button if there's copied data
+                if ss.ist_copied_interval:
+                    if st.button("📥 Paste here", key=f"paste_{sel_time}_{sel_day}",
+                               use_container_width=True, type="secondary"):
+                        paste_interval_data(student_name, sel_date, sel_day, sel_time)
+                        st.success("✅ Data pasted!")
+                        st.rerun()
+                else:
+                    st.button("📥 Paste (copy first)", key=f"paste_dis_{sel_time}_{sel_day}",
+                            use_container_width=True, disabled=True)
+            
+            with btn_col3:
+                if st.button("🗑️ Clear interval", key=f"clr_{sel_time}_{sel_day}",
+                           use_container_width=True, type="secondary"):
+                    clear_interval(student_name, sel_date, sel_time); st.rerun()
+            
+            # Show what's copied
+            if ss.ist_copied_interval:
+                copied_reg = ss.ist_copied_interval.get("regulated", "")
+                if copied_reg:
+                    reg_cfg = REG_STATES.get(copied_reg, {})
+                    st.caption(f"📋 Copied: {reg_cfg.get('emoji', '')} {reg_cfg.get('label', '')}")
+
 
     st.markdown('</div>', unsafe_allow_html=True)
 
