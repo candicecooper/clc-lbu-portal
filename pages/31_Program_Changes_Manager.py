@@ -67,6 +67,8 @@ for _k, _v in {
     'num_blocks': 1,
     'show_mobile_view': False,
     'pending_edit_preload': False,
+    '_save_success': None,   # set to staff name after successful save, cleared after display
+    '_save_updated': False,  # True when an edit was saved (vs new entry)
 }.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
@@ -407,6 +409,14 @@ with col3:
 target_date_str = target_date.isoformat()
 changes = get_changes_for_date(target_date_str)
 
+# ── Post-save success banner (shown after rerun so it persists) ──────
+if st.session_state._save_success:
+    _name = st.session_state._save_success
+    _verb = "updated" if st.session_state._save_updated else "saved"
+    st.success(f"✅ Timetable {_verb} for **{_name}**!")
+    st.session_state._save_success = None
+    st.session_state._save_updated = False
+
 st.markdown("---")
 
 # ── Editing state ────────────────────────────────────────────
@@ -540,36 +550,49 @@ Each entry = one person's view of what THEY are doing today.
         )
 
         if submitted:
+            _form_error = None
             if not staff_member or not reason:
-                st.error("Please fill in Staff Member and Reason")
-                st.stop()
-            valid_blocks = [b for b in time_blocks if b.get('program_type')]
-            if not valid_blocks:
-                st.error("Please add at least one time block")
-                st.stop()
-
-            change_data = {
-                'change_date': target_date_str,
-                'staff_name': staff_member,
-                'reason': reason,
-                'covered_by': covered_by if covered_by else None,
-                'notes': st.session_state.get('form_notes') or None,
-                'time_blocks': valid_blocks
-            }
-
-            if is_editing:
-                if update_program_change(st.session_state.editing_change_id, change_data):
-                    st.success(f"✅ Timetable updated for {staff_member}!")
-                    st.session_state.editing_change_id = None
-                    st.session_state.editing_change_data = None
+                _form_error = "Please fill in Staff Member and Reason."
             else:
-                if save_program_change(change_data):
-                    st.success(f"✅ Timetable saved for {staff_member}!")
+                valid_blocks = [b for b in time_blocks if b.get('program_type')]
+                if not valid_blocks:
+                    _form_error = "Please add at least one time block."
 
-            st.session_state.num_blocks = 1
-            for _k in ['form_reason', 'form_covered_by', 'form_notes']:
-                st.session_state.pop(_k, None)
-            st.rerun()
+            if _form_error:
+                st.error(_form_error)
+            else:
+                change_data = {
+                    'change_date': target_date_str,
+                    'staff_name': staff_member,
+                    'reason': reason,
+                    'covered_by': covered_by if covered_by else None,
+                    'notes': st.session_state.get('form_notes') or None,
+                    'time_blocks': valid_blocks
+                }
+
+                if is_editing:
+                    _ok = update_program_change(st.session_state.editing_change_id, change_data)
+                    if _ok:
+                        st.session_state._save_success = staff_member
+                        st.session_state._save_updated = True
+                        st.session_state.editing_change_id = None
+                        st.session_state.editing_change_data = None
+                        st.session_state.num_blocks = 1
+                        for _k in ['form_reason', 'form_covered_by', 'form_notes']:
+                            st.session_state.pop(_k, None)
+                        st.rerun()
+                    # if _ok is False, save_program_change already called st.error()
+                    # — don't rerun so the error stays visible
+                else:
+                    _ok = save_program_change(change_data)
+                    if _ok:
+                        st.session_state._save_success = staff_member
+                        st.session_state._save_updated = False
+                        st.session_state.num_blocks = 1
+                        for _k in ['form_reason', 'form_covered_by', 'form_notes']:
+                            st.session_state.pop(_k, None)
+                        st.rerun()
+                    # if _ok is False, save_program_change already called st.error()
 
 
 # ─────────────────────────────────────────────
