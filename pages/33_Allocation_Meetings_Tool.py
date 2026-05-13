@@ -1,10 +1,12 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import json
 from supabase import create_client
 import os
 from io import BytesIO
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # Page config
 st.set_page_config(
@@ -31,14 +33,20 @@ STAFF_NAMES = ["Candice", "Annette", "Tom", "Gary", "Caitie", "Jacqui",
 OUTCOMES = ["Allocated", "Not Allocated"]
 EXTENSION_OUTCOMES = ["Approved", "Not Approved"]
 
+# Program mapping for Data Entry format
+PROGRAM_MAPPING = {
+    "Junior Primary": "Primary (R-6)",
+    "Primary": "Primary (R-6)",
+    "Secondary": "Middle (7-9)"
+}
+
 # Helper functions
 def get_current_term_week():
     """Calculate current term and week based on SA school calendar"""
-    # This is a simplified version - adjust dates for actual SA school terms
     today = datetime.now().date()
     year = today.year
     
-    # Term 2 2025 dates (example - update as needed)
+    # Term 2 2025 dates
     term_2_start = datetime(2025, 4, 28).date()
     term_2_end = datetime(2025, 7, 4).date()
     
@@ -46,7 +54,6 @@ def get_current_term_week():
         weeks_in = ((today - term_2_start).days // 7) + 1
         return f"Term 2", weeks_in, year
     
-    # Default to Term 2, Week 1
     return "Term 2", 1, 2025
 
 def get_meeting_weeks(term, year):
@@ -55,16 +62,187 @@ def get_meeting_weeks(term, year):
 
 def get_thursday_date(week_number, term, year):
     """Calculate Thursday date for a given week"""
-    # Term 2 2025 start: Monday April 28
     term_2_start = datetime(2025, 4, 28).date()
-    
-    # Calculate the Thursday of the selected week
-    days_to_add = (week_number - 1) * 7 + 3  # +3 for Thursday
+    days_to_add = (week_number - 1) * 7 + 3
     thursday = term_2_start + timedelta(days=days_to_add)
     return thursday
 
+def generate_student_id():
+    """Generate next Student_ID in format STU-YYYY-###"""
+    year = datetime.now().year
+    
+    # Get highest existing ID from Supabase
+    result = supabase.table("allocation_students")\
+        .select("id")\
+        .execute()
+    
+    # Count records and increment
+    count = len(result.data) if result.data else 0
+    next_num = count + 1
+    
+    return f"STU-{year}-{next_num:03d}"
+
+def map_flags_from_allocation(cat_funding, partnership):
+    """Map categorical funding and partnership to flag columns"""
+    flags = {
+        "Flag_ASD": "No",
+        "Flag_ADHD": "No",
+        "Flag_MentalHealth": "No",
+        "Flag_ODD_CD": "No",
+        "Flag_Care_CPS": "No",
+        "Flag_Aboriginal": "No",
+        "Flag_EALD": "No",
+        "Flag_Other": "No"
+    }
+    
+    # Parse JSON if string
+    if isinstance(cat_funding, str):
+        try:
+            cat_funding = json.loads(cat_funding)
+        except:
+            cat_funding = []
+    if isinstance(partnership, str):
+        try:
+            partnership = json.loads(partnership)
+        except:
+            partnership = []
+    
+    # Map categorical funding
+    if "ATSI" in cat_funding:
+        flags["Flag_Aboriginal"] = "Yes"
+    if "SIC" in cat_funding or "DCP" in cat_funding:
+        flags["Flag_Care_CPS"] = "Yes"
+    
+    # Map partnership
+    if "ASD" in partnership:
+        flags["Flag_ASD"] = "Yes"
+    if "MH" in partnership or "CAHMS" in partnership:
+        flags["Flag_MentalHealth"] = "Yes"
+    if "EALD" in partnership:
+        flags["Flag_EALD"] = "Yes"
+    
+    return flags
+
+def export_to_data_entry(selected_allocations):
+    """Generate Excel file in Data Entry format"""
+    
+    # Create workbook
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Data_Model"
+    
+    # Define headers (29 columns)
+    headers = [
+        "Student_ID", "Student_Name", "DOB", "Gender", "Referring_School",
+        "Referral_Date", "Allocation_Status", "Allocated_Program", 
+        "Placement_Start", "Placement_End", "Partnership_Area",
+        "Previous_CLC_Placement", "Previous_Other_LC", "Other_LC_Name",
+        "Total_Previous_Placements", "Placement_History_Notes", "Priority_Level",
+        "Flag_ASD", "Flag_ADHD", "Flag_MentalHealth", "Flag_ODD_CD",
+        "Flag_Care_CPS", "Flag_Aboriginal", "Flag_EALD", "Flag_Other",
+        "Current_Status", "Exit_Reason", "Transition_Plan", "Notes"
+    ]
+    
+    # Style header row
+    header_fill = PatternFill(start_color="1A7A6E", end_color="1A7A6E", fill_type="solid")
+    header_font = Font(bold=True, color="FFFFFF")
+    
+    for col, header in enumerate(headers, 1):
+        cell = ws.cell(1, col, header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    
+    # Add data rows
+    for row_num, allocation in enumerate(selected_allocations, 2):
+        # Generate Student_ID
+        student_id = f"STU-{datetime.now().year}-{row_num-1:03d}"
+        
+        # Get flags from categorical funding and partnership
+        flags = map_flags_from_allocation(
+            allocation.get('cat_funding', []),
+            allocation.get('partnership', [])
+        )
+        
+        # Map program
+        program = allocation.get('program', '')
+        mapped_program = PROGRAM_MAPPING.get(program, program)
+        
+        # Format dates
+        dob = allocation.get('date_of_birth', '')
+        if dob and isinstance(dob, str):
+            try:
+                dob = datetime.strptime(dob, '%Y-%m-%d').strftime('%Y-%m-%d')
+            except:
+                pass
+        
+        start_date = allocation.get('start_after', '')
+        if start_date and isinstance(start_date, str):
+            try:
+                start_date = datetime.strptime(start_date, '%Y-%m-%d').strftime('%Y-%m-%d')
+            except:
+                pass
+        
+        end_date = allocation.get('finishing_date', '')
+        if end_date and isinstance(end_date, str):
+            try:
+                end_date = datetime.strptime(end_date, '%Y-%m-%d').strftime('%Y-%m-%d')
+            except:
+                pass
+        
+        # Today's date as referral date
+        today = datetime.now().strftime('%Y-%m-%d')
+        
+        # Build row data
+        row_data = [
+            student_id,
+            allocation.get('student_name', '').upper(),
+            dob,
+            "",  # Gender - not captured in meeting tool
+            allocation.get('school', ''),
+            today,  # Referral_Date (today)
+            "Allocated",  # Allocation_Status
+            mapped_program,
+            start_date,
+            end_date if end_date else None,
+            "",  # Partnership_Area - not captured
+            "No",  # Previous_CLC_Placement
+            "No",  # Previous_Other_LC
+            None,  # Other_LC_Name
+            0,  # Total_Previous_Placements
+            None,  # Placement_History_Notes
+            None,  # Priority_Level
+            flags["Flag_ASD"],
+            flags["Flag_ADHD"],
+            flags["Flag_MentalHealth"],
+            flags["Flag_ODD_CD"],
+            flags["Flag_Care_CPS"],
+            flags["Flag_Aboriginal"],
+            flags["Flag_EALD"],
+            flags["Flag_Other"],
+            "Active",  # Current_Status
+            None,  # Exit_Reason
+            None,  # Transition_Plan
+            allocation.get('notes', '')
+        ]
+        
+        for col, value in enumerate(row_data, 1):
+            cell = ws.cell(row_num, col, value)
+            cell.alignment = Alignment(horizontal="left", vertical="center")
+    
+    # Adjust column widths
+    for col in range(1, 30):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = 18
+    
+    # Save to BytesIO
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    return output
+
 def export_to_excel(week_data):
-    """Export meeting data to Excel"""
+    """Export meeting data to Excel (original format)"""
     output = BytesIO()
     
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -81,14 +259,6 @@ def export_to_excel(week_data):
                 df_students['partnership'] = df_students['partnership'].apply(
                     lambda x: ', '.join(json.loads(x)) if isinstance(x, str) else ', '.join(x) if x else ''
                 )
-            
-            # Reorder columns for readability
-            column_order = ['student_name', 'school', 'date_of_birth', 'year_level', 
-                          'exc_tsp_itsp', 'edid', 'cat_funding', 'partnership', 
-                          'program', 'start_after', 'finishing_date', 
-                          'case_worker', 'bsc', 'school_contact',
-                          'queries', 'outcome', 'details', 'notes']
-            df_students = df_students[[col for col in column_order if col in df_students.columns]]
             
             df_students.to_excel(writer, sheet_name='Student Allocations', index=False)
         
@@ -487,6 +657,69 @@ with tab4:
         
         st.markdown("---")
         
+        # NEW: Export to Data Entry Section
+        allocated_students = [s for s in students_data.data if s.get('outcome') == 'Allocated']
+        
+        if allocated_students:
+            st.subheader("📤 Export to Allocation Data Entry")
+            st.info("💡 Select allocated students to export in Data Entry format for your SharePoint tracker")
+            
+            # Selection interface
+            if 'selected_for_export' not in st.session_state:
+                st.session_state.selected_for_export = set()
+            
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.write("**Select students to export:**")
+            with col2:
+                if st.button("Select All Allocated"):
+                    st.session_state.selected_for_export = {s['id'] for s in allocated_students}
+                    st.rerun()
+            
+            # Checkboxes for each allocated student
+            for student in allocated_students:
+                col1, col2, col3, col4 = st.columns([1, 3, 2, 2])
+                with col1:
+                    is_selected = student['id'] in st.session_state.selected_for_export
+                    if st.checkbox("", value=is_selected, key=f"export_{student['id']}"):
+                        st.session_state.selected_for_export.add(student['id'])
+                    elif is_selected:
+                        st.session_state.selected_for_export.discard(student['id'])
+                with col2:
+                    st.write(f"**{student['student_name']}**")
+                with col3:
+                    st.write(student.get('program', ''))
+                with col4:
+                    st.write(student.get('school', '')[:20])
+            
+            # Export button
+            if st.session_state.selected_for_export:
+                st.markdown("---")
+                selected_count = len(st.session_state.selected_for_export)
+                
+                col1, col2, col3 = st.columns([2, 1, 2])
+                with col2:
+                    if st.button(f"📥 Export {selected_count} Student{'s' if selected_count > 1 else ''}", 
+                               use_container_width=True, type="primary"):
+                        # Get selected allocations
+                        selected = [s for s in allocated_students if s['id'] in st.session_state.selected_for_export]
+                        
+                        # Generate Data Entry Excel
+                        data_entry_excel = export_to_data_entry(selected)
+                        
+                        st.download_button(
+                            label="⬇️ Download Data Entry Excel",
+                            data=data_entry_excel,
+                            file_name=f"Allocation_DataEntry_{meeting_week_label.replace(' ', '_')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True
+                        )
+                        
+                        st.success(f"✅ Generated Data Entry format for {selected_count} student(s)")
+                        st.info("📋 **Next Steps:**\n1. Download the file above\n2. Open your SharePoint Allocation Data Entry\n3. Copy rows from this file\n4. Paste into your tracker")
+        
+        st.markdown("---")
+        
         # Display data tables
         if students_data.data:
             st.subheader("📝 Student Allocations")
@@ -499,9 +732,9 @@ with tab4:
             st.dataframe(df_students[display_cols], use_container_width=True)
             
             # Edit/Delete options
-            with st.expander("🔧 Edit Records"):
+            with st.expander("🔧 Manage Records"):
                 record_to_edit = st.selectbox(
-                    "Select record to edit",
+                    "Select record",
                     options=df_students['id'].tolist(),
                     format_func=lambda x: df_students[df_students['id'] == x]['student_name'].iloc[0]
                 )
@@ -537,8 +770,9 @@ with tab4:
             display_cols = [col for col in display_cols if col in df_not_placed.columns]
             st.dataframe(df_not_placed[display_cols], use_container_width=True)
         
-        # Export button
+        # Original Excel export (for meeting notes)
         st.markdown("---")
+        st.subheader("📄 Export Meeting Notes")
         
         week_data = {
             'students': students_data.data,
@@ -552,9 +786,9 @@ with tab4:
             col1, col2, col3 = st.columns([2, 1, 2])
             with col2:
                 st.download_button(
-                    label="📥 Download Excel",
+                    label="📥 Download Meeting Notes",
                     data=excel_file,
-                    file_name=f"Allocation_Meeting_{meeting_week_label.replace(' ', '_')}.xlsx",
+                    file_name=f"Allocation_Meeting_Notes_{meeting_week_label.replace(' ', '_')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True
                 )
@@ -567,4 +801,4 @@ with tab4:
 
 # Footer
 st.markdown("---")
-st.caption("CLC-LBU Allocation Meetings Tool | Developed for structured placement tracking")
+st.caption("CLC-LBU Allocation Meetings Tool | Streamlit + Supabase + Excel Export")
