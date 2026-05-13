@@ -588,8 +588,13 @@ Status: {previous_confirmed}
             with tab3:
                 st.markdown("### Download Meeting Documents")
                 
-                if minutes_response.data:
-                    minutes_data = minutes_response.data[0]
+                # FIX: Re-fetch minutes data in this tab instead of relying on tab2's variable
+                download_minutes_response = supabase.table("committee_minutes").select("*").eq(
+                    "meeting_id", st.session_state.selected_meeting
+                ).execute()
+                
+                if download_minutes_response.data:
+                    minutes_data = download_minutes_response.data[0]
                     
                     # Download minutes
                     if minutes_data.get('formatted_minutes'):
