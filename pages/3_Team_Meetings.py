@@ -873,8 +873,7 @@ def render_specialist_meeting():
                 st.success("✅ Meeting record updated!")
             else:
                 result = supabase.table('tm_program_meetings').insert(meeting_data).execute()
-
-if result.data:
+                if result.data:
                     st.session_state.current_meeting_id = result.data[0]['id']
                 st.success("✅ Meeting record saved!")
             
@@ -892,6 +891,7 @@ if result.data:
 # ─────────────────────────────────────────────────────────────────────────────
 # PROGRAM MEETING (JP/PY/SY) - WITH SMARTAR INTEGRATION
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def render_program_meeting(program):
     import json as _json
@@ -1699,8 +1699,7 @@ RAW TRANSCRIPT:
                         "action": st.session_state[f"ai_act_{program}_{ai_idx}"],
                         "who": st.session_state[f"ai_who_{program}_{ai_idx}"],
                         "by_when": st.session_state[f"ai_when_{program}_{ai_idx}"],
-
-"priority": st.session_state[f"ai_pri_{program}_{ai_idx}"],
+                        "priority": st.session_state[f"ai_pri_{program}_{ai_idx}"],
                         "notes": "",
                         "done": False
                     })
@@ -1730,8 +1729,8 @@ RAW TRANSCRIPT:
                 st.rerun()
         
         st.markdown("---")
-    
-    # Existing actions display
+
+# Existing actions display
     st.markdown("**Current Actions:**")
 
     ah_cols = st.columns([4,1.5,1,1,0.7,0.5])
