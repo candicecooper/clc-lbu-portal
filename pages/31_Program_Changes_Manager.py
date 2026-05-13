@@ -567,16 +567,6 @@ Each entry = one person's view of what THEY are doing today.
             if _form_error:
                 st.error(_form_error)
             else:
-                # Snapshot all form values into session state NOW, before any
-                # network call. If save fails the page won't rerun, but on any
-                # future rerun the values are still there — nothing is ever lost.
-                st.session_state['form_reason'] = reason
-                st.session_state['form_covered_by'] = covered_by or ''
-                st.session_state['form_notes'] = st.session_state.get('form_notes', '')
-                st.session_state['_pending_staff_member'] = staff_member
-                st.session_state['_pending_staff_type'] = staff_type
-                st.session_state['_pending_blocks'] = time_blocks
-
                 change_data = {
                     'change_date': target_date_str,
                     'staff_name': staff_member,
@@ -594,8 +584,7 @@ Each entry = one person's view of what THEY are doing today.
                         st.session_state.editing_change_id = None
                         st.session_state.editing_change_data = None
                         st.session_state.num_blocks = 1
-                        for _k in ['form_reason', 'form_covered_by', 'form_notes',
-                                   '_pending_staff_member', '_pending_staff_type', '_pending_blocks']:
+                        for _k in ['form_reason', 'form_covered_by', 'form_notes']:
                             st.session_state.pop(_k, None)
                         st.rerun()
                     # Save failed — st.error() already shown, no rerun, form stays intact
@@ -605,8 +594,7 @@ Each entry = one person's view of what THEY are doing today.
                         st.session_state._save_success = staff_member
                         st.session_state._save_updated = False
                         st.session_state.num_blocks = 1
-                        for _k in ['form_reason', 'form_covered_by', 'form_notes',
-                                   '_pending_staff_member', '_pending_staff_type', '_pending_blocks']:
+                        for _k in ['form_reason', 'form_covered_by', 'form_notes']:
                             st.session_state.pop(_k, None)
                         st.rerun()
                     # Save failed — st.error() already shown, no rerun, form stays intact
