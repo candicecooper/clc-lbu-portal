@@ -892,7 +892,6 @@ def render_specialist_meeting():
 # PROGRAM MEETING (JP/PY/SY) - WITH SMARTAR INTEGRATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-
 def render_program_meeting(program):
     import json as _json
     prog_label = PROGRAMS[program]["label"]
@@ -1729,8 +1728,8 @@ RAW TRANSCRIPT:
                 st.rerun()
         
         st.markdown("---")
-
-# Existing actions display
+    
+    # Existing actions display
     st.markdown("**Current Actions:**")
 
     ah_cols = st.columns([4,1.5,1,1,0.7,0.5])
@@ -2289,5 +2288,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# === END OF PART 3 - FILE COMPLETE ===
