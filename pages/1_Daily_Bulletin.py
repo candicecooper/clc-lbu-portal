@@ -413,23 +413,6 @@ def delete_bulletin_change(cid):
     try: _get_sb().table("daily_changes").delete().eq("id", cid).execute(); return True
     except Exception as e: st.error(f"Delete failed: {e}"); return False
 
-def load_pc_manager_changes(d):
-    """Load entries from the Program Changes Manager tool (program_changes table)."""
-    try:
-        res = _get_sb().table("program_changes").select("*").eq("change_date", str(d)).order("created_at").execute()
-        rows = res.data or []
-        for row in rows:
-            if isinstance(row.get("time_blocks"), str):
-                try: row["time_blocks"] = json.loads(row["time_blocks"])
-                except: row["time_blocks"] = []
-        return rows
-    except Exception:
-        return []
-
-def _fmt_pc_time(ts):
-    try: return datetime.strptime(str(ts), "%H:%M:%S").strftime("%I:%M %p").lstrip("0")
-    except: return str(ts)
-
 def _build_plain_text_bc(changes, for_date):
     lines = [f"CLC PROGRAM CHANGES \u2014 {for_date.strftime('%A %-d %B %Y').upper()}", "="*52]
     for idx, ch in enumerate(changes, 1):
@@ -529,7 +512,7 @@ if params.get("display") == "true":
       <div style="display:flex;align-items:center;gap:1.5rem;">
         <div style="font-family:'DM Mono',monospace;font-size:1.4rem;color:#e8a125;font-weight:700;" id="live-clock">--:-- --</div>
         <a href="/?quickadd=true" style="background:rgba(107,191,78,0.2);border:1px solid rgba(107,191,78,0.5);color:#6BBF4E;font-family:'DM Sans',sans-serif;font-size:.68rem;font-weight:600;padding:.3rem .85rem;border-radius:6px;text-decoration:none;">\U0001f4dd Quick Add</a>
-        <a href="/?from_display=true" style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.18);color:rgba(255,255,255,0.55);font-family:'DM Sans',sans-serif;font-size:.68rem;font-weight:600;padding:.3rem .85rem;border-radius:6px;text-decoration:none;">\u270f\ufe0f Staff Access</a>
+        <a href="/Daily_Bulletin?from_display=true" style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.18);color:rgba(255,255,255,0.55);font-family:'DM Sans',sans-serif;font-size:.68rem;font-weight:600;padding:.3rem .85rem;border-radius:6px;text-decoration:none;">\u270f\ufe0f Staff Access</a>
       </div></div>""", unsafe_allow_html=True)
 
     prev_day = today - timedelta(days=1); next_day = today + timedelta(days=1)
@@ -627,36 +610,6 @@ if params.get("display") == "true":
     else:
         st.markdown('<div class="dp"><div class="dp-header green">\U0001f4ca Program Changes</div><div class="dp-body"><span class="dt-em">No program changes today</span></div></div>', unsafe_allow_html=True)
 
-    # ── Program Changes Manager entries (from standalone tool) ──────────
-    _pcm_today = load_pc_manager_changes(today)
-    if _pcm_today:
-        _pcm_parts = []
-        for _pcm in _pcm_today:
-            _pcm_staff = _pcm.get("staff_name","N/A"); _pcm_reason = _pcm.get("reason","")
-            _pcm_covered = _pcm.get("covered_by",""); _pcm_blocks = _pcm.get("time_blocks",[]) or []
-            _block_rows = "".join([
-                f'<tr><td style="color:#C8760A;font-weight:600;white-space:nowrap;font-size:.58rem;">'
-                f'{_fmt_pc_time(b.get("start_time",""))} \u2192 {_fmt_pc_time(b.get("end_time",""))}</td>'
-                f'<td style="font-size:.58rem;">{b.get("modified_program","")}'
-                f'{"<br><span style=\'color:#6BBF4E;font-size:0.9em;\'>Release: "+b["released_by"]+"</span>" if b.get("released_by") else ""}'
-                f'</td></tr>'
-                for b in _pcm_blocks
-            ])
-            _cov_html = f'<div style="font-size:.58rem;color:#6BBF4E;font-weight:600;margin:.2rem 0;">Covered by: {_pcm_covered}</div>' if _pcm_covered else ""
-            _pcm_parts.append(
-                f'<div style="margin-bottom:8px;border-left:3px solid #C8760A;padding-left:7px;">'
-                f'<div style="font-size:.62rem;font-weight:700;color:#6BBF4E;">{_pcm_staff}</div>'
-                f'<div style="font-size:.58rem;color:#a8c8a8;margin-bottom:3px;">{_pcm_reason}</div>'
-                f'{_cov_html}'
-                f'{"<table style=\'border-collapse:collapse;width:100%;\'>" + _block_rows + "</table>" if _block_rows else ""}'
-                f'</div>'
-            )
-        st.markdown(
-            f'<div class="dp"><div class="dp-header amber">\U0001f4cb Staff Timetable Changes</div>'
-            f'<div class="dp-body">{"".join(_pcm_parts)}</div></div>',
-            unsafe_allow_html=True
-        )
-
     import streamlit.components.v1 as components
     components.html("""<script>(function(){function u(){var o={timeZone:'Australia/Adelaide',hour:'numeric',minute:'2-digit',hour12:true};var t=new Date().toLocaleTimeString('en-AU',o).toUpperCase();var e=window.parent.document.getElementById('live-clock');if(e)e.textContent=t}u();setInterval(u,1000)})();</script>""", height=0)
     st.markdown(f'<div class="fact-bar"><span class="fact-label">\U0001f4a1 Fun Fact</span><span>{fun or "No fun fact for today"}</span></div>', unsafe_allow_html=True)
@@ -681,7 +634,7 @@ if params.get("quickadd") == "true":
             else:
                 save_notice({"submitted_by": qa_name.strip(), "category": qa_cat, "title": qa_title.strip(), "body": qa_body.strip(), "notice_date": str(qa_date)})
                 st.success(f"\u2705 Notice posted for {qa_date.strftime('%-d %B')}!"); st.balloons()
-    st.markdown('<div style="text-align:center;"><a href="/" style="font-size:.82rem;color:#4a8f33;font-weight:600;text-decoration:none;">\u2190 Back to full bulletin</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="/?display=true" style="font-size:.82rem;color:#4a8f33;font-weight:600;text-decoration:none;">Staff room display \u2192</a></div>', unsafe_allow_html=True)
+    st.markdown('<div style="text-align:center;"><a href="/Daily_Bulletin" style="font-size:.82rem;color:#4a8f33;font-weight:600;text-decoration:none;">\u2190 Back to full bulletin</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="/Daily_Bulletin?display=true" style="font-size:.82rem;color:#4a8f33;font-weight:600;text-decoration:none;">Staff room display \u2192</a></div>', unsafe_allow_html=True)
     st.stop()
 
 
@@ -706,7 +659,7 @@ with page_tab:
                 if quick_pw == ADMIN_PASSWORD: st.session_state.authenticated = True; st.session_state.edit_mode = True; st.rerun()
                 else: st.error("Incorrect password")
         with back_col:
-            st.markdown('<a href="/?display=true" style="display:block;text-align:center;background:#eef1f4;color:#1a2e44;font-weight:600;font-size:.85rem;padding:.5rem;border-radius:8px;text-decoration:none;">\u21a9\ufe0f Back to Display</a>', unsafe_allow_html=True)
+            st.markdown('<a href="/Daily_Bulletin?display=true" style="display:block;text-align:center;background:#eef1f4;color:#1a2e44;font-weight:600;font-size:.85rem;padding:.5rem;border-radius:8px;text-decoration:none;">\u21a9\ufe0f Back to Display</a>', unsafe_allow_html=True)
         st.markdown("---")
 
     week = week_dates(current_date)
@@ -756,7 +709,7 @@ with page_tab:
         with ctrl_cols[0]:
             if st.button("\U0001f510 Staff Login", type="secondary", use_container_width=True): st.session_state.show_inline_login = not st.session_state.get("show_inline_login", False); st.rerun()
     with ctrl_cols[4]:
-        st.markdown('<a href="/?display=true" target="_blank" style="display:block;text-align:center;background:#1a2e44;color:white;font-weight:600;font-size:.8rem;padding:.45rem .75rem;border-radius:8px;text-decoration:none;white-space:nowrap;">\U0001f4fa Staff Room</a>', unsafe_allow_html=True)
+        st.markdown('<a href="/Daily_Bulletin?display=true" target="_blank" style="display:block;text-align:center;background:#1a2e44;color:white;font-weight:600;font-size:.8rem;padding:.45rem .75rem;border-radius:8px;text-decoration:none;white-space:nowrap;">\U0001f4fa Staff Room</a>', unsafe_allow_html=True)
 
     if not st.session_state.authenticated and st.session_state.get("show_inline_login", False):
         with st.container():
@@ -1168,47 +1121,6 @@ with page_tab:
             with ex3: st.markdown('<div style="font-size:.75rem;color:#7a907a;padding-top:.5rem;">\U0001f4a1 <strong>Text file</strong> \u2014 paste into SMS or email &nbsp;\u00b7&nbsp; <strong>Printable sheet</strong> \u2014 open in browser then Print or Save as PDF</div>', unsafe_allow_html=True)
             with st.expander("\U0001f441\ufe0f Preview plain text"): st.code(_plain, language=None)
 
-        # ── Program Changes Manager entries ─────────────────────────────────
-        st.markdown("---")
-        st.markdown(
-            '<div style="background:#fff8f0;border:1.5px solid #e8c090;border-radius:10px;padding:.75rem 1rem;margin-bottom:.75rem;">'
-            '<div style="font-size:.9rem;font-weight:700;color:#1a2e44;margin-bottom:.15rem;">\U0001f4cb Staff Timetable Changes <span style="font-size:.72rem;font-weight:400;color:#7a907a;">(from Program Changes Manager)</span></div>'
-            '<div style="font-size:.78rem;color:#7a907a;">These entries are managed via the <strong>Program Changes Manager</strong> tool. '
-            'To add, edit, or delete entries go to that tool — changes appear here automatically.</div>'
-            '</div>',
-            unsafe_allow_html=True
-        )
-        _pcm_changes = load_pc_manager_changes(current_date)
-        if not _pcm_changes:
-            st.markdown('<div style="text-align:center;padding:1.25rem;color:#9ab09a;font-size:.85rem;background:#f8fdf6;border-radius:10px;">\U0001f4ed No staff timetable changes entered via Program Changes Manager for this day.</div>', unsafe_allow_html=True)
-        else:
-            st.markdown(f'<div style="font-size:.82rem;font-weight:600;color:#C8760A;margin-bottom:.5rem;">\U0001f4cb {len(_pcm_changes)} timetable change{"s" if len(_pcm_changes)!=1 else ""} for {current_date.strftime("%-d %B")}:</div>', unsafe_allow_html=True)
-            for _pcm in _pcm_changes:
-                _pcm_staff   = _pcm.get("staff_name","N/A")
-                _pcm_reason  = _pcm.get("reason","")
-                _pcm_covered = _pcm.get("covered_by","")
-                _pcm_notes   = _pcm.get("notes","")
-                _pcm_blocks  = _pcm.get("time_blocks",[]) or []
-                _pcm_updated = " *(edited)*" if _pcm.get("updated_at") else ""
-                st.markdown(
-                    f'<div style="background:white;border:1.5px solid #e8d0b0;border-left:5px solid #C8760A;'
-                    f'border-radius:10px;padding:.85rem 1rem;margin-bottom:.6rem;">'
-                    f'<div style="font-size:.95rem;font-weight:700;color:#1a2e44;">{_pcm_staff}{_pcm_updated}</div>'
-                    f'<div style="font-size:.82rem;color:#7a907a;margin:.2rem 0 .4rem;">{_pcm_reason}</div>'
-                    + (f'<div style="font-size:.78rem;color:#1A7A6E;font-weight:600;margin-bottom:.35rem;">Covered by: {_pcm_covered}</div>' if _pcm_covered else "")
-                    + (f'<div style="font-size:.75rem;color:#888;font-style:italic;margin-bottom:.35rem;">{_pcm_notes}</div>' if _pcm_notes else "")
-                    + "</div>",
-                    unsafe_allow_html=True
-                )
-                if _pcm_blocks:
-                    for _b in _pcm_blocks:
-                        _bstart = _fmt_pc_time(_b.get("start_time",""))
-                        _bend   = _fmt_pc_time(_b.get("end_time",""))
-                        _bprog  = _b.get("modified_program","N/A")
-                        _brb    = _b.get("released_by","")
-                        _rb_txt = f" *(Release: {_brb})*" if _brb else ""
-                        st.markdown(f"&nbsp;&nbsp;&nbsp;- **{_bstart} → {_bend}**: {_bprog}{_rb_txt}")
-
     st.markdown('</div>', unsafe_allow_html=True)
 
     if edit:
@@ -1235,7 +1147,7 @@ with page_tab:
             st.session_state.edit_mode = False
             st.session_state["_save_ok"] = True
             if st.query_params.get("from_display") == "true":
-                st.markdown('<meta http-equiv="refresh" content="2;url=/?display=true">', unsafe_allow_html=True); st.info("\u21a9\ufe0f Returning to staff room display in 2 seconds...")
+                st.markdown('<meta http-equiv="refresh" content="2;url=/Daily_Bulletin?display=true">', unsafe_allow_html=True); st.info("\u21a9\ufe0f Returning to staff room display in 2 seconds...")
             st.rerun()
         except Exception as _save_err:
             st.error(f"\u26a0\ufe0f Bulletin could not be saved \u2014 {_save_err}")
