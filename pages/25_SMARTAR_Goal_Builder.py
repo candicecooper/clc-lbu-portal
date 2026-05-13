@@ -1,2276 +1,2188 @@
-from theme import apply_clc_theme
 import streamlit as st
-from supabase import create_client
-import datetime
-from groq import Groq
 import json
-import io
-import time
-from urllib.parse import quote
-from docx import Document
-from docx.shared import Pt, RGBColor, Inches, Cm
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+import matplotlib.patches as mpatches
+from matplotlib.backends.backend_pdf import PdfPages
+import numpy as np
+import pandas as pd
+from datetime import date, datetime, timedelta
+from io import BytesIO
+from supabase import create_client
+from groq import Groq
+from urllib.parse import unquote
+from collections import defaultdict
 
-# ── Page config ──────────────────────────────────────────────────────────────
-st.set_page_config(page_title="CLC Team Meetings", page_icon="👥", layout="wide")
-apply_clc_theme()
+# ── Page config ───────────────────────────────────────────────────────────────
+st.set_page_config(page_title="SMARTAR Goal Builder", page_icon="🎯", layout="wide")
 
-from auth import require_auth, logout_button, get_staff_name
-require_auth("Team Meetings", "👥")
-logout_button("sidebar")
+# ── Team Meetings Integration ─────────────────────────────────────────────────
+def check_team_meetings_integration():
+    params = st.query_params
+    student_param   = params.get("student", None)
+    meeting_id_param = params.get("meeting_id", None)
+    program_param   = params.get("program", None)
+    term_param      = params.get("term", None)
+    week_param      = params.get("week", None)
+    return_to       = params.get("return_to", None)
+    return {
+        "active":     return_to == "team_meetings",
+        "student":    unquote(student_param) if student_param else None,
+        "meeting_id": int(meeting_id_param) if meeting_id_param else None,
+        "program":    program_param,
+        "term":       term_param,
+        "week":       int(week_param) if week_param else None,
+    }
 
-# ── Auto-save session state initialization ───────────────────────────────────
-if 'last_autosave_time' not in st.session_state:
-    st.session_state.last_autosave_time = None
-if 'autosave_message' not in st.session_state:
-    st.session_state.autosave_message = ""
-if 'current_meeting_id' not in st.session_state:
-    st.session_state.current_meeting_id = None
+integration = check_team_meetings_integration()
 
-# ── Back to Portal ─────────────────────────────────────────────────────────────
-st.sidebar.markdown(
-    '<a href="https://16cefb77.clc-portal.pages.dev/" target="_self" style="display:block;text-align:center;'
-    'background:#1A7A7A;color:white;font-weight:600;font-size:0.85rem;'
-    'padding:0.5rem;border-radius:8px;text-decoration:none;margin-bottom:0.5rem;">'
-    '🏠 Back to Staff Portal</a>',
-    unsafe_allow_html=True
-)
+# ── Clients ───────────────────────────────────────────────────────────────────
+def _get_sb_creds():
+    url = (st.secrets.get("supabase", {}).get("url")
+           or st.secrets.get("BEHAVIOUR_SUPABASE_URL"))
+    key = (st.secrets.get("supabase", {}).get("key")
+           or st.secrets.get("BEHAVIOUR_SUPABASE_KEY"))
+    return url, key
 
-# ── Supabase ──────────────────────────────────────────────────────────────────
-# Team Meetings uses the MEETINGS database (cmqyrfekxgjdtuloseri project)
-SUPABASE_URL = st.secrets.get("SUPABASE_URL_MEETINGS", st.secrets["SUPABASE_URL"])
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY_MEETINGS", st.secrets["SUPABASE_KEY"])
-# Use service_role key to bypass RLS (this is an internal staff tool)
-SUPABASE_SERVICE_KEY = st.secrets.get("SUPABASE_SERVICE_KEY_MEETINGS", SUPABASE_KEY)
-ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "CLC2026admin")
-GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
+def _make_sb():
+    url, key = _get_sb_creds()
+    if not url or not key:
+        st.error("⚠️ Supabase credentials not found.")
+        st.stop()
+    return create_client(url, key)
 
-# Create Supabase client with service_role key to avoid RLS issues
-supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+# Fresh client on every page load — prevents stale connections on Render free tier
+sb = _make_sb()
 
-# ── Programs ──────────────────────────────────────────────────────────────────
-PROGRAMS = {
-    "JP":         {"label": "Junior Primary",     "color": "#2d7d4f", "light": "#d1fae5", "emoji": "🟢"},
-    "PY":         {"label": "Primary Years",      "color": "#1a4d8c", "light": "#dbeafe", "emoji": "🔵"},
-    "SY":         {"label": "Senior Years",       "color": "#7c3aed", "light": "#ede9fe", "emoji": "🟣"},
-    "SPECIALIST": {"label": "Specialist Program", "color": "#d97706", "light": "#fef3c7", "emoji": "🎨"},
-    "STAFF":      {"label": "STAFF Meetings",     "color": "#0891b2", "light": "#cffafe", "emoji": "👥"},
+@st.cache_resource
+def get_groq():
+    api_key = st.secrets.get("GROQ_API_KEY")
+    if not api_key:
+        return None
+    return Groq(api_key=api_key)
+
+groq_client = get_groq()
+
+import time as _time
+
+def _q(fn, retries=3):
+    """Run a DB query with automatic retry + fresh client on failure."""
+    global sb
+    for attempt in range(retries):
+        try:
+            return fn(sb)
+        except Exception as e:
+            if attempt < retries - 1:
+                _time.sleep(0.5 * (attempt + 1))
+                sb = _make_sb()
+            else:
+                raise e
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+LEVEL_ORDER  = ["EXCEEDING", "ABOVE", "EXPECTED", "BELOW", "NOT YET"]
+TRACK_LEVELS = ["EXCEEDING", "ABOVE", "EXPECTED", "NOT YET"]   # BELOW not tracked daily
+LEVEL_EMOJI  = {"EXCEEDING": "🌟", "ABOVE": "✅", "EXPECTED": "🎯", "BELOW": "⚠️", "NOT YET": "❌"}
+LEVEL_COLOR  = {
+    "EXCEEDING": "#1a7a3c", "ABOVE": "#2d8a5e",
+    "EXPECTED":  "#1d6fa4", "BELOW": "#d97706", "NOT YET": "#c0392b",
+}
+MPL_COLOR = {
+    "EXCEEDING": "#27ae60", "ABOVE": "#2ecc71",
+    "EXPECTED":  "#2980b9", "BELOW": "#e67e22",  "NOT YET": "#c0392b",
 }
 
-DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-RECURRENCE_TYPES = ["Weekly", "Fortnightly", "Monthly"]
+# Hierarchy of prompts (PBS/ABA framework)
+GROUPINGS    = ["Independently", "One to one", "Small group", "Large group",
+                "Unstructured", "With a peer"]
+TASK_TYPES   = ["Structured task", "Hands-on activity", "Using equipment",
+                "Paper/pencil task", "Oral/listening activity", "Following a routine",
+                "Computer-based task", "Other"]
+SETTINGS     = ["Classroom", "During a maths lesson", "During a literacy lesson",
+                "During morning block", "During afternoon block", "During transitions",
+                "At recess", "At lunch", "On excursion", "During negotiated school time"]
+PROMPT_TYPES = ["No prompts", "Visual prompt", "Verbal prompt", "Gestural prompt",
+                "Model prompt", "Partial physical support", "Full physical support",
+                "SSO support", "Verbal and gestural prompts", "Verbal and visual prompts"]
+RATE_OPTIONS = [
+    "3 out of 5 opportunities",
+    "4 out of 5 opportunities",
+    "3 out of 5 days over 3 weeks",
+    "4 out of 5 days over 3 weeks",
+    "80% of the time over a 3-week period",
+    "on 3 consecutive occasions",
+    "consistently over 2 weeks",
+]
 
-# ── Term week helper ──────────────────────────────────────────────────────────
-TERM1_2026_START = datetime.date(2026, 1, 26)
-TERM_WEEKS = 11
+TRACKING_PERIODS = [
+    "All Day", "Morning Only", "Middle Only", "Afternoon Only",
+    "Morning & Middle", "Middle & Afternoon",
+]
+SESSIONS_FOR_PERIOD = {
+    "All Day":            ["Morning", "Middle", "Afternoon"],
+    "Morning Only":       ["Morning"],
+    "Middle Only":        ["Middle"],
+    "Afternoon Only":     ["Afternoon"],
+    "Morning & Middle":   ["Morning", "Middle"],
+    "Middle & Afternoon": ["Middle", "Afternoon"],
+}
+ALL_SESSIONS = ["Morning", "Middle", "Afternoon"]
 
-def get_current_term_week():
-    """Return (term_label, week_number) based on today's date."""
-    today = datetime.date.today()
-    delta = (today - TERM1_2026_START).days
-    if delta < 0:
-        return "T1", 1
-    week_num = min(delta // 7 + 1, TERM_WEEKS)
-    return "T1", week_num
+PROGRAMS = ["JP", "PY", "SY"]
 
-# ── Auto-initialization & Auto-save helpers ───────────────────────────────────
-def auto_initialize_meeting(program, meeting_data):
-    """DISABLED — auto-init caused duplicates in multi-tab Streamlit. Save-only model."""
-    return bool(st.session_state.current_meeting_id)
+# ── AI helpers ────────────────────────────────────────────────────────────────
+def groq_call(prompt,
+              system="You are an expert educator supporting students in alternative "
+                     "education settings. Be concise and practical."):
+    if not groq_client:
+        return "[AI unavailable — Groq API key not configured]"
+    resp = groq_client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "system", "content": system},
+                  {"role": "user",   "content": prompt}],
+        max_tokens=800,
+    )
+    return resp.choices[0].message.content.strip()
 
-def trigger_autosave(program, meeting_data):
-    """DISABLED — autosave caused duplicates in multi-tab Streamlit. Save-only model."""
-    return False
 
-# ── SMARTAR Goal Integration helpers ──────────────────────────────────────────
-def get_smartar_goal_link(student_name, meeting_id, program, term, week_num):
-    """Generate URL to SMARTAR Goal Builder with context."""
-    base_url = "https://clc-lbu-portal.onrender.com/SMARTAR_Goal_Builder"
-    params = f"?student={quote(student_name)}&meeting_id={meeting_id}&program={program}&term={term}&week={week_num}&return_to=team_meetings"
-    return base_url + params
+def ai_check_period(smartar_goal: str) -> dict:
+    """Ask Groq to determine appropriate tracking period for a goal."""
+    if not groq_client:
+        return {"period": "All Day", "reasoning": "AI unavailable.", "confidence": "Low"}
+    prompt = f"""You are an educational support specialist for students in alternative education.
 
-def fetch_synced_smartar_goal(student_name, meeting_id):
-    """Fetch updated SMARTAR goal from the goal builder (Behaviour Support Supabase)."""
+Analyse this SMARTAR goal and determine the most appropriate tracking period within the school day.
+
+Goal: {smartar_goal}
+
+School sessions:
+- Morning (~9am–11am): literacy, numeracy, structured academic learning
+- Middle (~11am–1pm): recess, lunch, social time, transitions
+- Afternoon (~1pm–3pm): specialist subjects, projects, outdoor education
+
+Return ONLY valid JSON, nothing else:
+{{
+  "period": "All Day" | "Morning Only" | "Middle Only" | "Afternoon Only" | "Morning & Middle" | "Middle & Afternoon",
+  "reasoning": "One concise sentence explaining why",
+  "confidence": "High" | "Medium" | "Low"
+}}
+
+Use "All Day" unless the goal text CLEARLY references a specific time context (e.g., 'morning literacy', 'at lunch', 'during afternoon session')."""
     try:
-        # Import here to avoid issues if behaviour support connection not configured
-        import os
-        from supabase import create_client as _cc
-        
-        # Get Behaviour Support Supabase credentials
-        burl = st.secrets.get("BEHAVIOUR_SUPABASE_URL","") or os.environ.get("BEHAVIOUR_SUPABASE_URL","")
-        bkey = st.secrets.get("BEHAVIOUR_SUPABASE_KEY","") or os.environ.get("BEHAVIOUR_SUPABASE_KEY","")
-        
-        if not burl or not bkey:
-            # Behaviour Support Supabase not configured
-            return None
-        
-        # Create Behaviour Support Supabase client
-        behaviour_supabase = _cc(burl, bkey)
-        
-        # Query smartar_goals table in Behaviour Support Supabase
-        result = behaviour_supabase.table('smartar_goals').select('smartar_goal').eq('student_name', student_name).eq('meeting_id', meeting_id).order('updated_at', desc=True).limit(1).execute()
-        
-        if result.data and len(result.data) > 0:
-            return result.data[0].get('smartar_goal', '')
-            
-    except Exception as e:
-        # Log error but don't crash - integration is optional
-        pass
-    
-    return None
-
-# ══════════════════════════════════════════════════════════════════════════════
-# NEW: SMART AI GENERATION WITH DUPLICATION DETECTION
-# ══════════════════════════════════════════════════════════════════════════════
-
-def extract_student_names_from_concerns(concerns_json):
-    """Extract student names already documented in Student Concerns section."""
-    try:
-        concerns_data = json.loads(concerns_json) if isinstance(concerns_json, str) else concerns_json
-        if isinstance(concerns_data, list):
-            names = []
-            for item in concerns_data:
-                text = item.get('notes', '')
-                if text.strip():
-                    if '·' in text:
-                        name = text.split('·')[0].strip()
-                        if name:
-                            names.append(name.lower())
-                    else:
-                        words = text.split()
-                        if words:
-                            name = ' '.join(words[:2]).strip()
-                            names.append(name.lower())
-            return names
-    except:
-        return []
-    return []
-
-def generate_smart_minutes_week_a(transcript, existing_concerns_json, program):
-    """
-    Week A AI generation with duplication detection.
-    
-    Intelligently splits transcript into:
-    1. NEW student concerns (not already documented)
-    2. General meeting minutes
-    3. Suggested actions with who/when
-    """
-    if not GROQ_KEY or not transcript.strip():
-        return None
-    
-    existing_students = extract_student_names_from_concerns(existing_concerns_json)
-    existing_list = ", ".join(existing_students) if existing_students else "None documented yet"
-    
-    try:
-        client = Groq(api_key=GROQ_KEY)
-        prompt = f"""You are a professional minute-taker for Cowandilla Learning Centre (CLC), Learning & Behaviour Unit.
-
-A raw transcript from a Week A 'Student Lens' team meeting for the {PROGRAMS[program]['label']} program is provided below.
-
-CRITICAL CONTEXT — Students already documented in Student Concerns section:
-{existing_list}
-
-DO NOT repeat any information about students already listed above. Only extract NEW student concerns not yet documented.
-
-Your job: Read the transcript and produce THREE clearly separated sections.
-
----
-SECTION 1 — NEW STUDENT CONCERNS
-ONLY include students NOT in the existing list above.
-
-For each NEW student concern, format as:
-[Student Name] · [Concern/behaviour] · [Hypothesis - why?] · [Strategy to try] · [Who] · [By when]
-
-Example:
-Jayden R · Refusing work in literacy · Possible reading anxiety, avoidance pattern · Trial audio books + visual supports · Tom · W6
-
-If no new students discussed, write: "No new student concerns requiring documentation - see existing entries above."
-
----
-SECTION 2 — MEETING MINUTES
-Everything else — general discussion, decisions, announcements, TAC updates, reports, transitions, any other business that is NOT student-specific concerns.
-
-Format as clear professional minutes with numbered items.
-
----
-SECTION 3 — SUGGESTED ACTIONS
-Extract all action items mentioned in the transcript.
-
-For each action, provide:
-ACTION: [Specific task]
-WHO: [Person responsible]
-BY WHEN: [Due date or week]
-PRIORITY: [Low/Medium/High/Urgent]
-
-Rules:
-- Trauma-informed, strengths-based, plain English
-- Preserve ALL factual content — do not fabricate
-- Be concise but complete
-- DO NOT repeat student names from existing list
-- Clearly label all three sections
-
-RAW TRANSCRIPT:
-{transcript[:3500]}"""
-
-        response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+        resp = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=1200
+            response_format={"type": "json_object"},
+            max_tokens=200,
+            temperature=0.1,
         )
-        
-        full_output = response.choices[0].message.content
-        
-        sections = {
-            'student_concerns': '',
-            'minutes': '',
-            'actions': []
-        }
-        
-        if "SECTION 2" in full_output:
-            parts = full_output.split("SECTION 2", 1)
-            section1 = parts[0].replace("SECTION 1 — NEW STUDENT CONCERNS", "").replace("SECTION 1", "").replace("---", "").strip()
-            remaining = parts[1]
-            
-            if "SECTION 3" in remaining:
-                section2_and_3 = remaining.split("SECTION 3", 1)
-                section2 = section2_and_3[0].replace("— MEETING MINUTES", "").replace("---", "").strip()
-                section3 = section2_and_3[1].replace("— SUGGESTED ACTIONS", "").replace("---", "").strip()
-                
-                sections['student_concerns'] = section1
-                sections['minutes'] = section2
-                
-                actions_list = []
-                current_action = {}
-                
-                for line in section3.split('\n'):
-                    line = line.strip()
-                    if line.startswith("ACTION:"):
-                        if current_action.get('action'):
-                            actions_list.append(current_action)
-                        current_action = {'action': line.replace("ACTION:", "").strip()}
-                    elif line.startswith("WHO:"):
-                        current_action['who'] = line.replace("WHO:", "").strip()
-                    elif line.startswith("BY WHEN:"):
-                        current_action['by_when'] = line.replace("BY WHEN:", "").strip()
-                    elif line.startswith("PRIORITY:"):
-                        priority = line.replace("PRIORITY:", "").strip()
-                        current_action['priority'] = priority if priority in ["Low", "Medium", "High", "Urgent"] else "Medium"
-                
-                if current_action.get('action'):
-                    actions_list.append(current_action)
-                
-                sections['actions'] = actions_list
-        
-        return sections
-        
-    except Exception as e:
-        st.error(f"AI generation error: {e}")
-        return None
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-def get_program_from_params():
-    params = st.query_params
-    prog = params.get("program", "JP")
-    return prog if prog in PROGRAMS else "JP"
-
-def get_week_from_params():
-    week_str = st.query_params.get("week", None)
-    if not week_str:
-        return None
-    try:
-        monday = datetime.date.fromisoformat(week_str)
-        monday = monday - datetime.timedelta(days=monday.weekday())
-        return monday, monday + datetime.timedelta(days=6)
-    except ValueError:
-        return None
-
-def admin_login():
-    if "admin" not in st.session_state:
-        st.session_state.admin = False
-    with st.sidebar:
-        if not st.session_state.admin:
-            with st.expander("🔐 Admin Login"):
-                pw = st.text_input("Password", type="password", key="pw_input")
-                if st.button("Login"):
-                    if pw == ADMIN_PASSWORD:
-                        st.session_state.admin = True
-                        st.rerun()
-                    else:
-                        st.error("Incorrect password")
-        else:
-            st.success("✅ Admin logged in")
-            if st.button("Logout"):
-                st.session_state.admin = False
-                st.rerun()
-
-def improve_with_ai(raw_text: str, program: str, meeting_date: str, dsm_summary: str = "") -> str:
-    if not GROQ_KEY:
-        return raw_text
-    client = Groq(api_key=GROQ_KEY)
-
-    if program == "STAFF":
-        dsm_context = f"""
-PART 1 — DIGITAL STAFF MEETING (already recorded, include as first section):
-{dsm_summary}
-""" if dsm_summary else ""
-
-        prompt = f"""You are a professional minute-taker for Cowandilla Learning Centre (CLC), Learning & Behaviour Unit — an alternative education school in South Australia.
-
-Meeting: Staff Meeting (Combined — Digital + Face-to-Face)
-Date: {meeting_date}
-{dsm_context}
-PART 2 — FACE-TO-FACE MEETING TRANSCRIPT:
-{raw_text}
-
-Transform the face-to-face transcript into polished, professional minutes using this EXACT structure:
-
-## PART 2 — FACE-TO-FACE STAFF MEETING
-
-### Attendance
-List names present and apologies from the transcript. If not clear, note "See attendance record."
-
-### Apologies
-Names with apologies.
-
-### Arising Business
-Any matters arising from previous meetings mentioned in the transcript.
-
-### Standing Items
-Present each discussion point as a numbered item:
-1. **Item title** — summary of discussion and any decisions made
-
-### Actions
-| Action | Assigned To | Due |
-|--------|-------------|-----|
-| (list all actions agreed) | (who) | (when) |
-
-### Next Meeting
-Date/time if mentioned, otherwise leave blank.
-
-Rules:
-- Professional but warm, accessible language appropriate for a school setting
-- Trauma-informed, strengths-based framing
-- Preserve ALL factual content — do not add or fabricate anything
-- Keep it concise — one clear sentence per discussion point unless more detail is essential
-- Use plain English, avoid jargon
-
-Transcript to transform:
-{raw_text}"""
-    else:
-        prompt = f"""You are a professional minute-taker for an alternative education school (Cowandilla Learning Centre, Learning & Behaviour Unit).
-
-Program team: {PROGRAMS[program]['label']} ({program})
-Meeting date: {meeting_date}
-
-Transform the following raw transcript or rough notes into polished, professional meeting minutes.
-
-Format requirements:
-- Clear heading with meeting details
-- Numbered agenda items with concise summaries
-- Action items clearly identified with: Action | Assigned to | Timeline
-- Professional but accessible language
-- Trauma-informed, strengths-based framing where relevant
-- Preserve all factual content — do not add or fabricate information
-- End with a summary table of all action items
-
-Raw input:
-{raw_text}"""
-
-    response = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=900
-    )
-    return response.choices[0].message.content
-
-# ── DB helpers ────────────────────────────────────────────────────────────────
-def fetch(table, filters=None, order=None):
-    q = supabase.table(table).select("*")
-    if filters:
-        for k, v in filters.items():
-            q = q.eq(k, v)
-    if order:
-        q = q.order(order, desc=True)
-    return q.execute().data or []
-
-def insert(table, data):
-    supabase.table(table).insert(data).execute()
-
-def update_row(table, row_id, data):
-    supabase.table(table).update(data).eq("id", row_id).execute()
-
-def delete_row(table, row_id):
-    supabase.table(table).delete().eq("id", row_id).execute()
-
-# ─────────────────────────────────────────────────────────────────────────────
-# WORD DOCUMENT HELPERS (keeping existing - truncated for brevity)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _hex(colour):
-    return colour.lstrip("#").upper()
-
-def _shade_cell(cell, hex_colour):
-    try:
-        tc   = cell._tc
-        tcPr = tc.get_or_add_tcPr()
-        shd  = OxmlElement("w:shd")
-        shd.set(qn("w:val"),   "clear")
-        shd.set(qn("w:color"), "auto")
-        shd.set(qn("w:fill"),  _hex(hex_colour))
-        tcPr.append(shd)
+        result = json.loads(resp.choices[0].message.content.strip())
+        if result.get("period") not in TRACKING_PERIODS:
+            result["period"] = "All Day"
+        return result
     except Exception:
-        pass
+        return {"period": "All Day", "reasoning": "AI check unavailable.", "confidence": "Low"}
 
-def _rgb(hex_colour):
-    h = _hex(hex_colour)
-    return RGBColor(int(h[0:2],16), int(h[2:4],16), int(h[4:6],16))
 
-def _para_run(para, text, bold=False, italic=False, size_pt=10, colour="0f172a"):
-    run = para.add_run(str(text))
-    run.bold           = bold
-    run.italic         = italic
-    run.font.size      = Pt(size_pt)
-    run.font.color.rgb = _rgb(colour)
-    return run
+# ── Supabase helpers ───────────────────────────────────────────────────────────
+def get_students(include_archived=False):
+    def _fn(c):
+        q = c.table("smartar_students").select("*").order("student_name")
+        if not include_archived:
+            q = q.eq("active", True)
+        return q.execute().data or []
+    try:
+        result = _q(_fn)
+        return result
+    except Exception as e:
+        st.error(f"DB error loading students: {e}")
+        return []
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SPECIALIST PROGRAM MEETING (single template - not Week A/B)
-# ─────────────────────────────────────────────────────────────────────────────
 
-def render_specialist_meeting():
-    """Specialist Program Meeting — Job Share Coordination, Curriculum, Budget, Artifacts"""
-    import json as _json
-    
-    program = "SPECIALIST"
-    accent = PROGRAMS[program]["color"]
+def get_goals(student_name=None, active_only=True):
+    def _fn(c):
+        q = c.table("smartar_goals").select("*")
+        if student_name:
+            q = q.eq("student_name", student_name)
+        if active_only:
+            q = q.eq("active", True)
+        return q.order("created_at", desc=False).execute().data or []
+    try:
+        return _q(_fn)
+    except Exception as e:
+        st.error(f"DB error loading goals: {e}")
+        return []
 
-    # Auto-save status display
-    if st.session_state.autosave_message:
-        st.caption(st.session_state.autosave_message)
 
-    # Fetch past meetings for Specialist
-    past_meetings = fetch("tm_program_meetings", {"program": "SPECIALIST"}, "meeting_date")
-    
-    # Meeting selection - New or Edit existing
-    st.markdown("#### 📂 Select Meeting")
-    meeting_options = ["➕ New Meeting"] + [
-        f"{rec.get('meeting_date','')} - Term {rec.get('term','')} W{rec.get('week_number','')}"
-        for rec in reversed(past_meetings[-20:])  # Show last 20 meetings
-    ]
-    
-    selected_meeting = st.selectbox(
-        "Choose a meeting to edit or create new",
-        options=meeting_options,
-        key="meeting_select_specialist"
-    )
-    
-    # Load existing meeting if selected
-    selected_record = None
-    if selected_meeting != "➕ New Meeting":
-        # Find the selected record
-        selected_idx = meeting_options.index(selected_meeting) - 1
-        selected_record = list(reversed(past_meetings[-20:]))[selected_idx]
-        
-        # Set current_meeting_id so it updates instead of creating new
-        if not st.session_state.current_meeting_id or st.session_state.current_meeting_id != selected_record['id']:
-            st.session_state.current_meeting_id = selected_record['id']
-            
-            # Load data into session state
-            try:
-                if selected_record.get('student_concerns'):
-                    concerns_data = _json.loads(selected_record['student_concerns'])
-                    if isinstance(concerns_data, dict) and 'concerns' in concerns_data:
-                        st.session_state["sp_concerns"] = concerns_data['concerns']
-                if selected_record.get('curriculum_coverage'):
-                    curriculum_data = _json.loads(selected_record['curriculum_coverage'])
-                    if isinstance(curriculum_data, dict) and 'modules' in curriculum_data:
-                        st.session_state["sp_curriculum"] = curriculum_data['modules']
-                if selected_record.get('actions'):
-                    st.session_state["sp_actions"] = _json.loads(selected_record['actions'])
-            except:
-                pass
-        
-        st.info(f"✏️ Editing existing meeting - Meeting ID: {selected_record['id']}")
-        
-        # Show saved minutes in an expander for reference
-        if selected_record.get('meeting_minutes'):
-            with st.expander("📄 View Saved Minutes from This Meeting", expanded=False):
-                st.markdown(selected_record['meeting_minutes'])
-    else:
-        # Clear meeting_id for new meeting
-        if selected_meeting == "➕ New Meeting" and st.session_state.current_meeting_id:
-            st.session_state.current_meeting_id = None
-            # Clear session state
-            for k in ["sp_concerns", "sp_curriculum", "sp_actions"]:
-                st.session_state.pop(k, None)
-    
-    st.markdown("---")
-
-    st.markdown(f"""<div style="background:#fef3c7;border-left:5px solid #d97706;
-        border-radius:0 8px 8px 0;padding:8px 14px;margin-bottom:12px;font-size:13px;color:#92400e;">
-        🎨 <strong>SPECIALIST PROGRAM MEETING</strong> · Job Share Coordination · Curriculum Delivery · Budget & Foodbank · Student Artifacts
-    </div>""", unsafe_allow_html=True)
-
-    if not st.session_state.current_meeting_id:
-        st.markdown("""
-        <div style="background:#e0f2fe;border-left:4px solid #0284c7;border-radius:0 8px 8px 0;
-                    padding:8px 14px;margin-bottom:12px;font-size:13px;color:#075985;">
-          ℹ️ <strong>New Meeting:</strong> Meeting ID will be created automatically when you start entering content.
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.success(f"✅ Meeting Active (ID: {st.session_state.current_meeting_id})")
-
-    st.markdown("#### 📋 Meeting Details")
-    mc1, mc2, mc3, mc4 = st.columns(4)
-    
-    # Pre-populate with existing data if editing
-    default_date = datetime.date.fromisoformat(selected_record['meeting_date']) if selected_record else datetime.date.today()
-    default_term = selected_record.get('term', '') if selected_record else ''
-    default_week = selected_record.get('week_number', 1) if selected_record else 1
-    default_facilitator = selected_record.get('facilitator', get_staff_name()) if selected_record else get_staff_name()
-    default_attendees = selected_record.get('attendees', '') if selected_record else ''
-    
-    # Get check-in notes if editing
-    default_monday_notes = ""
-    default_tuefri_notes = ""
-    if selected_record and selected_record.get('checkin_notes'):
-        try:
-            checkin_data = _json.loads(selected_record['checkin_notes'])
-            default_monday_notes = checkin_data.get('monday_teacher', '')
-            default_tuefri_notes = checkin_data.get('tuefri_teacher', '')
-        except:
-            pass
-    
-    with mc1: sp_date        = st.date_input("Date", value=default_date, key="sp_date")
-    with mc2: sp_term        = st.text_input("Term", value=default_term, placeholder="T1", key="sp_term")
-    with mc3: sp_week        = st.number_input("Week #", min_value=1, max_value=11, value=default_week, key="sp_week")
-    with mc4: sp_facilitator = st.text_input("Facilitator", value=default_facilitator, key="sp_fac")
-    sp_attendees = st.text_input("Attendees (Both job share teachers + others)", value=default_attendees, placeholder="Names separated by commas", key="sp_att")
-
-    st.markdown("---")
-
-    # ── SECTION 1: Team Check-in ──
-    st.markdown("#### ⏱ 0–10 min | TEAM CHECK-IN & HANDOVER")
-    st.caption("Quick updates from both job share teachers. Any handover issues from previous week?")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("**Monday Teacher (0.2):**")
-        sp_monday_notes = st.text_area(
-            "Monday teacher notes",
-            value=default_monday_notes,
-            height=100,
-            key="sp_monday_notes",
-            placeholder="How did Monday sessions go? Kitchen/BSEM notes? Concerns for week ahead?",
-            label_visibility="collapsed"
+def get_all_goals_for_student(student_name: str):
+    """Returns active + archived goals for a student, newest first."""
+    def _fn(c):
+        return (
+            c.table("smartar_goals").select("*")
+            .eq("student_name", student_name)
+            .order("created_at", desc=True)
+            .execute().data or []
         )
-    with col2:
-        st.markdown("**Tuesday–Friday Teacher (0.8):**")
-        sp_tuefri_notes = st.text_area(
-            "Tue-Fri teacher notes",
-            value=default_tuefri_notes,
-            height=100,
-            key="sp_tuefri_notes",
-            placeholder="How was curriculum delivery this week? Student engagement? Handover working?",
-            label_visibility="collapsed"
+    try:
+        return _q(_fn)
+    except Exception:
+        return []
+
+
+def get_tracking(goal_id, days=30):
+    since = (date.today() - timedelta(days=days)).isoformat()
+    try:
+        return (
+            sb.table("smartar_tracking").select("*")
+            .eq("goal_id", goal_id)
+            .gte("session_date", since)
+            .order("session_date")
+            .execute().data or []
         )
-    
-    st.markdown("---")
+    except Exception:
+        return []
 
-    # ── SECTION 2: Student & Program Concerns ──
-    st.markdown("#### ⏱ 10–25 min | STUDENT & PROGRAM CONCERNS")
-    st.caption("Flag students needing additional support or program adjustments")
 
-    concerns_key = "sp_concerns"
-    if concerns_key not in st.session_state:
-        st.session_state[concerns_key] = [{"concern":"","strategy":"","adjustment":"","who":"","timeline":""}]
+def get_tracking_range(goal_id, from_date: str, to_date: str, sessions=None):
+    """Get tracking for a goal within an explicit date range."""
+    try:
+        rows = (
+            sb.table("smartar_tracking").select("*")
+            .eq("goal_id", goal_id)
+            .gte("session_date", from_date)
+            .lte("session_date", to_date)
+            .order("session_date")
+            .execute().data or []
+        )
+        if sessions:
+            rows = [r for r in rows if r.get("session_time") in sessions]
+        return rows
+    except Exception:
+        return []
 
-    concerns = st.session_state[concerns_key]
-    ch_cols = st.columns([2.5,2,2,1,1,0.5])
-    for h, label in zip(ch_cols, ["Student / Group | Concern","Current Strategy","Adjustment Needed","Who","Timeline",""]):
-        h.markdown(f"**{label}**" if label else "")
 
-    for idx, row in enumerate(concerns):
-        c1,c2,c3,c4,c5,c6 = st.columns([2.5,2,2,1,1,0.5])
-        with c1: row["concern"]    = st.text_input("Con", value=row.get("concern",""),    key=f"spc_con_{idx}",    label_visibility="collapsed", placeholder="Student name · Concern / context")
-        with c2: row["strategy"]   = st.text_input("Str", value=row.get("strategy",""),   key=f"spc_str_{idx}",    label_visibility="collapsed", placeholder="Current strategy")
-        with c3: row["adjustment"] = st.text_input("Adj", value=row.get("adjustment",""), key=f"spc_adj_{idx}",    label_visibility="collapsed", placeholder="What needs to change")
-        with c4: row["who"]        = st.text_input("Who", value=row.get("who",""),        key=f"spc_who_{idx}",    label_visibility="collapsed", placeholder="Person")
-        with c5: row["timeline"]   = st.text_input("By",  value=row.get("timeline",""),   key=f"spc_time_{idx}",   label_visibility="collapsed", placeholder="When")
-        with c6:
-            if len(concerns) > 1:
-                if st.button("✕", key=f"spc_del_{idx}"):
-                    concerns.pop(idx); st.rerun()
-    
-    if st.button("➕ Add concern", key="spc_add"):
-        concerns.append({"concern":"","strategy":"","adjustment":"","who":"","timeline":""}); st.rerun()
+def get_today_tracking(goal_id):
+    try:
+        return (
+            sb.table("smartar_tracking").select("*")
+            .eq("goal_id", goal_id)
+            .eq("session_date", date.today().isoformat())
+            .execute().data or []
+        )
+    except Exception:
+        return []
 
-    st.markdown("**Program-level concerns:**")
-    sp_program_concerns = st.text_area(
-        "Program concerns",
-        height=80,
-        key="sp_prog_concerns",
-        placeholder="NIT release coverage? Timetable changes? Cross-program coordination? Safety/BSP updates?",
-        label_visibility="collapsed"
-    )
 
-    st.markdown("---")
+def get_recent_tracking(goal_id, sessions=5):
+    try:
+        return (
+            sb.table("smartar_tracking").select("*")
+            .eq("goal_id", goal_id)
+            .order("session_date", desc=True)
+            .order("recorded_at", desc=True)
+            .limit(sessions)
+            .execute().data or []
+        )
+    except Exception:
+        return []
 
-    # ── SECTION 3: Curriculum Coverage ──
-    st.markdown("#### ⏱ 25–35 min | CURRICULUM COVERAGE CHECK-IN")
-    st.caption("Track progress, student engagement, and needed adjustments across all modules")
 
-    curriculum_key = "sp_curriculum"
-    if curriculum_key not in st.session_state:
-        st.session_state[curriculum_key] = [
-            {"module": "Cooking (all programs)", "progress": "", "engagement": "", "adjustments": "", "resources": ""},
-            {"module": "BSEM Stamina & Character Strengths", "progress": "", "engagement": "", "adjustments": "", "resources": ""},
-            {"module": "Child Protection — Right to be Safe", "progress": "", "engagement": "", "adjustments": "", "resources": ""},
-            {"module": "5 is Against the Law", "progress": "", "engagement": "", "adjustments": "", "resources": ""},
-            {"module": "Sexual Health Ed (SY only — Elephant Ed)", "progress": "", "engagement": "", "adjustments": "", "resources": ""},
-        ]
+def upsert_session(goal_id, student_name, session_time, performance_level,
+                   track_date=None):
+    """Always INSERT new observation — allows multiple per session per day."""
+    record_date = track_date or date.today().isoformat()
+    try:
+        sb.table("smartar_tracking").insert({
+            "goal_id":           goal_id,
+            "student_name":      student_name,
+            "session_date":      record_date,
+            "session_time":      session_time,
+            "performance_level": performance_level,
+        }).execute()
+    except Exception as e:
+        st.error(f"Save error: {e}")
 
-    curriculum = st.session_state[curriculum_key]
-    cur_cols = st.columns([2,2,2,2,2])
-    for h, label in zip(cur_cols, ["Module / Area","Progress This Week","Student Engagement","Adjustments Needed","Resources / Support"]):
-        h.markdown(f"**{label}**")
 
-    for idx, row in enumerate(curriculum):
-        cu1,cu2,cu3,cu4,cu5 = st.columns([2,2,2,2,2])
-        with cu1: st.markdown(f"`{row['module']}`")
-        with cu2: row["progress"]    = st.text_input("Prog",  value=row.get("progress",""),    key=f"cur_prog_{idx}",  label_visibility="collapsed", placeholder="What was covered")
-        with cu3: row["engagement"]  = st.text_input("Eng",   value=row.get("engagement",""),  key=f"cur_eng_{idx}",   label_visibility="collapsed", placeholder="Student response")
-        with cu4: row["adjustments"] = st.text_input("Adj",   value=row.get("adjustments",""), key=f"cur_adj_{idx}",   label_visibility="collapsed", placeholder="Changes needed")
-        with cu5: row["resources"]   = st.text_input("Res",   value=row.get("resources",""),   key=f"cur_res_{idx}",   label_visibility="collapsed", placeholder="What's needed")
+def get_session_counts(goal_id, track_date):
+    """Returns {session_time: {performance_level: count}} for given date."""
+    try:
+        rows = (
+            sb.table("smartar_tracking").select("session_time, performance_level")
+            .eq("goal_id", goal_id)
+            .eq("session_date", track_date)
+            .execute().data or []
+        )
+        counts = {}
+        for r in rows:
+            s = r["session_time"]
+            p = r["performance_level"]
+            counts.setdefault(s, {})
+            counts[s][p] = counts[s].get(p, 0) + 1
+        return counts
+    except Exception:
+        return {}
 
-    st.markdown("**Coverage gaps or concerns:**")
-    sp_coverage_gaps = st.text_area(
-        "Coverage gaps",
-        height=80,
-        key="sp_coverage_gaps",
-        placeholder="Students missing key curriculum? Pacing issues? Equity concerns across JP/PY/SY?",
-        label_visibility="collapsed"
-    )
 
-    st.markdown("---")
+def archive_goal(goal_id, reason: str = ""):
+    try:
+        sb.table("smartar_goals").update({
+            "active":         False,
+            "status":         "Archived",
+            "archived_at":    datetime.utcnow().isoformat(),
+            "archive_reason": reason,
+            "updated_at":     datetime.utcnow().isoformat(),
+        }).eq("id", goal_id).execute()
+        return True
+    except Exception as e:
+        st.error(f"Archive error: {e}")
+        return False
 
-    # ── SECTION 4: Budget & Foodbank ──
-    st.markdown("#### ⏱ 35–40 min | BUDGET & FOODBANK UPDATE")
 
-    col_fb1, col_fb2, col_fb3 = st.columns(3)
-    with col_fb1:
-        sp_foodbank_submitted = st.selectbox("Foodbank order submitted this fortnight?", ["Not due", "Yes", "No"], key="sp_fb_submitted")
-    with col_fb2:
-        sp_stock_ok = st.selectbox("Stock levels OK for next week?", ["Yes", "No — gaps identified"], key="sp_stock")
-    with col_fb3:
-        sp_ingredient_gaps = st.text_input("Ingredient gaps/substitutions needed", key="sp_gaps", placeholder="List any gaps")
+def restore_goal(goal_id):
+    try:
+        sb.table("smartar_goals").update({
+            "active":         True,
+            "status":         "Active",
+            "archived_at":    None,
+            "archive_reason": None,
+            "updated_at":     datetime.utcnow().isoformat(),
+        }).eq("id", goal_id).execute()
+        return True
+    except Exception:
+        return False
 
-    st.markdown("**Cooking Budget Tracking:**")
-    budget_cols = st.columns([2,2,2,4])
-    with budget_cols[0]: st.markdown("**Program**")
-    with budget_cols[1]: st.markdown("**Spent to Date**")
-    with budget_cols[2]: st.markdown("**Remaining**")
-    with budget_cols[3]: st.markdown("**Notes / Adjustments**")
 
-    for prog_name in ["JP", "PY", "SY"]:
-        bc1, bc2, bc3, bc4 = st.columns([2,2,2,4])
-        with bc1: st.markdown(f"`{prog_name}`")
-        with bc2: st.text_input(f"Spent {prog_name}", key=f"budget_spent_{prog_name}", label_visibility="collapsed", placeholder="$")
-        with bc3: st.text_input(f"Remain {prog_name}", key=f"budget_remain_{prog_name}", label_visibility="collapsed", placeholder="$")
-        with bc4: st.text_input(f"Notes {prog_name}", key=f"budget_notes_{prog_name}", label_visibility="collapsed", placeholder="Any concerns or adjustments")
+def goal_date_range(goal: dict):
+    start = goal.get("start_date") or (goal.get("created_at") or "")[:10] or date.today().isoformat()
+    if not goal.get("active", True) and goal.get("archived_at"):
+        end = goal["archived_at"][:10]
+    else:
+        end = date.today().isoformat()
+    return str(start)[:10], end
 
-    sp_budget_concerns = st.text_area(
-        "Budget concerns",
-        height=60,
-        key="sp_budget_concerns",
-        placeholder="Equitable spending? Specialist equipment needed? Budget adjustment for term remainder?",
-        label_visibility="collapsed"
-    )
 
-    st.markdown("---")
+def calc_percentages(tracking_data):
+    counts = {l: 0 for l in LEVEL_ORDER}
+    for row in tracking_data:
+        lvl = row.get("performance_level")
+        if lvl in counts:
+            counts[lvl] += 1
+    total = sum(counts.values())
+    pcts  = {l: round(counts[l] / total * 100, 1) for l in LEVEL_ORDER} if total else {}
+    return counts, total, pcts
 
-    # ── SECTION 5: Artifact Check-In ──
-    st.markdown("#### ⏱ 40–45 min | ARTIFACT CHECK-IN")
-    st.caption("Student reporting artifacts for end-of-placement reports — tracked by program")
 
-    for prog_name, prog_label in [("JP", "JUNIOR PRIMARY"), ("PY", "PRIMARY YEARS"), ("SY", "SENIOR YEARS")]:
-        st.markdown(f"**{prog_label} ({prog_name})**")
-        
-        modules = ["Cooking", "BSEM", "Child Protection", "5 is Against the Law"]
-        if prog_name == "SY":
-            modules.append("Sexual Health Ed (Elephant Ed)")
-        
-        art_cols = st.columns([2,2,2,3])
-        with art_cols[0]: st.markdown("**Module**")
-        with art_cols[1]: st.markdown("**Status**")
-        with art_cols[2]: st.markdown("**Timeline**")
-        with art_cols[3]: st.markdown("**Support Needed**")
-
-        for module in modules:
-            a1,a2,a3,a4 = st.columns([2,2,2,3])
-            with a1: st.markdown(f"`{module}`")
-            with a2: st.selectbox(f"Status {prog_name} {module}", ["Not Started", "In Progress", "Complete"], key=f"art_status_{prog_name}_{module}", label_visibility="collapsed")
-            with a3: st.text_input(f"Timeline {prog_name} {module}", key=f"art_timeline_{prog_name}_{module}", label_visibility="collapsed", placeholder="Due date")
-            with a4: st.text_input(f"Support {prog_name} {module}", key=f"art_support_{prog_name}_{module}", label_visibility="collapsed", placeholder="What's needed")
-        
-        st.markdown("")  # Spacing between programs
-
-    st.markdown("**Cross-program reporting concerns:**")
-    sp_artifact_concerns = st.text_area(
-        "Artifact concerns",
-        height=60,
-        key="sp_artifact_concerns",
-        placeholder="Programs ahead/behind? Deadline alignment? Support needed from program teachers?",
-        label_visibility="collapsed"
-    )
-
-    st.markdown("---")
-
-    # ── SECTION 6: Actions ──
-    st.markdown("#### ✅ ACTIONS — Clear Ownership & Accountability")
-    st.caption("Each action must have: specific task, responsible person, and due date")
-
-    actions_key = "sp_actions"
-    if actions_key not in st.session_state:
-        st.session_state[actions_key] = [{"action":"","who":"","by_when":"","priority":"Medium","done":False}]
-
-    actions = st.session_state[actions_key]
-    ah_cols = st.columns([4,1.5,1,1,0.7,0.5])
-    for h, label in zip(ah_cols, ["Action","Who","By When","Priority","✓ Done",""]):
-        h.markdown(f"**{label}**" if label else "")
-
-    for idx, row in enumerate(actions):
-        a1,a2,a3,a4,a5,a6 = st.columns([4,1.5,1,1,0.7,0.5])
-        with a1: row["action"]   = st.text_input("Act", value=row.get("action",""),   key=f"spa_a_{idx}",    label_visibility="collapsed", placeholder="Specific action")
-        with a2: row["who"]      = st.text_input("Who", value=row.get("who",""),      key=f"spa_w_{idx}",    label_visibility="collapsed", placeholder="Person")
-        with a3: row["by_when"]  = st.text_input("By",  value=row.get("by_when",""),  key=f"spa_by_{idx}",   label_visibility="collapsed", placeholder="When")
-        with a4: row["priority"] = st.selectbox("Pri",  ["Low","Medium","High","Urgent"], index=["Low","Medium","High","Urgent"].index(row.get("priority","Medium")), key=f"spa_pri_{idx}", label_visibility="collapsed")
-        with a5: row["done"]     = st.checkbox("✓",     value=row.get("done",False),   key=f"spa_done_{idx}")
-        with a6:
-            if len(actions) > 1:
-                if st.button("✕", key=f"spa_del_{idx}"):
-                    actions.pop(idx); st.rerun()
-
-    if st.button("➕ Add action", key="spa_add"):
-        actions.append({"action":"","who":"","by_when":"","priority":"Medium","done":False}); st.rerun()
-
-    st.markdown("---")
-    
-    # MEETING MINUTES / NOTES SECTION
-    st.markdown("#### 📝 MEETING MINUTES / NOTES")
-    st.caption("Comprehensive meeting notes - discussions, decisions, key points raised")
-    
-    default_sp_minutes = ""
-    if selected_record and selected_record.get('meeting_minutes'):
-        default_sp_minutes = selected_record['meeting_minutes']
-    
-    sp_minutes = st.text_area(
-        "Meeting minutes",
-        value=default_sp_minutes,
-        height=200,
-        key="sp_minutes",
-        label_visibility="collapsed",
-        placeholder="Record comprehensive meeting minutes here - discussions, decisions, key points, follow-up items..."
-    )
-
-    st.markdown("---")
-
-    # Prepare meeting data - FIXED: Use local variables instead of session state
-    concerns_data = concerns  # Use local variable
-    curriculum_data = curriculum  # Use local variable
-    actions_data = actions  # Use local variable
-    
-    # Collect budget data
-    budget_data = {}
-    for prog_name in ["JP", "PY", "SY"]:
-        budget_data[prog_name] = {
-            "spent": st.session_state.get(f"budget_spent_{prog_name}", ""),
-            "remaining": st.session_state.get(f"budget_remain_{prog_name}", ""),
-            "notes": st.session_state.get(f"budget_notes_{prog_name}", "")
-        }
-    
-    # Collect artifact data
-    artifact_data = {}
-    for prog_name in ["JP", "PY", "SY"]:
-        modules = ["Cooking", "BSEM", "Child Protection", "5 is Against the Law"]
-        if prog_name == "SY":
-            modules.append("Sexual Health Ed (Elephant Ed)")
-        artifact_data[prog_name] = {}
-        for module in modules:
-            artifact_data[prog_name][module] = {
-                "status": st.session_state.get(f"art_status_{prog_name}_{module}", "Not Started"),
-                "timeline": st.session_state.get(f"art_timeline_{prog_name}_{module}", ""),
-                "support": st.session_state.get(f"art_support_{prog_name}_{module}", "")
-            }
-
-    meeting_data = {
-        "program": "SPECIALIST",
-        "meeting_date": str(sp_date),
-        "term": sp_term.strip(),
-        "week_number": int(sp_week),
-        "week_type": "SPECIALIST",  # No A/B for specialist
-        "facilitator": sp_facilitator.strip(),
-        "attendees": sp_attendees.strip(),
-        "checkin_notes": _json.dumps({
-            "monday_teacher": sp_monday_notes,
-            "tuefri_teacher": sp_tuefri_notes
-        }),
-        "student_concerns": _json.dumps({
-            "concerns": concerns_data,
-            "program_concerns": sp_program_concerns
-        }),
-        "curriculum_coverage": _json.dumps({
-            "modules": curriculum_data,
-            "coverage_gaps": sp_coverage_gaps
-        }),
-        "budget_foodbank": _json.dumps({
-            "foodbank_submitted": sp_foodbank_submitted,
-            "stock_ok": sp_stock_ok,
-            "ingredient_gaps": sp_ingredient_gaps,
-            "budget": budget_data,
-            "concerns": sp_budget_concerns
-        }),
-        "artifacts": _json.dumps({
-            "artifact_data": artifact_data,
-            "concerns": sp_artifact_concerns
-        }),
-        "meeting_minutes": sp_minutes.strip(),
-        "actions": _json.dumps(actions_data),
+def get_gas_dict(goal):
+    return {
+        "EXCEEDING": goal.get("gas_exceeding", ""),
+        "ABOVE":     goal.get("gas_above",     ""),
+        "EXPECTED":  goal.get("gas_expected",  ""),
+        "BELOW":     goal.get("gas_below",     ""),
+        "NOT YET":   goal.get("gas_not_yet",   ""),
     }
 
-    # Trigger auto-save/auto-initialization
-    trigger_autosave("SPECIALIST", meeting_data)
 
-    # Manual save button
-    save_button_text = "💾 Update Meeting Record" if st.session_state.current_meeting_id else "💾 Save Meeting Record"
-    if st.button(save_button_text, type="primary", use_container_width=True, key="sp_save"):
-        try:
-            if st.session_state.current_meeting_id and not str(st.session_state.current_meeting_id).startswith("temp_"):
-                supabase.table('tm_program_meetings').update(meeting_data).eq('id', st.session_state.current_meeting_id).execute()
-                st.success("✅ Meeting record updated!")
-            else:
-                result = supabase.table('tm_program_meetings').insert(meeting_data).execute()
-                if result.data:
-                    st.session_state.current_meeting_id = result.data[0]['id']
-                st.success("✅ Meeting record saved!")
-            
-            # Clear session state
-            for k in ["sp_concerns", "sp_curriculum", "sp_actions"]:
-                st.session_state.pop(k, None)
-            
-            st.session_state.last_autosave_time = None
-            st.session_state.autosave_message = ""
-            st.rerun()
-        except Exception as e:
-            st.error(f"⚠️ Database save failed: {e}")
+def check_goal_needs_refinement(goal_id, threshold=3):
+    recent = get_recent_tracking(goal_id, sessions=5)
+    if len(recent) < threshold:
+        return False, 0
+    low = sum(1 for r in recent if r.get("performance_level") == "NOT YET")
+    return low >= threshold, low
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PROGRAM MEETING (JP/PY/SY) - WITH SMARTAR INTEGRATION
-# ─────────────────────────────────────────────────────────────────────────────
+def analyze_trend(tracking_data):
+    if len(tracking_data) < 4:
+        return "insufficient_data"
+    score_map = {"EXCEEDING": 5, "ABOVE": 4, "EXPECTED": 3, "BELOW": 2, "NOT YET": 1}
+    mid = len(tracking_data) // 2
+    first_avg = sum(score_map.get(r.get("performance_level",""), 0) for r in tracking_data[:mid]) / mid
+    second_avg = sum(score_map.get(r.get("performance_level",""), 0) for r in tracking_data[mid:]) / (len(tracking_data)-mid)
+    diff = second_avg - first_avg
+    if diff > 0.5:   return "improving"
+    if diff < -0.5:  return "declining"
+    return "stable"
 
-def render_program_meeting(program):
-    import json as _json
-    prog_label = PROGRAMS[program]["label"]
-    accent = PROGRAMS[program]["color"]
 
-    # Auto-save status display
-    if st.session_state.autosave_message:
-        st.caption(st.session_state.autosave_message)
+def _short(text: str, n: int = 65) -> str:
+    return text[:n] + "…" if len(text) > n else text
 
-    # Fetch past meetings for this program
-    past_meetings = fetch("tm_program_meetings", {"program": program}, "meeting_date")
-    
-    # Meeting selection - New or Edit existing
-    st.markdown("#### 📂 Select Meeting")
-    meeting_options = ["➕ New Meeting"] + [
-        f"{rec.get('meeting_date','')} - Term {rec.get('term','')} W{rec.get('week_number','')} - Week {rec.get('week_type','')}"
-        for rec in reversed(past_meetings[-20:])  # Show last 20 meetings
-    ]
-    
-    selected_meeting = st.selectbox(
-        "Choose a meeting to edit or create new",
-        options=meeting_options,
-        key=f"meeting_select_{program}"
-    )
-    
-    # Load existing meeting if selected
-    selected_record = None
-    if selected_meeting != "➕ New Meeting":
-        # Find the selected record
-        selected_idx = meeting_options.index(selected_meeting) - 1
-        selected_record = list(reversed(past_meetings[-20:]))[selected_idx]
-        
-        # Set current_meeting_id so it updates instead of creating new
-        if not st.session_state.current_meeting_id or st.session_state.current_meeting_id != selected_record['id']:
-            st.session_state.current_meeting_id = selected_record['id']
-            
-            # Load data into session state
-            try:
-                if selected_record.get('student_concerns'):
-                    st.session_state[f"pm_concerns_{program}"] = _json.loads(selected_record['student_concerns'])
-                if selected_record.get('smartar_spotlight'):
-                    st.session_state[f"pm_smartar_{program}"] = _json.loads(selected_record['smartar_spotlight'])
-                if selected_record.get('priority_focus'):
-                    st.session_state[f"pm_priority_{program}"] = _json.loads(selected_record['priority_focus'])
-                if selected_record.get('actions'):
-                    st.session_state[f"pm_actions_{program}"] = _json.loads(selected_record['actions'])
-            except:
-                pass
-        
-        st.info(f"✏️ Editing existing meeting - Meeting ID: {selected_record['id']}")
-        
-        # Show saved minutes in an expander for reference
-        if selected_record.get('meeting_minutes'):
-            with st.expander("📄 View Saved Minutes from This Meeting", expanded=False):
-                st.markdown(selected_record['meeting_minutes'])
-    else:
-        # Clear meeting_id for new meeting
-        if selected_meeting == "➕ New Meeting" and st.session_state.current_meeting_id:
-            st.session_state.current_meeting_id = None
-            # Clear session state
-            for k in [f"pm_concerns_{program}", f"pm_smartar_{program}",
-                      f"pm_priority_{program}", f"pm_actions_{program}"]:
-                st.session_state.pop(k, None)
-    
-    st.markdown("---")
 
-    # Fetch students for autocomplete
-    @st.cache_data(ttl=120)
-    def fetch_students(prog):
-        names = []
-        try:
-            import os
-            from supabase import create_client as _cc
-            burl = st.secrets.get("BEHAVIOUR_SUPABASE_URL","") or os.environ.get("BEHAVIOUR_SUPABASE_URL","")
-            bkey = st.secrets.get("BEHAVIOUR_SUPABASE_KEY","") or os.environ.get("BEHAVIOUR_SUPABASE_KEY","")
-            if burl:
-                bsb = _cc(burl, bkey)
-                res = bsb.table("students").select("id,name,year_level").eq("archived", False).execute()
-                if res.data:
-                    names = [s["name"] for s in res.data]
-        except Exception:
-            pass
-        try:
-            res2 = supabase.table("scatter_students").select("name").execute()
-            if res2.data:
-                scatter_names = [s["name"] for s in res2.data if s.get("name")]
-                for n in scatter_names:
-                    if n not in names:
-                        names.append(n)
-        except Exception:
-            pass
-        return sorted(names)
+# ── Chart helpers (matplotlib — no clipping, named titles) ────────────────────
+def make_goal_chart_mpl(tracking_data, goal_text: str, from_date: str,
+                        to_date: str, student_name: str = "") -> bytes | None:
+    """
+    Returns PNG bytes. Title = full SMARTAR goal text.
+    Uses bbox_inches='tight' so nothing is cut off.
+    """
+    if not tracking_data:
+        return None
 
-    student_names = fetch_students(program)
+    df = pd.DataFrame(tracking_data)
+    df["_date"]    = pd.to_datetime(df["session_date"])
+    score_map      = {"EXCEEDING": 4, "ABOVE": 3, "EXPECTED": 2, "NOT YET": 1}
+    df["_score"]   = df["performance_level"].map(score_map).fillna(0)
 
-    last_records = fetch("tm_program_meetings", {"program": program}, "meeting_date")
-    last_week_type = None
-    last_actions = []
-    if last_records:
-        last = last_records[-1]
-        last_week_type = last.get("week_type")
-        try:
-            last_actions = _json.loads(last.get("actions", "[]") or "[]")
-        except Exception:
-            last_actions = []
+    fig = plt.figure(figsize=(15, 9), facecolor="white")
+    title = _short(goal_text, 100)
+    fig.suptitle(title, fontsize=10, fontweight="bold", color="#1A7A6E", y=0.98, wrap=True)
+    if student_name:
+        fig.text(0.5, 0.955, student_name, ha="center", fontsize=9,
+                 color="#C8760A", fontweight="bold")
 
-    suggested_type = "B" if last_week_type == "A" else "A"
+    gs = gridspec.GridSpec(2, 2, figure=fig, hspace=0.45, wspace=0.32,
+                           top=0.92, bottom=0.08, left=0.07, right=0.97)
 
-    wt_col1, wt_col2 = st.columns([3, 2])
-    with wt_col1:
-        week_type = st.radio(
-            "Meeting type",
-            ["A — Student Lens", "B — System Lens", "📋 Ad-hoc Meeting"],
-            index=0 if suggested_type == "A" else 1,
-            horizontal=True,
-            key=f"pm_wt_{program}",
+    # ── Top: time series ──────────────────────────────────────────────────────
+    ax1 = fig.add_subplot(gs[0, :])
+    daily = df.groupby("_date")["_score"].mean().reset_index()
+    ax1.plot(daily["_date"], daily["_score"], color="#1A7A6E", lw=1.5, alpha=0.45, zorder=1)
+    sc_col = [MPL_COLOR.get(p, "#888") for p in df["performance_level"]]
+    ax1.scatter(df["_date"], df["_score"], c=sc_col, s=100, zorder=2,
+                edgecolors="white", linewidth=0.9)
+    ax1.set_yticks([1, 2, 3, 4])
+    ax1.set_yticklabels(["NOT YET", "EXPECTED", "ABOVE", "EXCEEDING"], fontsize=9)
+    ax1.set_ylim(0.3, 4.7)
+    ax1.set_title("Performance Over Time", fontsize=10, color="#1A7A6E",
+                  fontweight="bold", loc="left", pad=6)
+    ax1.annotate(f"Tracked: {from_date}  →  {to_date}",
+                 xy=(0.01, 0.05), xycoords="axes fraction", fontsize=8, color="gray")
+    patches = [mpatches.Patch(color=MPL_COLOR[p], label=p)
+               for p in TRACK_LEVELS if p in df["performance_level"].values]
+    ax1.legend(handles=patches, fontsize=8, loc="upper right", framealpha=0.7, ncol=4)
+    ax1.grid(axis="y", alpha=0.22)
+    ax1.spines[["top", "right"]].set_visible(False)
+    ax1.tick_params(axis="x", rotation=35, labelsize=8)
+
+    # ── Bottom-left: distribution pie ─────────────────────────────────────────
+    ax2 = fig.add_subplot(gs[1, 0])
+    counts_d = df["performance_level"].value_counts().reindex(TRACK_LEVELS).dropna()
+    if not counts_d.empty:
+        pie_c = [MPL_COLOR[l] for l in counts_d.index]
+        _, _, autotexts = ax2.pie(
+            counts_d.values, labels=counts_d.index, colors=pie_c,
+            autopct="%1.0f%%", startangle=90,
+            textprops={"fontsize": 9},
+            wedgeprops={"edgecolor": "white", "linewidth": 1.5},
         )
-    with wt_col2:
-        if last_week_type:
-            st.caption(f"Last scheduled meeting: Week {last_week_type}")
+        for at in autotexts:
+            at.set_fontsize(9)
+            at.set_fontweight("bold")
+    ax2.set_title("Distribution", fontsize=10, color="#1A7A6E",
+                  fontweight="bold", loc="left", pad=6)
 
-    is_week_a = week_type.startswith("A")
-    is_adhoc  = week_type.startswith("📋")
-
-    if is_week_a:
-        st.markdown(f"""<div style="background:#dbeafe;border-left:5px solid #1a4d8c;
-            border-radius:0 8px 8px 0;padding:8px 14px;margin-bottom:12px;font-size:13px;color:#1a4d8c;">
-            ⬤ <strong>WEEK A — STUDENT LENS</strong> · Individual Progress · SMARTAR Goals · Evidence
-        </div>""", unsafe_allow_html=True)
-    elif is_adhoc:
-        st.markdown(f"""<div style="background:#f3f0ff;border-left:5px solid #6d28d9;
-            border-radius:0 8px 8px 0;padding:8px 14px;margin-bottom:12px;font-size:13px;color:#4c1d95;">
-            📋 <strong>AD-HOC / ADDITIONAL MEETING</strong>
-        </div>""", unsafe_allow_html=True)
-    else:
-        st.markdown(f"""<div style="background:#fef3c7;border-left:5px solid #d97706;
-            border-radius:0 8px 8px 0;padding:8px 14px;margin-bottom:12px;font-size:13px;color:#92400e;">
-            ⬤ <strong>WEEK B — SYSTEM LENS</strong> · CLC Priorities · Innovation Fidelity · Staff Alignment
-        </div>""", unsafe_allow_html=True)
-
-    if is_adhoc:
-        # Keep existing ad-hoc meeting function
-        return
-
-    st.markdown("#### 📋 Meeting Details")
-    mc1, mc2, mc3, mc4 = st.columns(4)
-    
-    # Pre-populate with existing data if editing
-    default_date = datetime.date.fromisoformat(selected_record['meeting_date']) if selected_record else datetime.date.today()
-    default_term = selected_record.get('term', '') if selected_record else ''
-    default_week = selected_record.get('week_number', 1) if selected_record else 1
-    default_facilitator = selected_record.get('facilitator', get_staff_name()) if selected_record else get_staff_name()
-    default_attendees = selected_record.get('attendees', '') if selected_record else ''
-    default_checkin = selected_record.get('checkin_notes', '') if selected_record else ''
-    default_reports = selected_record.get('reports_tac_notes', '') if selected_record else ''
-    
-    with mc1: pm_date        = st.date_input("Date", value=default_date, key=f"pm_date_{program}")
-    with mc2: pm_term        = st.text_input("Term", value=default_term, placeholder="T1", key=f"pm_term_{program}")
-    with mc3: pm_week        = st.number_input("Week #", min_value=1, max_value=11, value=default_week, key=f"pm_week_{program}")
-    with mc4: pm_facilitator = st.text_input("Facilitator", value=default_facilitator, key=f"pm_fac_{program}")
-    pm_attendees = st.text_input("Attendees", value=default_attendees, placeholder="Names separated by commas", key=f"pm_att_{program}")
-
-    st.markdown("""<div style="background:#f0f9f9;border:1px solid #1A7A7A;border-radius:8px;
-        padding:6px 12px;font-size:0.78rem;color:#1A7A7A;margin-bottom:8px;">
-        <strong>Meeting Norms:</strong> ☑ Student-centred &nbsp;·&nbsp; ☑ Evidence before opinion
-        &nbsp;·&nbsp; ☑ Clear actions + ownership &nbsp;·&nbsp; ☑ Stick to time
-    </div>""", unsafe_allow_html=True)
-    
-    # STATUS DISPLAY - Updated messaging
-    if not st.session_state.current_meeting_id:
-        st.markdown("""
-        <div style="background:#e0f2fe;border-left:4px solid #0284c7;border-radius:0 8px 8px 0;
-                    padding:8px 14px;margin-bottom:12px;font-size:13px;color:#075985;">
-          ℹ️ <strong>New Meeting:</strong> Meeting ID will be created automatically when you start entering content. 
-          SMARTAR links will appear as soon as you enter a student name below.
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.success(f"✅ Meeting Active (ID: {st.session_state.current_meeting_id}) - SMARTAR integration ready")
-    
-    st.markdown("---")
-
-    checkin_label  = "TEAM CHECK-IN — Regulation Before Reaction" if is_week_a else "TEAM CHECK-IN"
-    checkin_prompt = "What do we need to know to support students effectively today?" if is_week_a else "Quick updates impacting program delivery"
-    st.markdown(f"#### ⏱ 0–10 min | {checkin_label}")
-    st.caption(checkin_prompt)
-    pm_checkin = st.text_area("Check-in notes", value=default_checkin, height=80, key=f"pm_checkin_{program}",
-        label_visibility="collapsed", placeholder=checkin_prompt)
-    st.markdown("---")
-
-    if is_week_a:
-        st.markdown("#### ⏱ 10–25 min | STUDENT CONCERNS — Structured Problem Solving")
-        st.caption("Facilitator prompt: Push for function-based thinking, not description.")
-
-        # Manual entry section
-        st.markdown("**Option A: Manual Entry**")
-        
-        concerns_key = f"pm_concerns_{program}"
-        if concerns_key not in st.session_state:
-            # Load from selected_record if editing
-            if selected_record and selected_record.get('student_concerns'):
-                try:
-                    loaded = _json.loads(selected_record['student_concerns'])
-                    st.session_state[concerns_key] = loaded if isinstance(loaded, list) else [{"notes": ""}]
-                except:
-                    st.session_state[concerns_key] = [{"notes": ""}]
-            else:
-                st.session_state[concerns_key] = [{"notes": ""}]
-
-        concerns = st.session_state[concerns_key]
-        
-        for idx, row in enumerate(concerns):
-            col_text, col_del = st.columns([11, 0.5])
-            with col_text:
-                row["notes"] = st.text_area(
-                    f"Student {idx + 1}",
-                    value=row.get("notes", ""),
-                    key=f"con_notes_{program}_{idx}",
-                    height=100,
-                    placeholder="Student name · Concern / behaviour · Hypothesis (why?) · Strategy to try · Who · By when",
-                )
-            with col_del:
-                st.markdown("<div style='margin-top:2rem;'></div>", unsafe_allow_html=True)
-                if len(concerns) > 1:
-                    if st.button("✕", key=f"con_del_{program}_{idx}"):
-                        concerns.pop(idx)
-                        st.rerun()
-        
-        if st.button("➕ Add student concern", key=f"con_add_{program}"):
-            concerns.append({"notes": ""})
-            st.rerun()
-        
-        # Show summary of documented students
-        if concerns and any(c.get('notes', '').strip() for c in concerns):
-            existing_count = len([c for c in concerns if c.get('notes', '').strip()])
-            st.caption(f"📋 {existing_count} student(s) currently documented above")
-        
-        st.markdown("---")
-        
-        # AI Generation section
-        st.markdown("**Option B: Generate from Transcript**")
-        st.caption("AI will identify NEW student concerns not already documented above")
-        
-        transcript_concerns = st.text_area(
-            "Meeting transcript",
-            height=180,
-            key=f"transcript_concerns_{program}",
-            label_visibility="collapsed",
-            placeholder="Paste meeting transcript here..."
-        )
-        
-        col_gen, col_status = st.columns([2, 3])
-        with col_gen:
-            if st.button("✨ Analyze with AI", key=f"gen_concerns_{program}", type="primary"):
-                if transcript_concerns.strip():
-                    with st.spinner("Analyzing transcript..."):
-                        existing_json = _json.dumps(concerns)
-                        result = generate_smart_minutes_week_a(transcript_concerns, existing_json, program)
-                        
-                        if result:
-                            st.session_state[f'_ai_new_concerns_{program}'] = result['student_concerns']
-                            st.session_state[f'_ai_minutes_{program}'] = result['minutes']
-                            st.session_state[f'_ai_actions_{program}'] = result['actions']
-                            st.success("✓ Analysis complete!")
-                            time.sleep(0.5)
-                            st.rerun()
-                else:
-                    st.warning("Please paste transcript first")
-        
-        with col_status:
-            if st.session_state.get(f'_ai_new_concerns_{program}'):
-                st.info("✓ AI results ready below")
-        
-        st.markdown("---")
-        
-        # AI Results Review
-        if st.session_state.get(f'_ai_new_concerns_{program}'):
-            st.markdown("### 🤖 AI Analysis Results")
-            new_concerns_text = st.session_state[f'_ai_new_concerns_{program}']
-            
-            if "No new student concerns" in new_concerns_text:
-                st.info("✓ All students in transcript already documented")
-                if st.button("Clear Results", key=f"clear_concerns_{program}"):
-                    del st.session_state[f'_ai_new_concerns_{program}']
-                    st.rerun()
-            else:
-                st.markdown("**New Student Concerns Found:**")
-                edited_concerns = st.text_area(
-                    "Review concerns",
-                    value=new_concerns_text,
-                    height=150,
-                    key=f"review_concerns_{program}",
-                    label_visibility="collapsed"
-                )
-                
-                new_lines = [line.strip() for line in edited_concerns.split('\n') 
-                            if line.strip() and not line.startswith("No new")]
-                
-                if new_lines:
-                    st.caption(f"Will add {len(new_lines)} new concern(s)")
-                
-                col_accept, col_reject = st.columns(2)
-                with col_accept:
-                    if st.button("✅ Accept & Add", key=f"accept_concerns_{program}", type="primary"):
-                        for line in new_lines:
-                            if line:
-                                concerns.append({"notes": line})
-                        del st.session_state[f'_ai_new_concerns_{program}']
-                        st.success(f"Added {len(new_lines)} concern(s)!")
-                        time.sleep(0.5)
-                        st.rerun()
-                
-                with col_reject:
-                    if st.button("❌ Discard", key=f"reject_concerns_{program}"):
-                        del st.session_state[f'_ai_new_concerns_{program}']
-                        st.rerun()
-        
-        st.markdown("---")
-
-        st.markdown("#### ⏱ 25–40 min | SMARTAR GOAL SPOTLIGHT — 4 Students")
-        st.caption("Click student name to open Goal Builder, or add new student")
-
-        if not st.session_state.current_meeting_id:
-            st.info("💡 Save the meeting details above first — SMARTAR links will activate once the meeting has an ID.")
-
-        if student_names:
-            st.caption(f"💡 {len(student_names)} students loaded")
-
-        # SMARTAR student selection - REDESIGNED with buttons
-        st.markdown("**Select students for goal spotlight:**")
-        
-        smartar_key = f"pm_smartar_{program}"
-        if smartar_key not in st.session_state:
-            st.session_state[smartar_key] = []
-        
-        smartar = st.session_state[smartar_key]
-        
-        # Display existing students with Goal Builder buttons
-        if smartar:
-            for idx, student_data in enumerate(smartar):
-                student_name = student_data.get("student_name", "")
-                if not student_name:
-                    continue
-                    
-                col_name, col_goal_btn, col_status, col_remove = st.columns([3, 2, 1.5, 0.5])
-                
-                with col_name:
-                    st.markdown(f"**{idx + 1}. {student_name}**")
-                
-                with col_goal_btn:
-                    if st.session_state.current_meeting_id:
-                        smartar_url = get_smartar_goal_link(
-                            student_name, 
-                            st.session_state.current_meeting_id,
-                            program,
-                            pm_term or "T1",
-                            pm_week
-                        )
-                        st.markdown(f"[🎯 Open Goal Builder]({smartar_url})", unsafe_allow_html=True)
-                    else:
-                        st.caption("Initializing...")
-                
-                with col_status:
-                    if st.session_state.current_meeting_id:
-                        synced_goal = fetch_synced_smartar_goal(student_name, st.session_state.current_meeting_id)
-                        if synced_goal:
-                            st.success("✓ Synced")
-                            # Update notes with synced goal
-                            if "SMARTAR Goal:" not in student_data.get("notes", ""):
-                                student_data["notes"] = f"SMARTAR Goal: {synced_goal}\n\n{student_data.get('notes', '')}"
-                        else:
-                            st.info("No goal yet")
-                
-                with col_remove:
-                    if st.button("✕", key=f"sm_remove_{program}_{idx}"):
-                        smartar.pop(idx)
-                        st.rerun()
-                
-                # Optional notes field (collapsed)
-                with st.expander(f"📝 Notes for {student_name}", expanded=False):
-                    student_data["notes"] = st.text_area(
-                        f"Notes for {student_name}",
-                        value=student_data.get("notes", ""),
-                        key=f"sm_notes_{program}_{idx}",
-                        height=80,
-                        placeholder="Additional notes about this student's goals...",
-                        label_visibility="collapsed"
-                    )
-        
-        st.markdown("---")
-        
-        # Add student section - SIMPLIFIED
-        st.markdown("**Add student to spotlight:**")
-        
-        col_select, col_add = st.columns([4, 1])
-        
-        with col_select:
-            # Student selector with autocomplete
-            new_student_name = st.selectbox(
-                "Select student",
-                options=[""] + student_names,
-                key=f"new_student_select_{program}",
-                label_visibility="collapsed"
-            )
-            # OR manual entry
-            if not new_student_name:
-                new_student_name = st.text_input(
-                    "Or type student name",
-                    key=f"new_student_manual_{program}",
-                    placeholder="Type student name if not in list...",
-                    label_visibility="collapsed"
-                )
-        
-        with col_add:
-            st.markdown("<div style='margin-top:1.8rem;'></div>", unsafe_allow_html=True)
-            if st.button("➕ Add & Open Goal Builder", key=f"add_student_{program}", type="primary"):
-                if new_student_name and new_student_name.strip():
-                    # Add to smartar list
-                    smartar.append({"student_name": new_student_name.strip(), "notes": ""})
-                    
-                    # Open SMARTAR Goal Builder immediately
-                    if st.session_state.current_meeting_id:
-                        smartar_url = get_smartar_goal_link(
-                            new_student_name.strip(), 
-                            st.session_state.current_meeting_id,
-                            program,
-                            pm_term or "T1",
-                            pm_week
-                        )
-                        st.markdown(f"""
-                        <meta http-equiv="refresh" content="0; url={smartar_url}">
-                        <div style="background:#dbeafe;border-left:4px solid #0284c7;border-radius:8px;
-                                    padding:12px 16px;margin:12px 0;font-size:14px;">
-                          🎯 <strong>Opening SMARTAR Goal Builder for {new_student_name}...</strong><br>
-                          If it doesn't open automatically, <a href="{smartar_url}" target="_blank">click here</a>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.warning("⚠️ Meeting not initialized yet - fill in meeting details first")
-                else:
-                    st.warning("⚠️ Please select or enter a student name")
-        
-        st.markdown("---")
-
-        st.markdown("#### ⏱ 40–45 min | REPORTS / TAC / TRANSITIONS")
-        pm_reports = st.text_area("Reports, TAC meetings, review or transition planning",
-            value=default_reports, height=80, key=f"pm_reports_{program}", label_visibility="collapsed",
-            placeholder="Upcoming reports due · TAC meetings · Review or transition planning")
-        priority_rows = []
-
-    else:  # Week B - System Lens
-        st.markdown("#### ⏱ 10–45 min | WEEK B — SYSTEM LENS")
-        st.caption("Align to: Implementation Plan · PDP Focus Areas · LBU Priorities")
-
-        priority_key = f"pm_priority_{program}"
-
-        # Initialise from saved record if first load
-        if priority_key not in st.session_state:
-            raw_pf = selected_record.get('priority_focus', '') if selected_record else ''
-            existing_focus = ""
-            if raw_pf:
-                try:
-                    import json as _json_pf
-                    pf_data = _json_pf.loads(raw_pf)
-                    if isinstance(pf_data, dict):
-                        existing_focus = pf_data.get("notes", "")
-                    elif isinstance(pf_data, list) and pf_data:
-                        lines = []
-                        for r in pf_data:
-                            if isinstance(r, dict):
-                                parts = [v for v in r.values() if v]
-                                if parts:
-                                    lines.append("• " + " | ".join(parts))
-                        existing_focus = "\n".join(lines)
-                except Exception:
-                    existing_focus = str(raw_pf)
-            st.session_state[priority_key] = {"notes": existing_focus}
-
-        priority_store = st.session_state[priority_key]
-        if not isinstance(priority_store, dict):
-            priority_store = {"notes": ""}
-            st.session_state[priority_key] = priority_store
-
-        # ── SINGLE TRANSCRIPT DROP ZONE ────────────────────────────────────
-        st.markdown("**📋 Drop Transcript / Raw Notes**")
-        st.caption(
-            "Paste a voice transcript, rough notes, or dot points from the whole meeting. "
-            "AI will read it and split content into the **Focus Area** summary and **Meeting Minutes** below."
-        )
-        st.caption("⚠️ Keep transcripts under ~3,000 characters for best results with the free Groq tier.")
-        transcript_raw = st.text_area(
-            "Transcript",
-            height=200,
-            key=f"pr_transcript_{program}",
-            label_visibility="collapsed",
-            placeholder=(
-                "Paste full meeting transcript or rough notes here…\n\n"
-                "e.g. 'We talked about BSEM implementation — Brenton said check-ins are happening but "
-                "not all staff using the language consistently. Candice to model it next week. "
-                "Also discussed upcoming reports — due end of week 8. Tom will send the template out by Thursday.'"
-            )
-        )
-
-        if st.button("✨ Process with AI → Split into Focus Area + Minutes", key=f"pr_groq_{program}", type="primary"):
-            if transcript_raw.strip():
-                if GROQ_KEY:
-                    with st.spinner("Reading transcript and sorting content…"):
-                        try:
-                            _groq_client = Groq(api_key=GROQ_KEY)
-                            _prompt = f"""You are a professional minute-taker for Cowandilla Learning Centre (CLC), Learning & Behaviour Unit — an alternative education school in South Australia.
-
-A raw transcript or rough notes from a Week B 'System Lens' team meeting for the {PROGRAMS[program]['label']} program is provided below.
-
-Your job: Read the full transcript and produce TWO clearly separated sections.
-
----
-SECTION 1 — FOCUS AREA SUMMARY
-Extract anything about implementation fidelity, frameworks, staff practice, LBU priorities, or systemic/program concerns. Format as:
-
-FOCUS AREA: [topic]
-WHAT'S WORKING: [strengths observed]
-GAP IDENTIFIED: [what needs attention]
-ADJUSTMENT / NEXT STEP: [what will change and how]
-EVIDENCE TO COLLECT: [how progress will be measured]
-WHO & WHEN: [responsible person and timeline]
-
-Repeat for each distinct focus area discussed.
-
----
-SECTION 2 — MEETING MINUTES
-Everything else — general discussion, decisions, announcements, upcoming events, staff matters, reports, TAC, transitions, any other business. Format as clear professional minutes with numbered items.
-
-Rules:
-- Trauma-informed, strengths-based, plain English
-- Preserve ALL factual content — do not add or fabricate anything
-- Be concise — one sentence per point unless more detail is essential
-- Clearly label the two sections with the headings above
-
-RAW TRANSCRIPT:
-{transcript_raw[:3500]}"""
-                            _resp = _groq_client.chat.completions.create(
-                                model="llama-3.1-8b-instant",
-                                messages=[{"role": "user", "content": _prompt}],
-                                max_tokens=900
-                            )
-                            full_output = _resp.choices[0].message.content
-
-                            # Split on the SECTION 2 heading
-                            split_markers = [
-                                "SECTION 2 — MEETING MINUTES",
-                                "SECTION 2 - MEETING MINUTES",
-                                "---\nSECTION 2",
-                                "\n\nSECTION 2",
-                            ]
-                            focus_text = full_output
-                            minutes_text = ""
-                            for marker in split_markers:
-                                if marker in full_output:
-                                    parts = full_output.split(marker, 1)
-                                    focus_text = parts[0].replace("SECTION 1 — FOCUS AREA SUMMARY", "").replace("SECTION 1 - FOCUS AREA SUMMARY", "").strip()
-                                    minutes_text = parts[1].strip()
-                                    break
-
-                            # Stage results — transferred to widget keys before render
-                            st.session_state[f"_stage_pr_notes_{program}"] = focus_text
-                            st.session_state[f"_stage_pm_minutes_{program}"] = minutes_text
-                            st.rerun()
-                        except Exception as _e:
-                            st.error(f"Groq error: {_e}")
-                else:
-                    st.warning("⚠️ Groq API key not configured.")
-            else:
-                st.warning("⚠️ Paste a transcript first.")
-
-        st.markdown("---")
-
-        # ── Focus Area notes (populated by AI or typed manually) ───────────
-        st.markdown("**📝 Focus Area Summary**")
-        st.caption("AI-populated from your transcript, or type freely. Edit before saving.")
-        _stage_pn = st.session_state.pop(f"_stage_pr_notes_{program}", None)
-        if _stage_pn is not None:
-            st.session_state[f"pr_notes_{program}"] = _stage_pn
-        elif f"pr_notes_{program}" not in st.session_state:
-            st.session_state[f"pr_notes_{program}"] = priority_store.get("notes", "")
-        _focus_notes = st.text_area(
-            "Focus area notes",
-            height=200,
-            key=f"pr_notes_{program}",
-            label_visibility="collapsed",
-            placeholder=(
-                "e.g.\n"
-                "FOCUS AREA: BSEM implementation fidelity\n"
-                "WHAT'S WORKING: Morning check-ins happening consistently\n"
-                "GAP: WoT language not yet embedded in afternoon sessions\n"
-                "ADJUSTMENT: Candice to model language at next team meeting\n"
-                "EVIDENCE: Scatter Plot regulation data — Brenton by W7"
-            )
-        )
-        # Keep priority_store in sync for save
-        priority_store["notes"] = _focus_notes
-        st.session_state[priority_key] = priority_store
-
-        # priority_rows used downstream for save
-        priority_rows = [{"notes": _focus_notes}]
-        st.markdown("---")
-
-        # SMARTAR for Week B (same as Week A)
-        st.markdown("#### ⏱ SMARTAR GOAL SPOTLIGHT — 4 Students")
-        st.caption("Click student name to open Goal Builder, or add new student")
-
-        if not st.session_state.current_meeting_id:
-            st.info("💡 Save the meeting details above first — SMARTAR links will activate once the meeting has an ID.")
-
-        if student_names:
-            st.caption(f"💡 {len(student_names)} students loaded")
-
-        smartar_key = f"pm_smartar_{program}"
-        if smartar_key not in st.session_state:
-            st.session_state[smartar_key] = []
-
-        smartar = st.session_state[smartar_key]
-        
-        # Display existing students
-        if smartar:
-            for idx, student_data in enumerate(smartar):
-                student_name = student_data.get("student_name", "")
-                if not student_name:
-                    continue
-                    
-                col_name, col_goal_btn, col_status, col_remove = st.columns([3, 2, 1.5, 0.5])
-                
-                with col_name:
-                    st.markdown(f"**{idx + 1}. {student_name}**")
-                
-                with col_goal_btn:
-                    if st.session_state.current_meeting_id:
-                        smartar_url = get_smartar_goal_link(
-                            student_name, 
-                            st.session_state.current_meeting_id,
-                            program,
-                            pm_term or "T1",
-                            pm_week
-                        )
-                        st.markdown(f"[🎯 Open Goal Builder]({smartar_url})", unsafe_allow_html=True)
-                    else:
-                        st.caption("Initializing...")
-                
-                with col_status:
-                    if st.session_state.current_meeting_id:
-                        synced_goal = fetch_synced_smartar_goal(student_name, st.session_state.current_meeting_id)
-                        if synced_goal:
-                            st.success("✓ Synced")
-                            if "SMARTAR Goal:" not in student_data.get("notes", ""):
-                                student_data["notes"] = f"SMARTAR Goal: {synced_goal}\n\n{student_data.get('notes', '')}"
-                        else:
-                            st.info("No goal yet")
-                
-                with col_remove:
-                    if st.button("✕", key=f"sm_remove_b_{program}_{idx}"):
-                        smartar.pop(idx)
-                        st.rerun()
-                
-                with st.expander(f"📝 Notes for {student_name}", expanded=False):
-                    student_data["notes"] = st.text_area(
-                        f"Notes for {student_name}",
-                        value=student_data.get("notes", ""),
-                        key=f"sm_notes_b_{program}_{idx}",
-                        height=80,
-                        placeholder="Additional notes about this student's goals...",
-                        label_visibility="collapsed"
-                    )
-        
-        st.markdown("---")
-        
-        # Add student section
-        st.markdown("**Add student to spotlight:**")
-        
-        col_select, col_add = st.columns([4, 1])
-        
-        with col_select:
-            new_student_name = st.selectbox(
-                "Select student",
-                options=[""] + student_names,
-                key=f"new_student_select_b_{program}",
-                label_visibility="collapsed"
-            )
-            if not new_student_name:
-                new_student_name = st.text_input(
-                    "Or type student name",
-                    key=f"new_student_manual_b_{program}",
-                    placeholder="Type student name if not in list...",
-                    label_visibility="collapsed"
-                )
-        
-        with col_add:
-            st.markdown("<div style='margin-top:1.8rem;'></div>", unsafe_allow_html=True)
-            if st.button("➕ Add & Open Goal Builder", key=f"add_student_b_{program}", type="primary"):
-                if new_student_name and new_student_name.strip():
-                    smartar.append({"student_name": new_student_name.strip(), "notes": ""})
-                    
-                    if st.session_state.current_meeting_id:
-                        smartar_url = get_smartar_goal_link(
-                            new_student_name.strip(), 
-                            st.session_state.current_meeting_id,
-                            program,
-                            pm_term or "T1",
-                            pm_week
-                        )
-                        st.markdown(f"""
-                        <meta http-equiv="refresh" content="0; url={smartar_url}">
-                        <div style="background:#dbeafe;border-left:4px solid #0284c7;border-radius:8px;
-                                    padding:12px 16px;margin:12px 0;font-size:14px;">
-                          🎯 <strong>Opening SMARTAR Goal Builder for {new_student_name}...</strong><br>
-                          If it doesn't open automatically, <a href="{smartar_url}" target="_blank">click here</a>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.warning("⚠️ Meeting not initialized yet - fill in meeting details first")
-                else:
-                    st.warning("⚠️ Please select or enter a student name")
-
-        pm_reports = ""
-        concerns = []
-
-    st.markdown("---")
-
-    # MEETING MINUTES / NOTES SECTION
-    st.markdown("#### 📝 MEETING MINUTES / NOTES")
-    st.caption("For Week B: AI-populated from transcript above. For Week A: type manually. Edit freely before saving.")
-    
-    # Check for AI-generated minutes
-    if st.session_state.get(f'_ai_minutes_{program}'):
-        st.markdown("**🤖 AI Generated Minutes:**")
-        ai_minutes = st.session_state[f'_ai_minutes_{program}']
-        
-        edited_minutes = st.text_area(
-            "Review minutes",
-            value=ai_minutes,
-            height=200,
-            key=f"review_minutes_{program}",
-            label_visibility="collapsed"
-        )
-        
-        col_accept, col_reject = st.columns(2)
-        with col_accept:
-            if st.button("✅ Accept Minutes", key=f"accept_minutes_{program}", type="primary"):
-                st.session_state[f"pm_minutes_{program}"] = edited_minutes
-                del st.session_state[f'_ai_minutes_{program}']
-                st.success("Minutes accepted!")
-                time.sleep(0.5)
-                st.rerun()
-        with col_reject:
-            if st.button("❌ Discard", key=f"reject_minutes_{program}"):
-                del st.session_state[f'_ai_minutes_{program}']
-                st.rerun()
-    else:
-        # Regular minutes entry
-        default_minutes = selected_record.get('meeting_minutes', '') if selected_record else ''
-        _stage_min = st.session_state.pop(f"_stage_pm_minutes_{program}", None)
-        if _stage_min is not None:
-            st.session_state[f"pm_minutes_{program}"] = _stage_min
-        elif f"pm_minutes_{program}" not in st.session_state:
-            st.session_state[f"pm_minutes_{program}"] = default_minutes
-        pm_minutes = st.text_area(
-            "Meeting minutes",
-            height=200,
-            key=f"pm_minutes_{program}",
-            label_visibility="collapsed",
-            placeholder="Record comprehensive meeting minutes here - discussions, decisions, key points, follow-up items..."
-        )
-    
-    st.markdown("---")
-    
-    # ACTIONS SECTION
-    st.markdown("#### ✅ ACTIONS — Clear Ownership & Accountability")
-    st.caption("Each action must have: specific task, responsible person, and due date")
-    
-    actions_key = f"pm_actions_{program}"
-    if actions_key not in st.session_state:
-        carried = [a for a in last_actions if not a.get("done", False)]
-        st.session_state[actions_key] = carried if carried else [{"action":"","who":"","by_when":"","priority":"Medium","notes":"","done":False}]
-
-    actions = st.session_state[actions_key]
-    if last_actions:
-        incomplete = [a for a in last_actions if not a.get("done", False)]
-        if incomplete:
-            st.caption(f"⬆️ {len(incomplete)} action(s) carried forward from last meeting")
-    
-    # AI-suggested actions review
-    if st.session_state.get(f'_ai_actions_{program}'):
-        st.markdown("**🤖 AI Suggested Actions — Review & Add:**")
-        ai_actions = st.session_state[f'_ai_actions_{program}']
-        
-        if ai_actions:
-            for ai_idx, ai_action in enumerate(ai_actions):
-                cols = st.columns([3, 1.5, 1, 1, 0.7])
-                cols[0].text_input("Action", value=ai_action.get('action', ''), key=f"ai_act_{program}_{ai_idx}", label_visibility="collapsed")
-                cols[1].text_input("Who", value=ai_action.get('who', ''), key=f"ai_who_{program}_{ai_idx}", label_visibility="collapsed")
-                cols[2].text_input("When", value=ai_action.get('by_when', ''), key=f"ai_when_{program}_{ai_idx}", label_visibility="collapsed")
-                cols[3].selectbox("Pri", ["Low", "Medium", "High", "Urgent"], 
-                                 index=["Low", "Medium", "High", "Urgent"].index(ai_action.get('priority', 'Medium')),
-                                 key=f"ai_pri_{program}_{ai_idx}", label_visibility="collapsed")
-                if cols[4].button("✅", key=f"add_ai_{program}_{ai_idx}"):
-                    actions.append({
-                        "action": st.session_state[f"ai_act_{program}_{ai_idx}"],
-                        "who": st.session_state[f"ai_who_{program}_{ai_idx}"],
-                        "by_when": st.session_state[f"ai_when_{program}_{ai_idx}"],
-                        "priority": st.session_state[f"ai_pri_{program}_{ai_idx}"],
-                        "notes": "",
-                        "done": False
-                    })
-                    st.success("Action added!")
-                    time.sleep(0.3)
-                    st.rerun()
-        
-        col_all, col_clear = st.columns(2)
-        with col_all:
-            if st.button("✅ Accept All Actions", key=f"accept_all_actions_{program}", type="primary"):
-                for ai_action in ai_actions:
-                    actions.append({
-                        "action": ai_action.get('action', ''),
-                        "who": ai_action.get('who', ''),
-                        "by_when": ai_action.get('by_when', ''),
-                        "priority": ai_action.get('priority', 'Medium'),
-                        "notes": "",
-                        "done": False
-                    })
-                del st.session_state[f'_ai_actions_{program}']
-                st.success(f"Added {len(ai_actions)} actions!")
-                time.sleep(0.5)
-                st.rerun()
-        with col_clear:
-            if st.button("Clear Suggestions", key=f"clear_actions_{program}"):
-                del st.session_state[f'_ai_actions_{program}']
-                st.rerun()
-        
-        st.markdown("---")
-    
-    # Existing actions display
-    st.markdown("**Current Actions:**")
-
-    ah_cols = st.columns([4,1.5,1,1,0.7,0.5])
-    for h, label in zip(ah_cols, ["Action (What needs to be done)","Who (Responsible person)","By When","Priority","✓ Done",""]):
-        h.markdown(f"**{label}**" if label else "")
-
-    for idx, row in enumerate(actions):
-        a1,a2,a3,a4,a5,a6 = st.columns([4,1.5,1,1,0.7,0.5])
-        with a1: row["action"]   = st.text_input("Act", value=row.get("action",""),   key=f"act_a_{program}_{idx}",      label_visibility="collapsed", placeholder="Specific action item")
-        with a2: row["who"]      = st.text_input("Who", value=row.get("who",""),      key=f"act_w_{program}_{idx}",      label_visibility="collapsed", placeholder="Person responsible")
-        with a3: row["by_when"]  = st.text_input("By",  value=row.get("by_when",""),  key=f"act_by_{program}_{idx}",     label_visibility="collapsed", placeholder="Due date/week")
-        with a4: row["priority"] = st.selectbox("Pri",  ["Low","Medium","High","Urgent"], index=["Low","Medium","High","Urgent"].index(row.get("priority","Medium")), key=f"act_pri_{program}_{idx}", label_visibility="collapsed")
-        with a5: row["done"]     = st.checkbox("✓",     value=row.get("done",False),   key=f"act_done_{program}_{idx}")
-        with a6:
-            if len(actions) > 1:
-                if st.button("✕", key=f"act_del_{program}_{idx}"):
-                    actions.pop(idx); st.rerun()
-        
-        if row.get("action"):
-            row["notes"] = st.text_input("Additional context/notes (optional)", 
-                value=row.get("notes", ""), 
-                key=f"act_notes_{program}_{idx}",
-                placeholder="Dependencies, resources needed, background...")
-
-    if st.button("➕ Add action", key=f"act_add_{program}"):
-        actions.append({"action":"","who":"","by_when":"","priority":"Medium","notes":"","done":False})
-        st.rerun()
-    
-    # Multiple add option
-    col_add_multi, col_button = st.columns([3, 1])
-    with col_add_multi:
-        num_actions = st.number_input("Add multiple actions", min_value=1, max_value=10, value=3, 
-                                     key=f"num_add_{program}", label_visibility="collapsed")
-    with col_button:
-        if st.button(f"➕ Add {num_actions} Actions", key=f"add_multi_{program}"):
-            for _ in range(num_actions):
-                actions.append({"action":"","who":"","by_when":"","priority":"Medium","notes":"","done":False})
-            st.rerun()
-    
-    st.markdown("---")
-
-    # Prepare meeting data for save - FIXED: Use local variables instead of session state
-    smartar_data = [{"student_name": r.get("student_name",""), "notes": r.get("notes","")} for r in smartar]
-    actions_data = actions  # Use local variable directly
-    concerns_data = [{"notes": r.get("notes","")} for r in concerns] if is_week_a else []
-    # Week B: priority_rows is [{notes: "..."}]; Week A: empty
-    if not is_week_a and priority_rows:
-        priority_data = priority_rows[0] if isinstance(priority_rows[0], dict) else {"notes": ""}
-    else:
-        priority_data = {}
-
-    meeting_data = {
-        "program": program, 
-        "meeting_date": str(pm_date),
-        "term": pm_term.strip(), 
-        "week_number": int(pm_week),
-        "week_type": "A" if is_week_a else "B",
-        "facilitator": pm_facilitator.strip(), 
-        "attendees": pm_attendees.strip(),
-        "checkin_notes": pm_checkin.strip(),
-        "student_concerns": _json.dumps(concerns_data),
-        "smartar_spotlight": _json.dumps(smartar_data),
-        "reports_tac_notes": pm_reports.strip() if is_week_a else "",
-        "priority_focus": _json.dumps(priority_data),
-        "meeting_minutes": pm_minutes.strip(),
-        "actions": _json.dumps(actions_data),
-    }
-
-    # Trigger auto-save/auto-initialization
-    trigger_autosave(program, meeting_data)
-
-    # Manual save button
-    save_button_text = "💾 Update Meeting Record" if st.session_state.current_meeting_id and not str(st.session_state.current_meeting_id).startswith("temp_") else "💾 Save Meeting Record"
-    if st.button(save_button_text, type="primary", use_container_width=True, key=f"pm_save_{program}"):
-        try:
-            if st.session_state.current_meeting_id and not str(st.session_state.current_meeting_id).startswith("temp_"):
-                supabase.table('tm_program_meetings').update(meeting_data).eq('id', st.session_state.current_meeting_id).execute()
-                st.success("✅ Meeting record updated!")
-            else:
-                result = supabase.table('tm_program_meetings').insert(meeting_data).execute()
-                if result.data:
-                    st.session_state.current_meeting_id = result.data[0]['id']
-                st.success("✅ Meeting record saved!")
-            
-            # Clear session state
-            for k in [f"pm_concerns_{program}", f"pm_smartar_{program}",
-                      f"pm_priority_{program}", f"pm_actions_{program}"]:
-                st.session_state.pop(k, None)
-            
-            st.session_state.last_autosave_time = None
-            st.session_state.autosave_message = ""
-            st.rerun()
-        except Exception as e:
-            st.error(f"⚠️ Database save failed: {e}")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# MEETING ARCHIVE - View and Edit Past Meetings
-# ─────────────────────────────────────────────────────────────────────────────
-
-def render_meeting_archive(program):
-    """Display archive of past meetings with full section editing."""
-    import json as _json
-
-    st.markdown("### 📚 Meeting Archive")
-    st.caption(f"Browse and edit past {PROGRAMS[program]['label']} meetings")
-
-    all_meetings = fetch("tm_program_meetings", {"program": program}, "meeting_date")
-
-    if not all_meetings:
-        st.info("No past meetings found. Start recording meetings in the Program Meeting tab!")
-        return
-
-    st.markdown(f"**Total meetings recorded:** {len(all_meetings)}")
-
-    col_filter1, col_filter2 = st.columns(2)
-    with col_filter1:
-        filter_term = st.selectbox(
-            "Filter by term",
-            ["All Terms"] + sorted(set(m.get('term', '') for m in all_meetings if m.get('term'))),
-            key=f"archive_filter_term_{program}"
-        )
-    with col_filter2:
-        if program in ["JP", "PY", "SY"]:
-            filter_week_type = st.selectbox(
-                "Filter by type", ["All Types", "Week A", "Week B"],
-                key=f"archive_filter_type_{program}"
-            )
+    # ── Bottom-right: by session ──────────────────────────────────────────────
+    ax3 = fig.add_subplot(gs[1, 1])
+    if "session_time" in df.columns:
+        sesses = [s for s in ALL_SESSIONS if s in df["session_time"].values]
+        if sesses:
+            x = np.arange(len(sesses))
+            w = 0.2
+            for i, perf in enumerate(TRACK_LEVELS):
+                vals = [df[(df["session_time"] == s) & (df["performance_level"] == perf)].shape[0]
+                        for s in sesses]
+                ax3.bar(x + i * w, vals, w, label=perf,
+                        color=MPL_COLOR[perf], alpha=0.85, edgecolor="white")
+            ax3.set_xticks(x + w * 1.5)
+            ax3.set_xticklabels(sesses, fontsize=9)
+            ax3.legend(fontsize=7, ncol=2)
+            ax3.spines[["top", "right"]].set_visible(False)
+            ax3.tick_params(labelsize=8)
+            ax3.yaxis.get_major_locator().set_params(integer=True)
         else:
-            filter_week_type = "All Types"
+            ax3.axis("off")
+    else:
+        ax3.axis("off")
+    ax3.set_title("By Session", fontsize=10, color="#1A7A6E",
+                  fontweight="bold", loc="left", pad=6)
 
-    filtered_meetings = all_meetings
-    if filter_term != "All Terms":
-        filtered_meetings = [m for m in filtered_meetings if m.get('term') == filter_term]
-    if filter_week_type == "Week A":
-        filtered_meetings = [m for m in filtered_meetings if m.get('week_type') == 'A']
-    elif filter_week_type == "Week B":
-        filtered_meetings = [m for m in filtered_meetings if m.get('week_type') == 'B']
+    fig.text(0.5, 0.01,
+             f"CLC Learning and Behaviour Unit  |  Generated {datetime.now().strftime('%d %b %Y')}",
+             ha="center", fontsize=7.5, color="#888", style="italic")
 
-    st.markdown("---")
+    buf = BytesIO()
+    plt.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
 
-    for meeting in reversed(filtered_meetings):
-        meeting_date  = meeting.get('meeting_date', 'Unknown')
-        term          = meeting.get('term', '')
-        week_num      = meeting.get('week_number', '')
-        week_type     = meeting.get('week_type', '')
-        facilitator   = meeting.get('facilitator', '')
-        meeting_id    = meeting.get('id', '')
-        edit_key      = f"arch_edit_{meeting_id}"
 
-        if program in ["JP", "PY", "SY"]:
-            week_badge = "🔵 Week A" if week_type == "A" else "🟡 Week B"
-            header = f"{week_badge} | {meeting_date} | Term {term} W{week_num} | {facilitator}"
-        else:
-            header = f"🎨 Specialist | {meeting_date} | Term {term} W{week_num} | {facilitator}"
+def make_student_pdf(student_name: str, goal_chart_list: list) -> bytes:
+    """goal_chart_list: [(goal_dict, png_bytes, from_d, to_d), …]"""
+    from PIL import Image as PILImage
+    buf = BytesIO()
+    with PdfPages(buf) as pdf:
+        # Cover
+        fig, ax = plt.subplots(figsize=(11.69, 8.27), facecolor="white")
+        ax.axis("off")
+        ax.add_patch(plt.Rectangle((0, 0.78), 1, 0.22, transform=ax.transAxes,
+                                   facecolor="#1A7A6E"))
+        ax.text(0.5, 0.895, "SMARTAR Goal Progress Report", ha="center", va="center",
+                fontsize=22, fontweight="bold", color="white", transform=ax.transAxes)
+        ax.text(0.5, 0.635, student_name, ha="center", va="center",
+                fontsize=20, fontweight="bold", color="#C8760A", transform=ax.transAxes)
+        ax.text(0.5, 0.545, f"Generated: {datetime.now().strftime('%d %B %Y')}",
+                ha="center", fontsize=12, color="gray", transform=ax.transAxes)
+        ax.text(0.5, 0.47, "CLC Learning and Behaviour Unit",
+                ha="center", fontsize=11, color="gray", transform=ax.transAxes)
+        ax.text(0.5, 0.39, f"Goals with data: {len(goal_chart_list)}",
+                ha="center", fontsize=11, color="#555", transform=ax.transAxes)
+        pdf.savefig(fig, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
 
-        in_edit_mode = st.session_state.get(edit_key, False)
-        with st.expander(header, expanded=in_edit_mode):
+        for idx, (goal, png_bytes, from_d, to_d) in enumerate(goal_chart_list, 1):
+            if not png_bytes:
+                continue
+            img    = PILImage.open(BytesIO(png_bytes))
+            pg_fig, pg_ax = plt.subplots(figsize=(11.69, 8.27), facecolor="white")
+            pg_ax.imshow(np.array(img))
+            pg_ax.axis("off")
+            status = "Active" if goal.get("active", True) else "Archived"
+            pg_fig.text(0.5, 0.005,
+                        f"Goal {idx}  ·  [{status}]  ·  Period: {goal.get('tracking_period','All Day')}",
+                        ha="center", fontsize=8, color="gray")
+            pdf.savefig(pg_fig, bbox_inches="tight", facecolor="white")
+            plt.close(pg_fig)
 
-            if not in_edit_mode:
-                # ── READ VIEW ──────────────────────────────────────────────
-                st.markdown(f"**Facilitator:** {facilitator} &nbsp;|&nbsp; **Attendees:** {meeting.get('attendees','Not recorded')}")
-                st.markdown(f"<small style='color:#888;'>Meeting ID: {meeting_id}</small>", unsafe_allow_html=True)
-                st.markdown("")
+    buf.seek(0)
+    return buf.getvalue()
 
-                # Check-in notes
-                raw_checkin = meeting.get('checkin_notes', '')
-                if raw_checkin:
-                    st.markdown("**📋 Check-in Notes:**")
-                    if program == "SPECIALIST":
-                        try:
-                            cd = _json.loads(raw_checkin)
-                            if cd.get('monday_teacher'):
-                                st.markdown(f"*Monday:* {cd['monday_teacher']}")
-                            if cd.get('tuefri_teacher'):
-                                st.markdown(f"*Tue–Fri:* {cd['tuefri_teacher']}")
-                        except Exception:
-                            st.markdown(raw_checkin)
-                    else:
-                        st.markdown(raw_checkin)
 
-                # Priority focus (Week B)
-                if week_type == "B" and meeting.get('priority_focus'):
-                    st.markdown("**🎯 Priority Focus:**")
-                    try:
-                        pf = _json.loads(meeting['priority_focus'])
-                        if isinstance(pf, dict):
-                            st.markdown(pf.get('notes', ''))
-                        elif isinstance(pf, list):
-                            for r in pf:
-                                if isinstance(r, dict) and any(r.values()):
-                                    st.markdown("• " + " | ".join(v for v in r.values() if v))
-                    except Exception:
-                        st.markdown(str(meeting['priority_focus']))
+# ── CSS ───────────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+.gas-level-bar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 0; border-bottom: 1px solid #f0f0f0;
+}
+.gas-level-label { font-weight: 600; font-size: 0.82rem; width: 100px; flex-shrink: 0; }
+.gas-level-desc  { font-size: 0.85rem; color: #374151; flex: 1; }
+.student-header  {
+    background: linear-gradient(135deg, #1d6fa4, #134e7a);
+    color: white; padding: 14px 20px; border-radius: 10px; margin-bottom: 16px;
+}
+.metric-pill {
+    display: inline-block; padding: 4px 12px; border-radius: 20px;
+    font-size: 0.8rem; font-weight: 600; margin: 2px;
+}
+.goal-badge {
+    background: #e0f2fe; color: #0369a1;
+    font-size: 0.75rem; padding: 2px 8px; border-radius: 4px; font-weight: 600;
+}
+.exclusion-box {
+    background: #fff7ed; border-left: 4px solid #f97316;
+    padding: 10px 14px; border-radius: 0 8px 8px 0;
+    font-size: 0.88rem; margin-bottom: 8px;
+}
+.smartar-box {
+    background: #f0fdf4; border-left: 4px solid #16a34a;
+    padding: 10px 14px; border-radius: 0 8px 8px 0; font-size: 0.88rem;
+}
+.period-box {
+    background: #eff6ff; border-left: 4px solid #3b82f6;
+    padding: 8px 14px; border-radius: 0 8px 8px 0;
+    font-size: 0.84rem; margin-top: 6px;
+}
+.integration-banner {
+    background: linear-gradient(135deg, #7c3aed, #5b21b6);
+    color: white; padding: 12px 18px; border-radius: 10px;
+    margin-bottom: 16px; border-left: 5px solid #fbbf24;
+}
+.alert-box {
+    background: #fef3c7; border-left: 4px solid #f59e0b;
+    padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 12px 0;
+}
+.success-box {
+    background: #d1fae5; border-left: 4px solid #10b981;
+    padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 12px 0;
+}
+.archived-box {
+    background: #fff7ed; border-left: 4px solid #C8760A;
+    padding: 10px 14px; border-radius: 0 8px 8px 0;
+    font-size: 0.88rem; margin-bottom: 8px; opacity: 0.85;
+}
+.admin-panel { background: #f8fafc; border: 2px solid #cbd5e1; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+</style>
+""", unsafe_allow_html=True)
 
-                # Student concerns (Week A)
-                if week_type == "A" and meeting.get('student_concerns'):
-                    try:
-                        sc = _json.loads(meeting['student_concerns'])
-                        if isinstance(sc, list) and sc:
-                            st.markdown("**👥 Student Concerns:**")
-                            for r in sc:
-                                note = r.get('notes','') if isinstance(r, dict) else str(r)
-                                if note:
-                                    st.markdown(f"• {note}")
-                    except Exception:
-                        pass
-
-                # Meeting minutes
-                current_minutes = meeting.get('meeting_minutes', '')
-                st.markdown("**📝 Meeting Minutes:**")
-                if current_minutes:
-                    st.markdown(current_minutes)
-                else:
-                    st.caption("No minutes recorded yet.")
-
-                # Actions summary
-                if meeting.get('actions'):
-                    try:
-                        actions = _json.loads(meeting['actions'])
-                        if actions:
-                            st.markdown("**✅ Actions:**")
-                            for a in actions:
-                                if a.get('action'):
-                                    done = "✅" if a.get("done") else "🔲"
-                                    p_emoji = {"Low":"⬇️","Medium":"➡️","High":"⬆️","Urgent":"🔴"}.get(a.get("priority","Medium"),"➡️")
-                                    st.markdown(f"{done} {p_emoji} {a['action']} — {a.get('who','')} by {a.get('by_when','')}")
-                    except Exception:
-                        pass
-
-                st.markdown("")
-                if st.button("✏️ Edit / Add to This Meeting", key=f"arch_open_{meeting_id}", type="secondary"):
-                    st.session_state[edit_key] = True
-                    st.rerun()
-
-            else:
-                # ── FULL EDIT MODE ─────────────────────────────────────────
-                st.markdown(
-                    f"""<div style="background:#fef3c7;border-left:4px solid #d97706;
-                    border-radius:0 8px 8px 0;padding:8px 14px;margin-bottom:10px;font-size:13px;color:#92400e;">
-                    ✏️ <strong>Editing:</strong> {meeting_date} — Term {term} W{week_num}
-                    </div>""",
-                    unsafe_allow_html=True
-                )
-
-                # ── Header fields ──
-                col_d, col_f, col_a = st.columns([1.5, 1.5, 3])
-                with col_d:
-                    try:
-                        ed_date = st.date_input("Date", value=datetime.date.fromisoformat(meeting_date), key=f"arch_date_{meeting_id}")
-                    except Exception:
-                        ed_date = st.date_input("Date", value=datetime.date.today(), key=f"arch_date_{meeting_id}")
-                with col_f:
-                    ed_fac = st.text_input("Facilitator", value=facilitator, key=f"arch_fac_{meeting_id}")
-                with col_a:
-                    ed_att = st.text_input("Attendees", value=meeting.get('attendees',''), key=f"arch_att_{meeting_id}")
-
-                st.markdown("---")
-
-                # ── Check-in notes ──
-                st.markdown("**📋 Check-in Notes**")
-                raw_checkin = meeting.get('checkin_notes','')
-                if program == "SPECIALIST":
-                    try:
-                        cd = _json.loads(raw_checkin) if raw_checkin else {}
-                    except Exception:
-                        cd = {}
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        ed_mon = st.text_area("Monday Teacher", value=cd.get('monday_teacher',''), height=80, key=f"arch_mon_{meeting_id}")
-                    with c2:
-                        ed_tuefri = st.text_area("Tue–Fri Teacher", value=cd.get('tuefri_teacher',''), height=80, key=f"arch_tuefri_{meeting_id}")
-                    ed_checkin_json = _json.dumps({"monday_teacher": ed_mon, "tuefri_teacher": ed_tuefri})
-                    ed_checkin_raw = None
-                else:
-                    ed_checkin_raw = st.text_area(
-                        "Check-in notes",
-                        value=raw_checkin,
-                        height=90,
-                        key=f"arch_checkin_{meeting_id}",
-                        label_visibility="collapsed",
-                        placeholder="Check-in / regulation notes from the meeting…"
-                    )
-                    ed_checkin_json = None
-
-                st.markdown("---")
-
-                # ── Priority focus (Week B) ──
-                ed_priority_json = None
-                if week_type == "B":
-                    st.markdown("**🎯 Priority Focus Notes**")
-                    raw_pf = meeting.get('priority_focus','')
-                    existing_pf = ""
-                    if raw_pf:
-                        try:
-                            pf = _json.loads(raw_pf)
-                            if isinstance(pf, dict):
-                                existing_pf = pf.get('notes','')
-                            elif isinstance(pf, list):
-                                lines = []
-                                for r in pf:
-                                    if isinstance(r, dict):
-                                        parts = [v for v in r.values() if v]
-                                        if parts:
-                                            lines.append("• " + " | ".join(parts))
-                                existing_pf = "\n".join(lines)
-                        except Exception:
-                            existing_pf = str(raw_pf)
-                    _stage_pf = st.session_state.pop(f"_stage_arch_pf_{meeting_id}", None)
-                    if _stage_pf is not None:
-                        st.session_state[f"arch_pf_{meeting_id}"] = _stage_pf
-                    elif f"arch_pf_{meeting_id}" not in st.session_state:
-                        st.session_state[f"arch_pf_{meeting_id}"] = existing_pf
-                    ed_pf = st.text_area(
-                        "Priority focus",
-                        height=160,
-                        key=f"arch_pf_{meeting_id}",
-                        label_visibility="collapsed",
-                        placeholder="Type or append priority focus notes…"
-                    )
-                    # Groq recalibration for archive priority notes
-                    with st.expander("📋 Paste Transcript → Recalibrate with AI", expanded=False):
-                        arch_transcript = st.text_area(
-                            "Transcript",
-                            height=120,
-                            key=f"arch_pf_transcript_{meeting_id}",
-                            label_visibility="collapsed",
-                            placeholder="Paste rough notes or transcript here…"
-                        )
-                        if st.button("✨ Recalibrate", key=f"arch_pf_groq_{meeting_id}"):
-                            if arch_transcript.strip() and GROQ_KEY:
-                                with st.spinner("Recalibrating…"):
-                                    try:
-                                        _gc = Groq(api_key=GROQ_KEY)
-                                        _r = _gc.chat.completions.create(
-                                            model="llama-3.1-8b-instant",
-                                            messages=[{"role": "user", "content":
-                                                f"Transform these rough meeting notes into structured CLC focus-area minutes. "
-                                                f"Use headings: FOCUS AREA, WHAT'S WORKING, GAP, ADJUSTMENT, EVIDENCE, WHO & WHEN. "
-                                                f"Trauma-informed, strengths-based, plain English. Preserve all facts.\n\n{arch_transcript[:3000]}"}],
-                                            max_tokens=800
-                                        )
-                                        _new_text = _r.choices[0].message.content
-                                        st.session_state[f"_stage_arch_pf_{meeting_id}"] = (ed_pf + "\n\n--- AI ---\n" + _new_text).strip() if ed_pf.strip() else _new_text
-                                        st.rerun()
-                                    except Exception as _e:
-                                        st.error(f"Groq error: {_e}")
-                    ed_priority_json = _json.dumps({"notes": ed_pf})
-                    st.markdown("---")
-
-                # ── Student concerns (Week A) ──
-                ed_concerns_json = None
-                if week_type == "A":
-                    st.markdown("**👥 Student Concerns**")
-                    raw_sc = meeting.get('student_concerns','')
-                    existing_sc = ""
-                    if raw_sc:
-                        try:
-                            sc = _json.loads(raw_sc)
-                            if isinstance(sc, list):
-                                existing_sc = "\n\n".join(r.get('notes','') for r in sc if isinstance(r,dict) and r.get('notes'))
-                        except Exception:
-                            existing_sc = str(raw_sc)
-                    ed_sc = st.text_area(
-                        "Student concerns",
-                        value=existing_sc,
-                        height=140,
-                        key=f"arch_sc_{meeting_id}",
-                        label_visibility="collapsed",
-                        placeholder="Add or edit student concern notes…"
-                    )
-                    ed_concerns_json = _json.dumps([{"notes": ed_sc}])
-                    st.markdown("---")
-
-                # ── Meeting minutes ──
-                st.markdown("**📝 Meeting Minutes**")
-                st.caption("Edit existing minutes or append new content — add your notes at the bottom.")
-                # Pending key carries Groq output across reruns without touching the widget key
-                _stage_am = st.session_state.pop(f"_stage_arch_min_{meeting_id}", None)
-                if _stage_am is not None:
-                    st.session_state[f"arch_minutes_{meeting_id}"] = _stage_am
-                elif f"arch_minutes_{meeting_id}" not in st.session_state:
-                    st.session_state[f"arch_minutes_{meeting_id}"] = meeting.get('meeting_minutes', '') or ''
-                ed_minutes = st.text_area(
-                    "Meeting minutes",
-                    height=280,
-                    key=f"arch_minutes_{meeting_id}",
-                    label_visibility="collapsed",
-                    placeholder="Add or edit meeting minutes here…"
-                )
-
-                # Groq recalibration for minutes
-                with st.expander("📋 Generate Minutes from Transcript (Groq)", expanded=False):
-                    arch_min_transcript = st.text_area(
-                        "Raw transcript",
-                        height=140,
-                        key=f"arch_min_transcript_{meeting_id}",
-                        label_visibility="collapsed",
-                        placeholder="Paste raw transcript or rough notes to generate polished minutes…"
-                    )
-                    if st.button("✨ Generate Minutes with AI", key=f"arch_min_groq_{meeting_id}"):
-                        if arch_min_transcript.strip() and GROQ_KEY:
-                            with st.spinner("Generating…"):
-                                try:
-                                    _gc2 = Groq(api_key=GROQ_KEY)
-                                    _r2 = _gc2.chat.completions.create(
-                                        model="llama-3.1-8b-instant",
-                                        messages=[{"role": "user", "content":
-                                            f"Transform these notes into polished professional meeting minutes for "
-                                            f"Cowandilla Learning Centre ({PROGRAMS[program]['label']} team meeting, {meeting_date}). "
-                                            f"Structured, trauma-informed, plain English. Preserve all facts.\n\n{arch_min_transcript[:3000]}"}],
-                                        max_tokens=900
-                                    )
-                                    _new_min = _r2.choices[0].message.content
-                                    st.session_state[f"_stage_arch_min_{meeting_id}"] = (
-                                        (ed_minutes + "\n\n--- AI Generated ---\n" + _new_min).strip()
-                                        if ed_minutes.strip() else _new_min
-                                    )
-                                    st.rerun()
-                                except Exception as _e:
-                                    st.error(f"Groq error: {_e}")
-
-                st.markdown("---")
-
-                # ── Actions — add new rows ──
-                st.markdown("**✅ Actions**")
-                existing_actions = []
-                if meeting.get('actions'):
-                    try:
-                        existing_actions = _json.loads(meeting['actions'])
-                    except Exception:
-                        existing_actions = []
-
-                # Show existing + allow toggling done
-                if existing_actions:
-                    st.caption("Existing actions:")
-                    for aidx, a in enumerate(existing_actions):
-                        if a.get('action'):
-                            ac1, ac2 = st.columns([5, 1])
-                            with ac1:
-                                p_emoji = {"Low":"⬇️","Medium":"➡️","High":"⬆️","Urgent":"🔴"}.get(a.get("priority","Medium"),"➡️")
-                                st.markdown(f"{p_emoji} **{a['action']}** — {a.get('who','')} by {a.get('by_when','')}")
-                            with ac2:
-                                existing_actions[aidx]["done"] = st.checkbox(
-                                    "Done", value=a.get("done", False),
-                                    key=f"arch_done_{meeting_id}_{aidx}"
-                                )
-
-                st.caption("Add new action (will be included when you save):")
-                new_act_cols = st.columns([3, 1.5, 1, 1])
-                new_act_action = new_act_cols[0].text_input("Action", key=f"arch_new_act_{meeting_id}", label_visibility="collapsed", placeholder="New action item")
-                new_act_who   = new_act_cols[1].text_input("Who",    key=f"arch_new_who_{meeting_id}", label_visibility="collapsed", placeholder="Person")
-                new_act_when  = new_act_cols[2].text_input("By",     key=f"arch_new_when_{meeting_id}", label_visibility="collapsed", placeholder="Date/week")
-                new_act_pri   = new_act_cols[3].selectbox("Pri",     ["Medium","Low","High","Urgent"], key=f"arch_new_pri_{meeting_id}", label_visibility="collapsed")
-
-                # NOTE: new action is appended only inside the Save block below, not here,
-                # to prevent it being duplicated on every rerun.
-
-                st.markdown("---")
-
-                # ── Save / Cancel ──
-                col_sv, col_cn = st.columns([1, 1])
-                with col_sv:
-                    if st.button("💾 Save All Changes", key=f"arch_save_{meeting_id}", type="primary", use_container_width=True):
-                        # Append new action only at save time
-                        if new_act_action.strip():
-                            existing_actions.append({
-                                "action": new_act_action.strip(),
-                                "who": new_act_who.strip(),
-                                "by_when": new_act_when.strip(),
-                                "priority": new_act_pri,
-                                "done": False
-                            })
-                        try:
-                            update_payload = {
-                                "meeting_date": str(ed_date),
-                                "facilitator": ed_fac.strip(),
-                                "attendees": ed_att.strip(),
-                                "meeting_minutes": ed_minutes.strip(),
-                                "actions": _json.dumps(existing_actions),
-                            }
-                            if ed_checkin_json is not None:
-                                update_payload["checkin_notes"] = ed_checkin_json
-                            elif ed_checkin_raw is not None:
-                                update_payload["checkin_notes"] = ed_checkin_raw.strip()
-                            if ed_priority_json is not None:
-                                update_payload["priority_focus"] = ed_priority_json
-                            if ed_concerns_json is not None:
-                                update_payload["student_concerns"] = ed_concerns_json
-
-                            result = supabase.table('tm_program_meetings') \
-                                .update(update_payload) \
-                                .eq('id', str(meeting_id)) \
-                                .execute()
-                            st.success("✅ Meeting updated successfully!")
-                            st.session_state[edit_key] = False
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"⚠️ Save failed: {e}")
-                            st.info("Check the console or try again. Meeting ID: " + str(meeting_id))
-
-                with col_cn:
-                    if st.button("❌ Cancel", key=f"arch_cancel_{meeting_id}", use_container_width=True):
-                        st.session_state[edit_key] = False
-                        st.rerun()
-
-def main():
-    program   = get_program_from_params()
-    prog_info = PROGRAMS[program]
-    week_range = get_week_from_params()
-
-    admin_login()
-
-    grad_end = {
-        "JP": "#3fa86a", "PY": "#2a6fd4", "SY": "#9b59b6",
-        "SPECIALIST": "#f59e0b"
-    }.get(program, "#2a6fd4")
-
+# ── Integration banner ─────────────────────────────────────────────────────────
+if integration["active"]:
     st.markdown(f"""
-    <div style="background:linear-gradient(135deg,{prog_info['color']},{grad_end});
-                padding:1.5rem 2rem;border-radius:16px;margin-bottom:1.5rem;">
-      <div style="font-size:2.5rem;margin-bottom:0.25rem;">{prog_info['emoji']}</div>
-      <h1 style="color:white;margin:0;font-size:1.8rem;">{prog_info['label']}</h1>
-      <p style="color:rgba(255,255,255,0.85);margin:0.25rem 0 0;">Cowandilla Learning Centre · LBU</p>
+    <div class="integration-banner">
+        <div style="font-size:1.1rem;font-weight:700;margin-bottom:0.25rem;">
+            🔗 Team Meeting Integration Active
+        </div>
+        <div style="font-size:0.85rem;opacity:0.9;">
+            {integration["program"]} Team Meeting · Term {integration["term"]} Week {integration["week"]} · Meeting ID: {integration["meeting_id"]}
+        </div>
     </div>
     """, unsafe_allow_html=True)
 
-    with st.sidebar:
-        st.markdown("### 🔀 Switch Program")
-        for p, info in PROGRAMS.items():
-            if p != program:
-                if st.button(f"{info['emoji']} {info['label']}", key=f"sw_{p}", use_container_width=True):
-                    st.query_params["program"] = p
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+st.sidebar.title("🎯 SMARTAR Tool")
+
+if integration["active"]:
+    meeting_url = f"https://clc-lbu-portal.onrender.com/Team_Meetings?program={integration['program']}"
+    st.sidebar.markdown(f"""
+    <a href="{meeting_url}" style="display:block;text-align:center;background:#7c3aed;color:white;
+    font-weight:600;font-size:0.85rem;padding:0.5rem;border-radius:8px;text-decoration:none;
+    margin-bottom:0.5rem;">← Back to Team Meeting</a>
+    """, unsafe_allow_html=True)
+
+view = st.sidebar.radio(
+    "View",
+    ["🏫 Class Dashboard", "🆕 New Student Setup", "📋 Goal Builder",
+     "📊 Daily Tracking", "📈 Progress Report", "⚙️ Admin Panel"],
+)
+st.sidebar.markdown("---")
+st.sidebar.caption("SMARTAR + GAS Goal Tracking · CLC LBU")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 1. CLASS DASHBOARD
+# ══════════════════════════════════════════════════════════════════════════════
+if view == "🏫 Class Dashboard":
+    st.title("🏫 Class Dashboard")
+    st.caption(f"Today — {date.today().strftime('%A, %d %B %Y')}")
+
+    students = get_students()
+    if not students:
+        st.info("No students set up yet. Go to **Goal Builder** to add your first student.")
+        st.stop()
+
+    prog_filter = st.selectbox("Filter by Program", ["All"] + PROGRAMS, index=0)
+    if prog_filter != "All":
+        students = [s for s in students if s.get("program") == prog_filter]
+
+    if not students:
+        st.warning("No students found for this program.")
+        st.stop()
+
+    for student in students:
+        goals = get_goals(student["student_name"])
+        if not goals:
+            continue
+
+        with st.expander(
+            f"**{student['student_name']}** — {student.get('program','?')}  ·  "
+            f"{len(goals)} goal{'s' if len(goals) != 1 else ''}",
+            expanded=True,
+        ):
+            for idx, goal in enumerate(goals, 1):
+                tracking          = get_tracking(goal["id"], days=21)
+                counts, total, pcts = calc_percentages(tracking)
+                today_rows        = get_today_tracking(goal["id"])
+                today_sessions    = {r["session_time"]: r["performance_level"] for r in today_rows}
+                needs_ref, low_c  = check_goal_needs_refinement(goal["id"])
+                period            = goal.get("tracking_period", "All Day")
+                sessions_today    = SESSIONS_FOR_PERIOD.get(period, ALL_SESSIONS)
+
+                st.markdown(f'<span class="goal-badge">Goal {idx}</span>', unsafe_allow_html=True)
+                if needs_ref:
+                    st.markdown(
+                        f'<div class="alert-box">⚠️ <b>Action Needed:</b> {low_c} recent sessions '
+                        f'show NOT YET. Consider refining this goal.</div>',
+                        unsafe_allow_html=True,
+                    )
+                if goal.get("exclusion_goal"):
+                    st.markdown(
+                        f'<div class="exclusion-box">🏫 <b>Exclusion Goal:</b> {goal["exclusion_goal"]}</div>',
+                        unsafe_allow_html=True,
+                    )
+                st.markdown(
+                    f'<div class="smartar-box">🎯 <b>SMARTAR Goal:</b> {goal.get("smartar_goal","No goal")}</div>',
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    f'<div class="period-box">📅 Tracking period: <strong>{period}</strong> '
+                    f'— sessions: {", ".join(sessions_today)}</div>',
+                    unsafe_allow_html=True,
+                )
+
+                # Today's sessions (only relevant to tracking period)
+                sess_cols = st.columns(len(sessions_today))
+                for i, session in enumerate(sessions_today):
+                    lvl = today_sessions.get(session)
+                    if lvl:
+                        sess_cols[i].markdown(
+                            f"**{session}**<br>{LEVEL_EMOJI.get(lvl,'')} {lvl}",
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        sess_cols[i].markdown(f"**{session}**<br>⬜ Not recorded",
+                                              unsafe_allow_html=True)
+
+                # 21-day bar
+                if total > 0:
+                    bar_parts = []
+                    for lvl in LEVEL_ORDER:
+                        pct = pcts.get(lvl, 0)
+                        if pct > 0:
+                            bar_parts.append(
+                                f'<div style="width:{pct}%;background:{LEVEL_COLOR[lvl]};'
+                                f'height:14px;display:inline-block;"></div>'
+                            )
+                    st.markdown(
+                        '<div style="display:flex;width:100%;border-radius:6px;overflow:hidden;margin:6px 0">'
+                        + "".join(bar_parts) + "</div>",
+                        unsafe_allow_html=True,
+                    )
+                    legend = "  ".join([
+                        f'{LEVEL_EMOJI[l]} **{l}** {pcts.get(l,0):.0f}%'
+                        for l in LEVEL_ORDER if pcts.get(l, 0) > 0
+                    ])
+                    st.caption(f"Last 21 days ({total} sessions): {legend}")
+                else:
+                    st.caption("No tracking data yet.")
+                st.markdown("---")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 2. NEW STUDENT SETUP  (leadership)
+# ══════════════════════════════════════════════════════════════════════════════
+elif view == "🆕 New Student Setup":
+    st.title("🆕 New Student Setup")
+    st.caption(
+        "Complete this form when a new student is admitted to set up their student record, "
+        "record the exclusion goal from their home school, and enter the initial entry SMARTAR goal. "
+        "Teachers will then see this information in the Goal Builder."
+    )
+
+    st.markdown(
+        '<div class="admin-panel">'
+        '🔒 <b>Leadership / Coordinator use</b> — this section creates the student record and '
+        'entry-level documentation. Teachers build and refine goals from the Goal Builder tab.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Step 1: Student details ───────────────────────────────────────────────
+    st.subheader("Step 1 — Student Details")
+    ns_c1, ns_c2 = st.columns([3, 1])
+    ns_name = ns_c1.text_input(
+        "Student first name (as it will appear in all goals)",
+        placeholder="e.g. Jordan",
+        key="ns_name",
+    )
+    ns_prog = ns_c2.selectbox("Program", PROGRAMS, key="ns_prog")
+
+    # Check for duplicate
+    _existing_students = get_students()
+    _existing_names    = [s["student_name"].lower() for s in _existing_students]
+    if ns_name.strip() and ns_name.strip().lower() in _existing_names:
+        st.warning(
+            f"⚠️ A student named **{ns_name.strip()}** already exists in the system. "
+            f"Go to Goal Builder to view and manage their goals."
+        )
+
+    # ── Step 2: Entry Goals (exclusion + SMARTAR pairs) ───────────────────────
+    st.markdown("---")
+    st.subheader("Step 2 — Entry Goals")
+    st.caption(
+        "Enter one goal pair per behaviour of concern. Each pair is an **Exclusion Goal** from "
+        "the home school (the reason for referral) and the **Entry SMARTAR Goal** — the replacement "
+        "behaviour teachers will work toward. Add as many pairs as needed."
+    )
+
+    # Initialise paired goal list in session state
+    if "ns_goal_list" not in st.session_state:
+        st.session_state["ns_goal_list"] = [{"excl": "", "smartar": "", "id": 0}]
+
+    # AI drafter — stages a goal into a chosen slot's smartar field
+    if groq_client:
+        with st.expander("✨ AI Goal Drafter — describe a behaviour, get a draft SMARTAR goal", expanded=False):
+            st.caption(
+                "Describe a behaviour of concern. AI drafts a single entry-level SMARTAR goal "
+                "you can drop into any slot below. Run it as many times as needed."
+            )
+            _ns_beh = st.text_area(
+                "What is the behaviour of concern?",
+                placeholder=(
+                    "e.g. Student has been excluded for frequent physical altercations with peers "
+                    "during unstructured time. Has difficulty regulating when frustrated…"
+                ),
+                height=80, key="ns_beh_brief",
+            )
+            if st.button("🤖 Draft SMARTAR Goal", key="ns_draft_btn",
+                         disabled=not _ns_beh.strip()):
+                with st.spinner("Drafting entry SMARTAR goal…"):
+                    _ns_dp = f"""You are an expert at writing initial SMARTAR goals for students being enrolled in an alternative education setting (CLC Learning and Behaviour Unit, Adelaide SA).
+
+Write ONE entry-level SMARTAR goal based on this behaviour of concern:
+{_ns_beh.strip()}
+
+Rules:
+- Use "[Student]" as a placeholder for the student's name
+- Target the REPLACEMENT behaviour (what the student WILL DO)
+- Entry-level — achievable starting point, not too high a bar
+- Trauma-informed, strengths-based language (PBS/BSEM)
+- ONE sentence only — no "and" joining two separate actions
+- Include a realistic prompt level and success rate
+
+Return ONLY the goal sentence — nothing else."""
+                    try:
+                        _ns_draft = groq_call(_ns_dp)
+                        if _ns_draft and len(_ns_draft) > 20 and "[AI unavailable" not in _ns_draft:
+                            _ns_draft = (_ns_draft.strip().strip('"').strip("'")
+                                         .replace("[Student]", ns_name.strip().split()[0] if ns_name.strip() else "[Student]")
+                                         .replace("[student]", ns_name.strip().split()[0] if ns_name.strip() else "[Student]"))
+                            st.session_state["ns_entry_draft"] = _ns_draft
+                            st.rerun()
+                        else:
+                            st.warning("Unexpected AI response — type the goal manually below.")
+                    except Exception as _nd_e:
+                        st.error(f"AI error: {_nd_e}")
+
+            if st.session_state.get("ns_entry_draft"):
+                st.markdown(
+                    f'<div class="smartar-box">🤖 <b>AI Draft:</b> '
+                    f'{st.session_state["ns_entry_draft"]}</div>',
+                    unsafe_allow_html=True,
+                )
+                # Let user choose which slot to drop into
+                _slot_options = [
+                    f"Goal {i+1}" + (f" — {g['excl'][:40]}…" if len(g['excl']) > 40 else (f" — {g['excl']}" if g['excl'] else ""))
+                    for i, g in enumerate(st.session_state["ns_goal_list"])
+                ]
+                _target_slot = st.selectbox("Add draft to:", _slot_options, key="ns_draft_slot")
+                _slot_idx = _slot_options.index(_target_slot)
+
+                _add_col, _dis_col = st.columns([2, 2])
+                with _add_col:
+                    if st.button("➕ Add to Selected Slot", key="ns_add_draft_to_list", type="primary"):
+                        st.session_state["ns_goal_list"][_slot_idx]["smartar"] = st.session_state["ns_entry_draft"]
+                        st.session_state.pop("ns_entry_draft", None)
+                        st.rerun()
+                with _dis_col:
+                    if st.button("✖ Discard Draft", key="ns_discard_draft"):
+                        st.session_state.pop("ns_entry_draft", None)
+                        st.rerun()
+
+    # ── Goal pairs ────────────────────────────────────────────────────────────
+    _gl  = st.session_state["ns_goal_list"]
+    _to_del = []
+
+    for _gi, _gentry in enumerate(_gl):
+        st.markdown(
+            f'<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;'
+            f'padding:14px 16px;margin-bottom:14px;">'
+            f'<span style="font-weight:700;color:#1A7A6E">Goal {_gi + 1}</span></div>',
+            unsafe_allow_html=True,
+        )
+        _pair_col, _del_col = st.columns([11, 1])
+        with _pair_col:
+            _new_excl = st.text_area(
+                f"🏫 Exclusion Goal {_gi + 1} — reason for referral from home school",
+                value=_gentry["excl"],
+                placeholder="e.g. The student has been excluded for physical aggression towards peers…",
+                height=75,
+                key=f"ns_excl_text_{_gentry['id']}",
+            )
+            if _new_excl != _gentry["excl"]:
+                st.session_state["ns_goal_list"][_gi]["excl"] = _new_excl
+
+            _new_smartar = st.text_area(
+                f"🎯 Entry SMARTAR Goal {_gi + 1} — replacement behaviour to work toward",
+                value=_gentry["smartar"],
+                placeholder=(
+                    "e.g. Jordan will use a calm-down card to request a break when feeling "
+                    "overwhelmed, one to one in the classroom, with a verbal prompt, on 3 out of 5 opportunities."
+                ),
+                height=90,
+                key=f"ns_smartar_text_{_gentry['id']}",
+            )
+            if _new_smartar != _gentry["smartar"]:
+                st.session_state["ns_goal_list"][_gi]["smartar"] = _new_smartar
+
+        with _del_col:
+            st.markdown("<div style='margin-top:30px'>", unsafe_allow_html=True)
+            if len(_gl) > 1:
+                if st.button("🗑", key=f"ns_goal_del_{_gentry['id']}", help="Remove this goal pair"):
+                    _to_del.append(_gi)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    if _to_del:
+        st.session_state["ns_goal_list"] = [g for i, g in enumerate(_gl) if i not in _to_del]
+        st.rerun()
+
+    if st.button("➕ Add Another Goal", key="ns_add_goal"):
+        _new_id2 = max(g["id"] for g in st.session_state["ns_goal_list"]) + 1
+        st.session_state["ns_goal_list"].append({"excl": "", "smartar": "", "id": _new_id2})
+        st.rerun()
+
+    _filled_pairs = [g for g in st.session_state["ns_goal_list"] if g["smartar"].strip()]
+    if _filled_pairs:
+        st.caption(f"✅ {len(_filled_pairs)} goal{'s' if len(_filled_pairs) != 1 else ''} ready to save.")
+    else:
+        st.caption("💡 Enter at least one SMARTAR goal (Goal 1) to enable save.")
+
+    # ── Save ──────────────────────────────────────────────────────────────────
+    st.markdown("---")
+    _ns_ready = (
+        ns_name.strip()
+        and bool(_filled_pairs)
+        and ns_name.strip().lower() not in _existing_names
+    )
+    if not ns_name.strip():
+        st.caption("💡 Enter a student name to enable save.")
+    elif ns_name.strip().lower() in _existing_names:
+        st.caption("⚠️ Student already exists — go to Goal Builder.")
+
+    if st.button(
+        f"💾 Save Student & {len(_filled_pairs)} Goal{'s' if len(_filled_pairs) != 1 else ''}",
+        type="primary", key="ns_save", disabled=not _ns_ready,
+    ):
+        try:
+            sb.table("smartar_students").insert({
+                "student_name": ns_name.strip(),
+                "program":      ns_prog,
+                "active":       True,
+            }).execute()
+            for _fp in _filled_pairs:
+                sb.table("smartar_goals").insert({
+                    "student_name":    ns_name.strip(),
+                    "exclusion_goal":  _fp["excl"].strip() if _fp["excl"].strip() else None,
+                    "smartar_goal":    _fp["smartar"].strip(),
+                    "tracking_period": "All Day",
+                    "active":          True,
+                    "status":          "Active",
+                    "start_date":      date.today().isoformat(),
+                }).execute()
+            for _nk in ["ns_entry_draft", "ns_goal_list"]:
+                st.session_state.pop(_nk, None)
+            st.success(
+                f"✅ **{ns_name.strip()}** added to **{ns_prog}** with "
+                f"**{len(_filled_pairs)} entry goal{'s' if len(_filled_pairs) != 1 else ''}** saved. "
+                f"Teachers can now open this student in the Goal Builder."
+            )
+            st.balloons()
+        except Exception as _ns_err:
+            st.error(f"Save error: {_ns_err}")
+
+    # ── Existing students quick view ──────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("Current Students")
+    _all_students = get_students()
+    if _all_students:
+        for _s in _all_students:
+            _sg = get_goals(_s["student_name"], active_only=True)
+            _sc1, _sc2, _sc3 = st.columns([3, 1, 1])
+            _sc1.write(f"**{_s['student_name']}** — {_s.get('program','?')} — {len(_sg)} active goal(s)")
+            _sc2.caption(_s.get("created_at","")[:10] or "")
+            if _sc3.button("Archive Student", key=f"ns_arch_{_s['id']}"):
+                sb.table("smartar_students").update({"active": False}).eq("id", _s["id"]).execute()
+                st.success(f"Archived {_s['student_name']}")
+                st.rerun()
+    else:
+        st.info("No students yet — add your first student above.")
+
+    # ── Archived students ─────────────────────────────────────────────────────
+    _archived_s_list = [s for s in get_students(include_archived=True)
+                        if not s.get("active", True) and not s.get("placement_ended", False)]
+    _ended_s_list    = [s for s in get_students(include_archived=True)
+                        if s.get("placement_ended", False)]
+
+    _total_non_active = len(_archived_s_list) + len(_ended_s_list)
+    if _total_non_active:
+        st.markdown("---")
+        with st.expander(
+            f"🗃️ Non-Active Students ({_total_non_active}) — archived · placement ended · delete",
+            expanded=False,
+        ):
+            st.caption(
+                "**Archived** — hidden from Goal Builder and tracking but data is intact. "
+                "Choose what to do with each student below.\n\n"
+                "🏁 **End Placement** — student has left CLC. Data is preserved in the archive "
+                "permanently but the student will no longer appear in any active views.\n\n"
+                "🗑 **Permanently Delete** — for students entered in error. Removes the student "
+                "record, all goals, and all tracking data. Cannot be undone."
+            )
+
+            if _archived_s_list:
+                st.markdown("**Archived students**")
+                for _as in _archived_s_list:
+                    _asg = get_goals(_as["student_name"], active_only=False)
+                    with st.container():
+                        st.markdown(
+                            f'<div style="background:#f8fafc;border:1px solid #e2e8f0;'
+                            f'border-radius:8px;padding:10px 14px;margin-bottom:10px;">'
+                            f'<b>{_as["student_name"]}</b> &nbsp;·&nbsp; {_as.get("program","?")} '
+                            f'&nbsp;·&nbsp; {len(_asg)} goal(s)</div>',
+                            unsafe_allow_html=True,
+                        )
+                        _ab1, _ab2, _ab3 = st.columns(3)
+                        with _ab1:
+                            if st.button("♻️ Restore to Active",
+                                         key=f"ns_restore_{_as['id']}"):
+                                sb.table("smartar_students").update({"active": True}).eq(
+                                    "id", _as["id"]
+                                ).execute()
+                                st.success(f"✅ {_as['student_name']} restored.")
+                                st.rerun()
+                        with _ab2:
+                            if st.button("🏁 End Placement",
+                                         key=f"ns_endplacement_{_as['id']}"):
+                                st.session_state[f"ns_end_confirm_{_as['id']}"] = True
+                        with _ab3:
+                            if st.button("🗑 Delete Permanently",
+                                         key=f"ns_del_{_as['id']}"):
+                                st.session_state[f"ns_del_confirm_{_as['id']}"] = True
+
+                        # End Placement confirmation
+                        if st.session_state.get(f"ns_end_confirm_{_as['id']}"):
+                            st.markdown(
+                                f'<div class="period-box">🏁 <b>End placement for '
+                                f'{_as["student_name"]}?</b><br>'
+                                f'This student will be marked as placement ended. '
+                                f'All goals and tracking data are permanently preserved in the archive '
+                                f'but the student will not appear in any active views.</div>',
+                                unsafe_allow_html=True,
+                            )
+                            _ea, _eb = st.columns(2)
+                            with _ea:
+                                if st.button(f"Yes — end placement",
+                                             key=f"ns_end_conf_{_as['id']}", type="primary"):
+                                    sb.table("smartar_students").update({
+                                        "active": False, "placement_ended": True
+                                    }).eq("id", _as["id"]).execute()
+                                    st.session_state.pop(f"ns_end_confirm_{_as['id']}", None)
+                                    st.success(f"🏁 {_as['student_name']} — placement ended. Data preserved.")
+                                    st.rerun()
+                            with _eb:
+                                if st.button("Cancel", key=f"ns_end_cancel_{_as['id']}"):
+                                    st.session_state.pop(f"ns_end_confirm_{_as['id']}", None)
+                                    st.rerun()
+
+                        # Delete confirmation
+                        if st.session_state.get(f"ns_del_confirm_{_as['id']}"):
+                            st.markdown(
+                                f'<div class="alert-box">⚠️ <b>Permanently delete '
+                                f'{_as["student_name"]}?</b><br>'
+                                f'Use this only if the student was entered in error. '
+                                f'This will permanently remove the student record, all goals, '
+                                f'and all tracking data. This cannot be undone.</div>',
+                                unsafe_allow_html=True,
+                            )
+                            _da, _db = st.columns(2)
+                            with _da:
+                                if st.button(f"Yes — permanently delete",
+                                             key=f"ns_del_conf_{_as['id']}", type="primary"):
+                                    try:
+                                        _del_gs = sb.table("smartar_goals").select("id").eq(
+                                            "student_name", _as["student_name"]
+                                        ).execute().data or []
+                                        for _dg in _del_gs:
+                                            sb.table("smartar_tracking").delete().eq(
+                                                "goal_id", _dg["id"]
+                                            ).execute()
+                                        sb.table("smartar_goals").delete().eq(
+                                            "student_name", _as["student_name"]
+                                        ).execute()
+                                        sb.table("smartar_students").delete().eq(
+                                            "id", _as["id"]
+                                        ).execute()
+                                        st.session_state.pop(f"ns_del_confirm_{_as['id']}", None)
+                                        st.success(f"✅ {_as['student_name']} permanently deleted.")
+                                        st.rerun()
+                                    except Exception as _nde:
+                                        st.error(f"Delete error: {_nde}")
+                            with _db:
+                                if st.button("Cancel", key=f"ns_del_cancel_{_as['id']}"):
+                                    st.session_state.pop(f"ns_del_confirm_{_as['id']}", None)
+                                    st.rerun()
+
+            if _ended_s_list:
+                if _archived_s_list:
+                    st.markdown("---")
+                st.markdown("**Placement ended students** — data preserved permanently")
+                for _es in _ended_s_list:
+                    _esg = get_goals(_es["student_name"], active_only=False)
+                    st.markdown(
+                        f'<div style="background:#f0fdf4;border:1px solid #bbf7d0;'
+                        f'border-radius:8px;padding:10px 14px;margin-bottom:8px;">'
+                        f'🏁 <b>{_es["student_name"]}</b> &nbsp;·&nbsp; {_es.get("program","?")} '
+                        f'&nbsp;·&nbsp; {len(_esg)} goal(s) &nbsp;·&nbsp; '
+                        f'<span style="color:#16a34a">Placement ended — data archived</span></div>',
+                        unsafe_allow_html=True,
+                    )
+                    _pb1, _pb2 = st.columns([2, 4])
+                    with _pb1:
+                        if st.button("♻️ Restore to Active",
+                                     key=f"ns_restore_end_{_es['id']}"):
+                            sb.table("smartar_students").update({
+                                "active": True, "placement_ended": False
+                            }).eq("id", _es["id"]).execute()
+                            st.success(f"✅ {_es['student_name']} restored to active.")
+                            st.rerun()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 3. GOAL BUILDER  (teachers)
+# ══════════════════════════════════════════════════════════════════════════════
+elif view == "📋 Goal Builder":
+    st.title("📋 SMARTAR Goal Builder")
+    st.caption("Select a student to view their current goal, then archive, modify, or refine it.")
+
+    students = get_students()
+    if not students:
+        st.info("No students set up yet. Ask your coordinator to add students via **New Student Setup**.")
+        st.stop()
+
+    student_options = {s["student_name"]: s for s in students}
+
+    # ── Student selector — no default (prevent accidental wrong-student edits) ─
+    if integration["active"] and integration["student"] and integration["student"] in student_options:
+        _sb_options = list(student_options.keys())
+        _sb_index   = _sb_options.index(integration["student"]) + 1  # +1 for placeholder
+    else:
+        _sb_index = 0  # lands on placeholder
+
+    _sb_choice = st.selectbox(
+        "Select student",
+        ["— Select a student —"] + list(student_options.keys()),
+        index=_sb_index,
+        key="gb_student_select",
+    )
+
+    if _sb_choice == "— Select a student —":
+        st.info("Select a student above to view their goals.")
+        st.stop()
+
+    selected_name  = _sb_choice
+    student        = student_options[selected_name]
+    existing_goals = get_goals(selected_name, active_only=True)
+    archived_goals = [g for g in get_goals(selected_name, active_only=False) if not g.get("active", True)]
+
+    st.markdown(
+        f'<div class="student-header"><b>{selected_name}</b> · '
+        f'{student.get("program","?")} · {len(existing_goals)} active goal(s)</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Current goals — flat display, each with inline archive + modify ───────
+    if existing_goals:
+        for idx, g in enumerate(existing_goals, 1):
+            goal_text        = g.get("smartar_goal", "No goal text")
+            needs_ref, low_c = check_goal_needs_refinement(g["id"])
+            period           = g.get("tracking_period", "All Day")
+
+            st.markdown(
+                f'<div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;'
+                f'padding:14px 18px;margin-bottom:6px;">'
+                f'<span style="font-weight:700;color:#0369a1">Goal {idx}</span>'
+                + (f' &nbsp;<span style="background:#fef3c7;color:#92400e;font-size:0.78rem;'
+                   f'padding:2px 8px;border-radius:4px;font-weight:600">⚠️ NEEDS REFINEMENT</span>'
+                   if needs_ref else "") +
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+            if needs_ref:
+                st.markdown(
+                    f'<div class="alert-box">⚠️ <b>Action Required:</b> {low_c} recent sessions '
+                    f'show NOT YET. Please refine this goal.</div>', unsafe_allow_html=True,
+                )
+            if g.get("exclusion_goal"):
+                st.markdown(
+                    f'<div class="exclusion-box">🏫 <b>Exclusion Goal from Home School:</b><br>'
+                    f'{g.get("exclusion_goal","—")}</div>', unsafe_allow_html=True,
+                )
+            st.markdown(
+                f'<div class="smartar-box">🎯 <b>Current SMARTAR Goal:</b><br>{goal_text}</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f'<div class="period-box" style="margin-bottom:10px;">📅 Tracking period: '
+                f'<strong>{period}</strong> — {", ".join(SESSIONS_FOR_PERIOD.get(period, ALL_SESSIONS))}</div>',
+                unsafe_allow_html=True,
+            )
+            gas = get_gas_dict(g)
+            if any(gas.values()):
+                with st.expander("📊 GAS Performance Levels"):
+                    for lvl in LEVEL_ORDER:
+                        desc = gas.get(lvl,"")
+                        if desc:
+                            st.markdown(
+                                f'<div class="gas-level-bar"><span class="gas-level-label" '
+                                f'style="color:{LEVEL_COLOR[lvl]}">{LEVEL_EMOJI[lvl]} {lvl}</span>'
+                                f'<span class="gas-level-desc">{desc}</span></div>',
+                                unsafe_allow_html=True,
+                            )
+
+            # ── Archive inline ────────────────────────────────────────────────
+            if st.button(f"🗑 Archive Goal {idx}", key=f"del_{g['id']}"):
+                st.session_state[f"arch_gb_{g['id']}"] = True
+            if st.session_state.get(f"arch_gb_{g['id']}"):
+                reason = st.text_input("Archive reason (optional):", key=f"arch_gb_r_{g['id']}")
+                ca, cb = st.columns(2)
+                with ca:
+                    if st.button("Confirm Archive", key=f"arch_gb_d_{g['id']}", type="primary"):
+                        if archive_goal(g["id"], reason):
+                            st.session_state.pop(f"arch_gb_{g['id']}", None)
+                            st.session_state["build_new_after_archive"]  = True
+                            st.session_state["archived_excl_goal"]       = g.get("exclusion_goal","")
+                            st.session_state["archived_student"]         = g.get("student_name","")
+                            st.session_state["archived_smartar_goal"]    = goal_text
+                            st.rerun()
+                with cb:
+                    if st.button("Cancel", key=f"arch_gb_x_{g['id']}"):
+                        st.session_state.pop(f"arch_gb_{g['id']}", None)
+                        st.rerun()
+
+            # ── Modify / refine this goal — inline below ──────────────────────
+            with st.expander(f"✏️ Modify / Refine Goal {idx}", expanded=False):
+                st.caption(
+                    "The exclusion goal and current SMARTAR goal are shown above as your reference. "
+                    "Edit the goal text directly below, then use the hierarchy builder or AI tool to refine."
+                )
+                # Pre-fill with current goal text so staff always see exactly what they're working from
+                _mod_key = f"gb_working_goal_{g['id']}"
+                if _mod_key not in st.session_state:
+                    st.session_state[_mod_key] = goal_text
+
+                _working_goal = st.text_area(
+                    "Working goal — edit directly or use tools below",
+                    value=st.session_state[_mod_key],
+                    height=100,
+                    key=f"gb_wg_ta_{g['id']}_{hash(st.session_state[_mod_key])}",
+                )
+                if _working_goal.strip() and _working_goal != st.session_state[_mod_key]:
+                    st.session_state[_mod_key] = _working_goal
+
+                _excl_ref   = g.get("exclusion_goal","")
+                _refine_tab, _ai_tab_g = st.tabs(["📐 Hierarchy Builder", "✨ AI Goal Tool"])
+
+                # ── Hierarchy builder ─────────────────────────────────────────
+                with _refine_tab:
+                    st.caption("Select each element to assemble a new version of the goal, then refine with AI.")
+                    _hb_c1, _hb_c2 = st.columns(2)
+                    with _hb_c1:
+                        _hb_first  = st.text_input("Student first name", value=selected_name.split()[0], key=f"hb_first_{g['id']}")
+                        _hb_skill  = st.text_area("Expected skill / behaviour",
+                                                  placeholder="e.g. use a break card to request a break",
+                                                  height=75, key=f"hb_skill_{g['id']}")
+                        _hb_group  = st.selectbox("Grouping", GROUPINGS, key=f"hb_grouping_{g['id']}")
+                        _hb_task   = st.selectbox("Task type", TASK_TYPES, key=f"hb_task_{g['id']}")
+                    with _hb_c2:
+                        _hb_set    = st.selectbox("Setting", SETTINGS, key=f"hb_setting_{g['id']}")
+                        _hb_prompt = st.selectbox("Prompt level", PROMPT_TYPES, key=f"hb_prompts_{g['id']}")
+                        _hb_rate   = st.selectbox("Rate / success criteria", RATE_OPTIONS, key=f"hb_rate_{g['id']}")
+
+                    _assembled = (
+                        f"{_hb_first} will {_hb_skill} {_hb_group.lower()} during {_hb_task.lower()} "
+                        f"in the {_hb_set.lower()} with {_hb_prompt.lower()}, "
+                        f"demonstrating successful use on {_hb_rate}."
+                        if _hb_skill and _hb_first else ""
+                    )
+                    if _assembled:
+                        st.markdown("**Assembled preview:**")
+                        st.info(_assembled)
+                        if st.button("✨ Refine assembled goal with AI", key=f"hb_refine_{g['id']}",
+                                     type="primary"):
+                            if groq_client:
+                                with st.spinner("Refining…"):
+                                    try:
+                                        _ref = groq_call(
+                                            f"""Rewrite into ONE fluent professional SMARTAR goal sentence.
+Fix doubled words; start "{_hb_first} will..."; keep ALL specific details;
+one sentence only; trauma-informed strengths-based language (PBS/BSEM);
+do NOT add "appropriately" or "independently" unless already present.
+Goal: {_assembled}
+Return ONLY the final goal statement."""
+                                        )
+                                        if _ref and len(_ref) > 20 and "[AI unavailable" not in _ref:
+                                            st.session_state[_mod_key] = _ref.strip().strip('"').strip("'")
+                                            st.rerun()
+                                    except Exception as _re:
+                                        st.error(f"AI error: {_re}")
+                            else:
+                                st.warning("AI unavailable.")
+
+                # ── AI goal tool ──────────────────────────────────────────────
+                with _ai_tab_g:
+                    _ai_mode_g = st.radio(
+                        "What would you like to do?",
+                        ["🔧 Modify the current goal based on observed behaviours",
+                         "🔄 Create a new replacement goal from observed behaviours"],
+                        key=f"ai_mode_{g['id']}",
+                    )
+                    _ai_desc_g = st.text_area(
+                        "📝 Describe the behaviours you're observing / what needs to change",
+                        placeholder=(
+                            "e.g. The student is now managing the break card request but still "
+                            "struggles to return to task. Goal should now focus on returning to "
+                            "work within 5 minutes after a break…"
+                        ),
+                        height=110, key=f"ai_desc_{g['id']}",
+                    )
+                    _ai_c1, _ai_c2 = st.columns(2)
+                    with _ai_c1:
+                        _ai_prompt_g = st.selectbox("Target prompt level", PROMPT_TYPES, key=f"ai_prompt_{g['id']}")
+                        _ai_rate_g   = st.selectbox("Target success rate",  RATE_OPTIONS,  key=f"ai_rate_{g['id']}")
+                    with _ai_c2:
+                        _ai_set_g    = st.selectbox("Setting",  SETTINGS,  key=f"ai_set_{g['id']}")
+                        _ai_group_g  = st.selectbox("Grouping", GROUPINGS, key=f"ai_group_{g['id']}")
+
+                    if groq_client and st.button(
+                        "🤖 Generate", type="primary", key=f"ai_gen_btn_{g['id']}",
+                        disabled=not _ai_desc_g.strip(),
+                    ):
+                        with st.spinner("Generating…"):
+                            if "Modify" in _ai_mode_g:
+                                _ai_p = f"""Modify this SMARTAR goal based on the observed behaviours described.
+
+CURRENT GOAL: {st.session_state[_mod_key]}
+OBSERVED / REQUESTED CHANGES: {_ai_desc_g.strip()}
+UPDATED CONTEXT: Setting: {_ai_set_g} | Grouping: {_ai_group_g} | Prompt: {_ai_prompt_g} | Rate: {_ai_rate_g}
+
+✅ ONE sentence, ONE target skill, build on the existing goal
+❌ No "and" joining two separate actions | no preamble
+Return ONLY the modified goal sentence."""
+                            else:
+                                _ai_p = f"""Write ONE new SMARTAR goal for this student based on the observed behaviour.
+
+OBSERVED BEHAVIOUR: {_ai_desc_g.strip()}
+CONTEXT: Setting: {_ai_set_g} | Grouping: {_ai_group_g} | Prompt: {_ai_prompt_g} | Rate: {_ai_rate_g}
+STUDENT NAME: {selected_name.split()[0]}
+
+✅ ONE sentence, ONE replacement/target behaviour
+✅ Start with "{selected_name.split()[0]} will..."
+❌ No "and" joining two separate actions | no preamble
+Return ONLY the goal sentence."""
+                            try:
+                                _ai_result = groq_call(_ai_p)
+                                if _ai_result and len(_ai_result) > 20 and "[AI unavailable" not in _ai_result:
+                                    st.session_state[_mod_key] = _ai_result.strip().strip('"').strip("'")
+                                    st.rerun()
+                            except Exception as _ae:
+                                st.error(f"AI error: {_ae}")
+                    if not _ai_desc_g.strip():
+                        st.caption("💡 Describe the behaviours / changes above to enable generation.")
+
+                # ── Finalise & save ───────────────────────────────────────────
+                st.markdown("---")
+                _final_g = st.session_state.get(_mod_key, goal_text)
+                st.markdown(
+                    f'<div class="smartar-box" style="margin-bottom:10px;">🎯 <b>Goal to save:</b><br>'
+                    f'{_final_g}</div>', unsafe_allow_html=True,
+                )
+
+                # Auto-generate GAS for the working goal
+                _gas_key = f"gas_levels_{g['id']}"
+                if _final_g and _final_g != goal_text and groq_client and not st.session_state.get(_gas_key):
+                    with st.spinner("🤖 Generating GAS levels…"):
+                        try:
+                            _gr2 = groq_call(
+                                f"""GAS for: "{_final_g}"
+EXPECTED (0) = goal verbatim. Scale only rate/criteria.
+Return ONLY JSON: {{"EXCEEDING":"...","ABOVE":"...","EXPECTED":"...","BELOW":"...","NOT_YET":"..."}}"""
+                            )
+                            _gp2 = json.loads(_gr2.strip().strip("```json").strip("```").strip())
+                            if "NOT_YET" in _gp2:
+                                _gp2["NOT YET"] = _gp2.pop("NOT_YET")
+                            st.session_state[_gas_key] = _gp2
+                            st.rerun()
+                        except Exception:
+                            pass
+
+                _excl_update = st.text_area(
+                    "🏫 Exclusion goal (leave blank to keep existing)",
+                    value=_excl_ref, height=65,
+                    key=f"gb_excl_update_{g['id']}",
+                )
+                _period_key = f"gb_period_{g['id']}"
+                _period_val = st.session_state.get(_period_key, period)
+                _tracking_g = st.selectbox(
+                    "Tracking period", TRACKING_PERIODS,
+                    index=TRACKING_PERIODS.index(_period_val) if _period_val in TRACKING_PERIODS else 0,
+                    key=f"gb_tp_{g['id']}",
+                )
+
+                _gas_g = st.session_state.get(_gas_key, {})
+                _edited_gas_g = {}
+                if _gas_g:
+                    if st.button("🔄 Re-generate GAS", key=f"gb_regen_gas_{g['id']}"):
+                        st.session_state.pop(_gas_key, None)
+                        st.rerun()
+                    with st.expander("📊 GAS Levels (auto-generated — edit if needed)"):
+                        _ggver = hash(str(sorted(_gas_g.items())))
+                        for _lvl in LEVEL_ORDER:
+                            _lk = _lvl if _lvl in _gas_g else _lvl.replace(" ","_")
+                            _edited_gas_g[_lvl] = st.text_area(
+                                f"{LEVEL_EMOJI[_lvl]} {_lvl}",
+                                value=_gas_g.get(_lvl, _gas_g.get(_lk,"")), height=60,
+                                key=f"gb_gas_{g['id']}_{_lvl}_{_ggver}",
+                            )
+                else:
+                    st.caption("GAS levels will auto-generate when the goal changes from the original.")
+
+                if st.button(f"💾 Save Updated Goal", type="primary",
+                             key=f"gb_save_{g['id']}", disabled=not _final_g.strip()):
+                    _fg_gas = _edited_gas_g or _gas_g
+                    try:
+                        sb.table("smartar_goals").insert({
+                            "student_name":    selected_name,
+                            "exclusion_goal":  _excl_update.strip() or _excl_ref or None,
+                            "smartar_goal":    _final_g.strip(),
+                            "tracking_period": _tracking_g,
+                            "active":          True,
+                            "status":          "Active",
+                            "start_date":      date.today().isoformat(),
+                            "gas_exceeding":   _fg_gas.get("EXCEEDING",""),
+                            "gas_above":       _fg_gas.get("ABOVE",""),
+                            "gas_expected":    _fg_gas.get("EXPECTED",""),
+                            "gas_below":       _fg_gas.get("BELOW",""),
+                            "gas_not_yet":     _fg_gas.get("NOT YET",""),
+                        }).execute()
+                        # Clear working state for this goal
+                        for _ck2 in [_mod_key, _gas_key]:
+                            st.session_state.pop(_ck2, None)
+                        st.success(f"✅ Updated goal saved for {selected_name}!")
+                        if integration["active"]:
+                            st.markdown(f"[← Return to Team Meeting](https://clc-lbu-portal.onrender.com/Team_Meetings?program={integration['program']})")
+                        st.rerun()
+                    except Exception as _se2:
+                        st.error(f"Save error: {_se2}")
+
+            st.markdown("---")
+
+
+    # ── Archived goals ────────────────────────────────────────────────────────
+    if archived_goals:
+        with st.expander(f"🗃️ Archived Goals ({len(archived_goals)})", expanded=False):
+            st.caption("Preserved with all tracking data.")
+            for ag in archived_goals:
+                ag_text = ag.get("smartar_goal","—")
+                with st.expander(f"🟠 {_short(ag_text, 70)} — archived {(ag.get('archived_at') or '')[:10]}", expanded=False):
+                    if ag.get("exclusion_goal"):
+                        st.markdown(f'<div class="exclusion-box">🏫 {ag["exclusion_goal"]}</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="archived-box">🎯 {ag_text}</div>', unsafe_allow_html=True)
+                    if ag.get("archive_reason"):
+                        st.caption(f"Reason: {ag['archive_reason']}")
+                    rc1, rc2 = st.columns(2)
+                    with rc1:
+                        if st.button("♻️ Restore", key=f"restore_gb_{ag['id']}", type="primary"):
+                            if restore_goal(ag["id"]):
+                                st.success("✅ Goal restored.")
+                                st.rerun()
+
+    # ── Manage student ────────────────────────────────────────────────────────
+    st.markdown("---")
+    with st.expander("⚙️ Manage Student", expanded=False):
+        st.caption("Archive this student. To add a new student, use New Student Setup in the sidebar.")
+        if st.button(f"🗑 Archive student — {selected_name}", key="mgmt_archive_student"):
+            st.session_state["mgmt_arch_confirm"] = True
+        if st.session_state.get("mgmt_arch_confirm"):
+            st.warning(f"⚠️ This will archive {selected_name}. All data is preserved.")
+            mc1, mc2 = st.columns(2)
+            with mc1:
+                if st.button("Confirm Archive", type="primary", key="mgmt_arch_confirm_btn"):
+                    sb.table("smartar_students").update({"active":False}).eq("id", student["id"]).execute()
+                    st.session_state.pop("mgmt_arch_confirm", None)
+                    st.success(f"✅ {selected_name} archived.")
                     st.rerun()
-        st.divider()
-        if st.session_state.get("admin"):
-            st.markdown("### ⚙️ Admin Mode Active")
-            st.caption("You can add, edit and delete all content.")
-
-    auto_term, auto_week = get_current_term_week()
-
-    if program == "SPECIALIST":
-        tab_meeting, tab_archive = st.tabs(["🎨 Specialist Meeting", "📚 Archive"])
-        with tab_meeting:
-            render_specialist_meeting()
-        with tab_archive:
-            render_meeting_archive(program)
-            
-    elif program in ("JP", "PY", "SY"):
-        tab_meeting, tab_archive = st.tabs(["🗒️ Program Meeting", "📚 Archive"])
-        with tab_meeting: 
-            render_program_meeting(program)
-        with tab_archive:
-            render_meeting_archive(program)
+            with mc2:
+                if st.button("Cancel", key="mgmt_arch_cancel"):
+                    st.session_state.pop("mgmt_arch_confirm", None)
+                    st.rerun()
 
 
-if __name__ == "__main__":
-    main()
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 4. DAILY TRACKING
+# ══════════════════════════════════════════════════════════════════════════════
+elif view == "📊 Daily Tracking":
+    st.title("📊 Daily Tracking")
+
+    col1, col2 = st.columns([6, 1])
+    if col2.button("🔄 Refresh", type="secondary"):
+        st.rerun()
+
+    students = get_students()
+    if not students:
+        st.info("No students set up yet.")
+        st.stop()
+
+    track_date     = st.date_input("Tracking date", value=date.today())
+    st.markdown(f"**Recording for: {track_date.strftime('%A, %d %B %Y')}**")
+
+    student_options = {s["student_name"]: s for s in students}
+    selected_name   = st.selectbox("Select student", list(student_options.keys()))
+    goals           = get_goals(selected_name)
+
+    if not goals:
+        st.info(f"No goals set up for {selected_name}. Go to Goal Builder first.")
+        st.stop()
+
+    st.markdown("---")
+
+    for idx, goal in enumerate(goals, 1):
+        # today_sessions not used for display — get_session_counts handles counts
+        gas            = get_gas_dict(goal)
+        needs_ref, low_c = check_goal_needs_refinement(goal["id"])
+
+        # Determine which sessions to show based on tracking period
+        period   = goal.get("tracking_period", "All Day")
+        sessions = SESSIONS_FOR_PERIOD.get(period, ALL_SESSIONS)
+
+        st.markdown(f"### Goal {idx}")
+        if needs_ref:
+            st.markdown(
+                f'<div class="alert-box">⚠️ <b>IMPORTANT:</b> {low_c} recent sessions show '
+                f'NOT YET. Please refine this goal to make it more achievable.</div>',
+                unsafe_allow_html=True,
+            )
+        st.markdown(
+            f'<div class="smartar-box">🎯 {goal.get("smartar_goal","No goal")}</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f'<div class="period-box">📅 Tracking period: <strong>{period}</strong>'
+            f' — recording sessions: <strong>{", ".join(sessions)}</strong></div>',
+            unsafe_allow_html=True,
+        )
+
+        if any(gas.values()):
+            with st.expander("📋 View GAS Performance Levels"):
+                for lvl in LEVEL_ORDER:
+                    desc = gas.get(lvl, "")
+                    if desc:
+                        color = LEVEL_COLOR[lvl]
+                        st.markdown(
+                            f'<div class="gas-level-bar">'
+                            f'<span class="gas-level-label" style="color:{color}">'
+                            f'{LEVEL_EMOJI[lvl]} {lvl}</span>'
+                            f'<span class="gas-level-desc">{desc}</span></div>',
+                            unsafe_allow_html=True,
+                        )
+
+        st.markdown("**Record observation:**")
+        st.caption("Each button tap adds one observation — tap as many times as observed.")
+        sess_counts = get_session_counts(goal["id"], track_date.isoformat())
+        sess_cols   = st.columns(len(sessions))
+
+        for i, session in enumerate(sessions):
+            lvl_counts = sess_counts.get(session, {})
+            total_obs  = sum(lvl_counts.values())
+            with sess_cols[i]:
+                obs_label = f"**{session}**" + (f" · {total_obs} obs" if total_obs else "")
+                st.markdown(obs_label)
+                for lvl in TRACK_LEVELS:
+                    n       = lvl_counts.get(lvl, 0)
+                    count_s = f" ×{n}" if n else ""
+                    label   = f"{LEVEL_EMOJI[lvl]} {lvl}{count_s}"
+                    btn_key = f"track_{goal['id']}_{session}_{lvl}_{track_date}"
+                    if st.button(label, key=btn_key, use_container_width=True,
+                                 type="primary" if n > 0 else "secondary"):
+                        upsert_session(goal["id"], selected_name, session, lvl,
+                                       track_date=track_date.isoformat())
+                        if lvl == "NOT YET":
+                            st.session_state["show_ref_alert"] = goal["id"]
+                        st.rerun()
+
+        if st.session_state.get("show_ref_alert") == goal["id"]:
+            st.markdown(
+                '<div class="alert-box">⚠️ NOT YET recorded. Please refine the goal '
+                'to make it more achievable — focus on incremental progress.</div>',
+                unsafe_allow_html=True,
+            )
+            if st.button("I understand — will refine goal as needed", key=f"ack_{goal['id']}"):
+                st.session_state.pop("show_ref_alert", None)
+                st.rerun()
+
+        st.markdown("---")
+
+    st.success("Tracking saves immediately when you click a level button.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 4. PROGRESS REPORT
+# ══════════════════════════════════════════════════════════════════════════════
+elif view == "📈 Progress Report":
+    st.title("📈 Progress Report")
+    st.caption("Charts use the full SMARTAR goal as the title. PNG downloads are full-size — nothing clipped.")
+
+    students = get_students()
+    if not students:
+        st.info("No students set up yet.")
+        st.stop()
+
+    student_options = {s["student_name"]: s for s in students}
+    selected_name   = st.selectbox("Select student", list(student_options.keys()))
+    student         = student_options[selected_name]
+
+    # Show active AND archived goals
+    all_goals = get_all_goals_for_student(selected_name)
+    if not all_goals:
+        st.info(f"No goals for {selected_name}.")
+        st.stop()
+
+    period_filter = st.radio(
+        "Report period (for active goals without a fixed range)",
+        ["Last 2 weeks", "Last 3 weeks", "Last 5 weeks"],
+        horizontal=True,
+    )
+    days_map = {"Last 2 weeks": 14, "Last 3 weeks": 21, "Last 5 weeks": 35}
+    default_days = days_map[period_filter]
+
+    st.markdown(f"## {selected_name} — Progress Report")
+    st.caption(f"Program: {student.get('program','?')} · {len(all_goals)} total goals")
+
+    goal_chart_list = []   # for PDF: (goal, png_bytes, from_d, to_d)
+
+    for idx, goal in enumerate(all_goals, 1):
+        is_active = goal.get("active", True)
+        status    = "Active" if is_active else "Archived"
+        s_icon    = "🟢" if is_active else "🟠"
+        period    = goal.get("tracking_period", "All Day")
+        sessions  = SESSIONS_FOR_PERIOD.get(period, ALL_SESSIONS)
+
+        # Date range: for archived goals use start→archived_at; for active use start→today
+        from_d, to_d = goal_date_range(goal)
+
+        tracking = get_tracking_range(goal["id"], from_d, to_d, sessions=sessions)
+
+        if tracking:
+            actual_from = min(r["session_date"] for r in tracking)[:10]
+            actual_to   = max(r["session_date"] for r in tracking)[:10]
+            track_str   = f"{actual_from} → {actual_to}"
+            n_entries   = len(tracking)
+        else:
+            actual_from = from_d
+            actual_to   = to_d
+            track_str   = "No entries yet"
+            n_entries   = 0
+
+        counts, total, pcts = calc_percentages(tracking)
+        trend = analyze_trend(tracking)
+        needs_ref, low_c = check_goal_needs_refinement(goal["id"])
+
+        smartar_text = goal.get("smartar_goal", "No goal text")
+
+        st.markdown(
+            f"### {s_icon} Goal {idx} ({status}): {goal.get('domain','')} — "
+            f"{_short(smartar_text, 55)}"
+        )
+
+        # Goal start / date range info
+        goal_start = goal.get("start_date")
+        if goal_start:
+            try:
+                start_obj = date.fromisoformat(str(goal_start)[:10])
+                days_active = (date.today() - start_obj).days
+                st.caption(
+                    f"📅 **Goal started:** {start_obj.strftime('%d %B %Y')} "
+                    f"({days_active} days ago) · "
+                    f"**Tracking period:** {period} ({', '.join(sessions)}) · "
+                    f"**Data range:** {track_str} · **Entries:** {n_entries}"
+                )
+            except Exception:
+                st.caption(f"Tracking: {track_str} · Entries: {n_entries}")
+        else:
+            st.caption(f"Tracking: {track_str} · Entries: {n_entries}")
+
+        if goal.get("archive_reason"):
+            st.caption(f"Archive reason: {goal['archive_reason']}")
+
+        # Trend / refinement alerts
+        if trend == "improving":
+            st.markdown(
+                '<div class="success-box">📈 <b>Improving Trend:</b> Performance is getting better over time.</div>',
+                unsafe_allow_html=True,
+            )
+        elif trend == "declining":
+            st.markdown(
+                '<div class="alert-box">📉 <b>Declining Trend:</b> Consider refining this goal.</div>',
+                unsafe_allow_html=True,
+            )
+        elif trend == "stable" and needs_ref:
+            st.markdown(
+                '<div class="alert-box">➡️ <b>Stable but Low:</b> Consistent low performance — consider refining.</div>',
+                unsafe_allow_html=True,
+            )
+
+        if goal.get("exclusion_goal"):
+            st.markdown(
+                f'<div class="exclusion-box">🏫 <b>Exclusion Goal:</b> {goal["exclusion_goal"]}</div>',
+                unsafe_allow_html=True,
+            )
+        st.markdown(
+            f'<div class="smartar-box">🎯 <b>SMARTAR Goal:</b> {smartar_text}</div>',
+            unsafe_allow_html=True,
+        )
+
+        if total == 0:
+            st.warning("No tracking data for this goal's period yet.")
+            st.markdown("---")
+            continue
+
+        # Summary metrics
+        mc = st.columns(4)
+        for i, lvl in enumerate(TRACK_LEVELS):
+            pct = pcts.get(lvl, 0)
+            mc[i].metric(f"{LEVEL_EMOJI[lvl]} {lvl}", f"{pct:.0f}%",
+                         f"{counts[lvl]} sessions")
+
+        # Progress bar
+        bar_parts = []
+        for lvl in LEVEL_ORDER:
+            pct = pcts.get(lvl, 0)
+            if pct > 0:
+                bar_parts.append(
+                    f'<div style="width:{pct}%;background:{LEVEL_COLOR[lvl]};'
+                    f'height:22px;display:inline-block;"></div>'
+                )
+        st.markdown(
+            '<div style="display:flex;width:100%;border-radius:8px;overflow:hidden;margin:12px 0">'
+            + "".join(bar_parts) + "</div>",
+            unsafe_allow_html=True,
+        )
+        st.caption(f"Total sessions: {total}")
+
+        # Matplotlib chart (full SMARTAR goal as title, PNG download no clipping)
+        png_bytes = make_goal_chart_mpl(
+            tracking, smartar_text, actual_from, actual_to,
+            student_name=selected_name,
+        )
+        if png_bytes:
+            goal_chart_list.append((goal, png_bytes, actual_from, actual_to))
+            col_chart, col_dl = st.columns([5, 1])
+            with col_chart:
+                st.image(png_bytes, use_container_width=True)
+            with col_dl:
+                safe = smartar_text[:25].replace(" ", "_").replace("/", "-")
+                st.download_button(
+                    "📥 Download\nPNG",
+                    data=png_bytes,
+                    file_name=f"{selected_name}_goal{idx}_{safe}.png",
+                    mime="image/png",
+                    key=f"dl_png_{goal['id']}",
+                    use_container_width=True,
+                )
+
+        # Day-by-day breakdown
+        if tracking:
+            daily = defaultdict(lambda: {l: 0 for l in LEVEL_ORDER})
+            for r in tracking:
+                daily[r["session_date"]][r.get("performance_level","")] += 1
+            dates_sorted = sorted(daily.keys())
+            st.markdown("**Session breakdown by day:**")
+            for d_str in dates_sorted[-10:]:
+                row       = daily[d_str]
+                day_total = sum(row.values())
+                if day_total == 0:
+                    continue
+                day_label = datetime.strptime(d_str, "%Y-%m-%d").strftime("%d %b")
+                pills     = " ".join([
+                    f'<span class="metric-pill" style="background:{LEVEL_COLOR[l]}22;color:{LEVEL_COLOR[l]}">'
+                    f'{LEVEL_EMOJI[l]} {l}: {row[l]}</span>'
+                    for l in LEVEL_ORDER if row.get(l, 0) > 0
+                ])
+                st.markdown(f"**{day_label}** — {pills}", unsafe_allow_html=True)
+
+        # AI narrative
+        if groq_client:
+            if st.button(f"✨ Generate Progress Summary (AI)", key=f"ai_rpt_{goal['id']}"):
+                with st.spinner("Generating summary…"):
+                    lvl_summary = ", ".join([f"{l}: {pcts.get(l,0):.0f}%" for l in TRACK_LEVELS])
+                    trend_text  = {"improving": "improving", "declining": "declining"}.get(trend, "stable")
+                    narrative   = groq_call(
+                        f"""Write a professional progress summary (3–4 sentences) for a student's review meeting.
+
+Student: {selected_name}
+SMARTAR Goal: {smartar_text}
+Tracking period: {from_d} to {to_d} ({n_entries} sessions recorded)
+Performance: {lvl_summary}
+Trend: {trend_text}
+
+Use trauma-informed, strengths-based language referencing the BSEM framework (Regulate, Relate, Reason) where relevant. Be specific about the data. If low performance, suggest refining the goal to support achievable progress."""
+                    )
+                    st.markdown("**AI-Generated Progress Summary:**")
+                    st.success(narrative)
+        st.markdown("---")
+
+    # PDF download all goals
+    if goal_chart_list:
+        st.markdown("#### 📄 Download All Goal Charts as PDF")
+        if st.button("Generate PDF Report", type="primary", key="gen_pdf"):
+            with st.spinner("Building PDF…"):
+                pdf_bytes = make_student_pdf(selected_name, goal_chart_list)
+            st.download_button(
+                "⬇️ Download PDF",
+                data=pdf_bytes,
+                file_name=f"{selected_name}_SMARTAR_Progress_Report.pdf",
+                mime="application/pdf",
+                key="dl_pdf_final",
+            )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 5. ADMIN PANEL
+# ══════════════════════════════════════════════════════════════════════════════
+elif view == "⚙️ Admin Panel":
+    st.title("⚙️ Admin Panel")
+    st.caption("Manage students · Pre-populate goals from entry meetings · Edit existing goals")
+
+    tab_students, tab_edit, tab_prepop = st.tabs([
+        "👥 Manage Students", "📝 Edit Goals", "➕ Pre-populate Goals",
+    ])
+
+    # -- Manage Students --------------------------------------------------------
+    with tab_students:
+        st.subheader("Add New Student")
+        col1, col2, col3 = st.columns([3, 1, 1])
+        new_sname = col1.text_input("Student name", key="admin_new_student")
+        new_sprog = col2.selectbox("Program", PROGRAMS, key="admin_new_prog")
+        if col3.button("Add Student", type="primary", key="admin_add_student"):
+            if new_sname.strip():
+                try:
+                    sb.table("smartar_students").insert({
+                        "student_name":    new_sname.strip(),
+                        "program":         new_sprog,
+                        "active":          True,
+                        "placement_ended": False,
+                    }).execute()
+                    st.success(f"Added {new_sname.strip()} to {new_sprog}.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
+            else:
+                st.warning("Please enter a student name.")
+
+        st.markdown("---")
+        st.caption("Active = on placement. Archived = goal archived, student still accessible. Placement Ended = student left CLC, hidden from tools but data preserved.")
+
+        col_show1, col_show2 = st.columns(2)
+        show_archived  = col_show1.checkbox("Show archived students", value=False)
+        show_placement = col_show2.checkbox("Show placement-ended students", value=False)
+
+        students_all = get_students(include_archived=True)
+        active_s   = [s for s in students_all
+                      if s.get("active", True) and not s.get("placement_ended", False)]
+        archived_s = [s for s in students_all
+                      if not s.get("active", True) and not s.get("placement_ended", False)]
+        ended_s    = [s for s in students_all if s.get("placement_ended", False)]
+
+        st.info(
+            f"{len(active_s)} active"
+            + (f"  |  {len(archived_s)} goal-archived" if show_archived else "")
+            + (f"  |  {len(ended_s)} placement ended" if show_placement else "")
+        )
+
+        display_students = list(active_s)
+        if show_archived:
+            display_students += archived_s
+        if show_placement:
+            display_students += ended_s
+
+        def _s_label(s):
+            if s.get("placement_ended", False): return s["student_name"] + " [PLACEMENT ENDED]"
+            if not s.get("active", True): return s["student_name"] + " [ARCHIVED]"
+            return s["student_name"]
+
+        snames = [_s_label(s) for s in display_students]
+        sel_s  = st.selectbox("Select student to manage", ["-- Select --"] + snames,
+                              key="admin_edit_select")
+
+        if sel_s != "-- Select --":
+            clean   = sel_s.replace(" [ARCHIVED]", "").replace(" [PLACEMENT ENDED]", "")
+            s       = next(x for x in display_students if x["student_name"] == clean)
+            is_end  = s.get("placement_ended", False)
+            is_arch = not s.get("active", True) and not is_end
+
+            goals_s = get_goals(s["student_name"])
+            status_tag = " [PLACEMENT ENDED]" if is_end else " [ARCHIVED]" if is_arch else ""
+            st.markdown(f"### {s['student_name']}{status_tag}")
+            st.caption(f"Program: {s.get('program','--')} · {len(goals_s)} active goals")
+
+            if not is_arch and not is_end:
+                c1, c2 = st.columns([2, 1])
+                prog_idx   = PROGRAMS.index(s.get("program","JP")) if s.get("program") in PROGRAMS else 0
+                new_prog_s = c1.selectbox("Program", PROGRAMS, index=prog_idx,
+                                          key=f"prog_{s['id']}")
+                if c2.button("Update Program", key=f"prog_upd_{s['id']}"):
+                    sb.table("smartar_students").update({"program": new_prog_s}).eq("id", s["id"]).execute()
+                    st.success("Updated.")
+                    st.rerun()
+
+            st.markdown("---")
+
+            if is_end:
+                st.warning("This student has left CLC. All data is preserved.")
+                if st.button("Restore to Active", key=f"restore_end_{s['id']}", type="primary"):
+                    sb.table("smartar_students").update({"active": True, "placement_ended": False}).eq("id", s["id"]).execute()
+                    st.success("Restored to active.")
+                    st.rerun()
+
+            elif is_arch:
+                st.markdown(
+                    '<div class="period-box" style="margin-bottom:10px;">'
+                    'This student is archived — hidden from active views but all data is intact. '
+                    'Choose an action below.</div>',
+                    unsafe_allow_html=True,
+                )
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    if st.button("♻️ Restore to Active",
+                                 key=f"restore_s_{s['id']}", type="primary",
+                                 help="Return student to active — they will reappear in Goal Builder and tracking"):
+                        sb.table("smartar_students").update({"active": True}).eq("id", s["id"]).execute()
+                        st.success("✅ Restored to active.")
+                        st.rerun()
+                with c2:
+                    if st.button("🏁 End Placement",
+                                 key=f"end_s_{s['id']}",
+                                 help="Student has left CLC — data preserved permanently, no longer tracked"):
+                        st.session_state[f"confirm_end_s_{s['id']}"] = True
+                with c3:
+                    if st.button("🗑 Permanently Delete",
+                                 key=f"del_s_{s['id']}",
+                                 help="For students entered in error — removes all data and cannot be undone"):
+                        st.session_state[f"confirm_delete_s_{s['id']}"] = True
+
+                # End Placement confirmation
+                if st.session_state.get(f"confirm_end_s_{s['id']}"):
+                    st.markdown(
+                        f'<div class="period-box">🏁 <b>End placement for {s["student_name"]}?</b><br>'
+                        f'All goals and tracking data will be preserved permanently in the archive. '
+                        f'The student will no longer appear in Goal Builder, tracking, or reports.</div>',
+                        unsafe_allow_html=True,
+                    )
+                    _ea, _eb = st.columns(2)
+                    with _ea:
+                        if st.button("Yes — end placement",
+                                     key=f"end_s_conf_{s['id']}", type="primary"):
+                            sb.table("smartar_students").update({
+                                "active": False, "placement_ended": True
+                            }).eq("id", s["id"]).execute()
+                            st.session_state.pop(f"confirm_end_s_{s['id']}", None)
+                            st.success(f"🏁 {s['student_name']} — placement ended. Data preserved.")
+                            st.rerun()
+                    with _eb:
+                        if st.button("Cancel", key=f"end_s_cancel_{s['id']}"):
+                            st.session_state.pop(f"confirm_end_s_{s['id']}", None)
+                            st.rerun()
+
+                # Permanent delete confirmation
+                if st.session_state.get(f"confirm_delete_s_{s['id']}"):
+                    st.markdown(
+                        f'<div class="alert-box">⚠️ <b>Permanently delete {s["student_name"]}?</b><br>'
+                        f'Use this only if the student was <b>entered in error</b>. '
+                        f'This will permanently remove the student record, <b>all goals</b>, '
+                        f'and <b>all tracking data</b>. This cannot be undone.</div>',
+                        unsafe_allow_html=True,
+                    )
+                    _da, _db = st.columns(2)
+                    with _da:
+                        if st.button(f"Yes — permanently delete",
+                                     key=f"del_s_conf_{s['id']}", type="primary"):
+                            try:
+                                _del_goals = sb.table("smartar_goals").select("id").eq(
+                                    "student_name", s["student_name"]
+                                ).execute().data or []
+                                for _dg in _del_goals:
+                                    sb.table("smartar_tracking").delete().eq(
+                                        "goal_id", _dg["id"]
+                                    ).execute()
+                                sb.table("smartar_goals").delete().eq(
+                                    "student_name", s["student_name"]
+                                ).execute()
+                                sb.table("smartar_students").delete().eq(
+                                    "id", s["id"]
+                                ).execute()
+                                st.session_state.pop(f"confirm_delete_s_{s['id']}", None)
+                                st.success(f"✅ {s['student_name']} and all data permanently deleted.")
+                                st.rerun()
+                            except Exception as _de:
+                                st.error(f"Delete error: {_de}")
+                    with _db:
+                        if st.button("Cancel", key=f"del_s_cancel_{s['id']}"):
+                            st.session_state.pop(f"confirm_delete_s_{s['id']}", None)
+                            st.rerun()
+
+            else:
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button(f"Archive {s['student_name']}", key=f"archive_s_{s['id']}"):
+                        sb.table("smartar_students").update({"active": False}).eq("id", s["id"]).execute()
+                        st.success("Archived — still accessible in Admin.")
+                        st.rerun()
+                with c2:
+                    if st.button("End Placement", key=f"end_active_{s['id']}"):
+                        st.session_state[f"confirm_end_{s['id']}"] = True
+                if st.session_state.get(f"confirm_end_{s['id']}"):
+                    st.warning(f"This will hide {s['student_name']} from all tools. All data preserved. Continue?")
+                    ca, cb = st.columns(2)
+                    with ca:
+                        if st.button("Confirm End Placement", key=f"end_conf_{s['id']}", type="primary"):
+                            sb.table("smartar_students").update({"active": False, "placement_ended": True}).eq("id", s["id"]).execute()
+                            st.session_state.pop(f"confirm_end_{s['id']}", None)
+                            st.success(f"{s['student_name']} marked as placement ended.")
+                            st.rerun()
+                    with cb:
+                        if st.button("Cancel", key=f"end_cancel_{s['id']}"):
+                            st.session_state.pop(f"confirm_end_{s['id']}", None)
+                            st.rerun()
+    # ── Edit Goals ────────────────────────────────────────────────────────────
+    with tab_edit:
+        st.subheader("Edit Existing Goals")
+        students_e = get_students()
+        if not students_e:
+            st.info("No students in the system yet.")
+        else:
+            sel_e  = st.selectbox("Select student", [s["student_name"] for s in students_e],
+                                  key="admin_edit_student")
+            goals_e = get_all_goals_for_student(sel_e)
+
+            if not goals_e:
+                st.info(f"No goals for {sel_e}. Use Pre-populate Goals to create initial goals.")
+            else:
+                for idx, goal in enumerate(goals_e, 1):
+                    is_active_g = goal.get("active", True)
+                    status_g    = "Active" if is_active_g else "Archived"
+                    label       = (f"[{status_g}] Goal {idx} — "
+                                   f"{_short(goal.get('smartar_goal',''), 55)}")
+
+                    with st.expander(label, expanded=False):
+                        edit_excl = st.text_area(
+                            "Exclusion Goal", value=goal.get("exclusion_goal", ""),
+                            height=80, key=f"edit_excl_{goal['id']}",
+                        )
+                        edit_smartar = st.text_area(
+                            "SMARTAR Goal", value=goal.get("smartar_goal", ""),
+                            height=100, key=f"edit_smt_{goal['id']}",
+                        )
+                        edit_period = st.selectbox(
+                            "Tracking Period", TRACKING_PERIODS,
+                            index=TRACKING_PERIODS.index(goal.get("tracking_period","All Day"))
+                              if goal.get("tracking_period") in TRACKING_PERIODS else 0,
+                            key=f"edit_per_{goal['id']}",
+                        )
+
+                        dc1, dc2 = st.columns(2)
+                        cur_start = goal.get("start_date")
+                        try:
+                            cur_start_d = date.fromisoformat(str(cur_start)[:10]) if cur_start else date.today()
+                        except Exception:
+                            cur_start_d = date.today()
+                        edit_start = dc1.date_input(
+                            "Start Date (update when refining goal)",
+                            value=cur_start_d, key=f"edit_start_{goal['id']}",
+                        )
+                        days_tracked = (date.today() - cur_start_d).days
+                        dc2.metric("Days Tracked", f"{days_tracked} days")
+
+                        st.markdown("**GAS Performance Levels:**")
+                        edit_gas = {}
+                        for lvl in LEVEL_ORDER:
+                            col_name = f"gas_{lvl.lower().replace(' ','_')}"
+                            edit_gas[lvl] = st.text_area(
+                                f"{LEVEL_EMOJI[lvl]} {lvl}",
+                                value=goal.get(col_name, ""),
+                                height=70, key=f"edit_gas_{lvl}_{goal['id']}",
+                            )
+
+                        c1, c2, c3 = st.columns(3)
+                        with c1:
+                            if st.button("💾 Save Changes", key=f"save_e_{goal['id']}", type="primary"):
+                                update = {
+                                    "exclusion_goal":  edit_excl.strip() or None,
+                                    "smartar_goal":    edit_smartar.strip(),
+                                    "tracking_period": edit_period,
+                                    "start_date":      edit_start.isoformat(),
+                                    "gas_exceeding":   edit_gas.get("EXCEEDING",""),
+                                    "gas_above":       edit_gas.get("ABOVE",""),
+                                    "gas_expected":    edit_gas.get("EXPECTED",""),
+                                    "gas_below":       edit_gas.get("BELOW",""),
+                                    "gas_not_yet":     edit_gas.get("NOT YET",""),
+                                    "updated_at":      datetime.utcnow().isoformat(),
+                                }
+                                sb.table("smartar_goals").update(update)\
+                                  .eq("id", goal["id"]).execute()
+                                st.success("✅ Goal updated.")
+                                st.rerun()
+                        with c2:
+                            if is_active_g:
+                                if st.button("🗃️ Archive", key=f"arch_e_{goal['id']}"):
+                                    st.session_state[f"arch_e_c_{goal['id']}"] = True
+                                if st.session_state.get(f"arch_e_c_{goal['id']}"):
+                                    reason_e = st.text_input("Reason:", key=f"arch_e_r_{goal['id']}")
+                                    if st.button("Confirm", key=f"arch_e_d_{goal['id']}", type="primary"):
+                                        archive_goal(goal["id"], reason_e)
+                                        st.session_state.pop(f"arch_e_c_{goal['id']}", None)
+                                        st.rerun()
+                            else:
+                                if st.button("♻️ Restore", key=f"restore_e_{goal['id']}"):
+                                    restore_goal(goal["id"])
+                                    st.rerun()
+                        with c3:
+                            if not is_active_g:
+                                if st.button("➕ New Goal (same student)",
+                                             key=f"new_from_e_{goal['id']}"):
+                                    st.info("Go to **Goal Builder** to create an updated goal "
+                                            f"for {sel_e}.")
+
+    # ── Pre-populate Goals ─────────────────────────────────────────────────────
+    with tab_prepop:
+        st.subheader("Pre-populate Goals from Entry Meeting")
+        st.caption(
+            "Add initial goals after an entry meeting so teachers can begin tracking "
+            "straight away. Goals can be refined later as teachers observe the student."
+        )
+        students_p = get_students()
+        if not students_p:
+            st.info("Add students in Manage Students tab first.")
+        else:
+            sel_p   = st.selectbox("Select student", [s["student_name"] for s in students_p],
+                                   key="admin_pp_student")
+            goals_p = get_goals(sel_p)
+            if goals_p:
+                st.info(f"{sel_p} already has {len(goals_p)} active goal(s). You can add more below.")
+
+            pp_excl = st.text_area(
+                "🏫 Exclusion Goal (from main school)",
+                placeholder="Paste exclusion goal from entry meeting…",
+                height=80, key="pp_excl",
+            )
+            pp_smartar = st.text_area(
+                "🎯 Initial SMARTAR Goal",
+                placeholder="Enter initial SMARTAR goal — teachers can refine based on observations.",
+                height=100, key="pp_smartar",
+            )
+            pp_period = st.selectbox("Tracking Period", TRACKING_PERIODS, key="pp_period")
+
+            st.markdown("**Optional: Add GAS Performance Levels**")
+            with st.expander("Add GAS Levels (can be done later)"):
+                pp_gas = {}
+                for lvl in LEVEL_ORDER:
+                    pp_gas[lvl] = st.text_area(
+                        f"{LEVEL_EMOJI[lvl]} {lvl}",
+                        placeholder=f"{lvl} performance description…",
+                        height=65, key=f"pp_gas_{lvl}",
+                    )
+
+            if st.button("💾 Save Pre-Populated Goal", type="primary", key="save_pp"):
+                if pp_smartar.strip():
+                    new_g = {
+                        "student_name":    sel_p,
+                        "exclusion_goal":  pp_excl.strip() or None,
+                        "smartar_goal":    pp_smartar.strip(),
+                        "tracking_period": pp_period,
+                        "gas_exceeding":   pp_gas.get("EXCEEDING",""),
+                        "gas_above":       pp_gas.get("ABOVE",""),
+                        "gas_expected":    pp_gas.get("EXPECTED",""),
+                        "gas_below":       pp_gas.get("BELOW",""),
+                        "gas_not_yet":     pp_gas.get("NOT YET",""),
+                        "start_date":      date.today().isoformat(),
+                        "active":          True,
+                        "status":          "Active",
+                    }
+                    sb.table("smartar_goals").insert(new_g).execute()
+                    st.success(
+                        f"✅ Goal pre-populated for {sel_p}. "
+                        "Teachers can now begin tracking and refine as needed."
+                    )
+                    st.rerun()
+                else:
+                    st.warning("Please enter a SMARTAR goal.")
