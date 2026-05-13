@@ -1,12 +1,12 @@
 # =============================================================================
 # 22_Visual_Support_Tools.py  -  CLC-LBU Portal
-# Build, customise and print visual supports: lanyard cards, desk mats,
-# First-Then boards, visual schedules, communication boards, regulation tools
-# ENHANCED VERSION - ARASAAC Symbols + Skillstreaming
+# Build, customise and print visual supports with REAL ARASAAC SYMBOLS
+# WORKING VERSION - Actual image display + Skillstreaming
 # =============================================================================
 
 import streamlit as st
 import json
+import requests
 from datetime import datetime
 import urllib.parse
 
@@ -29,15 +29,29 @@ CREAM  = "#F7F9FB"
 PURPLE = "#7C2D91"
 
 # -- ARASAAC Symbol Helper ---------------------------------------------------
-def get_arasaac_symbol(keyword, color=True):
-    """Generate ARASAAC symbol URL - free, CC-licensed AAC symbols"""
-    # ARASAAC API provides free symbols in multiple languages
-    # Use 'color' for color symbols, 'nocolor' for black/white
-    style = "color" if color else "nocolor"
-    keyword_encoded = urllib.parse.quote(keyword.lower())
-    # Format: https://static.arasaac.org/pictograms/[ID]/[ID]_500.png
-    # For simplicity, we'll use the search URL structure
-    return f"https://api.arasaac.org/api/pictograms/en/search/{keyword_encoded}"
+@st.cache_data(ttl=86400)
+def get_arasaac_symbol_url(keyword):
+    """
+    Fetch ARASAAC symbol URL for given keyword.
+    Returns direct image URL or None if not found.
+    ARASAAC provides FREE, open-source AAC symbols (CC license)
+    """
+    try:
+        # Search for the symbol
+        search_url = f"https://api.arasaac.org/api/pictograms/en/search/{urllib.parse.quote(keyword)}"
+        response = requests.get(search_url, timeout=5)
+        
+        if response.status_code == 200:
+            results = response.json()
+            if results and len(results) > 0:
+                # Get the first result's ID
+                symbol_id = results[0]['_id']
+                # Return the direct image URL (500px version, color)
+                return f"https://static.arasaac.org/pictograms/{symbol_id}/{symbol_id}_500.png"
+    except Exception as e:
+        st.sidebar.error(f"Symbol fetch error for '{keyword}': {str(e)}")
+    
+    return None
 
 # -- CSS ----------------------------------------------------------------------
 st.markdown(f"""
@@ -67,7 +81,6 @@ st.markdown(f"""
     padding:.85rem .6rem; text-align:center; min-height:120px;
     display:flex; flex-direction:column; justify-content:center;
 }}
-.vc .symbol-img {{ max-width:60px; height:60px; object-fit:contain; margin:0 auto .4rem; }}
 .vc .ti {{ font-size:.88rem; font-weight:700; color:{NAVY}; line-height:1.25; }}
 .vc .su {{ font-size:.73rem; color:#718096; margin-top:.25rem; }}
 
@@ -90,7 +103,6 @@ st.markdown(f"""
     letter-spacing:.1em; color:#718096; margin-bottom:.4rem;
 }}
 .slot.filled .slot-lbl {{ color:{TEAL}; }}
-.slot .symbol-img {{ max-width:50px; height:50px; object-fit:contain; margin:.3rem auto; }}
 .slot .slot-tx {{ font-size:.88rem; font-weight:700; }}
 
 .zone {{ border-radius:10px; padding:.85rem; border:2px solid transparent; margin-bottom:.5rem; }}
@@ -137,10 +149,9 @@ st.markdown(f"""
 # DATA - PODD-ALIGNED VOCABULARY WITH ARASAAC SYMBOLS
 # =============================================================================
 
-# ARASAAC keywords for symbols (free, open-source AAC symbols)
 CARDS = [
     # Regulation - PODD "I feel..." language
-    dict(id="feelings",   cat="regulation",    color=AMBER,     symbol_key="feelings",    ti="I feel",               sub="Tell someone",             fw=["BSEM","ZOR","TI","AAC"]),
+    dict(id="feelings",   cat="regulation",    color=AMBER,     symbol_key="feel",        ti="I feel",               sub="Tell someone",             fw=["BSEM","ZOR","TI","AAC"]),
     dict(id="help",       cat="regulation",    color=AMBER,     symbol_key="help",        ti="I need help",          sub="Someone help me",          fw=["BSEM","TI","AAC"]),
     dict(id="break",      cat="regulation",    color=AMBER,     symbol_key="break",       ti="I need a break",       sub="I want to stop",           fw=["TI","PBS","BSEM"]),
     dict(id="calm",       cat="regulation",    color=AMBER,     symbol_key="calm",        ti="I need to calm down",  sub="I want quiet",             fw=["BSEM","TI","OT"]),
@@ -182,58 +193,18 @@ CARDS = [
     dict(id="read",       cat="activities",    color="#059669", symbol_key="read",        ti="I want to read",       sub="Read a book",              fw=["AAC","PODD"]),
 ]
 
-# SKILLSTREAMING DATA
+# SKILLSTREAMING DATA (same as before)
 SKILLSTREAMING_SKILLS = {
     "classroom": {
         "name": "Classroom Survival Skills",
         "color": "#1A5C78",
         "icon": "📚",
         "skills": [
-            {
-                "name": "Listening",
-                "steps": [
-                    "Look at the person talking",
-                    "Think about what is being said",
-                    "Wait until the person is done talking",
-                    "Say what you want to say"
-                ]
-            },
-            {
-                "name": "Asking for Help",
-                "steps": [
-                    "Decide what the problem is",
-                    "Think about asking for help",
-                    "Choose who to ask",
-                    "Tell that person your problem"
-                ]
-            },
-            {
-                "name": "Saying Thank You",
-                "steps": [
-                    "Think if someone has helped you or done something nice",
-                    "Choose how to thank them (say it, write a note)",
-                    "Do it in a friendly way"
-                ]
-            },
-            {
-                "name": "Following Instructions",
-                "steps": [
-                    "Listen carefully to the instruction",
-                    "Think about what you have been asked to do",
-                    "Ask questions if you need to",
-                    "Repeat the steps to yourself",
-                    "Do what you have been asked"
-                ]
-            },
-            {
-                "name": "Asking a Question",
-                "steps": [
-                    "Decide what you want to know more about",
-                    "Decide who to ask",
-                    "Think about when to ask",
-                    "Ask your question"
-                ]
-            }
+            {"name": "Listening", "steps": ["Look at the person talking", "Think about what is being said", "Wait until the person is done talking", "Say what you want to say"]},
+            {"name": "Asking for Help", "steps": ["Decide what the problem is", "Think about asking for help", "Choose who to ask", "Tell that person your problem"]},
+            {"name": "Saying Thank You", "steps": ["Think if someone has helped you or done something nice", "Choose how to thank them (say it, write a note)", "Do it in a friendly way"]},
+            {"name": "Following Instructions", "steps": ["Listen carefully to the instruction", "Think about what you have been asked to do", "Ask questions if you need to", "Repeat the steps to yourself", "Do what you have been asked"]},
+            {"name": "Asking a Question", "steps": ["Decide what you want to know more about", "Decide who to ask", "Think about when to ask", "Ask your question"]},
         ]
     },
     "friendship": {
@@ -241,43 +212,10 @@ SKILLSTREAMING_SKILLS = {
         "color": "#2D7D4F",
         "icon": "🤝",
         "skills": [
-            {
-                "name": "Joining In",
-                "steps": [
-                    "Watch what is happening",
-                    "Decide if you want to join in",
-                    "Decide the best way to join in",
-                    "Choose the best time to join in",
-                    "Join in"
-                ]
-            },
-            {
-                "name": "Starting a Conversation",
-                "steps": [
-                    "Choose someone to talk to",
-                    "Decide what you want to say",
-                    "Choose a good time and place",
-                    "Start talking in a friendly way"
-                ]
-            },
-            {
-                "name": "Sharing",
-                "steps": [
-                    "Decide if you want to share",
-                    "Decide who you want to share with",
-                    "Choose what to share",
-                    "Offer to share in a friendly way"
-                ]
-            },
-            {
-                "name": "Waiting Your Turn",
-                "steps": [
-                    "Decide if you need to wait",
-                    "Wait quietly and patiently",
-                    "Think about other things while waiting",
-                    "Take your turn when it comes"
-                ]
-            }
+            {"name": "Joining In", "steps": ["Watch what is happening", "Decide if you want to join in", "Decide the best way to join in", "Choose the best time to join in", "Join in"]},
+            {"name": "Starting a Conversation", "steps": ["Choose someone to talk to", "Decide what you want to say", "Choose a good time and place", "Start talking in a friendly way"]},
+            {"name": "Sharing", "steps": ["Decide if you want to share", "Decide who you want to share with", "Choose what to share", "Offer to share in a friendly way"]},
+            {"name": "Waiting Your Turn", "steps": ["Decide if you need to wait", "Wait quietly and patiently", "Think about other things while waiting", "Take your turn when it comes"]},
         ]
     },
     "feelings": {
@@ -285,42 +223,10 @@ SKILLSTREAMING_SKILLS = {
         "color": "#D4860A",
         "icon": "💭",
         "skills": [
-            {
-                "name": "Knowing Your Feelings",
-                "steps": [
-                    "Think about how your body feels",
-                    "Decide what happened to make you feel this way",
-                    "Decide what feeling you are having",
-                    "Decide how strong your feeling is"
-                ]
-            },
-            {
-                "name": "Dealing with Fear",
-                "steps": [
-                    "Decide if you are feeling afraid",
-                    "Think about what you are afraid of",
-                    "Decide if the fear is real",
-                    "Take steps to reduce your fear"
-                ]
-            },
-            {
-                "name": "Dealing with Being Left Out",
-                "steps": [
-                    "Decide if you are being left out",
-                    "Think about why this might be happening",
-                    "Decide what you can do about it",
-                    "Try your best choice"
-                ]
-            },
-            {
-                "name": "Expressing Your Feelings",
-                "steps": [
-                    "Stop and think about what you are feeling",
-                    "Decide what it was that made you feel this way",
-                    "Decide how you can best express your feeling",
-                    "Express your feeling in a calm and friendly way"
-                ]
-            }
+            {"name": "Knowing Your Feelings", "steps": ["Think about how your body feels", "Decide what happened to make you feel this way", "Decide what feeling you are having", "Decide how strong your feeling is"]},
+            {"name": "Dealing with Fear", "steps": ["Decide if you are feeling afraid", "Think about what you are afraid of", "Decide if the fear is real", "Take steps to reduce your fear"]},
+            {"name": "Dealing with Being Left Out", "steps": ["Decide if you are being left out", "Think about why this might be happening", "Decide what you can do about it", "Try your best choice"]},
+            {"name": "Expressing Your Feelings", "steps": ["Stop and think about what you are feeling", "Decide what it was that made you feel this way", "Decide how you can best express your feeling", "Express your feeling in a calm and friendly way"]},
         ]
     },
     "aggression": {
@@ -328,43 +234,10 @@ SKILLSTREAMING_SKILLS = {
         "color": "#8C2D5A",
         "icon": "🛑",
         "skills": [
-            {
-                "name": "Dealing with Teasing",
-                "steps": [
-                    "Stop and think about what happened",
-                    "Decide if you are being teased",
-                    "Think about ways to deal with the teasing",
-                    "Choose the best way and do it"
-                ]
-            },
-            {
-                "name": "Staying Out of Fights",
-                "steps": [
-                    "Stop and think about what happened",
-                    "Decide what you are feeling",
-                    "Think about your choices (walk away, talk it out, get help)",
-                    "Act on your best choice"
-                ]
-            },
-            {
-                "name": "Dealing with Being Angry",
-                "steps": [
-                    "Stop and count to ten",
-                    "Think about what happened",
-                    "Think about how you feel",
-                    "Think about your choices",
-                    "Act on your best choice"
-                ]
-            },
-            {
-                "name": "Responding to Anger",
-                "steps": [
-                    "Listen to the person who is angry",
-                    "Try to understand what the person is saying",
-                    "Decide if you can say or do something to help",
-                    "If not, walk away from the situation"
-                ]
-            }
+            {"name": "Dealing with Teasing", "steps": ["Stop and think about what happened", "Decide if you are being teased", "Think about ways to deal with the teasing", "Choose the best way and do it"]},
+            {"name": "Staying Out of Fights", "steps": ["Stop and think about what happened", "Decide what you are feeling", "Think about your choices (walk away, talk it out, get help)", "Act on your best choice"]},
+            {"name": "Dealing with Being Angry", "steps": ["Stop and count to ten", "Think about what happened", "Think about how you feel", "Think about your choices", "Act on your best choice"]},
+            {"name": "Responding to Anger", "steps": ["Listen to the person who is angry", "Try to understand what the person is saying", "Decide if you can say or do something to help", "If not, walk away from the situation"]},
         ]
     },
     "stress": {
@@ -372,73 +245,32 @@ SKILLSTREAMING_SKILLS = {
         "color": "#3730A3",
         "icon": "🧘",
         "skills": [
-            {
-                "name": "Dealing with Mistakes",
-                "steps": [
-                    "Stop and think about what happened",
-                    "Accept that you made a mistake",
-                    "Think about how you can fix it or do better next time",
-                    "If needed, apologize to anyone who was affected",
-                    "Plan how to do better next time"
-                ]
-            },
-            {
-                "name": "Accepting No",
-                "steps": [
-                    "Stop and think about why the answer is no",
-                    "Decide if the answer is fair",
-                    "Think about your choices (accept it, ask for reason, suggest compromise)",
-                    "Act on your best choice"
-                ]
-            },
-            {
-                "name": "Dealing with Losing",
-                "steps": [
-                    "Say something good about how you did",
-                    "Think about how the other person feels",
-                    "Congratulate the other person",
-                    "Plan how to do as well or better next time"
-                ]
-            },
-            {
-                "name": "Relaxing",
-                "steps": [
-                    "Sit or lie down in a comfortable position",
-                    "Think of something pleasant",
-                    "Breathe slowly and deeply",
-                    "Relax your muscles from your toes to your head"
-                ]
-            }
+            {"name": "Dealing with Mistakes", "steps": ["Stop and think about what happened", "Accept that you made a mistake", "Think about how you can fix it or do better next time", "If needed, apologize to anyone who was affected", "Plan how to do better next time"]},
+            {"name": "Accepting No", "steps": ["Stop and think about why the answer is no", "Decide if the answer is fair", "Think about your choices (accept it, ask for reason, suggest compromise)", "Act on your best choice"]},
+            {"name": "Dealing with Losing", "steps": ["Say something good about how you did", "Think about how the other person feels", "Congratulate the other person", "Plan how to do as well or better next time"]},
+            {"name": "Relaxing", "steps": ["Sit or lie down in a comfortable position", "Think of something pleasant", "Breathe slowly and deeply", "Relax your muscles from your toes to your head"]},
         ]
     }
 }
 
-# PODD-aligned feelings
+# Other data structures
 FEELINGS_PODD = [
-    ("happy", "happy"),
-    ("sad", "sad"),
-    ("angry", "angry"),
-    ("scared", "scared"),
-    ("tired", "tired"),
-    ("excited", "excited"),
-    ("okay", "okay"),
-    ("worried", "worried"),
+    ("happy", "happy"), ("sad", "sad"), ("angry", "angry"), ("scared", "scared"),
+    ("tired", "tired"), ("excited", "excited"), ("okay", "okay"), ("worried", "worried"),
 ]
 
-# PODD-aligned calm down strategies
 CALM_STRATEGIES_PODD = [
     dict(symbol_key="breathe", lb="I can breathe"),
     dict(symbol_key="walk", lb="I can walk"),
     dict(symbol_key="sit", lb="I can sit"),
-    dict(symbol_key="squeeze", lb="I can squeeze"),
+    dict(symbol_key="squeeze hands", lb="I can squeeze"),
     dict(symbol_key="drink water", lb="I can drink water"),
-    dict(symbol_key="listen", lb="I can listen"),
+    dict(symbol_key="listen music", lb="I can listen"),
     dict(symbol_key="look", lb="I can look"),
     dict(symbol_key="hug", lb="I can hug"),
     dict(symbol_key="stop", lb="I can stop"),
 ]
 
-# Framework details
 FW_DETAILS = {
     "BSEM":  {"label":"BSEM",  "bg":"#1A5C78","color":"#fff"},
     "ZOR":   {"label":"ZOR",   "bg":"#2D7D4F","color":"#fff"},
@@ -447,10 +279,9 @@ FW_DETAILS = {
     "OT":    {"label":"OT",    "bg":"#0E7490","color":"#fff"},
     "AAC":   {"label":"AAC",   "bg":"#7C2D91","color":"#fff"},
     "PODD":  {"label":"PODD",  "bg":"#059669","color":"#fff"},
-    "SS":    {"label":"SS",    "bg":"#3730A3","color":"#fff"},  # Skillstreaming
+    "SS":    {"label":"SS",    "bg":"#3730A3","color":"#fff"},
 }
 
-# Zones of Regulation
 ZONE_DATA = {
     "blue":   {"name":"Blue - Moving Slowly",  "bg":"#DBEAFE","color":"#1E40AF","feels":["tired","sad","sick","bored"]},
     "green":  {"name":"Green - Ready to Learn","bg":"#DCFCE7","color":"#15803D","feels":["happy","calm","okay","focused"]},
@@ -469,18 +300,16 @@ st.markdown("""
     <div class="icon">🎨</div>
     <div>
         <h1>Visual Support Tools</h1>
-        <p>Create AAC-aligned communication supports • ARASAAC Symbols • Skillstreaming</p>
+        <p>Create AAC supports with REAL symbols • ARASAAC • PODD-aligned • Skillstreaming</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-# AAC Information Notice
 st.markdown("""
 <div class="aac-note">
-    <strong>AAC Symbol Integration:</strong> This tool uses ARASAAC symbols - free, open-source AAC pictograms 
-    (Creative Commons licensed) that are compatible with PODD and Boardmaker principles. All cards use 
-    AAC-appropriate vocabulary with core language like "I want", "I feel", "I need". Vocabulary aligned 
-    with PODD methodology for maximum communication effectiveness.
+    <strong>✨ Now with REAL AAC Symbols!</strong> This tool uses ARASAAC pictograms - professional, 
+    free AAC symbols (Creative Commons licensed) compatible with PODD and Boardmaker approaches. 
+    All vocabulary uses AAC core language: "I want", "I feel", "I need".
 </div>
 """, unsafe_allow_html=True)
 
@@ -501,7 +330,7 @@ if "vst_print_queue" not in st.session_state:
 
 # TAB 1: Quick Cards --------------------------------------------------------
 with tabs[0]:
-    st.markdown('<div class="section-card"><h3>Select Quick Cards</h3></div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-card"><h3>Select Quick Cards with REAL Symbols</h3></div>', unsafe_allow_html=True)
     
     cats = {"regulation":"🧘 Regulation","communication":"💬 Communication","actions":"🎯 Actions",
             "social":"🤝 Social","places":"📍 Places","activities":"✨ Activities"}
@@ -513,18 +342,25 @@ with tabs[0]:
                 cols = st.columns(4)
                 for i, c in enumerate(cat_cards):
                     with cols[i % 4]:
-                        fws = "".join(
-                            f'<span class="fw" style="background:{FW_DETAILS.get(f,{}).get("bg","#eee")};color:{FW_DETAILS.get(f,{}).get("color","#333")}">{FW_DETAILS.get(f,{}).get("label",f)}</span>'
+                        # Get real ARASAAC symbol
+                        symbol_url = get_arasaac_symbol_url(c.get('symbol_key', ''))
+                        
+                        # Display symbol image
+                        if symbol_url:
+                            st.image(symbol_url, width=80)
+                        else:
+                            st.markdown("<div style='font-size:2.5rem;text-align:center'>📌</div>", unsafe_allow_html=True)
+                        
+                        # Display card info
+                        st.markdown(f"**{c.get('ti','')}**")
+                        st.caption(c.get('sub',''))
+                        
+                        # Framework tags
+                        fws = " ".join([
+                            f"<span class='fw' style='background:{FW_DETAILS.get(f,{}).get('bg','#eee')};color:{FW_DETAILS.get(f,{}).get('color','#333')}'>{FW_DETAILS.get(f,{}).get('label',f)}</span>"
                             for f in c.get("fw",[])
-                        )
-                        # Note: ARASAAC symbols would be loaded via API in production
-                        # For now showing structure
-                        st.markdown(f"""<div class="vc" style="border-color:{c.get('color',TEAL)}">
-                            <div style="font-size:2rem;margin-bottom:.4rem">🔤</div>
-                            <div class="ti">{c.get('ti','')}</div>
-                            <div class="su">{c.get('sub','')}</div>
-                            <div style="margin-top:.3rem">{fws}</div>
-                        </div>""", unsafe_allow_html=True)
+                        ])
+                        st.markdown(fws, unsafe_allow_html=True)
                         
                         if st.button(f"Add to print", key=f"add_{c['id']}", use_container_width=True):
                             st.session_state.vst_print_queue.append({"type":"cards","data":[c]})
@@ -550,12 +386,20 @@ with tabs[1]:
     cols = st.columns(ft_steps)
     for i, lbl in enumerate(ft_labels):
         with cols[i]:
-            st.markdown(f'<div class="slot-lbl">{lbl}</div>', unsafe_allow_html=True)
+            st.markdown(f'**{lbl}**')
             slot_cards = [{"symbol":c.get("symbol_key"),"lb":c.get("ti"),"id":c.get("id")} for c in CARDS]
             sel = st.selectbox(f"Select activity", 
                              options=[None]+slot_cards,
-                             format_func=lambda x: f"🔤 {x['lb']}" if x else "-- Choose --",
-                             key=f"ft_slot_{i}")
+                             format_func=lambda x: x['lb'] if x else "-- Choose --",
+                             key=f"ft_slot_{i}",
+                             label_visibility="collapsed")
+            
+            # Show preview of selected symbol
+            if sel:
+                preview_url = get_arasaac_symbol_url(sel['symbol'])
+                if preview_url:
+                    st.image(preview_url, width=60)
+            
             ft_slots.append(sel)
     
     if st.button("➕ Add First-Then to Print", type="primary", use_container_width=True):
@@ -584,18 +428,23 @@ with tabs[2]:
     
     vs_slots = []
     for i in range(vs_slots_n):
-        col_t, col_a = st.columns([1,2])
+        col_t, col_a, col_p = st.columns([1,2,1])
         with col_t:
             time = st.text_input(f"Time", value=f"{8+i}:00", key=f"vs_time_{i}", label_visibility="collapsed")
         with col_a:
             activity_cards = [{"symbol":c.get("symbol_key"),"lb":c.get("ti"),"id":c.get("id")} for c in CARDS]
             sel = st.selectbox(f"Activity {i+1}",
                              options=[None]+activity_cards,
-                             format_func=lambda x: f"🔤 {x['lb']}" if x else "-- Choose --",
+                             format_func=lambda x: x['lb'] if x else "-- Choose --",
                              key=f"vs_act_{i}",
                              label_visibility="collapsed")
             if sel:
                 vs_slots.append({"time":time,"symbol":sel["symbol"],"act":sel["lb"]})
+        with col_p:
+            if sel:
+                preview_url = get_arasaac_symbol_url(sel['symbol'])
+                if preview_url:
+                    st.image(preview_url, width=40)
     
     if st.button("➕ Add Schedule to Print", type="primary", use_container_width=True):
         if vs_slots:
@@ -618,7 +467,7 @@ with tabs[3]:
         cb_grid = st.selectbox("Grid size", ["2x2","2x3","3x3","3x4","4x4"], index=2, key="cb_grid")
     
     with col2:
-        st.markdown("**PODD Core Board:** Include core vocabulary: yes, no, more, help, I want, I feel")
+        st.markdown("**PODD Core Board:** Include: yes, no, more, help, I want, I feel")
     
     cb_cells = []
     cols_n, rows_n = map(int, cb_grid.split("x"))
@@ -631,9 +480,16 @@ with tabs[3]:
         with cols[i % cols_n]:
             sel = st.selectbox(f"Cell {i+1}",
                              options=[None]+board_cards,
-                             format_func=lambda x: f"🔤 {x['tx']}" if x else "-- Empty --",
+                             format_func=lambda x: x['tx'] if x else "-- Empty --",
                              key=f"cb_cell_{i}",
                              label_visibility="collapsed")
+            
+            # Show preview
+            if sel:
+                preview_url = get_arasaac_symbol_url(sel['symbol'])
+                if preview_url:
+                    st.image(preview_url, width=50)
+            
             cb_cells.append(sel if sel else {"symbol":"","tx":""})
     
     if st.button("➕ Add Communication Board to Print", type="primary", use_container_width=True):
@@ -653,7 +509,7 @@ with tabs[4]:
                         horizontal=True)
     
     if tool_type == "Zones of Regulation":
-        st.markdown("**Zones of Regulation** - PODD language: 'I feel', 'I am in the...'")
+        st.markdown("**Zones of Regulation** - PODD: 'I feel', 'I am in the...'")
         for zone, zd in ZONE_DATA.items():
             st.markdown(f"""<div class="zone zone-{zone}">
                 <h4>{zd['name']}</h4>
@@ -691,11 +547,15 @@ with tabs[4]:
     elif tool_type == "Feelings Chart":
         st.markdown("**Feelings Chart** - PODD: 'I feel...' language")
         
-        fc_selected = st.multiselect("Select feelings to include",
-                                    options=FEELINGS_PODD,
-                                    default=FEELINGS_PODD[:4],
-                                    format_func=lambda x: f"🔤 {x[1]}",
-                                    key="fc_feelings")
+        fc_cols = st.columns(4)
+        fc_selected = []
+        for i, (symbol_key, label) in enumerate(FEELINGS_PODD):
+            with fc_cols[i % 4]:
+                symbol_url = get_arasaac_symbol_url(symbol_key)
+                if symbol_url:
+                    st.image(symbol_url, width=60)
+                if st.checkbox(label, key=f"fc_{i}", value=(i<4)):
+                    fc_selected.append((symbol_key, label))
         
         if st.button("➕ Add Feelings Chart to Print", use_container_width=True):
             if fc_selected:
@@ -712,17 +572,21 @@ with tabs[4]:
         st.markdown("**Calm-Down Toolkit** - PODD: 'I can...' strategies")
         cd_title = st.text_input("Toolkit title", value="I can calm down", key="cd_title")
         
-        cd_strats = st.multiselect("Select strategies",
-                                   options=CALM_STRATEGIES_PODD,
-                                   default=CALM_STRATEGIES_PODD[:6],
-                                   format_func=lambda x: f"🔤 {x['lb']}",
-                                   key="cd_strats")
+        cd_cols = st.columns(3)
+        cd_selected = []
+        for i, strat in enumerate(CALM_STRATEGIES_PODD):
+            with cd_cols[i % 3]:
+                symbol_url = get_arasaac_symbol_url(strat['symbol_key'])
+                if symbol_url:
+                    st.image(symbol_url, width=50)
+                if st.checkbox(strat['lb'], key=f"cd_{i}", value=(i<6)):
+                    cd_selected.append(strat)
         
         if st.button("➕ Add Calm-Down Toolkit to Print", use_container_width=True):
-            if cd_strats:
+            if cd_selected:
                 st.session_state.vst_print_queue.append({
                     "type":"regulation",
-                    "data":{"tool":"calmdown","title":cd_title,"strats":cd_strats}
+                    "data":{"tool":"calmdown","title":cd_title,"strats":cd_selected}
                 })
                 st.success("✅ Added to print queue")
                 st.rerun()
@@ -744,15 +608,22 @@ with tabs[5]:
     
     ss_steps = []
     for i in range(ss_steps_n):
-        col_s, col_t = st.columns([1,4])
+        col_s, col_t, col_p = st.columns([1,3,1])
         with col_s:
-            symbol_cards = [c.get("symbol_key") for c in CARDS]
-            sym = st.selectbox(f"Symbol {i+1}", options=["number"]+symbol_cards, key=f"ss_sym_{i}", label_visibility="collapsed", format_func=lambda x: f"🔤 {x}" if x != "number" else f"{i+1}")
+            symbol_options = ["number"] + [c.get("symbol_key") for c in CARDS]
+            sym = st.selectbox(f"Symbol {i+1}", options=symbol_options, key=f"ss_sym_{i}", 
+                             label_visibility="collapsed", format_func=lambda x: f"{i+1}" if x == "number" else "Symbol")
         with col_t:
             tx = st.text_input(f"Step {i+1}", key=f"ss_tx_{i}", label_visibility="collapsed", 
                              placeholder="e.g., I will tell someone I need help")
+        with col_p:
+            if sym != "number":
+                preview_url = get_arasaac_symbol_url(sym)
+                if preview_url:
+                    st.image(preview_url, width=30)
+        
         if tx:
-            ss_steps.append({"symbol":sym if sym != "number" else f"{i+1}","tx":tx})
+            ss_steps.append({"symbol":sym if sym != "number" else f"{i+1}","tx":tx,"is_num":(sym=="number")})
     
     if st.button("➕ Add Social Script to Print", type="primary", use_container_width=True):
         if ss_steps:
@@ -765,19 +636,15 @@ with tabs[5]:
         else:
             st.error("Add at least one step")
 
-# TAB 7: SKILLSTREAMING ------------------------------------------------------
+# TAB 7: SKILLSTREAMING
 with tabs[6]:
     st.markdown('<div class="section-card"><h3>Skillstreaming Social Skills</h3></div>', unsafe_allow_html=True)
     
     st.markdown("""
-    **Skillstreaming** is a structured, evidence-based program for teaching social skills through:
-    - **Modeling:** Demonstrating the skill
-    - **Role-playing:** Practicing the skill
-    - **Performance feedback:** Discussing what went well
-    - **Generalization:** Using the skill in real situations
+    **Skillstreaming** teaches social skills through modeling, practice, feedback, and generalization.
+    Select skills below to create printable teaching cards.
     """)
     
-    # Select category
     skill_cat = st.selectbox(
         "Select Skill Category",
         options=list(SKILLSTREAMING_SKILLS.keys()),
@@ -787,7 +654,6 @@ with tabs[6]:
     cat_data = SKILLSTREAMING_SKILLS[skill_cat]
     st.markdown(f"### {cat_data['icon']} {cat_data['name']}")
     
-    # Display all skills in category
     for skill in cat_data['skills']:
         with st.expander(f"✨ {skill['name']}", expanded=False):
             st.markdown('<div class="skill-card" style="counter-reset:step-counter 0"><div class="steps">', unsafe_allow_html=True)
@@ -797,9 +663,9 @@ with tabs[6]:
             
             col1, col2 = st.columns([3,1])
             with col1:
-                student_name = st.text_input("Student name (optional)", key=f"skill_{skill_cat}_{skill['name']}_student", label_visibility="collapsed", placeholder="Student name (optional)")
+                student_name = st.text_input("Student name", key=f"skill_{skill_cat}_{skill['name']}_student", label_visibility="collapsed", placeholder="Student name (optional)")
             with col2:
-                if st.button("➕ Add to Print", key=f"skill_{skill_cat}_{skill['name']}", use_container_width=True):
+                if st.button("➕ Add", key=f"skill_{skill_cat}_{skill['name']}", use_container_width=True):
                     st.session_state.vst_print_queue.append({
                         "type":"skillstreaming",
                         "data":{
@@ -810,37 +676,10 @@ with tabs[6]:
                             "color":cat_data['color']
                         }
                     })
-                    st.success("✅ Added to print queue")
+                    st.success("✅ Added")
                     st.rerun()
-    
-    # Quick Add Multiple
-    st.divider()
-    st.markdown("### Quick Add Multiple Skills")
-    
-    selected_skills = st.multiselect(
-        "Select multiple skills to add",
-        options=cat_data['skills'],
-        format_func=lambda x: x['name']
-    )
-    
-    if selected_skills:
-        multi_student = st.text_input("Student name for all selected skills", key="multi_student")
-        if st.button("➕ Add All Selected Skills", type="primary"):
-            for skill in selected_skills:
-                st.session_state.vst_print_queue.append({
-                    "type":"skillstreaming",
-                    "data":{
-                        "student":multi_student,
-                        "category":cat_data['name'],
-                        "skill_name":skill['name'],
-                        "steps":skill['steps'],
-                        "color":cat_data['color']
-                    }
-                })
-            st.success(f"✅ Added {len(selected_skills)} skills to print queue")
-            st.rerun()
 
-# TAB 8: Print Queue ---------------------------------------------------------
+# TAB 8: Print Queue
 with tabs[7]:
     st.markdown('<div class="section-card"><h3>Print Queue</h3></div>', unsafe_allow_html=True)
     
@@ -849,6 +688,7 @@ with tabs[7]:
     else:
         st.markdown(f"**{len(st.session_state.vst_print_queue)} item(s) in queue**")
         
+        # Show queue items
         for i, item in enumerate(st.session_state.vst_print_queue):
             col1, col2 = st.columns([5,1])
             with col1:
@@ -859,17 +699,16 @@ with tabs[7]:
                 elif t == "firstthen":
                     st.markdown(f"➡️ **First-Then:** {d.get('title','')}")
                 elif t == "schedule":
-                    st.markdown(f"📅 **Schedule:** {d.get('title','')} ({len(d.get('slots',[]))} activities)")
+                    st.markdown(f"📅 **Schedule:** {d.get('title','')}")
                 elif t == "board":
                     st.markdown(f"💬 **Comm Board:** {d.get('title','')}")
                 elif t == "regulation":
-                    tool_names = {"zones":"Zones of Regulation","fivepoint":"5-Point Scale",
-                                "feelings":"Feelings Chart","calmdown":"Calm-Down Toolkit"}
+                    tool_names = {"zones":"Zones","fivepoint":"5-Point","feelings":"Feelings","calmdown":"Calm-Down"}
                     st.markdown(f"🧘 **Regulation:** {tool_names.get(d.get('tool',''),'')}")
                 elif t == "script":
                     st.markdown(f"📜 **Social Script:** {d.get('title','')}")
                 elif t == "skillstreaming":
-                    st.markdown(f"🎯 **Skillstreaming:** {d.get('skill_name','')} ({d.get('category','')})")
+                    st.markdown(f"🎯 **Skillstreaming:** {d.get('skill_name','')}")
             
             with col2:
                 if st.button("🗑️", key=f"del_{i}"):
@@ -878,68 +717,150 @@ with tabs[7]:
         
         st.divider()
         
-        col1, col2, col3 = st.columns(3)
+        col1, col2 = st.columns(2)
         with col1:
             if st.button("🗑️ Clear all", use_container_width=True):
                 st.session_state.vst_print_queue = []
                 st.rerun()
         
         with col2:
-            fmt = st.selectbox("Print format", ["A4 Cards (4 per page)","Lanyard Cards (8 per page)"], key="print_fmt")
-        
-        with col3:
-            is_lanyard = "Lanyard" in fmt
+            fmt = st.selectbox("Format", ["A4 Cards","Lanyard Cards"])
             
-            # Generate print HTML
-            # (Simplified for this example - full implementation would include proper symbol loading)
-            print_html = f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
-<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet">
-<style>
-*{{box-sizing:border-box;margin:0;padding:0;font-family:'Nunito',sans-serif}}
-@page{{size:{"85mm 54mm" if is_lanyard else "A4 portrait"};margin:6mm}}
-body{{background:#fff}}
-.card{{border:1.5px solid #dde;border-radius:8px;padding:10px;margin:5px;min-height:{"54mm" if is_lanyard else "140mm"}}}
-.symbol{{width:50px;height:50px;margin:0 auto 10px;background:#f0f0f0;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:24px}}
-.title{{font-size:{"9px" if is_lanyard else "14px"};font-weight:800;text-align:center;margin-bottom:5px}}
-.subtitle{{font-size:{"7px" if is_lanyard else "10px"};text-align:center;color:#666}}
-.skillstreaming{{border-left:4px solid;padding:12px;margin:10px 0}}
-.skillstreaming h3{{margin-bottom:8px;font-size:14px}}
-.skillstreaming .step{{padding:5px 0 5px 25px;position:relative;font-size:11px}}
-.skillstreaming .step::before{{content:counter(step);counter-increment:step;position:absolute;left:0;top:5px;background:#7C2D91;color:#fff;border-radius:50%;width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700}}
-</style>
-</head><body>"""
+            # Generate HTML with real ARASAAC images
+            is_lanyard = "Lanyard" in fmt
+            card_width = "85mm" if is_lanyard else "180mm"
+            symbol_size = "50px" if is_lanyard else "80px"
+            title_size = "10px" if is_lanyard else "16px"
+            subtitle_size = "8px" if is_lanyard else "12px"
+            
+            html_parts = ['<!DOCTYPE html><html><head><meta charset="UTF-8">']
+            html_parts.append('<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet">')
+            html_parts.append('<style>*{box-sizing:border-box;margin:0;padding:0;font-family:"Nunito",sans-serif}')
+            html_parts.append(f'@page{{size:{"85mm 54mm" if is_lanyard else "A4 portrait"};margin:6mm}}')
+            html_parts.append('body{background:#fff;padding:10px}')
+            html_parts.append(f'.card{{border:2px solid #dde;border-radius:12px;padding:{("8px" if is_lanyard else "15px")};margin:5px;break-inside:avoid;width:{card_width}}}')
+            html_parts.append(f'.symbol{{max-width:{symbol_size};height:{symbol_size};object-fit:contain;margin:0 auto 10px;display:block}}')
+            html_parts.append(f'.title{{font-size:{title_size};font-weight:800;text-align:center;margin:10px 0 5px}}')
+            html_parts.append(f'.subtitle{{font-size:{subtitle_size};text-align:center;color:#666}}')
+            html_parts.append('.board-grid{display:grid;gap:5px;margin-top:10px}')
+            html_parts.append('.board-cell{border:1px solid #dde;border-radius:6px;padding:5px;text-align:center}')
+            html_parts.append(f'.board-cell img{{width:{("25px" if is_lanyard else "40px")};height:{("25px" if is_lanyard else "40px")};object-fit:contain;margin:0 auto 3px;display:block}}')
+            html_parts.append(f'.board-cell .label{{font-size:{("7px" if is_lanyard else "10px")};font-weight:700}}')
+            html_parts.append('</style></head><body>')
             
             for item in st.session_state.vst_print_queue:
                 t = item["type"]
                 d = item["data"]
                 
-                if t == "skillstreaming":
-                    steps_html = "".join(f'<div class="step">{s}</div>' for s in d.get("steps",[]))
+                if t == "cards":
+                    for card in d:
+                        symbol_url = get_arasaac_symbol_url(card.get('symbol_key', ''))
+                        html_parts.append(f'<div class="card" style="border-color:{card.get("color","#1A5C78")}">')
+                        if symbol_url:
+                            html_parts.append(f'<img src="{symbol_url}" class="symbol" alt="{card.get("ti","")}">')
+                        html_parts.append(f'<div class="title">{card.get("ti","")}</div>')
+                        html_parts.append(f'<div class="subtitle">{card.get("sub","")}</div>')
+                        html_parts.append('</div>')
+                
+                elif t == "firstthen":
                     student_name = f"{d.get('student','')}'s " if d.get('student') else ""
-                    print_html += f"""
-                    <div class="skillstreaming" style="border-left-color:{d.get('color','#7C2D91')};counter-reset:step 0">
-                        <h3>{student_name}{d.get('skill_name','')}</h3>
-                        <div style="font-size:9px;color:#666;margin-bottom:8px">{d.get('category','')}</div>
-                        {steps_html}
-                    </div>
-                    """
-                else:
-                    # Simple card rendering for other types
-                    print_html += f'<div class="card"><div class="symbol">🔤</div><div class="title">Item from queue</div></div>'
+                    html_parts.append(f'<div class="card"><div class="title">{student_name}{d.get("title","")}</div>')
+                    html_parts.append('<div style="display:flex;gap:10px;margin-top:10px">')
+                    for lbl, slot in zip(d.get('labels',[]), d.get('slots',[])):
+                        if slot:
+                            symbol_url = get_arasaac_symbol_url(slot.get('symbol',''))
+                            html_parts.append('<div style="flex:1;text-align:center">')
+                            html_parts.append(f'<div style="font-size:9px;font-weight:800;color:#666;margin-bottom:5px">{lbl}</div>')
+                            if symbol_url:
+                                html_parts.append(f'<img src="{symbol_url}" style="width:50px;height:50px;object-fit:contain;margin:0 auto">')
+                            html_parts.append(f'<div style="font-size:10px;font-weight:700;margin-top:5px">{slot.get("lb","")}</div>')
+                            html_parts.append('</div>')
+                    html_parts.append('</div></div>')
+                
+                elif t == "schedule":
+                    student_name = f"{d.get('student','')}'s " if d.get('student') else ""
+                    html_parts.append(f'<div class="card"><div class="title">{student_name}{d.get("title","")}</div>')
+                    for slot in d.get('slots',[]):
+                        symbol_url = get_arasaac_symbol_url(slot.get('symbol',''))
+                        html_parts.append('<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f0f0f0">')
+                        html_parts.append(f'<span style="font-size:11px;font-weight:700;color:#666;min-width:50px">{slot.get("time","")}</span>')
+                        if symbol_url:
+                            html_parts.append(f'<img src="{symbol_url}" style="width:30px;height:30px;object-fit:contain">')
+                        html_parts.append(f'<span style="font-size:12px;font-weight:600">{slot.get("act","")}</span>')
+                        html_parts.append('</div>')
+                    html_parts.append('</div>')
+                
+                elif t == "board":
+                    cols_n = int(d.get('gridSize','3x3').split('x')[0])
+                    html_parts.append(f'<div class="card"><div class="title">{d.get("title","")}</div>')
+                    html_parts.append(f'<div class="board-grid" style="grid-template-columns:repeat({cols_n},1fr)">')
+                    for cell in d.get('cells',[]):
+                        symbol_url = get_arasaac_symbol_url(cell.get('symbol','')) if cell.get('symbol') else None
+                        html_parts.append('<div class="board-cell">')
+                        if symbol_url:
+                            html_parts.append(f'<img src="{symbol_url}">')
+                        html_parts.append(f'<div class="label">{cell.get("tx","")}</div>')
+                        html_parts.append('</div>')
+                    html_parts.append('</div></div>')
+                
+                elif t == "regulation":
+                    tool = d.get('tool','')
+                    if tool == "feelings":
+                        html_parts.append('<div class="card"><div class="title">I feel</div>')
+                        html_parts.append('<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px">')
+                        for symbol_key, label in d.get('feels',[]):
+                            symbol_url = get_arasaac_symbol_url(symbol_key)
+                            html_parts.append('<div style="text-align:center;padding:8px;border:1px solid #dde;border-radius:6px">')
+                            if symbol_url:
+                                html_parts.append(f'<img src="{symbol_url}" style="width:40px;height:40px;object-fit:contain;margin:0 auto 5px">')
+                            html_parts.append(f'<div style="font-size:10px;font-weight:700">{label}</div>')
+                            html_parts.append('</div>')
+                        html_parts.append('</div></div>')
+                    
+                    elif tool == "calmdown":
+                        html_parts.append(f'<div class="card"><div class="title">{d.get("title","")}</div>')
+                        html_parts.append('<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px">')
+                        for strat in d.get('strats',[]):
+                            symbol_url = get_arasaac_symbol_url(strat.get('symbol_key',''))
+                            html_parts.append('<div style="text-align:center;padding:6px">')
+                            if symbol_url:
+                                html_parts.append(f'<img src="{symbol_url}" style="width:35px;height:35px;object-fit:contain;margin:0 auto 4px">')
+                            html_parts.append(f'<div style="font-size:9px;font-weight:700">{strat.get("lb","")}</div>')
+                            html_parts.append('</div>')
+                        html_parts.append('</div></div>')
+                
+                elif t == "script":
+                    student_name = f"{d.get('student','')}'s " if d.get('student') else ""
+                    html_parts.append(f'<div class="card"><div class="title">{student_name}{d.get("title","")}</div>')
+                    for i, step in enumerate(d.get('steps',[])):
+                        html_parts.append('<div style="display:flex;align-items:flex-start;gap:8px;margin-top:8px">')
+                        if step.get('is_num'):
+                            html_parts.append(f'<div style="min-width:24px;height:24px;border-radius:50%;background:#1A5C78;color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700">{step["symbol"]}</div>')
+                        else:
+                            symbol_url = get_arasaac_symbol_url(step.get('symbol',''))
+                            if symbol_url:
+                                html_parts.append(f'<img src="{symbol_url}" style="width:24px;height:24px;object-fit:contain">')
+                        html_parts.append(f'<div style="font-size:11px;font-weight:600;line-height:1.4;flex:1">{step.get("tx","")}</div>')
+                        html_parts.append('</div>')
+                    html_parts.append('</div>')
+                
+                elif t == "skillstreaming":
+                    steps_html = "".join(f'<div style="padding:8px 0 8px 30px;position:relative;font-size:11px"><span style="position:absolute;left:0;background:{d.get("color","#7C2D91")};color:#fff;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700">{i+1}</span>{s}</div>' 
+                                        for i, s in enumerate(d.get("steps",[])))
+                    student_name = f"{d.get('student','')}'s " if d.get('student') else ""
+                    html_parts.append(f'<div class="card" style="border-left:4px solid {d.get("color","#7C2D91")}">')
+                    html_parts.append(f'<div class="title">{student_name}{d.get("skill_name","")}</div>')
+                    html_parts.append(f'<div class="subtitle" style="margin-bottom:10px">{d.get("category","")}</div>')
+                    html_parts.append(steps_html)
+                    html_parts.append('</div>')
             
-            print_html += "</body></html>"
+            html_parts.append('</body></html>')
+            print_html = "".join(html_parts)
             
             st.download_button(
                 label="⬇️ Download print HTML",
                 data=print_html,
-                file_name=f"visual_supports_AAC_{fmt.replace(' ','_').lower()}.html",
+                file_name=f"visual_supports_ARASAAC.html",
                 mime="text/html",
             )
-            st.info("📄 Open the downloaded file in Chrome then use File > Print (Ctrl+P). Set margins to None and enable Background graphics.")
-            
-            st.markdown("""
-            <div class="aac-note">
-                <strong>Symbol Integration:</strong> In production, this tool would load ARASAAC symbols 
-                via API or integrate with your Boardmaker library. Contact your SLP for symbol licensing options.
-            </div>
-            """, unsafe_allow_html=True)
+            st.info("📄 Open in Chrome → File > Print (Ctrl+P) → Set margins to None → Enable background graphics")
