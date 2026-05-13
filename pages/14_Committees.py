@@ -316,6 +316,53 @@ elif st.session_state.committee_view == 'meeting_detail':
             st.subheader(f"{committee['icon']} {meeting['meeting_title']}")
             st.caption(f"📅 {meeting['meeting_date']} | 🕐 {meeting['meeting_time']} | 📍 {meeting.get('location', 'TBA')}")
             
+            # Edit Meeting Details Section
+            with st.expander("✏️ Edit Meeting Details"):
+                with st.form("edit_meeting_form"):
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        edit_title = st.text_input(
+                            "Meeting Title*", 
+                            value=meeting['meeting_title'],
+                            key="edit_title"
+                        )
+                        edit_date = st.date_input(
+                            "Meeting Date*", 
+                            value=datetime.strptime(meeting['meeting_date'], '%Y-%m-%d').date(),
+                            key="edit_date"
+                        )
+                    
+                    with col2:
+                        edit_time = st.time_input(
+                            "Meeting Time*", 
+                            value=datetime.strptime(meeting['meeting_time'], '%H:%M:%S').time(),
+                            key="edit_time"
+                        )
+                        edit_location = st.text_input(
+                            "Location", 
+                            value=meeting.get('location', ''),
+                            key="edit_location"
+                        )
+                    
+                    submit_edit = st.form_submit_button("💾 Update Meeting Details", use_container_width=True)
+                    
+                    if submit_edit:
+                        try:
+                            supabase.table("committee_meetings").update({
+                                "meeting_title": edit_title,
+                                "meeting_date": str(edit_date),
+                                "meeting_time": str(edit_time),
+                                "location": edit_location
+                            }).eq("id", st.session_state.selected_meeting).execute()
+                            
+                            st.success("✅ Meeting details updated!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error updating meeting: {str(e)}")
+            
+            st.divider()
+            
             # Tab navigation
             tab1, tab2, tab3 = st.tabs(["📋 Agenda", "📝 Minutes", "⬇️ Download"])
             
@@ -335,8 +382,119 @@ elif st.session_state.committee_view == 'meeting_detail':
                                 st.markdown(item['item_description'])
                             else:
                                 st.caption("No description provided")
+                            
+                            # Edit agenda item
+                            st.divider()
+                            st.markdown("**Edit This Item**")
+                            
+                            with st.form(f"edit_agenda_{item['id']}"):
+                                col1, col2 = st.columns([3, 1])
+                                with col1:
+                                    new_title = st.text_input(
+                                        "Item Title", 
+                                        value=item['item_title'],
+                                        key=f"title_{item['id']}"
+                                    )
+                                with col2:
+                                    new_duration = st.number_input(
+                                        "Duration (min)", 
+                                        min_value=5, 
+                                        value=item['duration_minutes'],
+                                        key=f"dur_{item['id']}"
+                                    )
+                                
+                                new_description = st.text_area(
+                                    "Description", 
+                                    value=item.get('item_description', ''),
+                                    key=f"desc_{item['id']}"
+                                )
+                                
+                                col_update, col_delete = st.columns(2)
+                                
+                                with col_update:
+                                    if st.form_submit_button("💾 Update", use_container_width=True):
+                                        try:
+                                            supabase.table("committee_agenda_items").update({
+                                                "item_title": new_title,
+                                                "item_description": new_description,
+                                                "duration_minutes": new_duration
+                                            }).eq("id", item['id']).execute()
+                                            st.success("Updated!")
+                                            st.rerun()
+                                        except Exception as e:
+                                            st.error(f"Error: {str(e)}")
+                                
+                                with col_delete:
+                                    if st.form_submit_button("🗑️ Delete", use_container_width=True):
+                                        try:
+                                            supabase.table("committee_agenda_items").delete().eq("id", item['id']).execute()
+                                            st.success("Deleted!")
+                                            st.rerun()
+                                        except Exception as e:
+                                            st.error(f"Error: {str(e)}")
+                    
+                    # Add new agenda item
+                    st.divider()
+                    st.markdown("### ➕ Add New Agenda Item")
+                    with st.form("add_agenda_item"):
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            new_item_title = st.text_input("Item Title*")
+                        with col2:
+                            new_item_duration = st.number_input("Duration (min)", min_value=5, value=10)
+                        
+                        new_item_desc = st.text_area("Description (optional)")
+                        
+                        if st.form_submit_button("➕ Add Item", use_container_width=True):
+                            if new_item_title:
+                                try:
+                                    # Get next item number
+                                    max_num = max([i['item_number'] for i in agenda_response.data]) if agenda_response.data else 0
+                                    
+                                    supabase.table("committee_agenda_items").insert({
+                                        "meeting_id": st.session_state.selected_meeting,
+                                        "item_number": max_num + 1,
+                                        "item_title": new_item_title,
+                                        "item_description": new_item_desc,
+                                        "duration_minutes": new_item_duration
+                                    }).execute()
+                                    st.success("Item added!")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {str(e)}")
+                            else:
+                                st.warning("Please provide an item title.")
+                
                 else:
-                    st.info("No agenda items yet.")
+                    st.info("No agenda items yet. Add your first item below.")
+                    
+                    # Add first agenda item
+                    st.markdown("### ➕ Add Agenda Item")
+                    with st.form("add_first_agenda_item"):
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            first_item_title = st.text_input("Item Title*")
+                        with col2:
+                            first_item_duration = st.number_input("Duration (min)", min_value=5, value=10)
+                        
+                        first_item_desc = st.text_area("Description (optional)")
+                        
+                        if st.form_submit_button("➕ Add First Item", use_container_width=True):
+                            if first_item_title:
+                                try:
+                                    supabase.table("committee_agenda_items").insert({
+                                        "meeting_id": st.session_state.selected_meeting,
+                                        "item_number": 1,
+                                        "item_title": first_item_title,
+                                        "item_description": first_item_desc,
+                                        "duration_minutes": first_item_duration
+                                    }).execute()
+                                    st.success("Item added!")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {str(e)}")
+                            else:
+                                st.warning("Please provide an item title.")
             
             # ========== MINUTES TAB ==========
             with tab2:
