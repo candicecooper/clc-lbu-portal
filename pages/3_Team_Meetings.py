@@ -798,7 +798,7 @@ def render_specialist_meeting():
     for prog_name in ["JP", "PY", "SY"]:
         modules = ["Cooking", "BSEM", "Child Protection", "5 is Against the Law"]
         if prog_name == "SY":
-modules.append("Sexual Health Ed (Elephant Ed)")
+            modules.append("Sexual Health Ed (Elephant Ed)")
         artifact_data[prog_name] = {}
         for module in modules:
             artifact_data[prog_name][module] = {
@@ -872,6 +872,7 @@ modules.append("Sexual Health Ed (Elephant Ed)")
 # ─────────────────────────────────────────────────────────────────────────────
 # PROGRAM MEETING (JP/PY/SY) - WITH SMARTAR INTEGRATION
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def render_program_meeting(program):
     import json as _json
@@ -1598,7 +1599,7 @@ RAW TRANSCRIPT:
                 else:
                     st.warning("⚠️ Please select or enter a student name")
 
-pm_reports = ""
+        pm_reports = ""
         concerns = []
 
     st.markdown("---")
@@ -1698,7 +1699,8 @@ pm_reports = ""
                 for ai_action in ai_actions:
                     actions.append({
                         "action": ai_action.get('action', ''),
-                        "who": ai_action.get('who', ''),
+
+"who": ai_action.get('who', ''),
                         "by_when": ai_action.get('by_when', ''),
                         "priority": ai_action.get('priority', 'Medium'),
                         "notes": "",
@@ -2274,3 +2276,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# === END OF PART 3 === FILE COMPLETE ===
