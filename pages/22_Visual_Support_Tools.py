@@ -710,7 +710,7 @@ body{{background:#fff;padding:10px}}
 .subtitle{{font-size:{subtitle_size}pt;color:#666}}
 </style></head><body>"""
             
-            # Add all items (cards, boards, etc.)
+            # Add all items (cards, boards, schedules, etc.)
             all_items = []
             for item in st.session_state.vst_print_queue:
                 t = item["type"]
@@ -725,6 +725,102 @@ body{{background:#fff;padding:10px}}
                         card_html += f'<div class="title">{card.get("ti","")}</div>'
                         card_html += f'<div class="subtitle">{card.get("sub","")}</div></div>'
                         all_items.append(card_html)
+                
+                elif t == "board":
+                    # Communication board
+                    cols_n = int(d.get('gridSize','3x3').split('x')[0])
+                    board_html = f'<div class="card"><div class="title">{d.get("title","")}</div>'
+                    board_html += f'<div style="display:grid;grid-template-columns:repeat({cols_n},1fr);gap:8px;margin-top:{card_padding//2}px">'
+                    for cell in d.get('cells',[]):
+                        symbol_url = get_arasaac_symbol_url(cell.get('symbol','')) if cell.get('symbol') else None
+                        board_html += '<div style="border:1px solid #dde;border-radius:6px;padding:8px;text-align:center">'
+                        if symbol_url:
+                            board_html += f'<img src="{symbol_url}" style="width:{symbol_size//2}px;height:{symbol_size//2}px;object-fit:contain;margin:0 auto 5px;display:block">'
+                        board_html += f'<div style="font-size:{subtitle_size}pt;font-weight:700">{cell.get("tx","")}</div></div>'
+                    board_html += '</div></div>'
+                    all_items.append(board_html)
+                
+                elif t == "firstthen":
+                    # First-Then board
+                    student_name = f"{d.get('student','')}'s " if d.get('student') else ""
+                    ft_html = f'<div class="card"><div class="title">{student_name}{d.get("title","")}</div>'
+                    ft_html += '<div style="display:flex;gap:10px;margin-top:10px">'
+                    for lbl, slot in zip(d.get('labels',[]), d.get('slots',[])):
+                        if slot:
+                            symbol_url = get_arasaac_symbol_url(slot.get('symbol',''))
+                            ft_html += '<div style="flex:1;text-align:center;border:2px solid #1A5C78;border-radius:8px;padding:10px">'
+                            ft_html += f'<div style="font-size:9pt;font-weight:800;color:#666;margin-bottom:8px">{lbl}</div>'
+                            if symbol_url:
+                                ft_html += f'<img src="{symbol_url}" style="width:{symbol_size//1.5}px;height:{symbol_size//1.5}px;object-fit:contain;margin:0 auto">'
+                            ft_html += f'<div style="font-size:{subtitle_size}pt;font-weight:700;margin-top:8px">{slot.get("lb","")}</div></div>'
+                    ft_html += '</div></div>'
+                    all_items.append(ft_html)
+                
+                elif t == "schedule":
+                    # Visual schedule
+                    student_name = f"{d.get('student','')}'s " if d.get('student') else ""
+                    sched_html = f'<div class="card"><div class="title">{student_name}{d.get("title","")}</div>'
+                    for slot in d.get('slots',[]):
+                        symbol_url = get_arasaac_symbol_url(slot.get('symbol',''))
+                        sched_html += '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #f0f0f0">'
+                        sched_html += f'<span style="font-size:{subtitle_size}pt;font-weight:700;color:#666;min-width:50px">{slot.get("time","")}</span>'
+                        if symbol_url:
+                            sched_html += f'<img src="{symbol_url}" style="width:{symbol_size//2.5}px;height:{symbol_size//2.5}px;object-fit:contain">'
+                        sched_html += f'<span style="font-size:{subtitle_size}pt;font-weight:600">{slot.get("act","")}</span></div>'
+                    sched_html += '</div>'
+                    all_items.append(sched_html)
+                
+                elif t == "regulation":
+                    tool = d.get('tool','')
+                    if tool == "feelings":
+                        feel_html = '<div class="card"><div class="title">I feel</div>'
+                        feel_html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px">'
+                        for symbol_key, label in d.get('feels',[]):
+                            symbol_url = get_arasaac_symbol_url(symbol_key)
+                            feel_html += '<div style="text-align:center;padding:8px;border:1px solid #dde;border-radius:6px">'
+                            if symbol_url:
+                                feel_html += f'<img src="{symbol_url}" style="width:{symbol_size//2}px;height:{symbol_size//2}px;object-fit:contain;margin:0 auto 5px">'
+                            feel_html += f'<div style="font-size:{subtitle_size}pt;font-weight:700">{label}</div></div>'
+                        feel_html += '</div></div>'
+                        all_items.append(feel_html)
+                    
+                    elif tool == "calmdown":
+                        calm_html = f'<div class="card"><div class="title">{d.get("title","")}</div>'
+                        calm_html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px">'
+                        for strat in d.get('strats',[]):
+                            symbol_url = get_arasaac_symbol_url(strat.get('symbol_key',''))
+                            calm_html += '<div style="text-align:center;padding:6px">'
+                            if symbol_url:
+                                calm_html += f'<img src="{symbol_url}" style="width:{symbol_size//2}px;height:{symbol_size//2}px;object-fit:contain;margin:0 auto 4px">'
+                            calm_html += f'<div style="font-size:{subtitle_size}pt;font-weight:700">{strat.get("lb","")}</div></div>'
+                        calm_html += '</div></div>'
+                        all_items.append(calm_html)
+                
+                elif t == "script":
+                    student_name = f"{d.get('student','')}'s " if d.get('student') else ""
+                    script_html = f'<div class="card"><div class="title">{student_name}{d.get("title","")}</div>'
+                    for i, step in enumerate(d.get('steps',[])):
+                        script_html += '<div style="display:flex;align-items:flex-start;gap:10px;margin-top:10px">'
+                        if step.get('is_num'):
+                            script_html += f'<div style="min-width:24px;height:24px;border-radius:50%;background:#1A5C78;color:#fff;display:flex;align-items:center;justify-content:center;font-size:12pt;font-weight:700">{step["symbol"]}</div>'
+                        else:
+                            symbol_url = get_arasaac_symbol_url(step.get('symbol',''))
+                            if symbol_url:
+                                script_html += f'<img src="{symbol_url}" style="width:30px;height:30px;object-fit:contain">'
+                        script_html += f'<div style="font-size:{subtitle_size}pt;font-weight:600;line-height:1.4;flex:1">{step.get("tx","")}</div></div>'
+                    script_html += '</div>'
+                    all_items.append(script_html)
+                
+                elif t == "skillstreaming":
+                    steps_html = "".join(f'<div style="padding:8px 0 8px 30px;position:relative;font-size:{subtitle_size}pt"><span style="position:absolute;left:0;background:{d.get("color","#7C2D91")};color:#fff;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:{subtitle_size}pt;font-weight:700">{i+1}</span>{s}</div>' 
+                                        for i, s in enumerate(d.get("steps",[])))
+                    student_name = f"{d.get('student','')}'s " if d.get('student') else ""
+                    skill_html = f'<div class="card" style="border-left:4px solid {d.get("color","#7C2D91")}">'
+                    skill_html += f'<div class="title">{student_name}{d.get("skill_name","")}</div>'
+                    skill_html += f'<div class="subtitle" style="margin-bottom:10px">{d.get("category","")}</div>'
+                    skill_html += steps_html
+                    skill_html += '</div>'
+                    all_items.append(skill_html)
             
             # Create pages
             for i in range(0, len(all_items), cards_per_page):
