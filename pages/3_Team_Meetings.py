@@ -93,11 +93,12 @@ def get_smartar_goal_link(student_name, meeting_id, program, term, week_num):
     return base_url + params
 
 def fetch_synced_smartar_goal(student_name, meeting_id):
-    """Fetch updated SMARTAR goal from the goal builder (Behaviour Support Supabase)."""
+    """Fetch updated SMARTAR goal from the goal builder (Behaviour Support Supabase) with timeout."""
     try:
         # Import here to avoid issues if behaviour support connection not configured
         import os
         from supabase import create_client as _cc
+        import signal
         
         # Get Behaviour Support Supabase credentials
         burl = st.secrets.get("BEHAVIOUR_SUPABASE_URL","") or os.environ.get("BEHAVIOUR_SUPABASE_URL","")
@@ -107,18 +108,36 @@ def fetch_synced_smartar_goal(student_name, meeting_id):
             # Behaviour Support Supabase not configured
             return None
         
-        # Create Behaviour Support Supabase client
-        behaviour_supabase = _cc(burl, bkey)
+        # Define timeout handler
+        def timeout_handler(signum, frame):
+            raise TimeoutError("SMARTAR goal fetch timed out")
         
-        # Query smartar_goals table in Behaviour Support Supabase
-        result = behaviour_supabase.table('smartar_goals').select('smartar_goal').eq('student_name', student_name).eq('meeting_id', meeting_id).order('updated_at', desc=True).limit(1).execute()
+        # Set 3 second timeout
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(3)
         
-        if result.data and len(result.data) > 0:
-            return result.data[0].get('smartar_goal', '')
+        try:
+            # Create Behaviour Support Supabase client
+            behaviour_supabase = _cc(burl, bkey)
+            
+            # Query smartar_goals table in Behaviour Support Supabase
+            result = behaviour_supabase.table('smartar_goals').select('smartar_goal').eq('student_name', student_name).eq('meeting_id', meeting_id).order('updated_at', desc=True).limit(1).execute()
+            
+            # Cancel alarm
+            signal.alarm(0)
+            
+            if result.data and len(result.data) > 0:
+                return result.data[0].get('smartar_goal', '')
+        except TimeoutError:
+            signal.alarm(0)
+            return None
+        finally:
+            # Ensure alarm is cancelled
+            signal.alarm(0)
             
     except Exception as e:
         # Log error but don't crash - integration is optional
-        pass
+        return None
     
     return None
 
@@ -854,7 +873,8 @@ def render_specialist_meeting():
                 st.success("✅ Meeting record updated!")
             else:
                 result = supabase.table('tm_program_meetings').insert(meeting_data).execute()
-                if result.data:
+
+if result.data:
                     st.session_state.current_meeting_id = result.data[0]['id']
                 st.success("✅ Meeting record saved!")
             
@@ -872,7 +892,6 @@ def render_specialist_meeting():
 # ─────────────────────────────────────────────────────────────────────────────
 # PROGRAM MEETING (JP/PY/SY) - WITH SMARTAR INTEGRATION
 # ─────────────────────────────────────────────────────────────────────────────
-
 
 def render_program_meeting(program):
     import json as _json
@@ -1237,15 +1256,12 @@ def render_program_meeting(program):
                         st.caption("Initializing...")
                 
                 with col_status:
-                    if st.session_state.current_meeting_id:
-                        synced_goal = fetch_synced_smartar_goal(student_name, st.session_state.current_meeting_id)
-                        if synced_goal:
-                            st.success("✓ Synced")
-                            # Update notes with synced goal
-                            if "SMARTAR Goal:" not in student_data.get("notes", ""):
-                                student_data["notes"] = f"SMARTAR Goal: {synced_goal}\n\n{student_data.get('notes', '')}"
-                        else:
-                            st.info("No goal yet")
+                    # Auto-sync disabled to prevent UI freezing
+                    # Goal builder links still work - goals are created there and can be manually copied
+                    if student_data.get("notes") and "SMARTAR Goal:" in student_data.get("notes", ""):
+                        st.success("✓ Has goal")
+                    else:
+                        st.info("No goal yet")
                 
                 with col_remove:
                     if st.button("✕", key=f"sm_remove_{program}_{idx}"):
@@ -1524,14 +1540,12 @@ RAW TRANSCRIPT:
                         st.caption("Initializing...")
                 
                 with col_status:
-                    if st.session_state.current_meeting_id:
-                        synced_goal = fetch_synced_smartar_goal(student_name, st.session_state.current_meeting_id)
-                        if synced_goal:
-                            st.success("✓ Synced")
-                            if "SMARTAR Goal:" not in student_data.get("notes", ""):
-                                student_data["notes"] = f"SMARTAR Goal: {synced_goal}\n\n{student_data.get('notes', '')}"
-                        else:
-                            st.info("No goal yet")
+                    # Auto-sync disabled to prevent UI freezing
+                    # Goal builder links still work - goals are created there and can be manually copied
+                    if student_data.get("notes") and "SMARTAR Goal:" in student_data.get("notes", ""):
+                        st.success("✓ Has goal")
+                    else:
+                        st.info("No goal yet")
                 
                 with col_remove:
                     if st.button("✕", key=f"sm_remove_b_{program}_{idx}"):
@@ -1685,7 +1699,8 @@ RAW TRANSCRIPT:
                         "action": st.session_state[f"ai_act_{program}_{ai_idx}"],
                         "who": st.session_state[f"ai_who_{program}_{ai_idx}"],
                         "by_when": st.session_state[f"ai_when_{program}_{ai_idx}"],
-                        "priority": st.session_state[f"ai_pri_{program}_{ai_idx}"],
+
+"priority": st.session_state[f"ai_pri_{program}_{ai_idx}"],
                         "notes": "",
                         "done": False
                     })
@@ -1699,8 +1714,7 @@ RAW TRANSCRIPT:
                 for ai_action in ai_actions:
                     actions.append({
                         "action": ai_action.get('action', ''),
-
-"who": ai_action.get('who', ''),
+                        "who": ai_action.get('who', ''),
                         "by_when": ai_action.get('by_when', ''),
                         "priority": ai_action.get('priority', 'Medium'),
                         "notes": "",
@@ -2277,4 +2291,4 @@ def main():
 if __name__ == "__main__":
     main()
 
-# === END OF PART 3 === FILE COMPLETE ===
+# === END OF PART 3 - FILE COMPLETE ===
