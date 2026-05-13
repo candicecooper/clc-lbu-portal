@@ -122,6 +122,154 @@ def fetch_synced_smartar_goal(student_name, meeting_id):
     
     return None
 
+# ══════════════════════════════════════════════════════════════════════════════
+# NEW: SMART AI GENERATION WITH DUPLICATION DETECTION
+# ══════════════════════════════════════════════════════════════════════════════
+
+def extract_student_names_from_concerns(concerns_json):
+    """Extract student names already documented in Student Concerns section."""
+    try:
+        concerns_data = json.loads(concerns_json) if isinstance(concerns_json, str) else concerns_json
+        if isinstance(concerns_data, list):
+            names = []
+            for item in concerns_data:
+                text = item.get('notes', '')
+                if text.strip():
+                    if '·' in text:
+                        name = text.split('·')[0].strip()
+                        if name:
+                            names.append(name.lower())
+                    else:
+                        words = text.split()
+                        if words:
+                            name = ' '.join(words[:2]).strip()
+                            names.append(name.lower())
+            return names
+    except:
+        return []
+    return []
+
+def generate_smart_minutes_week_a(transcript, existing_concerns_json, program):
+    """
+    Week A AI generation with duplication detection.
+    
+    Intelligently splits transcript into:
+    1. NEW student concerns (not already documented)
+    2. General meeting minutes
+    3. Suggested actions with who/when
+    """
+    if not GROQ_KEY or not transcript.strip():
+        return None
+    
+    existing_students = extract_student_names_from_concerns(existing_concerns_json)
+    existing_list = ", ".join(existing_students) if existing_students else "None documented yet"
+    
+    try:
+        client = Groq(api_key=GROQ_KEY)
+        prompt = f"""You are a professional minute-taker for Cowandilla Learning Centre (CLC), Learning & Behaviour Unit.
+
+A raw transcript from a Week A 'Student Lens' team meeting for the {PROGRAMS[program]['label']} program is provided below.
+
+CRITICAL CONTEXT — Students already documented in Student Concerns section:
+{existing_list}
+
+DO NOT repeat any information about students already listed above. Only extract NEW student concerns not yet documented.
+
+Your job: Read the transcript and produce THREE clearly separated sections.
+
+---
+SECTION 1 — NEW STUDENT CONCERNS
+ONLY include students NOT in the existing list above.
+
+For each NEW student concern, format as:
+[Student Name] · [Concern/behaviour] · [Hypothesis - why?] · [Strategy to try] · [Who] · [By when]
+
+Example:
+Jayden R · Refusing work in literacy · Possible reading anxiety, avoidance pattern · Trial audio books + visual supports · Tom · W6
+
+If no new students discussed, write: "No new student concerns requiring documentation - see existing entries above."
+
+---
+SECTION 2 — MEETING MINUTES
+Everything else — general discussion, decisions, announcements, TAC updates, reports, transitions, any other business that is NOT student-specific concerns.
+
+Format as clear professional minutes with numbered items.
+
+---
+SECTION 3 — SUGGESTED ACTIONS
+Extract all action items mentioned in the transcript.
+
+For each action, provide:
+ACTION: [Specific task]
+WHO: [Person responsible]
+BY WHEN: [Due date or week]
+PRIORITY: [Low/Medium/High/Urgent]
+
+Rules:
+- Trauma-informed, strengths-based, plain English
+- Preserve ALL factual content — do not fabricate
+- Be concise but complete
+- DO NOT repeat student names from existing list
+- Clearly label all three sections
+
+RAW TRANSCRIPT:
+{transcript[:3500]}"""
+
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1200
+        )
+        
+        full_output = response.choices[0].message.content
+        
+        sections = {
+            'student_concerns': '',
+            'minutes': '',
+            'actions': []
+        }
+        
+        if "SECTION 2" in full_output:
+            parts = full_output.split("SECTION 2", 1)
+            section1 = parts[0].replace("SECTION 1 — NEW STUDENT CONCERNS", "").replace("SECTION 1", "").replace("---", "").strip()
+            remaining = parts[1]
+            
+            if "SECTION 3" in remaining:
+                section2_and_3 = remaining.split("SECTION 3", 1)
+                section2 = section2_and_3[0].replace("— MEETING MINUTES", "").replace("---", "").strip()
+                section3 = section2_and_3[1].replace("— SUGGESTED ACTIONS", "").replace("---", "").strip()
+                
+                sections['student_concerns'] = section1
+                sections['minutes'] = section2
+                
+                actions_list = []
+                current_action = {}
+                
+                for line in section3.split('\n'):
+                    line = line.strip()
+                    if line.startswith("ACTION:"):
+                        if current_action.get('action'):
+                            actions_list.append(current_action)
+                        current_action = {'action': line.replace("ACTION:", "").strip()}
+                    elif line.startswith("WHO:"):
+                        current_action['who'] = line.replace("WHO:", "").strip()
+                    elif line.startswith("BY WHEN:"):
+                        current_action['by_when'] = line.replace("BY WHEN:", "").strip()
+                    elif line.startswith("PRIORITY:"):
+                        priority = line.replace("PRIORITY:", "").strip()
+                        current_action['priority'] = priority if priority in ["Low", "Medium", "High", "Urgent"] else "Medium"
+                
+                if current_action.get('action'):
+                    actions_list.append(current_action)
+                
+                sections['actions'] = actions_list
+        
+        return sections
+        
+    except Exception as e:
+        st.error(f"AI generation error: {e}")
+        return None
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def get_program_from_params():
     params = st.query_params
@@ -650,7 +798,7 @@ def render_specialist_meeting():
     for prog_name in ["JP", "PY", "SY"]:
         modules = ["Cooking", "BSEM", "Child Protection", "5 is Against the Law"]
         if prog_name == "SY":
-            modules.append("Sexual Health Ed (Elephant Ed)")
+modules.append("Sexual Health Ed (Elephant Ed)")
         artifact_data[prog_name] = {}
         for module in modules:
             artifact_data[prog_name][module] = {
@@ -919,11 +1067,23 @@ def render_program_meeting(program):
         st.markdown("#### ⏱ 10–25 min | STUDENT CONCERNS — Structured Problem Solving")
         st.caption("Facilitator prompt: Push for function-based thinking, not description.")
 
+        # Manual entry section
+        st.markdown("**Option A: Manual Entry**")
+        
         concerns_key = f"pm_concerns_{program}"
         if concerns_key not in st.session_state:
-            st.session_state[concerns_key] = [{"notes": ""}]
+            # Load from selected_record if editing
+            if selected_record and selected_record.get('student_concerns'):
+                try:
+                    loaded = _json.loads(selected_record['student_concerns'])
+                    st.session_state[concerns_key] = loaded if isinstance(loaded, list) else [{"notes": ""}]
+                except:
+                    st.session_state[concerns_key] = [{"notes": ""}]
+            else:
+                st.session_state[concerns_key] = [{"notes": ""}]
 
         concerns = st.session_state[concerns_key]
+        
         for idx, row in enumerate(concerns):
             col_text, col_del = st.columns([11, 0.5])
             with col_text:
@@ -938,9 +1098,98 @@ def render_program_meeting(program):
                 st.markdown("<div style='margin-top:2rem;'></div>", unsafe_allow_html=True)
                 if len(concerns) > 1:
                     if st.button("✕", key=f"con_del_{program}_{idx}"):
-                        concerns.pop(idx); st.rerun()
+                        concerns.pop(idx)
+                        st.rerun()
+        
         if st.button("➕ Add student concern", key=f"con_add_{program}"):
-            concerns.append({"notes": ""}); st.rerun()
+            concerns.append({"notes": ""})
+            st.rerun()
+        
+        # Show summary of documented students
+        if concerns and any(c.get('notes', '').strip() for c in concerns):
+            existing_count = len([c for c in concerns if c.get('notes', '').strip()])
+            st.caption(f"📋 {existing_count} student(s) currently documented above")
+        
+        st.markdown("---")
+        
+        # AI Generation section
+        st.markdown("**Option B: Generate from Transcript**")
+        st.caption("AI will identify NEW student concerns not already documented above")
+        
+        transcript_concerns = st.text_area(
+            "Meeting transcript",
+            height=180,
+            key=f"transcript_concerns_{program}",
+            label_visibility="collapsed",
+            placeholder="Paste meeting transcript here..."
+        )
+        
+        col_gen, col_status = st.columns([2, 3])
+        with col_gen:
+            if st.button("✨ Analyze with AI", key=f"gen_concerns_{program}", type="primary"):
+                if transcript_concerns.strip():
+                    with st.spinner("Analyzing transcript..."):
+                        existing_json = _json.dumps(concerns)
+                        result = generate_smart_minutes_week_a(transcript_concerns, existing_json, program)
+                        
+                        if result:
+                            st.session_state[f'_ai_new_concerns_{program}'] = result['student_concerns']
+                            st.session_state[f'_ai_minutes_{program}'] = result['minutes']
+                            st.session_state[f'_ai_actions_{program}'] = result['actions']
+                            st.success("✓ Analysis complete!")
+                            time.sleep(0.5)
+                            st.rerun()
+                else:
+                    st.warning("Please paste transcript first")
+        
+        with col_status:
+            if st.session_state.get(f'_ai_new_concerns_{program}'):
+                st.info("✓ AI results ready below")
+        
+        st.markdown("---")
+        
+        # AI Results Review
+        if st.session_state.get(f'_ai_new_concerns_{program}'):
+            st.markdown("### 🤖 AI Analysis Results")
+            new_concerns_text = st.session_state[f'_ai_new_concerns_{program}']
+            
+            if "No new student concerns" in new_concerns_text:
+                st.info("✓ All students in transcript already documented")
+                if st.button("Clear Results", key=f"clear_concerns_{program}"):
+                    del st.session_state[f'_ai_new_concerns_{program}']
+                    st.rerun()
+            else:
+                st.markdown("**New Student Concerns Found:**")
+                edited_concerns = st.text_area(
+                    "Review concerns",
+                    value=new_concerns_text,
+                    height=150,
+                    key=f"review_concerns_{program}",
+                    label_visibility="collapsed"
+                )
+                
+                new_lines = [line.strip() for line in edited_concerns.split('\n') 
+                            if line.strip() and not line.startswith("No new")]
+                
+                if new_lines:
+                    st.caption(f"Will add {len(new_lines)} new concern(s)")
+                
+                col_accept, col_reject = st.columns(2)
+                with col_accept:
+                    if st.button("✅ Accept & Add", key=f"accept_concerns_{program}", type="primary"):
+                        for line in new_lines:
+                            if line:
+                                concerns.append({"notes": line})
+                        del st.session_state[f'_ai_new_concerns_{program}']
+                        st.success(f"Added {len(new_lines)} concern(s)!")
+                        time.sleep(0.5)
+                        st.rerun()
+                
+                with col_reject:
+                    if st.button("❌ Discard", key=f"reject_concerns_{program}"):
+                        del st.session_state[f'_ai_new_concerns_{program}']
+                        st.rerun()
+        
         st.markdown("---")
 
         st.markdown("#### ⏱ 25–40 min | SMARTAR GOAL SPOTLIGHT — 4 Students")
@@ -1349,7 +1598,7 @@ RAW TRANSCRIPT:
                 else:
                     st.warning("⚠️ Please select or enter a student name")
 
-        pm_reports = ""
+pm_reports = ""
         concerns = []
 
     st.markdown("---")
@@ -1357,20 +1606,47 @@ RAW TRANSCRIPT:
     # MEETING MINUTES / NOTES SECTION
     st.markdown("#### 📝 MEETING MINUTES / NOTES")
     st.caption("For Week B: AI-populated from transcript above. For Week A: type manually. Edit freely before saving.")
-
-    default_minutes = selected_record.get('meeting_minutes', '') if selected_record else ''
-    _stage_min = st.session_state.pop(f"_stage_pm_minutes_{program}", None)
-    if _stage_min is not None:
-        st.session_state[f"pm_minutes_{program}"] = _stage_min
-    elif f"pm_minutes_{program}" not in st.session_state:
-        st.session_state[f"pm_minutes_{program}"] = default_minutes
-    pm_minutes = st.text_area(
-        "Meeting minutes",
-        height=200,
-        key=f"pm_minutes_{program}",
-        label_visibility="collapsed",
-        placeholder="Record comprehensive meeting minutes here - discussions, decisions, key points, follow-up items..."
-    )
+    
+    # Check for AI-generated minutes
+    if st.session_state.get(f'_ai_minutes_{program}'):
+        st.markdown("**🤖 AI Generated Minutes:**")
+        ai_minutes = st.session_state[f'_ai_minutes_{program}']
+        
+        edited_minutes = st.text_area(
+            "Review minutes",
+            value=ai_minutes,
+            height=200,
+            key=f"review_minutes_{program}",
+            label_visibility="collapsed"
+        )
+        
+        col_accept, col_reject = st.columns(2)
+        with col_accept:
+            if st.button("✅ Accept Minutes", key=f"accept_minutes_{program}", type="primary"):
+                st.session_state[f"pm_minutes_{program}"] = edited_minutes
+                del st.session_state[f'_ai_minutes_{program}']
+                st.success("Minutes accepted!")
+                time.sleep(0.5)
+                st.rerun()
+        with col_reject:
+            if st.button("❌ Discard", key=f"reject_minutes_{program}"):
+                del st.session_state[f'_ai_minutes_{program}']
+                st.rerun()
+    else:
+        # Regular minutes entry
+        default_minutes = selected_record.get('meeting_minutes', '') if selected_record else ''
+        _stage_min = st.session_state.pop(f"_stage_pm_minutes_{program}", None)
+        if _stage_min is not None:
+            st.session_state[f"pm_minutes_{program}"] = _stage_min
+        elif f"pm_minutes_{program}" not in st.session_state:
+            st.session_state[f"pm_minutes_{program}"] = default_minutes
+        pm_minutes = st.text_area(
+            "Meeting minutes",
+            height=200,
+            key=f"pm_minutes_{program}",
+            label_visibility="collapsed",
+            placeholder="Record comprehensive meeting minutes here - discussions, decisions, key points, follow-up items..."
+        )
     
     st.markdown("---")
     
@@ -1388,6 +1664,59 @@ RAW TRANSCRIPT:
         incomplete = [a for a in last_actions if not a.get("done", False)]
         if incomplete:
             st.caption(f"⬆️ {len(incomplete)} action(s) carried forward from last meeting")
+    
+    # AI-suggested actions review
+    if st.session_state.get(f'_ai_actions_{program}'):
+        st.markdown("**🤖 AI Suggested Actions — Review & Add:**")
+        ai_actions = st.session_state[f'_ai_actions_{program}']
+        
+        if ai_actions:
+            for ai_idx, ai_action in enumerate(ai_actions):
+                cols = st.columns([3, 1.5, 1, 1, 0.7])
+                cols[0].text_input("Action", value=ai_action.get('action', ''), key=f"ai_act_{program}_{ai_idx}", label_visibility="collapsed")
+                cols[1].text_input("Who", value=ai_action.get('who', ''), key=f"ai_who_{program}_{ai_idx}", label_visibility="collapsed")
+                cols[2].text_input("When", value=ai_action.get('by_when', ''), key=f"ai_when_{program}_{ai_idx}", label_visibility="collapsed")
+                cols[3].selectbox("Pri", ["Low", "Medium", "High", "Urgent"], 
+                                 index=["Low", "Medium", "High", "Urgent"].index(ai_action.get('priority', 'Medium')),
+                                 key=f"ai_pri_{program}_{ai_idx}", label_visibility="collapsed")
+                if cols[4].button("✅", key=f"add_ai_{program}_{ai_idx}"):
+                    actions.append({
+                        "action": st.session_state[f"ai_act_{program}_{ai_idx}"],
+                        "who": st.session_state[f"ai_who_{program}_{ai_idx}"],
+                        "by_when": st.session_state[f"ai_when_{program}_{ai_idx}"],
+                        "priority": st.session_state[f"ai_pri_{program}_{ai_idx}"],
+                        "notes": "",
+                        "done": False
+                    })
+                    st.success("Action added!")
+                    time.sleep(0.3)
+                    st.rerun()
+        
+        col_all, col_clear = st.columns(2)
+        with col_all:
+            if st.button("✅ Accept All Actions", key=f"accept_all_actions_{program}", type="primary"):
+                for ai_action in ai_actions:
+                    actions.append({
+                        "action": ai_action.get('action', ''),
+                        "who": ai_action.get('who', ''),
+                        "by_when": ai_action.get('by_when', ''),
+                        "priority": ai_action.get('priority', 'Medium'),
+                        "notes": "",
+                        "done": False
+                    })
+                del st.session_state[f'_ai_actions_{program}']
+                st.success(f"Added {len(ai_actions)} actions!")
+                time.sleep(0.5)
+                st.rerun()
+        with col_clear:
+            if st.button("Clear Suggestions", key=f"clear_actions_{program}"):
+                del st.session_state[f'_ai_actions_{program}']
+                st.rerun()
+        
+        st.markdown("---")
+    
+    # Existing actions display
+    st.markdown("**Current Actions:**")
 
     ah_cols = st.columns([4,1.5,1,1,0.7,0.5])
     for h, label in zip(ah_cols, ["Action (What needs to be done)","Who (Responsible person)","By When","Priority","✓ Done",""]):
@@ -1412,7 +1741,20 @@ RAW TRANSCRIPT:
                 placeholder="Dependencies, resources needed, background...")
 
     if st.button("➕ Add action", key=f"act_add_{program}"):
-        actions.append({"action":"","who":"","by_when":"","priority":"Medium","notes":"","done":False}); st.rerun()
+        actions.append({"action":"","who":"","by_when":"","priority":"Medium","notes":"","done":False})
+        st.rerun()
+    
+    # Multiple add option
+    col_add_multi, col_button = st.columns([3, 1])
+    with col_add_multi:
+        num_actions = st.number_input("Add multiple actions", min_value=1, max_value=10, value=3, 
+                                     key=f"num_add_{program}", label_visibility="collapsed")
+    with col_button:
+        if st.button(f"➕ Add {num_actions} Actions", key=f"add_multi_{program}"):
+            for _ in range(num_actions):
+                actions.append({"action":"","who":"","by_when":"","priority":"Medium","notes":"","done":False})
+            st.rerun()
+    
     st.markdown("---")
 
     # Prepare meeting data for save - FIXED: Use local variables instead of session state
