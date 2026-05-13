@@ -183,25 +183,31 @@ def get_changes_for_date(target_date_str):
 def save_program_change(change_data):
     try:
         sb = get_supabase()
-        payload = {k: v for k, v in change_data.items()
-                   if k not in ('id', 'created_at', 'updated_at')}
+        # Strip internal keys and any None values — avoids PGRST204 schema-cache
+        # errors on optional columns (covered_by, notes) when they're not set
+        payload = {
+            k: v for k, v in change_data.items()
+            if k not in ('id', 'created_at', 'updated_at') and v is not None
+        }
         sb.table("program_changes").insert(payload).execute()
         return True
     except Exception as e:
-        st.error(f"Could not save: {e}")
+        st.error(f"⚠️ Save failed: {e}")
         return False
 
 
 def update_program_change(change_id, new_data):
     try:
         sb = get_supabase()
-        payload = {k: v for k, v in new_data.items()
-                   if k not in ('id', 'created_at')}
+        payload = {
+            k: v for k, v in new_data.items()
+            if k not in ('id', 'created_at') and v is not None
+        }
         payload['updated_at'] = datetime.now().isoformat()
         sb.table("program_changes").update(payload).eq("id", change_id).execute()
         return True
     except Exception as e:
-        st.error(f"Could not update: {e}")
+        st.error(f"⚠️ Update failed: {e}")
         return False
 
 
@@ -561,6 +567,16 @@ Each entry = one person's view of what THEY are doing today.
             if _form_error:
                 st.error(_form_error)
             else:
+                # Snapshot all form values into session state NOW, before any
+                # network call. If save fails the page won't rerun, but on any
+                # future rerun the values are still there — nothing is ever lost.
+                st.session_state['form_reason'] = reason
+                st.session_state['form_covered_by'] = covered_by or ''
+                st.session_state['form_notes'] = st.session_state.get('form_notes', '')
+                st.session_state['_pending_staff_member'] = staff_member
+                st.session_state['_pending_staff_type'] = staff_type
+                st.session_state['_pending_blocks'] = time_blocks
+
                 change_data = {
                     'change_date': target_date_str,
                     'staff_name': staff_member,
@@ -578,21 +594,22 @@ Each entry = one person's view of what THEY are doing today.
                         st.session_state.editing_change_id = None
                         st.session_state.editing_change_data = None
                         st.session_state.num_blocks = 1
-                        for _k in ['form_reason', 'form_covered_by', 'form_notes']:
+                        for _k in ['form_reason', 'form_covered_by', 'form_notes',
+                                   '_pending_staff_member', '_pending_staff_type', '_pending_blocks']:
                             st.session_state.pop(_k, None)
                         st.rerun()
-                    # if _ok is False, save_program_change already called st.error()
-                    # — don't rerun so the error stays visible
+                    # Save failed — st.error() already shown, no rerun, form stays intact
                 else:
                     _ok = save_program_change(change_data)
                     if _ok:
                         st.session_state._save_success = staff_member
                         st.session_state._save_updated = False
                         st.session_state.num_blocks = 1
-                        for _k in ['form_reason', 'form_covered_by', 'form_notes']:
+                        for _k in ['form_reason', 'form_covered_by', 'form_notes',
+                                   '_pending_staff_member', '_pending_staff_type', '_pending_blocks']:
                             st.session_state.pop(_k, None)
                         st.rerun()
-                    # if _ok is False, save_program_change already called st.error()
+                    # Save failed — st.error() already shown, no rerun, form stays intact
 
 
 # ─────────────────────────────────────────────
