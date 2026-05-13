@@ -27,6 +27,7 @@ st.markdown(f"""
   <a href="{BASE}/Calendar" style="display:block;background:#1A7A7A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">📆 Calendar</a>
   <a href="{BASE}/Scatter_Plot_Tracker" style="display:block;background:#1A7A7A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">📊 Scatter Plot Tracker</a>
   <a href="{BASE}/Student_Schedule_Analysis" style="display:block;background:#1A7A7A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">🗂️ Schedule Analysis</a>
+  <a href="{BASE}/Allocation_Meetings_Tool" style="display:block;background:#1A7A7A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">📋 Allocation Meetings</a>
   <a href="{BASE}/Footy_Tipping" style="display:block;background:#C8760A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">🏈 Footy Tipping</a>
   <a href="{BASE}/Committees" style="display:block;background:#C8760A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">🏛 Committees</a>
   <a href="{BASE}/Leadership" style="display:block;background:#0f5f5f;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">👔 Leadership</a>
