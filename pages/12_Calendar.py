@@ -1128,7 +1128,7 @@ with tab_students:
                 
                 tr_notes  = st.text_input("Notes", placeholder="Optional", key="tr_notes_field")
 
-                st.markdown("**Days at mainstream school** — enter the times for each day they attend:")
+                st.markdown("**Days at mainstream school** — enter the times for each day they attend (8:30am–3:30pm):")
                 th0, th1, th2, th3, th4, th5 = st.columns([1.5, 1, 1, 1, 1, 1])
                 with th0: st.markdown("<div style='font-size:0.78rem;font-weight:700;padding-top:0.5rem;'>Day</div>", unsafe_allow_html=True)
                 for h, day in zip([th1, th2, th3, th4, th5], DAYS):
@@ -1142,7 +1142,8 @@ with tab_students:
                         with col:
                             times[f"{dkey}_{dkk}"] = st.time_input(" ", value=None,
                                                                     key=f"tr_{dkey}_{dkk}",
-                                                                    label_visibility="collapsed")
+                                                                    label_visibility="collapsed",
+                                                                    step=300)  # 5-minute increments
 
                 if st.form_submit_button("✅ Save Transition Week", type="primary", use_container_width=True):
                     if not tr_init.strip():     st.warning("Student initials are required.")
@@ -1151,6 +1152,23 @@ with tab_students:
                     elif not tr_term:           st.warning("Please select a term.")
                     elif tr_wstart.weekday() != 0: st.warning("Week start date should be a Monday.")
                     else:
+                        # Validate times are within school hours (8:30am - 3:30pm)
+                        from datetime import time as dt_time
+                        school_start = dt_time(8, 30)
+                        school_end = dt_time(15, 30)
+                        time_warnings = []
+                        for dkey, dname in zip(DAY_KEYS, DAYS):
+                            start_t = times.get(f"{dkey}_start")
+                            end_t = times.get(f"{dkey}_end")
+                            if start_t and (start_t < school_start or start_t > school_end):
+                                time_warnings.append(f"{dname} start time ({start_t.strftime('%I:%M %p')}) is outside school hours (8:30am–3:30pm)")
+                            if end_t and (end_t < school_start or end_t > school_end):
+                                time_warnings.append(f"{dname} end time ({end_t.strftime('%I:%M %p')}) is outside school hours (8:30am–3:30pm)")
+                        
+                        if time_warnings:
+                            st.warning("⚠️ **Times outside typical school hours:**\n\n" + "\n\n".join(f"• {w}" for w in time_warnings) + 
+                                     "\n\nYou can still save if these times are correct.")
+                        
                         row = {
                             "student_initials":  tr_init.strip(),
                             "program":           tr_prog,
@@ -1269,7 +1287,7 @@ with tab_students:
                             
                             en  = st.text_input("Notes", value=tr.get("notes",""))
 
-                            st.markdown("**Times at mainstream:**")
+                            st.markdown("**Times at mainstream (8:30am–3:30pm):**")
                             eth0, eth1, eth2, eth3, eth4, eth5 = st.columns([1.5, 1, 1, 1, 1, 1])
                             with eth0: st.markdown("<div style='font-size:0.76rem;font-weight:700;'>Day</div>", unsafe_allow_html=True)
                             for h, day in zip([eth1, eth2, eth3, eth4, eth5], DAYS):
@@ -1289,7 +1307,8 @@ with tab_students:
                                         etimes[f"{dkey}_{dkk}"] = st.time_input(
                                             " ", value=existing_time,
                                             key=f"tref_{tid}_{dkey}_{dkk}",
-                                            label_visibility="collapsed")
+                                            label_visibility="collapsed",
+                                            step=300)  # 5-minute increments
 
                             if st.form_submit_button("💾 Save Changes", type="primary"):
                                 upd_row = {
