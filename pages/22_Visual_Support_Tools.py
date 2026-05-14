@@ -685,6 +685,7 @@ tabs = st.tabs([
     "🧘 Regulation",
     "📜 Scripts",
     "🎯 Skillstreaming",
+    "💬 Chat Pages",
     "🖨️ Print Queue"
 ])
 
@@ -1189,8 +1190,474 @@ with tabs[7]:
                     st.success("✅")
                     st.rerun()
 
-# TAB 9: Print Queue with Individual Settings ----------------------------
+# TAB 9: Chat Pages with All 5 Modes ----------------------------------------
 with tabs[8]:
+    st.markdown('<div class="section-card"><h3>💬 AAC Chat Pages</h3></div>', unsafe_allow_html=True)
+    
+    st.markdown("""
+    <div class="aac-note">
+        <strong>🎯 Complete AAC Communication System:</strong> Five different modes for communication - 
+        interactive sentence building, practice boards, staff modeling, two-way conversation, and 
+        personalized downloadable pages for individual students. All using ARASAAC symbols!
+    </div>
+    """, unsafe_allow_html=True)
+    
+    chat_mode = st.tabs([
+        "💬 Sentence Builder",
+        "🎮 Practice Board",
+        "👨‍🏫 Modeling Tool",
+        "🔄 Two-Way Chat",
+        "📥 Personalized Pages"
+    ])
+    
+    # SUBTAB 1: Sentence Builder --------------------------------------------
+    with chat_mode[0]:
+        st.markdown("### Build sentences by clicking symbols, then speak them aloud")
+        
+        # Initialize sentence state
+        if "sentence_builder_words" not in st.session_state:
+            st.session_state.sentence_builder_words = []
+        
+        # Sentence strip display
+        sentence_text = " ".join([w.get('ti','') for w in st.session_state.sentence_builder_words]) or "Click symbols to build a sentence..."
+        
+        st.markdown(f"""
+        <div style="background:#fff;border:3px solid {TEAL};border-radius:12px;padding:20px;margin:20px 0;min-height:80px;display:flex;align-items:center;justify-content:center;">
+            <div style="font-size:24pt;font-weight:700;color:{NAVY}">{sentence_text}</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Control buttons
+        col_speak, col_clear, col_delete = st.columns(3)
+        with col_speak:
+            if st.button("🔊 SPEAK", type="primary", use_container_width=True, key="speak_sentence"):
+                if st.session_state.sentence_builder_words:
+                    # Show JavaScript to speak (will work in browser)
+                    speech_text = " ".join([w.get('ti','') for w in st.session_state.sentence_builder_words])
+                    st.markdown(f"""
+                    <script>
+                    if ('speechSynthesis' in window) {{
+                        const utterance = new SpeechSynthesisUtterance('{speech_text}');
+                        window.speechSynthesis.speak(utterance);
+                    }}
+                    </script>
+                    """, unsafe_allow_html=True)
+                    st.success(f"🔊 Speaking: {speech_text}")
+                else:
+                    st.warning("Build a sentence first!")
+        
+        with col_clear:
+            if st.button("❌ CLEAR ALL", use_container_width=True, key="clear_sentence"):
+                st.session_state.sentence_builder_words = []
+                st.rerun()
+        
+        with col_delete:
+            if st.button("⬅️ DELETE LAST", use_container_width=True, key="delete_last"):
+                if st.session_state.sentence_builder_words:
+                    st.session_state.sentence_builder_words.pop()
+                    st.rerun()
+        
+        st.divider()
+        
+        # Symbol selection - Core words first
+        st.markdown("#### CORE WORDS (High Frequency)")
+        core_words = [c for c in ALL_CARDS if "CORE" in c.get('fw', [])][:24]  # First 24 core words
+        
+        cols = st.columns(6)
+        for i, card in enumerate(core_words):
+            with cols[i % 6]:
+                symbol_url = get_arasaac_symbol_url(card.get('symbol_key', ''))
+                if symbol_url:
+                    st.image(symbol_url, width=60)
+                if st.button(card.get('ti',''), key=f"sb_core_{i}", use_container_width=True):
+                    st.session_state.sentence_builder_words.append(card)
+                    st.rerun()
+        
+        st.markdown("#### FRINGE WORDS (Context-Specific)")
+        fringe_words = [c for c in ALL_CARDS if "CORE" not in c.get('fw', [])][:18]
+        
+        cols = st.columns(6)
+        for i, card in enumerate(fringe_words):
+            with cols[i % 6]:
+                symbol_url = get_arasaac_symbol_url(card.get('symbol_key', ''))
+                if symbol_url:
+                    st.image(symbol_url, width=60)
+                if st.button(card.get('ti',''), key=f"sb_fringe_{i}", use_container_width=True):
+                    st.session_state.sentence_builder_words.append(card)
+                    st.rerun()
+    
+    # SUBTAB 2: Practice Board --------------------------------------------
+    with chat_mode[1]:
+        st.markdown("### Full-screen communication practice with tracking")
+        
+        if "practice_session_active" not in st.session_state:
+            st.session_state.practice_session_active = False
+        if "practice_selections" not in st.session_state:
+            st.session_state.practice_selections = []
+        
+        if not st.session_state.practice_session_active:
+            col1, col2 = st.columns([2,1])
+            with col1:
+                practice_student = st.text_input("Student name", key="practice_student")
+            with col2:
+                if st.button("▶️ START PRACTICE SESSION", type="primary", use_container_width=True):
+                    st.session_state.practice_session_active = True
+                    st.session_state.practice_start_time = datetime.now()
+                    st.session_state.practice_selections = []
+                    st.rerun()
+        else:
+            # Active session
+            col_info, col_end = st.columns([3,1])
+            with col_info:
+                duration = (datetime.now() - st.session_state.practice_start_time).seconds // 60
+                st.info(f"⏱️ Session active: {duration} minutes | {len(st.session_state.practice_selections)} selections")
+            with col_end:
+                if st.button("⏹️ END SESSION", type="secondary", use_container_width=True):
+                    st.session_state.practice_session_active = False
+                    # Show summary
+                    st.success(f"Session complete! {len(st.session_state.practice_selections)} communications")
+                    if st.session_state.practice_selections:
+                        st.write("Most used words:", ", ".join(list(dict.fromkeys([s.get('ti','') for s in st.session_state.practice_selections[:10]]))))
+                    st.rerun()
+            
+            st.divider()
+            
+            # Large symbol grid for practice
+            st.markdown("### Tap symbols to communicate:")
+            
+            practice_words = [c for c in ALL_CARDS if "CORE" in c.get('fw', [])][:20]
+            cols = st.columns(5)
+            for i, card in enumerate(practice_words):
+                with cols[i % 5]:
+                    symbol_url = get_arasaac_symbol_url(card.get('symbol_key', ''))
+                    if symbol_url:
+                        st.image(symbol_url, width=80)
+                    if st.button(card.get('ti',''), key=f"practice_{i}", use_container_width=True):
+                        st.session_state.practice_selections.append(card)
+                        st.rerun()
+    
+    # SUBTAB 3: Modeling Tool --------------------------------------------
+    with chat_mode[2]:
+        st.markdown("### Staff demonstration mode with extra-large symbols")
+        
+        st.markdown("""
+        <div style="background:#3B82F6;color:#fff;padding:15px;border-radius:8px;text-align:center;margin-bottom:20px;">
+            <h3 style="margin:0;color:#fff;">👨‍🏫 STAFF MODELING MODE</h3>
+            <p style="margin:5px 0 0;font-size:14px;">Click symbols to demonstrate AAC use to students</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        if "modeling_sequence" not in st.session_state:
+            st.session_state.modeling_sequence = []
+        
+        # Current sequence display
+        if st.session_state.modeling_sequence:
+            sequence_text = " → ".join([w.get('ti','').upper() for w in st.session_state.modeling_sequence])
+            st.markdown(f"""
+            <div style="background:{TEAL_B};border:3px solid {TEAL};border-radius:12px;padding:25px;margin:20px 0;">
+                <div style="font-size:28pt;font-weight:800;color:{TEAL};text-align:center;">{sequence_text}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        col_clear_model, col_speak_model = st.columns(2)
+        with col_clear_model:
+            if st.button("Clear Sequence", use_container_width=True, key="clear_model"):
+                st.session_state.modeling_sequence = []
+                st.rerun()
+        with col_speak_model:
+            if st.button("🔊 Speak Sequence", type="primary", use_container_width=True, key="speak_model"):
+                if st.session_state.modeling_sequence:
+                    speech_text = " ".join([w.get('ti','') for w in st.session_state.modeling_sequence])
+                    st.success(f"🔊 {speech_text}")
+        
+        st.divider()
+        
+        # Extra large symbols for modeling
+        modeling_words = [c for c in ALL_CARDS if "CORE" in c.get('fw', [])][:12]
+        cols = st.columns(3)
+        for i, card in enumerate(modeling_words):
+            with cols[i % 3]:
+                symbol_url = get_arasaac_symbol_url(card.get('symbol_key', ''))
+                if symbol_url:
+                    st.image(symbol_url, width=150)
+                if st.button(card.get('ti','').upper(), key=f"model_{i}", use_container_width=True):
+                    st.session_state.modeling_sequence.append(card)
+                    st.rerun()
+    
+    # SUBTAB 4: Two-Way Conversation --------------------------------------------
+    with chat_mode[3]:
+        st.markdown("### Reciprocal communication - both partners use AAC")
+        
+        if "conversation_history" not in st.session_state:
+            st.session_state.conversation_history = []
+        if "conversation_turn" not in st.session_state:
+            st.session_state.conversation_turn = "student"
+        if "current_message" not in st.session_state:
+            st.session_state.current_message = []
+        
+        # Conversation history
+        st.markdown("#### Conversation:")
+        if st.session_state.conversation_history:
+            for msg in st.session_state.conversation_history[-10:]:  # Last 10 messages
+                speaker = msg['speaker']
+                text = msg['text']
+                color = TEAL if speaker == "student" else AMBER
+                st.markdown(f"""
+                <div style="background:{'#EBF5FA' if speaker=='student' else '#FEF7EA'};border-left:4px solid {color};padding:10px;margin:5px 0;border-radius:4px;">
+                    <strong>{speaker.upper()}:</strong> {text}
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            st.info("Start a conversation by clicking symbols below")
+        
+        # Current message being built
+        if st.session_state.current_message:
+            current_text = " ".join([w.get('ti','') for w in st.session_state.current_message])
+            turn_color = TEAL if st.session_state.conversation_turn == "student" else AMBER
+            st.markdown(f"""
+            <div style="background:#fff;border:3px solid {turn_color};border-radius:8px;padding:15px;margin:10px 0;">
+                <strong>{st.session_state.conversation_turn.upper()} building:</strong> {current_text}
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # Turn indicator
+        st.markdown(f"**→ {st.session_state.conversation_turn.upper()}'s turn**")
+        
+        col_send, col_clear_conv, col_switch = st.columns(3)
+        with col_send:
+            if st.button("✉️ SEND MESSAGE", type="primary", use_container_width=True, key="send_conv"):
+                if st.session_state.current_message:
+                    message_text = " ".join([w.get('ti','') for w in st.session_state.current_message])
+                    st.session_state.conversation_history.append({
+                        'speaker': st.session_state.conversation_turn,
+                        'text': message_text,
+                        'time': datetime.now()
+                    })
+                    st.session_state.current_message = []
+                    # Auto-switch turn
+                    st.session_state.conversation_turn = "staff" if st.session_state.conversation_turn == "student" else "student"
+                    st.rerun()
+        with col_clear_conv:
+            if st.button("Clear Message", use_container_width=True, key="clear_conv"):
+                st.session_state.current_message = []
+                st.rerun()
+        with col_switch:
+            if st.button("Switch Turn", use_container_width=True, key="switch_turn"):
+                st.session_state.conversation_turn = "staff" if st.session_state.conversation_turn == "student" else "student"
+                st.rerun()
+        
+        st.divider()
+        
+        # Symbols for building message
+        conv_words = [c for c in ALL_CARDS if "CORE" in c.get('fw', [])][:18]
+        cols = st.columns(6)
+        for i, card in enumerate(conv_words):
+            with cols[i % 6]:
+                symbol_url = get_arasaac_symbol_url(card.get('symbol_key', ''))
+                if symbol_url:
+                    st.image(symbol_url, width=60)
+                if st.button(card.get('ti',''), key=f"conv_{i}", use_container_width=True):
+                    st.session_state.current_message.append(card)
+                    st.rerun()
+    
+    # SUBTAB 5: Personalized Page Generator --------------------------------------------
+    with chat_mode[4]:
+        st.markdown("### Create downloadable chat pages for individual students")
+        
+        st.markdown("""
+        <div class="aac-note">
+            <strong>📥 Personalized Pages:</strong> Create custom HTML chat pages with student-specific vocabulary. 
+            These files work offline, on any device (iPad/laptop/phone), and can be shared with families!
+        </div>
+        """, unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### Student Information")
+            pers_student_name = st.text_input("Student name", key="pers_student")
+            pers_grade = st.selectbox("Program", ["JP", "PY", "SY"], key="pers_grade")
+            pers_aac_device = st.text_input("Current AAC (optional)", placeholder="e.g., Proloquo2Go", key="pers_aac")
+            
+            st.markdown("#### Layout Options")
+            pers_grid_size = st.selectbox("Grid size", ["3x3 (9 words)", "4x4 (16 words)", "4x5 (20 words)", "5x5 (25 words)"], key="pers_grid")
+            pers_symbol_size = st.select_slider("Symbol size", options=[60, 80, 100, 120, 150], value=80, key="pers_size")
+        
+        with col2:
+            st.markdown("#### Select Vocabulary")
+            
+            # Core words selection
+            st.markdown("**Core Words (select up to 20):**")
+            core_options = [c for c in ALL_CARDS if "CORE" in c.get('fw', [])]
+            pers_core_selected = st.multiselect(
+                "Core vocabulary",
+                options=core_options,
+                format_func=lambda x: x.get('ti',''),
+                max_selections=20,
+                key="pers_core",
+                label_visibility="collapsed"
+            )
+            
+            # Fringe words selection
+            st.markdown("**Fringe Words (select up to 10):**")
+            fringe_options = [c for c in ALL_CARDS if "CORE" not in c.get('fw', [])]
+            pers_fringe_selected = st.multiselect(
+                "Fringe vocabulary",
+                options=fringe_options,
+                format_func=lambda x: x.get('ti',''),
+                max_selections=10,
+                key="pers_fringe",
+                label_visibility="collapsed"
+            )
+        
+        st.divider()
+        
+        # Preview selected vocabulary
+        if pers_core_selected or pers_fringe_selected:
+            st.markdown(f"**Selected vocabulary: {len(pers_core_selected)} core + {len(pers_fringe_selected)} fringe = {len(pers_core_selected) + len(pers_fringe_selected)} total**")
+        
+        # Generate button
+        if st.button("📥 GENERATE & DOWNLOAD PERSONALIZED PAGE", type="primary", use_container_width=True, key="gen_pers"):
+            if not pers_student_name:
+                st.error("Please enter student name")
+            elif not (pers_core_selected or pers_fringe_selected):
+                st.error("Please select at least some vocabulary")
+            else:
+                # Generate HTML
+                all_selected = pers_core_selected + pers_fringe_selected
+                grid_cols = int(pers_grid_size.split('x')[0])
+                
+                html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{pers_student_name}'s Communication Page</title>
+<style>
+* {{ box-sizing: border-box; margin: 0; padding: 0; font-family: 'Arial', sans-serif; }}
+body {{ background: #f0f4f8; padding: 20px; }}
+.header {{ background: {TEAL}; color: #fff; padding: 20px; border-radius: 12px; margin-bottom: 20px; text-align: center; }}
+.header h1 {{ margin: 0; font-size: 24pt; }}
+.sentence-strip {{ background: #fff; border: 3px solid {TEAL}; border-radius: 12px; padding: 20px; margin-bottom: 20px; min-height: 80px; display: flex; align-items: center; justify-content: center; font-size: 20pt; font-weight: 700; }}
+.controls {{ display: flex; gap: 10px; margin-bottom: 20px; }}
+.controls button {{ flex: 1; padding: 15px; font-size: 16pt; font-weight: 700; border: none; border-radius: 8px; cursor: pointer; }}
+.speak-btn {{ background: {TEAL}; color: #fff; }}
+.clear-btn {{ background: #ef4444; color: #fff; }}
+.delete-btn {{ background: #f59e0b; color: #fff; }}
+.vocabulary-grid {{ display: grid; grid-template-columns: repeat({grid_cols}, 1fr); gap: 10px; }}
+.symbol-card {{ background: #fff; border: 2px solid #ddd; border-radius: 12px; padding: 15px; text-align: center; cursor: pointer; transition: all 0.2s; }}
+.symbol-card:hover {{ border-color: {TEAL}; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }}
+.symbol-card:active {{ transform: scale(0.95); }}
+.symbol-card img {{ width: {pers_symbol_size}px; height: {pers_symbol_size}px; object-fit: contain; margin-bottom: 10px; }}
+.symbol-card span {{ display: block; font-size: 14pt; font-weight: 700; }}
+</style>
+</head>
+<body>
+<div class="header">
+<h1>{pers_student_name}'s Communication Page</h1>
+<p>Tap symbols to build sentences</p>
+</div>
+
+<div class="sentence-strip" id="sentence">Tap symbols to start...</div>
+
+<div class="controls">
+<button class="speak-btn" onclick="speakSentence()">🔊 Speak</button>
+<button class="delete-btn" onclick="deleteLast()">⬅️ Delete Last</button>
+<button class="clear-btn" onclick="clearSentence()">❌ Clear All</button>
+</div>
+
+<div class="vocabulary-grid">
+"""
+                
+                # Add symbols
+                for card in all_selected:
+                    symbol_url = get_arasaac_symbol_url(card.get('symbol_key', ''))
+                    word = card.get('ti', '')
+                    html += f"""
+<div class="symbol-card" onclick="addWord('{word}')">
+<img src="{symbol_url}" alt="{word}">
+<span>{word}</span>
+</div>
+"""
+                
+                html += """
+</div>
+
+<script>
+let sentence = [];
+
+function addWord(word) {
+    sentence.push(word);
+    updateSentence();
+    // Speak word immediately
+    if ('speechSynthesis' in window) {
+        const utterance = new SpeechSynthesisUtterance(word);
+        window.speechSynthesis.speak(utterance);
+    }
+}
+
+function updateSentence() {
+    const sentenceDiv = document.getElementById('sentence');
+    sentenceDiv.textContent = sentence.length > 0 ? sentence.join(' ') : 'Tap symbols to start...';
+}
+
+function speakSentence() {
+    if (sentence.length === 0) return;
+    if ('speechSynthesis' in window) {
+        const utterance = new SpeechSynthesisUtterance(sentence.join(' '));
+        window.speechSynthesis.speak(utterance);
+    } else {
+        alert('Text-to-speech not supported in this browser');
+    }
+}
+
+function deleteLast() {
+    if (sentence.length > 0) {
+        sentence.pop();
+        updateSentence();
+    }
+}
+
+function clearSentence() {
+    sentence = [];
+    updateSentence();
+}
+
+// Save sentence to localStorage
+window.addEventListener('beforeunload', () => {
+    localStorage.setItem('lastSentence', JSON.stringify(sentence));
+});
+
+// Load saved sentence
+window.addEventListener('load', () => {
+    const saved = localStorage.getItem('lastSentence');
+    if (saved) {
+        sentence = JSON.parse(saved);
+        updateSentence();
+    }
+});
+</script>
+</body>
+</html>
+"""
+                
+                # Offer download
+                filename = f"{pers_student_name.replace(' ', '_').lower()}_chat_page.html"
+                st.download_button(
+                    label=f"⬇️ Download {pers_student_name}'s Chat Page",
+                    data=html,
+                    file_name=filename,
+                    mime="text/html",
+                    type="primary",
+                    use_container_width=True,
+                    key="download_pers"
+                )
+                
+                st.success(f"✅ Generated! Download the file and open it in any browser. Works offline!")
+                st.info("💡 Tip: Save this file to iPad home screen or share with parents via email/USB")
+
+# TAB 10: Print Queue with Individual Settings ----------------------------
+with tabs[9]:
     st.markdown('<div class="section-card"><h3>Print Queue</h3></div>', unsafe_allow_html=True)
     
     if not st.session_state.vst_print_queue:
