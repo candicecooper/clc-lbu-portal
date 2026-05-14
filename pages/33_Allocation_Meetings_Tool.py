@@ -193,37 +193,37 @@ def export_to_data_entry(selected_allocations):
         # Today's date as referral date
         today = datetime.now().strftime('%Y-%m-%d')
         
-        # Build row data
+        # Build row data - EXACT order matching SharePoint Data_Model
         row_data = [
-            student_id,
-            allocation.get('student_name', '').upper(),
-            dob,
-            "",  # Gender - not captured in meeting tool
-            allocation.get('school', ''),
-            today,  # Referral_Date (today)
-            "Allocated",  # Allocation_Status
-            mapped_program,
-            start_date,
-            end_date if end_date else None,
-            "",  # Partnership_Area - not captured
-            "No",  # Previous_CLC_Placement
-            "No",  # Previous_Other_LC
-            None,  # Other_LC_Name
-            0,  # Total_Previous_Placements
-            None,  # Placement_History_Notes
-            None,  # Priority_Level
-            flags["Flag_ASD"],
-            flags["Flag_ADHD"],
-            flags["Flag_MentalHealth"],
-            flags["Flag_ODD_CD"],
-            flags["Flag_Care_CPS"],
-            flags["Flag_Aboriginal"],
-            flags["Flag_EALD"],
-            flags["Flag_Other"],
-            "Active",  # Current_Status
-            None,  # Exit_Reason
-            None,  # Transition_Plan
-            allocation.get('notes', '')
+            student_id,                                    # 1. Student_ID
+            allocation.get('student_name', '').upper(),   # 2. Student_Name
+            dob,                                           # 3. DOB
+            "",                                            # 4. Gender
+            allocation.get('school', ''),                 # 5. Referring_School
+            today,                                         # 6. Referral_Date
+            "Allocated",                                   # 7. Allocation_Status
+            mapped_program,                                # 8. Allocated_Program
+            start_date,                                    # 9. Placement_Start
+            end_date if end_date else None,               # 10. Placement_End
+            "",                                            # 11. Partnership_Area
+            "No",                                          # 12. Previous_CLC_Placement
+            "No",                                          # 13. Previous_Other_LC
+            None,                                          # 14. Other_LC_Name
+            0,                                             # 15. Total_Previous_Placements
+            None,                                          # 16. Placement_History_Notes
+            None,                                          # 17. Priority_Level
+            flags["Flag_ASD"],                            # 18. Flag_ASD
+            flags["Flag_ADHD"],                           # 19. Flag_ADHD
+            flags["Flag_MentalHealth"],                   # 20. Flag_MentalHealth
+            flags["Flag_ODD_CD"],                         # 21. Flag_ODD_CD
+            flags["Flag_Care_CPS"],                       # 22. Flag_Care_CPS
+            flags["Flag_Aboriginal"],                     # 23. Flag_Aboriginal
+            flags["Flag_EALD"],                           # 24. Flag_EALD
+            flags["Flag_Other"],                          # 25. Flag_Other
+            "Active",                                      # 26. Current_Status
+            None,                                          # 27. Exit_Reason
+            None,                                          # 28. Transition_Plan
+            allocation.get('notes', '')                   # 29. Notes
         ]
         
         for col, value in enumerate(row_data, 1):
