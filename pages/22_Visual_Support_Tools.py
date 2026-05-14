@@ -212,6 +212,18 @@ st.markdown(f"""
     background:#7C2D91; color:#fff; font-size:.65rem; font-weight:700;
     margin-left:.3rem;
 }}
+
+.core-badge {{
+    display:inline-block; padding:.2rem .5rem; border-radius:12px;
+    background:#F59E0B; color:#fff; font-size:.65rem; font-weight:700;
+    margin-left:.3rem;
+}}
+
+.tws-badge {{
+    display:inline-block; padding:.2rem .5rem; border-radius:12px;
+    background:#3B82F6; color:#fff; font-size:.65rem; font-weight:700;
+    margin-left:.3rem;
+}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -220,42 +232,134 @@ st.markdown(f"""
 # =============================================================================
 
 DEFAULT_CARDS = [
-    # Regulation
-    dict(id="feelings",   cat="regulation",    color=AMBER,     symbol_key="feel",        ti="I feel",               sub="Tell someone",             fw=["BSEM","ZOR","TI","AAC"], custom=False),
-    dict(id="help",       cat="regulation",    color=AMBER,     symbol_key="help",        ti="I need help",          sub="Someone help me",          fw=["BSEM","TI","AAC"], custom=False),
-    dict(id="break",      cat="regulation",    color=AMBER,     symbol_key="break",       ti="I need a break",       sub="I want to stop",           fw=["TI","PBS","BSEM"], custom=False),
-    dict(id="calm",       cat="regulation",    color=AMBER,     symbol_key="calm",        ti="I need to calm down",  sub="I want quiet",             fw=["BSEM","TI","OT"], custom=False),
-    dict(id="safe",       cat="regulation",    color=AMBER,     symbol_key="safe",        ti="I feel safe",          sub="It's okay",                fw=["TI","PBS"], custom=False),
-    # Communication
-    dict(id="yes",        cat="communication", color=GREEN,     symbol_key="yes",         ti="Yes",                  sub="I want this",              fw=["AAC","PODD"], custom=False),
-    dict(id="no",         cat="communication", color=GREEN,     symbol_key="no",          ti="No",                   sub="I don't want this",        fw=["AAC","PODD"], custom=False),
-    dict(id="more",       cat="communication", color=GREEN,     symbol_key="more",        ti="More",                 sub="I want more",              fw=["AAC","PODD"], custom=False),
-    dict(id="finished",   cat="communication", color=GREEN,     symbol_key="finished",    ti="Finished",             sub="All done",                 fw=["AAC","PODD"], custom=False),
-    dict(id="want",       cat="communication", color=GREEN,     symbol_key="want",        ti="I want",               sub="Something I want",         fw=["AAC","PODD"], custom=False),
-    dict(id="like",       cat="communication", color=GREEN,     symbol_key="like",        ti="I like",               sub="Something I like",         fw=["AAC","PODD"], custom=False),
-    dict(id="dont_like",  cat="communication", color=GREEN,     symbol_key="dislike",     ti="I don't like",         sub="Something I don't like",   fw=["AAC","PODD"], custom=False),
-    # Actions
-    dict(id="go",         cat="actions",       color="#3730A3", symbol_key="go",          ti="I want to go",         sub="I want to move",           fw=["AAC","PODD"], custom=False),
-    dict(id="stop",       cat="actions",       color="#3730A3", symbol_key="stop",        ti="I want to stop",       sub="Stop now",                 fw=["AAC","PODD"], custom=False),
-    dict(id="wait",       cat="actions",       color="#3730A3", symbol_key="wait",        ti="I can wait",           sub="Wait please",              fw=["AAC","PODD"], custom=False),
-    dict(id="look",       cat="actions",       color="#3730A3", symbol_key="look",        ti="I want to look",       sub="I want to see",            fw=["AAC","PODD"], custom=False),
-    dict(id="listen",     cat="actions",       color="#3730A3", symbol_key="listen",      ti="I want to listen",     sub="I want to hear",           fw=["AAC","PODD"], custom=False),
-    # Social
-    dict(id="hello",      cat="social",        color="#8C2D5A", symbol_key="hello",       ti="Hello",                sub="Say hi",                   fw=["AAC","PODD"], custom=False),
-    dict(id="goodbye",    cat="social",        color="#8C2D5A", symbol_key="goodbye",     ti="Goodbye",              sub="Say bye",                  fw=["AAC","PODD"], custom=False),
-    dict(id="please",     cat="social",        color="#8C2D5A", symbol_key="please",      ti="Please",               sub="Can I have please",        fw=["AAC","PODD"], custom=False),
-    dict(id="thankyou",   cat="social",        color="#8C2D5A", symbol_key="thank you",   ti="Thank you",            sub="Thanks",                   fw=["AAC","PODD"], custom=False),
-    dict(id="sorry",      cat="social",        color="#8C2D5A", symbol_key="sorry",       ti="Sorry",                sub="I am sorry",               fw=["AAC","PODD"], custom=False),
-    # Places
-    dict(id="bathroom",   cat="places",        color="#0E7490", symbol_key="toilet",      ti="Bathroom",             sub="I want the toilet",        fw=["AAC","PODD"], custom=False),
-    dict(id="outside",    cat="places",        color="#0E7490", symbol_key="outside",     ti="Outside",              sub="I want to go outside",     fw=["AAC","PODD"], custom=False),
-    dict(id="home",       cat="places",        color="#0E7490", symbol_key="home",        ti="Home",                 sub="I want to go home",        fw=["AAC","PODD"], custom=False),
-    # Activities
-    dict(id="eat",        cat="activities",    color="#059669", symbol_key="eat",         ti="I want to eat",        sub="Food",                     fw=["AAC","PODD"], custom=False),
-    dict(id="drink",      cat="activities",    color="#059669", symbol_key="drink",       ti="I want to drink",      sub="Something to drink",       fw=["AAC","PODD"], custom=False),
-    dict(id="play",       cat="activities",    color="#059669", symbol_key="play",        ti="I want to play",       sub="Play time",                fw=["AAC","PODD"], custom=False),
-    dict(id="work",       cat="activities",    color="#059669", symbol_key="work",        ti="I want to work",       sub="Do work",                  fw=["AAC","PODD"], custom=False),
-    dict(id="read",       cat="activities",    color="#059669", symbol_key="read",        ti="I want to read",       sub="Read a book",              fw=["AAC","PODD"], custom=False),
+    # =========================================================================
+    # CRESCENDO CORE WORDS - ACTIONS
+    # =========================================================================
+    dict(id="go",           cat="actions",       color="#3730A3", symbol_key="go",          ti="go",                   sub="Let's go",                 fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="stop",         cat="actions",       color="#3730A3", symbol_key="stop",        ti="stop",                 sub="Stop now",                 fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="do",           cat="actions",       color="#3730A3", symbol_key="do",          ti="do",                   sub="Do it",                    fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="get",          cat="actions",       color="#3730A3", symbol_key="get",         ti="get",                  sub="Get something",            fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="make",         cat="actions",       color="#3730A3", symbol_key="make",        ti="make",                 sub="Make something",           fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="put",          cat="actions",       color="#3730A3", symbol_key="put",         ti="put",                  sub="Put down",                 fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="turn",         cat="actions",       color="#3730A3", symbol_key="turn",        ti="turn",                 sub="Turn around",              fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="open",         cat="actions",       color="#3730A3", symbol_key="open",        ti="open",                 sub="Open it",                  fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="close",        cat="actions",       color="#3730A3", symbol_key="close",       ti="close",                sub="Close it",                 fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="come",         cat="actions",       color="#3730A3", symbol_key="come",        ti="come",                 sub="Come here",                fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="look",         cat="actions",       color="#3730A3", symbol_key="look",        ti="look",                 sub="Look at this",             fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="listen",       cat="actions",       color="#3730A3", symbol_key="listen",      ti="listen",               sub="Listen carefully",         fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="wait",         cat="actions",       color="#3730A3", symbol_key="wait",        ti="wait",                 sub="Wait please",              fw=["AAC","PODD","CORE"], custom=False),
+    
+    # =========================================================================
+    # CRESCENDO CORE WORDS - DESCRIPTORS
+    # =========================================================================
+    dict(id="more",         cat="communication", color=GREEN,     symbol_key="more",        ti="more",                 sub="I want more",              fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="big",          cat="communication", color=GREEN,     symbol_key="big",         ti="big",                  sub="It's big",                 fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="little",       cat="communication", color=GREEN,     symbol_key="little",      ti="little",               sub="It's little",              fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="different",    cat="communication", color=GREEN,     symbol_key="different",   ti="different",            sub="Something different",      fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="same",         cat="communication", color=GREEN,     symbol_key="same",        ti="same",                 sub="The same",                 fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="good",         cat="communication", color=GREEN,     symbol_key="good",        ti="good",                 sub="That's good",              fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="bad",          cat="communication", color=GREEN,     symbol_key="bad",         ti="bad",                  sub="That's bad",               fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="hot",          cat="communication", color=GREEN,     symbol_key="hot",         ti="hot",                  sub="It's hot",                 fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="cold",         cat="communication", color=GREEN,     symbol_key="cold",        ti="cold",                 sub="It's cold",                fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="all",          cat="communication", color=GREEN,     symbol_key="all",         ti="all",                  sub="All of it",                fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="some",         cat="communication", color=GREEN,     symbol_key="some",        ti="some",                 sub="Some of it",               fw=["AAC","PODD","CORE"], custom=False),
+    
+    # =========================================================================
+    # CRESCENDO CORE WORDS - QUESTIONS
+    # =========================================================================
+    dict(id="what",         cat="communication", color="#8C2D5A", symbol_key="what",        ti="what",                 sub="What is it?",              fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="where",        cat="communication", color="#8C2D5A", symbol_key="where",       ti="where",                sub="Where is it?",             fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="when",         cat="communication", color="#8C2D5A", symbol_key="when",        ti="when",                 sub="When?",                    fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="who",          cat="communication", color="#8C2D5A", symbol_key="who",         ti="who",                  sub="Who is it?",               fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="why",          cat="communication", color="#8C2D5A", symbol_key="why",         ti="why",                  sub="Why?",                     fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="how",          cat="communication", color="#8C2D5A", symbol_key="how",         ti="how",                  sub="How?",                     fw=["AAC","PODD","CORE"], custom=False),
+    
+    # =========================================================================
+    # CRESCENDO CORE WORDS - PRONOUNS
+    # =========================================================================
+    dict(id="i",            cat="communication", color=GREEN,     symbol_key="I",           ti="I",                    sub="Me",                       fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="you",          cat="communication", color=GREEN,     symbol_key="you",         ti="you",                  sub="You",                      fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="my",           cat="communication", color=GREEN,     symbol_key="my",          ti="my",                   sub="Mine",                     fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="your",         cat="communication", color=GREEN,     symbol_key="your",        ti="your",                 sub="Yours",                    fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="he",           cat="communication", color=GREEN,     symbol_key="he",          ti="he",                   sub="Him",                      fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="she",          cat="communication", color=GREEN,     symbol_key="she",         ti="she",                  sub="Her",                      fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="we",           cat="communication", color=GREEN,     symbol_key="we",          ti="we",                   sub="Us",                       fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="they",         cat="communication", color=GREEN,     symbol_key="they",        ti="they",                 sub="Them",                     fw=["AAC","PODD","CORE"], custom=False),
+    
+    # =========================================================================
+    # CRESCENDO CORE WORDS - LOCATION/TIME
+    # =========================================================================
+    dict(id="on",           cat="communication", color=GREEN,     symbol_key="on",          ti="on",                   sub="On top",                   fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="off",          cat="communication", color=GREEN,     symbol_key="off",         ti="off",                  sub="Take off",                 fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="in",           cat="communication", color=GREEN,     symbol_key="in",          ti="in",                   sub="Inside",                   fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="out",          cat="communication", color=GREEN,     symbol_key="out",         ti="out",                  sub="Outside",                  fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="up",           cat="communication", color=GREEN,     symbol_key="up",          ti="up",                   sub="Go up",                    fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="down",         cat="communication", color=GREEN,     symbol_key="down",        ti="down",                 sub="Go down",                  fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="here",         cat="communication", color=GREEN,     symbol_key="here",        ti="here",                 sub="Right here",               fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="there",        cat="communication", color=GREEN,     symbol_key="there",       ti="there",                sub="Over there",               fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="now",          cat="communication", color=GREEN,     symbol_key="now",         ti="now",                  sub="Right now",                fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="later",        cat="communication", color=GREEN,     symbol_key="later",       ti="later",                sub="Not now",                  fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="again",        cat="communication", color=GREEN,     symbol_key="again",       ti="again",                sub="Do it again",              fw=["AAC","PODD","CORE"], custom=False),
+    
+    # =========================================================================
+    # CRESCENDO CORE WORDS - NEGATION
+    # =========================================================================
+    dict(id="not",          cat="communication", color="#B91C1C", symbol_key="not",         ti="not",                  sub="Not that",                 fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="dont",         cat="communication", color="#B91C1C", symbol_key="don't",       ti="don't",                sub="Don't do it",              fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="cant",         cat="communication", color="#B91C1C", symbol_key="can't",       ti="can't",                sub="I can't",                  fw=["AAC","PODD","CORE"], custom=False),
+    
+    # =========================================================================
+    # CORE SOCIAL WORDS
+    # =========================================================================
+    dict(id="yes",          cat="communication", color=GREEN,     symbol_key="yes",         ti="yes",                  sub="I want this",              fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="no",           cat="communication", color=GREEN,     symbol_key="no",          ti="no",                   sub="I don't want this",        fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="please",       cat="social",        color="#8C2D5A", symbol_key="please",      ti="please",               sub="Can I have please",        fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="thankyou",     cat="social",        color="#8C2D5A", symbol_key="thank you",   ti="thank you",            sub="Thanks",                   fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="sorry",        cat="social",        color="#8C2D5A", symbol_key="sorry",       ti="sorry",                sub="I am sorry",               fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="hello",        cat="social",        color="#8C2D5A", symbol_key="hello",       ti="hello",                sub="Say hi",                   fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="goodbye",      cat="social",        color="#8C2D5A", symbol_key="goodbye",     ti="goodbye",              sub="Say bye",                  fw=["AAC","PODD","CORE"], custom=False),
+    
+    # =========================================================================
+    # CORE WANTING/NEEDING (High frequency regulation)
+    # =========================================================================
+    dict(id="want",         cat="communication", color=GREEN,     symbol_key="want",        ti="want",                 sub="I want",                   fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="like",         cat="communication", color=GREEN,     symbol_key="like",        ti="like",                 sub="I like",                   fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="dont_like",    cat="communication", color=GREEN,     symbol_key="dislike",     ti="don't like",           sub="I don't like",             fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="need",         cat="regulation",    color=AMBER,     symbol_key="need",        ti="need",                 sub="I need",                   fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="help",         cat="regulation",    color=AMBER,     symbol_key="help",        ti="help",                 sub="Someone help me",          fw=["BSEM","TI","AAC","CORE"], custom=False),
+    dict(id="finished",     cat="communication", color=GREEN,     symbol_key="finished",    ti="finished",             sub="All done",                 fw=["AAC","PODD","CORE"], custom=False),
+    
+    # =========================================================================
+    # REGULATION WORDS (BSEM-aligned)
+    # =========================================================================
+    dict(id="feel",         cat="regulation",    color=AMBER,     symbol_key="feel",        ti="feel",                 sub="I feel",                   fw=["BSEM","ZOR","TI","AAC","CORE"], custom=False),
+    dict(id="break",        cat="regulation",    color=AMBER,     symbol_key="break",       ti="break",                sub="I need a break",           fw=["TI","PBS","BSEM"], custom=False),
+    dict(id="calm",         cat="regulation",    color=AMBER,     symbol_key="calm",        ti="calm",                 sub="I want to calm down",      fw=["BSEM","TI","OT"], custom=False),
+    dict(id="safe",         cat="regulation",    color=AMBER,     symbol_key="safe",        ti="safe",                 sub="I feel safe",              fw=["TI","PBS"], custom=False),
+    
+    # =========================================================================
+    # FRINGE VOCABULARY - PLACES
+    # =========================================================================
+    dict(id="bathroom",     cat="places",        color="#0E7490", symbol_key="toilet",      ti="bathroom",             sub="I want the toilet",        fw=["AAC","PODD"], custom=False),
+    dict(id="outside",      cat="places",        color="#0E7490", symbol_key="outside",     ti="outside",              sub="I want to go outside",     fw=["AAC","PODD"], custom=False),
+    dict(id="home",         cat="places",        color="#0E7490", symbol_key="home",        ti="home",                 sub="I want to go home",        fw=["AAC","PODD"], custom=False),
+    
+    # =========================================================================
+    # FRINGE VOCABULARY - ACTIVITIES
+    # =========================================================================
+    dict(id="eat",          cat="activities",    color="#059669", symbol_key="eat",         ti="eat",                  sub="I want to eat",            fw=["AAC","PODD"], custom=False),
+    dict(id="drink",        cat="activities",    color="#059669", symbol_key="drink",       ti="drink",                sub="I want to drink",          fw=["AAC","PODD"], custom=False),
+    dict(id="play",         cat="activities",    color="#059669", symbol_key="play",        ti="play",                 sub="I want to play",           fw=["AAC","PODD"], custom=False),
+    dict(id="work",         cat="activities",    color="#059669", symbol_key="work",        ti="work",                 sub="I want to work",           fw=["AAC","PODD"], custom=False),
+    dict(id="read",         cat="activities",    color="#059669", symbol_key="read",        ti="read",                 sub="I want to read",           fw=["AAC","PODD"], custom=False),
+    
+    # =========================================================================
+    # TWO WAY STREET - PARTNER STRATEGY CARDS
+    # =========================================================================
+    dict(id="wait_partner", cat="social",        color="#7C2D91", symbol_key="wait",        ti="WAIT",                 sub="Count to 10 (partner)",    fw=["AAC","TWS"], custom=False),
+    dict(id="model_partner",cat="social",        color="#7C2D91", symbol_key="point",       ti="MODEL",                sub="Point, don't test",        fw=["AAC","TWS"], custom=False),
+    dict(id="presume",      cat="social",        color="#7C2D91", symbol_key="think",       ti="PRESUME",              sub="They understand",          fw=["AAC","TWS"], custom=False),
+    dict(id="honor",        cat="social",        color="#7C2D91", symbol_key="accept",      ti="HONOR",                sub="All communication counts", fw=["AAC","TWS"], custom=False),
 ]
 
 SKILLSTREAMING_SKILLS = {
@@ -297,6 +401,8 @@ FW_DETAILS = {
     "AAC":   {"label":"AAC",   "bg":"#7C2D91","color":"#fff"},
     "PODD":  {"label":"PODD",  "bg":"#059669","color":"#fff"},
     "SS":    {"label":"SS",    "bg":"#3730A3","color":"#fff"},
+    "CORE":  {"label":"CORE",  "bg":"#F59E0B","color":"#fff"},  # Gold for core words
+    "TWS":   {"label":"TWS",   "bg":"#3B82F6","color":"#fff"},  # Blue for Two Way Street
 }
 
 ZONE_DATA = {
@@ -555,9 +661,18 @@ st.markdown("""
 <div class="vst-header">
     <div class="icon">🎨</div>
     <div>
-        <h1>Visual Support Tools - Complete</h1>
-        <p>All resources • Individual settings • Custom cards • Search & filter</p>
+        <h1>Visual Support Tools - AAC Enhanced</h1>
+        <p>Proloquo2Go aligned • Two Way Street • 83 core + fringe words • Individual settings</p>
     </div>
+</div>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<div class="aac-note">
+    <strong>✨ NEW: AAC-Aligned Vocabulary!</strong> This tool now includes 53 <strong>Crescendo core words</strong> 
+    (the high-frequency words that make up 80% of communication) aligned with Proloquo2Go. 
+    <strong>Gold "CORE" badges</strong> show core words. <strong>Blue "TWS" badges</strong> show Two Way Street 
+    partner strategy cards. Use these to model AAC alongside students!
 </div>
 """, unsafe_allow_html=True)
 
@@ -625,6 +740,10 @@ with tabs[0]:
                 title_html = f"**{c.get('ti','')}**"
                 if c.get('custom'):
                     title_html += '<span class="custom-badge">CUSTOM</span>'
+                if "CORE" in c.get('fw', []):
+                    title_html += '<span class="core-badge">CORE</span>'
+                if "TWS" in c.get('fw', []):
+                    title_html += '<span class="tws-badge">TWS</span>'
                 st.markdown(title_html, unsafe_allow_html=True)
                 st.caption(c.get('sub',''))
                 
