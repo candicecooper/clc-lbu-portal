@@ -51,8 +51,15 @@ def load_custom_cards_from_db():
             })
         return cards
     except Exception as e:
-        st.error(f"Error loading custom cards: {e}")
-        return []
+        error_msg = str(e)
+        
+        # Check for specific schema cache error
+        if 'PGRST205' in error_msg or 'schema cache' in error_msg:
+            st.warning("⚠️ Database table not found in schema cache. This usually happens right after creating the table. Please run the fix_schema_cache.sql file in Supabase SQL editor, wait 10 seconds, then refresh this page.")
+        else:
+            st.error(f"Error loading custom cards: {error_msg}")
+        
+        return []  # Return empty list so app doesn't crash
 
 def save_custom_card_to_db(card_data):
     """Save new custom card to Supabase"""
