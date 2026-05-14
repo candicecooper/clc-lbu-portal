@@ -1120,11 +1120,13 @@ with tab_students:
                     tr_prog   = st.selectbox("Program *", ["","JP","PY","SY"], key="tr_prog")
                 with tr2:
                     tr_school = st.text_input("Mainstream school *", placeholder="e.g. Findon Primary", key="tr_school")
-                    tr_label  = st.text_input("Week label", placeholder="e.g. Week 3 T2, Trial Week 1", key="tr_label")
+                    tr_term   = st.selectbox("Term *", ["","Term 1","Term 2","Term 3","Term 4"], key="tr_term")
                 with tr3:
+                    tr_label  = st.text_input("Week label", placeholder="e.g. Week 3, Trial Week 1", key="tr_label")
                     tr_wstart = st.date_input("Week starting (Monday) *",
                                               value=today - timedelta(days=today.weekday()), key="tr_wstart")
-                    tr_notes  = st.text_input("Notes", placeholder="Optional", key="tr_notes_field")
+                
+                tr_notes  = st.text_input("Notes", placeholder="Optional", key="tr_notes_field")
 
                 st.markdown("**Days at mainstream school** — enter the times for each day they attend:")
                 th0, th1, th2, th3, th4, th5 = st.columns([1.5, 1, 1, 1, 1, 1])
@@ -1146,12 +1148,14 @@ with tab_students:
                     if not tr_init.strip():     st.warning("Student initials are required.")
                     elif not tr_prog:           st.warning("Please select a program.")
                     elif not tr_school.strip(): st.warning("Mainstream school is required.")
+                    elif not tr_term:           st.warning("Please select a term.")
                     elif tr_wstart.weekday() != 0: st.warning("Week start date should be a Monday.")
                     else:
                         row = {
                             "student_initials":  tr_init.strip(),
                             "program":           tr_prog,
                             "mainstream_school": tr_school.strip(),
+                            "term":              tr_term,
                             "week_label":        tr_label.strip(),
                             "week_start_date":   str(tr_wstart),
                             "notes":             tr_notes.strip(),
@@ -1213,11 +1217,12 @@ with tab_students:
                         return f"<span style='font-size:0.68rem;'>{fmt_time_short(s)}<br>{fmt_time_short(e)}</span>"
 
                     wlbl = tr.get("week_label","") or fmt_date(tr.get("week_start_date",""))
+                    term_prefix = f"{tr.get('term','')} · " if tr.get('term') else ""
                     st.markdown(
                         "<div style='display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr;"
                         "gap:4px;font-size:0.76rem;align-items:center;"
                         "border-bottom:1px solid #f0f0f0;padding:0.3rem 0.5rem;'>"
-                        f"<div><b style='font-size:0.78rem;'>{wlbl}</b>"
+                        f"<div><b style='font-size:0.78rem;'>{term_prefix}{wlbl}</b>"
                         f"{'<br><span style=color:#aaa;font-size:0.66rem;>'+tr.get('notes','')+'</span>' if tr.get('notes') else ''}"
                         f"</div>"
                         f"<div>{fmt_slot('mon')}</div><div>{fmt_slot('tue')}</div>"
@@ -1254,11 +1259,15 @@ with tab_students:
                                                   if tr.get("program","") in ["","JP","PY","SY"] else 0)
                             with e2:
                                 es  = st.text_input("Mainstream school", value=tr.get("mainstream_school",""))
-                                el  = st.text_input("Week label", value=tr.get("week_label",""))
+                                et  = st.selectbox("Term", ["","Term 1","Term 2","Term 3","Term 4"],
+                                                   index=["","Term 1","Term 2","Term 3","Term 4"].index(tr.get("term",""))
+                                                   if tr.get("term","") in ["","Term 1","Term 2","Term 3","Term 4"] else 0)
                             with e3:
+                                el  = st.text_input("Week label", value=tr.get("week_label",""))
                                 try:    ews = st.date_input("Week start (Mon)", value=datetime.strptime(str(tr.get("week_start_date",""))[:10], "%Y-%m-%d").date())
                                 except: ews = st.date_input("Week start (Mon)", value=today - timedelta(days=today.weekday()))
-                                en  = st.text_input("Notes", value=tr.get("notes",""))
+                            
+                            en  = st.text_input("Notes", value=tr.get("notes",""))
 
                             st.markdown("**Times at mainstream:**")
                             eth0, eth1, eth2, eth3, eth4, eth5 = st.columns([1.5, 1, 1, 1, 1, 1])
@@ -1287,6 +1296,7 @@ with tab_students:
                                     "student_initials":  ei.strip(),
                                     "program":           ep,
                                     "mainstream_school": es.strip(),
+                                    "term":              et,
                                     "week_label":        el.strip(),
                                     "week_start_date":   str(ews),
                                     "notes":             en.strip(),
