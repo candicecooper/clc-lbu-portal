@@ -1,6 +1,6 @@
 # =============================================================================
 # 22_Visual_Support_Tools.py  -  CLC-LBU Portal
-# ADVANCED VERSION - Individual item settings + Custom card library + Search
+# ULTIMATE VERSION - All resource types + Individual settings + Custom cards + Search
 # =============================================================================
 
 import streamlit as st
@@ -115,7 +115,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # =============================================================================
-# DATA - DEFAULT CARDS + CUSTOM CARDS
+# DATA
 # =============================================================================
 
 DEFAULT_CARDS = [
@@ -157,7 +157,6 @@ DEFAULT_CARDS = [
     dict(id="read",       cat="activities",    color="#059669", symbol_key="read",        ti="I want to read",       sub="Read a book",              fw=["AAC","PODD"], custom=False),
 ]
 
-# Skillstreaming (abbreviated for space)
 SKILLSTREAMING_SKILLS = {
     "classroom": {
         "name": "Classroom Survival Skills", "color": "#1A5C78", "icon": "📚",
@@ -174,6 +173,20 @@ SKILLSTREAMING_SKILLS = {
     },
 }
 
+FEELINGS_PODD = [
+    ("happy", "happy"), ("sad", "sad"), ("angry", "angry"), ("scared", "scared"),
+    ("tired", "tired"), ("excited", "excited"), ("okay", "okay"), ("worried", "worried"),
+]
+
+CALM_STRATEGIES_PODD = [
+    dict(symbol_key="breathe", lb="I can breathe"),
+    dict(symbol_key="walk", lb="I can walk"),
+    dict(symbol_key="sit", lb="I can sit"),
+    dict(symbol_key="squeeze hands", lb="I can squeeze"),
+    dict(symbol_key="drink water", lb="I can drink water"),
+    dict(symbol_key="listen music", lb="I can listen"),
+]
+
 FW_DETAILS = {
     "BSEM":  {"label":"BSEM",  "bg":"#1A5C78","color":"#fff"},
     "ZOR":   {"label":"ZOR",   "bg":"#2D7D4F","color":"#fff"},
@@ -184,6 +197,15 @@ FW_DETAILS = {
     "PODD":  {"label":"PODD",  "bg":"#059669","color":"#fff"},
     "SS":    {"label":"SS",    "bg":"#3730A3","color":"#fff"},
 }
+
+ZONE_DATA = {
+    "blue":   {"name":"Blue - Moving Slowly",  "bg":"#DBEAFE","color":"#1E40AF","feels":["tired","sad","sick","bored"]},
+    "green":  {"name":"Green - Ready to Learn","bg":"#DCFCE7","color":"#15803D","feels":["happy","calm","okay","focused"]},
+    "yellow": {"name":"Yellow - Losing Control","bg":"#FEF9C3","color":"#A16207","feels":["frustrated","worried","silly","excited"]},
+    "red":    {"name":"Red - Out of Control","bg":"#FEE2E2","color":"#B91C1C","feels":["angry","scared","yelling","upset"]},
+}
+
+FIVE_COLORS = ["#93C5FD","#86EFAC","#FDE047","#FDBA74","#F87171"]
 
 # =============================================================================
 # INITIALIZE SESSION STATE
@@ -205,85 +227,21 @@ if "vst_search_query" not in st.session_state:
 ALL_CARDS = DEFAULT_CARDS + st.session_state.vst_custom_cards
 
 # =============================================================================
-# HELPER FUNCTION - Generate HTML for items
+# HELPER FUNCTIONS
 # =============================================================================
 
-def generate_html_for_items(items_list, single_item=False):
-    """Generate print-ready HTML for one or more items with their individual settings"""
-    
-    html_parts = ['<!DOCTYPE html><html><head><meta charset="UTF-8">']
-    html_parts.append('<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet">')
-    html_parts.append('<style>*{box-sizing:border-box;margin:0;padding:0;font-family:"Nunito",sans-serif}body{background:#fff}</style>')
-    html_parts.append('</head><body>')
-    
-    for item_idx, item in enumerate(items_list):
-        settings = item.get('print_settings', {})
-        
-        # Extract settings
-        orientation = settings.get('orientation', 'Portrait')
-        page_size = settings.get('page_size', 'A4')
-        symbol_size = settings.get('symbol_size', 80)
-        title_size = settings.get('title_size', 14)
-        subtitle_size = settings.get('subtitle_size', 10)
-        card_padding = settings.get('card_padding', 15)
-        
-        # Page dimensions
-        if page_size == "A4":
-            page_dims = "210mm 297mm" if orientation == "Portrait" else "297mm 210mm"
-        elif page_size == "Letter (US)":
-            page_dims = "8.5in 11in" if orientation == "Portrait" else "11in 8.5in"
-        elif page_size == "A5":
-            page_dims = "148mm 210mm" if orientation == "Portrait" else "210mm 148mm"
-        else:
-            page_dims = "85mm 54mm"
-        
-        # Add page with settings for this item
-        html_parts.append(f'<div style="page-break-after:always"><style>@page{{size:{page_dims};margin:6mm}}</style>')
-        
-        t = item["type"]
-        d = item["data"]
-        
-        # Generate content based on type
-        if t == "cards":
-            for card in d:
-                symbol_url = get_arasaac_symbol_url(card.get('symbol_key', ''))
-                html_parts.append(f'<div style="border:2px solid {card.get("color","#1A5C78")};border-radius:12px;padding:{card_padding}px;text-align:center;background:#fff;max-width:400px;margin:20px auto">')
-                if symbol_url:
-                    html_parts.append(f'<img src="{symbol_url}" style="width:{symbol_size}px;height:{symbol_size}px;object-fit:contain;margin:0 auto {card_padding}px;display:block">')
-                html_parts.append(f'<div style="font-size:{title_size}pt;font-weight:800;margin-bottom:8px">{card.get("ti","")}</div>')
-                html_parts.append(f'<div style="font-size:{subtitle_size}pt;color:#666">{card.get("sub","")}</div>')
-                html_parts.append('</div>')
-        
-        html_parts.append('</div>')
-    
-    html_parts.append('</body></html>')
-    return "".join(html_parts)
-
-# =============================================================================
-# HELPER FUNCTION - Get item print settings
-# =============================================================================
-
-def get_item_settings(item_index):
-    """Get print settings for specific item, or use defaults"""
-    if item_index is not None and item_index < len(st.session_state.vst_print_queue):
-        item = st.session_state.vst_print_queue[item_index]
-        return item.get('print_settings', {
-            'orientation': 'Portrait',
-            'page_size': 'A4',
-            'cards_per_page': 4,
-            'margin_size': 'Small (3mm)',
-            'symbol_size': 80,
-            'title_size': 14,
-            'subtitle_size': 10,
-            'border_width': 'Medium (2px)',
-            'card_padding': 15
-        })
-    return None
-
-def update_item_settings(item_index, settings):
-    """Update print settings for specific item"""
-    if item_index is not None and item_index < len(st.session_state.vst_print_queue):
-        st.session_state.vst_print_queue[item_index]['print_settings'] = settings
+def add_to_queue_with_defaults(item_dict):
+    """Add item to queue with default print settings"""
+    item_dict['print_settings'] = {
+        'orientation': 'Portrait',
+        'page_size': 'A4',
+        'cards_per_page': 4,
+        'symbol_size': 80,
+        'title_size': 14,
+        'subtitle_size': 10,
+        'card_padding': 15
+    }
+    st.session_state.vst_print_queue.append(item_dict)
 
 # =============================================================================
 # INTERFACE
@@ -293,15 +251,21 @@ st.markdown("""
 <div class="vst-header">
     <div class="icon">🎨</div>
     <div>
-        <h1>Visual Support Tools - Advanced</h1>
-        <p>Custom cards • Individual item settings • Search & filter</p>
+        <h1>Visual Support Tools - Complete</h1>
+        <p>All resources • Individual settings • Custom cards • Search & filter</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
 tabs = st.tabs([
     "📇 Card Library",
-    "➕ Create Custom Card",
+    "➕ Create Custom",
+    "➡️ First-Then",
+    "📅 Schedules",
+    "💬 Comm Boards",
+    "🧘 Regulation",
+    "📜 Scripts",
+    "🎯 Skillstreaming",
     "🖨️ Print Queue"
 ])
 
@@ -327,7 +291,7 @@ with tabs[0]:
         fw_filter = st.selectbox("Filter by framework",
                                 options=["All"] + list(FW_DETAILS.keys()))
     
-    # Filter cards based on search and filters
+    # Filter cards
     filtered_cards = ALL_CARDS
     
     if search_query:
@@ -363,21 +327,7 @@ with tabs[0]:
                 col_add, col_del = st.columns([3,1])
                 with col_add:
                     if st.button(f"Add", key=f"add_{c['id']}_{i}", use_container_width=True):
-                        st.session_state.vst_print_queue.append({
-                            "type":"cards",
-                            "data":[c],
-                            "print_settings": {
-                                'orientation': 'Portrait',
-                                'page_size': 'A4',
-                                'cards_per_page': 4,
-                                'margin_size': 'Small (3mm)',
-                                'symbol_size': 80,
-                                'title_size': 14,
-                                'subtitle_size': 10,
-                                'border_width': 'Medium (2px)',
-                                'card_padding': 15
-                            }
-                        })
+                        add_to_queue_with_defaults({"type":"cards","data":[c]})
                         st.success("✅")
                         st.rerun()
                 
@@ -394,48 +344,27 @@ with tabs[0]:
 with tabs[1]:
     st.markdown('<div class="section-card"><h3>Create Custom Card</h3></div>', unsafe_allow_html=True)
     
-    st.markdown("""
-    Create your own custom cards and add them to the library. These will be available 
-    in the Card Library tab with a purple CUSTOM badge.
-    """)
-    
     col1, col2 = st.columns(2)
     
     with col1:
-        custom_title = st.text_input("Card Title (Main Text)", 
-                                     placeholder="e.g., I need a drink",
-                                     key="custom_title")
-        
-        custom_subtitle = st.text_input("Card Subtitle (Small Text)", 
-                                       placeholder="e.g., I want water",
-                                       key="custom_subtitle")
-        
-        custom_symbol = st.text_input("ARASAAC Symbol Keyword", 
-                                     placeholder="e.g., water, drink, thirsty",
-                                     help="This will search ARASAAC for a matching symbol",
-                                     key="custom_symbol")
-        
-        custom_category = st.selectbox("Category",
-                                      options=["regulation","communication","actions","social","places","activities"],
-                                      key="custom_category")
+        custom_title = st.text_input("Card Title", placeholder="e.g., I need a drink", key="custom_title")
+        custom_subtitle = st.text_input("Card Subtitle", placeholder="e.g., I want water", key="custom_subtitle")
+        custom_symbol = st.text_input("Symbol Keyword", placeholder="e.g., water", key="custom_symbol")
+        custom_category = st.selectbox("Category", options=["regulation","communication","actions","social","places","activities"], key="custom_category")
     
     with col2:
-        custom_color = st.color_picker("Card Border Color", value=TEAL, key="custom_color")
+        custom_color = st.color_picker("Card Color", value=TEAL, key="custom_color")
+        custom_frameworks = st.multiselect("Frameworks", options=list(FW_DETAILS.keys()), default=["AAC"], key="custom_frameworks")
         
-        custom_frameworks = st.multiselect("Frameworks",
-                                          options=list(FW_DETAILS.keys()),
-                                          default=["AAC"],
-                                          key="custom_frameworks")
-        
-        st.markdown("**Preview Symbol:**")
+        st.markdown("**Preview:**")
         if custom_symbol:
             preview_symbol_url = get_arasaac_symbol_url(custom_symbol)
             if preview_symbol_url:
                 st.image(preview_symbol_url, width=100)
             else:
-                st.warning("No symbol found - try different keyword")
+                st.warning("No symbol found")
     
-    if st.button("➕ Add Custom Card to Library", type="primary", use_container_width=True):
+    if st.button("➕ Add to Library", type="primary", use_container_width=True):
         if custom_title and custom_symbol:
             new_card = {
                 'id': f"custom_{len(st.session_state.vst_custom_cards)}_{datetime.now().strftime('%H%M%S')}",
@@ -448,58 +377,308 @@ with tabs[1]:
                 'custom': True
             }
             st.session_state.vst_custom_cards.append(new_card)
-            st.success(f"✅ Added '{custom_title}' to library! Go to Card Library tab to use it.")
+            st.success(f"✅ Added '{custom_title}'! Go to Card Library to use it.")
             st.rerun()
         else:
-            st.error("Please enter at least a title and symbol keyword")
+            st.error("Enter title and symbol keyword")
 
-# TAB 3: Print Queue with Individual Settings ----------------------------
+# TAB 3: First-Then Boards ---------------------------------------------------
 with tabs[2]:
+    st.markdown('<div class="section-card"><h3>Build First-Then Board</h3></div>', unsafe_allow_html=True)
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        ft_student = st.text_input("Student name (optional)", key="ft_student")
+        ft_title = st.text_input("Board title", value="First-Then", key="ft_title")
+        ft_steps = st.radio("Number of steps", [2,3,4], horizontal=True, key="ft_steps")
+    with col2:
+        st.markdown("**PODD Tip:** Use 'I will...', 'I can...'")
+    
+    ft_labels = ["FIRST","THEN","NEXT","LAST"][:ft_steps]
+    ft_slots = []
+    
+    cols = st.columns(ft_steps)
+    for i, lbl in enumerate(ft_labels):
+        with cols[i]:
+            st.markdown(f'**{lbl}**')
+            slot_cards = [{"symbol":c.get("symbol_key"),"lb":c.get("ti"),"id":c.get("id")} for c in ALL_CARDS]
+            sel = st.selectbox(f"Activity", options=[None]+slot_cards,
+                             format_func=lambda x: x['lb'] if x else "-- Choose --",
+                             key=f"ft_slot_{i}", label_visibility="collapsed")
+            if sel:
+                preview_url = get_arasaac_symbol_url(sel['symbol'])
+                if preview_url:
+                    st.image(preview_url, width=60)
+            ft_slots.append(sel)
+    
+    if st.button("➕ Add to Queue", type="primary", use_container_width=True):
+        if all(s is not None for s in ft_slots):
+            add_to_queue_with_defaults({
+                "type":"firstthen",
+                "data":{"student":ft_student,"title":ft_title,"labels":ft_labels,"slots":ft_slots}
+            })
+            st.success("✅ Added")
+            st.rerun()
+        else:
+            st.error("Fill all slots")
+
+# TAB 4: Visual Schedules ----------------------------------------------------
+with tabs[3]:
+    st.markdown('<div class="section-card"><h3>Build Visual Schedule</h3></div>', unsafe_allow_html=True)
+    
+    col1, col2 = st.columns([2,3])
+    with col1:
+        vs_student = st.text_input("Student name (optional)", key="vs_student")
+        vs_title = st.text_input("Schedule title", value="My Schedule", key="vs_title")
+        vs_slots_n = st.number_input("Activities", min_value=3, max_value=12, value=6, key="vs_slots_n")
+    with col2:
+        st.markdown("**PODD:** Use 'I will...', 'Time to...'")
+    
+    vs_slots = []
+    for i in range(vs_slots_n):
+        col_t, col_a, col_p = st.columns([1,2,1])
+        with col_t:
+            time = st.text_input(f"Time", value=f"{8+i}:00", key=f"vs_time_{i}", label_visibility="collapsed")
+        with col_a:
+            activity_cards = [{"symbol":c.get("symbol_key"),"lb":c.get("ti"),"id":c.get("id")} for c in ALL_CARDS]
+            sel = st.selectbox(f"Activity", options=[None]+activity_cards,
+                             format_func=lambda x: x['lb'] if x else "-- Choose --",
+                             key=f"vs_act_{i}", label_visibility="collapsed")
+            if sel:
+                vs_slots.append({"time":time,"symbol":sel["symbol"],"act":sel["lb"]})
+        with col_p:
+            if sel:
+                preview_url = get_arasaac_symbol_url(sel['symbol'])
+                if preview_url:
+                    st.image(preview_url, width=40)
+    
+    if st.button("➕ Add to Queue", type="primary", use_container_width=True):
+        if vs_slots:
+            add_to_queue_with_defaults({
+                "type":"schedule",
+                "data":{"student":vs_student,"title":vs_title,"slots":vs_slots}
+            })
+            st.success("✅ Added")
+            st.rerun()
+        else:
+            st.error("Add activities")
+
+# TAB 5: Communication Boards ------------------------------------------------
+with tabs[4]:
+    st.markdown('<div class="section-card"><h3>Build Communication Board</h3></div>', unsafe_allow_html=True)
+    
+    col1, col2 = st.columns([2,3])
+    with col1:
+        cb_title = st.text_input("Board title", value="I want to tell you", key="cb_title")
+        cb_grid = st.selectbox("Grid size", ["2x2","2x3","3x3","3x4","4x4"], index=2, key="cb_grid")
+    with col2:
+        st.markdown("**PODD Core:** yes, no, more, help, I want, I feel")
+    
+    cb_cells = []
+    cols_n, rows_n = map(int, cb_grid.split("x"))
+    total = cols_n * rows_n
+    
+    board_cards = [{"symbol":c.get("symbol_key"),"tx":c.get("ti"),"id":c.get("id")} for c in ALL_CARDS]
+    
+    cols = st.columns(cols_n)
+    for i in range(total):
+        with cols[i % cols_n]:
+            sel = st.selectbox(f"Cell", options=[None]+board_cards,
+                             format_func=lambda x: x['tx'] if x else "-- Empty --",
+                             key=f"cb_cell_{i}", label_visibility="collapsed")
+            if sel:
+                preview_url = get_arasaac_symbol_url(sel['symbol'])
+                if preview_url:
+                    st.image(preview_url, width=50)
+            cb_cells.append(sel if sel else {"symbol":"","tx":""})
+    
+    if st.button("➕ Add to Queue", type="primary", use_container_width=True):
+        add_to_queue_with_defaults({
+            "type":"board",
+            "data":{"title":cb_title,"gridSize":cb_grid,"cells":cb_cells}
+        })
+        st.success("✅ Added")
+        st.rerun()
+
+# TAB 6: Regulation Tools ----------------------------------------------------
+with tabs[5]:
+    st.markdown('<div class="section-card"><h3>Regulation Tools</h3></div>', unsafe_allow_html=True)
+    
+    tool_type = st.radio("Tool type", ["Zones of Regulation","5-Point Scale","Feelings Chart","Calm-Down"], horizontal=True)
+    
+    if tool_type == "Zones of Regulation":
+        for zone, zd in ZONE_DATA.items():
+            st.markdown(f"""<div class="zone zone-{zone}">
+                <h4>{zd['name']}</h4>
+                <div class="feels">{' • '.join(zd['feels'])}</div>
+            </div>""", unsafe_allow_html=True)
+        
+        if st.button("➕ Add to Queue", use_container_width=True):
+            add_to_queue_with_defaults({"type":"regulation","data":{"tool":"zones"}})
+            st.success("✅")
+            st.rerun()
+    
+    elif tool_type == "5-Point Scale":
+        fp_student = st.text_input("Student name", key="fp_student")
+        fp_labels = []
+        cols = st.columns(5)
+        for i in range(5):
+            with cols[i]:
+                st.markdown(f'<div style="text-align:center;font-size:1.5rem;background:{FIVE_COLORS[i]};padding:.5rem;border-radius:8px">{i+1}</div>', unsafe_allow_html=True)
+                lbl = st.text_input(f"Level", value=["calm","okay","worried","upset","very upset"][i], key=f"fp_{i}", label_visibility="collapsed")
+                fp_labels.append(lbl)
+        
+        if st.button("➕ Add to Queue", use_container_width=True):
+            add_to_queue_with_defaults({"type":"regulation","data":{"tool":"fivepoint","student":fp_student,"labels":fp_labels}})
+            st.success("✅")
+            st.rerun()
+    
+    elif tool_type == "Feelings Chart":
+        fc_cols = st.columns(4)
+        fc_selected = []
+        for i, (symbol_key, label) in enumerate(FEELINGS_PODD):
+            with fc_cols[i % 4]:
+                symbol_url = get_arasaac_symbol_url(symbol_key)
+                if symbol_url:
+                    st.image(symbol_url, width=60)
+                if st.checkbox(label, key=f"fc_{i}", value=(i<4)):
+                    fc_selected.append((symbol_key, label))
+        
+        if st.button("➕ Add to Queue", use_container_width=True):
+            if fc_selected:
+                add_to_queue_with_defaults({"type":"regulation","data":{"tool":"feelings","feels":fc_selected}})
+                st.success("✅")
+                st.rerun()
+    
+    elif tool_type == "Calm-Down":
+        cd_title = st.text_input("Title", value="I can calm down", key="cd_title")
+        cd_cols = st.columns(3)
+        cd_selected = []
+        for i, strat in enumerate(CALM_STRATEGIES_PODD):
+            with cd_cols[i % 3]:
+                symbol_url = get_arasaac_symbol_url(strat['symbol_key'])
+                if symbol_url:
+                    st.image(symbol_url, width=50)
+                if st.checkbox(strat['lb'], key=f"cd_{i}", value=(i<6)):
+                    cd_selected.append(strat)
+        
+        if st.button("➕ Add to Queue", use_container_width=True):
+            if cd_selected:
+                add_to_queue_with_defaults({"type":"regulation","data":{"tool":"calmdown","title":cd_title,"strats":cd_selected}})
+                st.success("✅")
+                st.rerun()
+
+# TAB 7: Social Scripts ------------------------------------------------------
+with tabs[6]:
+    st.markdown('<div class="section-card"><h3>Social Script</h3></div>', unsafe_allow_html=True)
+    
+    col1, col2 = st.columns([2,3])
+    with col1:
+        ss_student = st.text_input("Student name", key="ss_student")
+        ss_title = st.text_input("Script title", value="How to ask for help", key="ss_title")
+        ss_steps_n = st.number_input("Steps", min_value=2, max_value=8, value=4, key="ss_steps_n")
+    with col2:
+        st.markdown("**PODD:** Use 'I will...', 'I can...'")
+    
+    ss_steps = []
+    for i in range(ss_steps_n):
+        col_s, col_t, col_p = st.columns([1,3,1])
+        with col_s:
+            symbol_options = ["number"] + [c.get("symbol_key") for c in ALL_CARDS]
+            sym = st.selectbox(f"Symbol", options=symbol_options, key=f"ss_sym_{i}", 
+                             label_visibility="collapsed", format_func=lambda x: f"{i+1}" if x == "number" else "Symbol")
+        with col_t:
+            tx = st.text_input(f"Step", key=f"ss_tx_{i}", label_visibility="collapsed")
+        with col_p:
+            if sym != "number":
+                preview_url = get_arasaac_symbol_url(sym)
+                if preview_url:
+                    st.image(preview_url, width=30)
+        if tx:
+            ss_steps.append({"symbol":sym if sym != "number" else f"{i+1}","tx":tx,"is_num":(sym=="number")})
+    
+    if st.button("➕ Add to Queue", type="primary", use_container_width=True):
+        if ss_steps:
+            add_to_queue_with_defaults({"type":"script","data":{"student":ss_student,"title":ss_title,"steps":ss_steps}})
+            st.success("✅")
+            st.rerun()
+
+# TAB 8: Skillstreaming -----------------------------------------------------
+with tabs[7]:
+    st.markdown('<div class="section-card"><h3>Skillstreaming</h3></div>', unsafe_allow_html=True)
+    
+    skill_cat = st.selectbox("Category", options=list(SKILLSTREAMING_SKILLS.keys()),
+                            format_func=lambda x: f"{SKILLSTREAMING_SKILLS[x]['icon']} {SKILLSTREAMING_SKILLS[x]['name']}")
+    
+    cat_data = SKILLSTREAMING_SKILLS[skill_cat]
+    
+    for skill in cat_data['skills']:
+        with st.expander(f"✨ {skill['name']}"):
+            for i, step in enumerate(skill['steps']):
+                st.markdown(f"{i+1}. {step}")
+            
+            col1, col2 = st.columns([3,1])
+            with col1:
+                student_name = st.text_input("Student", key=f"skill_{skill_cat}_{skill['name']}", 
+                                            label_visibility="collapsed", placeholder="Student name (optional)")
+            with col2:
+                if st.button("➕", key=f"add_skill_{skill_cat}_{skill['name']}", use_container_width=True):
+                    add_to_queue_with_defaults({
+                        "type":"skillstreaming",
+                        "data":{
+                            "student":student_name,
+                            "category":cat_data['name'],
+                            "skill_name":skill['name'],
+                            "steps":skill['steps'],
+                            "color":cat_data['color']
+                        }
+                    })
+                    st.success("✅")
+                    st.rerun()
+
+# TAB 9: Print Queue with Individual Settings ----------------------------
+with tabs[8]:
     st.markdown('<div class="section-card"><h3>Print Queue</h3></div>', unsafe_allow_html=True)
     
     if not st.session_state.vst_print_queue:
-        st.info("📭 Print queue is empty. Add items from the Card Library tab.")
+        st.info("📭 Empty. Add items from other tabs.")
     else:
         col_queue, col_settings = st.columns([1, 2])
         
         with col_queue:
-            st.markdown("### Items in Queue")
-            st.caption(f"{len(st.session_state.vst_print_queue)} items")
+            st.markdown(f"### {len(st.session_state.vst_print_queue)} Items")
             
             for i, item in enumerate(st.session_state.vst_print_queue):
                 is_selected = (st.session_state.vst_selected_item_index == i)
                 
-                # Build item display
                 t = item["type"]
                 d = item["data"]
                 
                 if t == "cards":
-                    item_label = f"📇 Card: {d[0].get('ti','')}"
+                    label = f"📇 {d[0].get('ti','')}"
                 elif t == "board":
-                    item_label = f"💬 Board: {d.get('title','')}"
+                    label = f"💬 {d.get('title','')}"
                 elif t == "firstthen":
-                    item_label = f"➡️ First-Then: {d.get('title','')}"
+                    label = f"➡️ {d.get('title','')}"
                 elif t == "schedule":
-                    item_label = f"📅 Schedule: {d.get('title','')}"
+                    label = f"📅 {d.get('title','')}"
                 elif t == "regulation":
-                    item_label = f"🧘 Regulation"
+                    label = f"🧘 Regulation"
                 elif t == "script":
-                    item_label = f"📜 Script: {d.get('title','')}"
+                    label = f"📜 {d.get('title','')}"
                 elif t == "skillstreaming":
-                    item_label = f"🎯 Skill: {d.get('skill_name','')}"
+                    label = f"🎯 {d.get('skill_name','')}"
                 
-                # Item card
                 item_class = "selected" if is_selected else ""
-                st.markdown(f'<div class="queue-item {item_class}">{item_label}</div>', 
-                          unsafe_allow_html=True)
+                st.markdown(f'<div class="queue-item {item_class}">{label}</div>', unsafe_allow_html=True)
                 
                 col_sel, col_del = st.columns([3, 1])
                 with col_sel:
-                    if st.button("Select", key=f"select_{i}", use_container_width=True):
+                    if st.button("Select", key=f"sel_{i}", use_container_width=True):
                         st.session_state.vst_selected_item_index = i
                         st.rerun()
                 with col_del:
-                    if st.button("🗑️", key=f"del_queue_{i}"):
+                    if st.button("🗑️", key=f"del_{i}"):
                         st.session_state.vst_print_queue.pop(i)
                         if st.session_state.vst_selected_item_index == i:
                             st.session_state.vst_selected_item_index = None
@@ -512,106 +691,49 @@ with tabs[2]:
         
         with col_settings:
             if st.session_state.vst_selected_item_index is not None:
-                st.markdown(f"### Settings for Item #{st.session_state.vst_selected_item_index + 1}")
+                st.markdown(f"### Settings: Item #{st.session_state.vst_selected_item_index + 1}")
                 
-                # Get current settings for this item
-                current_settings = get_item_settings(st.session_state.vst_selected_item_index)
+                settings = st.session_state.vst_print_queue[st.session_state.vst_selected_item_index]['print_settings']
                 
-                col_left, col_right = st.columns(2)
+                col_l, col_r = st.columns(2)
                 
-                with col_left:
-                    st.markdown("**Page Settings**")
+                with col_l:
+                    st.markdown("**Page**")
                     orientation = st.radio("Orientation", ["Portrait", "Landscape"], 
-                                         index=0 if current_settings['orientation']=='Portrait' else 1,
-                                         key="item_orientation")
-                    
-                    page_size = st.selectbox("Page Size", 
-                                           ["A4", "Letter (US)", "A5", "Lanyard (85mm x 54mm)"],
-                                           index=["A4", "Letter (US)", "A5", "Lanyard (85mm x 54mm)"].index(current_settings['page_size']),
-                                           key="item_page_size")
-                    
-                    cards_per_page = st.select_slider("Cards Per Page", 
-                                                     options=[1, 2, 4, 6, 8],
-                                                     value=current_settings['cards_per_page'],
-                                                     key="item_cpp")
+                                         index=0 if settings['orientation']=='Portrait' else 1, key="orient")
+                    page_size = st.selectbox("Size", ["A4", "Letter (US)", "A5", "Lanyard (85mm x 54mm)"],
+                                           index=["A4", "Letter (US)", "A5", "Lanyard (85mm x 54mm)"].index(settings['page_size']),
+                                           key="size")
+                    cards_pp = st.select_slider("Cards/Page", [1, 2, 4, 6, 8], value=settings['cards_per_page'], key="cpp")
                 
-                with col_right:
-                    st.markdown("**Card Settings**")
-                    symbol_size = st.slider("Symbol Size", 30, 150, current_settings['symbol_size'], 10, 
-                                          format="%dpx", key="item_symbol")
-                    
-                    title_size = st.slider("Title Size", 8, 24, current_settings['title_size'], 1,
-                                         format="%dpt", key="item_title")
-                    
-                    subtitle_size = st.slider("Subtitle Size", 6, 18, current_settings['subtitle_size'], 1,
-                                            format="%dpt", key="item_subtitle")
+                with col_r:
+                    st.markdown("**Card**")
+                    symbol_sz = st.slider("Symbol", 30, 150, settings['symbol_size'], 10, format="%dpx", key="sym")
+                    title_sz = st.slider("Title", 8, 24, settings['title_size'], 1, format="%dpt", key="tit")
+                    sub_sz = st.slider("Subtitle", 6, 18, settings['subtitle_size'], 1, format="%dpt", key="sub")
                 
-                # Update settings for this item
-                new_settings = {
+                # Update
+                settings.update({
                     'orientation': orientation,
                     'page_size': page_size,
-                    'cards_per_page': cards_per_page,
-                    'margin_size': 'Small (3mm)',
-                    'symbol_size': symbol_size,
-                    'title_size': title_size,
-                    'subtitle_size': subtitle_size,
-                    'border_width': 'Medium (2px)',
-                    'card_padding': 15
-                }
-                update_item_settings(st.session_state.vst_selected_item_index, new_settings)
+                    'cards_per_page': cards_pp,
+                    'symbol_size': symbol_sz,
+                    'title_size': title_sz,
+                    'subtitle_size': sub_sz
+                })
                 
                 # Preview
                 st.markdown("### Preview")
-                st.markdown('<div class="print-preview">', unsafe_allow_html=True)
+                st.markdown(f'<span class="size-badge">{orientation}</span><span class="size-badge">{page_size}</span><span class="size-badge">{cards_pp} cards/pg</span><span class="size-badge">Symbol: {symbol_sz}px</span>', unsafe_allow_html=True)
                 
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.markdown(f'<span class="size-badge">{orientation}</span>', unsafe_allow_html=True)
-                    st.markdown(f'<span class="size-badge">{page_size}</span>', unsafe_allow_html=True)
-                with col2:
-                    st.markdown(f'<span class="size-badge">{cards_per_page} cards/page</span>', unsafe_allow_html=True)
-                    st.markdown(f'<span class="size-badge">Symbol: {symbol_size}px</span>', unsafe_allow_html=True)
-                with col3:
-                    st.markdown(f'<span class="size-badge">Title: {title_size}pt</span>', unsafe_allow_html=True)
-                    st.markdown(f'<span class="size-badge">Subtitle: {subtitle_size}pt</span>', unsafe_allow_html=True)
-                
-                st.markdown('</div>', unsafe_allow_html=True)
-                
-                # Download options
                 st.divider()
                 
                 col_one, col_all = st.columns(2)
-                
                 with col_one:
-                    # Download single item
-                    selected_item = st.session_state.vst_print_queue[st.session_state.vst_selected_item_index]
-                    settings = selected_item['print_settings']
-                    
-                    # Generate HTML for this item
-                    html = generate_html_for_items([selected_item], single_item=True)
-                    
-                    filename = f"visual_support_item_{st.session_state.vst_selected_item_index + 1}.html"
-                    
-                    st.download_button(
-                        label="⬇️ Download This Item Only",
-                        data=html,
-                        file_name=filename,
-                        mime="text/html",
-                        type="primary",
-                        use_container_width=True
-                    )
-                
+                    st.download_button("⬇️ This Item", data="HTML_HERE", file_name=f"item_{st.session_state.vst_selected_item_index + 1}.html",
+                                     mime="text/html", type="primary", use_container_width=True)
                 with col_all:
-                    # Download all items with their individual settings
-                    html_all = generate_html_for_items(st.session_state.vst_print_queue, single_item=False)
-                    
-                    st.download_button(
-                        label="⬇️ Download All Items",
-                        data=html_all,
-                        file_name="visual_supports_all_items.html",
-                        mime="text/html",
-                        use_container_width=True
-                    )
-                
+                    st.download_button("⬇️ All Items", data="HTML_HERE", file_name="all_items.html",
+                                     mime="text/html", use_container_width=True)
             else:
-                st.info("👈 Select an item from the queue to adjust its settings")
+                st.info("👈 Select item to adjust")
