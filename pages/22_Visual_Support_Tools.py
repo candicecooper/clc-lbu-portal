@@ -411,7 +411,7 @@ with tabs[2]:
                     st.image(preview_url, width=60)
             ft_slots.append(sel)
     
-    if st.button("➕ Add to Queue", type="primary", use_container_width=True):
+    if st.button("➕ Add to Queue", type="primary", use_container_width=True, key="add_firstthen"):
         if all(s is not None for s in ft_slots):
             add_to_queue_with_defaults({
                 "type":"firstthen",
@@ -452,7 +452,7 @@ with tabs[3]:
                 if preview_url:
                     st.image(preview_url, width=40)
     
-    if st.button("➕ Add to Queue", type="primary", use_container_width=True):
+    if st.button("➕ Add to Queue", type="primary", use_container_width=True, key="add_schedule"):
         if vs_slots:
             add_to_queue_with_defaults({
                 "type":"schedule",
@@ -492,7 +492,7 @@ with tabs[4]:
                     st.image(preview_url, width=50)
             cb_cells.append(sel if sel else {"symbol":"","tx":""})
     
-    if st.button("➕ Add to Queue", type="primary", use_container_width=True):
+    if st.button("➕ Add to Queue", type="primary", use_container_width=True, key="add_commboard"):
         add_to_queue_with_defaults({
             "type":"board",
             "data":{"title":cb_title,"gridSize":cb_grid,"cells":cb_cells}
@@ -513,7 +513,7 @@ with tabs[5]:
                 <div class="feels">{' • '.join(zd['feels'])}</div>
             </div>""", unsafe_allow_html=True)
         
-        if st.button("➕ Add to Queue", use_container_width=True):
+        if st.button("➕ Add to Queue", use_container_width=True, key="add_zones"):
             add_to_queue_with_defaults({"type":"regulation","data":{"tool":"zones"}})
             st.success("✅")
             st.rerun()
@@ -528,7 +528,7 @@ with tabs[5]:
                 lbl = st.text_input(f"Level", value=["calm","okay","worried","upset","very upset"][i], key=f"fp_{i}", label_visibility="collapsed")
                 fp_labels.append(lbl)
         
-        if st.button("➕ Add to Queue", use_container_width=True):
+        if st.button("➕ Add to Queue", use_container_width=True, key="add_fivepoint"):
             add_to_queue_with_defaults({"type":"regulation","data":{"tool":"fivepoint","student":fp_student,"labels":fp_labels}})
             st.success("✅")
             st.rerun()
@@ -544,7 +544,7 @@ with tabs[5]:
                 if st.checkbox(label, key=f"fc_{i}", value=(i<4)):
                     fc_selected.append((symbol_key, label))
         
-        if st.button("➕ Add to Queue", use_container_width=True):
+        if st.button("➕ Add to Queue", use_container_width=True, key="add_feelings"):
             if fc_selected:
                 add_to_queue_with_defaults({"type":"regulation","data":{"tool":"feelings","feels":fc_selected}})
                 st.success("✅")
@@ -562,7 +562,7 @@ with tabs[5]:
                 if st.checkbox(strat['lb'], key=f"cd_{i}", value=(i<6)):
                     cd_selected.append(strat)
         
-        if st.button("➕ Add to Queue", use_container_width=True):
+        if st.button("➕ Add to Queue", use_container_width=True, key="add_calmdown"):
             if cd_selected:
                 add_to_queue_with_defaults({"type":"regulation","data":{"tool":"calmdown","title":cd_title,"strats":cd_selected}})
                 st.success("✅")
@@ -597,7 +597,7 @@ with tabs[6]:
         if tx:
             ss_steps.append({"symbol":sym if sym != "number" else f"{i+1}","tx":tx,"is_num":(sym=="number")})
     
-    if st.button("➕ Add to Queue", type="primary", use_container_width=True):
+    if st.button("➕ Add to Queue", type="primary", use_container_width=True, key="add_script"):
         if ss_steps:
             add_to_queue_with_defaults({"type":"script","data":{"student":ss_student,"title":ss_title,"steps":ss_steps}})
             st.success("✅")
@@ -684,7 +684,7 @@ with tabs[8]:
                             st.session_state.vst_selected_item_index = None
                         st.rerun()
             
-            if st.button("🗑️ Clear All", use_container_width=True):
+            if st.button("🗑️ Clear All", use_container_width=True, key="clear_all_queue"):
                 st.session_state.vst_print_queue = []
                 st.session_state.vst_selected_item_index = None
                 st.rerun()
@@ -731,9 +731,9 @@ with tabs[8]:
                 col_one, col_all = st.columns(2)
                 with col_one:
                     st.download_button("⬇️ This Item", data="HTML_HERE", file_name=f"item_{st.session_state.vst_selected_item_index + 1}.html",
-                                     mime="text/html", type="primary", use_container_width=True)
+                                     mime="text/html", type="primary", use_container_width=True, key="download_one")
                 with col_all:
                     st.download_button("⬇️ All Items", data="HTML_HERE", file_name="all_items.html",
-                                     mime="text/html", use_container_width=True)
+                                     mime="text/html", use_container_width=True, key="download_all")
             else:
                 st.info("👈 Select item to adjust")
