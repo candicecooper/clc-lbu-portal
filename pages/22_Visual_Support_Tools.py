@@ -8,12 +8,106 @@ import json
 import requests
 from datetime import datetime
 import urllib.parse
+from supabase import create_client
 
 st.set_page_config(
     page_title="Visual Support Tools - CLC",
     page_icon="🎨",
     layout="wide",
 )
+
+# -- Supabase Setup -----------------------------------------------------------
+@st.cache_resource
+def get_supabase_client():
+    """Get Supabase client"""
+    SUPABASE_URL = st.secrets["supabase"]["url"]
+    SUPABASE_KEY = st.secrets["supabase"]["key"]
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+supabase = get_supabase_client()
+
+# -- Custom Cards Database Functions ------------------------------------------
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def load_custom_cards_from_db():
+    """Load all active custom cards from Supabase"""
+    try:
+        response = supabase.table('custom_visual_cards').select('*').eq('is_active', True).order('created_at', desc=True).execute()
+        
+        cards = []
+        for row in response.data:
+            cards.append({
+                'id': row['card_id'],
+                'cat': row['category'],
+                'color': row['color'],
+                'symbol_key': row['symbol_key'],
+                'ti': row['title'],
+                'sub': row['subtitle'] or '',
+                'fw': row['frameworks'] or [],
+                'custom': True,
+                'db_id': row['id'],  # Keep database ID for updates
+                'created_by': row.get('created_by', 'Unknown'),
+                'created_at': row['created_at'],
+                'notes': row.get('notes', '')
+            })
+        return cards
+    except Exception as e:
+        st.error(f"Error loading custom cards: {e}")
+        return []
+
+def save_custom_card_to_db(card_data):
+    """Save new custom card to Supabase"""
+    try:
+        db_card = {
+            'card_id': card_data['id'],
+            'category': card_data['cat'],
+            'color': card_data['color'],
+            'symbol_key': card_data['symbol_key'],
+            'title': card_data['ti'],
+            'subtitle': card_data['sub'],
+            'frameworks': card_data['fw'],
+            'created_by': card_data.get('created_by', 'Staff'),
+            'is_active': True
+        }
+        
+        response = supabase.table('custom_visual_cards').insert(db_card).execute()
+        
+        # Clear cache to reload cards
+        load_custom_cards_from_db.clear()
+        return True, "Card saved successfully!"
+    except Exception as e:
+        return False, f"Error saving card: {e}"
+
+def update_custom_card_in_db(db_id, card_data):
+    """Update existing custom card in Supabase"""
+    try:
+        db_card = {
+            'category': card_data['cat'],
+            'color': card_data['color'],
+            'symbol_key': card_data['symbol_key'],
+            'title': card_data['ti'],
+            'subtitle': card_data['sub'],
+            'frameworks': card_data['fw']
+        }
+        
+        response = supabase.table('custom_visual_cards').update(db_card).eq('id', db_id).execute()
+        
+        # Clear cache to reload cards
+        load_custom_cards_from_db.clear()
+        return True, "Card updated successfully!"
+    except Exception as e:
+        return False, f"Error updating card: {e}"
+
+def delete_custom_card_from_db(db_id):
+    """Delete (deactivate) custom card from Supabase"""
+    try:
+        # Soft delete - just set is_active to False
+        response = supabase.table('custom_visual_cards').update({'is_active': False}).eq('id', db_id).execute()
+        
+        # Clear cache to reload cards
+        load_custom_cards_from_db.clear()
+        return True, "Card deleted successfully!"
+    except Exception as e:
+        return False, f"Error deleting card: {e}"
 
 # -- Brand colours ------------------------------------------------------------
 TEAL   = "#1A5C78"
@@ -215,13 +309,20 @@ if "vst_print_queue" not in st.session_state:
     st.session_state.vst_print_queue = []
 
 if "vst_custom_cards" not in st.session_state:
-    st.session_state.vst_custom_cards = []
+    # Load custom cards from database on first load
+    st.session_state.vst_custom_cards = load_custom_cards_from_db()
 
 if "vst_selected_item_index" not in st.session_state:
     st.session_state.vst_selected_item_index = None
 
 if "vst_search_query" not in st.session_state:
     st.session_state.vst_search_query = ""
+
+if "vst_editing_card" not in st.session_state:
+    st.session_state.vst_editing_card = None
+
+# Reload custom cards from DB (with cache, so not every render)
+st.session_state.vst_custom_cards = load_custom_cards_from_db()
 
 # Combine default and custom cards
 ALL_CARDS = DEFAULT_CARDS + st.session_state.vst_custom_cards
@@ -334,53 +435,183 @@ with tabs[0]:
                 with col_del:
                     if c.get('custom'):
                         if st.button("🗑️", key=f"del_custom_{c['id']}_{i}"):
-                            st.session_state.vst_custom_cards = [x for x in st.session_state.vst_custom_cards if x['id'] != c['id']]
-                            st.success("Deleted")
-                            st.rerun()
+                            if 'db_id' in c:
+                                success, message = delete_custom_card_from_db(c['db_id'])
+                                if success:
+                                    st.success("Deleted")
+                                    st.rerun()
+                                else:
+                                    st.error(message)
+                            else:
+                                st.error("Cannot delete - missing database ID")
     else:
         st.info("No cards match your search/filters")
 
-# TAB 2: Create Custom Card ----------------------------------------------
+# TAB 2: Create/Manage Custom Cards ----------------------------------------
 with tabs[1]:
-    st.markdown('<div class="section-card"><h3>Create Custom Card</h3></div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-card"><h3>Create & Manage Custom Cards</h3></div>', unsafe_allow_html=True)
     
-    col1, col2 = st.columns(2)
+    subtab1, subtab2 = st.tabs(["➕ Create New Card", "📋 Manage Existing Cards"])
     
-    with col1:
-        custom_title = st.text_input("Card Title", placeholder="e.g., I need a drink", key="custom_title")
-        custom_subtitle = st.text_input("Card Subtitle", placeholder="e.g., I want water", key="custom_subtitle")
-        custom_symbol = st.text_input("Symbol Keyword", placeholder="e.g., water", key="custom_symbol")
-        custom_category = st.selectbox("Category", options=["regulation","communication","actions","social","places","activities"], key="custom_category")
-    
-    with col2:
-        custom_color = st.color_picker("Card Color", value=TEAL, key="custom_color")
-        custom_frameworks = st.multiselect("Frameworks", options=list(FW_DETAILS.keys()), default=["AAC"], key="custom_frameworks")
+    # SUBTAB 1: Create New Card
+    with subtab1:
+        st.markdown("Create custom cards that will be available to all staff in the Card Library.")
         
-        st.markdown("**Preview:**")
-        if custom_symbol:
-            preview_symbol_url = get_arasaac_symbol_url(custom_symbol)
-            if preview_symbol_url:
-                st.image(preview_symbol_url, width=100)
-            else:
-                st.warning("No symbol found")
-    
-    if st.button("➕ Add to Library", type="primary", use_container_width=True):
-        if custom_title and custom_symbol:
-            new_card = {
-                'id': f"custom_{len(st.session_state.vst_custom_cards)}_{datetime.now().strftime('%H%M%S')}",
-                'cat': custom_category,
-                'color': custom_color,
-                'symbol_key': custom_symbol,
-                'ti': custom_title,
-                'sub': custom_subtitle,
-                'fw': custom_frameworks,
-                'custom': True
-            }
-            st.session_state.vst_custom_cards.append(new_card)
-            st.success(f"✅ Added '{custom_title}'! Go to Card Library to use it.")
-            st.rerun()
+        # Check if editing existing card
+        if st.session_state.vst_editing_card:
+            st.info(f"✏️ Editing: {st.session_state.vst_editing_card['ti']}")
+            edit_data = st.session_state.vst_editing_card
         else:
-            st.error("Enter title and symbol keyword")
+            edit_data = None
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            custom_title = st.text_input("Card Title (Main Text)", 
+                                         value=edit_data['ti'] if edit_data else "",
+                                         placeholder="e.g., I need a drink", 
+                                         key="custom_title")
+            
+            custom_subtitle = st.text_input("Card Subtitle (Small Text)", 
+                                           value=edit_data['sub'] if edit_data else "",
+                                           placeholder="e.g., I want water", 
+                                           key="custom_subtitle")
+            
+            custom_symbol = st.text_input("ARASAAC Symbol Keyword", 
+                                         value=edit_data['symbol_key'] if edit_data else "",
+                                         placeholder="e.g., water", 
+                                         key="custom_symbol")
+            
+            custom_category = st.selectbox("Category", 
+                                          options=["regulation","communication","actions","social","places","activities"],
+                                          index=["regulation","communication","actions","social","places","activities"].index(edit_data['cat']) if edit_data else 0,
+                                          key="custom_category")
+            
+            custom_created_by = st.text_input("Your name (optional)", 
+                                             placeholder="e.g., Candice",
+                                             key="custom_created_by")
+        
+        with col2:
+            custom_color = st.color_picker("Card Border Color", 
+                                          value=edit_data['color'] if edit_data else TEAL, 
+                                          key="custom_color")
+            
+            custom_frameworks = st.multiselect("Frameworks", 
+                                              options=list(FW_DETAILS.keys()),
+                                              default=edit_data['fw'] if edit_data else ["AAC"],
+                                              key="custom_frameworks")
+            
+            st.markdown("**Preview Symbol:**")
+            if custom_symbol:
+                preview_symbol_url = get_arasaac_symbol_url(custom_symbol)
+                if preview_symbol_url:
+                    st.image(preview_symbol_url, width=100)
+                else:
+                    st.warning("No symbol found - try different keyword")
+        
+        # Buttons
+        col_btn1, col_btn2, col_btn3 = st.columns(3)
+        
+        with col_btn1:
+            if edit_data:
+                if st.button("💾 Save Changes", type="primary", use_container_width=True, key="save_edit"):
+                    if custom_title and custom_symbol:
+                        updated_card = {
+                            'cat': custom_category,
+                            'color': custom_color,
+                            'symbol_key': custom_symbol,
+                            'ti': custom_title,
+                            'sub': custom_subtitle,
+                            'fw': custom_frameworks
+                        }
+                        success, message = update_custom_card_in_db(edit_data['db_id'], updated_card)
+                        if success:
+                            st.success(message)
+                            st.session_state.vst_editing_card = None
+                            st.rerun()
+                        else:
+                            st.error(message)
+                    else:
+                        st.error("Enter title and symbol keyword")
+            else:
+                if st.button("➕ Save to Library", type="primary", use_container_width=True, key="save_new"):
+                    if custom_title and custom_symbol:
+                        new_card = {
+                            'id': f"custom_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                            'cat': custom_category,
+                            'color': custom_color,
+                            'symbol_key': custom_symbol,
+                            'ti': custom_title,
+                            'sub': custom_subtitle,
+                            'fw': custom_frameworks,
+                            'custom': True,
+                            'created_by': custom_created_by if custom_created_by else 'Staff'
+                        }
+                        success, message = save_custom_card_to_db(new_card)
+                        if success:
+                            st.success(f"✅ {message}")
+                            st.rerun()
+                        else:
+                            st.error(message)
+                    else:
+                        st.error("Enter title and symbol keyword")
+        
+        with col_btn2:
+            if edit_data and st.button("❌ Cancel Edit", use_container_width=True, key="cancel_edit"):
+                st.session_state.vst_editing_card = None
+                st.rerun()
+        
+        with col_btn3:
+            pass  # Empty for layout
+    
+    # SUBTAB 2: Manage Existing Cards
+    with subtab2:
+        st.markdown("**All Custom Cards** - Edit or delete cards created by staff")
+        
+        if st.session_state.vst_custom_cards:
+            st.markdown(f"*{len(st.session_state.vst_custom_cards)} custom cards in library*")
+            
+            # Refresh button
+            if st.button("🔄 Refresh List", key="refresh_custom"):
+                load_custom_cards_from_db.clear()
+                st.session_state.vst_custom_cards = load_custom_cards_from_db()
+                st.rerun()
+            
+            st.divider()
+            
+            # Display all custom cards
+            for i, card in enumerate(st.session_state.vst_custom_cards):
+                col_preview, col_info, col_actions = st.columns([1, 3, 2])
+                
+                with col_preview:
+                    symbol_url = get_arasaac_symbol_url(card['symbol_key'])
+                    if symbol_url:
+                        st.image(symbol_url, width=80)
+                
+                with col_info:
+                    st.markdown(f"**{card['ti']}** <span class='custom-badge'>CUSTOM</span>", unsafe_allow_html=True)
+                    st.caption(f"{card['sub']}")
+                    st.caption(f"📁 {card['cat']} • 🏷️ {', '.join(card['fw'])}")
+                    st.caption(f"👤 Created by: {card.get('created_by', 'Unknown')} • 📅 {card.get('created_at', '')[:10]}")
+                
+                with col_actions:
+                    col_edit, col_del = st.columns(2)
+                    with col_edit:
+                        if st.button("✏️ Edit", key=f"edit_custom_{i}", use_container_width=True):
+                            st.session_state.vst_editing_card = card
+                            st.rerun()
+                    with col_del:
+                        if st.button("🗑️ Delete", key=f"del_custom_db_{i}", use_container_width=True):
+                            success, message = delete_custom_card_from_db(card['db_id'])
+                            if success:
+                                st.success(message)
+                                st.rerun()
+                            else:
+                                st.error(message)
+                
+                st.divider()
+        else:
+            st.info("No custom cards yet. Create one in the 'Create New Card' tab!")
 
 # TAB 3: First-Then Boards ---------------------------------------------------
 with tabs[2]:
