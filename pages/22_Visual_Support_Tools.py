@@ -338,6 +338,202 @@ ALL_CARDS = DEFAULT_CARDS + st.session_state.vst_custom_cards
 # HELPER FUNCTIONS
 # =============================================================================
 
+def generate_print_html(items_list):
+    """Generate complete print-ready HTML for one or multiple items with their settings"""
+    
+    html_parts = ['''<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Nunito', sans-serif; }
+body { background: #fff; }
+.page-break { page-break-after: always; }
+.card-container { 
+    border: 2px solid #333; 
+    border-radius: 12px; 
+    padding: 15px; 
+    text-align: center; 
+    background: #fff; 
+    break-inside: avoid;
+    margin: 10px;
+}
+.symbol { display: block; margin: 0 auto; }
+.title { font-weight: 800; margin: 8px 0; }
+.subtitle { color: #666; }
+@media print {
+    body { background: #fff; }
+    .page-break { page-break-after: always; }
+}
+</style>
+</head>
+<body>
+''']
+    
+    for item_idx, item in enumerate(items_list):
+        settings = item.get('print_settings', {})
+        t = item["type"]
+        d = item["data"]
+        
+        # Extract settings
+        orientation = settings.get('orientation', 'Portrait')
+        page_size = settings.get('page_size', 'A4')
+        symbol_size = settings.get('symbol_size', 80)
+        title_size = settings.get('title_size', 14)
+        subtitle_size = settings.get('subtitle_size', 10)
+        padding = settings.get('card_padding', 15)
+        
+        # Add page styling for this item
+        if page_size == "A4":
+            page_dims = "210mm 297mm" if orientation == "Portrait" else "297mm 210mm"
+        elif page_size == "Letter (US)":
+            page_dims = "8.5in 11in" if orientation == "Portrait" else "11in 8.5in"
+        elif page_size == "A5":
+            page_dims = "148mm 210mm" if orientation == "Portrait" else "210mm 148mm"
+        else:
+            page_dims = "85mm 54mm"
+        
+        html_parts.append(f'<style>@page {{ size: {page_dims}; margin: 10mm; }}</style>')
+        
+        # Generate content based on type
+        if t == "cards":
+            for card in d:
+                symbol_url = get_arasaac_symbol_url(card.get('symbol_key', ''))
+                html_parts.append(f'<div class="card-container" style="border-color:{card.get("color","#1A5C78")};padding:{padding}px;max-width:500px;margin:20px auto">')
+                if symbol_url:
+                    html_parts.append(f'<img src="{symbol_url}" class="symbol" style="width:{symbol_size}px;height:{symbol_size}px;object-fit:contain;margin-bottom:{padding}px">')
+                html_parts.append(f'<div class="title" style="font-size:{title_size}pt">{card.get("ti","")}</div>')
+                html_parts.append(f'<div class="subtitle" style="font-size:{subtitle_size}pt">{card.get("sub","")}</div>')
+                html_parts.append('</div>')
+        
+        elif t == "board":
+            cols_n = int(d.get('gridSize','3x3').split('x')[0])
+            html_parts.append(f'<div class="card-container" style="padding:{padding}px;max-width:700px;margin:20px auto">')
+            html_parts.append(f'<div class="title" style="font-size:{title_size}pt;margin-bottom:{padding}px">{d.get("title","")}</div>')
+            html_parts.append(f'<div style="display:grid;grid-template-columns:repeat({cols_n},1fr);gap:10px">')
+            for cell in d.get('cells',[]):
+                symbol_url = get_arasaac_symbol_url(cell.get('symbol','')) if cell.get('symbol') else None
+                html_parts.append('<div style="border:2px solid #ddd;border-radius:8px;padding:10px;text-align:center">')
+                if symbol_url:
+                    html_parts.append(f'<img src="{symbol_url}" style="width:{symbol_size//2}px;height:{symbol_size//2}px;object-fit:contain;margin:0 auto 8px">')
+                html_parts.append(f'<div style="font-size:{subtitle_size}pt;font-weight:700">{cell.get("tx","")}</div>')
+                html_parts.append('</div>')
+            html_parts.append('</div></div>')
+        
+        elif t == "firstthen":
+            student = f"{d.get('student','')}'s " if d.get('student') else ""
+            html_parts.append(f'<div class="card-container" style="padding:{padding}px;max-width:700px;margin:20px auto">')
+            html_parts.append(f'<div class="title" style="font-size:{title_size}pt;margin-bottom:{padding}px">{student}{d.get("title","")}</div>')
+            html_parts.append('<div style="display:flex;gap:15px;justify-content:center">')
+            for lbl, slot in zip(d.get('labels',[]), d.get('slots',[])):
+                if slot:
+                    symbol_url = get_arasaac_symbol_url(slot.get('symbol',''))
+                    html_parts.append(f'<div style="flex:1;max-width:200px;border:3px solid #1A5C78;border-radius:10px;padding:{padding}px;text-align:center">')
+                    html_parts.append(f'<div style="font-size:{subtitle_size+2}pt;font-weight:800;color:#666;margin-bottom:10px">{lbl}</div>')
+                    if symbol_url:
+                        html_parts.append(f'<img src="{symbol_url}" style="width:{symbol_size}px;height:{symbol_size}px;object-fit:contain;margin:0 auto 10px">')
+                    html_parts.append(f'<div style="font-size:{subtitle_size}pt;font-weight:700">{slot.get("lb","")}</div>')
+                    html_parts.append('</div>')
+            html_parts.append('</div></div>')
+        
+        elif t == "schedule":
+            student = f"{d.get('student','')}'s " if d.get('student') else ""
+            html_parts.append(f'<div class="card-container" style="padding:{padding}px;max-width:600px;margin:20px auto">')
+            html_parts.append(f'<div class="title" style="font-size:{title_size}pt;margin-bottom:{padding}px">{student}{d.get("title","")}</div>')
+            for slot in d.get('slots',[]):
+                symbol_url = get_arasaac_symbol_url(slot.get('symbol',''))
+                html_parts.append('<div style="display:flex;align-items:center;gap:15px;padding:10px 0;border-bottom:1px solid #eee">')
+                html_parts.append(f'<span style="font-size:{subtitle_size+2}pt;font-weight:800;color:#666;min-width:60px">{slot.get("time","")}</span>')
+                if symbol_url:
+                    html_parts.append(f'<img src="{symbol_url}" style="width:{symbol_size//2}px;height:{symbol_size//2}px;object-fit:contain">')
+                html_parts.append(f'<span style="font-size:{subtitle_size}pt;font-weight:700">{slot.get("act","")}</span>')
+                html_parts.append('</div>')
+            html_parts.append('</div>')
+        
+        elif t == "regulation":
+            tool = d.get('tool','')
+            html_parts.append(f'<div class="card-container" style="padding:{padding}px;max-width:700px;margin:20px auto">')
+            
+            if tool == "zones":
+                html_parts.append(f'<div class="title" style="font-size:{title_size}pt;margin-bottom:{padding}px">Zones of Regulation</div>')
+                for zone, zdata in ZONE_DATA.items():
+                    html_parts.append(f'<div style="background:{zdata["bg"]};border:2px solid {zdata["color"]};border-radius:10px;padding:15px;margin:10px 0">')
+                    html_parts.append(f'<div style="font-size:{subtitle_size+2}pt;font-weight:800;margin-bottom:5px">{zdata["name"]}</div>')
+                    html_parts.append(f'<div style="font-size:{subtitle_size}pt">{" • ".join(zdata["feels"])}</div>')
+                    html_parts.append('</div>')
+            
+            elif tool == "fivepoint":
+                student = f"{d.get('student','')}'s " if d.get('student') else ""
+                html_parts.append(f'<div class="title" style="font-size:{title_size}pt;margin-bottom:{padding}px">{student}5-Point Scale</div>')
+                html_parts.append('<div style="display:flex;gap:10px">')
+                for i, label in enumerate(d.get('labels',[])):
+                    html_parts.append(f'<div style="flex:1;text-align:center;border:2px solid {FIVE_COLORS[i]};border-radius:8px;padding:15px;background:{FIVE_COLORS[i]}">')
+                    html_parts.append(f'<div style="font-size:{title_size+4}pt;font-weight:800;margin-bottom:10px">{i+1}</div>')
+                    html_parts.append(f'<div style="font-size:{subtitle_size}pt;font-weight:700">{label}</div>')
+                    html_parts.append('</div>')
+                html_parts.append('</div>')
+            
+            elif tool == "feelings":
+                html_parts.append(f'<div class="title" style="font-size:{title_size}pt;margin-bottom:{padding}px">I feel</div>')
+                html_parts.append('<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">')
+                for symbol_key, label in d.get('feels',[]):
+                    symbol_url = get_arasaac_symbol_url(symbol_key)
+                    html_parts.append('<div style="border:2px solid #ddd;border-radius:8px;padding:10px;text-align:center">')
+                    if symbol_url:
+                        html_parts.append(f'<img src="{symbol_url}" style="width:{symbol_size//2}px;height:{symbol_size//2}px;object-fit:contain;margin:0 auto 8px">')
+                    html_parts.append(f'<div style="font-size:{subtitle_size}pt;font-weight:700">{label}</div>')
+                    html_parts.append('</div>')
+                html_parts.append('</div>')
+            
+            elif tool == "calmdown":
+                html_parts.append(f'<div class="title" style="font-size:{title_size}pt;margin-bottom:{padding}px">{d.get("title","")}</div>')
+                html_parts.append('<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">')
+                for strat in d.get('strats',[]):
+                    symbol_url = get_arasaac_symbol_url(strat.get('symbol_key',''))
+                    html_parts.append('<div style="text-align:center;padding:10px">')
+                    if symbol_url:
+                        html_parts.append(f'<img src="{symbol_url}" style="width:{symbol_size//2}px;height:{symbol_size//2}px;object-fit:contain;margin:0 auto 8px">')
+                    html_parts.append(f'<div style="font-size:{subtitle_size}pt;font-weight:700">{strat.get("lb","")}</div>')
+                    html_parts.append('</div>')
+                html_parts.append('</div>')
+            
+            html_parts.append('</div>')
+        
+        elif t == "script":
+            student = f"{d.get('student','')}'s " if d.get('student') else ""
+            html_parts.append(f'<div class="card-container" style="padding:{padding}px;max-width:600px;margin:20px auto">')
+            html_parts.append(f'<div class="title" style="font-size:{title_size}pt;margin-bottom:{padding}px">{student}{d.get("title","")}</div>')
+            for step in d.get('steps',[]):
+                html_parts.append('<div style="display:flex;align-items:flex-start;gap:12px;margin:12px 0">')
+                if step.get('is_num'):
+                    html_parts.append(f'<div style="min-width:30px;height:30px;border-radius:50%;background:#1A5C78;color:#fff;display:flex;align-items:center;justify-content:center;font-size:{subtitle_size+2}pt;font-weight:800;flex-shrink:0">{step["symbol"]}</div>')
+                else:
+                    symbol_url = get_arasaac_symbol_url(step.get('symbol',''))
+                    if symbol_url:
+                        html_parts.append(f'<img src="{symbol_url}" style="width:40px;height:40px;object-fit:contain;flex-shrink:0">')
+                html_parts.append(f'<div style="font-size:{subtitle_size}pt;line-height:1.6;flex:1">{step.get("tx","")}</div>')
+                html_parts.append('</div>')
+            html_parts.append('</div>')
+        
+        elif t == "skillstreaming":
+            student = f"{d.get('student','')}'s " if d.get('student') else ""
+            html_parts.append(f'<div class="card-container" style="border-left:5px solid {d.get("color","#7C2D91")};padding:{padding}px;max-width:600px;margin:20px auto">')
+            html_parts.append(f'<div class="title" style="font-size:{title_size}pt">{student}{d.get("skill_name","")}</div>')
+            html_parts.append(f'<div style="font-size:{subtitle_size}pt;color:#666;margin-bottom:{padding}px">{d.get("category","")}</div>')
+            for i, step in enumerate(d.get("steps",[])):
+                html_parts.append(f'<div style="padding:10px 0 10px 40px;position:relative;font-size:{subtitle_size}pt">')
+                html_parts.append(f'<span style="position:absolute;left:0;top:10px;width:28px;height:28px;border-radius:50%;background:{d.get("color","#7C2D91")};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800">{i+1}</span>')
+                html_parts.append(f'{step}</div>')
+            html_parts.append('</div>')
+        
+        # Add page break between items (except last one)
+        if item_idx < len(items_list) - 1:
+            html_parts.append('<div class="page-break"></div>')
+    
+    html_parts.append('</body></html>')
+    return "".join(html_parts)
+
 def add_to_queue_with_defaults(item_dict):
     """Add item to queue with default print settings"""
     item_dict['print_settings'] = {
@@ -968,10 +1164,38 @@ with tabs[8]:
                 
                 col_one, col_all = st.columns(2)
                 with col_one:
-                    st.download_button("⬇️ This Item", data="HTML_HERE", file_name=f"item_{st.session_state.vst_selected_item_index + 1}.html",
-                                     mime="text/html", type="primary", use_container_width=True, key="download_one")
+                    # Generate HTML for just this item
+                    selected_item = st.session_state.vst_print_queue[st.session_state.vst_selected_item_index]
+                    html_single = generate_print_html([selected_item])
+                    
+                    st.download_button("⬇️ This Item", 
+                                     data=html_single, 
+                                     file_name=f"visual_support_item_{st.session_state.vst_selected_item_index + 1}.html",
+                                     mime="text/html", 
+                                     type="primary", 
+                                     use_container_width=True, 
+                                     key="download_one")
                 with col_all:
-                    st.download_button("⬇️ All Items", data="HTML_HERE", file_name="all_items.html",
-                                     mime="text/html", use_container_width=True, key="download_all")
+                    # Generate HTML for all items
+                    html_all = generate_print_html(st.session_state.vst_print_queue)
+                    
+                    st.download_button("⬇️ All Items", 
+                                     data=html_all, 
+                                     file_name="visual_supports_all.html",
+                                     mime="text/html", 
+                                     use_container_width=True, 
+                                     key="download_all")
+                
+                # Print instructions
+                st.markdown("""
+                <div class="aac-note">
+                    <strong>📄 How to Print:</strong><br>
+                    1. Open downloaded HTML file in Chrome or Edge<br>
+                    2. Press Ctrl+P (Windows) or Cmd+P (Mac)<br>
+                    3. Set margins to <strong>None</strong> or <strong>Minimum</strong><br>
+                    4. Enable <strong>Background graphics</strong><br>
+                    5. Print or Save as PDF
+                </div>
+                """, unsafe_allow_html=True)
             else:
                 st.info("👈 Select item to adjust")
