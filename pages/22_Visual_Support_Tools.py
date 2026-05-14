@@ -1,6 +1,6 @@
 # =============================================================================
 # 22_Visual_Support_Tools.py  -  CLC-LBU Portal
-# COMPLETE VERSION - All features + Enhanced Print Customization
+# ADVANCED VERSION - Individual item settings + Custom card library + Search
 # =============================================================================
 
 import streamlit as st
@@ -68,6 +68,18 @@ st.markdown(f"""
     margin:0 0 .75rem; font-size:1rem; font-weight:800; color:{TEAL};
 }}
 
+.queue-item {{
+    background:#fff; border:2px solid #dde; border-radius:8px;
+    padding:.8rem 1rem; margin-bottom:.6rem; cursor:pointer;
+    transition:all 0.2s;
+}}
+.queue-item:hover {{
+    border-color:{TEAL}; box-shadow:0 2px 6px rgba(26,92,120,.2);
+}}
+.queue-item.selected {{
+    border-color:{TEAL}; background:{TEAL_B};
+}}
+
 .print-preview {{
     background:#fff; border:2px solid {TEAL}; border-radius:12px;
     padding:1.5rem; margin:1rem 0;
@@ -93,93 +105,74 @@ st.markdown(f"""
     line-height:1.6;
 }}
 .aac-note strong {{ color:#D4860A; }}
+
+.custom-badge {{
+    display:inline-block; padding:.2rem .5rem; border-radius:12px;
+    background:#7C2D91; color:#fff; font-size:.65rem; font-weight:700;
+    margin-left:.3rem;
+}}
 </style>
 """, unsafe_allow_html=True)
 
 # =============================================================================
-# DATA
+# DATA - DEFAULT CARDS + CUSTOM CARDS
 # =============================================================================
 
-CARDS = [
+DEFAULT_CARDS = [
     # Regulation
-    dict(id="feelings",   cat="regulation",    color=AMBER,     symbol_key="feel",        ti="I feel",               sub="Tell someone",             fw=["BSEM","ZOR","TI","AAC"]),
-    dict(id="help",       cat="regulation",    color=AMBER,     symbol_key="help",        ti="I need help",          sub="Someone help me",          fw=["BSEM","TI","AAC"]),
-    dict(id="break",      cat="regulation",    color=AMBER,     symbol_key="break",       ti="I need a break",       sub="I want to stop",           fw=["TI","PBS","BSEM"]),
-    dict(id="calm",       cat="regulation",    color=AMBER,     symbol_key="calm",        ti="I need to calm down",  sub="I want quiet",             fw=["BSEM","TI","OT"]),
-    dict(id="safe",       cat="regulation",    color=AMBER,     symbol_key="safe",        ti="I feel safe",          sub="It's okay",                fw=["TI","PBS"]),
+    dict(id="feelings",   cat="regulation",    color=AMBER,     symbol_key="feel",        ti="I feel",               sub="Tell someone",             fw=["BSEM","ZOR","TI","AAC"], custom=False),
+    dict(id="help",       cat="regulation",    color=AMBER,     symbol_key="help",        ti="I need help",          sub="Someone help me",          fw=["BSEM","TI","AAC"], custom=False),
+    dict(id="break",      cat="regulation",    color=AMBER,     symbol_key="break",       ti="I need a break",       sub="I want to stop",           fw=["TI","PBS","BSEM"], custom=False),
+    dict(id="calm",       cat="regulation",    color=AMBER,     symbol_key="calm",        ti="I need to calm down",  sub="I want quiet",             fw=["BSEM","TI","OT"], custom=False),
+    dict(id="safe",       cat="regulation",    color=AMBER,     symbol_key="safe",        ti="I feel safe",          sub="It's okay",                fw=["TI","PBS"], custom=False),
     # Communication
-    dict(id="yes",        cat="communication", color=GREEN,     symbol_key="yes",         ti="Yes",                  sub="I want this",              fw=["AAC","PODD"]),
-    dict(id="no",         cat="communication", color=GREEN,     symbol_key="no",          ti="No",                   sub="I don't want this",        fw=["AAC","PODD"]),
-    dict(id="more",       cat="communication", color=GREEN,     symbol_key="more",        ti="More",                 sub="I want more",              fw=["AAC","PODD"]),
-    dict(id="finished",   cat="communication", color=GREEN,     symbol_key="finished",    ti="Finished",             sub="All done",                 fw=["AAC","PODD"]),
-    dict(id="want",       cat="communication", color=GREEN,     symbol_key="want",        ti="I want",               sub="Something I want",         fw=["AAC","PODD"]),
-    dict(id="like",       cat="communication", color=GREEN,     symbol_key="like",        ti="I like",               sub="Something I like",         fw=["AAC","PODD"]),
-    dict(id="dont_like",  cat="communication", color=GREEN,     symbol_key="dislike",     ti="I don't like",         sub="Something I don't like",   fw=["AAC","PODD"]),
+    dict(id="yes",        cat="communication", color=GREEN,     symbol_key="yes",         ti="Yes",                  sub="I want this",              fw=["AAC","PODD"], custom=False),
+    dict(id="no",         cat="communication", color=GREEN,     symbol_key="no",          ti="No",                   sub="I don't want this",        fw=["AAC","PODD"], custom=False),
+    dict(id="more",       cat="communication", color=GREEN,     symbol_key="more",        ti="More",                 sub="I want more",              fw=["AAC","PODD"], custom=False),
+    dict(id="finished",   cat="communication", color=GREEN,     symbol_key="finished",    ti="Finished",             sub="All done",                 fw=["AAC","PODD"], custom=False),
+    dict(id="want",       cat="communication", color=GREEN,     symbol_key="want",        ti="I want",               sub="Something I want",         fw=["AAC","PODD"], custom=False),
+    dict(id="like",       cat="communication", color=GREEN,     symbol_key="like",        ti="I like",               sub="Something I like",         fw=["AAC","PODD"], custom=False),
+    dict(id="dont_like",  cat="communication", color=GREEN,     symbol_key="dislike",     ti="I don't like",         sub="Something I don't like",   fw=["AAC","PODD"], custom=False),
     # Actions
-    dict(id="go",         cat="actions",       color="#3730A3", symbol_key="go",          ti="I want to go",         sub="I want to move",           fw=["AAC","PODD"]),
-    dict(id="stop",       cat="actions",       color="#3730A3", symbol_key="stop",        ti="I want to stop",       sub="Stop now",                 fw=["AAC","PODD"]),
-    dict(id="wait",       cat="actions",       color="#3730A3", symbol_key="wait",        ti="I can wait",           sub="Wait please",              fw=["AAC","PODD"]),
-    dict(id="look",       cat="actions",       color="#3730A3", symbol_key="look",        ti="I want to look",       sub="I want to see",            fw=["AAC","PODD"]),
-    dict(id="listen",     cat="actions",       color="#3730A3", symbol_key="listen",      ti="I want to listen",     sub="I want to hear",           fw=["AAC","PODD"]),
+    dict(id="go",         cat="actions",       color="#3730A3", symbol_key="go",          ti="I want to go",         sub="I want to move",           fw=["AAC","PODD"], custom=False),
+    dict(id="stop",       cat="actions",       color="#3730A3", symbol_key="stop",        ti="I want to stop",       sub="Stop now",                 fw=["AAC","PODD"], custom=False),
+    dict(id="wait",       cat="actions",       color="#3730A3", symbol_key="wait",        ti="I can wait",           sub="Wait please",              fw=["AAC","PODD"], custom=False),
+    dict(id="look",       cat="actions",       color="#3730A3", symbol_key="look",        ti="I want to look",       sub="I want to see",            fw=["AAC","PODD"], custom=False),
+    dict(id="listen",     cat="actions",       color="#3730A3", symbol_key="listen",      ti="I want to listen",     sub="I want to hear",           fw=["AAC","PODD"], custom=False),
     # Social
-    dict(id="hello",      cat="social",        color="#8C2D5A", symbol_key="hello",       ti="Hello",                sub="Say hi",                   fw=["AAC","PODD"]),
-    dict(id="goodbye",    cat="social",        color="#8C2D5A", symbol_key="goodbye",     ti="Goodbye",              sub="Say bye",                  fw=["AAC","PODD"]),
-    dict(id="please",     cat="social",        color="#8C2D5A", symbol_key="please",      ti="Please",               sub="Can I have please",        fw=["AAC","PODD"]),
-    dict(id="thankyou",   cat="social",        color="#8C2D5A", symbol_key="thank you",   ti="Thank you",            sub="Thanks",                   fw=["AAC","PODD"]),
-    dict(id="sorry",      cat="social",        color="#8C2D5A", symbol_key="sorry",       ti="Sorry",                sub="I am sorry",               fw=["AAC","PODD"]),
+    dict(id="hello",      cat="social",        color="#8C2D5A", symbol_key="hello",       ti="Hello",                sub="Say hi",                   fw=["AAC","PODD"], custom=False),
+    dict(id="goodbye",    cat="social",        color="#8C2D5A", symbol_key="goodbye",     ti="Goodbye",              sub="Say bye",                  fw=["AAC","PODD"], custom=False),
+    dict(id="please",     cat="social",        color="#8C2D5A", symbol_key="please",      ti="Please",               sub="Can I have please",        fw=["AAC","PODD"], custom=False),
+    dict(id="thankyou",   cat="social",        color="#8C2D5A", symbol_key="thank you",   ti="Thank you",            sub="Thanks",                   fw=["AAC","PODD"], custom=False),
+    dict(id="sorry",      cat="social",        color="#8C2D5A", symbol_key="sorry",       ti="Sorry",                sub="I am sorry",               fw=["AAC","PODD"], custom=False),
     # Places
-    dict(id="bathroom",   cat="places",        color="#0E7490", symbol_key="toilet",      ti="Bathroom",             sub="I want the toilet",        fw=["AAC","PODD"]),
-    dict(id="outside",    cat="places",        color="#0E7490", symbol_key="outside",     ti="Outside",              sub="I want to go outside",     fw=["AAC","PODD"]),
-    dict(id="home",       cat="places",        color="#0E7490", symbol_key="home",        ti="Home",                 sub="I want to go home",        fw=["AAC","PODD"]),
+    dict(id="bathroom",   cat="places",        color="#0E7490", symbol_key="toilet",      ti="Bathroom",             sub="I want the toilet",        fw=["AAC","PODD"], custom=False),
+    dict(id="outside",    cat="places",        color="#0E7490", symbol_key="outside",     ti="Outside",              sub="I want to go outside",     fw=["AAC","PODD"], custom=False),
+    dict(id="home",       cat="places",        color="#0E7490", symbol_key="home",        ti="Home",                 sub="I want to go home",        fw=["AAC","PODD"], custom=False),
     # Activities
-    dict(id="eat",        cat="activities",    color="#059669", symbol_key="eat",         ti="I want to eat",        sub="Food",                     fw=["AAC","PODD"]),
-    dict(id="drink",      cat="activities",    color="#059669", symbol_key="drink",       ti="I want to drink",      sub="Something to drink",       fw=["AAC","PODD"]),
-    dict(id="play",       cat="activities",    color="#059669", symbol_key="play",        ti="I want to play",       sub="Play time",                fw=["AAC","PODD"]),
-    dict(id="work",       cat="activities",    color="#059669", symbol_key="work",        ti="I want to work",       sub="Do work",                  fw=["AAC","PODD"]),
-    dict(id="read",       cat="activities",    color="#059669", symbol_key="read",        ti="I want to read",       sub="Read a book",              fw=["AAC","PODD"]),
+    dict(id="eat",        cat="activities",    color="#059669", symbol_key="eat",         ti="I want to eat",        sub="Food",                     fw=["AAC","PODD"], custom=False),
+    dict(id="drink",      cat="activities",    color="#059669", symbol_key="drink",       ti="I want to drink",      sub="Something to drink",       fw=["AAC","PODD"], custom=False),
+    dict(id="play",       cat="activities",    color="#059669", symbol_key="play",        ti="I want to play",       sub="Play time",                fw=["AAC","PODD"], custom=False),
+    dict(id="work",       cat="activities",    color="#059669", symbol_key="work",        ti="I want to work",       sub="Do work",                  fw=["AAC","PODD"], custom=False),
+    dict(id="read",       cat="activities",    color="#059669", symbol_key="read",        ti="I want to read",       sub="Read a book",              fw=["AAC","PODD"], custom=False),
 ]
 
+# Skillstreaming (abbreviated for space)
 SKILLSTREAMING_SKILLS = {
     "classroom": {
         "name": "Classroom Survival Skills", "color": "#1A5C78", "icon": "📚",
         "skills": [
             {"name": "Listening", "steps": ["Look at the person talking", "Think about what is being said", "Wait until the person is done talking", "Say what you want to say"]},
             {"name": "Asking for Help", "steps": ["Decide what the problem is", "Think about asking for help", "Choose who to ask", "Tell that person your problem"]},
-            {"name": "Following Instructions", "steps": ["Listen carefully to the instruction", "Think about what you have been asked to do", "Ask questions if you need to", "Repeat the steps to yourself", "Do what you have been asked"]},
         ]
     },
     "friendship": {
         "name": "Friendship-Making Skills", "color": "#2D7D4F", "icon": "🤝",
         "skills": [
             {"name": "Joining In", "steps": ["Watch what is happening", "Decide if you want to join in", "Decide the best way to join in", "Choose the best time to join in", "Join in"]},
-            {"name": "Sharing", "steps": ["Decide if you want to share", "Decide who you want to share with", "Choose what to share", "Offer to share in a friendly way"]},
-        ]
-    },
-    "feelings": {
-        "name": "Dealing with Feelings", "color": "#D4860A", "icon": "💭",
-        "skills": [
-            {"name": "Knowing Your Feelings", "steps": ["Think about how your body feels", "Decide what happened to make you feel this way", "Decide what feeling you are having", "Decide how strong your feeling is"]},
-            {"name": "Expressing Your Feelings", "steps": ["Stop and think about what you are feeling", "Decide what it was that made you feel this way", "Decide how you can best express your feeling", "Express your feeling in a calm and friendly way"]},
         ]
     },
 }
-
-FEELINGS_PODD = [
-    ("happy", "happy"), ("sad", "sad"), ("angry", "angry"), ("scared", "scared"),
-    ("tired", "tired"), ("excited", "excited"), ("okay", "okay"), ("worried", "worried"),
-]
-
-CALM_STRATEGIES_PODD = [
-    dict(symbol_key="breathe", lb="I can breathe"),
-    dict(symbol_key="walk", lb="I can walk"),
-    dict(symbol_key="sit", lb="I can sit"),
-    dict(symbol_key="squeeze hands", lb="I can squeeze"),
-    dict(symbol_key="drink water", lb="I can drink water"),
-    dict(symbol_key="listen music", lb="I can listen"),
-    dict(symbol_key="look", lb="I can look"),
-    dict(symbol_key="hug", lb="I can hug"),
-    dict(symbol_key="stop", lb="I can stop"),
-]
 
 FW_DETAILS = {
     "BSEM":  {"label":"BSEM",  "bg":"#1A5C78","color":"#fff"},
@@ -192,14 +185,105 @@ FW_DETAILS = {
     "SS":    {"label":"SS",    "bg":"#3730A3","color":"#fff"},
 }
 
-ZONE_DATA = {
-    "blue":   {"name":"Blue - Moving Slowly",  "bg":"#DBEAFE","color":"#1E40AF","feels":["tired","sad","sick","bored"]},
-    "green":  {"name":"Green - Ready to Learn","bg":"#DCFCE7","color":"#15803D","feels":["happy","calm","okay","focused"]},
-    "yellow": {"name":"Yellow - Losing Control","bg":"#FEF9C3","color":"#A16207","feels":["frustrated","worried","silly","excited"]},
-    "red":    {"name":"Red - Out of Control","bg":"#FEE2E2","color":"#B91C1C","feels":["angry","scared","yelling","upset"]},
-}
+# =============================================================================
+# INITIALIZE SESSION STATE
+# =============================================================================
 
-FIVE_COLORS = ["#93C5FD","#86EFAC","#FDE047","#FDBA74","#F87171"]
+if "vst_print_queue" not in st.session_state:
+    st.session_state.vst_print_queue = []
+
+if "vst_custom_cards" not in st.session_state:
+    st.session_state.vst_custom_cards = []
+
+if "vst_selected_item_index" not in st.session_state:
+    st.session_state.vst_selected_item_index = None
+
+if "vst_search_query" not in st.session_state:
+    st.session_state.vst_search_query = ""
+
+# Combine default and custom cards
+ALL_CARDS = DEFAULT_CARDS + st.session_state.vst_custom_cards
+
+# =============================================================================
+# HELPER FUNCTION - Generate HTML for items
+# =============================================================================
+
+def generate_html_for_items(items_list, single_item=False):
+    """Generate print-ready HTML for one or more items with their individual settings"""
+    
+    html_parts = ['<!DOCTYPE html><html><head><meta charset="UTF-8">']
+    html_parts.append('<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet">')
+    html_parts.append('<style>*{box-sizing:border-box;margin:0;padding:0;font-family:"Nunito",sans-serif}body{background:#fff}</style>')
+    html_parts.append('</head><body>')
+    
+    for item_idx, item in enumerate(items_list):
+        settings = item.get('print_settings', {})
+        
+        # Extract settings
+        orientation = settings.get('orientation', 'Portrait')
+        page_size = settings.get('page_size', 'A4')
+        symbol_size = settings.get('symbol_size', 80)
+        title_size = settings.get('title_size', 14)
+        subtitle_size = settings.get('subtitle_size', 10)
+        card_padding = settings.get('card_padding', 15)
+        
+        # Page dimensions
+        if page_size == "A4":
+            page_dims = "210mm 297mm" if orientation == "Portrait" else "297mm 210mm"
+        elif page_size == "Letter (US)":
+            page_dims = "8.5in 11in" if orientation == "Portrait" else "11in 8.5in"
+        elif page_size == "A5":
+            page_dims = "148mm 210mm" if orientation == "Portrait" else "210mm 148mm"
+        else:
+            page_dims = "85mm 54mm"
+        
+        # Add page with settings for this item
+        html_parts.append(f'<div style="page-break-after:always"><style>@page{{size:{page_dims};margin:6mm}}</style>')
+        
+        t = item["type"]
+        d = item["data"]
+        
+        # Generate content based on type
+        if t == "cards":
+            for card in d:
+                symbol_url = get_arasaac_symbol_url(card.get('symbol_key', ''))
+                html_parts.append(f'<div style="border:2px solid {card.get("color","#1A5C78")};border-radius:12px;padding:{card_padding}px;text-align:center;background:#fff;max-width:400px;margin:20px auto">')
+                if symbol_url:
+                    html_parts.append(f'<img src="{symbol_url}" style="width:{symbol_size}px;height:{symbol_size}px;object-fit:contain;margin:0 auto {card_padding}px;display:block">')
+                html_parts.append(f'<div style="font-size:{title_size}pt;font-weight:800;margin-bottom:8px">{card.get("ti","")}</div>')
+                html_parts.append(f'<div style="font-size:{subtitle_size}pt;color:#666">{card.get("sub","")}</div>')
+                html_parts.append('</div>')
+        
+        html_parts.append('</div>')
+    
+    html_parts.append('</body></html>')
+    return "".join(html_parts)
+
+# =============================================================================
+# HELPER FUNCTION - Get item print settings
+# =============================================================================
+
+def get_item_settings(item_index):
+    """Get print settings for specific item, or use defaults"""
+    if item_index is not None and item_index < len(st.session_state.vst_print_queue):
+        item = st.session_state.vst_print_queue[item_index]
+        return item.get('print_settings', {
+            'orientation': 'Portrait',
+            'page_size': 'A4',
+            'cards_per_page': 4,
+            'margin_size': 'Small (3mm)',
+            'symbol_size': 80,
+            'title_size': 14,
+            'subtitle_size': 10,
+            'border_width': 'Medium (2px)',
+            'card_padding': 15
+        })
+    return None
+
+def update_item_settings(item_index, settings):
+    """Update print settings for specific item"""
+    if item_index is not None and item_index < len(st.session_state.vst_print_queue):
+        st.session_state.vst_print_queue[item_index]['print_settings'] = settings
 
 # =============================================================================
 # INTERFACE
@@ -209,646 +293,325 @@ st.markdown("""
 <div class="vst-header">
     <div class="icon">🎨</div>
     <div>
-        <h1>Visual Support Tools</h1>
-        <p>Professional AAC supports • Adjustable print sizing • ARASAAC symbols</p>
+        <h1>Visual Support Tools - Advanced</h1>
+        <p>Custom cards • Individual item settings • Search & filter</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-st.markdown("""
-<div class="aac-note">
-    <strong>✨ Complete AAC Tool with Print Customization!</strong> Create all visual supports with 
-    ARASAAC symbols, then customize print size, orientation, and layout before downloading.
-</div>
-""", unsafe_allow_html=True)
-
-# Initialize session state
-if "vst_print_queue" not in st.session_state:
-    st.session_state.vst_print_queue = []
-
 tabs = st.tabs([
-    "📇 Quick Cards",
-    "➡️ First-Then Boards", 
-    "📅 Visual Schedules",
-    "💬 Communication Boards",
-    "🧘 Regulation Tools",
-    "📜 Social Scripts",
-    "🎯 Skillstreaming",
-    "🖨️ Print Queue & Settings"
+    "📇 Card Library",
+    "➕ Create Custom Card",
+    "🖨️ Print Queue"
 ])
 
-# TAB 1: Quick Cards --------------------------------------------------------
+# TAB 1: Card Library with Search -----------------------------------------
 with tabs[0]:
-    st.markdown('<div class="section-card"><h3>Select Quick Cards</h3></div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-card"><h3>Card Library with Search</h3></div>', unsafe_allow_html=True)
     
-    cats = {"regulation":"🧘 Regulation","communication":"💬 Communication","actions":"🎯 Actions",
-            "social":"🤝 Social","places":"📍 Places","activities":"✨ Activities"}
+    # Search and filter
+    col_search, col_cat, col_fw = st.columns([2, 1, 1])
     
-    for cat_id, cat_name in cats.items():
-        cat_cards = [c for c in CARDS if c.get("cat") == cat_id]
-        if cat_cards:
-            with st.expander(f"{cat_name} ({len(cat_cards)} cards)", expanded=(cat_id=="regulation")):
-                cols = st.columns(4)
-                for i, c in enumerate(cat_cards):
-                    with cols[i % 4]:
-                        symbol_url = get_arasaac_symbol_url(c.get('symbol_key', ''))
-                        if symbol_url:
-                            st.image(symbol_url, width=80)
-                        else:
-                            st.markdown("<div style='font-size:2rem'>📌</div>", unsafe_allow_html=True)
-                        
-                        st.markdown(f"**{c.get('ti','')}**")
-                        st.caption(c.get('sub',''))
-                        
-                        if st.button(f"Add to print", key=f"add_{c['id']}", use_container_width=True):
-                            st.session_state.vst_print_queue.append({"type":"cards","data":[c]})
-                            st.success("✅ Added")
+    with col_search:
+        search_query = st.text_input("🔍 Search cards", 
+                                     value=st.session_state.vst_search_query,
+                                     placeholder="Type to search...",
+                                     key="search_input")
+        st.session_state.vst_search_query = search_query
+    
+    with col_cat:
+        cat_filter = st.selectbox("Filter by category", 
+                                 options=["All"] + ["regulation","communication","actions","social","places","activities"])
+    
+    with col_fw:
+        fw_filter = st.selectbox("Filter by framework",
+                                options=["All"] + list(FW_DETAILS.keys()))
+    
+    # Filter cards based on search and filters
+    filtered_cards = ALL_CARDS
+    
+    if search_query:
+        filtered_cards = [c for c in filtered_cards 
+                         if search_query.lower() in c.get('ti','').lower() 
+                         or search_query.lower() in c.get('sub','').lower()
+                         or search_query.lower() in c.get('symbol_key','').lower()]
+    
+    if cat_filter != "All":
+        filtered_cards = [c for c in filtered_cards if c.get('cat') == cat_filter]
+    
+    if fw_filter != "All":
+        filtered_cards = [c for c in filtered_cards if fw_filter in c.get('fw', [])]
+    
+    st.markdown(f"**{len(filtered_cards)} cards found**")
+    
+    if filtered_cards:
+        cols = st.columns(4)
+        for i, c in enumerate(filtered_cards):
+            with cols[i % 4]:
+                symbol_url = get_arasaac_symbol_url(c.get('symbol_key', ''))
+                if symbol_url:
+                    st.image(symbol_url, width=80)
+                else:
+                    st.markdown("<div style='font-size:2rem'>📌</div>", unsafe_allow_html=True)
+                
+                title_html = f"**{c.get('ti','')}**"
+                if c.get('custom'):
+                    title_html += '<span class="custom-badge">CUSTOM</span>'
+                st.markdown(title_html, unsafe_allow_html=True)
+                st.caption(c.get('sub',''))
+                
+                col_add, col_del = st.columns([3,1])
+                with col_add:
+                    if st.button(f"Add", key=f"add_{c['id']}_{i}", use_container_width=True):
+                        st.session_state.vst_print_queue.append({
+                            "type":"cards",
+                            "data":[c],
+                            "print_settings": {
+                                'orientation': 'Portrait',
+                                'page_size': 'A4',
+                                'cards_per_page': 4,
+                                'margin_size': 'Small (3mm)',
+                                'symbol_size': 80,
+                                'title_size': 14,
+                                'subtitle_size': 10,
+                                'border_width': 'Medium (2px)',
+                                'card_padding': 15
+                            }
+                        })
+                        st.success("✅")
+                        st.rerun()
+                
+                with col_del:
+                    if c.get('custom'):
+                        if st.button("🗑️", key=f"del_custom_{c['id']}_{i}"):
+                            st.session_state.vst_custom_cards = [x for x in st.session_state.vst_custom_cards if x['id'] != c['id']]
+                            st.success("Deleted")
                             st.rerun()
+    else:
+        st.info("No cards match your search/filters")
 
-# TAB 2: First-Then Boards ---------------------------------------------------
+# TAB 2: Create Custom Card ----------------------------------------------
 with tabs[1]:
-    st.markdown('<div class="section-card"><h3>Build First-Then Board</h3></div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-card"><h3>Create Custom Card</h3></div>', unsafe_allow_html=True)
+    
+    st.markdown("""
+    Create your own custom cards and add them to the library. These will be available 
+    in the Card Library tab with a purple CUSTOM badge.
+    """)
     
     col1, col2 = st.columns(2)
+    
     with col1:
-        ft_student = st.text_input("Student name (optional)", key="ft_student")
-        ft_title = st.text_input("Board title", value="First-Then", key="ft_title")
-        ft_steps = st.radio("Number of steps", [2,3,4], horizontal=True, key="ft_steps")
+        custom_title = st.text_input("Card Title (Main Text)", 
+                                     placeholder="e.g., I need a drink",
+                                     key="custom_title")
+        
+        custom_subtitle = st.text_input("Card Subtitle (Small Text)", 
+                                       placeholder="e.g., I want water",
+                                       key="custom_subtitle")
+        
+        custom_symbol = st.text_input("ARASAAC Symbol Keyword", 
+                                     placeholder="e.g., water, drink, thirsty",
+                                     help="This will search ARASAAC for a matching symbol",
+                                     key="custom_symbol")
+        
+        custom_category = st.selectbox("Category",
+                                      options=["regulation","communication","actions","social","places","activities"],
+                                      key="custom_category")
+    
     with col2:
-        st.markdown("**PODD Tip:** Use action vocabulary like 'I want to...', 'I can...', 'I will...'")
+        custom_color = st.color_picker("Card Border Color", value=TEAL, key="custom_color")
+        
+        custom_frameworks = st.multiselect("Frameworks",
+                                          options=list(FW_DETAILS.keys()),
+                                          default=["AAC"],
+                                          key="custom_frameworks")
+        
+        st.markdown("**Preview Symbol:**")
+        if custom_symbol:
+            preview_symbol_url = get_arasaac_symbol_url(custom_symbol)
+            if preview_symbol_url:
+                st.image(preview_symbol_url, width=100)
+            else:
+                st.warning("No symbol found - try different keyword")
     
-    ft_labels = ["FIRST","THEN","NEXT","LAST"][:ft_steps]
-    ft_slots = []
-    
-    cols = st.columns(ft_steps)
-    for i, lbl in enumerate(ft_labels):
-        with cols[i]:
-            st.markdown(f'**{lbl}**')
-            slot_cards = [{"symbol":c.get("symbol_key"),"lb":c.get("ti"),"id":c.get("id")} for c in CARDS]
-            sel = st.selectbox(f"Select activity", options=[None]+slot_cards,
-                             format_func=lambda x: x['lb'] if x else "-- Choose --",
-                             key=f"ft_slot_{i}", label_visibility="collapsed")
-            if sel:
-                preview_url = get_arasaac_symbol_url(sel['symbol'])
-                if preview_url:
-                    st.image(preview_url, width=60)
-            ft_slots.append(sel)
-    
-    if st.button("➕ Add First-Then to Print", type="primary", use_container_width=True):
-        if all(s is not None for s in ft_slots):
-            st.session_state.vst_print_queue.append({
-                "type":"firstthen",
-                "data":{"student":ft_student,"title":ft_title,"labels":ft_labels,"slots":ft_slots}
-            })
-            st.success("✅ Added to print queue")
+    if st.button("➕ Add Custom Card to Library", type="primary", use_container_width=True):
+        if custom_title and custom_symbol:
+            new_card = {
+                'id': f"custom_{len(st.session_state.vst_custom_cards)}_{datetime.now().strftime('%H%M%S')}",
+                'cat': custom_category,
+                'color': custom_color,
+                'symbol_key': custom_symbol,
+                'ti': custom_title,
+                'sub': custom_subtitle,
+                'fw': custom_frameworks,
+                'custom': True
+            }
+            st.session_state.vst_custom_cards.append(new_card)
+            st.success(f"✅ Added '{custom_title}' to library! Go to Card Library tab to use it.")
             st.rerun()
         else:
-            st.error("Please fill all slots")
+            st.error("Please enter at least a title and symbol keyword")
 
-# TAB 3: Visual Schedules ----------------------------------------------------
+# TAB 3: Print Queue with Individual Settings ----------------------------
 with tabs[2]:
-    st.markdown('<div class="section-card"><h3>Build Visual Schedule</h3></div>', unsafe_allow_html=True)
-    
-    col1, col2 = st.columns([2,3])
-    with col1:
-        vs_student = st.text_input("Student name (optional)", key="vs_student")
-        vs_title = st.text_input("Schedule title", value="My Schedule", key="vs_title")
-        vs_slots_n = st.number_input("Number of activities", min_value=3, max_value=12, value=6, key="vs_slots_n")
-    with col2:
-        st.markdown("**PODD Schedule Language:** Use 'I will...', 'Time to...', 'Next I...'")
-    
-    vs_slots = []
-    for i in range(vs_slots_n):
-        col_t, col_a, col_p = st.columns([1,2,1])
-        with col_t:
-            time = st.text_input(f"Time", value=f"{8+i}:00", key=f"vs_time_{i}", label_visibility="collapsed")
-        with col_a:
-            activity_cards = [{"symbol":c.get("symbol_key"),"lb":c.get("ti"),"id":c.get("id")} for c in CARDS]
-            sel = st.selectbox(f"Activity {i+1}", options=[None]+activity_cards,
-                             format_func=lambda x: x['lb'] if x else "-- Choose --",
-                             key=f"vs_act_{i}", label_visibility="collapsed")
-            if sel:
-                vs_slots.append({"time":time,"symbol":sel["symbol"],"act":sel["lb"]})
-        with col_p:
-            if sel:
-                preview_url = get_arasaac_symbol_url(sel['symbol'])
-                if preview_url:
-                    st.image(preview_url, width=40)
-    
-    if st.button("➕ Add Schedule to Print", type="primary", use_container_width=True):
-        if vs_slots:
-            st.session_state.vst_print_queue.append({
-                "type":"schedule",
-                "data":{"student":vs_student,"title":vs_title,"slots":vs_slots}
-            })
-            st.success("✅ Added to print queue")
-            st.rerun()
-        else:
-            st.error("Add at least one activity")
-
-# TAB 4: Communication Boards ------------------------------------------------
-with tabs[3]:
-    st.markdown('<div class="section-card"><h3>Build Communication Board</h3></div>', unsafe_allow_html=True)
-    
-    col1, col2 = st.columns([2,3])
-    with col1:
-        cb_title = st.text_input("Board title", value="I want to tell you", key="cb_title")
-        cb_grid = st.selectbox("Grid size", ["2x2","2x3","3x3","3x4","4x4"], index=2, key="cb_grid")
-    with col2:
-        st.markdown("**PODD Core Board:** Include: yes, no, more, help, I want, I feel")
-    
-    cb_cells = []
-    cols_n, rows_n = map(int, cb_grid.split("x"))
-    total = cols_n * rows_n
-    
-    board_cards = [{"symbol":c.get("symbol_key"),"tx":c.get("ti"),"id":c.get("id")} for c in CARDS]
-    
-    cols = st.columns(cols_n)
-    for i in range(total):
-        with cols[i % cols_n]:
-            sel = st.selectbox(f"Cell {i+1}", options=[None]+board_cards,
-                             format_func=lambda x: x['tx'] if x else "-- Empty --",
-                             key=f"cb_cell_{i}", label_visibility="collapsed")
-            if sel:
-                preview_url = get_arasaac_symbol_url(sel['symbol'])
-                if preview_url:
-                    st.image(preview_url, width=50)
-            cb_cells.append(sel if sel else {"symbol":"","tx":""})
-    
-    if st.button("➕ Add Communication Board to Print", type="primary", use_container_width=True):
-        st.session_state.vst_print_queue.append({
-            "type":"board",
-            "data":{"title":cb_title,"gridSize":cb_grid,"cells":cb_cells}
-        })
-        st.success("✅ Added to print queue")
-        st.rerun()
-
-# TAB 5: Regulation Tools ----------------------------------------------------
-with tabs[4]:
-    st.markdown('<div class="section-card"><h3>Build Regulation Tool</h3></div>', unsafe_allow_html=True)
-    
-    tool_type = st.radio("Select tool type", 
-                        ["Zones of Regulation","5-Point Scale","Feelings Chart","Calm-Down Toolkit"],
-                        horizontal=True)
-    
-    if tool_type == "Zones of Regulation":
-        st.markdown("**Zones of Regulation** - PODD: 'I feel', 'I am in the...'")
-        for zone, zd in ZONE_DATA.items():
-            st.markdown(f"""<div class="zone zone-{zone}">
-                <h4>{zd['name']}</h4>
-                <div class="feels">{' • '.join(zd['feels'])}</div>
-            </div>""", unsafe_allow_html=True)
-        
-        if st.button("➕ Add Zones Card to Print", use_container_width=True):
-            st.session_state.vst_print_queue.append({"type":"regulation","data":{"tool":"zones"}})
-            st.success("✅ Added")
-            st.rerun()
-    
-    elif tool_type == "5-Point Scale":
-        st.markdown("**5-Point Scale** - PODD: 'I feel', 'My body is', 'I can...'")
-        fp_student = st.text_input("Student name (optional)", key="fp_student")
-        fp_labels = []
-        cols = st.columns(5)
-        default_labels = ["calm","okay","worried","upset","very upset"]
-        for i in range(5):
-            with cols[i]:
-                st.markdown(f'<div style="text-align:center;font-size:1.5rem;background:{FIVE_COLORS[i]};padding:.5rem;border-radius:8px;margin-bottom:.3rem">{i+1}</div>', unsafe_allow_html=True)
-                lbl = st.text_input(f"Level {i+1}", value=default_labels[i], key=f"fp_lbl_{i}", label_visibility="collapsed")
-                fp_labels.append(lbl)
-        
-        if st.button("➕ Add 5-Point Scale to Print", use_container_width=True):
-            st.session_state.vst_print_queue.append({
-                "type":"regulation",
-                "data":{"tool":"fivepoint","student":fp_student,"labels":fp_labels}
-            })
-            st.success("✅ Added")
-            st.rerun()
-    
-    elif tool_type == "Feelings Chart":
-        st.markdown("**Feelings Chart** - PODD: 'I feel...' language")
-        fc_cols = st.columns(4)
-        fc_selected = []
-        for i, (symbol_key, label) in enumerate(FEELINGS_PODD):
-            with fc_cols[i % 4]:
-                symbol_url = get_arasaac_symbol_url(symbol_key)
-                if symbol_url:
-                    st.image(symbol_url, width=60)
-                if st.checkbox(label, key=f"fc_{i}", value=(i<4)):
-                    fc_selected.append((symbol_key, label))
-        
-        if st.button("➕ Add Feelings Chart to Print", use_container_width=True):
-            if fc_selected:
-                st.session_state.vst_print_queue.append({
-                    "type":"regulation",
-                    "data":{"tool":"feelings","feels":fc_selected}
-                })
-                st.success("✅ Added")
-                st.rerun()
-            else:
-                st.error("Select at least one feeling")
-    
-    elif tool_type == "Calm-Down Toolkit":
-        st.markdown("**Calm-Down Toolkit** - PODD: 'I can...' strategies")
-        cd_title = st.text_input("Toolkit title", value="I can calm down", key="cd_title")
-        cd_cols = st.columns(3)
-        cd_selected = []
-        for i, strat in enumerate(CALM_STRATEGIES_PODD):
-            with cd_cols[i % 3]:
-                symbol_url = get_arasaac_symbol_url(strat['symbol_key'])
-                if symbol_url:
-                    st.image(symbol_url, width=50)
-                if st.checkbox(strat['lb'], key=f"cd_{i}", value=(i<6)):
-                    cd_selected.append(strat)
-        
-        if st.button("➕ Add Calm-Down Toolkit to Print", use_container_width=True):
-            if cd_selected:
-                st.session_state.vst_print_queue.append({
-                    "type":"regulation",
-                    "data":{"tool":"calmdown","title":cd_title,"strats":cd_selected}
-                })
-                st.success("✅ Added")
-                st.rerun()
-            else:
-                st.error("Select at least one strategy")
-
-# TAB 6: Social Scripts ------------------------------------------------------
-with tabs[5]:
-    st.markdown('<div class="section-card"><h3>Build Social Script</h3></div>', unsafe_allow_html=True)
-    
-    col1, col2 = st.columns([2,3])
-    with col1:
-        ss_student = st.text_input("Student name (optional)", key="ss_student")
-        ss_title = st.text_input("Script title", value="How to ask for help", key="ss_title")
-        ss_steps_n = st.number_input("Number of steps", min_value=2, max_value=8, value=4, key="ss_steps_n")
-    with col2:
-        st.markdown("**PODD Social Script:** Use 'I will...', 'I can...', 'Someone will...'")
-    
-    ss_steps = []
-    for i in range(ss_steps_n):
-        col_s, col_t, col_p = st.columns([1,3,1])
-        with col_s:
-            symbol_options = ["number"] + [c.get("symbol_key") for c in CARDS]
-            sym = st.selectbox(f"Symbol {i+1}", options=symbol_options, key=f"ss_sym_{i}", 
-                             label_visibility="collapsed", format_func=lambda x: f"{i+1}" if x == "number" else "Symbol")
-        with col_t:
-            tx = st.text_input(f"Step {i+1}", key=f"ss_tx_{i}", label_visibility="collapsed", 
-                             placeholder="e.g., I will tell someone I need help")
-        with col_p:
-            if sym != "number":
-                preview_url = get_arasaac_symbol_url(sym)
-                if preview_url:
-                    st.image(preview_url, width=30)
-        if tx:
-            ss_steps.append({"symbol":sym if sym != "number" else f"{i+1}","tx":tx,"is_num":(sym=="number")})
-    
-    if st.button("➕ Add Social Script to Print", type="primary", use_container_width=True):
-        if ss_steps:
-            st.session_state.vst_print_queue.append({
-                "type":"script",
-                "data":{"student":ss_student,"title":ss_title,"steps":ss_steps}
-            })
-            st.success("✅ Added")
-            st.rerun()
-        else:
-            st.error("Add at least one step")
-
-# TAB 7: Skillstreaming -----------------------------------------------------
-with tabs[6]:
-    st.markdown('<div class="section-card"><h3>Skillstreaming Social Skills</h3></div>', unsafe_allow_html=True)
-    
-    skill_cat = st.selectbox(
-        "Select Skill Category",
-        options=list(SKILLSTREAMING_SKILLS.keys()),
-        format_func=lambda x: f"{SKILLSTREAMING_SKILLS[x]['icon']} {SKILLSTREAMING_SKILLS[x]['name']}"
-    )
-    
-    cat_data = SKILLSTREAMING_SKILLS[skill_cat]
-    st.markdown(f"### {cat_data['icon']} {cat_data['name']}")
-    
-    for skill in cat_data['skills']:
-        with st.expander(f"✨ {skill['name']}", expanded=False):
-            for i, step in enumerate(skill['steps']):
-                st.markdown(f"{i+1}. {step}")
-            
-            col1, col2 = st.columns([3,1])
-            with col1:
-                student_name = st.text_input("Student name", key=f"skill_{skill_cat}_{skill['name']}_student", 
-                                            label_visibility="collapsed", placeholder="Student name (optional)")
-            with col2:
-                if st.button("➕ Add", key=f"skill_{skill_cat}_{skill['name']}", use_container_width=True):
-                    st.session_state.vst_print_queue.append({
-                        "type":"skillstreaming",
-                        "data":{
-                            "student":student_name,
-                            "category":cat_data['name'],
-                            "skill_name":skill['name'],
-                            "steps":skill['steps'],
-                            "color":cat_data['color']
-                        }
-                    })
-                    st.success("✅ Added")
-                    st.rerun()
-
-# TAB 8: PRINT QUEUE WITH CUSTOMIZATION -------------------------------------
-with tabs[7]:
-    st.markdown('<div class="section-card"><h3>🖨️ Print Queue & Customization</h3></div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-card"><h3>Print Queue</h3></div>', unsafe_allow_html=True)
     
     if not st.session_state.vst_print_queue:
-        st.info("📭 Print queue is empty. Add items from other tabs.")
+        st.info("📭 Print queue is empty. Add items from the Card Library tab.")
     else:
-        st.markdown(f"**{len(st.session_state.vst_print_queue)} item(s) in queue**")
+        col_queue, col_settings = st.columns([1, 2])
         
-        for i, item in enumerate(st.session_state.vst_print_queue):
-            col1, col2 = st.columns([5,1])
-            with col1:
+        with col_queue:
+            st.markdown("### Items in Queue")
+            st.caption(f"{len(st.session_state.vst_print_queue)} items")
+            
+            for i, item in enumerate(st.session_state.vst_print_queue):
+                is_selected = (st.session_state.vst_selected_item_index == i)
+                
+                # Build item display
                 t = item["type"]
                 d = item["data"]
+                
                 if t == "cards":
-                    st.markdown(f"📇 **Quick Cards** ({len(d)} cards)")
-                elif t == "firstthen":
-                    st.markdown(f"➡️ **First-Then:** {d.get('title','')}")
-                elif t == "schedule":
-                    st.markdown(f"📅 **Schedule:** {d.get('title','')} ({len(d.get('slots',[]))} activities)")
+                    item_label = f"📇 Card: {d[0].get('ti','')}"
                 elif t == "board":
-                    st.markdown(f"💬 **Comm Board:** {d.get('title','')}")
+                    item_label = f"💬 Board: {d.get('title','')}"
+                elif t == "firstthen":
+                    item_label = f"➡️ First-Then: {d.get('title','')}"
+                elif t == "schedule":
+                    item_label = f"📅 Schedule: {d.get('title','')}"
                 elif t == "regulation":
-                    tool_names = {"zones":"Zones","fivepoint":"5-Point","feelings":"Feelings","calmdown":"Calm-Down"}
-                    st.markdown(f"🧘 **Regulation:** {tool_names.get(d.get('tool',''),'')}")
+                    item_label = f"🧘 Regulation"
                 elif t == "script":
-                    st.markdown(f"📜 **Social Script:** {d.get('title','')}")
+                    item_label = f"📜 Script: {d.get('title','')}"
                 elif t == "skillstreaming":
-                    st.markdown(f"🎯 **Skillstreaming:** {d.get('skill_name','')}")
-            with col2:
-                if st.button("🗑️", key=f"del_{i}"):
-                    st.session_state.vst_print_queue.pop(i)
-                    st.rerun()
-        
-        st.divider()
-        
-        # PRINT CUSTOMIZATION
-        st.markdown("## 🎨 Print Customization")
-        
-        col_left, col_right = st.columns([1, 1])
-        
-        with col_left:
-            st.markdown("### 📐 Page Settings")
-            orientation = st.radio("Page Orientation", options=["Portrait", "Landscape"], horizontal=True)
-            page_size = st.selectbox("Page Size", options=["A4", "Letter (US)", "A5", "Lanyard (85mm x 54mm)"])
+                    item_label = f"🎯 Skill: {d.get('skill_name','')}"
+                
+                # Item card
+                item_class = "selected" if is_selected else ""
+                st.markdown(f'<div class="queue-item {item_class}">{item_label}</div>', 
+                          unsafe_allow_html=True)
+                
+                col_sel, col_del = st.columns([3, 1])
+                with col_sel:
+                    if st.button("Select", key=f"select_{i}", use_container_width=True):
+                        st.session_state.vst_selected_item_index = i
+                        st.rerun()
+                with col_del:
+                    if st.button("🗑️", key=f"del_queue_{i}"):
+                        st.session_state.vst_print_queue.pop(i)
+                        if st.session_state.vst_selected_item_index == i:
+                            st.session_state.vst_selected_item_index = None
+                        st.rerun()
             
-            if "Lanyard" not in page_size:
-                cards_per_page = st.select_slider("Cards Per Page", options=[1, 2, 4, 6, 8, 9, 12], value=4)
-            else:
-                cards_per_page = 8
-                st.info("Lanyard cards: 8 per page (standard)")
-            
-            margin_size = st.select_slider("Page Margins", 
-                                          options=["None", "Small (3mm)", "Medium (6mm)", "Large (10mm)"], 
-                                          value="Small (3mm)")
-        
-        with col_right:
-            st.markdown("### 📏 Card Settings")
-            symbol_size = st.slider("Symbol Size", min_value=30, max_value=150, value=80, step=10, format="%dpx")
-            title_size = st.slider("Title Text Size", min_value=8, max_value=24, value=14, step=1, format="%dpt")
-            subtitle_size = st.slider("Subtitle Text Size", min_value=6, max_value=18, value=10, step=1, format="%dpt")
-            border_width = st.select_slider("Card Border Thickness", 
-                                           options=["None", "Thin (1px)", "Medium (2px)", "Thick (3px)"], 
-                                           value="Medium (2px)")
-            card_padding = st.slider("Card Padding", min_value=5, max_value=30, value=15, step=5, format="%dpx")
-        
-        st.divider()
-        
-        # PREVIEW
-        st.markdown("## 👀 Preview")
-        
-        # Settings summary
-        st.markdown('<div class="print-preview">', unsafe_allow_html=True)
-        st.markdown(f"<h4>Print Preview Settings</h4>", unsafe_allow_html=True)
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.markdown(f'<span class="size-badge">Orientation: {orientation}</span>', unsafe_allow_html=True)
-            st.markdown(f'<span class="size-badge">Size: {page_size}</span>', unsafe_allow_html=True)
-        with col2:
-            st.markdown(f'<span class="size-badge">Cards/Page: {cards_per_page}</span>', unsafe_allow_html=True)
-            st.markdown(f'<span class="size-badge">Symbol: {symbol_size}px</span>', unsafe_allow_html=True)
-        with col3:
-            st.markdown(f'<span class="size-badge">Title: {title_size}pt</span>', unsafe_allow_html=True)
-            st.markdown(f'<span class="size-badge">Margins: {margin_size}</span>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Sample preview
-        st.markdown("### Sample Card Preview:")
-        preview_col1, preview_col2, preview_col3 = st.columns([1,2,1])
-        with preview_col2:
-            if st.session_state.vst_print_queue:
-                first_item = st.session_state.vst_print_queue[0]
-                if first_item["type"] == "cards":
-                    sample_card = first_item["data"][0]
-                    symbol_url = get_arasaac_symbol_url(sample_card.get('symbol_key', ''))
-                    
-                    border_map = {"None": "0", "Thin (1px)": "1px", "Medium (2px)": "2px", "Thick (3px)": "3px"}
-                    border_css = border_map[border_width]
-                    
-                    preview_html = f"""
-                    <div style="border:{border_css} solid #dde;border-radius:12px;padding:{card_padding}px;
-                                text-align:center;background:#fff;max-width:300px;margin:0 auto;">
-                        <img src="{symbol_url}" style="width:{symbol_size}px;height:{symbol_size}px;
-                             object-fit:contain;margin:0 auto {card_padding//2}px;">
-                        <div style="font-size:{title_size}pt;font-weight:800;margin-bottom:5px;">
-                            {sample_card.get('ti','')}
-                        </div>
-                        <div style="font-size:{subtitle_size}pt;color:#666;">
-                            {sample_card.get('sub','')}
-                        </div>
-                    </div>
-                    """
-                    st.markdown(preview_html, unsafe_allow_html=True)
-                    st.caption("↑ This is how your card will look when printed")
-        
-        st.divider()
-        
-        # DOWNLOAD
-        st.markdown("## ⬇️ Download")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if st.button("🗑️ Clear All Items", use_container_width=True):
+            if st.button("🗑️ Clear All", use_container_width=True):
                 st.session_state.vst_print_queue = []
+                st.session_state.vst_selected_item_index = None
                 st.rerun()
         
-        with col2:
-            # Generate HTML (simplified - full version would be longer)
-            margin_map = {"None": "0", "Small (3mm)": "3mm", "Medium (6mm)": "6mm", "Large (10mm)": "10mm"}
-            margin_css = margin_map[margin_size]
-            border_map = {"None": "0", "Thin (1px)": "1px", "Medium (2px)": "2px", "Thick (3px)": "3px"}
-            border_css = border_map[border_width]
-            
-            # Calculate page dimensions
-            if page_size == "A4":
-                page_dims = "210mm 297mm" if orientation == "Portrait" else "297mm 210mm"
-            elif page_size == "Letter (US)":
-                page_dims = "8.5in 11in" if orientation == "Portrait" else "11in 8.5in"
-            elif page_size == "A5":
-                page_dims = "148mm 210mm" if orientation == "Portrait" else "210mm 148mm"
-            else:
-                page_dims = "85mm 54mm"
-            
-            cols_per_row = {1: 1, 2: 2, 4: 2, 6: 3, 8: 4, 9: 3, 12: 4}.get(cards_per_page, 2)
-            
-            # Build HTML with all items (abbreviated)
-            html = f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
-<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet">
-<style>
-*{{box-sizing:border-box;margin:0;padding:0;font-family:'Nunito',sans-serif}}
-@page{{size:{page_dims};margin:{margin_css}}}
-body{{background:#fff;padding:10px}}
-.page{{display:grid;grid-template-columns:repeat({cols_per_row},1fr);gap:8px;page-break-after:always}}
-.card{{border:{border_css} solid #dde;border-radius:12px;padding:{card_padding}px;text-align:center;break-inside:avoid;background:#fff}}
-.symbol{{width:{symbol_size}px;height:{symbol_size}px;object-fit:contain;margin:0 auto {card_padding//2}px;display:block}}
-.title{{font-size:{title_size}pt;font-weight:800;margin-bottom:5px}}
-.subtitle{{font-size:{subtitle_size}pt;color:#666}}
-</style></head><body>"""
-            
-            # Add all items (cards, boards, schedules, etc.)
-            all_items = []
-            for item in st.session_state.vst_print_queue:
-                t = item["type"]
-                d = item["data"]
+        with col_settings:
+            if st.session_state.vst_selected_item_index is not None:
+                st.markdown(f"### Settings for Item #{st.session_state.vst_selected_item_index + 1}")
                 
-                if t == "cards":
-                    for card in d:
-                        symbol_url = get_arasaac_symbol_url(card.get('symbol_key', ''))
-                        card_html = f'<div class="card" style="border-color:{card.get("color","#1A5C78")}">'
-                        if symbol_url:
-                            card_html += f'<img src="{symbol_url}" class="symbol">'
-                        card_html += f'<div class="title">{card.get("ti","")}</div>'
-                        card_html += f'<div class="subtitle">{card.get("sub","")}</div></div>'
-                        all_items.append(card_html)
+                # Get current settings for this item
+                current_settings = get_item_settings(st.session_state.vst_selected_item_index)
                 
-                elif t == "board":
-                    # Communication board
-                    cols_n = int(d.get('gridSize','3x3').split('x')[0])
-                    board_html = f'<div class="card"><div class="title">{d.get("title","")}</div>'
-                    board_html += f'<div style="display:grid;grid-template-columns:repeat({cols_n},1fr);gap:8px;margin-top:{card_padding//2}px">'
-                    for cell in d.get('cells',[]):
-                        symbol_url = get_arasaac_symbol_url(cell.get('symbol','')) if cell.get('symbol') else None
-                        board_html += '<div style="border:1px solid #dde;border-radius:6px;padding:8px;text-align:center">'
-                        if symbol_url:
-                            board_html += f'<img src="{symbol_url}" style="width:{symbol_size//2}px;height:{symbol_size//2}px;object-fit:contain;margin:0 auto 5px;display:block">'
-                        board_html += f'<div style="font-size:{subtitle_size}pt;font-weight:700">{cell.get("tx","")}</div></div>'
-                    board_html += '</div></div>'
-                    all_items.append(board_html)
+                col_left, col_right = st.columns(2)
                 
-                elif t == "firstthen":
-                    # First-Then board
-                    student_name = f"{d.get('student','')}'s " if d.get('student') else ""
-                    ft_html = f'<div class="card"><div class="title">{student_name}{d.get("title","")}</div>'
-                    ft_html += '<div style="display:flex;gap:10px;margin-top:10px">'
-                    for lbl, slot in zip(d.get('labels',[]), d.get('slots',[])):
-                        if slot:
-                            symbol_url = get_arasaac_symbol_url(slot.get('symbol',''))
-                            ft_html += '<div style="flex:1;text-align:center;border:2px solid #1A5C78;border-radius:8px;padding:10px">'
-                            ft_html += f'<div style="font-size:9pt;font-weight:800;color:#666;margin-bottom:8px">{lbl}</div>'
-                            if symbol_url:
-                                ft_html += f'<img src="{symbol_url}" style="width:{symbol_size//1.5}px;height:{symbol_size//1.5}px;object-fit:contain;margin:0 auto">'
-                            ft_html += f'<div style="font-size:{subtitle_size}pt;font-weight:700;margin-top:8px">{slot.get("lb","")}</div></div>'
-                    ft_html += '</div></div>'
-                    all_items.append(ft_html)
-                
-                elif t == "schedule":
-                    # Visual schedule
-                    student_name = f"{d.get('student','')}'s " if d.get('student') else ""
-                    sched_html = f'<div class="card"><div class="title">{student_name}{d.get("title","")}</div>'
-                    for slot in d.get('slots',[]):
-                        symbol_url = get_arasaac_symbol_url(slot.get('symbol',''))
-                        sched_html += '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #f0f0f0">'
-                        sched_html += f'<span style="font-size:{subtitle_size}pt;font-weight:700;color:#666;min-width:50px">{slot.get("time","")}</span>'
-                        if symbol_url:
-                            sched_html += f'<img src="{symbol_url}" style="width:{symbol_size//2.5}px;height:{symbol_size//2.5}px;object-fit:contain">'
-                        sched_html += f'<span style="font-size:{subtitle_size}pt;font-weight:600">{slot.get("act","")}</span></div>'
-                    sched_html += '</div>'
-                    all_items.append(sched_html)
-                
-                elif t == "regulation":
-                    tool = d.get('tool','')
-                    if tool == "feelings":
-                        feel_html = '<div class="card"><div class="title">I feel</div>'
-                        feel_html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px">'
-                        for symbol_key, label in d.get('feels',[]):
-                            symbol_url = get_arasaac_symbol_url(symbol_key)
-                            feel_html += '<div style="text-align:center;padding:8px;border:1px solid #dde;border-radius:6px">'
-                            if symbol_url:
-                                feel_html += f'<img src="{symbol_url}" style="width:{symbol_size//2}px;height:{symbol_size//2}px;object-fit:contain;margin:0 auto 5px">'
-                            feel_html += f'<div style="font-size:{subtitle_size}pt;font-weight:700">{label}</div></div>'
-                        feel_html += '</div></div>'
-                        all_items.append(feel_html)
+                with col_left:
+                    st.markdown("**Page Settings**")
+                    orientation = st.radio("Orientation", ["Portrait", "Landscape"], 
+                                         index=0 if current_settings['orientation']=='Portrait' else 1,
+                                         key="item_orientation")
                     
-                    elif tool == "calmdown":
-                        calm_html = f'<div class="card"><div class="title">{d.get("title","")}</div>'
-                        calm_html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px">'
-                        for strat in d.get('strats',[]):
-                            symbol_url = get_arasaac_symbol_url(strat.get('symbol_key',''))
-                            calm_html += '<div style="text-align:center;padding:6px">'
-                            if symbol_url:
-                                calm_html += f'<img src="{symbol_url}" style="width:{symbol_size//2}px;height:{symbol_size//2}px;object-fit:contain;margin:0 auto 4px">'
-                            calm_html += f'<div style="font-size:{subtitle_size}pt;font-weight:700">{strat.get("lb","")}</div></div>'
-                        calm_html += '</div></div>'
-                        all_items.append(calm_html)
+                    page_size = st.selectbox("Page Size", 
+                                           ["A4", "Letter (US)", "A5", "Lanyard (85mm x 54mm)"],
+                                           index=["A4", "Letter (US)", "A5", "Lanyard (85mm x 54mm)"].index(current_settings['page_size']),
+                                           key="item_page_size")
+                    
+                    cards_per_page = st.select_slider("Cards Per Page", 
+                                                     options=[1, 2, 4, 6, 8],
+                                                     value=current_settings['cards_per_page'],
+                                                     key="item_cpp")
                 
-                elif t == "script":
-                    student_name = f"{d.get('student','')}'s " if d.get('student') else ""
-                    script_html = f'<div class="card"><div class="title">{student_name}{d.get("title","")}</div>'
-                    for i, step in enumerate(d.get('steps',[])):
-                        script_html += '<div style="display:flex;align-items:flex-start;gap:10px;margin-top:10px">'
-                        if step.get('is_num'):
-                            script_html += f'<div style="min-width:24px;height:24px;border-radius:50%;background:#1A5C78;color:#fff;display:flex;align-items:center;justify-content:center;font-size:12pt;font-weight:700">{step["symbol"]}</div>'
-                        else:
-                            symbol_url = get_arasaac_symbol_url(step.get('symbol',''))
-                            if symbol_url:
-                                script_html += f'<img src="{symbol_url}" style="width:30px;height:30px;object-fit:contain">'
-                        script_html += f'<div style="font-size:{subtitle_size}pt;font-weight:600;line-height:1.4;flex:1">{step.get("tx","")}</div></div>'
-                    script_html += '</div>'
-                    all_items.append(script_html)
+                with col_right:
+                    st.markdown("**Card Settings**")
+                    symbol_size = st.slider("Symbol Size", 30, 150, current_settings['symbol_size'], 10, 
+                                          format="%dpx", key="item_symbol")
+                    
+                    title_size = st.slider("Title Size", 8, 24, current_settings['title_size'], 1,
+                                         format="%dpt", key="item_title")
+                    
+                    subtitle_size = st.slider("Subtitle Size", 6, 18, current_settings['subtitle_size'], 1,
+                                            format="%dpt", key="item_subtitle")
                 
-                elif t == "skillstreaming":
-                    steps_html = "".join(f'<div style="padding:8px 0 8px 30px;position:relative;font-size:{subtitle_size}pt"><span style="position:absolute;left:0;background:{d.get("color","#7C2D91")};color:#fff;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:{subtitle_size}pt;font-weight:700">{i+1}</span>{s}</div>' 
-                                        for i, s in enumerate(d.get("steps",[])))
-                    student_name = f"{d.get('student','')}'s " if d.get('student') else ""
-                    skill_html = f'<div class="card" style="border-left:4px solid {d.get("color","#7C2D91")}">'
-                    skill_html += f'<div class="title">{student_name}{d.get("skill_name","")}</div>'
-                    skill_html += f'<div class="subtitle" style="margin-bottom:10px">{d.get("category","")}</div>'
-                    skill_html += steps_html
-                    skill_html += '</div>'
-                    all_items.append(skill_html)
-            
-            # Create pages
-            for i in range(0, len(all_items), cards_per_page):
-                page_items = all_items[i:i+cards_per_page]
-                html += '<div class="page">'
-                html += ''.join(page_items)
-                html += '</div>'
-            
-            html += '</body></html>'
-            
-            filename = f"visual_supports_{page_size.replace(' ','_')}_{orientation.lower()}_{cards_per_page}cards.html"
-            
-            st.download_button(
-                label="⬇️ Download Print-Ready HTML",
-                data=html,
-                file_name=filename,
-                mime="text/html",
-                type="primary",
-                use_container_width=True
-            )
-        
-        st.markdown("""
-        <div class="aac-note">
-            <strong>📄 How to Print:</strong><br>
-            1. Open downloaded HTML in Chrome/Edge<br>
-            2. Press Ctrl+P (Windows) or Cmd+P (Mac)<br>
-            3. Set margins to <strong>None</strong><br>
-            4. Enable <strong>Background graphics</strong><br>
-            5. Print or Save as PDF
-        </div>
-        """, unsafe_allow_html=True)
+                # Update settings for this item
+                new_settings = {
+                    'orientation': orientation,
+                    'page_size': page_size,
+                    'cards_per_page': cards_per_page,
+                    'margin_size': 'Small (3mm)',
+                    'symbol_size': symbol_size,
+                    'title_size': title_size,
+                    'subtitle_size': subtitle_size,
+                    'border_width': 'Medium (2px)',
+                    'card_padding': 15
+                }
+                update_item_settings(st.session_state.vst_selected_item_index, new_settings)
+                
+                # Preview
+                st.markdown("### Preview")
+                st.markdown('<div class="print-preview">', unsafe_allow_html=True)
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.markdown(f'<span class="size-badge">{orientation}</span>', unsafe_allow_html=True)
+                    st.markdown(f'<span class="size-badge">{page_size}</span>', unsafe_allow_html=True)
+                with col2:
+                    st.markdown(f'<span class="size-badge">{cards_per_page} cards/page</span>', unsafe_allow_html=True)
+                    st.markdown(f'<span class="size-badge">Symbol: {symbol_size}px</span>', unsafe_allow_html=True)
+                with col3:
+                    st.markdown(f'<span class="size-badge">Title: {title_size}pt</span>', unsafe_allow_html=True)
+                    st.markdown(f'<span class="size-badge">Subtitle: {subtitle_size}pt</span>', unsafe_allow_html=True)
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+                # Download options
+                st.divider()
+                
+                col_one, col_all = st.columns(2)
+                
+                with col_one:
+                    # Download single item
+                    selected_item = st.session_state.vst_print_queue[st.session_state.vst_selected_item_index]
+                    settings = selected_item['print_settings']
+                    
+                    # Generate HTML for this item
+                    html = generate_html_for_items([selected_item], single_item=True)
+                    
+                    filename = f"visual_support_item_{st.session_state.vst_selected_item_index + 1}.html"
+                    
+                    st.download_button(
+                        label="⬇️ Download This Item Only",
+                        data=html,
+                        file_name=filename,
+                        mime="text/html",
+                        type="primary",
+                        use_container_width=True
+                    )
+                
+                with col_all:
+                    # Download all items with their individual settings
+                    html_all = generate_html_for_items(st.session_state.vst_print_queue, single_item=False)
+                    
+                    st.download_button(
+                        label="⬇️ Download All Items",
+                        data=html_all,
+                        file_name="visual_supports_all_items.html",
+                        mime="text/html",
+                        use_container_width=True
+                    )
+                
+            else:
+                st.info("👈 Select an item from the queue to adjust its settings")
