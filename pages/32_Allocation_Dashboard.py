@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
@@ -247,6 +248,8 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
             # Prepare sync data (de-identify)
             def prepare_sync_data(df):
                 """De-identify and map Excel columns to Supabase schema"""
+                import numpy as np
+                
                 sync_df = pd.DataFrame()
                 
                 # Map columns (Excel -> Supabase) - STUDENT NAMES EXCLUDED
@@ -297,17 +300,38 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                 # Convert year level to string
                 if 'year_level' in sync_df.columns:
                     sync_df['year_level'] = sync_df['year_level'].astype(str).str.strip()
+                    # Replace 'nan' string with None
+                    sync_df['year_level'] = sync_df['year_level'].replace('nan', None)
                 
                 # Handle dates
                 date_columns = ['referral_date', 'placement_start', 'placement_end']
                 for date_col in date_columns:
                     if date_col in sync_df.columns:
                         sync_df[date_col] = pd.to_datetime(sync_df[date_col], errors='coerce')
-                        sync_df[date_col] = sync_df[date_col].dt.strftime('%Y-%m-%d')
+                        # Convert valid dates to string, keep NaT as None
+                        sync_df[date_col] = sync_df[date_col].apply(
+                            lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else None
+                        )
                 
-                # Handle NaN values
+                # COMPREHENSIVE NaN handling - convert all NaN/inf values to None
+                # This is critical for JSON serialization
+                sync_df = sync_df.replace([np.nan, np.inf, -np.inf], None)
                 sync_df = sync_df.replace({pd.NA: None, pd.NaT: None})
-                sync_df = sync_df.where(pd.notna(sync_df), None)
+                
+                # Additional pass to catch any remaining NaN in object columns
+                for col in sync_df.columns:
+                    if sync_df[col].dtype == 'object':
+                        sync_df[col] = sync_df[col].where(pd.notna(sync_df[col]), None)
+                
+                # Convert integer columns with NaN to nullable int or None
+                int_columns = ['total_previous_placements']
+                for col in int_columns:
+                    if col in sync_df.columns:
+                        sync_df[col] = sync_df[col].where(pd.notna(sync_df[col]), None)
+                        # Convert valid values to int
+                        sync_df[col] = sync_df[col].apply(
+                            lambda x: int(x) if x is not None and pd.notna(x) else None
+                        )
                 
                 # Add current_status
                 sync_df['current_status'] = 'Active'
