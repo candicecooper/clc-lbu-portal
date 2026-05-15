@@ -337,6 +337,34 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                             lambda x: int(x) if x is not None and pd.notna(x) else None
                         )
                 
+                # FINAL AGGRESSIVE CLEANUP: Convert to dict and clean any remaining NaN
+                # This catches edge cases that pandas might miss
+                records = sync_df.to_dict('records')
+                
+                # Deep clean each record
+                cleaned_records = []
+                for record in records:
+                    cleaned_record = {}
+                    for key, value in record.items():
+                        # Convert any remaining NaN/inf to None
+                        if pd.isna(value) or (isinstance(value, float) and (np.isinf(value) or np.isnan(value))):
+                            cleaned_record[key] = None
+                        # Convert numpy bool to Python bool
+                        elif isinstance(value, (np.bool_, np.bool)):
+                            cleaned_record[key] = bool(value)
+                        # Convert numpy int to Python int
+                        elif isinstance(value, (np.integer, np.int_, np.int64, np.int32)):
+                            cleaned_record[key] = int(value)
+                        # Convert numpy float to Python float (if not NaN)
+                        elif isinstance(value, (np.floating, np.float_, np.float64, np.float32)):
+                            cleaned_record[key] = float(value) if not np.isnan(value) else None
+                        else:
+                            cleaned_record[key] = value
+                    cleaned_records.append(cleaned_record)
+                
+                # Convert back to DataFrame for consistency
+                sync_df = pd.DataFrame(cleaned_records)
+                
                 # Add current_status
                 sync_df['current_status'] = 'Active'
                 
