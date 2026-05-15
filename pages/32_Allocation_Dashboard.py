@@ -454,9 +454,9 @@ df = df_raw.copy()
 
 # Map Supabase columns to dashboard expectations
 df['record_id'] = df.get('student_id', df.get('id', ''))  # Use student_id if available, fallback to id
-df['school'] = df['referring_school']
-df['status'] = df['allocation_status']
-df['program'] = df['allocated_program']
+df['school'] = df['referring_school'].fillna('Unknown School')
+df['status'] = df['allocation_status'].fillna('Unknown Status')
+df['program'] = df['allocated_program'].fillna('Unknown Program')
 df['partnership'] = df['partnership_area'].fillna('')
 
 # Handle dates
@@ -488,7 +488,7 @@ def calculate_year_level_from_dob(dob):
 
 # Use database year_level
 if 'year_level' in df.columns:
-    df['year_level'] = df['year_level'].fillna('').astype(str)
+    df['year_level'] = df['year_level'].fillna('Unknown').astype(str)
 else:
     df['year_level'] = "Unknown"
 
@@ -520,16 +520,20 @@ df['current_status'] = df.get('current_status', 'Active')
 
 # Define terms
 def get_term(month):
-    if pd.isna(month):
+    if pd.isna(month) or month is None:
         return "Unknown"
-    if month <= 3:
-        return "Term 1"
-    elif month <= 6:
-        return "Term 2"
-    elif month <= 9:
-        return "Term 3"
-    else:
-        return "Term 4"
+    try:
+        month = int(month)
+        if month <= 3:
+            return "Term 1"
+        elif month <= 6:
+            return "Term 2"
+        elif month <= 9:
+            return "Term 3"
+        else:
+            return "Term 4"
+    except (ValueError, TypeError):
+        return "Unknown"
 
 df['term'] = df['month'].apply(get_term)
 
@@ -539,11 +543,28 @@ if 'bespoke_placement' in df.columns:
     # Convert Yes/No to boolean
     df['program_mismatch'] = df['bespoke_placement'].map({'Yes': True, 'No': False, '': False})
     df['program_mismatch'] = df['program_mismatch'].fillna(False)
+    
+    # Still calculate expected_program for display purposes
+    def get_expected_program(year_level):
+        """Determine expected program based on year level"""
+        if pd.isna(year_level) or year_level == '' or year_level == "Unknown" or year_level == 'None':
+            return "Unknown"
+        year_level = str(year_level).upper()
+        if year_level in ['R', '1']:
+            return "Junior Primary (R-1)"
+        elif year_level in ['3', '4', '5', '6']:
+            return "Primary Years (3-6)"
+        elif year_level in ['7', '8', '9', '10']:
+            return "Senior Years (7-10)"
+        else:
+            return "Unknown"
+    
+    df['expected_program'] = df['year_level'].apply(get_expected_program)
 else:
     # Fallback: calculate based on year level if Bespoke_Placement not available
     def get_expected_program(year_level):
         """Determine expected program based on year level"""
-        if pd.isna(year_level) or year_level == '' or year_level == "Unknown":
+        if pd.isna(year_level) or year_level == '' or year_level == "Unknown" or year_level == 'None':
             return "Unknown"
         year_level = str(year_level).upper()
         if year_level in ['R', '1']:
@@ -558,9 +579,6 @@ else:
     df['expected_program'] = df['year_level'].apply(get_expected_program)
     df['program_mismatch'] = (df['program'] != df['expected_program']) & (df['expected_program'] != "Unknown")
 
-# Set expected_program for display purposes
-df['expected_program'] = df['year_level'].apply(lambda yl: get_expected_program(yl) if 'get_expected_program' in dir() else '')
-
 # ══════════════════════════════════════════════════════════════════════════════
 # FILTERS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -569,15 +587,15 @@ st.markdown('<div class="section-header">🔍 Filters & View Options</div>', uns
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    terms = ['All Terms'] + sorted(df['term'].unique().tolist())
+    terms = ['All Terms'] + sorted([t for t in df['term'].unique() if pd.notna(t)])
     selected_term = st.selectbox("📅 Select Term", terms, key="term_filter")
 
 with col2:
-    partnerships = ['All Partnerships'] + sorted([p for p in df['partnership'].unique() if p != ''])
+    partnerships = ['All Partnerships'] + sorted([p for p in df['partnership'].unique() if p != '' and pd.notna(p)])
     selected_partnership = st.selectbox("🤝 Select Partnership", partnerships, key="partnership_filter")
 
 with col3:
-    programs = ['All Programs'] + sorted(df['program'].unique().tolist())
+    programs = ['All Programs'] + sorted([p for p in df['program'].unique() if pd.notna(p)])
     selected_program = st.selectbox("📚 Select Program", programs, key="program_filter")
 
 # Apply filters
