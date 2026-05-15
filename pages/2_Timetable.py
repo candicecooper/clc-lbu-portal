@@ -52,13 +52,14 @@ def get_client():
     from supabase import create_client
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
-PROGRAMS = ["Specialist", "JP", "PY", "SY", "SSO", "Meetings"]
+PROGRAMS = ["Specialist", "JP", "PY", "SY", "SSO", "Leadership", "Meetings"]
 PROGRAM_LABELS = {
     "Specialist": "📋 Specialist Teacher",
     "JP":         "🟢 Junior Primary",
     "PY":         "🔵 Primary Years",
     "SY":         "🟣 Senior Years",
     "SSO":        "🟠 SSO Support",
+    "Leadership": "👔 Leadership",
     "Meetings":   "📅 Scheduled Meetings",
 }
 
@@ -173,6 +174,7 @@ SECTION_HEADERS = {
     "PY":         ["primary years program timetable", "primary years program", "primary years", "py program"],
     "SY":         ["senior years program timetable", "senior years program", "senior years", "sy program"],
     "SSO":        ["sso support timetable", "sso support", "sso program", "support staff"],
+    "Leadership": ["leadership timetable", "leadership team", "leadership", "manager", "candice", "annette"],
     "Meetings":   ["scheduled meetings timetable", "scheduled meetings", "meetings timetable", "meeting schedule", "staff meetings"],
 }
 
