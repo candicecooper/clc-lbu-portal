@@ -981,6 +981,10 @@ with tab_students:
                     elif not pa_school.strip(): st.warning("School / placement site is required.")
                     elif pa_end < pa_start:     st.warning("End date must be on or after start date.")
                     else:
+                        # contact_email column not in schema — fold into contact_person
+                        contact_combined = pa_contact.strip()
+                        if pa_email.strip():
+                            contact_combined = f"{contact_combined} — {pa_email.strip()}" if contact_combined else pa_email.strip()
                         save_placement({
                             "student_initials":     pa_init.strip(),
                             "program":              pa_prog,
@@ -989,14 +993,13 @@ with tab_students:
                             "funding_type":         pa_fund,
                             "start_date":           str(pa_start),
                             "end_date":             str(pa_end),
-                            "contact_person":       pa_contact.strip(),
+                            "contact_person":       contact_combined,
                             "contact_phone":        pa_phone.strip(),
-                            "contact_email":        pa_email.strip(),
                             "support_arrangements": pa_support.strip(),
                             "goals":                pa_goals.strip(),
                             "notes":                pa_notes.strip(),
                         })
-                        st.success(f"✅ Placement saved for {pa_init.strip()} at {pa_school.strip()}!")
+                        st.session_state["_cal_save_ok"] = f"✅ Placement saved for {pa_init.strip()} at {pa_school.strip()}!"
                         st.rerun()
 
         st.markdown("---")
@@ -1034,7 +1037,7 @@ with tab_students:
                         f'{(" &nbsp;|&nbsp; 💰 "+pl["funding_type"]) if pl.get("funding_type") else ""}'
                         f'{("<br>👤 Contact: "+pl["contact_person"]) if pl.get("contact_person") else ""}'
                         f'{(" · 📞 "+pl["contact_phone"]) if pl.get("contact_phone") else ""}'
-                        f'{(" · ✉️ "+pl["contact_email"]) if pl.get("contact_email") else ""}'
+                        f''
                         f'</div>', unsafe_allow_html=True)
                     if pl.get("support_arrangements"):
                         st.markdown(f"**Support arrangements:** {pl['support_arrangements']}")
@@ -1066,13 +1069,20 @@ with tab_students:
                                     except: e_start = st.date_input("Start date", value=today)
                                     try:    e_end   = st.date_input("End date",   value=datetime.strptime(str(pl.get("end_date",""))[:10],   "%Y-%m-%d").date())
                                     except: e_end   = st.date_input("End date",   value=today)
-                                    e_contact = st.text_input("Contact person", value=pl.get("contact_person",""))
+                                    _cp_raw   = pl.get("contact_person","")
+                                    _cp_name  = _cp_raw.split(" — ", 1)[0]
+                                    e_contact = st.text_input("Contact person", value=_cp_name)
                                     e_phone   = st.text_input("Phone",          value=pl.get("contact_phone",""))
-                                    e_email   = st.text_input("Email",          value=pl.get("contact_email",""))
+                                    # contact_email not in schema; email stored in contact_person as "Name — email"
+                                    _cp_parts = pl.get("contact_person","").split(" — ", 1)
+                                    e_email   = st.text_input("Email", value=_cp_parts[1] if len(_cp_parts) > 1 else "")
                                 e_support = st.text_area("Support arrangements", value=pl.get("support_arrangements",""), height=56)
                                 e_goals   = st.text_area("Goals",               value=pl.get("goals",""),                height=56)
                                 e_notes   = st.text_area("Notes",               value=pl.get("notes",""),                height=40)
                                 if st.form_submit_button("💾 Save Changes", type="primary"):
+                                    _upd_contact = e_contact.strip()
+                                    if e_email.strip():
+                                        _upd_contact = f"{_upd_contact} — {e_email.strip()}" if _upd_contact else e_email.strip()
                                     upd_placement(pid, {
                                         "student_initials":     e_init.strip(),
                                         "program":              e_prog,
@@ -1081,9 +1091,8 @@ with tab_students:
                                         "funding_type":         e_fund,
                                         "start_date":           str(e_start),
                                         "end_date":             str(e_end),
-                                        "contact_person":       e_contact.strip(),
+                                        "contact_person":       _upd_contact,
                                         "contact_phone":        e_phone.strip(),
-                                        "contact_email":        e_email.strip(),
                                         "support_arrangements": e_support.strip(),
                                         "goals":                e_goals.strip(),
                                         "notes":                e_notes.strip(),
@@ -1120,15 +1129,13 @@ with tab_students:
                     tr_prog   = st.selectbox("Program *", ["","JP","PY","SY"], key="tr_prog")
                 with tr2:
                     tr_school = st.text_input("Mainstream school *", placeholder="e.g. Findon Primary", key="tr_school")
-                    tr_term   = st.selectbox("Term *", ["","Term 1","Term 2","Term 3","Term 4"], key="tr_term")
+                    tr_label  = st.text_input("Week label", placeholder="e.g. Week 3 T2, Trial Week 1", key="tr_label")
                 with tr3:
-                    tr_label  = st.text_input("Week label", placeholder="e.g. Week 3, Trial Week 1", key="tr_label")
                     tr_wstart = st.date_input("Week starting (Monday) *",
                                               value=today - timedelta(days=today.weekday()), key="tr_wstart")
-                
-                tr_notes  = st.text_input("Notes", placeholder="Optional", key="tr_notes_field")
+                    tr_notes  = st.text_input("Notes", placeholder="Optional", key="tr_notes_field")
 
-                st.markdown("**Days at mainstream school** — enter the times for each day they attend (8:30am–3:30pm):")
+                st.markdown("**Days at mainstream school** — enter the times for each day they attend:")
                 th0, th1, th2, th3, th4, th5 = st.columns([1.5, 1, 1, 1, 1, 1])
                 with th0: st.markdown("<div style='font-size:0.78rem;font-weight:700;padding-top:0.5rem;'>Day</div>", unsafe_allow_html=True)
                 for h, day in zip([th1, th2, th3, th4, th5], DAYS):
@@ -1142,38 +1149,18 @@ with tab_students:
                         with col:
                             times[f"{dkey}_{dkk}"] = st.time_input(" ", value=None,
                                                                     key=f"tr_{dkey}_{dkk}",
-                                                                    label_visibility="collapsed",
-                                                                    step=300)  # 5-minute increments
+                                                                    label_visibility="collapsed")
 
                 if st.form_submit_button("✅ Save Transition Week", type="primary", use_container_width=True):
                     if not tr_init.strip():     st.warning("Student initials are required.")
                     elif not tr_prog:           st.warning("Please select a program.")
                     elif not tr_school.strip(): st.warning("Mainstream school is required.")
-                    elif not tr_term:           st.warning("Please select a term.")
                     elif tr_wstart.weekday() != 0: st.warning("Week start date should be a Monday.")
                     else:
-                        # Validate times are within school hours (8:30am - 3:30pm)
-                        from datetime import time as dt_time
-                        school_start = dt_time(8, 30)
-                        school_end = dt_time(15, 30)
-                        time_warnings = []
-                        for dkey, dname in zip(DAY_KEYS, DAYS):
-                            start_t = times.get(f"{dkey}_start")
-                            end_t = times.get(f"{dkey}_end")
-                            if start_t and (start_t < school_start or start_t > school_end):
-                                time_warnings.append(f"{dname} start time ({start_t.strftime('%I:%M %p')}) is outside school hours (8:30am–3:30pm)")
-                            if end_t and (end_t < school_start or end_t > school_end):
-                                time_warnings.append(f"{dname} end time ({end_t.strftime('%I:%M %p')}) is outside school hours (8:30am–3:30pm)")
-                        
-                        if time_warnings:
-                            st.warning("⚠️ **Times outside typical school hours:**\n\n" + "\n\n".join(f"• {w}" for w in time_warnings) + 
-                                     "\n\nYou can still save if these times are correct.")
-                        
                         row = {
                             "student_initials":  tr_init.strip(),
                             "program":           tr_prog,
                             "mainstream_school": tr_school.strip(),
-                            "term":              tr_term,
                             "week_label":        tr_label.strip(),
                             "week_start_date":   str(tr_wstart),
                             "notes":             tr_notes.strip(),
@@ -1235,12 +1222,11 @@ with tab_students:
                         return f"<span style='font-size:0.68rem;'>{fmt_time_short(s)}<br>{fmt_time_short(e)}</span>"
 
                     wlbl = tr.get("week_label","") or fmt_date(tr.get("week_start_date",""))
-                    term_prefix = f"{tr.get('term','')} · " if tr.get('term') else ""
                     st.markdown(
                         "<div style='display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr;"
                         "gap:4px;font-size:0.76rem;align-items:center;"
                         "border-bottom:1px solid #f0f0f0;padding:0.3rem 0.5rem;'>"
-                        f"<div><b style='font-size:0.78rem;'>{term_prefix}{wlbl}</b>"
+                        f"<div><b style='font-size:0.78rem;'>{wlbl}</b>"
                         f"{'<br><span style=color:#aaa;font-size:0.66rem;>'+tr.get('notes','')+'</span>' if tr.get('notes') else ''}"
                         f"</div>"
                         f"<div>{fmt_slot('mon')}</div><div>{fmt_slot('tue')}</div>"
@@ -1277,17 +1263,13 @@ with tab_students:
                                                   if tr.get("program","") in ["","JP","PY","SY"] else 0)
                             with e2:
                                 es  = st.text_input("Mainstream school", value=tr.get("mainstream_school",""))
-                                et  = st.selectbox("Term", ["","Term 1","Term 2","Term 3","Term 4"],
-                                                   index=["","Term 1","Term 2","Term 3","Term 4"].index(tr.get("term",""))
-                                                   if tr.get("term","") in ["","Term 1","Term 2","Term 3","Term 4"] else 0)
-                            with e3:
                                 el  = st.text_input("Week label", value=tr.get("week_label",""))
+                            with e3:
                                 try:    ews = st.date_input("Week start (Mon)", value=datetime.strptime(str(tr.get("week_start_date",""))[:10], "%Y-%m-%d").date())
                                 except: ews = st.date_input("Week start (Mon)", value=today - timedelta(days=today.weekday()))
-                            
-                            en  = st.text_input("Notes", value=tr.get("notes",""))
+                                en  = st.text_input("Notes", value=tr.get("notes",""))
 
-                            st.markdown("**Times at mainstream (8:30am–3:30pm):**")
+                            st.markdown("**Times at mainstream:**")
                             eth0, eth1, eth2, eth3, eth4, eth5 = st.columns([1.5, 1, 1, 1, 1, 1])
                             with eth0: st.markdown("<div style='font-size:0.76rem;font-weight:700;'>Day</div>", unsafe_allow_html=True)
                             for h, day in zip([eth1, eth2, eth3, eth4, eth5], DAYS):
@@ -1307,15 +1289,13 @@ with tab_students:
                                         etimes[f"{dkey}_{dkk}"] = st.time_input(
                                             " ", value=existing_time,
                                             key=f"tref_{tid}_{dkey}_{dkk}",
-                                            label_visibility="collapsed",
-                                            step=300)  # 5-minute increments
+                                            label_visibility="collapsed")
 
                             if st.form_submit_button("💾 Save Changes", type="primary"):
                                 upd_row = {
                                     "student_initials":  ei.strip(),
                                     "program":           ep,
                                     "mainstream_school": es.strip(),
-                                    "term":              et,
                                     "week_label":        el.strip(),
                                     "week_start_date":   str(ews),
                                     "notes":             en.strip(),
