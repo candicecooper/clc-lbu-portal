@@ -384,6 +384,16 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
             
             sync_data = prepare_sync_data(df_excel)
             
+            # DEBUG: Show previous_clc_placement values before sync
+            with st.expander("🔍 Debug: Check Previous Placement Data", expanded=False):
+                if 'previous_clc_placement' in sync_data.columns:
+                    prev_clc_counts = sync_data['previous_clc_placement'].value_counts()
+                    st.write("**Previous CLC Placement values:**")
+                    st.write(prev_clc_counts)
+                    st.write(f"**Type:** {type(sync_data['previous_clc_placement'].iloc[0]) if len(sync_data) > 0 else 'N/A'}")
+                else:
+                    st.error("❌ previous_clc_placement column missing from sync data!")
+            
             # Initialize Supabase
             status_text.text("Connecting to database...")
             progress_bar.progress(40)
@@ -518,6 +528,19 @@ df['mental_health'] = df.get('flag_mental_health', False).map({True: 'Yes', Fals
 # Previous placements - already converted to Yes/No during sync
 df['prev_clc'] = df.get('previous_clc_placement', 'No').fillna('No')
 df['prev_other'] = df.get('previous_other_lc', 'No').fillna('No')
+
+# DEBUG: Show what's actually in the dashboard data
+with st.expander("🔍 Debug: Dashboard Previous Placement Data", expanded=False):
+    st.write("**Raw previous_clc_placement from database:**")
+    if 'previous_clc_placement' in df.columns:
+        st.write(df['previous_clc_placement'].value_counts())
+        st.write(f"**Sample values:** {df['previous_clc_placement'].head(5).tolist()}")
+    else:
+        st.error("Column 'previous_clc_placement' not found in database!")
+    
+    st.write("**Processed prev_clc values:**")
+    st.write(df['prev_clc'].value_counts())
+    st.write(f"**Total returning (prev_clc=='Yes'):** {(df['prev_clc'] == 'Yes').sum()}")
 
 # Priority
 df['priority'] = df.get('priority_level', '')
