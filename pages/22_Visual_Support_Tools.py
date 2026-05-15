@@ -1231,8 +1231,11 @@ with tabs[6]:
     
     st.markdown("""
     <div class="aac-note">
-        <strong>✨ Smart Icons:</strong> Type your step and we'll automatically suggest relevant symbols! 
-        Or search for specific icons using the search box.
+        <strong>✨ Four Ways to Add Symbols:</strong><br>
+        <strong>AUTO</strong> = Smart suggestion from your text<br>
+        <strong>NUMBER</strong> = Use step number (1, 2, 3...)<br>
+        <strong>LIBRARY</strong> = Search your 100 card library<br>
+        <strong>ARASAAC</strong> = Search 30,000+ professional AAC symbols!
     </div>
     """, unsafe_allow_html=True)
     
@@ -1243,7 +1246,7 @@ with tabs[6]:
         ss_steps_n = st.number_input("Steps", min_value=2, max_value=8, value=4, key="ss_steps_n")
     with col2:
         st.markdown("**PODD:** Use 'I will...', 'I can...'")
-        st.caption("💡 Icons auto-suggest based on keywords in your steps!")
+        st.caption("💡 AUTO mode suggests symbols, or use ARASAAC to search 30,000+ symbols!")
     
     st.divider()
     
@@ -1340,10 +1343,11 @@ with tabs[6]:
         with col_sym_type:
             use_icon = st.radio(
                 "Icon",
-                ["Auto", "Number", "Search"],
+                ["Auto", "Number", "Library", "ARASAAC"],
                 key=f"ss_icon_type_{i}",
                 horizontal=True,
-                label_visibility="collapsed"
+                label_visibility="collapsed",
+                help="Auto=smart suggest, Number=1/2/3, Library=search 100 cards, ARASAAC=search 30,000+ symbols"
             )
         
         final_symbol = "number"
@@ -1352,19 +1356,19 @@ with tabs[6]:
             # Use suggested symbol
             final_symbol = suggested_symbol
             with col_sym_search:
-                st.info(f"Using: {final_symbol}")
+                st.info(f"✓ Using: {final_symbol}")
         
         elif use_icon == "Number":
             # Use step number
             final_symbol = "number"
             with col_sym_search:
-                st.info(f"Using: {i+1}")
+                st.info(f"✓ Using: Step {i+1}")
         
-        elif use_icon == "Search":
-            # Manual search
+        elif use_icon == "Library":
+            # Search in card library (100 cards)
             with col_sym_search:
                 search_query = st.text_input(
-                    "Search symbols",
+                    "Search card library",
                     key=f"ss_search_{i}",
                     placeholder="e.g., help, look, ask",
                     label_visibility="collapsed"
@@ -1376,7 +1380,7 @@ with tabs[6]:
                     
                     if matches:
                         selected = st.selectbox(
-                            "Select",
+                            "Pick from library",
                             options=matches,
                             format_func=lambda x: x.get('ti',''),
                             key=f"ss_sel_{i}",
@@ -1384,7 +1388,55 @@ with tabs[6]:
                         )
                         final_symbol = selected.get('symbol_key')
                     else:
-                        st.warning("No matches")
+                        st.warning("No matches in library - try ARASAAC search")
+                        final_symbol = "number"
+        
+        elif use_icon == "ARASAAC":
+            # Direct ARASAAC API search (30,000+ symbols)
+            with col_sym_search:
+                arasaac_query = st.text_input(
+                    "Search ARASAAC database",
+                    key=f"ss_arasaac_{i}",
+                    placeholder="e.g., hand, pencil, write, teacher",
+                    label_visibility="collapsed",
+                    help="Search 30,000+ ARASAAC symbols"
+                )
+                
+                if arasaac_query:
+                    # Search ARASAAC API
+                    try:
+                        search_url = f"https://api.arasaac.org/api/pictograms/en/search/{urllib.parse.quote(arasaac_query)}"
+                        response = requests.get(search_url, timeout=5)
+                        
+                        if response.status_code == 200:
+                            results = response.json()
+                            
+                            if results:
+                                # Show top 10 results
+                                st.caption(f"Found {len(results)} symbols - showing top 10:")
+                                
+                                # Create selection with previews
+                                selected_idx = st.selectbox(
+                                    "Pick symbol",
+                                    options=range(min(10, len(results))),
+                                    format_func=lambda idx: results[idx]['keywords'][0]['keyword'] if results[idx].get('keywords') else f"Symbol {results[idx]['_id']}",
+                                    key=f"ss_arasaac_sel_{i}",
+                                    label_visibility="collapsed"
+                                )
+                                
+                                # Use the selected symbol ID
+                                final_symbol = str(results[selected_idx]['_id'])
+                                
+                                # Show mini preview of selected
+                                st.caption(f"✓ Selected: {results[selected_idx]['keywords'][0]['keyword'] if results[selected_idx].get('keywords') else final_symbol}")
+                            else:
+                                st.warning("No symbols found - try different keyword")
+                                final_symbol = "number"
+                        else:
+                            st.error("ARASAAC search failed")
+                            final_symbol = "number"
+                    except Exception as e:
+                        st.error(f"Search error: {str(e)}")
                         final_symbol = "number"
         
         # Preview
