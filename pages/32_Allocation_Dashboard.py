@@ -1256,7 +1256,20 @@ with tab6:
     with col2:
         # Bar chart by program
         program_history = filtered_df.groupby(['program', 'prev_clc']).size().unstack(fill_value=0)
-        program_history.columns = ['First-Time', 'Returning']
+        
+        # Handle cases where only one type exists (all first-time or all returning)
+        # Rename columns based on what actually exists
+        column_mapping = {'No': 'First-Time', 'Yes': 'Returning'}
+        program_history.columns = [column_mapping.get(col, col) for col in program_history.columns]
+        
+        # Ensure both columns exist for stacked bar chart
+        if 'First-Time' not in program_history.columns:
+            program_history['First-Time'] = 0
+        if 'Returning' not in program_history.columns:
+            program_history['Returning'] = 0
+        
+        # Reorder columns
+        program_history = program_history[['First-Time', 'Returning']]
         
         fig_program_hist = go.Figure()
         
