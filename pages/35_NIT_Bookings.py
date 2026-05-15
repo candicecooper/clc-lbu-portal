@@ -27,8 +27,7 @@ with st.sidebar:
     if st.checkbox("Enable Admin Mode (for testing)", key="admin_override"):
         is_admin_user = True
         st.success("Admin mode enabled!")
-    if st.checkbox("Show Debug Info", key="show_debug"):
-        st.session_state.show_debug = True
+    st.checkbox("Show Debug Info", key="show_debug")
 
 # Supabase setup
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
