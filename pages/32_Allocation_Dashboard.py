@@ -292,7 +292,7 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                         sync_df[db_col] = df[excel_col]
                 
                 # Convert Yes/No to boolean for flags ONLY
-                # Previous placements stay as text Yes/No for easier filtering
+                # Previous placements will be handled separately
                 flag_columns = ['flag_asd', 'flag_adhd', 'flag_mental_health', 'flag_odd_cd',
                               'flag_care_cps', 'flag_aboriginal', 'flag_eald', 'flag_other',
                               'bespoke_placement']  # Include bespoke_placement in flag conversion
@@ -301,12 +301,6 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                     if flag_col in sync_df.columns:
                         sync_df[flag_col] = sync_df[flag_col].map({'Yes': True, 'No': False, '': False})
                         sync_df[flag_col] = sync_df[flag_col].fillna(False)
-                
-                # Keep Previous_CLC_Placement and Previous_Other_LC as text Yes/No
-                for text_col in ['previous_clc_placement', 'previous_other_lc']:
-                    if text_col in sync_df.columns:
-                        sync_df[text_col] = sync_df[text_col].map({'Yes': 'Yes', 'No': 'No', '': 'No', None: 'No'})
-                        sync_df[text_col] = sync_df[text_col].fillna('No')
                 
                 # Convert year level to string
                 if 'year_level' in sync_df.columns:
@@ -371,6 +365,19 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                 
                 # Convert back to DataFrame for consistency
                 sync_df = pd.DataFrame(cleaned_records)
+                
+                # NOW handle Previous_CLC_Placement and Previous_Other_LC as text Yes/No
+                # This must happen AFTER aggressive cleanup to preserve values
+                for text_col in ['previous_clc_placement', 'previous_other_lc']:
+                    if text_col in sync_df.columns:
+                        # Explicitly convert to text Yes/No, handling all possible input types
+                        def to_yes_no(val):
+                            if pd.isna(val) or val is None or val == '' or val == 'None':
+                                return 'No'
+                            val_str = str(val).strip().lower()
+                            return 'Yes' if val_str == 'yes' else 'No'
+                        
+                        sync_df[text_col] = sync_df[text_col].apply(to_yes_no)
                 
                 # Add current_status
                 sync_df['current_status'] = 'Active'
