@@ -632,6 +632,7 @@ if integration["active"]:
 view = st.sidebar.radio(
     "View",
     ["🏫 Class Dashboard", "🆕 New Student Setup", "📋 Goal Builder",
+     "👩‍💼 Leadership Dashboard",
      "📊 Daily Tracking", "📈 Progress Report", "⚙️ Admin Panel"],
 )
 st.sidebar.markdown("---")
@@ -1490,8 +1491,298 @@ Return ONLY JSON: {{"EXCEEDING":"...","ABOVE":"...","EXPECTED":"...","BELOW":"..
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 4. DAILY TRACKING
+# 4. LEADERSHIP DASHBOARD
 # ══════════════════════════════════════════════════════════════════════════════
+elif view == "👩‍💼 Leadership Dashboard":
+    st.title("👩‍💼 Leadership Dashboard")
+    st.caption(
+        "Program-level overview for leadership. Select a program to see all students, "
+        "their current goals, and tracking status at a glance — "
+        "to identify who needs goal review, teacher follow-up, or tracking support."
+    )
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+    FLAG_NONE        = "✅ On track"
+    FLAG_NOT_TRACKED = "⬜ Not being tracked"
+    FLAG_SPARSE      = "🟡 Tracking sparse"
+    FLAG_TOO_EASY    = "🔵 Goal too easy — consistently exceeding"
+    FLAG_NOT_ACHIEV  = "🔴 Not achieving — review needed"
+    FLAG_NEEDS_REF   = "🟠 Needs goal refinement"
+    FLAG_IMPROVING   = "📈 Improving"
+    FLAG_DECLINING   = "📉 Declining — needs attention"
+
+    def _flag_goal(goal_id):
+        """Return (flag_str, recent_data, counts, total) for a goal."""
+        recent = get_recent_tracking(goal_id, sessions=10)
+        if not recent:
+            return FLAG_NOT_TRACKED, [], {}, 0
+        counts, total, pcts = calc_percentages(recent)
+        if total < 3:
+            return FLAG_SPARSE, recent, counts, total
+        high  = pcts.get("EXCEEDING", 0) + pcts.get("ABOVE", 0)
+        low   = pcts.get("NOT YET", 0)
+        below = pcts.get("BELOW", 0) + low
+        needs_ref, _ = check_goal_needs_refinement(goal_id)
+        if needs_ref:
+            return FLAG_NOT_ACHIEV, recent, counts, total
+        if high >= 70:
+            return FLAG_TOO_EASY, recent, counts, total
+        if below >= 60:
+            return FLAG_NEEDS_REF, recent, counts, total
+        trend = analyze_trend(recent)
+        if trend == "declining":
+            return FLAG_DECLINING, recent, counts, total
+        if trend == "improving":
+            return FLAG_IMPROVING, recent, counts, total
+        return FLAG_NONE, recent, counts, total
+
+    FLAG_COLOR = {
+        FLAG_NONE:        "#d1fae5",
+        FLAG_NOT_TRACKED: "#f3f4f6",
+        FLAG_SPARSE:      "#fef9c3",
+        FLAG_TOO_EASY:    "#dbeafe",
+        FLAG_NOT_ACHIEV:  "#fee2e2",
+        FLAG_NEEDS_REF:   "#ffedd5",
+        FLAG_IMPROVING:   "#dcfce7",
+        FLAG_DECLINING:   "#fee2e2",
+    }
+    FLAG_BORDER = {
+        FLAG_NONE:        "#6ee7b7",
+        FLAG_NOT_TRACKED: "#d1d5db",
+        FLAG_SPARSE:      "#fcd34d",
+        FLAG_TOO_EASY:    "#93c5fd",
+        FLAG_NOT_ACHIEV:  "#fca5a5",
+        FLAG_NEEDS_REF:   "#fb923c",
+        FLAG_IMPROVING:   "#86efac",
+        FLAG_DECLINING:   "#f87171",
+    }
+
+    # ── Program tabs ──────────────────────────────────────────────────────────
+    _prog_tabs = st.tabs(["📚 JP — Junior Primary", "📖 PY — Primary Years", "🎓 SY — Senior Years"])
+
+    for _prog_tab, _prog in zip(_prog_tabs, PROGRAMS):
+        with _prog_tab:
+            all_students = get_students()
+            prog_students = [s for s in all_students if s.get("program") == _prog]
+
+            if not prog_students:
+                st.info(f"No active students in {_prog}.")
+                continue
+
+            # ── Summary banner ─────────────────────────────────────────────
+            _all_flags = []
+            _student_data = []  # cache per-student flags so we only fetch once
+            for _ps in prog_students:
+                _ps_goals = get_goals(_ps["student_name"], active_only=True)
+                _ps_goal_flags = []
+                for _g in _ps_goals:
+                    _flag, _rec, _cnt, _tot = _flag_goal(_g["id"])
+                    _ps_goal_flags.append((_g, _flag, _rec, _cnt, _tot))
+                    _all_flags.append(_flag)
+                _student_data.append((_ps, _ps_goals, _ps_goal_flags))
+
+            _total_s   = len(prog_students)
+            _n_untrack = sum(1 for f in _all_flags if f == FLAG_NOT_TRACKED)
+            _n_sparse  = sum(1 for f in _all_flags if f == FLAG_SPARSE)
+            _n_easy    = sum(1 for f in _all_flags if f == FLAG_TOO_EASY)
+            _n_achiev  = sum(1 for f in _all_flags if f in (FLAG_NOT_ACHIEV, FLAG_DECLINING))
+            _n_ref     = sum(1 for f in _all_flags if f == FLAG_NEEDS_REF)
+            _n_good    = sum(1 for f in _all_flags if f in (FLAG_NONE, FLAG_IMPROVING))
+
+            st.markdown(
+                f'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">'
+                f'<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;'
+                f'padding:10px 16px;text-align:center;min-width:90px;">'
+                f'<div style="font-size:1.5rem;font-weight:700">{_total_s}</div>'
+                f'<div style="font-size:0.75rem;color:#166534">Students</div></div>'
+                f'<div style="background:#f3f4f6;border:1px solid #d1d5db;border-radius:8px;'
+                f'padding:10px 16px;text-align:center;min-width:90px;">'
+                f'<div style="font-size:1.5rem;font-weight:700">{_n_untrack}</div>'
+                f'<div style="font-size:0.75rem;color:#6b7280">Not tracked</div></div>'
+                f'<div style="background:#fef9c3;border:1px solid #fcd34d;border-radius:8px;'
+                f'padding:10px 16px;text-align:center;min-width:90px;">'
+                f'<div style="font-size:1.5rem;font-weight:700">{_n_sparse}</div>'
+                f'<div style="font-size:0.75rem;color:#92400e">Sparse</div></div>'
+                f'<div style="background:#fee2e2;border:1px solid #fca5a5;border-radius:8px;'
+                f'padding:10px 16px;text-align:center;min-width:90px;">'
+                f'<div style="font-size:1.5rem;font-weight:700">{_n_achiev}</div>'
+                f'<div style="font-size:0.75rem;color:#991b1b">Not achieving</div></div>'
+                f'<div style="background:#dbeafe;border:1px solid #93c5fd;border-radius:8px;'
+                f'padding:10px 16px;text-align:center;min-width:90px;">'
+                f'<div style="font-size:1.5rem;font-weight:700">{_n_easy}</div>'
+                f'<div style="font-size:0.75rem;color:#1e40af">Too easy</div></div>'
+                f'<div style="background:#ffedd5;border:1px solid #fb923c;border-radius:8px;'
+                f'padding:10px 16px;text-align:center;min-width:90px;">'
+                f'<div style="font-size:1.5rem;font-weight:700">{_n_ref}</div>'
+                f'<div style="font-size:0.75rem;color:#9a3412">Needs review</div></div>'
+                f'<div style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:8px;'
+                f'padding:10px 16px;text-align:center;min-width:90px;">'
+                f'<div style="font-size:1.5rem;font-weight:700">{_n_good}</div>'
+                f'<div style="font-size:0.75rem;color:#065f46">On track</div></div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+            # ── Filter strip ───────────────────────────────────────────────
+            _filter_opts = [
+                "All students",
+                "⬜ Not being tracked",
+                "🟡 Sparse tracking",
+                "🔴 Not achieving / declining",
+                "🔵 Goal too easy",
+                "🟠 Needs review",
+                "✅ On track / improving",
+            ]
+            _filter = st.selectbox(
+                "Filter by status",
+                _filter_opts,
+                key=f"ld_filter_{_prog}",
+            )
+
+            # ── Notes store (session state — lightweight, doesn't persist) ─
+            if f"ld_notes_{_prog}" not in st.session_state:
+                st.session_state[f"ld_notes_{_prog}"] = {}
+
+            # ── Student cards ──────────────────────────────────────────────
+            _shown = 0
+            for _ps, _ps_goals, _ps_goal_flags in _student_data:
+
+                # Determine worst flag for this student (for filter)
+                _priority = [
+                    FLAG_NOT_TRACKED, FLAG_NOT_ACHIEV, FLAG_DECLINING,
+                    FLAG_NEEDS_REF, FLAG_SPARSE, FLAG_TOO_EASY,
+                    FLAG_IMPROVING, FLAG_NONE,
+                ]
+                _student_flags = [f for _, f, _, _, _ in _ps_goal_flags]
+                _worst = next(
+                    (f for f in _priority if f in _student_flags),
+                    FLAG_NONE,
+                )
+
+                # Apply filter
+                if _filter != "All students":
+                    _pass = False
+                    if "Not being tracked"   in _filter and _worst == FLAG_NOT_TRACKED: _pass = True
+                    if "Sparse"              in _filter and _worst == FLAG_SPARSE:      _pass = True
+                    if "Not achieving"       in _filter and _worst in (FLAG_NOT_ACHIEV, FLAG_DECLINING): _pass = True
+                    if "too easy"            in _filter and _worst == FLAG_TOO_EASY:    _pass = True
+                    if "Needs review"        in _filter and _worst == FLAG_NEEDS_REF:   _pass = True
+                    if "On track"            in _filter and _worst in (FLAG_NONE, FLAG_IMPROVING): _pass = True
+                    if not _pass:
+                        continue
+
+                _shown += 1
+                _card_bg  = FLAG_COLOR.get(_worst, "#f8fafc")
+                _card_bdr = FLAG_BORDER.get(_worst, "#e2e8f0")
+
+                with st.expander(
+                    f"{'🔴' if _worst in (FLAG_NOT_ACHIEV, FLAG_DECLINING) else '🟡' if _worst in (FLAG_SPARSE, FLAG_NEEDS_REF, FLAG_NOT_TRACKED) else '🔵' if _worst == FLAG_TOO_EASY else '✅'} "
+                    f"**{_ps['student_name']}** — {len(_ps_goals)} goal(s) — {_worst}",
+                    expanded=(_worst in (FLAG_NOT_ACHIEV, FLAG_DECLINING, FLAG_NOT_TRACKED)),
+                ):
+                    if not _ps_goals:
+                        st.warning("No active goals set up for this student.")
+                        continue
+
+                    for _gi2, (_g, _flag, _rec, _cnt, _tot) in enumerate(_ps_goal_flags, 1):
+                        _gtext  = _g.get("smartar_goal","—")
+                        _excl   = _g.get("exclusion_goal","")
+                        _period = _g.get("tracking_period","All Day")
+
+                        # Goal header card
+                        st.markdown(
+                            f'<div style="background:{FLAG_COLOR.get(_flag,"#f8fafc")};'
+                            f'border-left:4px solid {FLAG_BORDER.get(_flag,"#e2e8f0")};'
+                            f'border-radius:0 8px 8px 0;padding:10px 14px;margin-bottom:8px;">'
+                            f'<span style="font-weight:700;color:#0369a1">Goal {_gi2}</span> &nbsp; '
+                            f'<span style="font-size:0.8rem;font-weight:600">{_flag}</span><br>'
+                            + (f'<span style="font-size:0.78rem;color:#b45309">🏫 {_excl}</span><br>' if _excl else "")
+                            + f'<span style="font-size:0.88rem">{_gtext}</span><br>'
+                            f'<span style="font-size:0.75rem;color:#6b7280">📅 {_period} &nbsp;·&nbsp; '
+                            f'{_tot} observations (last 10)</span>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+
+                        # Mini bar chart of performance distribution
+                        if _tot > 0:
+                            _, _, _pcts = calc_percentages(_rec)
+                            _bar_html = '<div style="display:flex;height:18px;border-radius:4px;overflow:hidden;margin-bottom:6px;">'
+                            for _lvl in LEVEL_ORDER:
+                                _pct = _pcts.get(_lvl, 0)
+                                if _pct > 0:
+                                    _bar_html += (
+                                        f'<div style="width:{_pct}%;background:{LEVEL_COLOR[_lvl]};'
+                                        f'display:flex;align-items:center;justify-content:center;'
+                                        f'font-size:0.65rem;color:white;font-weight:600;'
+                                        f'white-space:nowrap;overflow:hidden;" title="{_lvl} {_pct:.0f}%">'
+                                        f'{_pct:.0f}%</div>'
+                                    )
+                            _bar_html += '</div>'
+                            _pill_html = " &nbsp; ".join(
+                                f'<span style="font-size:0.72rem;font-weight:600;color:{LEVEL_COLOR[_lvl]}">'
+                                f'{LEVEL_EMOJI[_lvl]} {_lvl} {_pcts.get(_lvl,0):.0f}%</span>'
+                                for _lvl in LEVEL_ORDER if _pcts.get(_lvl, 0) > 0
+                            )
+                            st.markdown(
+                                _bar_html + _pill_html,
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            st.markdown(
+                                '<div style="background:#f3f4f6;border-radius:4px;padding:6px 10px;'
+                                'font-size:0.8rem;color:#6b7280;margin-bottom:6px;">'
+                                '⬜ No tracking data recorded yet.</div>',
+                                unsafe_allow_html=True,
+                            )
+
+                        # Last recorded session
+                        if _rec:
+                            _last = _rec[0]
+                            _last_date  = _last.get("session_date","")
+                            _last_level = _last.get("performance_level","")
+                            st.caption(
+                                f"Last tracked: **{_last_date}** · "
+                                f"{LEVEL_EMOJI.get(_last_level,'')} {_last_level}"
+                            )
+
+                        st.markdown("---")
+
+                    # ── Leadership note ─────────────────────────────────────
+                    _note_key = f"ld_note_{_prog}_{_ps['student_name']}"
+                    _note_val = st.session_state[f"ld_notes_{_prog}"].get(_ps["student_name"], "")
+                    _note_new = st.text_area(
+                        "📝 Leadership note (for discussion with teacher — not saved to database)",
+                        value=_note_val,
+                        height=65,
+                        placeholder=(
+                            "e.g. Discuss goal difficulty with teacher in next check-in. "
+                            "Student consistently exceeding — may need to increase prompt fading…"
+                        ),
+                        key=_note_key,
+                    )
+                    if _note_new != _note_val:
+                        st.session_state[f"ld_notes_{_prog}"][_ps["student_name"]] = _note_new
+
+            if _shown == 0:
+                st.info("No students match the selected filter.")
+
+            # ── Export notes summary ───────────────────────────────────────
+            _notes = st.session_state.get(f"ld_notes_{_prog}", {})
+            _notes_filled = {k: v for k, v in _notes.items() if v.strip()}
+            if _notes_filled:
+                st.markdown("---")
+                with st.expander("📋 Export discussion notes", expanded=False):
+                    st.caption("Copy this summary to use in your check-in with teachers.")
+                    _export_txt = f"Leadership Check-in Notes — {_prog} Program\n"
+                    _export_txt += f"Generated: {date.today().strftime('%d %B %Y')}\n\n"
+                    for _sname, _snote in _notes_filled.items():
+                        _export_txt += f"{'─'*50}\n{_sname}\n{_snote}\n\n"
+                    st.text_area("", value=_export_txt.strip(), height=200,
+                                 key=f"ld_export_{_prog}")
+
+
+
 elif view == "📊 Daily Tracking":
     st.title("📊 Daily Tracking")
 
