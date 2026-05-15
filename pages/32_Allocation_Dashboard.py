@@ -643,12 +643,13 @@ with col6:
 st.markdown('<div class="section-header">🎯 Interactive Drill-Down Analytics <span class="drill-badge">Click to Explore</span></div>', unsafe_allow_html=True)
 
 # Create tabs for different drill-down views
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📊 Partnership Deep Dive",
     "🏫 School Distribution",
     "📅 Term Trends",
     "🎨 Program Breakdown",
-    "⚠️ Non-Typical Placements"
+    "⚠️ Non-Typical Placements",
+    "🔄 Placement History"  # NEW TAB
 ])
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1203,6 +1204,163 @@ with tab5:
         </ul>
         </div>
         """, unsafe_allow_html=True)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# TAB 6: PLACEMENT HISTORY (Returning vs First-Time Students)
+# ──────────────────────────────────────────────────────────────────────────────
+with tab6:
+    st.markdown("### 🔄 Placement History Analysis")
+    
+    st.markdown("""
+    <div class="info-box">
+    <strong>ℹ️ About Placement History:</strong><br>
+    This view shows which students are returning to CLC for additional support vs. first-time placements.
+    Returning students have had previous CLC placements, indicating ongoing support needs or successful re-engagement.
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Count returning vs first-time
+    returning_students = filtered_df[filtered_df['prev_clc'] == 'Yes']
+    firsttime_students = filtered_df[filtered_df['prev_clc'] == 'No']
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("🔄 Returning Students", len(returning_students))
+    
+    with col2:
+        st.metric("🆕 First-Time Students", len(firsttime_students))
+    
+    with col3:
+        returning_pct = (len(returning_students) / len(filtered_df) * 100) if len(filtered_df) > 0 else 0
+        st.metric("📊 Returning %", f"{returning_pct:.1f}%")
+    
+    # Breakdown by program
+    st.markdown("#### 📊 Returning vs First-Time by Program")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Pie chart of returning vs first-time
+        placement_status_counts = filtered_df['prev_clc'].value_counts()
+        placement_status_labels = placement_status_counts.index.map({'Yes': 'Returning Students', 'No': 'First-Time Students'})
+        
+        fig_status = px.pie(
+            values=placement_status_counts.values,
+            names=placement_status_labels,
+            title='Overall Placement History',
+            color_discrete_sequence=['#C8760A', '#1A7A6E']
+        )
+        st.plotly_chart(fig_status, use_container_width=True)
+    
+    with col2:
+        # Bar chart by program
+        program_history = filtered_df.groupby(['program', 'prev_clc']).size().unstack(fill_value=0)
+        program_history.columns = ['First-Time', 'Returning']
+        
+        fig_program_hist = go.Figure()
+        
+        fig_program_hist.add_trace(go.Bar(
+            name='First-Time',
+            x=program_history.index,
+            y=program_history['First-Time'],
+            marker_color='#1A7A6E'
+        ))
+        
+        fig_program_hist.add_trace(go.Bar(
+            name='Returning',
+            x=program_history.index,
+            y=program_history['Returning'],
+            marker_color='#C8760A'
+        ))
+        
+        fig_program_hist.update_layout(
+            title='Placement History by Program',
+            barmode='stack',
+            height=350,
+            xaxis_title="Program",
+            yaxis_title="Number of Students"
+        )
+        
+        st.plotly_chart(fig_program_hist, use_container_width=True)
+    
+    # Detailed breakdown
+    if len(returning_students) > 0:
+        st.markdown("#### 🔄 Returning Students Detail")
+        
+        returning_by_program = returning_students['program'].value_counts()
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.markdown("**Programs with Returning Students:**")
+            for program, count in returning_by_program.items():
+                st.markdown(f"""
+                <div style="background: #FFF9E6; padding: 0.8rem; border-radius: 8px; margin-bottom: 0.5rem; border-left: 4px solid #C8760A;">
+                    <strong>{program}:</strong> {count} returning student(s)
+                </div>
+                """, unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown("**Support Needs Profile:**")
+            returning_swd = (returning_students['swd'] == 'Yes').sum()
+            returning_dcp = (returning_students['dcp'] == 'Yes').sum()
+            
+            st.metric("SWD", returning_swd)
+            st.metric("DCP", returning_dcp)
+        
+        st.markdown("**📋 Returning Students List:**")
+        returning_display = returning_students[[
+            'record_id', 'school', 'program', 'year_level', 'term', 
+            'swd', 'dcp', 'aboriginal', 'eald'
+        ]].copy()
+        
+        returning_display.columns = [
+            'Student ID', 'School', 'Program', 'Year', 'Term',
+            'SWD', 'DCP', 'Aboriginal', 'EALD'
+        ]
+        
+        st.dataframe(
+            returning_display,
+            use_container_width=True,
+            hide_index=True,
+            height=300
+        )
+        
+        # Export option
+        csv_returning = returning_students.to_csv(index=False)
+        st.download_button(
+            label="📥 Download Returning Students Report (CSV)",
+            data=csv_returning,
+            file_name=f"returning_students_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv"
+        )
+    else:
+        st.info("✅ No returning students in current filtered view. All students are first-time placements.")
+    
+    # Schools with most returning students
+    if len(returning_students) > 0:
+        st.markdown("#### 🏫 Schools with Returning Students")
+        
+        returning_schools = returning_students['school'].value_counts().head(10)
+        
+        fig_schools_returning = px.bar(
+            y=returning_schools.index,
+            x=returning_schools.values,
+            orientation='h',
+            color=returning_schools.values,
+            color_continuous_scale='Oranges',
+            text=returning_schools.values
+        )
+        fig_schools_returning.update_traces(textposition='outside')
+        fig_schools_returning.update_layout(
+            title='Schools Referring Returning Students',
+            showlegend=False,
+            height=max(300, len(returning_schools) * 40),
+            yaxis_title="School",
+            xaxis_title="Number of Returning Students"
+        )
+        st.plotly_chart(fig_schools_returning, use_container_width=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SUMMARY STATISTICS TABLE
