@@ -456,11 +456,24 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
             def kill_all_nans(record):
                 """Remove ALL NaN values from a record, no matter what"""
                 clean = {}
+                # Integer columns that must be int, not float or string
+                int_columns = {'total_previous_placements'}
+                
                 for key, value in record.items():
                     # Check for NaN in every possible way
                     try:
                         if value is None:
                             clean[key] = None
+                        elif key in int_columns:
+                            # Special handling for integer columns
+                            if pd.isna(value) or value is None or value == '' or value == 'None':
+                                clean[key] = None
+                            else:
+                                # Convert to int (handles float 0.0 -> int 0)
+                                try:
+                                    clean[key] = int(float(value))
+                                except:
+                                    clean[key] = None
                         elif isinstance(value, float):
                             # Check if it's NaN or inf
                             import math
