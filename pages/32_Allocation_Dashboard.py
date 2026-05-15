@@ -145,6 +145,15 @@ st.markdown("""
         display: inline-block;
         margin-left: 0.5rem;
     }
+    
+    /* Sync section */
+    .sync-box {
+        background: #FFF9E6;
+        border: 2px solid #C8760A;
+        padding: 1.5rem;
+        border-radius: 12px;
+        margin-bottom: 2rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -173,7 +182,6 @@ def load_allocation_data():
         response = supabase.table('allocation_tracker').select('*').execute()
         
         if not response.data:
-            st.warning("📋 No allocation data found in database. The dashboard will show empty until records are added.")
             return pd.DataFrame()
         
         # Convert to DataFrame
@@ -183,20 +191,209 @@ def load_allocation_data():
         
     except Exception as e:
         st.error(f"❌ Error loading data from Supabase: {str(e)}")
-        st.stop()
+        return pd.DataFrame()
 
-# Load data
+# ══════════════════════════════════════════════════════════════════════════════
+# HEADER
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown(f"""
+<div class="dashboard-header">
+    <h1>📊 Allocation Dashboard</h1>
+    <p>Live student allocation overview • Interactive drill-down analytics</p>
+    <span class="privacy-badge">🔒 Privacy Protected • De-identified Data</span>
+    <span class="refresh-badge">🔄 Auto-refresh 60s</span>
+</div>
+""", unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ADMIN SECTION: DATA SYNC
+# ══════════════════════════════════════════════════════════════════════════════
+with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
+    st.markdown("""
+    <div class="sync-box">
+    <strong>🔒 Privacy-Preserving Sync</strong><br>
+    Upload your allocation Excel file to update the dashboard. <strong>Student names are automatically removed</strong> during sync.
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        uploaded_file = st.file_uploader(
+            "Upload Allocation Excel File",
+            type=['xlsx', 'xlsm'],
+            help="CLC_Allocation_Dashboard Excel file - student names will NOT be synced",
+            key="excel_upload"
+        )
+    
+    with col2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        sync_button = st.button("🔄 Sync to Dashboard", type="primary", use_container_width=True, disabled=(uploaded_file is None))
+    
+    if uploaded_file is not None and sync_button:
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        try:
+            # Read Excel file
+            status_text.text("Reading Excel file...")
+            progress_bar.progress(10)
+            df_excel = pd.read_excel(uploaded_file, sheet_name='Data_Model')
+            
+            status_text.text(f"Processing {len(df_excel)} student records...")
+            progress_bar.progress(20)
+            
+            # Prepare sync data (de-identify)
+            def prepare_sync_data(df):
+                """De-identify and map Excel columns to Supabase schema"""
+                sync_df = pd.DataFrame()
+                
+                # Map columns (Excel -> Supabase) - STUDENT NAMES EXCLUDED
+                column_mapping = {
+                    'Student_ID': 'id',
+                    'Gender': 'gender',
+                    'Year Level': 'year_level',
+                    'Referring_School': 'referring_school',
+                    'Referral_Date': 'referral_date',
+                    'Allocation_Status': 'allocation_status',
+                    'Allocated_Program': 'allocated_program',
+                    'Placement_Start': 'placement_start',
+                    'Placement_End': 'placement_end',
+                    'Partnership_Area': 'partnership_area',
+                    'Previous_CLC_Placement': 'previous_clc_placement',
+                    'Previous_Other_LC': 'previous_other_lc',
+                    'Other_LC_Name': 'other_lc_name',
+                    'Total_Previous_Placements': 'total_previous_placements',
+                    'Placement_History_Notes': 'placement_history_notes',
+                    'Priority_Level': 'priority_level',
+                    'Flag_ASD': 'flag_asd',
+                    'Flag_ADHD': 'flag_adhd',
+                    'Flag_MentalHealth': 'flag_mental_health',
+                    'Flag_ODD_CD': 'flag_odd_cd',
+                    'Flag_Care_CPS': 'flag_care_cps',
+                    'Flag_Aboriginal': 'flag_aboriginal',
+                    'Flag_EALD': 'flag_eald',
+                    'Flag_Other': 'flag_other',
+                    'Exit_Reason': 'exit_reason',
+                    'Transition_Plan': 'transition_plan',
+                    'Notes': 'notes'
+                }
+                
+                # Map columns
+                for excel_col, db_col in column_mapping.items():
+                    if excel_col in df.columns:
+                        sync_df[db_col] = df[excel_col]
+                
+                # Convert Yes/No to boolean for flags
+                flag_columns = ['flag_asd', 'flag_adhd', 'flag_mental_health', 'flag_odd_cd',
+                              'flag_care_cps', 'flag_aboriginal', 'flag_eald', 'flag_other']
+                
+                for flag_col in flag_columns:
+                    if flag_col in sync_df.columns:
+                        sync_df[flag_col] = sync_df[flag_col].map({'Yes': True, 'No': False, '': False})
+                        sync_df[flag_col] = sync_df[flag_col].fillna(False)
+                
+                # Convert year level to string
+                if 'year_level' in sync_df.columns:
+                    sync_df['year_level'] = sync_df['year_level'].astype(str).str.strip()
+                
+                # Handle dates
+                date_columns = ['referral_date', 'placement_start', 'placement_end']
+                for date_col in date_columns:
+                    if date_col in sync_df.columns:
+                        sync_df[date_col] = pd.to_datetime(sync_df[date_col], errors='coerce')
+                        sync_df[date_col] = sync_df[date_col].dt.strftime('%Y-%m-%d')
+                
+                # Handle NaN values
+                sync_df = sync_df.replace({pd.NA: None, pd.NaT: None})
+                sync_df = sync_df.where(pd.notna(sync_df), None)
+                
+                # Add current_status
+                sync_df['current_status'] = 'Active'
+                
+                # Add timestamps
+                now = datetime.now().isoformat()
+                sync_df['created_at'] = now
+                sync_df['updated_at'] = now
+                
+                return sync_df
+            
+            sync_data = prepare_sync_data(df_excel)
+            
+            # Initialize Supabase
+            status_text.text("Connecting to database...")
+            progress_bar.progress(40)
+            supabase = init_supabase()
+            
+            # Clear existing data
+            status_text.text("Clearing old dashboard data...")
+            progress_bar.progress(50)
+            supabase.table('allocation_tracker').delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
+            
+            # Insert new data
+            status_text.text(f"Uploading {len(sync_data)} de-identified records...")
+            progress_bar.progress(60)
+            
+            # Convert to list of dicts
+            records = sync_data.to_dict('records')
+            
+            # Insert in batches
+            batch_size = 50
+            for i in range(0, len(records), batch_size):
+                batch = records[i:i + batch_size]
+                supabase.table('allocation_tracker').insert(batch).execute()
+                progress_bar.progress(60 + int(30 * ((i + len(batch)) / len(records))))
+            
+            # Clear cache to force reload
+            load_allocation_data.clear()
+            
+            # Complete
+            progress_bar.progress(100)
+            status_text.empty()
+            progress_bar.empty()
+            
+            st.success(f"""
+            ✅ **Sync Successful!** {len(sync_data)} records synced to dashboard.
+            
+            **Privacy Status:** ✅ No student names were transmitted or stored in database.
+            
+            Dashboard below will refresh automatically in 60 seconds, or refresh your browser now.
+            """)
+            
+            # Force page rerun to show new data
+            st.rerun()
+            
+        except Exception as e:
+            progress_bar.empty()
+            status_text.empty()
+            st.error(f"❌ Sync failed: {str(e)}")
+            st.exception(e)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# LOAD DATA
+# ══════════════════════════════════════════════════════════════════════════════
 df_raw = load_allocation_data()
 
 if len(df_raw) == 0:
-    st.info("📭 **The allocation_tracker table is currently empty.** Add student records to see the dashboard populate with data.")
+    st.info("""
+    📭 **No allocation data in dashboard yet.**
+    
+    **To get started:**
+    1. Click "🔧 ADMIN: Sync Data from Excel" above
+    2. Upload your allocation Excel file
+    3. Click "Sync to Dashboard"
+    4. Dashboard will populate with de-identified data
+    """)
     st.stop()
+
+# Show last update time
+st.caption(f"📅 Last updated: {datetime.now().strftime('%d/%m/%Y %I:%M %p')} | Total records: {len(df_raw)}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DATA PROCESSING & MAPPING
 # ══════════════════════════════════════════════════════════════════════════════
-
-# Create a working copy
+# Create working copy
 df = df_raw.copy()
 
 # Map Supabase columns to dashboard expectations
@@ -211,57 +408,35 @@ df['referral_date'] = pd.to_datetime(df['referral_date'], errors='coerce')
 df['year'] = df['referral_date'].dt.year
 df['month'] = df['referral_date'].dt.month
 
-# Get year level from database (added via SQL script)
-# If year_level is empty, calculate from DOB as fallback
+# Get year level from database
 def calculate_year_level_from_dob(dob):
     """Calculate year level from date of birth as fallback"""
     if pd.isna(dob):
         return "Unknown"
-    
     dob = pd.to_datetime(dob)
     today = datetime.now()
     age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
-    
-    # SA school entry: Reception at age 5
-    if age < 5:
-        return "R"
-    elif age == 5:
-        return "R"
-    elif age == 6:
-        return "1"
-    elif age == 7:
-        return "2"
-    elif age == 8:
-        return "3"
-    elif age == 9:
-        return "4"
-    elif age == 10:
-        return "5"
-    elif age == 11:
-        return "6"
-    elif age == 12:
-        return "7"
-    elif age == 13:
-        return "8"
-    elif age == 14:
-        return "9"
-    elif age >= 15:
-        return "10"
-    else:
-        return "Unknown"
+    if age < 5: return "R"
+    elif age == 5: return "R"
+    elif age == 6: return "1"
+    elif age == 7: return "2"
+    elif age == 8: return "3"
+    elif age == 9: return "4"
+    elif age == 10: return "5"
+    elif age == 11: return "6"
+    elif age == 12: return "7"
+    elif age == 13: return "8"
+    elif age == 14: return "9"
+    elif age >= 15: return "10"
+    else: return "Unknown"
 
-# Use database year_level, calculate from DOB if missing
+# Use database year_level
 if 'year_level' in df.columns:
     df['year_level'] = df['year_level'].fillna('').astype(str)
-    # Fill empty year_levels with calculated values
-    mask = (df['year_level'] == '') | (df['year_level'] == 'None') | (df['year_level'].isna())
-    df.loc[mask, 'year_level'] = df.loc[mask, 'dob'].apply(calculate_year_level_from_dob)
 else:
-    # If column doesn't exist yet, calculate from DOB
-    df['year_level'] = df['dob'].apply(calculate_year_level_from_dob)
+    df['year_level'] = "Unknown"
 
 # Create SWD and DCP flags
-# SWD = Students with Disabilities (any disability flag is true)
 df['swd'] = (
     df.get('flag_asd', False) | 
     df.get('flag_adhd', False) | 
@@ -269,7 +444,6 @@ df['swd'] = (
     df.get('flag_odd_cd', False)
 ).map({True: 'Yes', False: 'No'})
 
-# DCP = Department Child Protection
 df['dcp'] = df.get('flag_care_cps', False).map({True: 'Yes', False: 'No'})
 
 # Map other flags
@@ -288,7 +462,7 @@ df['priority'] = df.get('priority_level', '')
 # Current status
 df['current_status'] = df.get('current_status', 'Active')
 
-# Define terms based on SA school year
+# Define terms
 def get_term(month):
     if pd.isna(month):
         return "Unknown"
@@ -303,16 +477,12 @@ def get_term(month):
 
 df['term'] = df['month'].apply(get_term)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# PROGRAM PLACEMENT LOGIC
-# ══════════════════════════════════════════════════════════════════════════════
+# Program placement logic
 def get_expected_program(year_level):
     """Determine expected program based on year level"""
     if pd.isna(year_level) or year_level == '' or year_level == "Unknown":
         return "Unknown"
-    
     year_level = str(year_level).upper()
-    
     if year_level in ['R', '1']:
         return "Junior Primary (R-1)"
     elif year_level in ['3', '4', '5', '6']:
@@ -322,28 +492,8 @@ def get_expected_program(year_level):
     else:
         return "Unknown"
 
-# Add expected program and mismatch flag
 df['expected_program'] = df['year_level'].apply(get_expected_program)
 df['program_mismatch'] = (df['program'] != df['expected_program']) & (df['expected_program'] != "Unknown")
-
-# Calculate percentage in non-typical placement
-mismatch_count = df['program_mismatch'].sum()
-mismatch_percentage = (mismatch_count / len(df) * 100) if len(df) > 0 else 0
-
-# ══════════════════════════════════════════════════════════════════════════════
-# HEADER
-# ══════════════════════════════════════════════════════════════════════════════
-st.markdown(f"""
-<div class="dashboard-header">
-    <h1>📊 Allocation Dashboard</h1>
-    <p>Live student allocation overview • Interactive drill-down analytics</p>
-    <span class="privacy-badge">🔒 Privacy Protected</span>
-    <span class="refresh-badge">🔄 Live Data • Auto-refresh 60s</span>
-</div>
-""", unsafe_allow_html=True)
-
-# Show last update time
-st.caption(f"📅 Last updated: {datetime.now().strftime('%d/%m/%Y %I:%M %p')} | Total records: {len(df)}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # FILTERS
@@ -353,17 +503,14 @@ st.markdown('<div class="section-header">🔍 Filters & View Options</div>', uns
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    # Term filter
     terms = ['All Terms'] + sorted(df['term'].unique().tolist())
     selected_term = st.selectbox("📅 Select Term", terms, key="term_filter")
 
 with col2:
-    # Partnership filter
     partnerships = ['All Partnerships'] + sorted([p for p in df['partnership'].unique() if p != ''])
     selected_partnership = st.selectbox("🤝 Select Partnership", partnerships, key="partnership_filter")
 
 with col3:
-    # Program filter
     programs = ['All Programs'] + sorted(df['program'].unique().tolist())
     selected_program = st.selectbox("📚 Select Program", programs, key="program_filter")
 
@@ -388,11 +535,10 @@ if selected_term != 'All Terms' or selected_partnership != 'All Partnerships' or
         active_filters.append(f"**{selected_partnership}**")
     if selected_program != 'All Programs':
         active_filters.append(f"**{selected_program}**")
-    
     st.info(f"🔎 Showing data for: {' • '.join(active_filters)} | Displaying {len(filtered_df)} of {len(df)} records")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# KEY METRICS (FILTERED)
+# KEY METRICS
 # ══════════════════════════════════════════════════════════════════════════════
 col1, col2, col3, col4, col5, col6 = st.columns(6)
 
@@ -452,6 +598,10 @@ with col6:
 # ══════════════════════════════════════════════════════════════════════════════
 # INTERACTIVE DRILL-DOWN SECTIONS
 # ══════════════════════════════════════════════════════════════════════════════
+
+# [REST OF THE DASHBOARD CODE CONTINUES EXACTLY AS BEFORE - ALL TABS, CHARTS, ETC.]
+# For brevity, I'll indicate where the existing tab code goes...
+
 st.markdown('<div class="section-header">🎯 Interactive Drill-Down Analytics <span class="drill-badge">Click to Explore</span></div>', unsafe_allow_html=True)
 
 # Create tabs for different drill-down views
@@ -463,9 +613,9 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "⚠️ Non-Typical Placements"
 ])
 
-# [Rest of the tabs code continues exactly as before, with the same structure...]
-# For brevity, I'll include the key sections with proper data mapping
-
+# ──────────────────────────────────────────────────────────────────────────────
+# TAB 1: PARTNERSHIP DEEP DIVE
+# ──────────────────────────────────────────────────────────────────────────────
 with tab1:
     st.markdown("### 🤝 Partnership Enrollment Distribution")
     
@@ -534,9 +684,9 @@ with tab1:
     else:
         st.info("No partnership data available for the selected filters.")
 
-# Continue with remaining tabs using same structure...
-# [School Distribution, Term Trends, Program Breakdown, Non-Typical Placements tabs]
-
+# ──────────────────────────────────────────────────────────────────────────────
+# TAB 2: SCHOOL DISTRIBUTION
+# ──────────────────────────────────────────────────────────────────────────────
 with tab2:
     st.markdown("### 🏫 Students Allocated Per School")
     
@@ -638,9 +788,12 @@ with tab2:
         school_display = school_detail_df[['record_id', 'year_level', 'program', 'expected_program', 'program_mismatch', 'term', 'referral_date', 'swd', 'dcp', 'aboriginal', 'eald']].copy()
         school_display.columns = ['Record ID', 'Year', 'Program', 'Expected', 'Non-Typical', 'Term', 'Referral Date', 'SWD', 'DCP', 'Aboriginal', 'EALD']
         school_display['Non-Typical'] = school_display['Non-Typical'].apply(lambda x: '⚠️' if x else '✓')
-        school_display['Referral Date'] = school_display['Referral Date'].dt.strftime('%d/%m/%Y')
+        school_display['Referral Date'] = pd.to_datetime(school_display['Referral Date']).dt.strftime('%d/%m/%Y')
         st.dataframe(school_display, use_container_width=True, hide_index=True)
 
+# ──────────────────────────────────────────────────────────────────────────────
+# TAB 3: TERM TRENDS
+# ──────────────────────────────────────────────────────────────────────────────
 with tab3:
     st.markdown("### 📅 Term-by-Term Allocation Trends")
     
@@ -737,6 +890,9 @@ with tab3:
         else:
             st.info(f"No data available for {selected_term_drill}")
 
+# ──────────────────────────────────────────────────────────────────────────────
+# TAB 4: PROGRAM BREAKDOWN
+# ──────────────────────────────────────────────────────────────────────────────
 with tab4:
     st.markdown("### 🎨 Program-Level Analysis")
     
@@ -845,6 +1001,9 @@ with tab4:
         )
         st.plotly_chart(fig_flags_prog, use_container_width=True)
 
+# ──────────────────────────────────────────────────────────────────────────────
+# TAB 5: NON-TYPICAL PLACEMENTS
+# ──────────────────────────────────────────────────────────────────────────────
 with tab5:
     st.markdown("### ⚠️ Students in Non-Typical Program Placements")
     
@@ -1067,12 +1226,13 @@ with col2:
     </div>
     """, unsafe_allow_html=True)
 
+# Footer
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; color: #666; padding: 2rem 0;">
-    <p style="font-size: 0.9rem;">📊 Live Allocation Dashboard | Cowandilla Learning Centre LBU</p>
+    <p style="font-size: 0.9rem;">📊 Integrated Allocation Dashboard | Cowandilla Learning Centre LBU</p>
     <p style="font-size: 0.85rem; color: #1A7A6E; font-weight: 600;">
-        🔄 Connected to Supabase • Auto-refresh every 60 seconds • Live data
+        🔄 Live Data • Auto-refresh 60s • Privacy Protected • Built-in Sync
     </p>
 </div>
 """, unsafe_allow_html=True)
