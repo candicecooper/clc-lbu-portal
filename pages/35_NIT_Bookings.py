@@ -7,6 +7,11 @@ import os
 # Page config
 st.set_page_config(page_title="NIT Time Booking", page_icon="📅", layout="wide")
 
+# Auth check
+from auth import get_staff_name, is_admin
+staff_name = get_staff_name()
+is_admin_user = is_admin()
+
 # Supabase setup
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
@@ -91,6 +96,17 @@ def load_bookings():
         st.error(f"Error loading bookings: {e}")
         return pd.DataFrame()
 
+def load_staff_names():
+    """Load staff names from database for admin dropdown"""
+    try:
+        response = supabase.table("staff").select("name").order("name").execute()
+        if response.data:
+            return [r["name"] for r in response.data]
+        return []
+    except Exception as e:
+        st.warning(f"Could not load staff names: {e}")
+        return []
+
 def create_booking(booking_date, time_slot, staff_name):
     """Create a new booking"""
     try:
@@ -140,8 +156,17 @@ st.info(f"""
 # My Bookings Section
 st.markdown("### 📋 My Bookings")
 
-# Staff name input for filtering
-staff_name_filter = st.text_input("Your name (to view/manage your bookings):", key="staff_filter")
+# Show admin badge if admin
+if is_admin_user:
+    st.markdown('<span style="background:#e8a125;color:#1a2e44;padding:0.25rem 0.75rem;border-radius:20px;font-size:0.75rem;font-weight:700;">👑 ADMIN</span>', unsafe_allow_html=True)
+    st.caption("As an admin, you can book on behalf of any staff member")
+
+# Use authenticated staff name, or allow manual entry if not authenticated
+if staff_name:
+    staff_name_filter = staff_name
+    st.info(f"Viewing bookings for: **{staff_name}**")
+else:
+    staff_name_filter = st.text_input("Your name (to view/manage your bookings):", key="staff_filter")
 
 if staff_name_filter:
     if not bookings_df.empty:
@@ -173,6 +198,36 @@ if staff_name_filter:
         st.info("You have no upcoming bookings.")
 else:
     st.info("👆 Enter your name above to view and manage your bookings")
+
+# Admin: Show all bookings
+if is_admin_user:
+    st.markdown("---")
+    st.markdown("### 👑 All Bookings (Admin View)")
+    
+    if not bookings_df.empty:
+        all_bookings_sorted = bookings_df.sort_values('booking_date')
+        st.markdown(f"**Total of {len(all_bookings_sorted)} booking(s) in the system:**")
+        
+        for idx, booking in all_bookings_sorted.iterrows():
+            col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+            with col1:
+                st.write(f"📅 {booking['booking_date'].strftime('%A, %d %B %Y')}")
+            with col2:
+                st.write(f"🕐 {booking['time_slot']}")
+            with col3:
+                st.write(f"👤 {booking['staff_name']}")
+            with col4:
+                if st.button("Cancel", key=f"admin_cancel_{booking['id']}"):
+                    success, message = cancel_booking(booking['id'])
+                    if success:
+                        st.success(message)
+                        st.rerun()
+                    else:
+                        st.error(message)
+    else:
+        st.info("No bookings in the system yet")
+    
+    st.markdown("---")
 
 # Booking Grid
 st.markdown("### 📅 Available Time Slots")
@@ -240,11 +295,29 @@ else:
                         
                         # Booking form
                         with st.expander("Book this slot"):
-                            booking_staff_name = st.text_input(
-                                "Your name:", 
-                                value=staff_name_filter if staff_name_filter else "",
-                                key=f"book_{booking_date}_{day_name}"
-                            )
+                            if is_admin_user:
+                                # Admin: Show dropdown with all staff names
+                                staff_list = load_staff_names()
+                                if staff_list:
+                                    booking_staff_name = st.selectbox(
+                                        "Select staff member:",
+                                        options=[""] + staff_list,
+                                        key=f"book_select_{booking_date}_{day_name}"
+                                    )
+                                else:
+                                    booking_staff_name = st.text_input(
+                                        "Staff name:",
+                                        value="",
+                                        key=f"book_{booking_date}_{day_name}"
+                                    )
+                                    st.caption("⚠️ Could not load staff list - enter name manually")
+                            else:
+                                # Regular staff: Pre-filled with their name
+                                booking_staff_name = st.text_input(
+                                    "Your name:", 
+                                    value=staff_name if staff_name else (staff_name_filter if staff_name_filter else ""),
+                                    key=f"book_{booking_date}_{day_name}"
+                                )
                             
                             if st.button("Confirm Booking", key=f"confirm_{booking_date}_{day_name}"):
                                 if booking_staff_name.strip():
