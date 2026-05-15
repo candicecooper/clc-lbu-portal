@@ -373,13 +373,13 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                         if pd.isna(value) or (isinstance(value, float) and (np.isinf(value) or np.isnan(value))):
                             cleaned_record[key] = None
                         # Convert numpy bool to Python bool
-                        elif isinstance(value, (np.bool_, np.bool)):
+                        elif isinstance(value, (np.bool_, bool)):
                             cleaned_record[key] = bool(value)
                         # Convert numpy int to Python int
-                        elif isinstance(value, (np.integer, np.int_, np.int64, np.int32)):
+                        elif isinstance(value, (np.integer, np.int64, np.int32)):
                             cleaned_record[key] = int(value)
                         # Convert numpy float to Python float (if not NaN)
-                        elif isinstance(value, (np.floating, np.float_, np.float64, np.float32)):
+                        elif isinstance(value, (np.floating, np.float64, np.float32)):
                             cleaned_record[key] = float(value) if not np.isnan(value) else None
                         else:
                             cleaned_record[key] = value
