@@ -291,7 +291,8 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                     if excel_col in df.columns:
                         sync_df[db_col] = df[excel_col]
                 
-                # Convert Yes/No to boolean for flags
+                # Convert Yes/No to boolean for flags ONLY
+                # Previous placements stay as text Yes/No for easier filtering
                 flag_columns = ['flag_asd', 'flag_adhd', 'flag_mental_health', 'flag_odd_cd',
                               'flag_care_cps', 'flag_aboriginal', 'flag_eald', 'flag_other',
                               'bespoke_placement']  # Include bespoke_placement in flag conversion
@@ -300,6 +301,12 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                     if flag_col in sync_df.columns:
                         sync_df[flag_col] = sync_df[flag_col].map({'Yes': True, 'No': False, '': False})
                         sync_df[flag_col] = sync_df[flag_col].fillna(False)
+                
+                # Keep Previous_CLC_Placement and Previous_Other_LC as text Yes/No
+                for text_col in ['previous_clc_placement', 'previous_other_lc']:
+                    if text_col in sync_df.columns:
+                        sync_df[text_col] = sync_df[text_col].map({'Yes': 'Yes', 'No': 'No', '': 'No', None: 'No'})
+                        sync_df[text_col] = sync_df[text_col].fillna('No')
                 
                 # Convert year level to string
                 if 'year_level' in sync_df.columns:
@@ -508,9 +515,9 @@ df['eald'] = df.get('flag_eald', False).map({True: 'Yes', False: 'No'})
 df['care_cps'] = df.get('flag_care_cps', False).map({True: 'Yes', False: 'No'})
 df['mental_health'] = df.get('flag_mental_health', False).map({True: 'Yes', False: 'No'})
 
-# Previous placements
-df['prev_clc'] = df.get('previous_clc_placement', '').apply(lambda x: 'Yes' if x and x != '' else 'No')
-df['prev_other'] = df.get('previous_other_lc', '').apply(lambda x: 'Yes' if x and x != '' else 'No')
+# Previous placements - already converted to Yes/No during sync
+df['prev_clc'] = df.get('previous_clc_placement', 'No').fillna('No')
+df['prev_other'] = df.get('previous_other_lc', 'No').fillna('No')
 
 # Priority
 df['priority'] = df.get('priority_level', '')
