@@ -981,23 +981,25 @@ with tab_students:
                     elif not pa_school.strip(): st.warning("School / placement site is required.")
                     elif pa_end < pa_start:     st.warning("End date must be on or after start date.")
                     else:
-                        # contact_email column not in schema — fold into contact_person
+                        # Fold all extended fields into notes to avoid missing-column errors
                         contact_combined = pa_contact.strip()
                         if pa_email.strip():
                             contact_combined = f"{contact_combined} — {pa_email.strip()}" if contact_combined else pa_email.strip()
+                        notes_parts = []
+                        if pa_type:                  notes_parts.append(f"Type: {pa_type}")
+                        if pa_fund:                  notes_parts.append(f"Funding: {pa_fund}")
+                        if pa_phone.strip():         notes_parts.append(f"Phone: {pa_phone.strip()}")
+                        if pa_support.strip():       notes_parts.append(f"Support: {pa_support.strip()}")
+                        if pa_goals.strip():         notes_parts.append(f"Goals: {pa_goals.strip()}")
+                        if pa_notes.strip():         notes_parts.append(pa_notes.strip())
                         save_placement({
-                            "student_initials":     pa_init.strip(),
-                            "program":              pa_prog,
-                            "placement_type":       pa_type,
-                            "placement_school":     pa_school.strip(),
-                            "funding_type":         pa_fund,
-                            "start_date":           str(pa_start),
-                            "end_date":             str(pa_end),
-                            "contact_person":       contact_combined,
-                            "contact_phone":        pa_phone.strip(),
-                            "support_arrangements": pa_support.strip(),
-                            "goals":                pa_goals.strip(),
-                            "notes":                pa_notes.strip(),
+                            "student_initials": pa_init.strip(),
+                            "program":          pa_prog,
+                            "placement_school": pa_school.strip(),
+                            "start_date":       str(pa_start),
+                            "end_date":         str(pa_end),
+                            "contact_person":   contact_combined,
+                            "notes":            "\n".join(notes_parts),
                         })
                         st.session_state["_cal_save_ok"] = f"✅ Placement saved for {pa_init.strip()} at {pa_school.strip()}!"
                         st.rerun()
@@ -1034,17 +1036,10 @@ with tab_students:
                         f'{badge_html}<b style="color:{pc["color"]};">{pl.get("student_initials","")}</b>'
                         f' — {ptype} at <b>{pl.get("placement_school","")}</b><br>'
                         f'<span style="color:#555;">📅 {dur}</span>'
-                        f'{(" &nbsp;|&nbsp; 💰 "+pl["funding_type"]) if pl.get("funding_type") else ""}'
                         f'{("<br>👤 Contact: "+pl["contact_person"]) if pl.get("contact_person") else ""}'
-                        f'{(" · 📞 "+pl["contact_phone"]) if pl.get("contact_phone") else ""}'
-                        f''
                         f'</div>', unsafe_allow_html=True)
-                    if pl.get("support_arrangements"):
-                        st.markdown(f"**Support arrangements:** {pl['support_arrangements']}")
-                    if pl.get("goals"):
-                        st.markdown(f"**Placement goals:** {pl['goals']}")
                     if pl.get("notes"):
-                        st.markdown(f"**Notes:** {pl['notes']}")
+                        st.markdown(pl['notes'])
 
                     ec1, ec2 = st.columns(2)
                     with ec1:
@@ -1059,11 +1054,24 @@ with tab_students:
                                     e_init   = st.text_input("Student initials", value=pl.get("student_initials",""))
                                     e_prog   = st.selectbox("Program", ["","JP","PY","SY"],
                                                             index=["","JP","PY","SY"].index(pl.get("program","")) if pl.get("program","") in ["","JP","PY","SY"] else 0)
+                                    # Parse stored fields back out of notes
+                                    _notes_raw = pl.get("notes","") or ""
+                                    def _parse_note(prefix, text):
+                                        for line in text.splitlines():
+                                            if line.startswith(prefix+":"):
+                                                return line[len(prefix)+1:].strip()
+                                        return ""
+                                    _stored_type    = _parse_note("Type",    _notes_raw)
+                                    _stored_fund    = _parse_note("Funding", _notes_raw)
+                                    _stored_phone   = _parse_note("Phone",   _notes_raw)
+                                    _stored_support = _parse_note("Support", _notes_raw)
+                                    _stored_goals   = _parse_note("Goals",   _notes_raw)
+                                    _stored_notes   = "\n".join(l for l in _notes_raw.splitlines() if not any(l.startswith(p+":") for p in ["Type","Funding","Phone","Support","Goals"]))
                                     e_type   = st.selectbox("Placement type", PLACEMENT_TYPES,
-                                                            index=PLACEMENT_TYPES.index(pl.get("placement_type","")) if pl.get("placement_type","") in PLACEMENT_TYPES else 0)
+                                                            index=PLACEMENT_TYPES.index(_stored_type) if _stored_type in PLACEMENT_TYPES else 0)
                                     e_school = st.text_input("School / site", value=pl.get("placement_school",""))
                                     e_fund   = st.selectbox("Funding", FUNDING_TYPES,
-                                                            index=FUNDING_TYPES.index(pl.get("funding_type","")) if pl.get("funding_type","") in FUNDING_TYPES else 0)
+                                                            index=FUNDING_TYPES.index(_stored_fund) if _stored_fund in FUNDING_TYPES else 0)
                                 with e2:
                                     try:    e_start = st.date_input("Start date", value=datetime.strptime(str(pl.get("start_date",""))[:10], "%Y-%m-%d").date())
                                     except: e_start = st.date_input("Start date", value=today)
@@ -1072,30 +1080,31 @@ with tab_students:
                                     _cp_raw   = pl.get("contact_person","")
                                     _cp_name  = _cp_raw.split(" — ", 1)[0]
                                     e_contact = st.text_input("Contact person", value=_cp_name)
-                                    e_phone   = st.text_input("Phone",          value=pl.get("contact_phone",""))
-                                    # contact_email not in schema; email stored in contact_person as "Name — email"
+                                    e_phone   = st.text_input("Phone",          value=_stored_phone)
                                     _cp_parts = pl.get("contact_person","").split(" — ", 1)
                                     e_email   = st.text_input("Email", value=_cp_parts[1] if len(_cp_parts) > 1 else "")
-                                e_support = st.text_area("Support arrangements", value=pl.get("support_arrangements",""), height=56)
-                                e_goals   = st.text_area("Goals",               value=pl.get("goals",""),                height=56)
-                                e_notes   = st.text_area("Notes",               value=pl.get("notes",""),                height=40)
+                                e_support = st.text_area("Support arrangements", value=_stored_support, height=56)
+                                e_goals   = st.text_area("Goals",               value=_stored_goals,   height=56)
+                                e_notes   = st.text_area("Notes",               value=_stored_notes,   height=40)
                                 if st.form_submit_button("💾 Save Changes", type="primary"):
                                     _upd_contact = e_contact.strip()
                                     if e_email.strip():
                                         _upd_contact = f"{_upd_contact} — {e_email.strip()}" if _upd_contact else e_email.strip()
+                                    _upd_notes_parts = []
+                                    if e_type:              _upd_notes_parts.append(f"Type: {e_type}")
+                                    if e_fund:              _upd_notes_parts.append(f"Funding: {e_fund}")
+                                    if e_phone.strip():     _upd_notes_parts.append(f"Phone: {e_phone.strip()}")
+                                    if e_support.strip():   _upd_notes_parts.append(f"Support: {e_support.strip()}")
+                                    if e_goals.strip():     _upd_notes_parts.append(f"Goals: {e_goals.strip()}")
+                                    if e_notes.strip():     _upd_notes_parts.append(e_notes.strip())
                                     upd_placement(pid, {
-                                        "student_initials":     e_init.strip(),
-                                        "program":              e_prog,
-                                        "placement_type":       e_type,
-                                        "placement_school":     e_school.strip(),
-                                        "funding_type":         e_fund,
-                                        "start_date":           str(e_start),
-                                        "end_date":             str(e_end),
-                                        "contact_person":       _upd_contact,
-                                        "contact_phone":        e_phone.strip(),
-                                        "support_arrangements": e_support.strip(),
-                                        "goals":                e_goals.strip(),
-                                        "notes":                e_notes.strip(),
+                                        "student_initials": e_init.strip(),
+                                        "program":          e_prog,
+                                        "placement_school": e_school.strip(),
+                                        "start_date":       str(e_start),
+                                        "end_date":         str(e_end),
+                                        "contact_person":   _upd_contact,
+                                        "notes":            "\n".join(_upd_notes_parts),
                                     })
                                     st.session_state[ek] = False
                                     st.success("✅ Updated!")
