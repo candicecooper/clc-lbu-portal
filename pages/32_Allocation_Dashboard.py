@@ -452,6 +452,49 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
             # Convert to list of dicts
             records = sync_data.to_dict('records')
             
+            # FINAL ULTIMATE NaN KILLER - check every single value before Supabase
+            def kill_all_nans(record):
+                """Remove ALL NaN values from a record, no matter what"""
+                clean = {}
+                for key, value in record.items():
+                    # Check for NaN in every possible way
+                    try:
+                        if value is None:
+                            clean[key] = None
+                        elif isinstance(value, float):
+                            # Check if it's NaN or inf
+                            import math
+                            if math.isnan(value) or math.isinf(value):
+                                clean[key] = None
+                            else:
+                                clean[key] = value
+                        elif isinstance(value, str):
+                            # String is fine
+                            clean[key] = value if value not in ['nan', 'NaN', 'NaT'] else None
+                        elif isinstance(value, bool):
+                            # Boolean is fine
+                            clean[key] = value
+                        elif isinstance(value, int):
+                            # Int is fine
+                            clean[key] = value
+                        else:
+                            # Try to convert, if fails set to None
+                            try:
+                                # Check if pandas/numpy thinks it's NaN
+                                if pd.isna(value):
+                                    clean[key] = None
+                                else:
+                                    clean[key] = value
+                            except:
+                                clean[key] = value
+                    except:
+                        # If anything fails, set to None to be safe
+                        clean[key] = None
+                return clean
+            
+            # Clean every single record
+            records = [kill_all_nans(record) for record in records]
+            
             # Insert in batches
             batch_size = 50
             for i in range(0, len(records), batch_size):
