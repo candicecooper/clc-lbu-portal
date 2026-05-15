@@ -590,7 +590,7 @@ with ph4:
         st.session_state.cal_year = today.year; st.session_state.cal_month = today.month
         select_day(today); st.rerun()
 
-tab_month, tab_week, tab_list, tab_students = st.tabs(["📅 Month", "📆 Week", "📋 List", "👤 Students"])
+tab_month, tab_week, tab_list, tab_students, tab_weekoverview = st.tabs(["📅 Month", "📆 Week", "📋 List", "👤 Students", "🖨️ Week Overview"])
 
 # ═══════════════ MONTH VIEW ════════════════════════════════════════════════════
 with tab_month:
@@ -1385,6 +1385,210 @@ with tab_students:
             st.markdown(f"**{len(all_mtgs)} {mtgs_text} found**")
             for ev in all_mtgs:
                 render_event_row(ev, "stmtg")
+
+# ═══════════════ WEEK OVERVIEW (PRINT) ════════════════════════════════════════
+with tab_weekoverview:
+    st.markdown("### 🖨️ Week Overview")
+
+    # ── Week selector ──────────────────────────────────────────────────────────
+    ov_col1, ov_col2, ov_col3 = st.columns([1, 2, 1])
+    with ov_col1:
+        if st.button("◀ Prev week", key="ov_prev", use_container_width=True):
+            st.session_state["ov_week_start"] = st.session_state.get("ov_week_start", today - timedelta(days=today.weekday())) - timedelta(weeks=1)
+            st.rerun()
+    with ov_col3:
+        if st.button("Next week ▶", key="ov_next", use_container_width=True):
+            st.session_state["ov_week_start"] = st.session_state.get("ov_week_start", today - timedelta(days=today.weekday())) + timedelta(weeks=1)
+            st.rerun()
+    with ov_col2:
+        if st.button("📅 This week", key="ov_this", use_container_width=True):
+            st.session_state["ov_week_start"] = today - timedelta(days=today.weekday())
+            st.rerun()
+
+    ov_start = st.session_state.get("ov_week_start", today - timedelta(days=today.weekday()))
+    ov_end   = ov_start + timedelta(days=4)   # Mon–Fri
+    week_label = f"Week of {ov_start.strftime('%-d %B')} – {ov_end.strftime('%-d %B %Y')}"
+    st.markdown(f"<h4 style='text-align:center;color:#1A7A7A;margin:0.25rem 0 1rem;'>{week_label}</h4>", unsafe_allow_html=True)
+
+    # ── Fetch data for the week ────────────────────────────────────────────────
+    ov_events    = db_events(ov_start, ov_end) + schedule_events(ov_start, ov_end)
+    ov_index     = ev_index(ov_events)
+    ov_days      = [ov_start + timedelta(days=i) for i in range(5)]
+
+    # ── Build HTML for screen + print ─────────────────────────────────────────
+    DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+
+    def ov_event_html(ev):
+        et   = ev.get("event_type", "Other")
+        cfg  = EVENT_TYPES.get(et, EVENT_TYPES["Other"])
+        emoji = cfg["emoji"]
+        color = cfg["color"]
+        bg    = cfg["bg"]
+        title = ev.get("title", et)
+        loc   = ev.get("location", "")
+        st_t  = ev.get("start_time", "")
+        en_t  = ev.get("end_time", "")
+        who   = ev.get("added_by", "")
+        prog  = ev.get("program", "")
+        time_str = ""
+        if st_t:
+            try:    time_str = datetime.strptime(str(st_t)[:5], "%H:%M").strftime("%-I:%M %p")
+            except: time_str = str(st_t)[:5]
+        if en_t:
+            try:    time_str += f" – {datetime.strptime(str(en_t)[:5], '%H:%M').strftime('%-I:%M %p')}"
+            except: pass
+        meta_parts = [p for p in [time_str, loc, prog] if p]
+        meta = " &nbsp;·&nbsp; ".join(meta_parts)
+        return (
+            f'<div style="background:{bg};border-left:3px solid {color};border-radius:5px;'
+            f'padding:4px 8px;margin:3px 0;font-size:0.82rem;">'
+            f'<span style="color:{color};font-weight:600;">{emoji} {title}</span>'
+            + (f'<br><span style="color:#555;font-size:0.75rem;">{meta}</span>' if meta else '')
+            + f'</div>'
+        )
+
+    # Build the HTML overview table
+    html_rows = ""
+    any_events = False
+    for d, dname in zip(ov_days, DAY_NAMES):
+        day_evs = ov_index.get(str(d), [])
+        is_today = (d == today)
+        bg_hdr = "#1A7A7A" if is_today else "#2d3748"
+        event_html = "".join(ov_event_html(e) for e in day_evs) if day_evs else '<span style="color:#aaa;font-size:0.8rem;font-style:italic;">No events</span>'
+        if day_evs:
+            any_events = True
+        html_rows += (
+            f'<tr>'
+            f'<td style="background:{bg_hdr};color:white;font-weight:700;font-size:0.85rem;'
+            f'padding:8px 12px;vertical-align:top;white-space:nowrap;border-bottom:1px solid #e2e8f0;">'
+            f'{dname}<br><span style="font-weight:400;font-size:0.75rem;opacity:0.85;">{d.strftime("%-d %b")}</span></td>'
+            f'<td style="padding:6px 10px;vertical-align:top;border-bottom:1px solid #e2e8f0;">{event_html}</td>'
+            f'</tr>'
+        )
+
+    overview_html = f"""
+<style>
+@media print {{
+  body {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+  .no-print {{ display: none !important; }}
+  .print-container {{ font-family: Arial, sans-serif; }}
+}}
+</style>
+<div class="print-container" id="weekOverviewBlock" style="font-family:Arial,sans-serif;max-width:860px;margin:0 auto;">
+  <div style="text-align:center;padding:12px 0 8px;">
+    <div style="font-size:1.1rem;font-weight:700;color:#1A7A7A;">Cowandilla Learning Centre</div>
+    <div style="font-size:0.95rem;font-weight:600;color:#2d3748;">{week_label}</div>
+    <div style="font-size:0.72rem;color:#888;margin-top:2px;">Generated {today.strftime('%-d %B %Y')}</div>
+  </div>
+  <table style="width:100%;border-collapse:collapse;border:1px solid #cbd5e0;border-radius:8px;overflow:hidden;">
+    <thead>
+      <tr style="background:#f7fafc;">
+        <th style="width:120px;padding:8px 12px;text-align:left;font-size:0.8rem;color:#555;border-bottom:2px solid #1A7A7A;">Day</th>
+        <th style="padding:8px 12px;text-align:left;font-size:0.8rem;color:#555;border-bottom:2px solid #1A7A7A;">Events &amp; Activities</th>
+      </tr>
+    </thead>
+    <tbody>{html_rows}</tbody>
+  </table>
+  <div style="text-align:center;font-size:0.7rem;color:#aaa;padding:8px 0 4px;">
+    CLC Staff Portal · Calendar · Printed {today.strftime('%-d %B %Y')}
+  </div>
+</div>
+"""
+    st.markdown(overview_html, unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # ── Download button ────────────────────────────────────────────────────────
+    printable_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CLC Week Overview – {week_label}</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: Arial, sans-serif; padding: 24px; color: #1a202c; }}
+  h1 {{ font-size: 1.2rem; color: #1A7A7A; text-align: center; margin-bottom: 2px; }}
+  h2 {{ font-size: 1rem; text-align: center; color: #2d3748; margin-bottom: 4px; }}
+  .meta {{ text-align: center; font-size: 0.72rem; color: #888; margin-bottom: 16px; }}
+  table {{ width: 100%; border-collapse: collapse; border: 1px solid #cbd5e0; }}
+  thead th {{ background: #f7fafc; padding: 8px 12px; text-align: left; font-size: 0.8rem; color: #555; border-bottom: 2px solid #1A7A7A; }}
+  td {{ padding: 6px 10px; vertical-align: top; border-bottom: 1px solid #e2e8f0; font-size: 0.82rem; }}
+  td.day-col {{ background: #2d3748; color: white; font-weight: 700; font-size: 0.85rem; white-space: nowrap; width: 120px; }}
+  td.day-col.today {{ background: #1A7A7A; }}
+  td.day-col span {{ font-weight: 400; font-size: 0.75rem; opacity: 0.85; display: block; }}
+  .ev {{ border-radius: 4px; padding: 3px 7px; margin: 2px 0; border-left: 3px solid; }}
+  .ev-title {{ font-weight: 600; }}
+  .ev-meta {{ font-size: 0.72rem; color: #555; }}
+  .none {{ color: #aaa; font-style: italic; font-size: 0.78rem; }}
+  footer {{ text-align: center; font-size: 0.68rem; color: #aaa; padding: 10px 0 0; }}
+  @media print {{
+    body {{ padding: 12px; }}
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }}
+</style>
+</head>
+<body>
+<h1>Cowandilla Learning Centre</h1>
+<h2>{week_label}</h2>
+<p class="meta">Generated {today.strftime('%-d %B %Y')}</p>
+<table>
+<thead><tr><th>Day</th><th>Events &amp; Activities</th></tr></thead>
+<tbody>
+"""
+    for d, dname in zip(ov_days, DAY_NAMES):
+        day_evs = ov_index.get(str(d), [])
+        is_today_cls = " today" if d == today else ""
+        rows_html = ""
+        if day_evs:
+            for ev in day_evs:
+                et   = ev.get("event_type", "Other")
+                cfg  = EVENT_TYPES.get(et, EVENT_TYPES["Other"])
+                title = ev.get("title", et)
+                loc   = ev.get("location", "")
+                st_t  = ev.get("start_time", "")
+                en_t  = ev.get("end_time", "")
+                prog  = ev.get("program", "")
+                time_str = ""
+                if st_t:
+                    try:    time_str = datetime.strptime(str(st_t)[:5], "%H:%M").strftime("%-I:%M %p")
+                    except: time_str = str(st_t)[:5]
+                if en_t:
+                    try:    time_str += f" – {datetime.strptime(str(en_t)[:5], '%H:%M').strftime('%-I:%M %p')}"
+                    except: pass
+                meta_parts = [p for p in [time_str, loc, prog] if p]
+                meta = " · ".join(meta_parts)
+                rows_html += (
+                    f'<div class="ev" style="background:{cfg["bg"]};border-color:{cfg["color"]};">'
+                    f'<span class="ev-title" style="color:{cfg["color"]};">{cfg["emoji"]} {title}</span>'
+                    + (f'<div class="ev-meta">{meta}</div>' if meta else '')
+                    + '</div>'
+                )
+        else:
+            rows_html = '<span class="none">No events</span>'
+        printable_html += (
+            f'<tr>'
+            f'<td class="day-col{is_today_cls}">{dname}<span>{d.strftime("%-d %b")}</span></td>'
+            f'<td>{rows_html}</td>'
+            f'</tr>\n'
+        )
+
+    printable_html += f"""</tbody>
+</table>
+<footer>CLC Staff Portal · Calendar · {today.strftime('%-d %B %Y')}</footer>
+</body>
+</html>"""
+
+    safe_label = week_label.replace(" ", "_").replace("–", "-")
+    st.download_button(
+        label="⬇️ Download printable HTML (open in browser → Print / Save as PDF)",
+        data=printable_html.encode("utf-8"),
+        file_name=f"CLC_Week_Overview_{safe_label}.html",
+        mime="text/html",
+        use_container_width=True,
+        type="primary",
+    )
+    st.caption("💡 Tip: Open the downloaded file in Chrome or Edge, then use Ctrl+P (or ⌘P on Mac) → Save as PDF for a clean printout.")
 
 # ─── FOOTER ─────────────────────────────────────────────────────────────────────
 st.markdown("""
