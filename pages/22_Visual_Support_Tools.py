@@ -320,6 +320,35 @@ DEFAULT_CARDS = [
     dict(id="goodbye",      cat="social",        color="#8C2D5A", symbol_key="goodbye",     ti="goodbye",              sub="Say bye",                  fw=["AAC","PODD","CORE"], custom=False),
     
     # =========================================================================
+    # FIRST-THEN SEQUENCE WORDS (for transition boards)
+    # =========================================================================
+    dict(id="first",        cat="actions",       color="#0891B2", symbol_key="first",       ti="first",                sub="Do this first",            fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="then",         cat="actions",       color="#0891B2", symbol_key="then",        ti="then",                 sub="Do this next",             fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="next",         cat="actions",       color="#0891B2", symbol_key="next",        ti="next",                 sub="After this",               fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="after",        cat="actions",       color="#0891B2", symbol_key="after",       ti="after",                sub="Comes after",              fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="before",       cat="actions",       color="#0891B2", symbol_key="before",      ti="before",               sub="Comes before",             fw=["AAC","PODD","CORE"], custom=False),
+    dict(id="last",         cat="actions",       color="#0891B2", symbol_key="last",        ti="last",                 sub="Final step",               fw=["AAC","PODD","CORE"], custom=False),
+    
+    # =========================================================================
+    # ROUTINE TIMES (common First-Then activities)
+    # =========================================================================
+    dict(id="morning",      cat="activities",    color="#059669", symbol_key="morning",     ti="morning",              sub="Morning time",             fw=["AAC","PODD"], custom=False),
+    dict(id="lunch_time",   cat="activities",    color="#059669", symbol_key="lunch",       ti="lunch",                sub="Lunch time",               fw=["AAC","PODD"], custom=False),
+    dict(id="recess",       cat="activities",    color="#059669", symbol_key="playground",  ti="recess",               sub="Playtime outside",         fw=["AAC","PODD"], custom=False),
+    dict(id="snack",        cat="activities",    color="#059669", symbol_key="snack",       ti="snack",                sub="Snack time",               fw=["AAC","PODD"], custom=False),
+    dict(id="circle_time",  cat="activities",    color="#059669", symbol_key="group",       ti="circle time",          sub="Group time",               fw=["AAC","PODD"], custom=False),
+    dict(id="pack_up",      cat="activities",    color="#059669", symbol_key="tidy",        ti="pack up",              sub="Clean up time",            fw=["AAC","PODD"], custom=False),
+    dict(id="home_time",    cat="activities",    color="#059669", symbol_key="home",        ti="home time",            sub="Time to go home",          fw=["AAC","PODD"], custom=False),
+    
+    # =========================================================================
+    # TRANSITION SUPPORT WORDS
+    # =========================================================================
+    dict(id="start",        cat="actions",       color="#0891B2", symbol_key="start",       ti="start",                sub="Begin now",                fw=["AAC","PODD"], custom=False),
+    dict(id="change",       cat="actions",       color="#0891B2", symbol_key="change",      ti="change",               sub="Time to change",           fw=["AAC","PODD"], custom=False),
+    dict(id="ready",        cat="actions",       color="#0891B2", symbol_key="ready",       ti="ready",                sub="Get ready",                fw=["AAC","PODD"], custom=False),
+    dict(id="finish_up",    cat="actions",       color="#0891B2", symbol_key="finish",      ti="finish",               sub="Finish this",              fw=["AAC","PODD"], custom=False),
+    
+    # =========================================================================
     # CORE WANTING/NEEDING (High frequency regulation)
     # =========================================================================
     dict(id="want",         cat="communication", color=GREEN,     symbol_key="want",        ti="want",                 sub="I want",                   fw=["AAC","PODD","CORE"], custom=False),
@@ -562,11 +591,30 @@ body { background: #fff; }
             html_parts.append(f'<div class="card-container" style="padding:{padding}px;max-width:700px;margin:20px auto">')
             
             if tool == "zones":
-                html_parts.append(f'<div class="title" style="font-size:{title_size}pt;margin-bottom:{padding}px">Zones of Regulation</div>')
-                for zone, zdata in ZONE_DATA.items():
-                    html_parts.append(f'<div style="background:{zdata["bg"]};border:2px solid {zdata["color"]};border-radius:10px;padding:15px;margin:10px 0">')
-                    html_parts.append(f'<div style="font-size:{subtitle_size+2}pt;font-weight:800;margin-bottom:5px">{zdata["name"]}</div>')
-                    html_parts.append(f'<div style="font-size:{subtitle_size}pt">{" • ".join(zdata["feels"])}</div>')
+                # Use custom title if provided, otherwise default
+                zone_title = d.get('title', 'Zones of Regulation')
+                student = f"{d.get('student','')}'s " if d.get('student') else ""
+                html_parts.append(f'<div class="title" style="font-size:{title_size}pt;margin-bottom:{padding}px">{student}{zone_title}</div>')
+                
+                # Use customized zones if provided, otherwise fallback to default
+                zones_to_render = d.get('zones', ZONE_DATA)
+                
+                for zone, zdata in zones_to_render.items():
+                    html_parts.append(f'<div style="background:{zdata["bg"]};border:3px solid {zdata["color"]};border-radius:12px;padding:15px;margin:12px 0">')
+                    html_parts.append(f'<div style="font-size:{subtitle_size+4}pt;font-weight:800;color:{zdata["color"]};margin-bottom:8px">{zdata["name"]}</div>')
+                    
+                    # Feelings
+                    if zdata.get("feels"):
+                        html_parts.append(f'<div style="font-size:{subtitle_size}pt;margin-bottom:8px"><strong>Feelings:</strong> {" • ".join(zdata["feels"])}</div>')
+                    
+                    # Strategies (if provided)
+                    if zdata.get("strategies"):
+                        html_parts.append(f'<div style="font-size:{subtitle_size}pt;margin-top:8px;border-top:2px solid {zdata["color"]};padding-top:8px">')
+                        html_parts.append('<strong>Strategies:</strong><br>')
+                        for strat in zdata["strategies"]:
+                            html_parts.append(f'✓ {strat}<br>')
+                        html_parts.append('</div>')
+                    
                     html_parts.append('</div>')
             
             elif tool == "fivepoint":
@@ -662,7 +710,7 @@ st.markdown("""
     <div class="icon">🎨</div>
     <div>
         <h1>Visual Support Tools - AAC Enhanced</h1>
-        <p>Proloquo2Go aligned • Two Way Street • 83 core + fringe words • Individual settings</p>
+        <p>Proloquo2Go aligned • Two Way Street • 100 cards (core + fringe + sequence) • 5 chat modes</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -670,8 +718,8 @@ st.markdown("""
 st.markdown("""
 <div class="aac-note">
     <strong>✨ NEW: AAC-Aligned Vocabulary!</strong> This tool now includes 53 <strong>Crescendo core words</strong> 
-    (the high-frequency words that make up 80% of communication) aligned with Proloquo2Go. 
-    <strong>Gold "CORE" badges</strong> show core words. <strong>Blue "TWS" badges</strong> show Two Way Street 
+    (the high-frequency words that make up 80% of communication) aligned with Proloquo2Go, plus <strong>17 sequence/routine cards</strong> 
+    perfect for First-Then boards. <strong>Gold "CORE" badges</strong> show core words. <strong>Blue "TWS" badges</strong> show Two Way Street 
     partner strategy cards. Use these to model AAC alongside students!
 </div>
 """, unsafe_allow_html=True)
@@ -1061,16 +1109,71 @@ with tabs[5]:
     tool_type = st.radio("Tool type", ["Zones of Regulation","5-Point Scale","Feelings Chart","Calm-Down"], horizontal=True)
     
     if tool_type == "Zones of Regulation":
-        for zone, zd in ZONE_DATA.items():
-            st.markdown(f"""<div class="zone zone-{zone}">
-                <h4>{zd['name']}</h4>
-                <div class="feels">{' • '.join(zd['feels'])}</div>
-            </div>""", unsafe_allow_html=True)
+        st.markdown("**Customize your Zones of Regulation chart:**")
         
-        if st.button("➕ Add to Queue", use_container_width=True, key="add_zones"):
-            add_to_queue_with_defaults({"type":"regulation","data":{"tool":"zones"}})
-            st.success("✅")
-            st.rerun()
+        # Student name option
+        zone_student = st.text_input("Student name (optional)", placeholder="Leave blank for general use", key="zone_student")
+        
+        # Title option
+        zone_title = st.text_input("Custom title (optional)", placeholder="Zones of Regulation", key="zone_title")
+        
+        st.divider()
+        
+        st.markdown("**Select which zones to include and customize feelings:**")
+        st.caption("💡 Tip: Uncheck 'Include' to remove a zone. Edit the feelings list to customize.")
+        
+        zones_selected = {}
+        
+        cols = st.columns(4)  # Show all 4 zones side-by-side
+        
+        for idx, (zone, zd) in enumerate(ZONE_DATA.items()):
+            with cols[idx]:
+                # Zone preview box
+                st.markdown(f'<div style="width:100%;height:80px;background:{zd["bg"]};border:3px solid {zd["color"]};border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:700;color:{zd["color"]};font-size:16pt;">{zone.upper()}</div>', unsafe_allow_html=True)
+                
+                # Include checkbox
+                include = st.checkbox(f"Include {zd['name']}", value=True, key=f"zone_inc_{zone}")
+                
+                if include:
+                    # Feelings editor (simplified - just comma separated)
+                    st.markdown("**Feelings:**")
+                    default_feels = ", ".join(zd['feels'])
+                    custom_feels = st.text_area(
+                        f"Feelings in {zone}", 
+                        value=default_feels,
+                        height=100,
+                        key=f"zone_feels_{zone}",
+                        label_visibility="collapsed",
+                        help="Separate feelings with commas"
+                    )
+                    
+                    feels_list = [f.strip() for f in custom_feels.split(',') if f.strip()]
+                    
+                    zones_selected[zone] = {
+                        'name': zd['name'],
+                        'bg': zd['bg'],
+                        'color': zd['color'],
+                        'feels': feels_list,
+                        'strategies': []  # Removed strategies to simplify
+                    }
+        
+        st.divider()
+        
+        if st.button("➕ Add Zones Chart to Queue", type="primary", use_container_width=True, key="add_zones"):
+            if zones_selected:
+                add_to_queue_with_defaults({
+                    "type": "regulation",
+                    "data": {
+                        "tool": "zones",
+                        "zones": zones_selected,
+                        "student": zone_student,
+                        "title": zone_title or "Zones of Regulation"
+                    }
+                })
+                st.success(f"✅ Added Zones chart with {len(zones_selected)} zones to queue!")
+                st.rerun()
+            else:
+                st.warning("⚠️ Please include at least one zone!")
     
     elif tool_type == "5-Point Scale":
         fp_student = st.text_input("Student name", key="fp_student")
