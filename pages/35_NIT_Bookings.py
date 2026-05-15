@@ -63,25 +63,29 @@ def get_current_term():
 
 def get_booking_date_range():
     """Get the date range for bookings (current term + 5 weeks of next term)"""
+    today = date.today()
     current_term, term_start, term_end = get_current_term()
     
-    if current_term:
-        # End date is 5 weeks into next term
-        next_term_start = None
-        terms_list = list(TERM_DATES.items())
-        for i, (term_name, _) in enumerate(terms_list):
-            if term_name == current_term and i < len(terms_list) - 1:
-                next_term_start = terms_list[i + 1][1]["start"]
-                break
-        
-        if next_term_start:
-            end_date = next_term_start + timedelta(weeks=5)
-        else:
-            end_date = term_end
-            
-        return term_start, end_date
+    # If we're before Term 2 starts, use Term 2 start date
+    if not current_term or today < TERM_DATES["Term 2"]["start"]:
+        term_start = TERM_DATES["Term 2"]["start"]
+        term_end = TERM_DATES["Term 2"]["end"]
+        current_term = "Term 2"
     
-    return None, None
+    # End date is 5 weeks into next term
+    next_term_start = None
+    terms_list = list(TERM_DATES.items())
+    for i, (term_name, _) in enumerate(terms_list):
+        if term_name == current_term and i < len(terms_list) - 1:
+            next_term_start = terms_list[i + 1][1]["start"]
+            break
+    
+    if next_term_start:
+        end_date = next_term_start + timedelta(weeks=5)
+    else:
+        end_date = term_end
+        
+    return term_start, end_date
 
 def get_available_dates():
     """Generate all valid booking dates (Mon, Tue, Thu only)"""
@@ -164,8 +168,15 @@ bookings_df = load_bookings()
 current_term, term_start, term_end = get_current_term()
 booking_start, booking_end = get_booking_date_range()
 
+# If we're before Term 2, show appropriate message
+today = date.today()
+if today < TERM_DATES["Term 2"]["start"]:
+    period_text = f"Term 2 bookings (starts {TERM_DATES['Term 2']['start'].strftime('%d %B %Y')})"
+else:
+    period_text = f"{current_term} (viewing until {booking_end.strftime('%d %B %Y')})"
+
 st.info(f"""
-**Current Period**: {current_term} (viewing until {booking_end.strftime('%d %B %Y')})  
+**Current Period**: {period_text}  
 **Available Slots**: {', '.join(TIME_SLOTS.values())}  
 **Duration**: 60 minutes additional NIT per booking
 """)
