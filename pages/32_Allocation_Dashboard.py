@@ -242,6 +242,21 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
             progress_bar.progress(10)
             df_excel = pd.read_excel(uploaded_file, sheet_name='Data_Model')
             
+            # DEBUG: Show raw Excel values IMMEDIATELY after reading
+            st.info(f"📄 **Excel file read:** {len(df_excel)} rows")
+            
+            with st.expander("🔍 DEBUG: Raw Excel Data (Before ANY Processing)", expanded=True):
+                st.write("**Previous_CLC_Placement column in Excel:**")
+                if 'Previous_CLC_Placement' in df_excel.columns:
+                    prev_counts = df_excel['Previous_CLC_Placement'].value_counts()
+                    st.write(prev_counts)
+                    st.write(f"**Type of values:** {df_excel['Previous_CLC_Placement'].dtype}")
+                    st.write(f"**Sample raw values:** {df_excel['Previous_CLC_Placement'].head(5).tolist()}")
+                    st.write(f"**Students with 'Yes':** {(df_excel['Previous_CLC_Placement'] == 'Yes').sum()}")
+                else:
+                    st.error("❌ Previous_CLC_Placement column NOT FOUND in Excel!")
+                    st.write(f"**Available columns:** {list(df_excel.columns)}")
+            
             status_text.text(f"Processing {len(df_excel)} student records...")
             progress_bar.progress(20)
             
@@ -290,6 +305,13 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                 for excel_col, db_col in column_mapping.items():
                     if excel_col in df.columns:
                         sync_df[db_col] = df[excel_col]
+                
+                # DEBUG: Check if previous_clc_placement survived column mapping
+                if 'previous_clc_placement' in sync_df.columns:
+                    st.write("✅ **After column mapping - previous_clc_placement exists**")
+                    st.write(f"Values: {sync_df['previous_clc_placement'].value_counts().to_dict()}")
+                else:
+                    st.error("❌ previous_clc_placement NOT in sync_df after mapping!")
                 
                 # Convert Yes/No to boolean for flags ONLY
                 # Previous placements will be handled separately
@@ -366,6 +388,12 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                 # Convert back to DataFrame for consistency
                 sync_df = pd.DataFrame(cleaned_records)
                 
+                # DEBUG: Check values BEFORE to_yes_no conversion
+                if 'previous_clc_placement' in sync_df.columns:
+                    st.write("🔍 **Before to_yes_no conversion:**")
+                    st.write(f"Values: {sync_df['previous_clc_placement'].value_counts().to_dict()}")
+                    st.write(f"Sample: {sync_df['previous_clc_placement'].head(5).tolist()}")
+                
                 # NOW handle Previous_CLC_Placement and Previous_Other_LC as text Yes/No
                 # This must happen AFTER aggressive cleanup to preserve values
                 for text_col in ['previous_clc_placement', 'previous_other_lc']:
@@ -378,6 +406,12 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                             return 'Yes' if val_str == 'yes' else 'No'
                         
                         sync_df[text_col] = sync_df[text_col].apply(to_yes_no)
+                
+                # DEBUG: Check values AFTER to_yes_no conversion
+                if 'previous_clc_placement' in sync_df.columns:
+                    st.write("✅ **After to_yes_no conversion:**")
+                    st.write(f"Values: {sync_df['previous_clc_placement'].value_counts().to_dict()}")
+                    st.success(f"**YES count: {(sync_df['previous_clc_placement'] == 'Yes').sum()}**")
                 
                 # Add current_status
                 sync_df['current_status'] = 'Active'
