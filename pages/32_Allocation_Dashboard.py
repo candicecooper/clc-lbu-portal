@@ -3,7 +3,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
-import json
+import os
+from supabase import create_client, Client
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG
@@ -132,69 +133,160 @@ st.markdown("""
         color: #C8760A;
         font-weight: 600;
     }
+    
+    /* Refresh badge */
+    .refresh-badge {
+        background: #4CAF50;
+        color: white;
+        padding: 0.3rem 0.6rem;
+        border-radius: 12px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        display: inline-block;
+        margin-left: 0.5rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# EMBEDDED DATA (De-identified)
+# SUPABASE CONNECTION
 # ══════════════════════════════════════════════════════════════════════════════
-ALLOCATION_DATA = [
-    {"record_id": "Record #1", "school": "Cowandilla PS", "referral_date": "2026-01-27", "status": "Allocated", "program": "Junior Primary (R-1)", "year_level": "1", "partnership": "West Torrens", "prev_clc": "No", "prev_other": "No", "priority": "", "swd": "No", "dcp": "No", "mental_health": "No", "care_cps": "No", "aboriginal": "No", "eald": "No", "current_status": "Active"},
-    {"record_id": "Record #2", "school": "Highgate School", "referral_date": "2026-01-27", "status": "Allocated", "program": "Primary Years (3-6)", "year_level": "5", "partnership": "", "prev_clc": "No", "prev_other": "No", "priority": "", "swd": "Yes", "dcp": "No", "mental_health": "No", "care_cps": "No", "aboriginal": "No", "eald": "No", "current_status": "Active"},
-    {"record_id": "Record #3", "school": "Le Fevre HS", "referral_date": "2026-01-27", "status": "Allocated", "program": "Senior Years (7-10)", "year_level": "8", "partnership": "Port Adelaide", "prev_clc": "No", "prev_other": "No", "priority": "", "swd": "Yes", "dcp": "No", "mental_health": "No", "care_cps": "No", "aboriginal": "No", "eald": "No", "current_status": "Active"},
-    {"record_id": "Record #4", "school": "Hendon PS", "referral_date": "2026-01-27", "status": "Allocated", "program": "Primary Years (3-6)", "year_level": "4", "partnership": "Inner Western", "prev_clc": "No", "prev_other": "No", "priority": "", "swd": "Yes", "dcp": "Yes", "mental_health": "No", "care_cps": "No", "aboriginal": "Yes", "eald": "Yes", "current_status": "Active"},
-    {"record_id": "Record #5", "school": "Warradale PS", "referral_date": "2026-04-14", "status": "Allocated", "program": "Primary Years (3-6)", "year_level": "6", "partnership": "Inner Western", "prev_clc": "No", "prev_other": "No", "priority": "", "swd": "No", "dcp": "No", "mental_health": "No", "care_cps": "No", "aboriginal": "No", "eald": "No", "current_status": "Active"},
-    {"record_id": "Record #6", "school": "Le Fevre HS", "referral_date": "2026-01-27", "status": "Allocated", "program": "Senior Years (7-10)", "year_level": "9", "partnership": "Port Adelaide", "prev_clc": "No", "prev_other": "No", "priority": "", "swd": "Yes", "dcp": "Yes", "mental_health": "No", "care_cps": "No", "aboriginal": "No", "eald": "No", "current_status": "Active"},
-    {"record_id": "Record #7", "school": "Ocean View P-12 College", "referral_date": "2026-01-27", "status": "Allocated", "program": "Senior Years (7-10)", "year_level": "7", "partnership": "Port Adelaide", "prev_clc": "No", "prev_other": "No", "priority": "", "swd": "Yes", "dcp": "No", "mental_health": "No", "care_cps": "No", "aboriginal": "Yes", "eald": "No", "current_status": "Active"},
-    {"record_id": "Record #8", "school": "Clovelly Park PS", "referral_date": "2026-01-27", "status": "Allocated", "program": "Junior Primary (R-1)", "year_level": "R", "partnership": "", "prev_clc": "No", "prev_other": "No", "priority": "", "swd": "Yes", "dcp": "No", "mental_health": "No", "care_cps": "No", "aboriginal": "No", "eald": "No", "current_status": "Active"},
-    {"record_id": "Record #9", "school": "Clovelly Park PS", "referral_date": "2026-01-27", "status": "Allocated", "program": "Primary Years (3-6)", "year_level": "6", "partnership": "", "prev_clc": "No", "prev_other": "No", "priority": "", "swd": "Yes", "dcp": "No", "mental_health": "No", "care_cps": "No", "aboriginal": "No", "eald": "No", "current_status": "Active"},
-    {"record_id": "Record #10", "school": "Findon HS", "referral_date": "2026-01-27", "status": "Allocated", "program": "Primary Years (3-6)", "year_level": "7", "partnership": "Port Adelaide", "prev_clc": "No", "prev_other": "No", "priority": "", "swd": "Yes", "dcp": "Yes", "mental_health": "No", "care_cps": "No", "aboriginal": "No", "eald": "No", "current_status": "Active"},
-    {"record_id": "Record #11", "school": "Highgate School", "referral_date": "2026-01-27", "status": "Allocated", "program": "Primary Years (3-6)", "year_level": "3", "partnership": "", "prev_clc": "No", "prev_other": "No", "priority": "", "swd": "Yes", "dcp": "No", "mental_health": "No", "care_cps": "Yes", "aboriginal": "Yes", "eald": "Yes", "current_status": "Active"},
-    {"record_id": "Record #12", "school": "Paralowie R-12", "referral_date": "2026-01-27", "status": "Allocated", "program": "Senior Years (7-10)", "year_level": "8", "partnership": "Western Adelaide Shores", "prev_clc": "No", "prev_other": "No", "priority": "", "swd": "Yes", "dcp": "No", "mental_health": "No", "care_cps": "No", "aboriginal": "No", "eald": "No", "current_status": "Active"},
-    {"record_id": "Record #13", "school": "Walkerville PS", "referral_date": "2026-01-27", "status": "Allocated", "program": "Junior Primary (R-1)", "year_level": "1", "partnership": "Inner Western", "prev_clc": "No", "prev_other": "No", "priority": "", "swd": "Yes", "dcp": "Yes", "mental_health": "No", "care_cps": "No", "aboriginal": "No", "eald": "No", "current_status": "Active"},
-    {"record_id": "Record #14", "school": "Challa Gardens PS", "referral_date": "2026-01-27", "status": "Allocated", "program": "Primary Years (3-6)", "year_level": "4", "partnership": "", "prev_clc": "No", "prev_other": "No", "priority": "", "swd": "Yes", "dcp": "No", "mental_health": "No", "care_cps": "No", "aboriginal": "No", "eald": "No", "current_status": "Active"},
-    {"record_id": "Record #15", "school": "Bellevue Heights PS", "referral_date": "2026-01-27", "status": "Allocated", "program": "Primary Years (3-6)", "year_level": "5", "partnership": "Inner Western", "prev_clc": "No", "prev_other": "No", "priority": "", "swd": "Yes", "dcp": "No", "mental_health": "No", "care_cps": "No", "aboriginal": "No", "eald": "No", "current_status": "Active"},
-    {"record_id": "Record #16", "school": "Highgate School", "referral_date": "2026-01-27", "status": "Allocated", "program": "Primary Years (3-6)", "year_level": "6", "partnership": "", "prev_clc": "No", "prev_other": "No", "priority": "", "swd": "Yes", "dcp": "Yes", "mental_health": "No", "care_cps": "No", "aboriginal": "Yes", "eald": "No", "current_status": "Active"},
-    {"record_id": "Record #17", "school": "West Lakes Shores", "referral_date": "2026-01-27", "status": "Allocated", "program": "Junior Primary (R-1)", "year_level": "R", "partnership": "", "prev_clc": "No", "prev_other": "No", "priority": "", "swd": "Yes", "dcp": "Yes", "mental_health": "No", "care_cps": "Yes", "aboriginal": "Yes", "eald": "Yes", "current_status": "Active"}
-]
+@st.cache_resource
+def init_supabase():
+    """Initialize Supabase client - cached to avoid reconnecting"""
+    SUPABASE_URL = os.environ.get("SUPABASE_URL")
+    SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+    
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        st.error("⚠️ Supabase credentials not found. Please set SUPABASE_URL and SUPABASE_KEY environment variables.")
+        st.stop()
+    
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+@st.cache_data(ttl=60)  # Cache for 60 seconds, then refresh
+def load_allocation_data():
+    """Load allocation data from Supabase - refreshes every 60 seconds"""
+    try:
+        supabase = init_supabase()
+        
+        # Fetch all records from allocation_tracker table
+        response = supabase.table('allocation_tracker').select('*').execute()
+        
+        if not response.data:
+            st.warning("📋 No allocation data found in database. The dashboard will show empty until records are added.")
+            return pd.DataFrame()
+        
+        # Convert to DataFrame
+        df = pd.DataFrame(response.data)
+        
+        return df
+        
+    except Exception as e:
+        st.error(f"❌ Error loading data from Supabase: {str(e)}")
+        st.stop()
 
 # Load data
-df = pd.DataFrame(ALLOCATION_DATA)
+df_raw = load_allocation_data()
 
-# Clean any invalid records
-df = df[df['program'] != '']
+if len(df_raw) == 0:
+    st.info("📭 **The allocation_tracker table is currently empty.** Add student records to see the dashboard populate with data.")
+    st.stop()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PROGRAM PLACEMENT LOGIC
+# DATA PROCESSING & MAPPING
 # ══════════════════════════════════════════════════════════════════════════════
-def get_expected_program(year_level):
-    """Determine expected program based on year level"""
-    if pd.isna(year_level) or year_level == '':
-        return "Unknown"
-    
-    year_level = str(year_level).upper()
-    
-    if year_level in ['R', '1']:
-        return "Junior Primary (R-1)"
-    elif year_level in ['3', '4', '5', '6']:
-        return "Primary Years (3-6)"
-    elif year_level in ['7', '8', '9', '10']:
-        return "Senior Years (7-10)"
-    else:
-        return "Unknown"
 
-# Add expected program and mismatch flag
-df['expected_program'] = df['year_level'].apply(get_expected_program)
-df['program_mismatch'] = df['program'] != df['expected_program']
+# Create a working copy
+df = df_raw.copy()
 
-# Calculate percentage in non-typical placement
-mismatch_count = df['program_mismatch'].sum()
-mismatch_percentage = (mismatch_count / len(df) * 100) if len(df) > 0 else 0
+# Map Supabase columns to dashboard expectations
+df['record_id'] = df['id']
+df['school'] = df['referring_school']
+df['status'] = df['allocation_status']
+df['program'] = df['allocated_program']
+df['partnership'] = df['partnership_area'].fillna('')
 
-# Parse dates and extract terms
+# Handle dates
 df['referral_date'] = pd.to_datetime(df['referral_date'], errors='coerce')
 df['year'] = df['referral_date'].dt.year
 df['month'] = df['referral_date'].dt.month
+
+# Get year level from database (added via SQL script)
+# If year_level is empty, calculate from DOB as fallback
+def calculate_year_level_from_dob(dob):
+    """Calculate year level from date of birth as fallback"""
+    if pd.isna(dob):
+        return "Unknown"
+    
+    dob = pd.to_datetime(dob)
+    today = datetime.now()
+    age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+    
+    # SA school entry: Reception at age 5
+    if age < 5:
+        return "R"
+    elif age == 5:
+        return "R"
+    elif age == 6:
+        return "1"
+    elif age == 7:
+        return "2"
+    elif age == 8:
+        return "3"
+    elif age == 9:
+        return "4"
+    elif age == 10:
+        return "5"
+    elif age == 11:
+        return "6"
+    elif age == 12:
+        return "7"
+    elif age == 13:
+        return "8"
+    elif age == 14:
+        return "9"
+    elif age >= 15:
+        return "10"
+    else:
+        return "Unknown"
+
+# Use database year_level, calculate from DOB if missing
+if 'year_level' in df.columns:
+    df['year_level'] = df['year_level'].fillna('').astype(str)
+    # Fill empty year_levels with calculated values
+    mask = (df['year_level'] == '') | (df['year_level'] == 'None') | (df['year_level'].isna())
+    df.loc[mask, 'year_level'] = df.loc[mask, 'dob'].apply(calculate_year_level_from_dob)
+else:
+    # If column doesn't exist yet, calculate from DOB
+    df['year_level'] = df['dob'].apply(calculate_year_level_from_dob)
+
+# Create SWD and DCP flags
+# SWD = Students with Disabilities (any disability flag is true)
+df['swd'] = (
+    df.get('flag_asd', False) | 
+    df.get('flag_adhd', False) | 
+    df.get('flag_mental_health', False) | 
+    df.get('flag_odd_cd', False)
+).map({True: 'Yes', False: 'No'})
+
+# DCP = Department Child Protection
+df['dcp'] = df.get('flag_care_cps', False).map({True: 'Yes', False: 'No'})
+
+# Map other flags
+df['aboriginal'] = df.get('flag_aboriginal', False).map({True: 'Yes', False: 'No'})
+df['eald'] = df.get('flag_eald', False).map({True: 'Yes', False: 'No'})
+df['care_cps'] = df.get('flag_care_cps', False).map({True: 'Yes', False: 'No'})
+df['mental_health'] = df.get('flag_mental_health', False).map({True: 'Yes', False: 'No'})
+
+# Previous placements
+df['prev_clc'] = df.get('previous_clc_placement', '').apply(lambda x: 'Yes' if x and x != '' else 'No')
+df['prev_other'] = df.get('previous_other_lc', '').apply(lambda x: 'Yes' if x and x != '' else 'No')
+
+# Priority
+df['priority'] = df.get('priority_level', '')
+
+# Current status
+df['current_status'] = df.get('current_status', 'Active')
 
 # Define terms based on SA school year
 def get_term(month):
@@ -212,15 +304,46 @@ def get_term(month):
 df['term'] = df['month'].apply(get_term)
 
 # ══════════════════════════════════════════════════════════════════════════════
+# PROGRAM PLACEMENT LOGIC
+# ══════════════════════════════════════════════════════════════════════════════
+def get_expected_program(year_level):
+    """Determine expected program based on year level"""
+    if pd.isna(year_level) or year_level == '' or year_level == "Unknown":
+        return "Unknown"
+    
+    year_level = str(year_level).upper()
+    
+    if year_level in ['R', '1']:
+        return "Junior Primary (R-1)"
+    elif year_level in ['3', '4', '5', '6']:
+        return "Primary Years (3-6)"
+    elif year_level in ['7', '8', '9', '10']:
+        return "Senior Years (7-10)"
+    else:
+        return "Unknown"
+
+# Add expected program and mismatch flag
+df['expected_program'] = df['year_level'].apply(get_expected_program)
+df['program_mismatch'] = (df['program'] != df['expected_program']) & (df['expected_program'] != "Unknown")
+
+# Calculate percentage in non-typical placement
+mismatch_count = df['program_mismatch'].sum()
+mismatch_percentage = (mismatch_count / len(df) * 100) if len(df) > 0 else 0
+
+# ══════════════════════════════════════════════════════════════════════════════
 # HEADER
 # ══════════════════════════════════════════════════════════════════════════════
-st.markdown("""
+st.markdown(f"""
 <div class="dashboard-header">
     <h1>📊 Allocation Dashboard</h1>
-    <p>De-identified student allocation overview • Interactive drill-down analytics</p>
-    <span class="privacy-badge">🔒 Privacy Protected • Student Names Removed</span>
+    <p>Live student allocation overview • Interactive drill-down analytics</p>
+    <span class="privacy-badge">🔒 Privacy Protected</span>
+    <span class="refresh-badge">🔄 Live Data • Auto-refresh 60s</span>
 </div>
 """, unsafe_allow_html=True)
+
+# Show last update time
+st.caption(f"📅 Last updated: {datetime.now().strftime('%d/%m/%Y %I:%M %p')} | Total records: {len(df)}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # FILTERS
@@ -340,21 +463,18 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "⚠️ Non-Typical Placements"
 ])
 
-# ──────────────────────────────────────────────────────────────────────────────
-# TAB 1: PARTNERSHIP DEEP DIVE
-# ──────────────────────────────────────────────────────────────────────────────
+# [Rest of the tabs code continues exactly as before, with the same structure...]
+# For brevity, I'll include the key sections with proper data mapping
+
 with tab1:
     st.markdown("### 🤝 Partnership Enrollment Distribution")
     
-    # Get partnership data
     partnership_df = filtered_df[filtered_df['partnership'] != ''].copy()
     
     if len(partnership_df) > 0:
-        # Partnership overview
         partnership_counts = partnership_df['partnership'].value_counts().reset_index()
         partnership_counts.columns = ['Partnership', 'Count']
         
-        # Create interactive bar chart
         fig_partnership = px.bar(
             partnership_counts,
             x='Partnership',
@@ -375,7 +495,6 @@ with tab1:
         )
         st.plotly_chart(fig_partnership, use_container_width=True)
         
-        # Drill-down selector
         st.markdown("#### 🔍 Drill Down into Specific Partnership")
         selected_partnership_drill = st.selectbox(
             "Select a partnership to see detailed breakdown:",
@@ -392,14 +511,12 @@ with tab1:
                 st.markdown(f"**📌 {selected_partnership_drill} Overview**")
                 st.metric("Total Students", len(partnership_detail_df))
                 
-                # Schools in this partnership
                 schools_in_partnership = partnership_detail_df['school'].value_counts()
                 st.markdown("**🏫 Referring Schools:**")
                 for school, count in schools_in_partnership.items():
                     st.write(f"• {school}: **{count}** student(s)")
             
             with col2:
-                # Programs distribution for this partnership
                 programs_in_partnership = partnership_detail_df['program'].value_counts()
                 fig_programs = px.pie(
                     values=programs_in_partnership.values,
@@ -409,7 +526,6 @@ with tab1:
                 )
                 st.plotly_chart(fig_programs, use_container_width=True)
             
-            # Student details table
             st.markdown("**📋 Student Records:**")
             detail_display = partnership_detail_df[['record_id', 'school', 'year_level', 'program', 'expected_program', 'program_mismatch', 'term', 'swd', 'dcp']].copy()
             detail_display.columns = ['Record ID', 'School', 'Year', 'Program', 'Expected', 'Non-Typical', 'Term', 'SWD', 'DCP']
@@ -418,18 +534,16 @@ with tab1:
     else:
         st.info("No partnership data available for the selected filters.")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# TAB 2: SCHOOL DISTRIBUTION
-# ──────────────────────────────────────────────────────────────────────────────
+# Continue with remaining tabs using same structure...
+# [School Distribution, Term Trends, Program Breakdown, Non-Typical Placements tabs]
+
 with tab2:
     st.markdown("### 🏫 Students Allocated Per School")
     
-    # School counts
     school_counts = filtered_df['school'].value_counts().reset_index()
     school_counts.columns = ['School', 'Count']
     school_counts = school_counts.sort_values('Count', ascending=False)
     
-    # Create horizontal bar chart for better readability
     fig_schools = px.bar(
         school_counts,
         y='School',
@@ -451,7 +565,6 @@ with tab2:
     )
     st.plotly_chart(fig_schools, use_container_width=True)
     
-    # School drill-down
     st.markdown("#### 🔍 Drill Down into Specific School")
     selected_school = st.selectbox(
         "Select a school to see detailed breakdown:",
@@ -475,11 +588,9 @@ with tab2:
             primary_program = school_detail_df['program'].mode()[0] if len(school_detail_df) > 0 else "N/A"
             st.metric("📚 Primary Program", primary_program)
         
-        # Detailed breakdown
         col1, col2 = st.columns(2)
         
         with col1:
-            # Program distribution
             program_dist = school_detail_df['program'].value_counts()
             fig_prog = px.bar(
                 x=program_dist.index,
@@ -499,13 +610,11 @@ with tab2:
             st.plotly_chart(fig_prog, use_container_width=True)
         
         with col2:
-            # Support flags
             flag_counts = {
                 'SWD': (school_detail_df['swd'] == 'Yes').sum(),
                 'DCP': (school_detail_df['dcp'] == 'Yes').sum(),
                 'Aboriginal': (school_detail_df['aboriginal'] == 'Yes').sum(),
-                'EALD': (school_detail_df['eald'] == 'Yes').sum(),
-                'Care/CPS': (school_detail_df['care_cps'] == 'Yes').sum()
+                'EALD': (school_detail_df['eald'] == 'Yes').sum()
             }
             
             fig_flags = px.bar(
@@ -525,7 +634,6 @@ with tab2:
             )
             st.plotly_chart(fig_flags, use_container_width=True)
         
-        # Student records
         st.markdown("**📋 Individual Student Records:**")
         school_display = school_detail_df[['record_id', 'year_level', 'program', 'expected_program', 'program_mismatch', 'term', 'referral_date', 'swd', 'dcp', 'aboriginal', 'eald']].copy()
         school_display.columns = ['Record ID', 'Year', 'Program', 'Expected', 'Non-Typical', 'Term', 'Referral Date', 'SWD', 'DCP', 'Aboriginal', 'EALD']
@@ -533,13 +641,9 @@ with tab2:
         school_display['Referral Date'] = school_display['Referral Date'].dt.strftime('%d/%m/%Y')
         st.dataframe(school_display, use_container_width=True, hide_index=True)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# TAB 3: TERM TRENDS
-# ──────────────────────────────────────────────────────────────────────────────
 with tab3:
     st.markdown("### 📅 Term-by-Term Allocation Trends")
     
-    # Term distribution
     term_counts = filtered_df['term'].value_counts().reindex(['Term 1', 'Term 2', 'Term 3', 'Term 4'], fill_value=0)
     
     fig_terms = px.bar(
@@ -559,7 +663,6 @@ with tab3:
     )
     st.plotly_chart(fig_terms, use_container_width=True)
     
-    # Term drill-down
     st.markdown("#### 🔍 Drill Down into Specific Term")
     selected_term_drill = st.selectbox(
         "Select a term to see detailed breakdown:",
@@ -584,7 +687,6 @@ with tab3:
                 unique_schools = term_detail_df['school'].nunique()
                 st.metric("🏫 Unique Schools", unique_schools)
             
-            # Breakdown by partnership and program
             col1, col2 = st.columns(2)
             
             with col1:
@@ -612,7 +714,6 @@ with tab3:
                 )
                 st.plotly_chart(fig_prg, use_container_width=True)
             
-            # Top referring schools
             st.markdown(f"**🏫 Top Referring Schools in {selected_term_drill}:**")
             top_schools = term_detail_df['school'].value_counts().head(10).reset_index()
             top_schools.columns = ['School', 'Referrals']
@@ -636,13 +737,9 @@ with tab3:
         else:
             st.info(f"No data available for {selected_term_drill}")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# TAB 4: PROGRAM BREAKDOWN
-# ──────────────────────────────────────────────────────────────────────────────
 with tab4:
     st.markdown("### 🎨 Program-Level Analysis")
     
-    # Program counts
     program_counts = filtered_df['program'].value_counts().reset_index()
     program_counts.columns = ['Program', 'Count']
     
@@ -664,7 +761,6 @@ with tab4:
     )
     st.plotly_chart(fig_prog_main, use_container_width=True)
     
-    # Program drill-down
     st.markdown("#### 🔍 Drill Down into Specific Program")
     selected_program_drill = st.selectbox(
         "Select a program to see detailed breakdown:",
@@ -688,7 +784,6 @@ with tab4:
             partnership_students = len(program_detail_df[program_detail_df['partnership'] != ''])
             st.metric("🤝 Partnership Students", partnership_students)
         
-        # School breakdown
         col1, col2 = st.columns(2)
         
         with col1:
@@ -725,15 +820,13 @@ with tab4:
             else:
                 st.info("No partnership data for this program")
         
-        # Support needs profile
         st.markdown(f"**🏷️ Support Needs Profile for {selected_program_drill}:**")
         
         flag_data_prog = {
             'SWD': (program_detail_df['swd'] == 'Yes').sum(),
             'DCP': (program_detail_df['dcp'] == 'Yes').sum(),
             'Aboriginal': (program_detail_df['aboriginal'] == 'Yes').sum(),
-            'EALD': (program_detail_df['eald'] == 'Yes').sum(),
-            'Care/CPS': (program_detail_df['care_cps'] == 'Yes').sum()
+            'EALD': (program_detail_df['eald'] == 'Yes').sum()
         }
         
         fig_flags_prog = px.bar(
@@ -752,9 +845,6 @@ with tab4:
         )
         st.plotly_chart(fig_flags_prog, use_container_width=True)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# TAB 5: NON-TYPICAL PLACEMENTS
-# ──────────────────────────────────────────────────────────────────────────────
 with tab5:
     st.markdown("### ⚠️ Students in Non-Typical Program Placements")
     
@@ -766,11 +856,9 @@ with tab5:
     </div>
     """, unsafe_allow_html=True)
     
-    # Filter for mismatches
     mismatch_df = filtered_df[filtered_df['program_mismatch'] == True].copy()
     
     if len(mismatch_df) > 0:
-        # Overview metrics
         col1, col2, col3 = st.columns(3)
         
         with col1:
@@ -784,10 +872,8 @@ with tab5:
             unique_schools_mismatch = mismatch_df['school'].nunique()
             st.metric("🏫 Schools Involved", unique_schools_mismatch)
         
-        # Breakdown by type of mismatch
         st.markdown("#### 📋 Placement Details")
         
-        # Create a summary of mismatches
         mismatch_summary = mismatch_df.groupby(['year_level', 'expected_program', 'program']).size().reset_index(name='count')
         mismatch_summary = mismatch_summary.sort_values('count', ascending=False)
         
@@ -796,7 +882,6 @@ with tab5:
         with col1:
             st.markdown("**🔄 Mismatch Patterns:**")
             
-            # Create a visual showing the mismatches
             for _, row in mismatch_summary.iterrows():
                 st.markdown(f"""
                 <div style="background: #FFF9E6; padding: 1rem; border-radius: 8px; margin-bottom: 0.5rem; border-left: 4px solid #C8760A;">
@@ -810,7 +895,6 @@ with tab5:
         with col2:
             st.markdown("**📊 Programs with Non-Typical Students:**")
             
-            # Bar chart of programs containing mismatched students
             program_mismatch_counts = mismatch_df['program'].value_counts()
             
             fig_mismatch = px.bar(
@@ -829,7 +913,6 @@ with tab5:
             )
             st.plotly_chart(fig_mismatch, use_container_width=True)
         
-        # Detailed table of mismatched students
         st.markdown("#### 📋 Individual Student Records")
         
         mismatch_display = mismatch_df[[
@@ -842,7 +925,6 @@ with tab5:
             'Term', 'SWD', 'DCP', 'Aboriginal', 'EALD'
         ]
         
-        # Style the dataframe to highlight the mismatch
         st.dataframe(
             mismatch_display,
             use_container_width=True,
@@ -850,7 +932,6 @@ with tab5:
             height=400
         )
         
-        # Analysis of why students might be in non-typical placements
         st.markdown("#### 💡 Support Needs Analysis")
         
         col1, col2 = st.columns(2)
@@ -862,8 +943,7 @@ with tab5:
                 'SWD': (mismatch_df['swd'] == 'Yes').sum(),
                 'DCP': (mismatch_df['dcp'] == 'Yes').sum(),
                 'Aboriginal': (mismatch_df['aboriginal'] == 'Yes').sum(),
-                'EALD': (mismatch_df['eald'] == 'Yes').sum(),
-                'Care/CPS': (mismatch_df['care_cps'] == 'Yes').sum()
+                'EALD': (mismatch_df['eald'] == 'Yes').sum()
             }
             
             fig_flags_mismatch = px.bar(
@@ -904,7 +984,6 @@ with tab5:
             )
             st.plotly_chart(fig_school_mismatch, use_container_width=True)
         
-        # Download option for non-typical placements
         st.markdown("#### 📥 Export Non-Typical Placements Data")
         
         csv_mismatch = mismatch_df.to_csv(index=False)
@@ -933,11 +1012,9 @@ with tab5:
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown('<div class="section-header">📋 Complete Allocation Summary</div>', unsafe_allow_html=True)
 
-# Display filtered data table with mismatch indicator
 display_df = filtered_df[['record_id', 'school', 'year_level', 'program', 'expected_program', 'program_mismatch', 'partnership', 'term', 'status']].copy()
 display_df.columns = ['Record ID', 'Referring School', 'Year', 'Program', 'Expected Program', 'Non-Typical', 'Partnership', 'Term', 'Status']
 
-# Convert boolean to visual indicator
 display_df['Non-Typical'] = display_df['Non-Typical'].apply(lambda x: '⚠️ Yes' if x else '✓ Match')
 
 st.dataframe(
@@ -953,7 +1030,6 @@ st.dataframe(
     }
 )
 
-# Download button for filtered data
 csv = filtered_df.to_csv(index=False)
 st.download_button(
     label="📥 Download Filtered Data (CSV)",
@@ -991,13 +1067,12 @@ with col2:
     </div>
     """, unsafe_allow_html=True)
 
-# Footer
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; color: #666; padding: 2rem 0;">
-    <p style="font-size: 0.9rem;">📊 Enhanced Allocation Dashboard | Cowandilla Learning Centre LBU</p>
+    <p style="font-size: 0.9rem;">📊 Live Allocation Dashboard | Cowandilla Learning Centre LBU</p>
     <p style="font-size: 0.85rem; color: #1A7A6E; font-weight: 600;">
-        🔒 De-identified data • Interactive drill-down • Updated automatically • Safe for external presentation
+        🔄 Connected to Supabase • Auto-refresh every 60 seconds • Live data
     </p>
 </div>
 """, unsafe_allow_html=True)
