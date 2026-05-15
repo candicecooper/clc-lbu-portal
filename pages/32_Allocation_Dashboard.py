@@ -280,6 +280,7 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                     'Flag_Aboriginal': 'flag_aboriginal',
                     'Flag_EALD': 'flag_eald',
                     'Flag_Other': 'flag_other',
+                    'Bespoke_Placement': 'bespoke_placement',  # Your non-typical placement flag
                     'Exit_Reason': 'exit_reason',
                     'Transition_Plan': 'transition_plan',
                     'Notes': 'notes'
@@ -292,7 +293,8 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                 
                 # Convert Yes/No to boolean for flags
                 flag_columns = ['flag_asd', 'flag_adhd', 'flag_mental_health', 'flag_odd_cd',
-                              'flag_care_cps', 'flag_aboriginal', 'flag_eald', 'flag_other']
+                              'flag_care_cps', 'flag_aboriginal', 'flag_eald', 'flag_other',
+                              'bespoke_placement']  # Include bespoke_placement in flag conversion
                 
                 for flag_col in flag_columns:
                     if flag_col in sync_df.columns:
@@ -503,23 +505,33 @@ def get_term(month):
 
 df['term'] = df['month'].apply(get_term)
 
-# Program placement logic
-def get_expected_program(year_level):
-    """Determine expected program based on year level"""
-    if pd.isna(year_level) or year_level == '' or year_level == "Unknown":
-        return "Unknown"
-    year_level = str(year_level).upper()
-    if year_level in ['R', '1']:
-        return "Junior Primary (R-1)"
-    elif year_level in ['3', '4', '5', '6']:
-        return "Primary Years (3-6)"
-    elif year_level in ['7', '8', '9', '10']:
-        return "Senior Years (7-10)"
-    else:
-        return "Unknown"
+# Program placement - use Excel's Bespoke_Placement flag
+# This is YOUR authoritative definition of non-typical placement
+if 'bespoke_placement' in df.columns:
+    # Convert Yes/No to boolean
+    df['program_mismatch'] = df['bespoke_placement'].map({'Yes': True, 'No': False, '': False})
+    df['program_mismatch'] = df['program_mismatch'].fillna(False)
+else:
+    # Fallback: calculate based on year level if Bespoke_Placement not available
+    def get_expected_program(year_level):
+        """Determine expected program based on year level"""
+        if pd.isna(year_level) or year_level == '' or year_level == "Unknown":
+            return "Unknown"
+        year_level = str(year_level).upper()
+        if year_level in ['R', '1']:
+            return "Junior Primary (R-1)"
+        elif year_level in ['3', '4', '5', '6']:
+            return "Primary Years (3-6)"
+        elif year_level in ['7', '8', '9', '10']:
+            return "Senior Years (7-10)"
+        else:
+            return "Unknown"
 
-df['expected_program'] = df['year_level'].apply(get_expected_program)
-df['program_mismatch'] = (df['program'] != df['expected_program']) & (df['expected_program'] != "Unknown")
+    df['expected_program'] = df['year_level'].apply(get_expected_program)
+    df['program_mismatch'] = (df['program'] != df['expected_program']) & (df['expected_program'] != "Unknown")
+
+# Set expected_program for display purposes
+df['expected_program'] = df['year_level'].apply(lambda yl: get_expected_program(yl) if 'get_expected_program' in dir() else '')
 
 # ══════════════════════════════════════════════════════════════════════════════
 # FILTERS
