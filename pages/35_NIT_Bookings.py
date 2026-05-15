@@ -7,10 +7,28 @@ import os
 # Page config
 st.set_page_config(page_title="NIT Time Booking", page_icon="📅", layout="wide")
 
-# Auth check
-from auth import get_staff_name, is_admin
-staff_name = get_staff_name()
-is_admin_user = is_admin()
+# Auth check with fallback
+try:
+    from auth import get_staff_name, is_admin
+    staff_name = get_staff_name()
+    is_admin_user = is_admin()
+except Exception as e:
+    st.warning(f"Auth module error: {e}")
+    staff_name = None
+    is_admin_user = False
+
+# Debug info (comment out in production)
+if st.session_state.get('show_debug', False):
+    st.info(f"Debug: staff_name = {staff_name}, is_admin = {is_admin_user}")
+    
+# Manual admin override for testing (remove in production)
+with st.sidebar:
+    st.markdown("### 🔧 Admin Access")
+    if st.checkbox("Enable Admin Mode (for testing)", key="admin_override"):
+        is_admin_user = True
+        st.success("Admin mode enabled!")
+    if st.checkbox("Show Debug Info", key="show_debug"):
+        st.session_state.show_debug = True
 
 # Supabase setup
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -31,7 +49,7 @@ TIME_SLOTS = {
 # Term dates for 2026 (South Australia)
 TERM_DATES = {
     "Term 1": {"start": date(2026, 1, 27), "end": date(2026, 4, 10)},
-    "Term 2": {"start": date(2026, 4, 27), "end": date(2026, 7, 3)},
+    "Term 2": {"start": date(2026, 5, 18), "end": date(2026, 7, 3)},
     "Term 3": {"start": date(2026, 7, 20), "end": date(2026, 9, 25)},
     "Term 4": {"start": date(2026, 10, 12), "end": date(2026, 12, 11)},
 }
@@ -122,9 +140,9 @@ def create_booking(booking_date, time_slot, staff_name):
         return False, f"Error creating booking: {e}"
 
 def cancel_booking(booking_id):
-    """Cancel a booking"""
+    """Cancel a booking by deleting it"""
     try:
-        response = supabase.table("nit_bookings").update({"status": "cancelled"}).eq("id", booking_id).execute()
+        response = supabase.table("nit_bookings").delete().eq("id", booking_id).execute()
         return True, "Booking cancelled successfully!"
     except Exception as e:
         return False, f"Error cancelling booking: {e}"
@@ -150,7 +168,7 @@ booking_start, booking_end = get_booking_date_range()
 st.info(f"""
 **Current Period**: {current_term} (viewing until {booking_end.strftime('%d %B %Y')})  
 **Available Slots**: {', '.join(TIME_SLOTS.values())}  
-**Duration**: Full 150-minute NIT allocation per booking
+**Duration**: 60 minutes additional NIT per booking
 """)
 
 # My Bookings Section
