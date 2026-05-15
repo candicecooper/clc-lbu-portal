@@ -144,7 +144,10 @@ st.markdown("### 📋 My Bookings")
 staff_name_filter = st.text_input("Your name (to view/manage your bookings):", key="staff_filter")
 
 if staff_name_filter:
-    my_bookings = bookings_df[bookings_df['staff_name'].str.lower() == staff_name_filter.lower()]
+    if not bookings_df.empty:
+        my_bookings = bookings_df[bookings_df['staff_name'].str.lower() == staff_name_filter.lower()]
+    else:
+        my_bookings = pd.DataFrame()  # Empty DataFrame if no bookings exist yet
     
     if not my_bookings.empty:
         my_bookings_sorted = my_bookings.sort_values('booking_date')
@@ -205,10 +208,13 @@ else:
                     booking_date = week_data[day_name]
                     
                     # Check if this slot is booked
-                    existing_booking = bookings_df[
-                        (bookings_df['booking_date'] == booking_date) & 
-                        (bookings_df['time_slot'] == time_slot_label)
-                    ]
+                    if not bookings_df.empty:
+                        existing_booking = bookings_df[
+                            (bookings_df['booking_date'] == booking_date) & 
+                            (bookings_df['time_slot'] == time_slot_label)
+                        ]
+                    else:
+                        existing_booking = pd.DataFrame()  # Empty DataFrame if no bookings
                     
                     if not existing_booking.empty:
                         # Slot is booked
