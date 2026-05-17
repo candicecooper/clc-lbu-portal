@@ -16,9 +16,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-from auth import require_auth, logout_button
-require_auth("Minutes Polisher", "📝")
-logout_button("sidebar")
+# Authentication removed - open access
 
 # ── DESIGN ────────────────────────────────────────────────────
 st.markdown("""
