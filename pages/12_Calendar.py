@@ -10,17 +10,47 @@ import zoneinfo
 st.set_page_config(page_title="CLC Calendar", page_icon="📅", layout="wide", initial_sidebar_state="collapsed")
 apply_clc_theme()
 
-from auth import require_auth, logout_button, get_staff_name
-require_auth("CLC Calendar", "📅")
-logout_button("sidebar")
+# ── Inline staff auth (view is public; editing requires sign-in) ─────────────
+def _cal_is_signed_in():
+    return bool(st.session_state.get("_cal_staff_name", "").strip())
+
+def _cal_staff_name():
+    return st.session_state.get("_cal_staff_name", "").strip()
+
+def get_staff_name():
+    return _cal_staff_name()
 
 st.sidebar.markdown(
     '<a href="https://16cefb77.clc-portal.pages.dev/" target="_self" style="display:block;text-align:center;'
     'background:#1A7A7A;color:white;font-weight:600;font-size:0.85rem;'
-    'padding:0.5rem;border-radius:8px;text-decoration:none;margin-bottom:0.5rem;">'
+    'padding:0.5rem;border-radius:8px;text-decoration:none;margin-bottom:0.75rem;">'
     '🏠 Back to Staff Portal</a>',
     unsafe_allow_html=True
 )
+
+# ── Sidebar staff sign-in ─────────────────────────────────────────────────────
+st.sidebar.markdown("---")
+if _cal_is_signed_in():
+    st.sidebar.success(f"✅ Signed in as **{_cal_staff_name()}**")
+    st.sidebar.caption("You can add and edit calendar events.")
+    if st.sidebar.button("🔓 Sign out", use_container_width=True):
+        st.session_state["_cal_staff_name"] = ""
+        st.rerun()
+else:
+    st.sidebar.markdown("### 🔐 Staff Sign In")
+    st.sidebar.caption("Sign in to add or edit events. The calendar is viewable by everyone.")
+    with st.sidebar.form("cal_signin_form", clear_on_submit=False):
+        _sn_input = st.text_input("Your name", placeholder="e.g. Candice Cooper")
+        _sn_pin   = st.text_input("Staff PIN", type="password", placeholder="Enter PIN")
+        if st.form_submit_button("Sign In", use_container_width=True, type="primary"):
+            if not _sn_input.strip():
+                st.sidebar.warning("Please enter your name.")
+            elif _sn_pin != st.secrets.get("STAFF_PIN", "clc2025"):
+                st.sidebar.error("Incorrect PIN. Please try again.")
+            else:
+                st.session_state["_cal_staff_name"] = _sn_input.strip()
+                st.rerun()
+st.sidebar.markdown("---")
 
 # ─── SUPABASE ───────────────────────────────────────────────────────────────────
 @st.cache_resource
@@ -82,13 +112,16 @@ for k, v in [
     ("cal_month",         today.month),
     ("cal_week_start",    today - timedelta(days=today.weekday())),
     ("selected_date",     today),
-    ("is_admin",          True),
+    ("is_admin",          False),
     ("edit_event_id",     None),
     ("selected_event_id", None),
     ("quick_add_open",    False),
 ]:
     if k not in st.session_state:
         st.session_state[k] = v
+
+# Update is_admin dynamically based on current sign-in state
+st.session_state.is_admin = _cal_is_signed_in()
 
 # ─── HOVER + CARD CSS ────────────────────────────────────────────────────────────
 st.markdown("""
@@ -640,13 +673,16 @@ with tab_month:
         render_event_row(ev, "m")
 
     st.markdown(f"#### ➕ Add event on {sel.strftime('%-d %B %Y')}")
-    _show_save_notification()
-    ok, data = event_form(f"madd_{sel.year}_{sel.month}_{sel.day}", default_date=sel)
-    if ok:
-        if save_event(data):
-            st.session_state.cal_year  = sel.year
-            st.session_state.cal_month = sel.month
-            st.rerun()
+    if _cal_is_signed_in():
+        _show_save_notification()
+        ok, data = event_form(f"madd_{sel.year}_{sel.month}_{sel.day}", default_date=sel)
+        if ok:
+            if save_event(data):
+                st.session_state.cal_year  = sel.year
+                st.session_state.cal_month = sel.month
+                st.rerun()
+    else:
+        st.info("🔐 **Sign in via the sidebar** to add or edit events.", icon="ℹ️")
 
 # ═══════════════ WEEK VIEW ═════════════════════════════════════════════════════
 with tab_week:
@@ -709,12 +745,15 @@ with tab_week:
                     unsafe_allow_html=True)
     for ev in d_evs:
         render_event_row(ev, "w")
-    with st.expander(f"➕ Add event on {sel.strftime('%-d %B')}", expanded=(not d_evs and sel != today)):
-        _show_save_notification()
-        ok, data = event_form(f"wadd_{str(sel)}", default_date=sel)
-        if ok:
-            if save_event(data):
-                st.rerun()
+    if _cal_is_signed_in():
+        with st.expander(f"➕ Add event on {sel.strftime('%-d %B')}", expanded=(not d_evs and sel != today)):
+            _show_save_notification()
+            ok, data = event_form(f"wadd_{str(sel)}", default_date=sel)
+            if ok:
+                if save_event(data):
+                    st.rerun()
+    else:
+        st.info("🔐 **Sign in via the sidebar** to add or edit events.", icon="ℹ️")
 
 # ═══════════════ LIST / AGENDA VIEW ═══════════════════════════════════════════
 with tab_list:
@@ -723,12 +762,15 @@ with tab_list:
     with lc2: le = st.date_input("To",   value=today+timedelta(weeks=8), key="le")
     with lc3: tf = st.multiselect("Filter type", list(EVENT_TYPES.keys()), default=list(EVENT_TYPES.keys()), key="tf")
 
-    with st.expander("➕ Add New Event"):
-        _show_save_notification()
-        ok, data = event_form("ladd")
-        if ok:
-            if save_event(data):
-                st.rerun()
+    if _cal_is_signed_in():
+        with st.expander("➕ Add New Event"):
+            _show_save_notification()
+            ok, data = event_form("ladd")
+            if ok:
+                if save_event(data):
+                    st.rerun()
+    else:
+        st.info("🔐 **Sign in via the sidebar** to add or edit events.", icon="ℹ️")
 
     st.markdown("---")
     levs = [e for e in (db_events(ls, le) + schedule_events(ls, le) + pac_events(db_pac(), ls, le))
@@ -951,7 +993,10 @@ with tab_students:
             '📋 Record full placement details here — school, support arrangements, funding, goals and contacts. '
             'Placements auto-appear in the Student Timeline above.</div>', unsafe_allow_html=True)
 
-        with st.expander("➕ Add New Placement", expanded=True):
+        if not _cal_is_signed_in():
+            st.info("🔐 **Sign in via the sidebar** to add or edit student records.", icon="ℹ️")
+        else:
+         with st.expander("➕ Add New Placement", expanded=True):
             with st.form("place_add_form", clear_on_submit=True):
                 pa1, pa2 = st.columns(2)
                 with pa1:
@@ -1130,7 +1175,10 @@ with tab_students:
             'Enter the days and times they are <b>at mainstream</b> — leave a day blank if they are at CLC all day. '
             'Transition weeks appear as solid bars on the Student Timeline.</div>', unsafe_allow_html=True)
 
-        with st.expander("➕ Add Transition Week", expanded=True):
+        if not _cal_is_signed_in():
+            st.info("🔐 **Sign in via the sidebar** to add or edit student records.", icon="ℹ️")
+        else:
+         with st.expander("➕ Add Transition Week", expanded=True):
             with st.form("trans_add_form", clear_on_submit=True):
                 tr1, tr2, tr3 = st.columns(3)
                 with tr1:
@@ -1326,7 +1374,10 @@ with tab_students:
             'Use the calendar\'s Entry / Review / Transition / TAC filter to view them.'
             '</div>', unsafe_allow_html=True)
 
-        with st.expander("➕ Log a Student Meeting", expanded=True):
+        if not _cal_is_signed_in():
+            st.info("🔐 **Sign in via the sidebar** to add or edit student records.", icon="ℹ️")
+        else:
+         with st.expander("➕ Log a Student Meeting", expanded=True):
             _show_save_notification()
             with st.form("mtg_add_form", clear_on_submit=True):
                 mg1, mg2 = st.columns(2)
