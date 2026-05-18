@@ -296,6 +296,9 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                     'Flag_EALD': 'flag_eald',
                     'Flag_Other': 'flag_other',
                     'Bespoke_Placement': 'bespoke_placement',  # Your non-typical placement flag
+                    'Waitlist_Status': 'waitlist_status',  # Waitlist tracking
+                    'Waitlist_Date': 'waitlist_date',  # When joined waitlist
+                    'Allocated_From_Waitlist': 'allocated_from_waitlist',  # Previously waitlisted
                     'Exit_Reason': 'exit_reason',
                     'Transition_Plan': 'transition_plan',
                     'Notes': 'notes'
@@ -331,7 +334,7 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                     sync_df['year_level'] = sync_df['year_level'].replace('nan', None)
                 
                 # Handle dates
-                date_columns = ['referral_date', 'placement_start', 'placement_end']
+                date_columns = ['referral_date', 'placement_start', 'placement_end', 'waitlist_date']
                 for date_col in date_columns:
                     if date_col in sync_df.columns:
                         sync_df[date_col] = pd.to_datetime(sync_df[date_col], errors='coerce')
@@ -394,18 +397,26 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                     st.write(f"Values: {sync_df['previous_clc_placement'].value_counts().to_dict()}")
                     st.write(f"Sample: {sync_df['previous_clc_placement'].head(5).tolist()}")
                 
-                # NOW handle Previous_CLC_Placement and Previous_Other_LC as text Yes/No
-                # This must happen AFTER aggressive cleanup to preserve values
-                for text_col in ['previous_clc_placement', 'previous_other_lc']:
-                    if text_col in sync_df.columns:
-                        # Explicitly convert to text Yes/No, handling all possible input types
+                # NOW handle text columns AFTER aggressive cleanup to preserve values
+                
+                # Previous_CLC_Placement and Previous_Other_LC: Convert to Yes/No
+                for yes_no_col in ['previous_clc_placement', 'previous_other_lc']:
+                    if yes_no_col in sync_df.columns:
                         def to_yes_no(val):
                             if pd.isna(val) or val is None or val == '' or val == 'None':
                                 return 'No'
                             val_str = str(val).strip().lower()
                             return 'Yes' if val_str == 'yes' else 'No'
-                        
-                        sync_df[text_col] = sync_df[text_col].apply(to_yes_no)
+                        sync_df[yes_no_col] = sync_df[yes_no_col].apply(to_yes_no)
+                
+                # Waitlist columns: Keep as-is but clean
+                for text_col in ['waitlist_status', 'allocated_from_waitlist']:
+                    if text_col in sync_df.columns:
+                        def clean_text(val):
+                            if pd.isna(val) or val is None or val == '' or val == 'None':
+                                return None
+                            return str(val).strip()
+                        sync_df[text_col] = sync_df[text_col].apply(clean_text)
                 
                 # DEBUG: Check values AFTER to_yes_no conversion
                 if 'previous_clc_placement' in sync_df.columns:
@@ -558,7 +569,12 @@ if len(df_raw) == 0:
     st.stop()
 
 # Show last update time
-st.caption(f"📅 Last updated: {datetime.now().strftime('%d/%m/%Y %I:%M %p')} | Total records: {len(df_raw)}")
+current_year = datetime.now().year
+st.caption(f"📅 Last updated: {datetime.now().strftime('%d/%m/%Y %I:%M %p')} | Current year: {current_year} | Total records: {len(df_raw)}")
+
+# Validate year
+if current_year != 2026:
+    st.warning(f"⚠️ System year is {current_year}, not 2026. Year level and term calculations may be incorrect. Please check your server's system time.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DATA PROCESSING & MAPPING
@@ -816,13 +832,14 @@ with col6:
 st.markdown('<div class="section-header">🎯 Interactive Drill-Down Analytics <span class="drill-badge">Click to Explore</span></div>', unsafe_allow_html=True)
 
 # Create tabs for different drill-down views
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📊 Partnership Deep Dive",
     "🏫 School Distribution",
     "📅 Term Trends",
     "🎨 Program Breakdown",
     "⚠️ Non-Typical Placements",
-    "🔄 Placement History"  # NEW TAB
+    "🔄 Placement History",
+    "⏳ Waitlist & Non-Placed"  # NEW TAB
 ])
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1548,6 +1565,230 @@ with tab6:
         )
         st.plotly_chart(fig_schools_returning, use_container_width=True)
 
+# ──────────────────────────────────────────────────────────────────────────────
+# TAB 7: WAITLIST & NON-PLACED STUDENTS
+# ──────────────────────────────────────────────────────────────────────────────
+with tab7:
+    st.markdown("### ⏳ Waitlist & Non-Placed Students Tracking")
+    
+    st.markdown("""
+    <div class="info-box">
+    <strong>ℹ️ About Waitlist Tracking:</strong><br>
+    This view tracks students awaiting placement at CLC. When a school refers a student but no space is available, 
+    schools can choose to join the waitlist or decline. This system tracks wait times, conversions to placements, 
+    and provides visibility into unmet demand.
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Calculate waitlist metrics
+    waitlist_students = filtered_df[filtered_df.get('waitlist_status', '') == 'On Waitlist'].copy()
+    declined_students = filtered_df[filtered_df.get('waitlist_status', '') == 'Declined'].copy()
+    allocated_from_waitlist = filtered_df[filtered_df.get('allocated_from_waitlist', '') == 'Yes'].copy()
+    
+    # Calculate days waiting for current waitlist
+    if len(waitlist_students) > 0 and 'waitlist_date' in waitlist_students.columns:
+        waitlist_students['waitlist_date_parsed'] = pd.to_datetime(waitlist_students['waitlist_date'], errors='coerce')
+        today = pd.Timestamp.now()
+        waitlist_students['days_waiting'] = (today - waitlist_students['waitlist_date_parsed']).dt.days
+        waitlist_students['days_waiting'] = waitlist_students['days_waiting'].fillna(0).astype(int)
+        avg_wait = waitlist_students['days_waiting'].mean() if len(waitlist_students) > 0 else 0
+        longest_wait = waitlist_students['days_waiting'].max() if len(waitlist_students) > 0 else 0
+    else:
+        avg_wait = 0
+        longest_wait = 0
+    
+    # Overview metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("⏳ On Waitlist", len(waitlist_students))
+    
+    with col2:
+        st.metric("❌ Declined", len(declined_students))
+    
+    with col3:
+        st.metric("📊 Avg Wait (Days)", f"{avg_wait:.0f}")
+    
+    with col4:
+        st.metric("⚠️ Longest Wait (Days)", longest_wait)
+    
+    if len(waitlist_students) > 0:
+        st.markdown("#### 📊 Current Waitlist Analysis")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Waitlist by program
+            st.markdown("**Waitlist by Program:**")
+            waitlist_program = waitlist_students['program'].value_counts()
+            
+            fig_wait_prog = px.bar(
+                x=waitlist_program.index,
+                y=waitlist_program.values,
+                color=waitlist_program.values,
+                color_continuous_scale='Reds',
+                text=waitlist_program.values,
+                title='Students Waiting by Program'
+            )
+            fig_wait_prog.update_traces(textposition='outside')
+            fig_wait_prog.update_layout(
+                showlegend=False,
+                height=350,
+                xaxis_title="Program",
+                yaxis_title="Students Waiting"
+            )
+            st.plotly_chart(fig_wait_prog, use_container_width=True)
+        
+        with col2:
+            # Waitlist by year level
+            st.markdown("**Waitlist by Year Level:**")
+            waitlist_year = waitlist_students['year_level'].value_counts().sort_index()
+            
+            fig_wait_year = px.bar(
+                x=waitlist_year.index,
+                y=waitlist_year.values,
+                color=waitlist_year.values,
+                color_continuous_scale='Oranges',
+                text=waitlist_year.values,
+                title='Students Waiting by Year Level'
+            )
+            fig_wait_year.update_traces(textposition='outside')
+            fig_wait_year.update_layout(
+                showlegend=False,
+                height=350,
+                xaxis_title="Year Level",
+                yaxis_title="Students Waiting"
+            )
+            st.plotly_chart(fig_wait_year, use_container_width=True)
+        
+        # Schools with waitlist students
+        st.markdown("**🏫 Schools with Students on Waitlist:**")
+        waitlist_schools = waitlist_students['school'].value_counts().head(10)
+        
+        fig_wait_schools = px.bar(
+            y=waitlist_schools.index,
+            x=waitlist_schools.values,
+            orientation='h',
+            color=waitlist_schools.values,
+            color_continuous_scale='Reds',
+            text=waitlist_schools.values,
+            title='Top Schools by Waitlist Count'
+        )
+        fig_wait_schools.update_traces(textposition='outside')
+        fig_wait_schools.update_layout(
+            showlegend=False,
+            height=max(300, len(waitlist_schools) * 40),
+            yaxis_title="School",
+            xaxis_title="Students Waiting"
+        )
+        st.plotly_chart(fig_wait_schools, use_container_width=True)
+        
+        # Current waitlist table
+        st.markdown("#### 📋 Current Waitlist Details")
+        
+        waitlist_display = waitlist_students[[
+            'record_id', 'school', 'year_level', 'program', 'partnership',
+            'waitlist_date', 'days_waiting', 'swd', 'dcp'
+        ]].copy()
+        
+        waitlist_display.columns = [
+            'Student ID', 'School', 'Year', 'Program', 'Partnership',
+            'Waitlist Date', 'Days Waiting', 'SWD', 'DCP'
+        ]
+        
+        waitlist_display['Waitlist Date'] = pd.to_datetime(waitlist_display['Waitlist Date']).dt.strftime('%d/%m/%Y')
+        waitlist_display = waitlist_display.sort_values('Days Waiting', ascending=False)
+        
+        st.dataframe(
+            waitlist_display,
+            use_container_width=True,
+            hide_index=True,
+            height=400
+        )
+        
+        # Export waitlist
+        csv_waitlist = waitlist_students.to_csv(index=False)
+        st.download_button(
+            label="📥 Download Waitlist Report (CSV)",
+            data=csv_waitlist,
+            file_name=f"waitlist_students_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv"
+        )
+    else:
+        st.success("✅ No students currently on waitlist!")
+    
+    # Waitlist Success Stories
+    if len(allocated_from_waitlist) > 0:
+        st.markdown("#### ✅ Waitlist Success Stories")
+        st.markdown("""
+        <div style="background: #D4EDDA; padding: 1rem; border-radius: 8px; border-left: 4px solid #28A745; margin: 1rem 0;">
+        <strong>{} students</strong> were successfully allocated after being on the waitlist!
+        </div>
+        """.format(len(allocated_from_waitlist)), unsafe_allow_html=True)
+        
+        # Calculate wait times for allocated students
+        if 'waitlist_date' in allocated_from_waitlist.columns and 'placement_start' in allocated_from_waitlist.columns:
+            allocated_from_waitlist['waitlist_date_parsed'] = pd.to_datetime(allocated_from_waitlist['waitlist_date'], errors='coerce')
+            allocated_from_waitlist['placement_start_parsed'] = pd.to_datetime(allocated_from_waitlist['placement_start'], errors='coerce')
+            allocated_from_waitlist['wait_duration'] = (
+                allocated_from_waitlist['placement_start_parsed'] - allocated_from_waitlist['waitlist_date_parsed']
+            ).dt.days
+            allocated_from_waitlist['wait_duration'] = allocated_from_waitlist['wait_duration'].fillna(0).astype(int)
+            
+            avg_wait_before_allocation = allocated_from_waitlist['wait_duration'].mean() if len(allocated_from_waitlist) > 0 else 0
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.metric("📊 Average Wait Before Allocation", f"{avg_wait_before_allocation:.0f} days")
+            
+            with col2:
+                st.metric("✅ Waitlist→Allocated Success Rate", 
+                         f"{len(allocated_from_waitlist)}/{len(allocated_from_waitlist) + len(waitlist_students)}")
+            
+            # Show allocated students
+            allocated_display = allocated_from_waitlist[[
+                'record_id', 'school', 'year_level', 'program',
+                'waitlist_date', 'placement_start', 'wait_duration'
+            ]].copy()
+            
+            allocated_display.columns = [
+                'Student ID', 'School', 'Year', 'Program',
+                'Waitlist Date', 'Allocated Date', 'Days Waited'
+            ]
+            
+            allocated_display['Waitlist Date'] = pd.to_datetime(allocated_display['Waitlist Date']).dt.strftime('%d/%m/%Y')
+            allocated_display['Allocated Date'] = pd.to_datetime(allocated_display['Allocated Date']).dt.strftime('%d/%m/%Y')
+            
+            st.dataframe(
+                allocated_display,
+                use_container_width=True,
+                hide_index=True,
+                height=300
+            )
+    
+    # Declined students summary
+    if len(declined_students) > 0:
+        st.markdown("#### ❌ Declined Placements")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            declined_program = declined_students['program'].value_counts()
+            fig_declined = px.pie(
+                values=declined_program.values,
+                names=declined_program.index,
+                title='Declined by Program',
+                color_discrete_sequence=px.colors.sequential.Greys
+            )
+            st.plotly_chart(fig_declined, use_container_width=True)
+        
+        with col2:
+            declined_schools = declined_students['school'].value_counts().head(5)
+            st.markdown("**Top Schools (Declined):**")
+            for school, count in declined_schools.items():
+                st.markdown(f"• **{school}:** {count} student(s)")
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SUMMARY STATISTICS TABLE
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1583,6 +1824,11 @@ st.download_button(
 # INSIGHTS
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown('<div class="section-header">💡 Key Insights</div>', unsafe_allow_html=True)
+
+# Show current academic year context
+current_year = datetime.now().year
+academic_year = f"{current_year}"
+st.info(f"📅 **Academic Year Context:** Data calculated for {academic_year}. Year levels and ages are current as of {datetime.now().strftime('%B %Y')}.")
 
 col1, col2 = st.columns(2)
 
