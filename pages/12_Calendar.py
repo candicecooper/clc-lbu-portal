@@ -41,12 +41,17 @@ else:
     st.sidebar.caption("Sign in to add or edit events. The calendar is viewable by everyone.")
     with st.sidebar.form("cal_signin_form", clear_on_submit=False):
         _sn_input = st.text_input("Your name", placeholder="e.g. Candice Cooper")
-        _sn_pin   = st.text_input("Staff PIN", type="password", placeholder="Enter PIN")
+        _sn_pin   = st.text_input("Staff password", type="password", placeholder="Staff password")
         if st.form_submit_button("Sign In", use_container_width=True, type="primary"):
+            import os
+            try:    _correct = st.secrets.get("APP_PASSWORD", "")
+            except: _correct = os.environ.get("APP_PASSWORD", "")
+            if not _correct:
+                _correct = "clcstaff2026"
             if not _sn_input.strip():
                 st.sidebar.warning("Please enter your name.")
-            elif _sn_pin != st.secrets.get("STAFF_PIN", "clc2025"):
-                st.sidebar.error("Incorrect PIN. Please try again.")
+            elif _sn_pin != _correct:
+                st.sidebar.error("Incorrect password. Please try again.")
             else:
                 st.session_state["_cal_staff_name"] = _sn_input.strip()
                 st.rerun()
