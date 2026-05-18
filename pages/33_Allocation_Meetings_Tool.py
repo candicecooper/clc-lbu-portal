@@ -473,7 +473,8 @@ with tab1:
                     with col3:
                         st.write(f"**Priority:** {draft.get('priority_level', 'Standard')}")
                         st.write(f"**Previous CLC:** {draft.get('previous_clc_placement', 'No')}")
-                        st.write(f"**Queries:** {draft.get('queries', 'None')[:50]}...")
+                        queries_text = draft.get('queries') or 'None'
+                st.write(f"**Queries:** {queries_text[:50]}..." if len(queries_text) > 50 else f"**Queries:** {queries_text}")
                 
                 st.markdown("---")
                 st.markdown("### 🎯 Complete Allocation on Meeting Day")
