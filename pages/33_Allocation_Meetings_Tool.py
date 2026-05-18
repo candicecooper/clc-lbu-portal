@@ -25,7 +25,7 @@ def init_supabase():
 supabase = init_supabase()
 
 # Define constants
-PROGRAMS = ["Junior Primary", "Primary", "Secondary"]
+PROGRAMS = ["Junior Primary (JP)", "Primary Years (PY)", "Senior Years (SY)"]
 CAT_FUNDING_OPTIONS = ["ATSI", "SIC", "SWD", "DCP", "SCH"]
 PARTNERSHIP_OPTIONS = ["MH", "PREV", "EALD", "CAHMS", "ASD"]
 STAFF_NAMES = ["Candice", "Annette", "Tom", "Gary", "Caitie", "Jacqui", 
@@ -33,11 +33,34 @@ STAFF_NAMES = ["Candice", "Annette", "Tom", "Gary", "Caitie", "Jacqui",
 OUTCOMES = ["Allocated", "Not Allocated"]
 EXTENSION_OUTCOMES = ["Approved", "Not Approved"]
 
+# NEW: Additional options
+GENDER_OPTIONS = ["Male", "Female", "Other", "Prefer not to say"]
+PRIORITY_OPTIONS = ["Standard", "High", "Urgent"]
+YEAR_LEVELS = ["R", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
+WAITLIST_STATUS_OPTIONS = ["Not Applicable", "On Waitlist", "Declined"]
+
+# UPDATED: Partnership Areas from government PDF
+PARTNERSHIP_AREAS = [
+    "Adelaide Prospect", "Anangu Lands", "Barossa Valley", "Beach Road",
+    "Berri & Barmera", "Blue Lake", "Campbell", "Central East", "Central Eyre 1", "Central Eyre 2",
+    "Coorong & Mallee", "Elizabeth", "Far North", "Far West", "Fleurieu", "Flinders",
+    "Golden Way", "Goyder & Light", "Greater Gawler", "Greenhill South", "Heysen",
+    "Holdfast", "Hollywood Lakes and Gardens", "Inner West", "Kangaroo Island",
+    "Le Fevre Peninsula", "Lower Mid North", "Marion Coast", "Marion Inland",
+    "Mid North Clare", "Mitcham Hills", "Mitcham Plains", "Modbury", "Montague",
+    "Morialta", "Mount Lofty", "Murraylands", "Northern Yorke", "Orion",
+    "Panalatinga", "Peachey", "Pirie", "Port Augusta - Quorn", "Port Lincoln",
+    "Renmark Loxton", "River Hub", "Salisbury", "Sea & Vines", "South East Coast & Vines",
+    "South Valley", "Southern Yorke", "Tatiara", "Tea Tree Gully", "Torrens",
+    "Torrens Valley", "Uleybury", "Upper Mid North", "Waikerie", "West Torrens",
+    "Western Adelaide Shores", "Whyalla", "Wrattonbully"
+]
+
 # Program mapping for Data Entry format
 PROGRAM_MAPPING = {
-    "Junior Primary": "Primary (R-6)",
-    "Primary": "Primary (R-6)",
-    "Secondary": "Middle (7-9)"
+    "Junior Primary (JP)": "JP",
+    "Primary Years (PY)": "PY",
+    "Senior Years (SY)": "SY"
 }
 
 # Helper functions
@@ -46,15 +69,15 @@ def get_current_term_week():
     today = datetime.now().date()
     year = today.year
     
-    # Term 2 2025 dates
-    term_2_start = datetime(2025, 4, 28).date()
-    term_2_end = datetime(2025, 7, 4).date()
+    # Term 2 2026 dates
+    term_2_start = datetime(2026, 4, 27).date()
+    term_2_end = datetime(2026, 7, 3).date()
     
     if term_2_start <= today <= term_2_end:
         weeks_in = ((today - term_2_start).days // 7) + 1
         return f"Term 2", weeks_in, year
     
-    return "Term 2", 1, 2025
+    return "Term 2", 1, 2026
 
 def get_meeting_weeks(term, year):
     """Generate list of meeting weeks for a term"""
@@ -62,7 +85,7 @@ def get_meeting_weeks(term, year):
 
 def get_thursday_date(week_number, term, year):
     """Calculate Thursday date for a given week"""
-    term_2_start = datetime(2025, 4, 28).date()
+    term_2_start = datetime(2026, 4, 27).date()
     days_to_add = (week_number - 1) * 7 + 3
     thursday = term_2_start + timedelta(days=days_to_add)
     return thursday
@@ -112,6 +135,8 @@ def map_flags_from_allocation(cat_funding, partnership):
         flags["Flag_Aboriginal"] = "Yes"
     if "SIC" in cat_funding or "DCP" in cat_funding:
         flags["Flag_Care_CPS"] = "Yes"
+    if "SWD" in cat_funding:
+        flags["Flag_Other"] = "Yes"
     
     # Map partnership
     if "ASD" in partnership:
@@ -124,22 +149,24 @@ def map_flags_from_allocation(cat_funding, partnership):
     return flags
 
 def export_to_data_entry(selected_allocations):
-    """Generate Excel file in Data Entry format"""
+    """Generate Excel file in Data Entry format with ALL database fields"""
     
     # Create workbook
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Data_Model"
     
-    # Define headers (29 columns)
+    # Define headers - COMPLETE SET matching allocation_tracker table
     headers = [
-        "Student_ID", "Student_Name", "DOB", "Gender", "Referring_School",
+        "Student_ID", "Student_Name", "DOB", "Gender", "Year_Level", "Referring_School",
         "Referral_Date", "Allocation_Status", "Allocated_Program", 
         "Placement_Start", "Placement_End", "Partnership_Area",
         "Previous_CLC_Placement", "Previous_Other_LC", "Other_LC_Name",
         "Total_Previous_Placements", "Placement_History_Notes", "Priority_Level",
         "Flag_ASD", "Flag_ADHD", "Flag_MentalHealth", "Flag_ODD_CD",
         "Flag_Care_CPS", "Flag_Aboriginal", "Flag_EALD", "Flag_Other",
+        "Bespoke_Placement",
+        "Waitlist_Status", "Waitlist_Date", "Allocated_From_Waitlist",
         "Current_Status", "Exit_Reason", "Transition_Plan", "Notes"
     ]
     
@@ -190,48 +217,61 @@ def export_to_data_entry(selected_allocations):
             except:
                 pass
         
+        waitlist_date = allocation.get('waitlist_date', '')
+        if waitlist_date and isinstance(waitlist_date, str):
+            try:
+                waitlist_date = datetime.strptime(waitlist_date, '%Y-%m-%d').strftime('%Y-%m-%d')
+            except:
+                pass
+        
         # Today's date as referral date
         today = datetime.now().strftime('%Y-%m-%d')
         
-        # Build row data - EXACT order matching SharePoint Data_Model
+        # Build row data - COMPLETE SET
         row_data = [
-            student_id,                                    # 1. Student_ID
-            allocation.get('student_name', '').upper(),   # 2. Student_Name
-            dob,                                           # 3. DOB
-            "",                                            # 4. Gender
-            allocation.get('school', ''),                 # 5. Referring_School
-            today,                                         # 6. Referral_Date
-            "Allocated",                                   # 7. Allocation_Status
-            mapped_program,                                # 8. Allocated_Program
-            start_date,                                    # 9. Placement_Start
-            end_date if end_date else None,               # 10. Placement_End
-            "",                                            # 11. Partnership_Area
-            "No",                                          # 12. Previous_CLC_Placement
-            "No",                                          # 13. Previous_Other_LC
-            None,                                          # 14. Other_LC_Name
-            0,                                             # 15. Total_Previous_Placements
-            None,                                          # 16. Placement_History_Notes
-            None,                                          # 17. Priority_Level
-            flags["Flag_ASD"],                            # 18. Flag_ASD
-            flags["Flag_ADHD"],                           # 19. Flag_ADHD
-            flags["Flag_MentalHealth"],                   # 20. Flag_MentalHealth
-            flags["Flag_ODD_CD"],                         # 21. Flag_ODD_CD
-            flags["Flag_Care_CPS"],                       # 22. Flag_Care_CPS
-            flags["Flag_Aboriginal"],                     # 23. Flag_Aboriginal
-            flags["Flag_EALD"],                           # 24. Flag_EALD
-            flags["Flag_Other"],                          # 25. Flag_Other
-            "Active",                                      # 26. Current_Status
-            None,                                          # 27. Exit_Reason
-            None,                                          # 28. Transition_Plan
-            allocation.get('notes', '')                   # 29. Notes
+            student_id,                                          # 1. Student_ID
+            allocation.get('student_name', '').upper(),         # 2. Student_Name
+            dob,                                                 # 3. DOB
+            allocation.get('gender', ''),                        # 4. Gender
+            allocation.get('year_level', ''),                    # 5. Year_Level
+            allocation.get('school', ''),                        # 6. Referring_School
+            today,                                               # 7. Referral_Date
+            "Allocated" if allocation.get('outcome') == 'Allocated' else "Waitlist",  # 8. Allocation_Status
+            mapped_program,                                      # 9. Allocated_Program
+            start_date,                                          # 10. Placement_Start
+            end_date,                                            # 11. Placement_End
+            allocation.get('partnership_area', ''),              # 12. Partnership_Area
+            allocation.get('previous_clc_placement', 'No'),      # 13. Previous_CLC_Placement
+            allocation.get('previous_other_lc', 'No'),           # 14. Previous_Other_LC
+            allocation.get('other_lc_name', ''),                 # 15. Other_LC_Name
+            allocation.get('total_previous_placements', 0),      # 16. Total_Previous_Placements
+            allocation.get('placement_history_notes', ''),       # 17. Placement_History_Notes
+            allocation.get('priority_level', 'Standard'),        # 18. Priority_Level
+            flags["Flag_ASD"],                                   # 19. Flag_ASD
+            flags["Flag_ADHD"],                                  # 20. Flag_ADHD
+            flags["Flag_MentalHealth"],                          # 21. Flag_MentalHealth
+            flags["Flag_ODD_CD"],                                # 22. Flag_ODD_CD
+            flags["Flag_Care_CPS"],                              # 23. Flag_Care_CPS
+            flags["Flag_Aboriginal"],                            # 24. Flag_Aboriginal
+            flags["Flag_EALD"],                                  # 25. Flag_EALD
+            flags["Flag_Other"],                                 # 26. Flag_Other
+            allocation.get('bespoke_placement', 'No'),           # 27. Bespoke_Placement
+            allocation.get('waitlist_status', 'Not Applicable'), # 28. Waitlist_Status
+            waitlist_date,                                       # 29. Waitlist_Date
+            allocation.get('allocated_from_waitlist', 'No'),     # 30. Allocated_From_Waitlist
+            "Active",                                            # 31. Current_Status
+            allocation.get('exit_reason', ''),                   # 32. Exit_Reason
+            allocation.get('transition_plan', ''),               # 33. Transition_Plan
+            allocation.get('notes', '')                          # 34. Notes
         ]
         
+        # Write row
         for col, value in enumerate(row_data, 1):
             cell = ws.cell(row_num, col, value)
             cell.alignment = Alignment(horizontal="left", vertical="center")
     
     # Adjust column widths
-    for col in range(1, 30):
+    for col in range(1, len(headers) + 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = 18
     
     # Save to BytesIO
@@ -277,7 +317,8 @@ def export_to_excel(week_data):
 
 # Main app
 st.title("📋 Allocation Meetings")
-st.markdown("**Weekly student placement allocation tracking**")
+st.markdown("**Weekly student placement allocation tracking - Enhanced Edition**")
+st.caption("✨ Now collecting complete allocation data for seamless database sync")
 
 # Initialize session state
 if 'current_term' not in st.session_state:
@@ -349,26 +390,75 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "📊 View & Export"
 ])
 
-# TAB 1: New Student Allocations
+# TAB 1: New Student Allocations - ENHANCED
 with tab1:
     st.header("New Student Allocations")
+    st.caption("Complete form captures all data needed for dashboard sync")
     
     with st.form("new_allocation_form", clear_on_submit=True):
-        st.subheader("Student Information")
+        st.subheader("📋 Student Information")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            student_name = st.text_input("Name *", key="alloc_name")
+        with col2:
+            dob = st.date_input("Date of Birth", value=None, key="alloc_dob")
+        with col3:
+            gender = st.selectbox("Gender", [""] + GENDER_OPTIONS, key="alloc_gender")
+        with col4:
+            year_level = st.selectbox("Year Level *", [""] + YEAR_LEVELS, key="alloc_year_level")
         
         col1, col2, col3 = st.columns(3)
         with col1:
-            student_name = st.text_input("Name *", key="alloc_name")
-            school = st.text_input("School", key="alloc_school")
+            school = st.text_input("Referring School *", key="alloc_school")
         with col2:
-            dob = st.date_input("Date of Birth", value=None, key="alloc_dob")
-            year_level = st.text_input("Year Level", key="alloc_year_level")
+            partnership_area = st.selectbox("Partnership Area", [""] + PARTNERSHIP_AREAS, key="alloc_partnership_area")
         with col3:
-            exc_tsp = st.text_input("Exc/TSP/ITSP", key="alloc_exc")
-            edid = st.text_input("EDID", key="alloc_edid")
+            priority_level = st.selectbox("Priority Level", [""] + PRIORITY_OPTIONS, key="alloc_priority")
         
         st.markdown("---")
-        st.subheader("Categorical Funding & Partnership")
+        st.subheader("📚 Placement History")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            previous_clc = st.selectbox("Previous CLC Placement?", ["No", "Yes"], key="alloc_prev_clc")
+        with col2:
+            previous_other_lc = st.selectbox("Previous Other LC?", ["No", "Yes"], key="alloc_prev_other")
+        with col3:
+            if previous_other_lc == "Yes":
+                other_lc_name = st.text_input("Other LC Name", key="alloc_other_lc")
+            else:
+                other_lc_name = ""
+        
+        if previous_clc == "Yes" or previous_other_lc == "Yes":
+            col1, col2 = st.columns(2)
+            with col1:
+                total_placements = st.number_input("Total Previous Placements", min_value=0, value=1, key="alloc_total_prev")
+            with col2:
+                placement_history_notes = st.text_input("Placement History Notes", key="alloc_history_notes")
+        else:
+            total_placements = 0
+            placement_history_notes = ""
+        
+        st.markdown("---")
+        st.subheader("⏳ Waitlist Information")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            waitlist_status = st.selectbox("Waitlist Status", WAITLIST_STATUS_OPTIONS, key="alloc_waitlist_status")
+        with col2:
+            if waitlist_status == "On Waitlist":
+                waitlist_date = st.date_input("Waitlist Date", value=None, key="alloc_waitlist_date")
+            else:
+                waitlist_date = None
+        with col3:
+            if waitlist_status == "On Waitlist":
+                allocated_from_waitlist = st.selectbox("Allocated from Waitlist?", ["No", "Yes"], key="alloc_from_waitlist")
+            else:
+                allocated_from_waitlist = "No"
+        
+        st.markdown("---")
+        st.subheader("🏷️ Categorical Funding & Partnership")
         
         col1, col2 = st.columns(2)
         with col1:
@@ -379,25 +469,30 @@ with tab1:
                     cat_funding.append(option)
         
         with col2:
-            st.write("**Partnership**")
+            st.write("**Partnership Support**")
             partnership = []
             for option in PARTNERSHIP_OPTIONS:
                 if st.checkbox(option, key=f"part_{option}"):
                     partnership.append(option)
         
         st.markdown("---")
-        st.subheader("Program & Placement")
+        st.subheader("🎯 Program & Placement")
         
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             program = st.selectbox("Program *", [""] + PROGRAMS, key="alloc_program")
         with col2:
             start_after = st.date_input("Start After", value=None, key="alloc_start")
         with col3:
             finishing_date = st.date_input("Finishing Date", value=None, key="alloc_finish")
+        with col4:
+            bespoke_placement = st.selectbox("Bespoke Placement?", ["No", "Yes"], key="alloc_bespoke")
+        
+        if bespoke_placement == "Yes":
+            st.info("💡 **Bespoke Placement:** Student year level doesn't match standard program expectations (e.g., Year 2 in PY program)")
         
         st.markdown("---")
-        st.subheader("Case Support Team")
+        st.subheader("👥 Case Support Team")
         
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -408,29 +503,42 @@ with tab1:
             school_contact = st.text_input("School Contact", key="alloc_school_contact")
         
         st.markdown("---")
-        st.subheader("Meeting Details")
+        st.subheader("📝 Meeting Details")
         
-        queries = st.text_area("Queries", key="alloc_queries", height=100)
+        queries = st.text_area("Queries", key="alloc_queries", height=80)
         
         col1, col2 = st.columns(2)
         with col1:
             outcome = st.selectbox("Outcome *", [""] + OUTCOMES, key="alloc_outcome")
         with col2:
-            details = st.text_area("Details", key="alloc_details", height=100)
+            details = st.text_area("Details", key="alloc_details", height=80)
         
-        notes = st.text_area("Notes", key="alloc_notes", height=100)
+        notes = st.text_area("Additional Notes", key="alloc_notes", height=80)
         
         # Submit button
         col1, col2, col3 = st.columns([2, 1, 2])
         with col2:
-            submit_allocation = st.form_submit_button("➕ Add Allocation", use_container_width=True)
+            submit_allocation = st.form_submit_button("➕ Add Allocation", use_container_width=True, type="primary")
         
         if submit_allocation:
-            if not student_name or not program or not outcome:
-                st.error("⚠️ Please fill in all required fields (Name, Program, Outcome)")
+            # Validation
+            missing = []
+            if not student_name:
+                missing.append("Name")
+            if not year_level:
+                missing.append("Year Level")
+            if not school:
+                missing.append("School")
+            if not program:
+                missing.append("Program")
+            if not outcome:
+                missing.append("Outcome")
+            
+            if missing:
+                st.error(f"⚠️ Please fill in required fields: {', '.join(missing)}")
             else:
                 try:
-                    # Insert into database
+                    # Prepare data with ALL new fields
                     data = {
                         "meeting_week": meeting_week_label,
                         "meeting_date": meeting_date.isoformat(),
@@ -439,14 +547,24 @@ with tab1:
                         "student_name": student_name,
                         "school": school,
                         "date_of_birth": dob.isoformat() if dob else None,
+                        "gender": gender,
                         "year_level": year_level,
-                        "exc_tsp_itsp": exc_tsp,
-                        "edid": edid,
+                        "partnership_area": partnership_area,
+                        "priority_level": priority_level if priority_level else "Standard",
+                        "previous_clc_placement": previous_clc,
+                        "previous_other_lc": previous_other_lc,
+                        "other_lc_name": other_lc_name if previous_other_lc == "Yes" else None,
+                        "total_previous_placements": total_placements,
+                        "placement_history_notes": placement_history_notes,
+                        "waitlist_status": waitlist_status,
+                        "waitlist_date": waitlist_date.isoformat() if waitlist_date else None,
+                        "allocated_from_waitlist": allocated_from_waitlist,
                         "cat_funding": json.dumps(cat_funding),
                         "partnership": json.dumps(partnership),
                         "program": program,
                         "start_after": start_after.isoformat() if start_after else None,
                         "finishing_date": finishing_date.isoformat() if finishing_date else None,
+                        "bespoke_placement": bespoke_placement,
                         "case_worker": case_worker,
                         "bsc": bsc,
                         "school_contact": school_contact,
@@ -462,7 +580,7 @@ with tab1:
                     st.rerun()
                     
                 except Exception as e:
-                    st.error(f"❌ Error saving allocation: {str(e)}")
+                    st.error(f"❌ Error saving record: {str(e)}")
 
 # TAB 2: Extension Requests
 with tab2:
@@ -662,7 +780,7 @@ with tab4:
         
         if allocated_students:
             st.subheader("📤 Export to Allocation Data Entry")
-            st.info("💡 Select allocated students to export in Data Entry format for your SharePoint tracker")
+            st.info("💡 Select allocated students to export in Data Entry format (34 columns) for your dashboard")
             
             # Selection interface
             if 'selected_for_export' not in st.session_state:
@@ -708,15 +826,15 @@ with tab4:
                         data_entry_excel = export_to_data_entry(selected)
                         
                         st.download_button(
-                            label="⬇️ Download Data Entry Excel",
+                            label="⬇️ Download Data Entry Excel (34 Columns)",
                             data=data_entry_excel,
                             file_name=f"Allocation_DataEntry_{meeting_week_label.replace(' ', '_')}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             use_container_width=True
                         )
                         
-                        st.success(f"✅ Generated Data Entry format for {selected_count} student(s)")
-                        st.info("📋 **Next Steps:**\n1. Download the file above\n2. Open your SharePoint Allocation Data Entry\n3. Copy rows from this file\n4. Paste into your tracker")
+                        st.success(f"✅ Generated complete Data Entry format for {selected_count} student(s)")
+                        st.info("📋 **Next Steps:**\n1. Download the file above\n2. Open your Allocation Dashboard Excel\n3. Copy rows from this file\n4. Paste into Data_Model sheet\n\n✨ All 34 fields are complete - no manual work needed!")
         
         st.markdown("---")
         
@@ -726,8 +844,8 @@ with tab4:
             df_students = pd.DataFrame(students_data.data)
             
             # Format for display
-            display_cols = ['student_name', 'school', 'program', 'outcome', 
-                          'case_worker', 'bsc', 'start_after', 'finishing_date']
+            display_cols = ['student_name', 'school', 'program', 'year_level', 'priority_level', 
+                          'outcome', 'case_worker', 'bsc', 'start_after', 'finishing_date']
             display_cols = [col for col in display_cols if col in df_students.columns]
             st.dataframe(df_students[display_cols], use_container_width=True)
             
@@ -797,8 +915,8 @@ with tab4:
             
     except Exception as e:
         st.error(f"❌ Error loading data: {str(e)}")
-        st.info("💡 Make sure the database tables have been created using the schema file")
+        st.info("💡 Make sure the database tables have been created and columns added using the SQL script")
 
 # Footer
 st.markdown("---")
-st.caption("CLC-LBU Allocation Meetings Tool | Streamlit + Supabase + Excel Export")
+st.caption("CLC-LBU Allocation Meetings Tool - Enhanced Edition | Streamlit + Supabase + Complete Excel Export (34 fields)")
