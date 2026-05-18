@@ -182,7 +182,23 @@ today     = date.today()
 today_str = today.isoformat()
 today_fmt = today.strftime("%A, %d %B %Y")
 
-st.markdown(f'<div class="today-banner">📅 {today_fmt}</div>', unsafe_allow_html=True)
+# ── Date-change detection ─────────────────────────────────────────────────────
+# If the app has been open since yesterday, wipe all caches so tracking counts
+# and student lists reflect the correct day immediately.
+if st.session_state.get("_qt_last_date") != today_str:
+    st.session_state["_qt_last_date"] = today_str
+    get_active_goals.clear()
+    get_session_counts.clear()
+    st.rerun()
+
+_banner_col, _refresh_col = st.columns([5, 1])
+with _banner_col:
+    st.markdown(f'<div class="today-banner">📅 {today_fmt}</div>', unsafe_allow_html=True)
+with _refresh_col:
+    if st.button("🔄 Refresh", key="qt_refresh_btn", use_container_width=True):
+        get_active_goals.clear()
+        get_session_counts.clear()
+        st.rerun()
 
 # ── Student selector ──────────────────────────────────────────────────────────
 all_students = get_all_students()
