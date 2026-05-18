@@ -529,41 +529,41 @@ if params.get("display") == "true":
     st.markdown('<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">', unsafe_allow_html=True)
     sr = d_data.get("staff_responsibilities", {}); fun = d_data.get("fun_fact","")
     st.markdown("""<style>
-    .dp{background:#ffffff;border:1px solid #d8ead8;border-radius:8px;overflow:hidden;margin-bottom:3px;box-shadow:0 1px 4px rgba(0,0,0,0.06)}
-    .dp-header{padding:.35rem .7rem;font-size:.95rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:white}
+    .dp{background:#ffffff;border:1px solid #d8ead8;border-radius:6px;overflow:hidden;margin-bottom:2px;box-shadow:0 1px 3px rgba(0,0,0,0.05)}
+    .dp-header{padding:.25rem .55rem;font-size:.78rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:white}
     .dp-header.green{background:#4a8f33}.dp-header.navy{background:#1a2e44}.dp-header.brown{background:#7a5c4a}
     .dp-header.amber{background:#c97b1a;color:#1a2e44}.dp-header.blue{background:#3a6a9a}
     .dp-header.purple{background:#6a4a9a}.dp-header.slate{background:#4a5a6a}.dp-header.red{background:#c0392b}
-    .dp-body{padding:.4rem .55rem}
-    .dt{width:100%;border-collapse:collapse;font-size:1.05rem;color:#1e3a1e;font-family:'DM Sans',sans-serif}
-    .dt th{color:#6BBF4E;font-weight:600;font-size:.88rem;text-transform:uppercase;letter-spacing:.06em;padding:.25rem .35rem;border-bottom:1px solid #2a3d2a}
-    .dt td{padding:.22rem .35rem;border-bottom:1px solid #e8f0e8;vertical-align:top;line-height:1.25}
+    .dp-body{padding:.3rem .4rem}
+    .dt{width:100%;border-collapse:collapse;font-size:.95rem;color:#1e3a1e;font-family:'DM Sans',sans-serif}
+    .dt th{color:#6BBF4E;font-weight:600;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;padding:.18rem .25rem;border-bottom:1px solid #2a3d2a}
+    .dt td{padding:.15rem .25rem;border-bottom:1px solid #e8f0e8;vertical-align:top;line-height:1.2}
     .dt tr:last-child td{border-bottom:none}
-    .dt-em{color:#9aaa9a;font-style:italic;font-size:.9rem}
-    .vb-tag{background:#e8f5e1;color:#2d6b1a;padding:.08rem .4rem;border-radius:3px;font-size:.95rem;font-weight:600}
-    .kitchen-val{background:#c97b1a;border-radius:4px;padding:.15rem .45rem;color:#1a2e44;font-weight:800;font-size:1.05rem;display:inline-block}
-    .resp-label{font-size:.92rem;color:#6BBF4E;font-weight:600}.resp-val{font-size:1rem;color:#2d3d2d}
-    .fact-bar{background:#f0f8ee;border-top:2px solid #c8e0c8;padding:.45rem 1.5rem;font-size:1.15rem;color:#3a5a3a;display:flex;align-items:center;gap:.75rem;font-family:'DM Sans',sans-serif}
-    .fact-label{color:#e8a125;font-weight:700;font-size:1.05rem;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
-    .tc-badge{background:#fee2e2;color:#b91c1c;padding:.08rem .4rem;border-radius:3px;font-size:.95rem;font-weight:700}
+    .dt-em{color:#9aaa9a;font-style:italic;font-size:.8rem}
+    .vb-tag{background:#e8f5e1;color:#2d6b1a;padding:.06rem .3rem;border-radius:3px;font-size:.85rem;font-weight:600}
+    .kitchen-val{background:#c97b1a;border-radius:4px;padding:.12rem .35rem;color:#1a2e44;font-weight:800;font-size:.92rem;display:inline-block}
+    .resp-label{font-size:.78rem;color:#6BBF4E;font-weight:600}.resp-val{font-size:.88rem;color:#2d3d2d}
+    .fact-bar{background:#f0f8ee;border-top:2px solid #c8e0c8;padding:.35rem 1.2rem;font-size:1rem;color:#3a5a3a;display:flex;align-items:center;gap:.6rem;font-family:'DM Sans',sans-serif}
+    .fact-label{color:#e8a125;font-weight:700;font-size:.9rem;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap}
+    .tc-badge{background:#fee2e2;color:#b91c1c;padding:.06rem .3rem;border-radius:3px;font-size:.85rem;font-weight:700}
     </style>""", unsafe_allow_html=True)
     import streamlit.components.v1 as _components
     _date_str = today.strftime("%A %-d %B %Y").upper()
-    _components.html(f"""<div style="background:linear-gradient(135deg,#1a4d8c 0%,#2d7d4f 100%);padding:.65rem 1.5rem;display:flex;align-items:center;justify-content:space-between;border-bottom:3px solid #6BBF4E;font-family:sans-serif;">
+    _components.html(f"""<div style="background:linear-gradient(135deg,#1a4d8c 0%,#2d7d4f 100%);padding:.5rem 1.2rem;display:flex;align-items:center;justify-content:space-between;border-bottom:3px solid #6BBF4E;font-family:sans-serif;">
       <div>
-        <div style="font-size:1.6rem;color:white;font-weight:700;">Cowandilla Learning Centre &mdash; Daily Bulletin</div>
-        <div style="font-size:1.4rem;color:#6BBF4E;font-weight:600;letter-spacing:.08em;">{_date_str}</div>
+        <div style="font-size:1.35rem;color:white;font-weight:700;">Cowandilla Learning Centre &mdash; Daily Bulletin</div>
+        <div style="font-size:1.15rem;color:#6BBF4E;font-weight:600;letter-spacing:.06em;">{_date_str}</div>
       </div>
-      <div style="display:flex;align-items:center;gap:1.5rem;">
-        <div style="font-size:2rem;color:#e8a125;font-weight:700;" id="live-clock">--:-- --</div>
-        <a href="/Daily_Bulletin?quickadd=true" style="background:rgba(107,191,78,0.2);border:1px solid rgba(107,191,78,0.5);color:#6BBF4E;font-size:1rem;font-weight:600;padding:.35rem .95rem;border-radius:6px;text-decoration:none;">&#128221; Quick Add</a>
-        <a href="/Daily_Bulletin?from_display=true" style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.18);color:rgba(255,255,255,0.7);font-size:1rem;font-weight:600;padding:.35rem .95rem;border-radius:6px;text-decoration:none;">&#9999;&#65039; Staff Access</a>
+      <div style="display:flex;align-items:center;gap:1.2rem;">
+        <div style="font-size:1.7rem;color:#e8a125;font-weight:700;" id="live-clock">--:-- --</div>
+        <a href="/Daily_Bulletin?quickadd=true" style="background:rgba(107,191,78,0.2);border:1px solid rgba(107,191,78,0.5);color:#6BBF4E;font-size:.85rem;font-weight:600;padding:.28rem .75rem;border-radius:6px;text-decoration:none;">&#128221; Quick Add</a>
+        <a href="/Daily_Bulletin?from_display=true" style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.18);color:rgba(255,255,255,0.7);font-size:.85rem;font-weight:600;padding:.28rem .75rem;border-radius:6px;text-decoration:none;">&#9999;&#65039; Staff Access</a>
       </div>
     </div>
     <script>
     function updateClock(){{var n=new Date();var h=n.getHours();var m=n.getMinutes();var ap=h>=12?'PM':'AM';h=h%12||12;document.getElementById('live-clock').textContent=h+':'+(m<10?'0':'')+m+' '+ap;}}
     updateClock();setInterval(updateClock,30000);
-    </script>""", height=80, scrolling=False)
+    </script>""", height=70, scrolling=False)
 
     prev_day = today - timedelta(days=1); next_day = today + timedelta(days=1)
     dn1, dn2, dn3, dn4 = st.columns([1,4,1,1])
@@ -586,8 +586,8 @@ if params.get("display") == "true":
         n_parts = []
         for n in d_notices:
             cat = n.get("category","General"); nc = NOTICE_CATS.get(cat, NOTICE_CATS["General"])
-            n_parts.append(f'<span style="background:{nc["bg"]};color:{nc["color"]};font-size:.92rem;font-weight:700;text-transform:uppercase;padding:.12rem .45rem;border-radius:10px;">{cat}</span> <strong style="color:#1a2e44;font-size:1.05rem;">{n.get("title","")}</strong><span style="color:#4a6a4a;font-size:1rem;"> \u2014 {n.get("body","")}</span><span style="color:#7a9a7a;font-size:.92rem;"> \u00b7 {n.get("submitted_by","")}</span>')
-        st.markdown(f'<div class="dp"><div class="dp-header green">\U0001f4dd Staff Notices</div><div class="dp-body"><div style="font-family:DM Sans,sans-serif;line-height:1.7;">{"<br>".join(n_parts)}</div></div></div>', unsafe_allow_html=True)
+            n_parts.append(f'<span style="background:{nc["bg"]};color:{nc["color"]};font-size:.75rem;font-weight:700;text-transform:uppercase;padding:.08rem .35rem;border-radius:8px;">{cat}</span> <strong style="color:#1a2e44;font-size:.9rem;">{n.get("title","")}</strong><span style="color:#4a6a4a;font-size:.88rem;"> \u2014 {n.get("body","")}</span><span style="color:#7a9a7a;font-size:.75rem;"> \u00b7 {n.get("submitted_by","")}</span>')
+        st.markdown(f'<div class="dp"><div class="dp-header green">\U0001f4dd Staff Notices</div><div class="dp-body"><div style="font-family:DM Sans,sans-serif;line-height:1.5;">{"<br>".join(n_parts)}</div></div></div>', unsafe_allow_html=True)
 
     r1c1, r1c2, r1c3, r1c4, r1c5 = st.columns([2,2,2.5,1.5,2])
     with r1c1:
@@ -607,7 +607,7 @@ if params.get("display") == "true":
 
     _vis_rows = [r for r in d_data.get("visitors_on_site", []) if any(r.get(k,"") for k in ["Visitor Name","Reason","Staff Responsible"])]
     if _vis_rows:
-        _vis_html = "".join([f'<tr><td><strong style="color:#1a2e44;">{r.get("Visitor Name","")}</strong></td><td style="font-size:.95rem;">{r.get("Reason","")}</td><td style="font-size:.95rem;">{r.get("Staff Responsible","")}</td><td style="font-size:.95rem;">{r.get("Arriving","")}</td><td style="font-size:.95rem;">{r.get("Departing","")}</td><td style="font-size:.95rem;">{r.get("Location","")}</td></tr>' for r in _vis_rows])
+        _vis_html = "".join([f'<tr><td><strong style="color:#1a2e44;">{r.get("Visitor Name","")}</strong></td><td style="font-size:.85rem;">{r.get("Reason","")}</td><td style="font-size:.85rem;">{r.get("Staff Responsible","")}</td><td style="font-size:.85rem;">{r.get("Arriving","")}</td><td style="font-size:.85rem;">{r.get("Departing","")}</td><td style="font-size:.85rem;">{r.get("Location","")}</td></tr>' for r in _vis_rows])
         st.markdown(f'<div class="dp"><div class="dp-header green">\U0001f465 Visitors on Site</div><div class="dp-body"><table class="dt"><tr><th>Visitor</th><th>Reason</th><th>Staff</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>{_vis_html}</table></div></div>', unsafe_allow_html=True)
 
     r2c1, r2c2, r2c3, r2c4, r2c5 = st.columns([2,2,2,1.5,1])
@@ -622,13 +622,13 @@ if params.get("display") == "true":
         if isinstance(vb, dict): vb = []
         if vb:
             def _dm_vb_time_d(b): return "All day" if b.get("whole_day",True) else f"{b.get('start_time','?')}\u2013{b.get('end_time','?')}"
-            vb_html = "".join([f'<tr><td style="font-size:.92rem;color:#5a7a5a;">{"🚐 Van" if b.get("vehicle")=="Van" else "🚙 Kia"}</td><td><span class="vb-tag">{b.get("booker","")}</span></td><td style="font-size:.92rem;color:#6BBF4E;">{_dm_vb_time_d(b)}</td></tr>' for b in vb if b.get("booker","")])
+            vb_html = "".join([f'<tr><td style="font-size:.8rem;color:#5a7a5a;">{"🚐 Van" if b.get("vehicle")=="Van" else "🚙 Kia"}</td><td><span class="vb-tag">{b.get("booker","")}</span></td><td style="font-size:.8rem;color:#6BBF4E;">{_dm_vb_time_d(b)}</td></tr>' for b in vb if b.get("booker","")])
         else:
             vb_html = '<tr><td colspan="3" class="dt-em">No bookings today</td></tr>'
         st.markdown(f'<div class="dp"><div class="dp-header navy">\U0001f697 Vehicles</div><div class="dp-body"><table class="dt"><tr><th>Vehicle</th><th>Booked By</th><th>Time</th></tr>{vb_html}</table></div></div>', unsafe_allow_html=True)
     with r2c5:
         nit = d_data.get("nit_booking","") or '<span class="dt-em">None today</span>'
-        st.markdown(f'<div class="dp"><div class="dp-header green">\U0001f4cb NIT</div><div class="dp-body"><p style="font-size:1rem;color:#2d3d2d;margin:0;line-height:1.35;">{nit}</p></div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="dp"><div class="dp-header green">\U0001f4cb NIT</div><div class="dp-body"><p style="font-size:.88rem;color:#2d3d2d;margin:0;line-height:1.3;">{nit}</p></div></div>', unsafe_allow_html=True)
 
     # Travel Changes — highlighted red if anything entered
     tc_today = d_data.get("travel_changes", [])
@@ -636,11 +636,11 @@ if params.get("display") == "true":
     if tc_filtered:
         tc_rows_html = "".join([
             f'<tr><td><strong style="color:#1a2e44;">{r.get("Student","")}</strong></td>'
-            f'<td style="font-size:.95rem;">{r.get("Program","")}</td>'
+            f'<td style="font-size:.85rem;">{r.get("Program","")}</td>'
             f'<td><span class="tc-badge">{r.get("Change Type","")}</span></td>'
-            f'<td style="font-size:.95rem;color:#4a2a2a;">{r.get("Reason","")}</td>'
-            f'<td style="font-family:DM Mono,monospace;font-size:.95rem;color:#c0392b;font-weight:700;">{r.get("Time","")}</td>'
-            f'<td style="font-size:.95rem;">{r.get("How Departed","")}</td></tr>'
+            f'<td style="font-size:.85rem;color:#4a2a2a;">{r.get("Reason","")}</td>'
+            f'<td style="font-family:DM Mono,monospace;font-size:.85rem;color:#c0392b;font-weight:700;">{r.get("Time","")}</td>'
+            f'<td style="font-size:.85rem;">{r.get("How Departed","")}</td></tr>'
             for r in tc_filtered
         ])
         st.markdown(f'<div class="dp" style="border-left:4px solid #c0392b;"><div class="dp-header red">\U0001f504 Travel Plan Changes</div><div class="dp-body"><table class="dt"><tr><th style="color:#e87878;">Student</th><th style="color:#e87878;">Program</th><th style="color:#e87878;">Change</th><th style="color:#e87878;">Reason</th><th style="color:#e87878;">Time</th><th style="color:#e87878;">How Departed</th></tr>{tc_rows_html}</table></div></div>', unsafe_allow_html=True)
