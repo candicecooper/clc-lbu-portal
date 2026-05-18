@@ -529,41 +529,53 @@ if params.get("display") == "true":
     st.markdown('<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">', unsafe_allow_html=True)
     sr = d_data.get("staff_responsibilities", {}); fun = d_data.get("fun_fact","")
     st.markdown("""<style>
-    .dp{background:#ffffff;border:1px solid #d8ead8;border-radius:6px;overflow:hidden;margin-bottom:2px;box-shadow:0 1px 3px rgba(0,0,0,0.05)}
-    .dp-header{padding:.25rem .55rem;font-size:.78rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:white}
-    .dp-header.green{background:#4a8f33}.dp-header.navy{background:#1a2e44}.dp-header.brown{background:#7a5c4a}
-    .dp-header.amber{background:#c97b1a;color:#1a2e44}.dp-header.blue{background:#3a6a9a}
-    .dp-header.purple{background:#6a4a9a}.dp-header.slate{background:#4a5a6a}.dp-header.red{background:#c0392b}
-    .dp-body{padding:.3rem .4rem}
-    .dt{width:100%;border-collapse:collapse;font-size:.95rem;color:#1e3a1e;font-family:'DM Sans',sans-serif}
-    .dt th{color:#6BBF4E;font-weight:600;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;padding:.18rem .25rem;border-bottom:1px solid #2a3d2a}
-    .dt td{padding:.15rem .25rem;border-bottom:1px solid #e8f0e8;vertical-align:top;line-height:1.2}
+    body{font-family:'Inter','Segoe UI',sans-serif}
+    .dp{background:#ffffff;border:none;border-radius:12px;overflow:hidden;margin-bottom:8px;box-shadow:0 2px 8px rgba(0,0,0,0.08)}
+    .dp-header{padding:.7rem 1rem;font-size:1.1rem;font-weight:800;letter-spacing:0;color:white;border-bottom:2px solid rgba(255,255,255,0.2)}
+    .dp-header.green{background:linear-gradient(135deg,#4a8f33,#5ca744)}
+    .dp-header.navy{background:linear-gradient(135deg,#1a2e44,#2a4564)}
+    .dp-header.brown{background:linear-gradient(135deg,#7a5c4a,#8a6c5a)}
+    .dp-header.amber{background:linear-gradient(135deg,#c97b1a,#d98b2a);color:#1a2e44}
+    .dp-header.blue{background:linear-gradient(135deg,#3a6a9a,#4a7aaa)}
+    .dp-header.purple{background:linear-gradient(135deg,#6a4a9a,#7a5aaa)}
+    .dp-header.slate{background:linear-gradient(135deg,#4a5a6a,#5a6a7a)}
+    .dp-header.red{background:linear-gradient(135deg,#c0392b,#d0493b)}
+    .dp-body{padding:.7rem .9rem;background:#fafbfc}
+    .dt{width:100%;border-collapse:collapse;font-size:1.05rem;color:#1a2e44;font-family:'Inter',sans-serif;font-weight:500}
+    .dt th{color:#6BBF4E;font-weight:700;font-size:.85rem;text-transform:uppercase;letter-spacing:.05em;padding:.4rem .4rem;border-bottom:2px solid #e1e8ed;text-align:left}
+    .dt td{padding:.45rem .4rem;border-bottom:1px solid #f0f3f5;vertical-align:middle;line-height:1.3}
     .dt tr:last-child td{border-bottom:none}
-    .dt-em{color:#9aaa9a;font-style:italic;font-size:.8rem}
-    .vb-tag{background:#e8f5e1;color:#2d6b1a;padding:.06rem .3rem;border-radius:3px;font-size:.85rem;font-weight:600}
-    .kitchen-val{background:#c97b1a;border-radius:4px;padding:.12rem .35rem;color:#1a2e44;font-weight:800;font-size:.92rem;display:inline-block}
-    .resp-label{font-size:.78rem;color:#6BBF4E;font-weight:600}.resp-val{font-size:.88rem;color:#2d3d2d}
-    .fact-bar{background:#f0f8ee;border-top:2px solid #c8e0c8;padding:.35rem 1.2rem;font-size:1rem;color:#3a5a3a;display:flex;align-items:center;gap:.6rem;font-family:'DM Sans',sans-serif}
-    .fact-label{color:#e8a125;font-weight:700;font-size:.9rem;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap}
-    .tc-badge{background:#fee2e2;color:#b91c1c;padding:.06rem .3rem;border-radius:3px;font-size:.85rem;font-weight:700}
+    .dt tr:hover{background:#f8faf9}
+    .dt-em{color:#95a5a6;font-style:italic;font-size:.9rem}
+    .vb-tag{background:#d4edda;color:#155724;padding:.2rem .5rem;border-radius:6px;font-size:.9rem;font-weight:700;display:inline-block}
+    .kitchen-val{background:linear-gradient(135deg,#e8a125,#f0b135);border-radius:8px;padding:.3rem .6rem;color:#1a2e44;font-weight:800;font-size:1.1rem;display:inline-block;box-shadow:0 2px 4px rgba(232,161,37,0.3)}
+    .resp-label{font-size:.85rem;color:#6BBF4E;font-weight:700;text-transform:uppercase;letter-spacing:.05em}.resp-val{font-size:1rem;color:#2c3e50;font-weight:600;margin-top:.15rem}
+    .tc-badge{background:#f8d7da;color:#721c24;padding:.25rem .5rem;border-radius:6px;font-size:.9rem;font-weight:700}
+    .notice-box{background:#fff9e6;border-left:4px solid #f0b135;padding:.7rem 1rem;margin:.4rem 0;border-radius:6px}
+    .notice-cat{background:#e8a125;color:#1a2e44;padding:.2rem .5rem;border-radius:4px;font-size:.8rem;font-weight:700;margin-right:.5rem}
+    .notice-title{color:#1a2e44;font-size:1rem;font-weight:700}
+    .notice-body{color:#4a5a6a;font-size:.95rem;margin-top:.2rem}
+    .notice-by{color:#7a8a9a;font-size:.8rem;font-style:italic;margin-top:.2rem}
     </style>""", unsafe_allow_html=True)
     import streamlit.components.v1 as _components
     _date_str = today.strftime("%A %-d %B %Y").upper()
-    _components.html(f"""<div style="background:linear-gradient(135deg,#1a4d8c 0%,#2d7d4f 100%);padding:.5rem 1.2rem;display:flex;align-items:center;justify-content:space-between;border-bottom:3px solid #6BBF4E;font-family:sans-serif;">
+    _components.html(f"""<div style="background:#1a2e44;padding:.9rem 1.8rem;display:flex;align-items:center;justify-content:space-between;box-shadow:0 4px 12px rgba(0,0,0,0.15);">
       <div>
-        <div style="font-size:1.35rem;color:white;font-weight:700;">Cowandilla Learning Centre &mdash; Daily Bulletin</div>
-        <div style="font-size:1.15rem;color:#6BBF4E;font-weight:600;letter-spacing:.06em;">{_date_str}</div>
+        <div style="font-size:1.8rem;color:white;font-weight:800;letter-spacing:-0.02em;">Daily Bulletin</div>
+        <div style="font-size:1.3rem;color:#6BBF4E;font-weight:600;margin-top:.2rem;">{_date_str}</div>
       </div>
-      <div style="display:flex;align-items:center;gap:1.2rem;">
-        <div style="font-size:1.7rem;color:#e8a125;font-weight:700;" id="live-clock">--:-- --</div>
-        <a href="/Daily_Bulletin?quickadd=true" style="background:rgba(107,191,78,0.2);border:1px solid rgba(107,191,78,0.5);color:#6BBF4E;font-size:.85rem;font-weight:600;padding:.28rem .75rem;border-radius:6px;text-decoration:none;">&#128221; Quick Add</a>
-        <a href="/Daily_Bulletin?from_display=true" style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.18);color:rgba(255,255,255,0.7);font-size:.85rem;font-weight:600;padding:.28rem .75rem;border-radius:6px;text-decoration:none;">&#9999;&#65039; Staff Access</a>
+      <div style="display:flex;align-items:center;gap:2rem;">
+        <div style="font-size:2.2rem;color:#6BBF4E;font-weight:800;font-family:monospace;letter-spacing:.05em;" id="live-clock">--:-- --</div>
+        <div style="display:flex;gap:.8rem;">
+          <a href="/Daily_Bulletin?quickadd=true" style="background:#6BBF4E;color:#1a2e44;font-size:.95rem;font-weight:700;padding:.5rem 1rem;border-radius:8px;text-decoration:none;box-shadow:0 2px 6px rgba(107,191,78,0.3);">+ Quick Add</a>
+          <a href="/Daily_Bulletin?from_display=true" style="background:rgba(255,255,255,0.1);color:white;font-size:.95rem;font-weight:600;padding:.5rem 1rem;border-radius:8px;text-decoration:none;border:1px solid rgba(255,255,255,0.2);">Staff Access</a>
+        </div>
       </div>
     </div>
     <script>
     function updateClock(){{var n=new Date();var h=n.getHours();var m=n.getMinutes();var ap=h>=12?'PM':'AM';h=h%12||12;document.getElementById('live-clock').textContent=h+':'+(m<10?'0':'')+m+' '+ap;}}
     updateClock();setInterval(updateClock,30000);
-    </script>""", height=70, scrolling=False)
+    </script>""", height=90, scrolling=False)
 
     prev_day = today - timedelta(days=1); next_day = today + timedelta(days=1)
     dn1, dn2, dn3, dn4 = st.columns([1,4,1,1])
@@ -586,8 +598,8 @@ if params.get("display") == "true":
         n_parts = []
         for n in d_notices:
             cat = n.get("category","General"); nc = NOTICE_CATS.get(cat, NOTICE_CATS["General"])
-            n_parts.append(f'<span style="background:{nc["bg"]};color:{nc["color"]};font-size:.75rem;font-weight:700;text-transform:uppercase;padding:.08rem .35rem;border-radius:8px;">{cat}</span> <strong style="color:#1a2e44;font-size:.9rem;">{n.get("title","")}</strong><span style="color:#4a6a4a;font-size:.88rem;"> \u2014 {n.get("body","")}</span><span style="color:#7a9a7a;font-size:.75rem;"> \u00b7 {n.get("submitted_by","")}</span>')
-        st.markdown(f'<div class="dp"><div class="dp-header green">\U0001f4dd Staff Notices</div><div class="dp-body"><div style="font-family:DM Sans,sans-serif;line-height:1.5;">{"<br>".join(n_parts)}</div></div></div>', unsafe_allow_html=True)
+            n_parts.append(f'<div class="notice-box"><div><span class="notice-cat">{cat}</span><span class="notice-title">{n.get("title","")}</span></div><div class="notice-body">{n.get("body","")}</div><div class="notice-by">— {n.get("submitted_by","")}</div></div>')
+        st.markdown(f'<div class="dp"><div class="dp-header green">📢 Staff Notices</div><div class="dp-body" style="padding:.5rem;">{"".join(n_parts)}</div></div>', unsafe_allow_html=True)
 
     r1c1, r1c2, r1c3, r1c4, r1c5 = st.columns([2,2,2.5,1.5,2])
     with r1c1:
