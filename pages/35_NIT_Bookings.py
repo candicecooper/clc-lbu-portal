@@ -189,12 +189,29 @@ if is_admin_user:
     st.markdown('<span style="background:#e8a125;color:#1a2e44;padding:0.25rem 0.75rem;border-radius:20px;font-size:0.75rem;font-weight:700;">👑 ADMIN</span>', unsafe_allow_html=True)
     st.caption("As an admin, you can book on behalf of any staff member")
 
-# Use authenticated staff name, or allow manual entry if not authenticated
-if staff_name:
-    staff_name_filter = staff_name
-    st.info(f"Viewing bookings for: **{staff_name}**")
+# Staff name selection - dropdown for everyone
+staff_list = load_staff_names()
+
+if staff_list:
+    # If authenticated, try to find their name in the list
+    default_index = 0
+    if staff_name and staff_name in staff_list:
+        default_index = staff_list.index(staff_name) + 1  # +1 because we add empty option at start
+    
+    staff_name_filter = st.selectbox(
+        "Select your name to view your bookings:",
+        options=[""] + staff_list,
+        index=default_index if staff_name else 0,
+        key="staff_name_selector"
+    )
 else:
-    staff_name_filter = st.text_input("Your name (to view/manage your bookings):", key="staff_filter")
+    # Fallback to text input if staff list can't be loaded
+    if staff_name:
+        staff_name_filter = staff_name
+        st.info(f"Viewing bookings for: **{staff_name}**")
+    else:
+        staff_name_filter = st.text_input("Your name (to view/manage your bookings):", key="staff_filter")
+        st.caption("⚠️ Could not load staff list - enter name manually")
 
 if staff_name_filter:
     if not bookings_df.empty:
