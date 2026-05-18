@@ -434,33 +434,166 @@ with tab1:
             
             st.write(f"**Debug:** Found {len(all_records.data) if all_records.data else 0} total records")
             
-            # Filter for drafts
+            # Filter for drafts - outcome is NULL/None
             drafts_list = []
             if all_records.data:
                 for record in all_records.data:
                     outcome = record.get('outcome')
-                    if outcome is None or outcome == '' or str(outcome).lower() == 'none' or str(outcome).lower() == 'null':
+                    # In Supabase, NULL comes back as None in Python
+                    is_draft = (outcome is None)
+                    st.write(f"- Record: {record.get('student_name')} | outcome='{outcome}' | type={type(outcome)} | is_draft={is_draft}")
+                    if is_draft:
                         drafts_list.append(record)
-                        st.write(f"- Found draft: {record.get('student_name')} (outcome={outcome})")
             
             if not drafts_list:
                 st.info("✅ No drafts found. Create a new draft in Stage 1.")
             else:
-                draft_options = {f"{d['student_name']} ({d.get('school', 'No school')})"
-
-: d for d in drafts_list}
+                draft_options = {f"{d['student_name']} ({d.get('school', 'No school')})": d for d in drafts_list}
                 
                 selected_draft_display = st.selectbox(
                     f"Select one of {len(drafts_list)} draft(s):",
                     list(draft_options.keys())
                 )
                 
-                draft_data = draft_options[selected_draft_display]
+                draft = draft_options[selected_draft_display]
                 
-                st.success(f"✅ Loaded: {draft_data['student_name']}")
-                st.json(draft_data)  # Show all data
+                # Show what was already entered
+                st.success(f"✅ Loaded draft for: **{draft['student_name']}**")
                 
-                st.info("Coming soon: Form to complete the draft will appear here")
+                with st.expander("👀 View Pre-Entered Information", expanded=False):
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.write(f"**Name:** {draft.get('student_name')}")
+                        st.write(f"**School:** {draft.get('school')}")
+                        st.write(f"**Partnership:** {draft.get('partnership_area')}")
+                    with col2:
+                        st.write(f"**DOB:** {draft.get('date_of_birth', 'Not entered')}")
+                        st.write(f"**Gender:** {draft.get('gender', 'Not entered')}")
+                        st.write(f"**Year Level:** {draft.get('year_level')}")
+                    with col3:
+                        st.write(f"**Priority:** {draft.get('priority_level', 'Standard')}")
+                        st.write(f"**Previous CLC:** {draft.get('previous_clc_placement', 'No')}")
+                        st.write(f"**Queries:** {draft.get('queries', 'None')[:50]}...")
+                
+                st.markdown("---")
+                st.markdown("### 🎯 Complete Allocation on Meeting Day")
+                
+                with st.form("complete_draft_form"):
+                    # SECTION 5: Outcome
+                    st.markdown("### 5️⃣ Allocation Outcome")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        outcome = st.selectbox("Outcome *", [""] + OUTCOMES)
+                    with col2:
+                        details = st.text_area("Outcome Details", height=100)
+                    
+                    # Only show these sections if Allocated
+                    if outcome == "Allocated":
+                        # SECTION 6: Waitlist
+                        st.markdown("---")
+                        st.markdown("### 6️⃣ Waitlist Information")
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            waitlist_status = st.selectbox("Waitlist Status", WAITLIST_STATUS_OPTIONS)
+                        with col2:
+                            if waitlist_status == "On Waitlist":
+                                waitlist_date = st.date_input("Waitlist Date", value=None)
+                            else:
+                                waitlist_date = None
+                        with col3:
+                            if waitlist_status == "On Waitlist":
+                                allocated_from_waitlist = st.selectbox("Allocated from Waitlist?", ["No", "Yes"])
+                            else:
+                                allocated_from_waitlist = "No"
+                        
+                        # SECTION 7: Program & Placement
+                        st.markdown("---")
+                        st.markdown("### 7️⃣ Program & Placement")
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            program = st.selectbox("Program *", [""] + PROGRAMS)
+                        with col2:
+                            start_after = st.date_input("Start After", value=None)
+                        with col3:
+                            finishing_date = st.date_input("Finishing Date", value=None)
+                        with col4:
+                            bespoke_placement = st.selectbox("Bespoke Placement?", ["No", "Yes"])
+                        
+                        if bespoke_placement == "Yes":
+                            st.info("💡 **Bespoke:** Year level doesn't match standard program")
+                        
+                        # SECTION 8: Case Support Team
+                        st.markdown("---")
+                        st.markdown("### 8️⃣ Case Support Team")
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            case_worker = st.selectbox("Case Worker", [""] + STAFF_NAMES)
+                        with col2:
+                            bsc = st.selectbox("BSC", [""] + STAFF_NAMES)
+                        with col3:
+                            school_contact = st.text_input("School Contact")
+                        
+                        notes = st.text_area("Additional Notes", height=80)
+                    else:
+                        # Not allocated - set defaults
+                        waitlist_status = "Not Applicable"
+                        waitlist_date = None
+                        allocated_from_waitlist = "No"
+                        program = ""
+                        start_after = None
+                        finishing_date = None
+                        bespoke_placement = "No"
+                        case_worker = ""
+                        bsc = ""
+                        school_contact = ""
+                        notes = ""
+                    
+                    # Submit
+                    st.markdown("---")
+                    submitted = st.form_submit_button("✅ Complete Allocation", type="primary", use_container_width=True)
+                    
+                    if submitted:
+                        # Validation
+                        missing = []
+                        if not outcome:
+                            missing.append("Outcome")
+                        if outcome == "Allocated" and not program:
+                            missing.append("Program")
+                        
+                        if missing:
+                            st.error(f"⚠️ Please fill in required fields: {', '.join(missing)}")
+                        else:
+                            try:
+                                # Update the draft with completion data
+                                update_data = {
+                                    "outcome": outcome,
+                                    "details": details,
+                                    "waitlist_status": waitlist_status,
+                                    "waitlist_date": waitlist_date.isoformat() if waitlist_date else None,
+                                    "allocated_from_waitlist": allocated_from_waitlist,
+                                    "program": program,
+                                    "start_after": start_after.isoformat() if start_after else None,
+                                    "finishing_date": finishing_date.isoformat() if finishing_date else None,
+                                    "bespoke_placement": bespoke_placement,
+                                    "case_worker": case_worker,
+                                    "bsc": bsc,
+                                    "school_contact": school_contact,
+                                    "notes": notes
+                                }
+                                
+                                result = supabase.table("allocation_students")\
+                                    .update(update_data)\
+                                    .eq("id", draft['id'])\
+                                    .execute()
+                                
+                                st.success(f"✅ Allocation completed for {draft['student_name']}!")
+                                st.balloons()
+                                st.info("🎉 This student is now ready for export in the View & Export tab")
+                                
+                            except Exception as e:
+                                st.error(f"❌ Error completing allocation: {str(e)}")
+                                import traceback
+                                st.code(traceback.format_exc())
                 
         except Exception as e:
             st.error(f"Error: {e}")
@@ -468,25 +601,97 @@ with tab1:
             st.code(traceback.format_exc())
     
     else:
-        # STAGE 1: Create new draft
-        st.subheader("➕ Create New Draft")
-        st.caption("Fill in what you know now, save as draft, complete later")
+        # STAGE 1: Create new draft - FULL VERSION
+        st.subheader("➕ Stage 1: Pre-Meeting Draft")
+        st.caption("Leadership enters student information before allocation meeting")
         
         with st.form("create_draft_form", clear_on_submit=True):
+            # SECTION 1: Student Information
+            st.markdown("### 1️⃣ Student Information")
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                student_name = st.text_input("Name *")
+            with col2:
+                dob = st.date_input("Date of Birth", value=None)
+            with col3:
+                gender = st.selectbox("Gender", [""] + GENDER_OPTIONS)
+            with col4:
+                year_level = st.selectbox("Year Level *", [""] + YEAR_LEVELS)
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                school = st.selectbox("Referring School * (searchable)", [""] + ALL_SCHOOLS)
+            with col2:
+                auto_partnership = get_partnership_from_school(school) if school else ""
+                partnership_area = st.text_input("Partnership Area (auto-filled)", value=auto_partnership, disabled=True)
+            with col3:
+                priority_level = st.selectbox("Priority Level", [""] + PRIORITY_OPTIONS)
+            
+            # SECTION 2: Placement History
+            st.markdown("---")
+            st.markdown("### 2️⃣ Placement History")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                previous_clc = st.selectbox("Previous CLC Placement?", ["No", "Yes"])
+            with col2:
+                previous_other_lc = st.selectbox("Previous Other LC?", ["No", "Yes"])
+            with col3:
+                if previous_other_lc == "Yes":
+                    other_lc_name = st.text_input("Other LC Name")
+                else:
+                    other_lc_name = ""
+            
+            if previous_clc == "Yes" or previous_other_lc == "Yes":
+                col1, col2 = st.columns(2)
+                with col1:
+                    total_placements = st.number_input("Total Previous Placements", min_value=0, value=1)
+                with col2:
+                    placement_history_notes = st.text_input("Placement History Notes")
+            else:
+                total_placements = 0
+                placement_history_notes = ""
+            
+            # SECTION 3: Categorical Funding & Partnership
+            st.markdown("---")
+            st.markdown("### 3️⃣ Categorical Funding & Partnership Support")
+            
             col1, col2 = st.columns(2)
             with col1:
-                student_name = st.text_input("Student Name *")
-                school = st.selectbox("School *", [""] + ALL_SCHOOLS)
-            with col2:
-                year_level = st.selectbox("Year Level *", [""] + YEAR_LEVELS)
-                auto_partnership = get_partnership_from_school(school) if school else ""
-                st.text_input("Partnership (auto)", value=auto_partnership, disabled=True)
+                st.write("**Categorical Funding**")
+                cat_funding = []
+                for option in CAT_FUNDING_OPTIONS:
+                    if st.checkbox(option, key=f"cat_{option}"):
+                        cat_funding.append(option)
             
-            submitted = st.form_submit_button("💾 Save Draft")
+            with col2:
+                st.write("**Partnership Support**")
+                partnership = []
+                for option in PARTNERSHIP_OPTIONS:
+                    if st.checkbox(option, key=f"part_{option}"):
+                        partnership.append(option)
+            
+            # SECTION 4: Meeting Details
+            st.markdown("---")
+            st.markdown("### 4️⃣ Queries/Notes for Meeting")
+            queries = st.text_area("Queries/Notes", height=100)
+            
+            # Submit
+            st.markdown("---")
+            submitted = st.form_submit_button("💾 Save Draft (Complete Later)", type="primary", use_container_width=True)
             
             if submitted:
-                if not student_name or not school or not year_level:
-                    st.error("Fill in all required fields")
+                # Validation
+                missing = []
+                if not student_name:
+                    missing.append("Name")
+                if not year_level:
+                    missing.append("Year Level")
+                if not school:
+                    missing.append("School")
+                
+                if missing:
+                    st.error(f"⚠️ Please fill in required fields: {', '.join(missing)}")
                 else:
                     try:
                         data = {
@@ -496,19 +701,28 @@ with tab1:
                             "year": st.session_state.current_year,
                             "student_name": student_name,
                             "school": school,
+                            "date_of_birth": dob.isoformat() if dob else None,
+                            "gender": gender,
                             "year_level": year_level,
                             "partnership_area": auto_partnership,
-                            "outcome": None
+                            "priority_level": priority_level if priority_level else "Standard",
+                            "previous_clc_placement": previous_clc,
+                            "previous_other_lc": previous_other_lc,
+                            "other_lc_name": other_lc_name if previous_other_lc == "Yes" else None,
+                            "total_previous_placements": total_placements,
+                            "placement_history_notes": placement_history_notes,
+                            "cat_funding": json.dumps(cat_funding),
+                            "partnership": json.dumps(partnership),
+                            "queries": queries,
+                            "outcome": None  # Draft status
                         }
                         
-                        st.write("Saving:", data)
                         result = supabase.table("allocation_students").insert(data).execute()
-                        st.success(f"✅ Draft saved for {student_name}!")
+                        st.success(f"✅ Draft saved for {student_name}! Complete on meeting day.")
                         st.balloons()
-                        st.write("Result:", result.data)
                         
                     except Exception as e:
-                        st.error(f"Error: {e}")
+                        st.error(f"❌ Error saving draft: {str(e)}")
                         import traceback
                         st.code(traceback.format_exc())
 
