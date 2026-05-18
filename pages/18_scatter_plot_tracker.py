@@ -425,17 +425,26 @@ if not students or st.session_state.get('show_student_mgmt', False):
                     except Exception as e:
                         st.error(f"Could not add student: {e}")
     
-    # Show existing students with delete option
+    # Show existing students with edit/delete options
     if students:
         st.markdown("---")
         st.markdown("**Existing Students:**")
         for stu in students:
             col1, col2, col3 = st.columns([3, 1, 1])
             with col1:
-                st.markdown(f"**{stu['student_name']}** ({stu.get('program_type', '-')})")
+                student_display = stu['student_name']
+                program_display = stu.get('program_type', '-')
+                
+                # Show warning for Unknown students
+                if student_display.startswith('Unknown_'):
+                    st.markdown(f"⚠️ **{student_display}** ({program_display})")
+                    st.caption("↑ This student needs a proper name - click Edit")
+                else:
+                    st.markdown(f"**{student_display}** ({program_display})")
             with col2:
-                if st.button("Edit", key=f"edit_{stu['id']}", use_container_width=True):
-                    st.info("Edit functionality: Update student details via database")
+                if st.button("✏️ Edit", key=f"edit_{stu['id']}", use_container_width=True):
+                    st.session_state[f'editing_{stu["id"]}'] = True
+                    st.rerun()
             with col3:
                 if st.button("🗑️", key=f"del_stu_{stu['id']}", use_container_width=True):
                     sb = get_sb()
@@ -447,6 +456,39 @@ if not students or st.session_state.get('show_student_mgmt', False):
                             st.rerun()
                         except Exception as e:
                             st.error(f"Could not delete: {e}")
+            
+            # Edit form (if editing this student)
+            if st.session_state.get(f'editing_{stu["id"]}', False):
+                with st.container():
+                    st.markdown("**Edit Student:**")
+                    edit_name = st.text_input("Student Name", value=stu['student_name'], key=f"edit_name_{stu['id']}")
+                    edit_prog = st.selectbox("Program Type", ["JP", "PY", "SY"], 
+                                            index=["JP", "PY", "SY"].index(stu.get('program_type', 'PY')) if stu.get('program_type') in ["JP", "PY", "SY"] else 1,
+                                            key=f"edit_prog_{stu['id']}")
+                    
+                    col_save, col_cancel = st.columns(2)
+                    with col_save:
+                        if st.button("💾 Save", key=f"save_{stu['id']}", use_container_width=True):
+                            if not edit_name.strip():
+                                st.error("Student name is required")
+                            else:
+                                sb = get_sb()
+                                if sb:
+                                    try:
+                                        sb.table("scatter_students").update({
+                                            "student_name": edit_name.strip(),
+                                            "program_type": edit_prog
+                                        }).eq("id", stu['id']).execute()
+                                        st.success(f"✅ Updated to {edit_name}")
+                                        st.session_state[f'editing_{stu["id"]}'] = False
+                                        load_students.clear()
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Could not update: {e}")
+                    with col_cancel:
+                        if st.button("Cancel", key=f"cancel_{stu['id']}", use_container_width=True):
+                            st.session_state[f'editing_{stu["id"]}'] = False
+                            st.rerun()
         
         if st.button("Done - Continue to Data Collection", type="primary", use_container_width=True):
             st.session_state.show_student_mgmt = False
@@ -656,9 +698,99 @@ periods = load_periods(student_name)
 
 st.markdown("### 2. Select Tracking Period")
 
-if not periods:
-    st.info(f"No tracking periods configured for {student_name}. Create one via Portal Admin.")
-    st.stop()
+# Tracking Period Management Section
+if not periods or st.session_state.get('show_period_mgmt', False):
+    st.markdown("#### ➕ Tracking Period Management")
+    
+    with st.expander("Create New Tracking Period", expanded=(not periods)):
+        st.markdown(f"**Create a new tracking period for {student_name}:**")
+        
+        period_label = st.text_input("Period Label (e.g., 'Term 2 Week 1-4')", key="new_period_label")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            period_start = st.date_input("Start Date", key="new_period_start")
+        with col2:
+            period_end = st.date_input("End Date (optional)", value=None, key="new_period_end")
+        
+        st.markdown("**Select target behaviours for this period:**")
+        
+        # Load behaviour bank for selection
+        bank = load_behaviour_bank()
+        all_behaviours = []
+        for cat in BEHAVIOUR_CATEGORIES:
+            if cat in bank:
+                all_behaviours.extend([b['description'] for b in bank[cat]])
+        
+        selected_behaviours = st.multiselect(
+            "Target Behaviours",
+            options=all_behaviours,
+            key="new_period_behs",
+            help="Select 1-3 behaviours to track during this period"
+        )
+        
+        if st.button("➕ Create Tracking Period", type="primary", use_container_width=True):
+            if not period_label.strip():
+                st.error("Period label is required")
+            elif not selected_behaviours:
+                st.error("Please select at least one target behaviour")
+            else:
+                sb = get_sb()
+                if sb:
+                    try:
+                        sb.table("scatter_tracking_periods").insert({
+                            "student_name": student_name,
+                            "label": period_label.strip(),
+                            "start_date": str(period_start),
+                            "end_date": str(period_end) if period_end else None,
+                            "target_behaviours": json.dumps(selected_behaviours),
+                            "schedule": json.dumps(DEFAULT_SCHEDULE)
+                        }).execute()
+                        st.success(f"✅ Created tracking period: {period_label}")
+                        load_periods.clear()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Could not create tracking period: {e}")
+    
+    # Show existing periods with delete option
+    if periods:
+        st.markdown("---")
+        st.markdown("**Existing Tracking Periods:**")
+        for p in periods:
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                label = p.get("label", "Untitled")
+                sd = pd.to_datetime(p["start_date"]).strftime("%-d %b %Y")
+                ed = pd.to_datetime(p["end_date"]).strftime("%-d %b %Y") if p.get("end_date") else "ongoing"
+                behs = json.loads(p.get("target_behaviours") or "[]")
+                behs_str = ", ".join(behs) if behs else "No behaviours"
+                st.markdown(f"**{label}**  \n{sd} - {ed}  \n*Behaviours:* {behs_str}")
+            with col2:
+                if st.button("🗑️", key=f"del_period_{p['id']}", use_container_width=True):
+                    sb = get_sb()
+                    if sb:
+                        try:
+                            sb.table("scatter_tracking_periods").delete().eq("id", p['id']).execute()
+                            st.success(f"✅ Deleted period")
+                            load_periods.clear()
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Could not delete: {e}")
+        
+        if st.button("Done - Continue to Data Collection", type="primary", use_container_width=True):
+            st.session_state.show_period_mgmt = False
+            st.rerun()
+    
+    if not periods:
+        st.stop()
+    
+    st.markdown("---")
+
+# Toggle button to show period management
+if periods and not st.session_state.get('show_period_mgmt', False):
+    if st.button("⚙️ Manage Tracking Periods", use_container_width=True):
+        st.session_state.show_period_mgmt = True
+        st.rerun()
 
 for p in periods:
     active = (ss.spt_period_id == p["id"])
