@@ -437,7 +437,7 @@ with tab1:
                 st.session_state.editing_draft = True
                 st.session_state.draft_id = draft_data['id']
                 st.session_state.draft_data = draft_data
-                st.success(f"✅ Loaded draft for {selected_draft_name} - Complete sections below")
+                st.rerun()  # Reload page to populate form with draft data
         else:
             st.success("✅ No drafts pending - Create new allocation below")
             st.session_state.editing_draft = False
@@ -451,18 +451,32 @@ with tab1:
     is_editing = st.session_state.get('editing_draft', False)
     draft = st.session_state.get('draft_data', {}) if is_editing else {}
     
-    with st.form("new_allocation_form", clear_on_submit=not is_editing):
+    # Show clear draft button if editing
+    if is_editing:
+        st.success(f"📝 **Loaded draft for: {draft.get('student_name', 'Unknown')}**")
+        col1, col2, col3 = st.columns([2, 1, 2])
+        with col2:
+            if st.button("🔄 Start New Allocation Instead", use_container_width=True):
+                st.session_state.editing_draft = False
+                st.session_state.draft_id = None
+                st.session_state.draft_data = {}
+                st.rerun()
+    
+    with st.form(f"new_allocation_form_{draft.get('id', 'new')}", clear_on_submit=not is_editing):
         if is_editing:
             st.info(f"📝 **STAGE 2: Completing draft for {draft.get('student_name', 'student')}**")
         else:
             st.info("📝 **STAGE 1: Enter student information** (Leadership enters before meeting)")
+        
+        # Key suffix for form inputs to prevent conflicts
+        key_suffix = f"_{draft.get('id', 'new')}"
         
         # SECTION 1: Student Information
         st.subheader("1️⃣ Student Information")
         
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            student_name = st.text_input("Name *", value=draft.get('student_name', ''), key="alloc_name")
+            student_name = st.text_input("Name *", value=draft.get('student_name', ''), key=f"alloc_name{key_suffix}")
         with col2:
             dob_val = draft.get('date_of_birth')
             if dob_val and isinstance(dob_val, str):
@@ -470,15 +484,15 @@ with tab1:
                     dob_val = datetime.strptime(dob_val, '%Y-%m-%d').date()
                 except:
                     dob_val = None
-            dob = st.date_input("Date of Birth", value=dob_val, key="alloc_dob")
+            dob = st.date_input("Date of Birth", value=dob_val, key=f"alloc_dob{key_suffix}")
         with col3:
             gender = st.selectbox("Gender", [""] + GENDER_OPTIONS, 
                                  index=([""] + GENDER_OPTIONS).index(draft.get('gender', '')) if draft.get('gender', '') in GENDER_OPTIONS else 0,
-                                 key="alloc_gender")
+                                 key=f"alloc_gender{key_suffix}")
         with col4:
             year_level = st.selectbox("Year Level *", [""] + YEAR_LEVELS,
                                      index=([""] + YEAR_LEVELS).index(draft.get('year_level', '')) if draft.get('year_level', '') in YEAR_LEVELS else 0,
-                                     key="alloc_year_level")
+                                     key=f"alloc_year_level{key_suffix}")
         
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -486,7 +500,7 @@ with tab1:
             school = st.selectbox("Referring School * (searchable)", 
                                  [""] + ALL_SCHOOLS,
                                  index=([""] + ALL_SCHOOLS).index(draft.get('school', '')) if draft.get('school', '') in ALL_SCHOOLS else 0,
-                                 key="alloc_school",
+                                 key=f"alloc_school{key_suffix}",
                                  help="Start typing to search schools")
         with col2:
             # AUTO-POPULATE: Partnership from school
@@ -494,12 +508,12 @@ with tab1:
             partnership_area = st.selectbox("Partnership Area (auto-filled)", 
                                            [""] + PARTNERSHIP_AREAS,
                                            index=([""] + PARTNERSHIP_AREAS).index(auto_partnership) if auto_partnership in PARTNERSHIP_AREAS else 0,
-                                           key="alloc_partnership_area",
+                                           key=f"alloc_partnership_area{key_suffix}",
                                            help="Automatically filled based on school")
         with col3:
             priority_level = st.selectbox("Priority Level", [""] + PRIORITY_OPTIONS,
                                          index=([""] + PRIORITY_OPTIONS).index(draft.get('priority_level', '')) if draft.get('priority_level', '') in PRIORITY_OPTIONS else 0,
-                                         key="alloc_priority")
+                                         key=f"alloc_priority{key_suffix}")
         
         # SECTION 2: Placement History
         st.markdown("---")
@@ -509,14 +523,14 @@ with tab1:
         with col1:
             previous_clc = st.selectbox("Previous CLC Placement?", ["No", "Yes"],
                                        index=["No", "Yes"].index(draft.get('previous_clc_placement', 'No')),
-                                       key="alloc_prev_clc")
+                                       key=f"alloc_prev_clc{key_suffix}")
         with col2:
             previous_other_lc = st.selectbox("Previous Other LC?", ["No", "Yes"],
                                             index=["No", "Yes"].index(draft.get('previous_other_lc', 'No')),
-                                            key="alloc_prev_other")
+                                            key=f"alloc_prev_other{key_suffix}")
         with col3:
             if previous_other_lc == "Yes":
-                other_lc_name = st.text_input("Other LC Name", value=draft.get('other_lc_name', ''), key="alloc_other_lc")
+                other_lc_name = st.text_input("Other LC Name", value=draft.get('other_lc_name', ''), key=f"alloc_other_lc{key_suffix}")
             else:
                 other_lc_name = ""
         
@@ -525,11 +539,11 @@ with tab1:
             with col1:
                 total_placements = st.number_input("Total Previous Placements", min_value=0, 
                                                   value=int(draft.get('total_previous_placements', 1)),
-                                                  key="alloc_total_prev")
+                                                  key=f"alloc_total_prev{key_suffix}")
             with col2:
                 placement_history_notes = st.text_input("Placement History Notes", 
                                                        value=draft.get('placement_history_notes', ''),
-                                                       key="alloc_history_notes")
+                                                       key=f"alloc_history_notes{key_suffix}")
         else:
             total_placements = 0
             placement_history_notes = ""
@@ -555,21 +569,21 @@ with tab1:
             st.write("**Categorical Funding**")
             cat_funding = []
             for option in CAT_FUNDING_OPTIONS:
-                if st.checkbox(option, value=option in existing_cat, key=f"cat_{option}"):
+                if st.checkbox(option, value=option in existing_cat, key=f"cat_{option}{key_suffix}"):
                     cat_funding.append(option)
         
         with col2:
             st.write("**Partnership Support**")
             partnership = []
             for option in PARTNERSHIP_OPTIONS:
-                if st.checkbox(option, value=option in existing_part, key=f"part_{option}"):
+                if st.checkbox(option, value=option in existing_part, key=f"part_{option}{key_suffix}"):
                     partnership.append(option)
         
         # SECTION 4: Meeting Details (Pre-Meeting - NO OUTCOME YET)
         st.markdown("---")
         st.subheader("4️⃣ Meeting Details")
         
-        queries = st.text_area("Queries/Notes for Meeting", value=draft.get('queries', ''), key="alloc_queries", height=100)
+        queries = st.text_area("Queries/Notes for Meeting", value=draft.get('queries', ''), key=f"alloc_queries{key_suffix}", height=100)
         
         # CONDITIONAL SECTIONS - Only show if editing draft (STAGE 2)
         if is_editing:
@@ -580,9 +594,9 @@ with tab1:
             st.subheader("5️⃣ Allocation Outcome")
             col1, col2 = st.columns(2)
             with col1:
-                outcome = st.selectbox("Outcome *", [""] + OUTCOMES, key="alloc_outcome")
+                outcome = st.selectbox("Outcome *", [""] + OUTCOMES, key=f"alloc_outcome{key_suffix}")
             with col2:
-                details = st.text_area("Outcome Details", key="alloc_details", height=100)
+                details = st.text_area("Outcome Details", key=f"alloc_details{key_suffix}", height=100)
             
             if outcome == "Allocated":
                 # SECTION 6: Waitlist Information
@@ -591,15 +605,15 @@ with tab1:
                 
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    waitlist_status = st.selectbox("Waitlist Status", WAITLIST_STATUS_OPTIONS, key="alloc_waitlist_status")
+                    waitlist_status = st.selectbox("Waitlist Status", WAITLIST_STATUS_OPTIONS, key=f"alloc_waitlist_status{key_suffix}")
                 with col2:
                     if waitlist_status == "On Waitlist":
-                        waitlist_date = st.date_input("Waitlist Date", value=None, key="alloc_waitlist_date")
+                        waitlist_date = st.date_input("Waitlist Date", value=None, key=f"alloc_waitlist_date{key_suffix}")
                     else:
                         waitlist_date = None
                 with col3:
                     if waitlist_status == "On Waitlist":
-                        allocated_from_waitlist = st.selectbox("Allocated from Waitlist?", ["No", "Yes"], key="alloc_from_waitlist")
+                        allocated_from_waitlist = st.selectbox("Allocated from Waitlist?", ["No", "Yes"], key=f"alloc_from_waitlist{key_suffix}")
                     else:
                         allocated_from_waitlist = "No"
                 
@@ -609,13 +623,13 @@ with tab1:
                 
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    program = st.selectbox("Program *", [""] + PROGRAMS, key="alloc_program")
+                    program = st.selectbox("Program *", [""] + PROGRAMS, key=f"alloc_program{key_suffix}")
                 with col2:
-                    start_after = st.date_input("Start After", value=None, key="alloc_start")
+                    start_after = st.date_input("Start After", value=None, key=f"alloc_start{key_suffix}")
                 with col3:
-                    finishing_date = st.date_input("Finishing Date", value=None, key="alloc_finish")
+                    finishing_date = st.date_input("Finishing Date", value=None, key=f"alloc_finish{key_suffix}")
                 with col4:
-                    bespoke_placement = st.selectbox("Bespoke Placement?", ["No", "Yes"], key="alloc_bespoke")
+                    bespoke_placement = st.selectbox("Bespoke Placement?", ["No", "Yes"], key=f"alloc_bespoke{key_suffix}")
                 
                 if bespoke_placement == "Yes":
                     st.info("💡 **Bespoke Placement:** Student year level doesn't match standard program expectations")
@@ -626,13 +640,13 @@ with tab1:
                 
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    case_worker = st.selectbox("Case Worker", [""] + STAFF_NAMES, key="alloc_cw")
+                    case_worker = st.selectbox("Case Worker", [""] + STAFF_NAMES, key=f"alloc_cw{key_suffix}")
                 with col2:
-                    bsc = st.selectbox("BSC", [""] + STAFF_NAMES, key="alloc_bsc")
+                    bsc = st.selectbox("BSC", [""] + STAFF_NAMES, key=f"alloc_bsc{key_suffix}")
                 with col3:
-                    school_contact = st.text_input("School Contact", key="alloc_school_contact")
+                    school_contact = st.text_input("School Contact", key=f"alloc_school_contact{key_suffix}")
                 
-                notes = st.text_area("Additional Notes", key="alloc_notes", height=80)
+                notes = st.text_area("Additional Notes", key=f"alloc_notes{key_suffix}", height=80)
             else:
                 # Not allocated - set defaults
                 waitlist_status = "Not Applicable"
