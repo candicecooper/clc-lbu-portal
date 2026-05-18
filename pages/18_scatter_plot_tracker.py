@@ -10,8 +10,8 @@ from datetime import date, timedelta, datetime
 import json
 
 from auth import require_auth, logout_button, get_staff_name
-require_auth(app_title="CLC LBU Staff Portal", app_icon="🏫")
-logout_button()
+# require_auth(app_title="CLC LBU Staff Portal", app_icon="🏫")
+# logout_button()
 
 TEAL  = "#1A6B8A"
 AMBER = "#D4860A"
@@ -118,7 +118,7 @@ DEFAULT_SCHEDULE = [
 DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday"]
 
 
-# -----------------------------------------------------------------------------─ Supabase ──────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------= Supabase ==================================================================
 def get_sb():
     try:
         from supabase import create_client
@@ -275,9 +275,9 @@ INTERVENTIONS_IN_PLACE = [
 ]
 
 
-# ==============================================================================═════════════════════════════════════════════════════════════════════════════
+# ===========================================================================================================================================================
 # OPERATIONAL DEFINITIONS - CORE ABA REQUIREMENT
-# ==============================================================================═════════════════════════════════════════════════════════════════════════════
+# ===========================================================================================================================================================
 
 @st.cache_data(ttl=120)
 def load_behaviour_bank():
@@ -356,9 +356,9 @@ def delete_behaviour(beh_id):
         return False
 
 
-# ==============================================================================═════════════════════════════════════════════════════════════════════════════
+# ===========================================================================================================================================================
 # STUDENT & PERIOD MANAGEMENT
-# ==============================================================================═════════════════════════════════════════════════════════════════════════════
+# ===========================================================================================================================================================
 
 def init_state():
     ss = st.session_state
@@ -384,7 +384,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# -----------------------------------------------------------------------------─ LOAD STUDENTS ─────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
+# LOAD STUDENTS
+# ------------------------------------------------------------------------------
 @st.cache_data(ttl=120)
 def load_students():
     sb = get_sb()
@@ -397,14 +399,75 @@ def load_students():
 
 students = load_students()
 
-if not students:
-    st.info("⚠️ No students configured. Add students via Portal Admin.")
-    st.stop()
+# Student Management Section (if no students or user wants to add)
+if not students or st.session_state.get('show_student_mgmt', False):
+    st.markdown("### ➕ Student Management")
+    
+    with st.expander("Add New Student", expanded=(not students)):
+        st.markdown("**Add a new student to the scatter plot tracker:**")
+        new_student_name = st.text_input("Student Name", key="new_stu_name")
+        new_program = st.selectbox("Program Type", ["JP", "PY", "SY"], key="new_stu_prog")
+        
+        if st.button("➕ Add Student", type="primary", use_container_width=True):
+            if not new_student_name.strip():
+                st.error("Student name is required")
+            else:
+                sb = get_sb()
+                if sb:
+                    try:
+                        sb.table("scatter_students").insert({
+                            "student_name": new_student_name.strip(),
+                            "program_type": new_program
+                        }).execute()
+                        st.success(f"✅ Added {new_student_name}")
+                        load_students.clear()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Could not add student: {e}")
+    
+    # Show existing students with delete option
+    if students:
+        st.markdown("---")
+        st.markdown("**Existing Students:**")
+        for stu in students:
+            col1, col2, col3 = st.columns([3, 1, 1])
+            with col1:
+                st.markdown(f"**{stu['student_name']}** ({stu.get('program_type', '-')})")
+            with col2:
+                if st.button("Edit", key=f"edit_{stu['id']}", use_container_width=True):
+                    st.info("Edit functionality: Update student details via database")
+            with col3:
+                if st.button("🗑️", key=f"del_stu_{stu['id']}", use_container_width=True):
+                    sb = get_sb()
+                    if sb:
+                        try:
+                            sb.table("scatter_students").delete().eq("id", stu['id']).execute()
+                            st.success(f"✅ Deleted {stu['student_name']}")
+                            load_students.clear()
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Could not delete: {e}")
+        
+        if st.button("Done - Continue to Data Collection", type="primary", use_container_width=True):
+            st.session_state.show_student_mgmt = False
+            st.rerun()
+    
+    if not students:
+        st.stop()
+    
+    st.markdown("---")
+
+# Toggle button to show student management
+if students and not st.session_state.get('show_student_mgmt', False):
+    if st.button("⚙️ Manage Students", use_container_width=True):
+        st.session_state.show_student_mgmt = True
+        st.rerun()
 
 
-# ==============================================================================═════════════════════════════════════════════════════════════════════════════
+
+# ===========================================================================================================================================================
 # MAIN WORKFLOW
-# ==============================================================================═════════════════════════════════════════════════════════════════════════════
+# ===========================================================================================================================================================
 
 mode_choice = st.radio(
     "Choose mode:",
@@ -421,9 +484,9 @@ else:
     ss.spt_mode = "collect"
 
 
-# ==============================================================================═════════════════════════════════════════════════════════════════════════════
+# ===========================================================================================================================================================
 # MODE: MANAGE BEHAVIOURS & OPERATIONAL DEFINITIONS
-# ==============================================================================═════════════════════════════════════════════════════════════════════════════
+# ===========================================================================================================================================================
 
 if ss.spt_mode == "manage":
     st.markdown("### ⚙️ Behaviour Bank - Operational Definitions")
@@ -544,9 +607,9 @@ if ss.spt_mode == "manage":
     st.stop()
 
 
-# ==============================================================================═════════════════════════════════════════════════════════════════════════════
+# ===========================================================================================================================================================
 # STUDENT & PERIOD SELECTION (FOR COLLECT & ANALYSE MODES)
-# ==============================================================================═════════════════════════════════════════════════════════════════════════════
+# ===========================================================================================================================================================
 
 st.markdown("### 1. Select Student")
 
@@ -574,7 +637,7 @@ student_name = ss.spt_student_name
 st.markdown(f"**Selected:** {student_name}")
 st.markdown("---")
 
-# -----------------------------------------------------------------------------─ LOAD PERIODS ──────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------= LOAD PERIODS ==============================================================
 @st.cache_data(ttl=120)
 def load_periods(student_name):
     sb = get_sb()
@@ -637,9 +700,9 @@ if not behaviours:
 st.markdown("---")
 
 
-# ==============================================================================═════════════════════════════════════════════════════════════════════════════
+# ===========================================================================================================================================================
 # MODE: DATA COLLECTION WITH ABA FRAMEWORK
-# ==============================================================================═════════════════════════════════════════════════════════════════════════════
+# ===========================================================================================================================================================
 
 if ss.spt_mode == "collect":
     st.markdown("### 3. Operational Definitions - Review Before Recording")
@@ -980,9 +1043,9 @@ if ss.spt_mode == "collect":
                         st.error(f"Save failed: {e}")
 
 
-# ==============================================================================═════════════════════════════════════════════════════════════════════════════
+# ===========================================================================================================================================================
 # MODE: ANALYSIS & REPORTS
-# ==============================================================================═════════════════════════════════════════════════════════════════════════════
+# ===========================================================================================================================================================
 
 elif ss.spt_mode == "analyse":
     st.markdown("### 3. Analysis Parameters")
