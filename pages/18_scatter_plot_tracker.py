@@ -383,6 +383,12 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# Simple/Advanced mode toggle
+col1, col2, col3 = st.columns([2, 1, 2])
+with col2:
+    simple_mode = st.toggle("Simple Mode", value=True, help="Hide advanced features for faster data entry")
+    st.session_state['simple_mode'] = simple_mode
+
 
 # ------------------------------------------------------------------------------
 # LOAD STUDENTS
@@ -1035,19 +1041,44 @@ st.markdown("---")
 # ===========================================================================================================================================================
 
 if ss.spt_mode == "collect":
-    st.markdown("### 3. Operational Definitions - Review Before Recording")
+    # Simplified UI based on mode
+    simple_mode = st.session_state.get('simple_mode', True)
     
-    st.markdown("""
-    <div class='ins-critical'>
-    <b>⚠️ ABA Requirement:</b> Review operational definitions before each data collection session.
-    This ensures consistency and inter-observer reliability across sessions and staff.
-    </div>
-    """, unsafe_allow_html=True)
+    if simple_mode:
+        # SIMPLE MODE - Just the essentials
+        st.markdown("### Quick Recording")
+        st.info(f"📝 Recording: {', '.join(behaviours)}")
+        
+        with st.expander("📋 Behaviour Definitions (tap to review)", expanded=False):
+            bank = load_behaviour_bank()
+            for beh_label in behaviours:
+                for cat in bank.values():
+                    for beh_data in cat:
+                        if beh_data['description'] == beh_label:
+                            op_def = beh_data.get('operational_definition', 'No definition set')
+                            st.markdown(f"**{beh_label}:** {op_def}")
+                            break
+        
+        # Skip advanced options in simple mode
+        st.markdown("---")
+        
+    else:
+        # ADVANCED MODE - Full ABA features
+        st.markdown("### 3. Operational Definitions - Review Before Recording")
     
-    # Load behaviour bank to get operational definitions
-    bank = load_behaviour_bank()
+    if not simple_mode:
+        # Only show full definitions in advanced mode
+        st.markdown("""
+        <div class='ins-critical'>
+        <b>⚠️ ABA Requirement:</b> Review operational definitions before each data collection session.
+        This ensures consistency and inter-observer reliability across sessions and staff.
+        </div>
+        """, unsafe_allow_html=True)
     
-    # Display operational definitions for target behaviours
+    # Display operational definitions for target behaviours (advanced mode only)
+    if not simple_mode:
+        # Load behaviour bank to get operational definitions
+        bank = load_behaviour_bank()
     for idx, beh_label in enumerate(behaviours):
         # Find this behaviour in the bank
         op_def_found = False
@@ -1092,8 +1123,9 @@ if ss.spt_mode == "collect":
     
     st.markdown("---")
     
-    # Data collection options
-    st.markdown("### 4. Data Collection Options")
+    # Data collection options (advanced mode only)
+    if not simple_mode:
+        st.markdown("### 4. Data Collection Options")
     
     col1, col2 = st.columns(2)
     with col1:
