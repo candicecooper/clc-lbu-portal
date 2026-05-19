@@ -807,32 +807,58 @@ if not periods or st.session_state.get('show_period_mgmt', False):
                 all_behaviours.extend([b['description'] for b in bank[cat]])
         
         selected_behaviours = st.multiselect(
-            "Target Behaviours",
+            "From Behaviour Bank",
             options=all_behaviours,
             key="new_period_behs",
-            help="Select 1-3 behaviours to track during this period"
+            help="Select behaviours from the pre-defined bank"
         )
+        
+        # Manual entry option
+        st.markdown("**OR enter custom behaviours:**")
+        custom_behaviours = st.text_area(
+            "Custom Behaviours (one per line)",
+            key="new_period_custom_behs",
+            help="Type custom behaviour labels, one per line",
+            placeholder="e.g.\nCalling out\nLeaving seat\nRefusing work"
+        )
+        
+        # Combine selected and custom behaviours
+        final_behaviours = selected_behaviours.copy()
+        if custom_behaviours.strip():
+            custom_list = [b.strip() for b in custom_behaviours.split('\n') if b.strip()]
+            final_behaviours.extend(custom_list)
+        
+        if final_behaviours:
+            st.info(f"📝 Will track {len(final_behaviours)} behaviour(s): {', '.join(final_behaviours)}")
         
         if st.button("➕ Create Tracking Period", type="primary", use_container_width=True):
             if not period_label.strip():
                 st.error("Period label is required")
-            elif not selected_behaviours:
-                st.error("Please select at least one target behaviour")
+            elif not final_behaviours:
+                st.error("Please select at least one behaviour (from bank or custom)")
             else:
                 sb = get_sb()
                 if sb:
                     try:
-                        sb.table("scatter_tracking_periods").insert({
-                            "student_name": student_name,
-                            "label": period_label.strip(),
-                            "start_date": str(period_start),
-                            "end_date": str(period_end) if period_end else None,
-                            "target_behaviours": json.dumps(selected_behaviours),
-                            "schedule": json.dumps(DEFAULT_SCHEDULE)
-                        }).execute()
-                        st.success(f"✅ Created tracking period: {period_label}")
-                        load_periods.clear()
-                        st.rerun()
+                        # Get the student's ID from the student_name
+                        student_result = sb.table("scatter_students").select("id").eq("student_name", student_name).execute()
+                        if not student_result.data:
+                            st.error(f"Could not find student: {student_name}")
+                        else:
+                            student_id = student_result.data[0]['id']
+                            
+                            sb.table("scatter_tracking_periods").insert({
+                                "student_id": student_id,
+                                "student_name": student_name,
+                                "label": period_label.strip(),
+                                "start_date": str(period_start),
+                                "end_date": str(period_end) if period_end else None,
+                                "target_behaviours": json.dumps(final_behaviours),
+                                "schedule": json.dumps(DEFAULT_SCHEDULE)
+                            }).execute()
+                            st.success(f"✅ Created tracking period: {period_label}")
+                            load_periods.clear()
+                            st.rerun()
                     except Exception as e:
                         st.error(f"Could not create tracking period: {e}")
     
