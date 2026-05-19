@@ -940,6 +940,7 @@ for p in periods:
     # Card styling
     if active:
         card_class = "stu-card stu-active"
+        card_style = ""
     elif is_current:
         card_class = "stu-card" 
         card_style = "border-color:#22c55e;background:#f0fdf4;"
