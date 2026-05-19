@@ -754,6 +754,7 @@ def load_periods(student_name):
 periods = load_periods(student_name)
 
 st.markdown("### 2. Select Tracking Period")
+st.caption("🟢 = Current period (today's date falls within) · ⚪ = Past/future period")
 
 # Tracking Period Management Section
 if not periods or st.session_state.get('show_period_mgmt', False):
@@ -762,13 +763,39 @@ if not periods or st.session_state.get('show_period_mgmt', False):
     with st.expander("Create New Tracking Period", expanded=(not periods)):
         st.markdown(f"**Create a new tracking period for {student_name}:**")
         
-        period_label = st.text_input("Period Label (e.g., 'Term 2 Week 1-4')", key="new_period_label")
+        # Current date helpers
+        today = date.today()
+        four_weeks_out = today + timedelta(weeks=4)
+        
+        # Auto-generate suggested label
+        import calendar
+        current_month = calendar.month_name[today.month]
+        current_year = today.year
+        suggested_label = f"{current_month} {current_year} - Data Collection"
+        
+        period_label = st.text_input(
+            "Period Label", 
+            value=suggested_label,
+            key="new_period_label",
+            help="Give this tracking period a descriptive name"
+        )
         
         col1, col2 = st.columns(2)
         with col1:
-            period_start = st.date_input("Start Date", key="new_period_start")
+            period_start = st.date_input(
+                "Start Date", 
+                value=today,
+                key="new_period_start",
+                help="Usually today or the start of this week"
+            )
         with col2:
-            period_end = st.date_input("End Date (optional)", value=None, key="new_period_end")
+            period_end = st.date_input(
+                "End Date (optional)", 
+                value=four_weeks_out,
+                min_value=today,
+                key="new_period_end",
+                help="Typically 2-4 weeks for data collection period"
+            )
         
         st.markdown("**Select target behaviours for this period:**")
         
@@ -851,12 +878,32 @@ if periods and not st.session_state.get('show_period_mgmt', False):
 
 for p in periods:
     active = (ss.spt_period_id == p["id"])
-    card_class = "stu-card stu-active" if active else "stu-card"
+    
+    # Check if this period is current (today falls within date range)
+    start_date = pd.to_datetime(p["start_date"]).date()
+    end_date = pd.to_datetime(p["end_date"]).date() if p.get("end_date") else None
+    today = date.today()
+    is_current = start_date <= today and (end_date is None or today <= end_date)
+    
+    # Card styling
+    if active:
+        card_class = "stu-card stu-active"
+    elif is_current:
+        card_class = "stu-card" 
+        card_style = "border-color:#22c55e;background:#f0fdf4;"
+    else:
+        card_class = "stu-card"
+        card_style = ""
+    
     label = p.get("label", "Untitled")
-    sd = pd.to_datetime(p["start_date"]).strftime("%-d %b %Y")
-    ed = pd.to_datetime(p["end_date"]).strftime("%-d %b %Y") if p.get("end_date") else "ongoing"
+    sd = start_date.strftime("%-d %b %Y")
+    ed = end_date.strftime("%-d %b %Y") if end_date else "ongoing"
+    
+    # Add current/past indicator
+    status_emoji = "🟢 " if is_current else "⚪ "
+    
     st.markdown(
-        f"<div class='{card_class}'><b>{label}</b> - {sd} – {ed}</div>",
+        f"<div class='{card_class}' style='{card_style}'>{status_emoji}<b>{label}</b> · {sd} – {ed}</div>",
         unsafe_allow_html=True
     )
     if st.button(f"Select {label}", key=f"per_{p['id']}", use_container_width=True):
