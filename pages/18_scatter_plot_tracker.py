@@ -831,6 +831,44 @@ if not periods or st.session_state.get('show_period_mgmt', False):
         if final_behaviours:
             st.info(f"📝 Will track {len(final_behaviours)} behaviour(s): {', '.join(final_behaviours)}")
         
+        # Schedule/Activity customization
+        st.markdown("---")
+        st.markdown("**Customize Daily Schedule (Optional):**")
+        
+        with st.expander("Edit Time Slots & Activities"):
+            st.caption("Add activity names to time slots (e.g., 'Maths', 'Recess', 'Reading')")
+            
+            # Create editable schedule
+            schedule_data = []
+            for idx, slot in enumerate(DEFAULT_SCHEDULE):
+                schedule_data.append({
+                    "Time": slot["time"],
+                    "Activity": slot.get("activity", "")
+                })
+            
+            schedule_df = pd.DataFrame(schedule_data)
+            
+            edited_schedule = st.data_editor(
+                schedule_df,
+                column_config={
+                    "Time": st.column_config.TextColumn("Time", disabled=True, width="small"),
+                    "Activity": st.column_config.TextColumn("Activity", width="medium", help="e.g. Maths, Recess, Lunch")
+                },
+                hide_index=True,
+                use_container_width=True,
+                key="schedule_editor"
+            )
+            
+            # Convert back to schedule format
+            custom_schedule = []
+            for _, row in edited_schedule.iterrows():
+                custom_schedule.append({
+                    "time": row["Time"],
+                    "activity": row["Activity"]
+                })
+        
+        st.markdown("---")
+        
         if st.button("➕ Create Tracking Period", type="primary", use_container_width=True):
             if not period_label.strip():
                 st.error("Period label is required")
@@ -847,6 +885,9 @@ if not periods or st.session_state.get('show_period_mgmt', False):
                         else:
                             student_id = student_result.data[0]['id']
                             
+                            # Use custom schedule if edited, otherwise default
+                            final_schedule = custom_schedule if 'schedule_editor' in st.session_state else DEFAULT_SCHEDULE
+                            
                             sb.table("scatter_tracking_periods").insert({
                                 "student_id": student_id,
                                 "student_name": student_name,
@@ -854,7 +895,7 @@ if not periods or st.session_state.get('show_period_mgmt', False):
                                 "start_date": str(period_start),
                                 "end_date": str(period_end) if period_end else None,
                                 "target_behaviours": json.dumps(final_behaviours),
-                                "schedule": json.dumps(DEFAULT_SCHEDULE)
+                                "schedule": json.dumps(final_schedule)
                             }).execute()
                             st.success(f"✅ Created tracking period: {period_label}")
                             load_periods.clear()
@@ -1171,7 +1212,7 @@ if ss.spt_mode == "collect":
             grid_df,
             column_config={
                 "Time": st.column_config.TextColumn("Time", disabled=True, width="small"),
-                "Activity": st.column_config.TextColumn("Activity", disabled=True, width="medium"),
+                "Activity": st.column_config.TextColumn("Activity", width="medium", help="Edit activity name if needed"),
                 "Frequency": st.column_config.SelectboxColumn(
                     "Frequency",
                     options=list(FREQUENCY_MEASURES.keys()),
