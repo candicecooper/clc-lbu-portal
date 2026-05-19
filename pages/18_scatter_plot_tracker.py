@@ -877,15 +877,41 @@ if not periods or st.session_state.get('show_period_mgmt', False):
                 st.markdown(f"**{label}**  \n{sd} - {ed}  \n*Behaviours:* {behs_str}")
             with col2:
                 if st.button("🗑️", key=f"del_period_{p['id']}", use_container_width=True):
-                    sb = get_sb()
-                    if sb:
-                        try:
-                            sb.table("scatter_tracking_periods").delete().eq("id", p['id']).execute()
-                            st.success(f"✅ Deleted period")
-                            load_periods.clear()
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Could not delete: {e}")
+                    st.session_state[f'confirm_del_{p["id"]}'] = True
+                    st.rerun()
+            
+            # Confirmation dialog
+            if st.session_state.get(f'confirm_del_{p["id"]}', False):
+                st.warning(f"⚠️ **Delete '{label}'?** This will also delete all observations for this period.")
+                
+                # Count observations
+                sb = get_sb()
+                if sb:
+                    try:
+                        obs_count_result = sb.table("scatter_observations").select("id", count="exact").eq("tracking_period_id", p['id']).execute()
+                        obs_count = obs_count_result.count if hasattr(obs_count_result, 'count') else 0
+                        if obs_count > 0:
+                            st.error(f"📊 This period has {obs_count} observation(s) that will be deleted")
+                    except:
+                        obs_count = 0
+                
+                col_confirm, col_cancel = st.columns(2)
+                with col_confirm:
+                    if st.button("✅ Yes, Delete", key=f"confirm_yes_{p['id']}", use_container_width=True, type="primary"):
+                        sb = get_sb()
+                        if sb:
+                            try:
+                                sb.table("scatter_tracking_periods").delete().eq("id", p['id']).execute()
+                                st.success(f"✅ Deleted period and observations")
+                                st.session_state[f'confirm_del_{p["id"]}'] = False
+                                load_periods.clear()
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Could not delete: {e}")
+                with col_cancel:
+                    if st.button("❌ Cancel", key=f"confirm_no_{p['id']}", use_container_width=True):
+                        st.session_state[f'confirm_del_{p["id"]}'] = False
+                        st.rerun()
         
         if st.button("Done - Continue to Data Collection", type="primary", use_container_width=True):
             st.session_state.show_period_mgmt = False
