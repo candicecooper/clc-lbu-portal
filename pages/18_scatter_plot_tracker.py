@@ -655,20 +655,77 @@ if ss.spt_mode == "manage":
 
 st.markdown("### 1. Select Student")
 
+# Quick fix warning for Unknown students
+unknown_students = [s for s in students if s['student_name'].startswith('Unknown_')]
+if unknown_students:
+    st.warning(f"⚠️ {len(unknown_students)} student(s) need proper names. Click '🔧 Fix Name' below to update.")
+
 # Student cards
 for stu in students:
     active = (ss.spt_student_name == stu["student_name"])
     card_class = "stu-card stu-active" if active else "stu-card"
+    
+    # Check if this is an Unknown student
+    is_unknown = stu['student_name'].startswith('Unknown_')
+    
     st.markdown(
         f"<div class='{card_class}'><b>{stu['student_name']}</b> - {stu.get('program_type', '-')}</div>",
         unsafe_allow_html=True
     )
-    if st.button(f"Select {stu['student_name']}", key=f"sel_{stu['id']}", use_container_width=True):
-        ss.spt_student_name = stu["student_name"]
-        ss.spt_prog_type = stu.get("program_type", "")
-        ss.spt_period_id = None
-        ss.spt_behs = []
-        st.rerun()
+    
+    # Show select button and fix button if needed
+    if is_unknown:
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            if st.button(f"Select {stu['student_name']}", key=f"sel_{stu['id']}", use_container_width=True):
+                ss.spt_student_name = stu["student_name"]
+                ss.spt_prog_type = stu.get("program_type", "")
+                ss.spt_period_id = None
+                ss.spt_behs = []
+                st.rerun()
+        with col2:
+            if st.button("🔧 Fix Name", key=f"fix_{stu['id']}", use_container_width=True, type="primary"):
+                st.session_state[f'fixing_{stu["id"]}'] = True
+                st.rerun()
+    else:
+        if st.button(f"Select {stu['student_name']}", key=f"sel_{stu['id']}", use_container_width=True):
+            ss.spt_student_name = stu["student_name"]
+            ss.spt_prog_type = stu.get("program_type", "")
+            ss.spt_period_id = None
+            ss.spt_behs = []
+            st.rerun()
+    
+    # Inline edit form for fixing names
+    if st.session_state.get(f'fixing_{stu["id"]}', False):
+        with st.container():
+            st.markdown("**Update Student Details:**")
+            fix_name = st.text_input("Student Name", placeholder="Enter student's full name", key=f"fix_name_{stu['id']}")
+            fix_prog = st.selectbox("Program Type", ["JP", "PY", "SY"], key=f"fix_prog_{stu['id']}")
+            
+            col_save, col_cancel = st.columns(2)
+            with col_save:
+                if st.button("💾 Save", key=f"save_fix_{stu['id']}", use_container_width=True):
+                    if not fix_name.strip():
+                        st.error("Student name is required")
+                    else:
+                        sb = get_sb()
+                        if sb:
+                            try:
+                                sb.table("scatter_students").update({
+                                    "student_name": fix_name.strip(),
+                                    "program_type": fix_prog
+                                }).eq("id", stu['id']).execute()
+                                st.success(f"✅ Updated to {fix_name}")
+                                st.session_state[f'fixing_{stu["id"]}'] = False
+                                load_students.clear()
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Could not update: {e}")
+            with col_cancel:
+                if st.button("Cancel", key=f"cancel_fix_{stu['id']}", use_container_width=True):
+                    st.session_state[f'fixing_{stu["id"]}'] = False
+                    st.rerun()
+        st.markdown("---")
 
 if not ss.spt_student_name:
     st.info("👆 Select a student to continue")
