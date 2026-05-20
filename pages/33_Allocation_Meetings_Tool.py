@@ -810,5 +810,98 @@ with tab1:
                         import traceback
                         st.code(traceback.format_exc())
 
-# Rest of tabs remain unchanged...
+# TAB 2: Extensions (placeholder)
+with tab2:
+    st.header("🔄 Extensions")
+    st.info("Extension requests feature coming soon...")
+
+# TAB 3: Not Placed (placeholder)
+with tab3:
+    st.header("⏸️ Not Placed")
+    st.info("Not placed tracking feature coming soon...")
+
+# TAB 4: View & Export
+with tab4:
+    st.header("📊 View & Export Completed Allocations")
+    
+    # Fetch completed allocations (outcome is NOT NULL)
+    try:
+        completed = supabase.table("allocation_students")\
+            .select("*")\
+            .neq("outcome", None)\
+            .order("created_at", desc=True)\
+            .execute()
+        
+        if not completed.data:
+            st.info("📭 No completed allocations yet. Complete some drafts in the New Allocations tab!")
+        else:
+            st.success(f"✅ Found {len(completed.data)} completed allocation(s)")
+            
+            # Display table
+            st.subheader("Completed Allocations")
+            
+            # Convert to simple display format
+            display_data = []
+            for record in completed.data:
+                display_data.append({
+                    "Student": record.get("student_name", ""),
+                    "School": record.get("school", ""),
+                    "Year": record.get("year_level", ""),
+                    "Program": record.get("program", ""),
+                    "Outcome": record.get("outcome", ""),
+                    "Meeting": record.get("meeting_week", ""),
+                    "Date": record.get("meeting_date", "")
+                })
+            
+            st.dataframe(display_data, use_container_width=True)
+            
+            # Export section
+            st.markdown("---")
+            st.subheader("📤 Export to Excel")
+            
+            # Select allocations to export
+            all_selected = st.checkbox("Select all", value=True)
+            
+            if all_selected:
+                selected_ids = [r["id"] for r in completed.data]
+            else:
+                # Show checkboxes for individual selection
+                st.write("Select allocations to export:")
+                selected_ids = []
+                for record in completed.data:
+                    if st.checkbox(f"{record['student_name']} - {record.get('school', '')}", key=f"export_{record['id']}"):
+                        selected_ids.append(record["id"])
+            
+            if st.button("📥 Download Excel", type="primary"):
+                if not selected_ids:
+                    st.error("Please select at least one allocation to export")
+                else:
+                    # Filter to selected records
+                    to_export = [r for r in completed.data if r["id"] in selected_ids]
+                    
+                    try:
+                        # Generate Excel
+                        excel_bytes = export_to_data_entry(to_export)
+                        
+                        # Download button
+                        st.download_button(
+                            label="💾 Save Excel File",
+                            data=excel_bytes,
+                            file_name=f"CLC_Allocations_{meeting_week_label.replace(' ', '_')}_{st.session_state.current_term.replace(' ', '_')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                        
+                        st.success(f"✅ Excel file ready! {len(to_export)} allocation(s) exported.")
+                        
+                    except Exception as e:
+                        st.error(f"Error generating Excel: {e}")
+                        import traceback
+                        st.code(traceback.format_exc())
+    
+    except Exception as e:
+        st.error(f"Error loading allocations: {e}")
+        import traceback
+        st.code(traceback.format_exc())
+
+# Caption
 st.caption("CLC-LBU Allocation Meetings Tool V3 | Simplified Draft System")
