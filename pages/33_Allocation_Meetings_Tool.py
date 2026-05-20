@@ -514,14 +514,14 @@ with tab1:
                         with col1:
                             program = st.selectbox("Program *", [""] + PROGRAMS)
                         with col2:
-                            # Exclusion start date: today to 2 years from now
-                            start_min = datetime.now().date()
-                            start_max = datetime.now().date() + timedelta(days=365*2)
+                            # Exclusion start date: Jan 1, 2026 to end of 2028
+                            start_min = datetime(2026, 1, 1).date()
+                            start_max = datetime(2028, 12, 31).date()
                             start_after = st.date_input("Exclusion Start Date", value=None, min_value=start_min, max_value=start_max)
                         with col3:
-                            # Exclusion end date: today to 2 years from now
-                            finish_min = datetime.now().date()
-                            finish_max = datetime.now().date() + timedelta(days=365*2)
+                            # Exclusion end date: Jan 1, 2026 to end of 2028
+                            finish_min = datetime(2026, 1, 1).date()
+                            finish_max = datetime(2028, 12, 31).date()
                             finishing_date = st.date_input("Exclusion End Date", value=None, min_value=finish_min, max_value=finish_max)
                         with col4:
                             bespoke_placement = st.selectbox("Bespoke Placement?", ["No", "Yes"])
@@ -826,11 +826,17 @@ with tab4:
     
     # Fetch completed allocations (outcome is NOT NULL)
     try:
+        # Correct way to query for NOT NULL in Supabase
         completed = supabase.table("allocation_students")\
             .select("*")\
-            .neq("outcome", None)\
+            .in_("outcome", ["Allocated", "Not Allocated"])\
             .order("created_at", desc=True)\
             .execute()
+        
+        st.write(f"**Debug:** Query returned {len(completed.data) if completed.data else 0} records")
+        if completed.data:
+            for record in completed.data:
+                st.write(f"- {record.get('student_name')}: outcome={record.get('outcome')}")
         
         if not completed.data:
             st.info("📭 No completed allocations yet. Complete some drafts in the New Allocations tab!")
