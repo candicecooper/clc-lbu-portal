@@ -1,11 +1,9 @@
 # ==============================================================================
 # 18_Scatter_Plot_Tracker.py - CLC-LBU Portal
-# Paper-Style Scatter Plot with Student Details & Analysis
+# Simple Paper-Style Scatter Plot Tracker
 # ==============================================================================
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
 from datetime import date, timedelta, datetime
 import json
 
@@ -27,20 +25,43 @@ st.markdown("""
 }
 .header h1 { margin:0; font-size:1.8rem; }
 .header p { margin:.3rem 0 0; opacity:.9; font-size:.9rem; }
-.saved-week {
-    background:#f0f9ff; border-left:4px solid #0284c7;
-    padding:.8rem 1rem; border-radius:6px; margin:.5rem 0;
-    cursor:pointer;
+.grid-container {
+    background:white; border:2px solid #cbd5e1; border-radius:10px;
+    padding:1rem; margin-top:1rem;
 }
-.saved-week:hover { background:#e0f2fe; }
-.active-week {
-    background:#dcfce7; border-left:4px solid #22c55e;
+.week-grid {
+    width:100%; border-collapse:collapse; font-size:.85rem;
+    margin-top:1rem;
 }
+.week-grid th {
+    background:#1A7A6E; color:white; padding:.6rem .4rem;
+    text-align:center; font-weight:600; border:1px solid #0f5f56;
+}
+.week-grid td {
+    border:1px solid #cbd5e1; padding:.5rem .3rem;
+    text-align:center; min-width:45px; cursor:pointer;
+}
+.week-grid td:hover { background:#e0f2fe; }
+.week-grid .time-cell { 
+    background:#f1f5f9; font-weight:600; text-align:left;
+    padding-left:.6rem; white-space:nowrap;
+}
+.week-grid .activity-cell {
+    background:#f8fafc; text-align:left; padding-left:.6rem;
+    font-style:italic; font-size:.8rem; color:#64748b;
+}
+.week-grid .total-cell {
+    background:#fef3c7; font-weight:700; color:#92400e;
+}
+.week-grid .total-row {
+    background:#fef3c7; font-weight:700; color:#92400e;
+    font-size:.9rem;
+}
+.tally { color:#dc2626; font-weight:700; font-size:1.1rem; }
 .info-box {
     background:#f0f9ff; border-left:4px solid #0284c7;
     padding:.7rem 1rem; border-radius:6px; margin:.5rem 0;
 }
-.tally { color:#dc2626; font-weight:700; font-size:1.1rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -59,11 +80,9 @@ def get_sb():
 # ==============================================================================
 def init():
     if 'page' not in st.session_state:
-        st.session_state.page = 'students'
+        st.session_state.page = 'setup'
     if 'student_name' not in st.session_state:
         st.session_state.student_name = ''
-    if 'week_id' not in st.session_state:
-        st.session_state.week_id = None
     if 'week_start' not in st.session_state:
         st.session_state.week_start = date.today() - timedelta(days=date.today().weekday())
     if 'behaviours' not in st.session_state:
@@ -81,465 +100,36 @@ init()
 st.markdown("""
 <div class='header'>
 <h1>📊 Scatter Plot Tracker</h1>
-<p>Weekly behaviour recording with student details and analysis</p>
+<p>Simple paper-style weekly behaviour recording</p>
 </div>
 """, unsafe_allow_html=True)
 
 # ==============================================================================
 # PAGE NAVIGATION
 # ==============================================================================
-col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+col1, col2 = st.columns([1, 1])
 with col1:
-    if st.button("👤 Students", use_container_width=True, type="primary" if st.session_state.page == 'students' else "secondary"):
-        st.session_state.page = 'students'
-        st.rerun()
-with col2:
     if st.button("📋 Setup Week", use_container_width=True, type="primary" if st.session_state.page == 'setup' else "secondary"):
         st.session_state.page = 'setup'
         st.rerun()
-with col3:
-    if st.button("✏️ Record", use_container_width=True, type="primary" if st.session_state.page == 'record' else "secondary"):
+with col2:
+    if st.button("✏️ Record Behaviours", use_container_width=True, type="primary" if st.session_state.page == 'record' else "secondary"):
         st.session_state.page = 'record'
-        st.rerun()
-with col4:
-    if st.button("📈 Analysis", use_container_width=True, type="primary" if st.session_state.page == 'analysis' else "secondary"):
-        st.session_state.page = 'analysis'
         st.rerun()
 
 st.markdown("---")
 
 # ==============================================================================
-# PAGE 1: STUDENT DETAILS
+# PAGE 1: SETUP
 # ==============================================================================
-if st.session_state.page == 'students':
-    st.markdown("## 👤 Student Details")
-    
-    @st.cache_data(ttl=60)
-    def load_students():
-        sb = get_sb()
-        if not sb: return []
-        try:
-            res = sb.table("scatter_students").select("*").order("student_name").execute()
-            return res.data or []
-        except:
-            return []
-    
-    students = load_students()
-    
-    tab1, tab2 = st.tabs(["📋 Manage Students", "➕ Add Student"])
-    
-    with tab1:
-        if not students:
-            st.info("No students yet. Add one in the 'Add Student' tab.")
-        else:
-            for stu in students:
-                with st.expander(f"**{stu['student_name']}** ({stu.get('program_type', '-')})"):
-                    st.markdown(f"**Program:** {stu.get('program_type', 'Not set')}")
-                    st.markdown(f"**Added:** {pd.to_datetime(stu['created_at']).strftime('%-d %b %Y')}")
-                    
-                    # Behaviour definitions
-                    st.markdown("### Target Behaviours & Definitions")
-                    
-                    beh_defs = stu.get('behaviour_definitions')
-                    if beh_defs:
-                        # Parse if it's a string
-                        if isinstance(beh_defs, str):
-                            try:
-                                beh_defs = json.loads(beh_defs)
-                            except:
-                                beh_defs = {}
-                        
-                        if beh_defs and len(beh_defs) > 0:
-                            for beh, defn in beh_defs.items():
-                                st.markdown(f"**{beh}:** {defn}")
-                        else:
-                            st.caption("No behaviour definitions set")
-                    else:
-                        st.caption("No behaviour definitions set")
-                    
-                    # Edit
-                    st.markdown("---")
-                    edit_name = st.text_input("Name", value=stu['student_name'], key=f"edit_name_{stu['id']}")
-                    edit_prog = st.selectbox("Program", ["JP", "PY", "SY"], 
-                                            index=["JP", "PY", "SY"].index(stu.get('program_type', 'PY')) if stu.get('program_type') in ["JP", "PY", "SY"] else 1,
-                                            key=f"edit_prog_{stu['id']}")
-                    
-                    # Behaviour definitions editor
-                    st.markdown("**Behaviour Definitions:**")
-                    st.caption("Click ✨ Generate for AI-suggested definitions")
-                    
-                    # Load existing definitions
-                    existing_defs = stu.get('behaviour_definitions')
-                    if existing_defs and isinstance(existing_defs, str):
-                        try:
-                            existing_defs = json.loads(existing_defs)
-                        except:
-                            existing_defs = {}
-                    elif not existing_defs:
-                        existing_defs = {}
-                    
-                    # Get existing behaviour names and definitions
-                    existing_list = list(existing_defs.items())
-                    
-                    col1, col2 = st.columns([3, 1])
-                    with col1:
-                        beh1_name = st.text_input(
-                            "Behaviour 1", 
-                            value=existing_list[0][0] if len(existing_list) > 0 else "",
-                            key=f"b1n_{stu['id']}"
-                        )
-                    with col2:
-                        if st.button("✨", key=f"gen1_{stu['id']}", use_container_width=True):
-                            if beh1_name:
-                                try:
-                                    from groq import Groq
-                                    groq_client = Groq(api_key=st.secrets.get("groq", {}).get("api_key", ""))
-                                    
-                                    prompt = f"""Create a concise operational definition for the behaviour "{beh1_name}" suitable for school behaviour tracking. 
-
-Requirements:
-- Observable and measurable
-- Clear and specific
-- 2-3 sentences maximum
-- Include what it looks like
-- No medical/diagnostic language
-
-Format: Just the definition, no preamble."""
-                                    
-                                    response = groq_client.chat.completions.create(
-                                        model="llama-3.3-70b-versatile",
-                                        messages=[{"role": "user", "content": prompt}],
-                                        temperature=0.3,
-                                        max_tokens=200
-                                    )
-                                    
-                                    definition = response.choices[0].message.content.strip()
-                                    st.session_state[f'edit_gen1_{stu["id"]}'] = definition
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Error: {e}")
-                    
-                    beh1_def = st.text_area(
-                        "Definition 1", 
-                        value=st.session_state.get(f'edit_gen1_{stu["id"]}', existing_list[0][1] if len(existing_list) > 0 else ''),
-                        key=f"b1d_{stu['id']}", 
-                        height=60
-                    )
-                    
-                    col1, col2 = st.columns([3, 1])
-                    with col1:
-                        beh2_name = st.text_input(
-                            "Behaviour 2", 
-                            value=existing_list[1][0] if len(existing_list) > 1 else "",
-                            key=f"b2n_{stu['id']}"
-                        )
-                    with col2:
-                        if st.button("✨", key=f"gen2_{stu['id']}", use_container_width=True):
-                            if beh2_name:
-                                try:
-                                    from groq import Groq
-                                    groq_client = Groq(api_key=st.secrets.get("groq", {}).get("api_key", ""))
-                                    
-                                    prompt = f"""Create a concise operational definition for the behaviour "{beh2_name}" suitable for school behaviour tracking. 
-
-Requirements:
-- Observable and measurable
-- Clear and specific
-- 2-3 sentences maximum
-- Include what it looks like
-- No medical/diagnostic language
-
-Format: Just the definition, no preamble."""
-                                    
-                                    response = groq_client.chat.completions.create(
-                                        model="llama-3.3-70b-versatile",
-                                        messages=[{"role": "user", "content": prompt}],
-                                        temperature=0.3,
-                                        max_tokens=200
-                                    )
-                                    
-                                    definition = response.choices[0].message.content.strip()
-                                    st.session_state[f'edit_gen2_{stu["id"]}'] = definition
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Error: {e}")
-                    
-                    beh2_def = st.text_area(
-                        "Definition 2",
-                        value=st.session_state.get(f'edit_gen2_{stu["id"]}', existing_list[1][1] if len(existing_list) > 1 else ''),
-                        key=f"b2d_{stu['id']}", 
-                        height=60
-                    )
-                    
-                    col1, col2 = st.columns([3, 1])
-                    with col1:
-                        beh3_name = st.text_input(
-                            "Behaviour 3", 
-                            value=existing_list[2][0] if len(existing_list) > 2 else "",
-                            key=f"b3n_{stu['id']}"
-                        )
-                    with col2:
-                        if st.button("✨", key=f"gen3_{stu['id']}", use_container_width=True):
-                            if beh3_name:
-                                try:
-                                    from groq import Groq
-                                    groq_client = Groq(api_key=st.secrets.get("groq", {}).get("api_key", ""))
-                                    
-                                    prompt = f"""Create a concise operational definition for the behaviour "{beh3_name}" suitable for school behaviour tracking. 
-
-Requirements:
-- Observable and measurable
-- Clear and specific
-- 2-3 sentences maximum
-- Include what it looks like
-- No medical/diagnostic language
-
-Format: Just the definition, no preamble."""
-                                    
-                                    response = groq_client.chat.completions.create(
-                                        model="llama-3.3-70b-versatile",
-                                        messages=[{"role": "user", "content": prompt}],
-                                        temperature=0.3,
-                                        max_tokens=200
-                                    )
-                                    
-                                    definition = response.choices[0].message.content.strip()
-                                    st.session_state[f'edit_gen3_{stu["id"]}'] = definition
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Error: {e}")
-                    
-                    beh3_def = st.text_area(
-                        "Definition 3",
-                        value=st.session_state.get(f'edit_gen3_{stu["id"]}', existing_list[2][1] if len(existing_list) > 2 else ''),
-                        key=f"b3d_{stu['id']}", 
-                        height=60
-                    )
-                    
-                    new_defs = {}
-                    if beh1_name: new_defs[beh1_name] = beh1_def
-                    if beh2_name: new_defs[beh2_name] = beh2_def
-                    if beh3_name: new_defs[beh3_name] = beh3_def
-                    
-                    col_save, col_del = st.columns(2)
-                    with col_save:
-                        if st.button("💾 Update", key=f"save_{stu['id']}", use_container_width=True):
-                            sb = get_sb()
-                            if sb and edit_name:
-                                try:
-                                    sb.table("scatter_students").update({
-                                        "student_name": edit_name,
-                                        "program_type": edit_prog,
-                                        "behaviour_definitions": json.dumps(new_defs)
-                                    }).eq("id", stu['id']).execute()
-                                    st.success("✅ Updated!")
-                                    load_students.clear()
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Error: {e}")
-                    with col_del:
-                        if st.button("🗑️ Delete", key=f"del_{stu['id']}", use_container_width=True):
-                            if st.checkbox(f"Confirm delete {stu['student_name']}", key=f"confirm_{stu['id']}"):
-                                sb = get_sb()
-                                if sb:
-                                    try:
-                                        sb.table("scatter_students").delete().eq("id", stu['id']).execute()
-                                        st.success("✅ Deleted!")
-                                        load_students.clear()
-                                        st.rerun()
-                                    except Exception as e:
-                                        st.error(f"Error: {e}")
-    
-    with tab2:
-        st.markdown("### Add New Student")
-        new_name = st.text_input("Student Name")
-        new_prog = st.selectbox("Program", ["JP", "PY", "SY"])
-        
-        st.markdown("**Optional: Add Behaviour Definitions**")
-        st.caption("Type a behaviour name and click 'Generate' for AI definition, or select from common templates")
-        
-        # Common behaviour templates
-        COMMON_BEHAVIOURS = {
-            "Hitting": "Making forceful contact with another person using an open or closed hand. Includes slapping, punching, or striking any part of another person's body. Does not include accidental contact, light taps, or high-fives.",
-            "Pushing": "Using hands, arms, or body to forcefully move another person. Includes shoving, bumping with force, or moving someone out of the way. Does not include gentle guidance or accidental contact.",
-            "Kicking": "Making forceful contact with another person using foot or leg. Includes kicking, stomping on feet, or tripping. Does not include accidental contact or stretching.",
-            "Yelling": "Speaking at a volume significantly louder than conversational tone for more than 3 seconds. Includes shouting, screaming during instruction, or loud vocalizations. Does not include excited voice during play or calling from distance.",
-            "Task refusal": "Verbally or physically refusing to begin or continue an assigned task. Includes saying 'no', pushing materials away, or stating refusal. Does not include asking for help, requesting a break, or seeking clarification.",
-            "Leaving area": "Moving beyond designated boundaries without permission. Includes leaving classroom, exiting playground area, or wandering from group. Does not include transitioning with class or returning materials.",
-            "Throwing objects": "Propelling objects through the air with force. Includes throwing books, tossing chairs, or hurling materials. Does not include passing items, placing down quickly, or accidental drops.",
-            "Swearing": "Using profanity or socially inappropriate language. Includes curse words and explicit language directed at others. Does not include repeating overheard language without understanding.",
-        }
-        
-        use_template = st.checkbox("Use common behaviour templates", value=False, key="use_template_new")
-        
-        if use_template:
-            template_beh = st.selectbox("Select behaviour", [""] + list(COMMON_BEHAVIOURS.keys()), key="template_select_new")
-            if template_beh:
-                st.session_state['template_def_new'] = COMMON_BEHAVIOURS[template_beh]
-                st.session_state['template_name_new'] = template_beh
-        
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            new_beh1_name = st.text_input(
-                "Behaviour 1 Name", 
-                value=st.session_state.get('template_name_new', ''),
-                key="new_b1n"
-            )
-        with col2:
-            if st.button("✨ Generate", key="gen_b1", use_container_width=True):
-                if new_beh1_name:
-                    try:
-                        from groq import Groq
-                        api_key = st.secrets.get("GROQ_API_KEY") or st.secrets.get("groq", {}).get("api_key")
-                        
-                        if not api_key:
-                            st.error("⚠️ Groq API key not configured. Use templates or type manually.")
-                        else:
-                            groq_client = Groq(api_key=api_key)
-                        
-                        prompt = f"""Create a concise operational definition for the behaviour "{new_beh1_name}" suitable for school behaviour tracking. 
-
-Requirements:
-- Observable and measurable
-- Clear and specific
-- 2-3 sentences maximum
-- Include what it looks like
-- No medical/diagnostic language
-
-Format: Just the definition, no preamble."""
-                        
-                        response = groq_client.chat.completions.create(
-                            model="llama-3.3-70b-versatile",
-                            messages=[{"role": "user", "content": prompt}],
-                            temperature=0.3,
-                            max_tokens=200
-                        )
-                        
-                        st.session_state['gen_def_b1'] = definition
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"⚠️ AI generation failed: {str(e)[:100]}. Use templates or type manually.")
-        
-        new_beh1_def = st.text_area(
-            "Behaviour 1 Definition", 
-            value=st.session_state.get('gen_def_b1', st.session_state.get('template_def_new', '')),
-            height=80,
-            key="new_b1d",
-            help="Observable, measurable description of the behaviour"
-        )
-        
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            new_beh2_name = st.text_input("Behaviour 2 Name", key="new_b2n")
-        with col2:
-            if st.button("✨ Generate", key="gen_b2", use_container_width=True):
-                if new_beh2_name:
-                    try:
-                        from groq import Groq
-                        groq_client = Groq(api_key=st.secrets.get("groq", {}).get("api_key", ""))
-                        
-                        prompt = f"""Create a concise operational definition for the behaviour "{new_beh2_name}" suitable for school behaviour tracking. 
-
-Requirements:
-- Observable and measurable
-- Clear and specific
-- 2-3 sentences maximum
-- Include what it looks like
-- No medical/diagnostic language
-
-Format: Just the definition, no preamble."""
-                        
-                        response = groq_client.chat.completions.create(
-                            model="llama-3.3-70b-versatile",
-                            messages=[{"role": "user", "content": prompt}],
-                            temperature=0.3,
-                            max_tokens=200
-                        )
-                        
-                        definition = response.choices[0].message.content.strip()
-                        st.session_state['gen_def_b2'] = definition
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Could not generate: {e}")
-        
-        new_beh2_def = st.text_area(
-            "Behaviour 2 Definition",
-            value=st.session_state.get('gen_def_b2', ''),
-            height=80,
-            key="new_b2d"
-        )
-        
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            new_beh3_name = st.text_input("Behaviour 3 Name", key="new_b3n")
-        with col2:
-            if st.button("✨ Generate", key="gen_b3", use_container_width=True):
-                if new_beh3_name:
-                    try:
-                        from groq import Groq
-                        groq_client = Groq(api_key=st.secrets.get("groq", {}).get("api_key", ""))
-                        
-                        prompt = f"""Create a concise operational definition for the behaviour "{new_beh3_name}" suitable for school behaviour tracking. 
-
-Requirements:
-- Observable and measurable
-- Clear and specific
-- 2-3 sentences maximum
-- Include what it looks like
-- No medical/diagnostic language
-
-Format: Just the definition, no preamble."""
-                        
-                        response = groq_client.chat.completions.create(
-                            model="llama-3.3-70b-versatile",
-                            messages=[{"role": "user", "content": prompt}],
-                            temperature=0.3,
-                            max_tokens=200
-                        )
-                        
-                        definition = response.choices[0].message.content.strip()
-                        st.session_state['gen_def_b3'] = definition
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Could not generate: {e}")
-        
-        new_beh3_def = st.text_area(
-            "Behaviour 3 Definition",
-            value=st.session_state.get('gen_def_b3', ''),
-            height=80,
-            key="new_b3d"
-        )
-        
-        if st.button("➕ Add Student", type="primary", use_container_width=True):
-            if not new_name:
-                st.error("Name required")
-            else:
-                beh_defs = {}
-                if new_beh1_name: beh_defs[new_beh1_name] = new_beh1_def
-                if new_beh2_name: beh_defs[new_beh2_name] = new_beh2_def
-                
-                sb = get_sb()
-                if sb:
-                    try:
-                        sb.table("scatter_students").insert({
-                            "student_name": new_name,
-                            "program_type": new_prog,
-                            "behaviour_definitions": json.dumps(beh_defs) if beh_defs else None
-                        }).execute()
-                        st.success(f"✅ Added {new_name}!")
-                        load_students.clear()
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-
-# ==============================================================================
-# PAGE 2: SETUP WEEK
-# ==============================================================================
-elif st.session_state.page == 'setup':
-    st.markdown("## 📋 Setup Week")
+if st.session_state.page == 'setup':
+    st.markdown("## 📋 Weekly Setup")
+    st.caption("Set up your tracking sheet for the week")
     
     # Student selection
-    @st.cache_data(ttl=60)
+    st.markdown("### 1. Student")
+    
+    @st.cache_data(ttl=120)
     def load_students():
         sb = get_sb()
         if not sb: return []
@@ -552,103 +142,70 @@ elif st.session_state.page == 'setup':
     students = load_students()
     
     if not students:
-        st.warning("⚠️ No students. Go to Students page to add one.")
-        st.stop()
+        st.warning("⚠️ No students found. Add a student first.")
+        new_name = st.text_input("Student Name")
+        new_prog = st.selectbox("Program", ["JP", "PY", "SY"])
+        if st.button("Add Student", type="primary"):
+            sb = get_sb()
+            if sb and new_name:
+                try:
+                    sb.table("scatter_students").insert({
+                        "student_name": new_name.strip(),
+                        "program_type": new_prog
+                    }).execute()
+                    st.success(f"✅ Added {new_name}")
+                    load_students.clear()
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
+    else:
+        student_names = [s['student_name'] for s in students]
+        selected = st.selectbox(
+            "Select Student",
+            options=student_names,
+            index=student_names.index(st.session_state.student_name) if st.session_state.student_name in student_names else 0
+        )
+        st.session_state.student_name = selected
     
-    # Load saved weeks for this student
-    @st.cache_data(ttl=30)
-    def load_saved_weeks(student_name):
-        sb = get_sb()
-        if not sb: return []
-        try:
-            res = sb.table("scatter_weekly_data").select("*").eq("student_name", student_name).order("week_start", desc=True).execute()
-            return res.data or []
-        except:
-            return []
+    st.markdown("---")
     
-    st.markdown("### 1. Select Student")
-    student_names = [s['student_name'] for s in students]
-    selected = st.selectbox(
-        "Student",
-        options=student_names,
-        index=student_names.index(st.session_state.student_name) if st.session_state.student_name in student_names else 0
-    )
-    st.session_state.student_name = selected
-    
-    # Show saved weeks
-    saved_weeks = load_saved_weeks(selected)
-    
-    if saved_weeks:
-        st.markdown("### 📚 Saved Weeks - Click to Resume")
-        for week in saved_weeks:
-            week_start = pd.to_datetime(week['week_start']).date()
-            week_end = week_start + timedelta(days=4)
-            behs = json.loads(week.get('behaviours', '[]'))
-            
-            # Count observations
-            grid_data = json.loads(week.get('grid_data', '{}'))
-            obs_count = sum(1 for v in grid_data.values() if v > 0)
-            
-            is_active = st.session_state.week_id == week['id']
-            card_class = "saved-week active-week" if is_active else "saved-week"
-            
-            st.markdown(f"<div class='{card_class}'>📅 <b>{week_start.strftime('%-d %b')} - {week_end.strftime('%-d %b %Y')}</b><br>Behaviours: {', '.join(behs)}<br>Observations: {obs_count}</div>", unsafe_allow_html=True)
-            
-            if st.button(f"Load This Week", key=f"load_{week['id']}", use_container_width=True):
-                st.session_state.week_id = week['id']
-                st.session_state.week_start = week_start
-                st.session_state.behaviours = behs
-                st.session_state.schedule = json.loads(week.get('schedule', '[]'))
-                st.session_state.grid_data = grid_data
-                st.success(f"✅ Loaded week {week_start.strftime('%-d %b')}")
-                load_saved_weeks.clear()
-                st.rerun()
-        
-        st.markdown("---")
-    
-    st.markdown("### 2. Create New Week")
-    
+    # Week selection
+    st.markdown("### 2. Week")
     col1, col2 = st.columns(2)
     with col1:
         week_start = st.date_input(
             "Monday (start of week)",
             value=st.session_state.week_start,
-            help="Select the Monday"
+            help="Select the Monday of the tracking week"
         )
+        st.session_state.week_start = week_start
     with col2:
         week_end = week_start + timedelta(days=4)
         st.info(f"📅 Week: {week_start.strftime('%-d %b')} - {week_end.strftime('%-d %b %Y')}")
     
-    # Get student's predefined behaviours
-    student = [s for s in students if s['student_name'] == selected][0]
-    beh_defs = student.get('behaviour_definitions', {})
-    if isinstance(beh_defs, str):
-        try:
-            beh_defs = json.loads(beh_defs)
-        except:
-            beh_defs = {}
+    st.markdown("---")
     
+    # Target behaviours
     st.markdown("### 3. Target Behaviours")
+    st.caption("Enter 1-3 behaviours to track this week (e.g., 'Hitting', 'Task refusal', 'Yelling')")
     
-    if beh_defs:
-        st.info(f"📋 Pre-defined behaviours for {selected}: {', '.join(beh_defs.keys())}")
-        use_predefined = st.checkbox("Use pre-defined behaviours", value=True)
-        
-        if use_predefined:
-            behaviours = list(beh_defs.keys())
-        else:
-            beh1 = st.text_input("Behaviour 1", value=st.session_state.behaviours[0] if len(st.session_state.behaviours) > 0 else "")
-            beh2 = st.text_input("Behaviour 2", value=st.session_state.behaviours[1] if len(st.session_state.behaviours) > 1 else "")
-            beh3 = st.text_input("Behaviour 3", value=st.session_state.behaviours[2] if len(st.session_state.behaviours) > 2 else "")
-            behaviours = [b.strip() for b in [beh1, beh2, beh3] if b.strip()]
-    else:
-        beh1 = st.text_input("Behaviour 1", value=st.session_state.behaviours[0] if len(st.session_state.behaviours) > 0 else "")
-        beh2 = st.text_input("Behaviour 2", value=st.session_state.behaviours[1] if len(st.session_state.behaviours) > 1 else "")
-        beh3 = st.text_input("Behaviour 3", value=st.session_state.behaviours[2] if len(st.session_state.behaviours) > 2 else "")
-        behaviours = [b.strip() for b in [beh1, beh2, beh3] if b.strip()]
+    beh1 = st.text_input("Behaviour 1", value=st.session_state.behaviours[0] if len(st.session_state.behaviours) > 0 else "", key="beh1")
+    beh2 = st.text_input("Behaviour 2 (optional)", value=st.session_state.behaviours[1] if len(st.session_state.behaviours) > 1 else "", key="beh2")
+    beh3 = st.text_input("Behaviour 3 (optional)", value=st.session_state.behaviours[2] if len(st.session_state.behaviours) > 2 else "", key="beh3")
     
+    behaviours = [b.strip() for b in [beh1, beh2, beh3] if b.strip()]
+    st.session_state.behaviours = behaviours
+    
+    if behaviours:
+        st.success(f"✅ Tracking: {', '.join(behaviours)}")
+    
+    st.markdown("---")
+    
+    # Schedule
     st.markdown("### 4. Daily Schedule")
+    st.caption("Enter your time slots and activities (e.g., '9:00 - Maths', '10:30 - Recess')")
     
+    # Default schedule
     if not st.session_state.schedule:
         st.session_state.schedule = [
             {"time": "9:00", "activity": "Morning routine"},
@@ -661,6 +218,7 @@ elif st.session_state.page == 'setup':
         ]
     
     schedule_data = pd.DataFrame(st.session_state.schedule)
+    
     edited_schedule = st.data_editor(
         schedule_data,
         column_config={
@@ -673,41 +231,28 @@ elif st.session_state.page == 'setup':
     )
     
     st.session_state.schedule = edited_schedule.to_dict('records')
-    st.session_state.behaviours = behaviours
-    st.session_state.week_start = week_start
     
-    if st.button("✅ Save & Start Recording", type="primary", use_container_width=True):
-        if not behaviours:
-            st.error("❌ Add at least one behaviour")
+    st.markdown("---")
+    
+    # Save and continue
+    if st.button("✅ Setup Complete - Start Recording", type="primary", use_container_width=True):
+        if not st.session_state.student_name:
+            st.error("❌ Please select a student")
+        elif not behaviours:
+            st.error("❌ Please enter at least one behaviour")
+        elif not st.session_state.schedule:
+            st.error("❌ Please add your daily schedule")
         else:
-            sb = get_sb()
-            if sb:
-                try:
-                    # Create new week
-                    result = sb.table("scatter_weekly_data").insert({
-                        "student_name": selected,
-                        "week_start": str(week_start),
-                        "behaviours": json.dumps(behaviours),
-                        "schedule": json.dumps(st.session_state.schedule),
-                        "grid_data": json.dumps({})
-                    }).execute()
-                    
-                    st.session_state.week_id = result.data[0]['id']
-                    st.session_state.grid_data = {}
-                    st.success("✅ Week created!")
-                    load_saved_weeks.clear()
-                    st.session_state.page = 'record'
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {e}")
+            st.session_state.page = 'record'
+            st.rerun()
 
 # ==============================================================================
-# PAGE 3: RECORDING
+# PAGE 2: RECORDING GRID
 # ==============================================================================
 elif st.session_state.page == 'record':
     
-    if not st.session_state.student_name or not st.session_state.week_id:
-        st.warning("⚠️ Please set up a week first")
+    if not st.session_state.student_name or not st.session_state.behaviours:
+        st.warning("⚠️ Please complete setup first")
         if st.button("Go to Setup"):
             st.session_state.page = 'setup'
             st.rerun()
@@ -720,21 +265,7 @@ elif st.session_state.page == 'record':
     
     st.markdown(f"<div class='info-box'><b>Week:</b> {week_start.strftime('%-d %b')} - {week_end.strftime('%-d %b %Y')} | <b>Behaviours:</b> {', '.join(st.session_state.behaviours)}</div>", unsafe_allow_html=True)
     
-    # Auto-save button
-    col1, col2 = st.columns([3, 1])
-    with col2:
-        if st.button("💾 Save Now", use_container_width=True):
-            sb = get_sb()
-            if sb:
-                try:
-                    sb.table("scatter_weekly_data").update({
-                        "grid_data": json.dumps(st.session_state.grid_data)
-                    }).eq("id", st.session_state.week_id).execute()
-                    st.success("✅ Saved!")
-                except Exception as e:
-                    st.error(f"Error: {e}")
-    
-    # Days
+    # Days of week
     days = []
     for i in range(5):
         day_date = week_start + timedelta(days=i)
@@ -748,10 +279,14 @@ elif st.session_state.page == 'record':
     behaviours = st.session_state.behaviours
     schedule = st.session_state.schedule
     
-    # Build grid
-    st.markdown("### 📊 Weekly Grid")
-    st.caption("Tally marks: blank = 0, / = 1, // = 2, /// = 3, //// = 4, 5+ = number")
+    # Initialize grid data if needed
+    if not st.session_state.grid_data:
+        st.session_state.grid_data = {}
     
+    st.markdown("### 📊 Weekly Grid")
+    st.caption("Click any cell to add a tally mark ( / ). Click repeatedly to add more.")
+    
+    # Build grid as DataFrame for display
     grid_rows = []
     
     for slot in schedule:
@@ -765,6 +300,7 @@ elif st.session_state.page == 'record':
                 cell_key = f"{day['date_obj']}_{time}_{beh_idx}"
                 current_value = st.session_state.grid_data.get(cell_key, 0)
                 
+                # Display tally marks
                 if current_value == 0:
                     display = ""
                 elif current_value <= 4:
@@ -775,13 +311,14 @@ elif st.session_state.page == 'record':
                 col_name = f"{day['short']}_{beh[:8]}"
                 row[col_name] = display
         
+        # Row total
         row_total = sum(st.session_state.grid_data.get(f"{d['date_obj']}_{time}_{i}", 0) 
                        for d in days for i in range(len(behaviours)))
         row["Total"] = str(row_total) if row_total > 0 else ""
         
         grid_rows.append(row)
     
-    # Totals row
+    # Add totals row
     totals_row = {"Time": "TOTAL", "Activity": ""}
     week_total = 0
     
@@ -796,12 +333,13 @@ elif st.session_state.page == 'record':
     totals_row["Total"] = str(week_total)
     grid_rows.append(totals_row)
     
+    # Display grid
     grid_df = pd.DataFrame(grid_rows)
     st.dataframe(grid_df, use_container_width=True, hide_index=True)
     
     st.markdown("---")
     
-    # Quick recording
+    # Quick recording interface
     st.markdown("### ✏️ Quick Record")
     
     col1, col2, col3 = st.columns(3)
@@ -827,207 +365,64 @@ elif st.session_state.page == 'record':
     with col_add:
         if st.button("➕ Add Tally ( / )", use_container_width=True, type="primary"):
             st.session_state.grid_data[cell_key] = current + 1
-            # Auto-save
-            sb = get_sb()
-            if sb:
-                try:
-                    sb.table("scatter_weekly_data").update({
-                        "grid_data": json.dumps(st.session_state.grid_data)
-                    }).eq("id", st.session_state.week_id).execute()
-                except:
-                    pass
             st.rerun()
     
     with col_minus:
         if st.button("➖ Remove Tally", use_container_width=True):
             if current > 0:
                 st.session_state.grid_data[cell_key] = current - 1
-                sb = get_sb()
-                if sb:
-                    try:
-                        sb.table("scatter_weekly_data").update({
-                            "grid_data": json.dumps(st.session_state.grid_data)
-                        }).eq("id", st.session_state.week_id).execute()
-                    except:
-                        pass
                 st.rerun()
     
     with col_set:
-        set_value = st.number_input("Set to:", min_value=0, max_value=20, value=current, label_visibility="collapsed")
+        set_value = st.number_input("Or set to:", min_value=0, max_value=20, value=current, key="set_val", label_visibility="collapsed")
         if st.button("✏️ Set", use_container_width=True):
             st.session_state.grid_data[cell_key] = set_value
+            st.rerun()
+    
+    st.markdown("---")
+    
+    # Save/Load
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("💾 Save Week", use_container_width=True):
             sb = get_sb()
             if sb:
                 try:
-                    sb.table("scatter_weekly_data").update({
-                        "grid_data": json.dumps(st.session_state.grid_data)
-                    }).eq("id", st.session_state.week_id).execute()
-                except:
-                    pass
-            st.rerun()
-
-# ==============================================================================
-# PAGE 4: ANALYSIS
-# ==============================================================================
-elif st.session_state.page == 'analysis':
-    st.markdown("## 📈 Scatter Plot & Analysis")
+                    # Save as JSON blob
+                    sb.table("scatter_weekly_data").upsert({
+                        "student_name": st.session_state.student_name,
+                        "week_start": str(week_start),
+                        "behaviours": json.dumps(behaviours),
+                        "schedule": json.dumps(schedule),
+                        "grid_data": json.dumps(st.session_state.grid_data),
+                        "created_by": get_staff_name() if hasattr(get_staff_name, '__call__') else "Staff"
+                    }).execute()
+                    st.success("✅ Week saved!")
+                except Exception as e:
+                    st.error(f"Save failed: {e}")
     
-    if not st.session_state.student_name:
-        st.warning("⚠️ Select a student first")
-        if st.button("Go to Setup"):
-            st.session_state.page = 'setup'
-            st.rerun()
-        st.stop()
-    
-    # Load all weeks for this student
-    @st.cache_data(ttl=30)
-    def load_all_weeks(student_name):
-        sb = get_sb()
-        if not sb: return []
-        try:
-            res = sb.table("scatter_weekly_data").select("*").eq("student_name", student_name).order("week_start").execute()
-            return res.data or []
-        except:
-            return []
-    
-    weeks = load_all_weeks(st.session_state.student_name)
-    
-    if not weeks:
-        st.info("No data yet. Record some observations first.")
-        st.stop()
-    
-    # Week selector
-    week_options = [f"{pd.to_datetime(w['week_start']).strftime('%-d %b %Y')} - {(pd.to_datetime(w['week_start']) + timedelta(days=4)).strftime('%-d %b')}" for w in weeks]
-    selected_week_idx = st.selectbox("Select Week to Analyze", range(len(weeks)), format_func=lambda i: week_options[i])
-    
-    week = weeks[selected_week_idx]
-    behaviours = json.loads(week.get('behaviours', '[]'))
-    schedule = json.loads(week.get('schedule', '[]'))
-    grid_data = json.loads(week.get('grid_data', '{}'))
-    week_start = pd.to_datetime(week['week_start']).date()
-    
-    st.markdown(f"### Analysis: {st.session_state.student_name}")
-    st.markdown(f"**Week:** {week_start.strftime('%-d %b')} - {(week_start + timedelta(days=4)).strftime('%-d %b %Y')}")
-    st.markdown(f"**Behaviours:** {', '.join(behaviours)}")
-    
-    st.markdown("---")
-    
-    # Summary stats
-    st.markdown("### 📊 Summary Statistics")
-    
-    days = []
-    for i in range(5):
-        day_date = week_start + timedelta(days=i)
-        days.append(day_date)
-    
-    total_incidents = sum(grid_data.values())
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Total Incidents", total_incidents)
     with col2:
-        avg_per_day = total_incidents / 5 if total_incidents > 0 else 0
-        st.metric("Avg Per Day", f"{avg_per_day:.1f}")
+        if st.button("📥 Load Week", use_container_width=True):
+            sb = get_sb()
+            if sb:
+                try:
+                    res = sb.table("scatter_weekly_data").select("*").eq("student_name", st.session_state.student_name).eq("week_start", str(week_start)).execute()
+                    if res.data:
+                        data = res.data[0]
+                        st.session_state.grid_data = json.loads(data.get('grid_data', '{}'))
+                        st.success("✅ Week loaded!")
+                        st.rerun()
+                    else:
+                        st.info("No saved data for this week")
+                except Exception as e:
+                    st.error(f"Load failed: {e}")
+    
     with col3:
-        # Peak time
-        time_totals = {}
-        for slot in schedule:
-            time = slot['time']
-            time_total = sum(grid_data.get(f"{d}_{time}_{i}", 0) for d in days for i in range(len(behaviours)))
-            time_totals[time] = time_total
-        peak_time = max(time_totals, key=time_totals.get) if time_totals else "—"
-        st.metric("Peak Time", peak_time)
-    
-    st.markdown("---")
-    
-    # Scatter plot visualization
-    st.markdown("### 📍 Scatter Plot Visualization")
-    
-    # Build data for plotting
-    plot_data = []
-    for day_idx, day in enumerate(days):
-        for slot_idx, slot in enumerate(schedule):
-            time = slot['time']
-            activity = slot.get('activity', '')
-            
-            for beh_idx, beh in enumerate(behaviours):
-                cell_key = f"{day}_{time}_{beh_idx}"
-                value = grid_data.get(cell_key, 0)
-                
-                if value > 0:
-                    plot_data.append({
-                        "Day": day.strftime("%a %d/%m"),
-                        "Day_num": day_idx,
-                        "Time": time,
-                        "Time_num": slot_idx,
-                        "Activity": activity,
-                        "Behaviour": beh,
-                        "Count": value
-                    })
-    
-    if plot_data:
-        df_plot = pd.DataFrame(plot_data)
-        
-        # Create scatter plot
-        fig = px.scatter(
-            df_plot,
-            x="Day",
-            y="Time",
-            size="Count",
-            color="Behaviour",
-            hover_data=["Activity", "Count"],
-            title="Behaviour Occurrences by Day and Time",
-            height=600
-        )
-        
-        fig.update_layout(
-            yaxis=dict(categoryorder='array', categoryarray=[s['time'] for s in schedule][::-1]),
-            xaxis=dict(categoryorder='category ascending')
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # By behaviour chart
-        st.markdown("### 📊 By Behaviour")
-        beh_totals = df_plot.groupby("Behaviour")["Count"].sum().reset_index()
-        fig2 = px.bar(beh_totals, x="Behaviour", y="Count", title="Total Incidents by Behaviour")
-        st.plotly_chart(fig2, use_container_width=True)
-        
-        # By day chart
-        st.markdown("### 📅 By Day")
-        day_totals = df_plot.groupby("Day")["Count"].sum().reset_index()
-        fig3 = px.bar(day_totals, x="Day", y="Count", title="Total Incidents by Day")
-        st.plotly_chart(fig3, use_container_width=True)
-        
-        # By time chart
-        st.markdown("### ⏰ By Time")
-        time_totals = df_plot.groupby("Time")["Count"].sum().reset_index()
-        fig4 = px.bar(time_totals, x="Time", y="Count", title="Total Incidents by Time")
-        st.plotly_chart(fig4, use_container_width=True)
-        
-        # Pattern analysis
-        st.markdown("### 🔍 Pattern Analysis")
-        
-        # Find patterns
-        patterns = []
-        
-        # Peak day
-        peak_day_data = day_totals.loc[day_totals['Count'].idxmax()]
-        patterns.append(f"**Peak day:** {peak_day_data['Day']} ({peak_day_data['Count']} incidents)")
-        
-        # Peak time
-        peak_time_data = time_totals.loc[time_totals['Count'].idxmax()]
-        patterns.append(f"**Peak time:** {peak_time_data['Time']} ({peak_time_data['Count']} incidents)")
-        
-        # Most common behaviour
-        peak_beh_data = beh_totals.loc[beh_totals['Count'].idxmax()]
-        patterns.append(f"**Most frequent behaviour:** {peak_beh_data['Behaviour']} ({peak_beh_data['Count']} incidents)")
-        
-        for p in patterns:
-            st.markdown(f"- {p}")
-        
-    else:
-        st.info("No observations recorded for this week yet")
+        if st.button("🗑️ Clear All", use_container_width=True):
+            if st.checkbox("Confirm clear all data"):
+                st.session_state.grid_data = {}
+                st.rerun()
 
 st.markdown("---")
-st.caption("🏫 CLC-LBU · Scatter Plot Tracker")
+st.caption("🏫 CLC-LBU · Simple Scatter Plot Tracker")
