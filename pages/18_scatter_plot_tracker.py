@@ -457,7 +457,7 @@ elif st.session_state.page == 'record':
             sb = get_sb()
             if sb:
                 try:
-                    # Save as JSON blob
+                    # Save as JSON blob - upsert to update if exists
                     sb.table("scatter_weekly_data").upsert({
                         "student_name": st.session_state.student_name,
                         "week_start": str(week_start),
@@ -465,7 +465,7 @@ elif st.session_state.page == 'record':
                         "schedule": json.dumps(schedule),
                         "grid_data": json.dumps(st.session_state.grid_data),
                         "created_by": get_staff_name() if hasattr(get_staff_name, '__call__') else "Staff"
-                    }).execute()
+                    }, on_conflict="student_name,week_start").execute()
                     st.success("✅ Week saved!")
                 except Exception as e:
                     st.error(f"Save failed: {e}")
