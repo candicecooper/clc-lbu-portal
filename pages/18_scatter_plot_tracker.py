@@ -356,18 +356,46 @@ Format: Just the definition, no preamble."""
         new_prog = st.selectbox("Program", ["JP", "PY", "SY"])
         
         st.markdown("**Optional: Add Behaviour Definitions**")
-        st.caption("Type a behaviour name and click 'Generate Definition' for an AI-suggested operational definition")
+        st.caption("Type a behaviour name and click 'Generate' for AI definition, or select from common templates")
+        
+        # Common behaviour templates
+        COMMON_BEHAVIOURS = {
+            "Hitting": "Making forceful contact with another person using an open or closed hand. Includes slapping, punching, or striking any part of another person's body. Does not include accidental contact, light taps, or high-fives.",
+            "Pushing": "Using hands, arms, or body to forcefully move another person. Includes shoving, bumping with force, or moving someone out of the way. Does not include gentle guidance or accidental contact.",
+            "Kicking": "Making forceful contact with another person using foot or leg. Includes kicking, stomping on feet, or tripping. Does not include accidental contact or stretching.",
+            "Yelling": "Speaking at a volume significantly louder than conversational tone for more than 3 seconds. Includes shouting, screaming during instruction, or loud vocalizations. Does not include excited voice during play or calling from distance.",
+            "Task refusal": "Verbally or physically refusing to begin or continue an assigned task. Includes saying 'no', pushing materials away, or stating refusal. Does not include asking for help, requesting a break, or seeking clarification.",
+            "Leaving area": "Moving beyond designated boundaries without permission. Includes leaving classroom, exiting playground area, or wandering from group. Does not include transitioning with class or returning materials.",
+            "Throwing objects": "Propelling objects through the air with force. Includes throwing books, tossing chairs, or hurling materials. Does not include passing items, placing down quickly, or accidental drops.",
+            "Swearing": "Using profanity or socially inappropriate language. Includes curse words and explicit language directed at others. Does not include repeating overheard language without understanding.",
+        }
+        
+        use_template = st.checkbox("Use common behaviour templates", value=False, key="use_template_new")
+        
+        if use_template:
+            template_beh = st.selectbox("Select behaviour", [""] + list(COMMON_BEHAVIOURS.keys()), key="template_select_new")
+            if template_beh:
+                st.session_state['template_def_new'] = COMMON_BEHAVIOURS[template_beh]
+                st.session_state['template_name_new'] = template_beh
         
         col1, col2 = st.columns([3, 1])
         with col1:
-            new_beh1_name = st.text_input("Behaviour 1 Name", key="new_b1n")
+            new_beh1_name = st.text_input(
+                "Behaviour 1 Name", 
+                value=st.session_state.get('template_name_new', ''),
+                key="new_b1n"
+            )
         with col2:
             if st.button("✨ Generate", key="gen_b1", use_container_width=True):
                 if new_beh1_name:
-                    # Generate definition using Groq
                     try:
                         from groq import Groq
-                        groq_client = Groq(api_key=st.secrets.get("groq", {}).get("api_key", ""))
+                        api_key = st.secrets.get("GROQ_API_KEY") or st.secrets.get("groq", {}).get("api_key")
+                        
+                        if not api_key:
+                            st.error("⚠️ Groq API key not configured. Use templates or type manually.")
+                        else:
+                            groq_client = Groq(api_key=api_key)
                         
                         prompt = f"""Create a concise operational definition for the behaviour "{new_beh1_name}" suitable for school behaviour tracking. 
 
@@ -387,17 +415,17 @@ Format: Just the definition, no preamble."""
                             max_tokens=200
                         )
                         
-                        definition = response.choices[0].message.content.strip()
                         st.session_state['gen_def_b1'] = definition
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Could not generate: {e}")
+                        st.error(f"⚠️ AI generation failed: {str(e)[:100]}. Use templates or type manually.")
         
         new_beh1_def = st.text_area(
             "Behaviour 1 Definition", 
-            value=st.session_state.get('gen_def_b1', ''),
+            value=st.session_state.get('gen_def_b1', st.session_state.get('template_def_new', '')),
             height=80,
-            key="new_b1d"
+            key="new_b1d",
+            help="Observable, measurable description of the behaviour"
         )
         
         col1, col2 = st.columns([3, 1])
