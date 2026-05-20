@@ -40,8 +40,7 @@ MEDICAL_FLAGS = ["Medication", "Medical condition"]
 # Combine all for storage
 ALL_FLAGS = (LANGUAGE_CULTURAL_FLAGS + ATTENDANCE_FLAGS + CARE_CUSTODY_FLAGS + 
              FUNDING_FLAGS + SUPPORT_NEEDS_FLAGS + MEDICAL_FLAGS)
-STAFF_NAMES = ["Candice", "Annette", "Tom", "Gary", "Caitie", "Jacqui", 
-               "Ben Sutton", "Ben Selga", "Brenton", "Vinnie"]
+STAFF_NAMES = ["Brenton McGorman", "Caitie Hook", "Ben Selga", "Ben Sutton", "Jacqui Simpson"]
 OUTCOMES = ["Allocated", "Not Allocated"]
 EXTENSION_OUTCOMES = ["Approved", "Not Approved"]
 
@@ -515,15 +514,15 @@ with tab1:
                         with col1:
                             program = st.selectbox("Program *", [""] + PROGRAMS)
                         with col2:
-                            # Start date: today to 2 years from now
+                            # Exclusion start date: today to 2 years from now
                             start_min = datetime.now().date()
                             start_max = datetime.now().date() + timedelta(days=365*2)
-                            start_after = st.date_input("Start After", value=None, min_value=start_min, max_value=start_max)
+                            start_after = st.date_input("Exclusion Start Date", value=None, min_value=start_min, max_value=start_max)
                         with col3:
-                            # End date: today to 2 years from now
+                            # Exclusion end date: today to 2 years from now
                             finish_min = datetime.now().date()
                             finish_max = datetime.now().date() + timedelta(days=365*2)
-                            finishing_date = st.date_input("Finishing Date", value=None, min_value=finish_min, max_value=finish_max)
+                            finishing_date = st.date_input("Exclusion End Date", value=None, min_value=finish_min, max_value=finish_max)
                         with col4:
                             bespoke_placement = st.selectbox("Bespoke Placement?", ["No", "Yes"])
                         
@@ -537,24 +536,24 @@ with tab1:
                         with col1:
                             case_worker = st.selectbox("Case Worker", [""] + STAFF_NAMES)
                         with col2:
-                            bsc = st.selectbox("BSC", [""] + STAFF_NAMES)
+                            bsc = st.text_input("BSE (Behaviour Support Educator)")
                         with col3:
                             school_contact = st.text_input("School Contact")
                         
                         notes = st.text_area("Additional Notes", height=80)
                     else:
-                        # Not allocated - set defaults
+                        # Not allocated - set defaults (None for database fields)
                         waitlist_status = "Not Applicable"
                         waitlist_date = None
                         allocated_from_waitlist = "No"
-                        program = ""
+                        program = None  # Must be None, not empty string (database constraint)
                         start_after = None
                         finishing_date = None
                         bespoke_placement = "No"
-                        case_worker = ""
-                        bsc = ""
-                        school_contact = ""
-                        notes = ""
+                        case_worker = None  # None instead of empty string
+                        bsc = None  # None instead of empty string
+                        school_contact = None  # None instead of empty string
+                        notes = None  # None instead of empty string
                     
                     # Submit
                     st.markdown("---")
@@ -642,23 +641,25 @@ with tab1:
             st.markdown("---")
             st.markdown("### 2️⃣ Placement History")
             
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
                 previous_clc = st.selectbox("Previous CLC Placement?", ["No", "Yes"])
             with col2:
                 previous_other_lc = st.selectbox("Previous Other LC?", ["No", "Yes"])
             with col3:
+                previously_referred = st.selectbox("Previously Referred?", ["No", "Yes"])
+            with col4:
                 if previous_other_lc == "Yes":
                     other_lc_name = st.text_input("Other LC Name")
                 else:
                     other_lc_name = ""
             
-            if previous_clc == "Yes" or previous_other_lc == "Yes":
+            if previous_clc == "Yes" or previous_other_lc == "Yes" or previously_referred == "Yes":
                 col1, col2 = st.columns(2)
                 with col1:
-                    total_placements = st.number_input("Total Previous Placements", min_value=0, value=1)
+                    total_placements = st.number_input("Total Previous Placements/Referrals", min_value=0, value=1)
                 with col2:
-                    placement_history_notes = st.text_input("Placement History Notes")
+                    placement_history_notes = st.text_input("Placement/Referral History Notes")
             else:
                 total_placements = 0
                 placement_history_notes = ""
@@ -694,9 +695,14 @@ with tab1:
             
             with col2:
                 st.write("**Medical**")
+                medical_condition_details = ""  # Initialize first
                 for flag in MEDICAL_FLAGS:
                     if st.checkbox(flag, key=f"flag_{flag}"):
                         selected_flags.append(flag)
+                
+                # Medical condition details field - only show if checked
+                if "Medical condition" in selected_flags:
+                    medical_condition_details = st.text_input("Medical Condition Details", placeholder="Please specify medical condition")
             
             # Row 3: Funding (full width - lots of options)
             st.write("**Funding & Categories**")
@@ -771,9 +777,11 @@ with tab1:
                             "priority_level": priority_level if priority_level else "Standard",
                             "previous_clc_placement": previous_clc,
                             "previous_other_lc": previous_other_lc,
+                            "previously_referred": previously_referred,  # NEW
                             "other_lc_name": other_lc_name if previous_other_lc == "Yes" else None,
                             "total_previous_placements": total_placements,
                             "placement_history_notes": placement_history_notes,
+                            "medical_condition_details": medical_condition_details if "Medical condition" in selected_flags else None,  # NEW
                             "cat_funding": json.dumps(selected_flags),  # All flags stored here
                             "partnership": json.dumps([]),  # Legacy field, kept empty
                             "queries": queries,
