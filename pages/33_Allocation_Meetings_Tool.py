@@ -26,8 +26,20 @@ supabase = init_supabase()
 
 # Define constants
 PROGRAMS = ["Junior Primary (JP)", "Primary Years (PY)", "Senior Years (SY)"]
-CAT_FUNDING_OPTIONS = ["ATSI", "SIC", "SWD", "DCP", "SCH"]
-PARTNERSHIP_OPTIONS = ["MH", "PREV", "EALD", "CAHMS", "ASD"]
+# NEW: Comprehensive flag categories organized by type
+LANGUAGE_CULTURAL_FLAGS = ["EALD", "ATSI"]
+ATTENDANCE_FLAGS = ["Attendance-Fulltime", "Attendance-Parttime"]
+CARE_CUSTODY_FLAGS = ["Intervention/Custody Order", "DCP involvement", "Child in care"]
+FUNDING_FLAGS = ["IESP Funding-yes", "IESP Funding-no", "IESP Grant", 
+                 "Category 1", "Category 2", "Category 3", "Category 4", "Category 5",
+                 "Category 6", "Category 7", "Category 8", "Category 9", "9+RAAP", "SWD"]
+SUPPORT_NEEDS_FLAGS = ["Speech and Lang", "ASD", "Intellectual", "Learning Difficulty", 
+                       "Sensory Processing", "ADHD", "ODD", "PDA"]
+MEDICAL_FLAGS = ["Medication", "Medical condition"]
+
+# Combine all for storage
+ALL_FLAGS = (LANGUAGE_CULTURAL_FLAGS + ATTENDANCE_FLAGS + CARE_CUSTODY_FLAGS + 
+             FUNDING_FLAGS + SUPPORT_NEEDS_FLAGS + MEDICAL_FLAGS)
 STAFF_NAMES = ["Candice", "Annette", "Tom", "Gary", "Caitie", "Jacqui", 
                "Ben Sutton", "Ben Selga", "Brenton", "Vinnie"]
 OUTCOMES = ["Allocated", "Not Allocated"]
@@ -119,17 +131,8 @@ def get_partnership_from_school(school_name):
     return SCHOOL_PARTNERSHIP_MAP.get(school_name, "")
 
 def map_flags_from_allocation(cat_funding, partnership):
-    """Map categorical funding and partnership to flag columns"""
-    flags = {
-        "Flag_ASD": "No",
-        "Flag_ADHD": "No",
-        "Flag_MentalHealth": "No",
-        "Flag_ODD_CD": "No",
-        "Flag_Care_CPS": "No",
-        "Flag_Aboriginal": "No",
-        "Flag_EALD": "No",
-        "Flag_Other": "No"
-    }
+    """Map comprehensive flags to Yes/No columns for export"""
+    flags = {}
     
     # Parse JSON if string
     if isinstance(cat_funding, str):
@@ -143,21 +146,13 @@ def map_flags_from_allocation(cat_funding, partnership):
         except:
             partnership = []
     
-    # Map categorical funding
-    if "ATSI" in cat_funding:
-        flags["Flag_Aboriginal"] = "Yes"
-    if "SIC" in cat_funding or "DCP" in cat_funding:
-        flags["Flag_Care_CPS"] = "Yes"
-    if "SWD" in cat_funding:
-        flags["Flag_Other"] = "Yes"
+    # Combine all flags
+    all_flags = cat_funding + partnership
     
-    # Map partnership
-    if "ASD" in partnership:
-        flags["Flag_ASD"] = "Yes"
-    if "MH" in partnership or "CAHMS" in partnership:
-        flags["Flag_MentalHealth"] = "Yes"
-    if "EALD" in partnership:
-        flags["Flag_EALD"] = "Yes"
+    # Map each possible flag to Yes/No
+    for flag in ALL_FLAGS:
+        flag_key = flag.replace(" ", "_").replace("/", "_").replace("+", "plus").replace("-", "_")
+        flags[f"Flag_{flag_key}"] = "Yes" if flag in all_flags else "No"
     
     return flags
 
@@ -169,15 +164,18 @@ def export_to_data_entry(selected_allocations):
     ws = wb.active
     ws.title = "Data_Model"
     
-    # Define headers - COMPLETE SET matching allocation_tracker table
+    # Define headers - COMPLETE SET with comprehensive flags
+    # Generate flag headers from ALL_FLAGS list
+    flag_headers = [f"Flag_{flag.replace(' ', '_').replace('/', '_').replace('+', 'plus').replace('-', '_')}" 
+                    for flag in ALL_FLAGS]
+    
     headers = [
         "Student_ID", "Student_Name", "DOB", "Gender", "Year_Level", "Referring_School",
         "Referral_Date", "Allocation_Status", "Allocated_Program", 
         "Placement_Start", "Placement_End", "Partnership_Area",
         "Previous_CLC_Placement", "Previous_Other_LC", "Other_LC_Name",
-        "Total_Previous_Placements", "Placement_History_Notes", "Priority_Level",
-        "Flag_ASD", "Flag_ADHD", "Flag_MentalHealth", "Flag_ODD_CD",
-        "Flag_Care_CPS", "Flag_Aboriginal", "Flag_EALD", "Flag_Other",
+        "Total_Previous_Placements", "Placement_History_Notes", "Priority_Level"
+    ] + flag_headers + [
         "Bespoke_Placement",
         "Waitlist_Status", "Waitlist_Date", "Allocated_From_Waitlist",
         "Current_Status", "Exit_Reason", "Transition_Plan", "Notes"
@@ -240,7 +238,14 @@ def export_to_data_entry(selected_allocations):
         # Today's date as referral date
         today = datetime.now().strftime('%Y-%m-%d')
         
-        # Build row data - COMPLETE SET
+        # Build row data - COMPLETE SET with comprehensive flags
+        # Generate flag header keys to match the flags dictionary
+        flag_keys = [f"Flag_{flag.replace(' ', '_').replace('/', '_').replace('+', 'plus').replace('-', '_')}" 
+                     for flag in ALL_FLAGS]
+        
+        # Get flag values in same order as headers
+        flag_values = [flags.get(key, "No") for key in flag_keys]
+        
         row_data = [
             student_id,                                          # 1. Student_ID
             allocation.get('student_name', '').upper(),         # 2. Student_Name
@@ -260,22 +265,15 @@ def export_to_data_entry(selected_allocations):
             allocation.get('total_previous_placements', 0),      # 16. Total_Previous_Placements
             allocation.get('placement_history_notes', ''),       # 17. Placement_History_Notes
             allocation.get('priority_level', 'Standard'),        # 18. Priority_Level
-            flags["Flag_ASD"],                                   # 19. Flag_ASD
-            flags["Flag_ADHD"],                                  # 20. Flag_ADHD
-            flags["Flag_MentalHealth"],                          # 21. Flag_MentalHealth
-            flags["Flag_ODD_CD"],                                # 22. Flag_ODD_CD
-            flags["Flag_Care_CPS"],                              # 23. Flag_Care_CPS
-            flags["Flag_Aboriginal"],                            # 24. Flag_Aboriginal
-            flags["Flag_EALD"],                                  # 25. Flag_EALD
-            flags["Flag_Other"],                                 # 26. Flag_Other
-            allocation.get('bespoke_placement', 'No'),           # 27. Bespoke_Placement
-            allocation.get('waitlist_status', 'Not Applicable'), # 28. Waitlist_Status
-            waitlist_date,                                       # 29. Waitlist_Date
-            allocation.get('allocated_from_waitlist', 'No'),     # 30. Allocated_From_Waitlist
-            "Active",                                            # 31. Current_Status
-            allocation.get('exit_reason', ''),                   # 32. Exit_Reason
-            allocation.get('transition_plan', ''),               # 33. Transition_Plan
-            allocation.get('notes', '')                          # 34. Notes
+        ] + flag_values + [  # 19-51. All comprehensive flags (33 flags)
+            allocation.get('bespoke_placement', 'No'),           # 52. Bespoke_Placement
+            allocation.get('waitlist_status', 'Not Applicable'), # 53. Waitlist_Status
+            waitlist_date,                                       # 54. Waitlist_Date
+            allocation.get('allocated_from_waitlist', 'No'),     # 55. Allocated_From_Waitlist
+            "Active",                                            # 56. Current_Status
+            allocation.get('exit_reason', ''),                   # 57. Exit_Reason
+            allocation.get('transition_plan', ''),               # 58. Transition_Plan
+            allocation.get('notes', '')                          # 59. Notes
         ]
         
         # Write row
@@ -665,24 +663,76 @@ with tab1:
                 total_placements = 0
                 placement_history_notes = ""
             
-            # SECTION 3: Categorical Funding & Partnership
+            # SECTION 3: Student Flags (Comprehensive)
             st.markdown("---")
-            st.markdown("### 3️⃣ Categorical Funding & Partnership Support")
+            st.markdown("### 3️⃣ Student Flags & Support Needs")
+            st.caption("Select all that apply - organized by category")
             
+            selected_flags = []
+            
+            # Row 1: Language/Cultural & Attendance
             col1, col2 = st.columns(2)
             with col1:
-                st.write("**Categorical Funding**")
-                cat_funding = []
-                for option in CAT_FUNDING_OPTIONS:
-                    if st.checkbox(option, key=f"cat_{option}"):
-                        cat_funding.append(option)
+                st.write("**Language & Cultural**")
+                for flag in LANGUAGE_CULTURAL_FLAGS:
+                    if st.checkbox(flag, key=f"flag_{flag}"):
+                        selected_flags.append(flag)
             
             with col2:
-                st.write("**Partnership Support**")
-                partnership = []
-                for option in PARTNERSHIP_OPTIONS:
-                    if st.checkbox(option, key=f"part_{option}"):
-                        partnership.append(option)
+                st.write("**Attendance**")
+                for flag in ATTENDANCE_FLAGS:
+                    if st.checkbox(flag, key=f"flag_{flag}"):
+                        selected_flags.append(flag)
+            
+            # Row 2: Care/Custody & Medical
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write("**Care & Custody**")
+                for flag in CARE_CUSTODY_FLAGS:
+                    if st.checkbox(flag, key=f"flag_{flag}"):
+                        selected_flags.append(flag)
+            
+            with col2:
+                st.write("**Medical**")
+                for flag in MEDICAL_FLAGS:
+                    if st.checkbox(flag, key=f"flag_{flag}"):
+                        selected_flags.append(flag)
+            
+            # Row 3: Funding (full width - lots of options)
+            st.write("**Funding & Categories**")
+            col1, col2, col3 = st.columns(3)
+            funding_split = len(FUNDING_FLAGS) // 3 + 1
+            
+            with col1:
+                for flag in FUNDING_FLAGS[:funding_split]:
+                    if st.checkbox(flag, key=f"flag_{flag}"):
+                        selected_flags.append(flag)
+            with col2:
+                for flag in FUNDING_FLAGS[funding_split:funding_split*2]:
+                    if st.checkbox(flag, key=f"flag_{flag}"):
+                        selected_flags.append(flag)
+            with col3:
+                for flag in FUNDING_FLAGS[funding_split*2:]:
+                    if st.checkbox(flag, key=f"flag_{flag}"):
+                        selected_flags.append(flag)
+            
+            # Row 4: Support Needs (full width - lots of options)
+            st.write("**Support Needs & Diagnoses**")
+            col1, col2, col3 = st.columns(3)
+            support_split = len(SUPPORT_NEEDS_FLAGS) // 3 + 1
+            
+            with col1:
+                for flag in SUPPORT_NEEDS_FLAGS[:support_split]:
+                    if st.checkbox(flag, key=f"flag_{flag}"):
+                        selected_flags.append(flag)
+            with col2:
+                for flag in SUPPORT_NEEDS_FLAGS[support_split:support_split*2]:
+                    if st.checkbox(flag, key=f"flag_{flag}"):
+                        selected_flags.append(flag)
+            with col3:
+                for flag in SUPPORT_NEEDS_FLAGS[support_split*2:]:
+                    if st.checkbox(flag, key=f"flag_{flag}"):
+                        selected_flags.append(flag)
             
             # SECTION 4: Meeting Details
             st.markdown("---")
@@ -724,8 +774,8 @@ with tab1:
                             "other_lc_name": other_lc_name if previous_other_lc == "Yes" else None,
                             "total_previous_placements": total_placements,
                             "placement_history_notes": placement_history_notes,
-                            "cat_funding": json.dumps(cat_funding),
-                            "partnership": json.dumps(partnership),
+                            "cat_funding": json.dumps(selected_flags),  # All flags stored here
+                            "partnership": json.dumps([]),  # Legacy field, kept empty
                             "queries": queries,
                             "outcome": None  # Draft status
                         }
