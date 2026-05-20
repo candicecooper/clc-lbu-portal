@@ -140,16 +140,20 @@ if st.session_state.page == 'students':
                     # Behaviour definitions
                     st.markdown("### Target Behaviours & Definitions")
                     
-                    beh_defs = stu.get('behaviour_definitions', {})
-                    if isinstance(beh_defs, str):
-                        try:
-                            beh_defs = json.loads(beh_defs)
-                        except:
-                            beh_defs = {}
-                    
+                    beh_defs = stu.get('behaviour_definitions')
                     if beh_defs:
-                        for beh, defn in beh_defs.items():
-                            st.markdown(f"**{beh}:** {defn}")
+                        # Parse if it's a string
+                        if isinstance(beh_defs, str):
+                            try:
+                                beh_defs = json.loads(beh_defs)
+                            except:
+                                beh_defs = {}
+                        
+                        if beh_defs and len(beh_defs) > 0:
+                            for beh, defn in beh_defs.items():
+                                st.markdown(f"**{beh}:** {defn}")
+                        else:
+                            st.caption("No behaviour definitions set")
                     else:
                         st.caption("No behaviour definitions set")
                     
@@ -164,9 +168,26 @@ if st.session_state.page == 'students':
                     st.markdown("**Behaviour Definitions:**")
                     st.caption("Click ✨ Generate for AI-suggested definitions")
                     
+                    # Load existing definitions
+                    existing_defs = stu.get('behaviour_definitions')
+                    if existing_defs and isinstance(existing_defs, str):
+                        try:
+                            existing_defs = json.loads(existing_defs)
+                        except:
+                            existing_defs = {}
+                    elif not existing_defs:
+                        existing_defs = {}
+                    
+                    # Get existing behaviour names and definitions
+                    existing_list = list(existing_defs.items())
+                    
                     col1, col2 = st.columns([3, 1])
                     with col1:
-                        beh1_name = st.text_input("Behaviour 1", key=f"b1n_{stu['id']}")
+                        beh1_name = st.text_input(
+                            "Behaviour 1", 
+                            value=existing_list[0][0] if len(existing_list) > 0 else "",
+                            key=f"b1n_{stu['id']}"
+                        )
                     with col2:
                         if st.button("✨", key=f"gen1_{stu['id']}", use_container_width=True):
                             if beh1_name:
@@ -200,14 +221,18 @@ Format: Just the definition, no preamble."""
                     
                     beh1_def = st.text_area(
                         "Definition 1", 
-                        value=st.session_state.get(f'edit_gen1_{stu["id"]}', ''),
+                        value=st.session_state.get(f'edit_gen1_{stu["id"]}', existing_list[0][1] if len(existing_list) > 0 else ''),
                         key=f"b1d_{stu['id']}", 
                         height=60
                     )
                     
                     col1, col2 = st.columns([3, 1])
                     with col1:
-                        beh2_name = st.text_input("Behaviour 2", key=f"b2n_{stu['id']}")
+                        beh2_name = st.text_input(
+                            "Behaviour 2", 
+                            value=existing_list[1][0] if len(existing_list) > 1 else "",
+                            key=f"b2n_{stu['id']}"
+                        )
                     with col2:
                         if st.button("✨", key=f"gen2_{stu['id']}", use_container_width=True):
                             if beh2_name:
@@ -241,14 +266,18 @@ Format: Just the definition, no preamble."""
                     
                     beh2_def = st.text_area(
                         "Definition 2",
-                        value=st.session_state.get(f'edit_gen2_{stu["id"]}', ''),
+                        value=st.session_state.get(f'edit_gen2_{stu["id"]}', existing_list[1][1] if len(existing_list) > 1 else ''),
                         key=f"b2d_{stu['id']}", 
                         height=60
                     )
                     
                     col1, col2 = st.columns([3, 1])
                     with col1:
-                        beh3_name = st.text_input("Behaviour 3", key=f"b3n_{stu['id']}")
+                        beh3_name = st.text_input(
+                            "Behaviour 3", 
+                            value=existing_list[2][0] if len(existing_list) > 2 else "",
+                            key=f"b3n_{stu['id']}"
+                        )
                     with col2:
                         if st.button("✨", key=f"gen3_{stu['id']}", use_container_width=True):
                             if beh3_name:
@@ -282,7 +311,7 @@ Format: Just the definition, no preamble."""
                     
                     beh3_def = st.text_area(
                         "Definition 3",
-                        value=st.session_state.get(f'edit_gen3_{stu["id"]}', ''),
+                        value=st.session_state.get(f'edit_gen3_{stu["id"]}', existing_list[2][1] if len(existing_list) > 2 else ''),
                         key=f"b3d_{stu['id']}", 
                         height=60
                     )
