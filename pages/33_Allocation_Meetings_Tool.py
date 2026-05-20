@@ -52,23 +52,136 @@ WAITLIST_STATUS_OPTIONS = ["Not Applicable", "On Waitlist", "Declined"]
 
 # SCHOOL-PARTNERSHIP MAPPING (from government PDF)
 SCHOOL_PARTNERSHIP_MAP = {
-    "Bellevue Heights PS": "Mitcham Hills",
-    "Challa Gardens PS": "Inner West",
-    "Clovelly Park PS": "Marion Inland",
-    "Cowandilla PS": "West Torrens",
-    "Findon HS": "Inner West",
-    "Hendon PS": "Western Adelaide Shores",
+    # Adelaide Prospect Partnership
+    "Angle Vale School": "Adelaide Prospect",
+    "Gawler and District College": "Adelaide Prospect",
+    "Gawler East Primary School": "Adelaide Prospect",
+    "Gawler Primary School": "Adelaide Prospect",
+    "Hewett Primary School": "Adelaide Prospect",
+    "Kingsford School": "Adelaide Prospect",
+    "Nailsworth Primary School": "Adelaide Prospect",
+    "Prospect North Primary School": "Adelaide Prospect",
+    "Prospect Primary School": "Adelaide Prospect",
+    "Walkerville Primary School": "Adelaide Prospect",
+    
+    # Greenhill South Partnership
+    "Aberfoyle Hub School": "Greenhill South",
+    "Bellevue Heights Primary School": "Greenhill South",
+    "Blackwood High School": "Greenhill South",
+    "Coromandel Valley Primary School": "Greenhill South",
+    "Eden Hills Primary School": "Greenhill South",
+    "Hawthorndene Primary School": "Greenhill South",
     "Highgate School": "Greenhill South",
-    "Le Fevre HS": "Le Fevre Peninsula",
+    "Mitcham Primary School": "Greenhill South",
+    "Springbank Secondary College": "Greenhill South",
+    "Unley High School": "Greenhill South",
+    
+    # Heysen Partnership
+    "Aberfoyle Park High School": "Heysen",
+    "Kangarilla Primary School": "Heysen",
+    "Mount Barker High School": "Heysen",
     "Mount Barker Primary School": "Heysen",
     "Mount Barker Primary": "Heysen",
+    "Mount Barker Waldorf School": "Heysen",
+    "Nairne Primary School": "Heysen",
+    
+    # Holdfast Partnership
+    "Brighton Secondary School": "Holdfast",
+    "Hallett Cove School": "Holdfast",
+    "Hamilton Secondary College": "Holdfast",
+    "Paringa Park Primary School": "Holdfast",
+    "Pasadena High School": "Holdfast",
+    "Seaview High School": "Holdfast",
+    "Warradale Primary School": "Holdfast",
+    
+    # Inner West Partnership
+    "Challa Gardens Primary School": "Inner West",
+    "Cowandilla Primary School": "Inner West",
+    "Findon High School": "Inner West",
+    "Henley High School": "Inner West",
+    "Kidman Park Primary School": "Inner West",
+    "Lockleys Primary School": "Inner West",
+    "Plympton Primary School": "Inner West",
+    "Richmond Primary School": "Inner West",
+    "West Beach Primary School": "Inner West",
+    
+    # Le Fevre Peninsula Partnership
+    "Alberton Primary School": "Le Fevre Peninsula",
+    "Ethelton Primary School": "Le Fevre Peninsula",
+    "Le Fevre High School": "Le Fevre Peninsula",
+    "Largs Bay School": "Le Fevre Peninsula",
     "Ocean View P-12 College": "Le Fevre Peninsula",
+    "Peninsula School": "Le Fevre Peninsula",
+    "Taperoo Primary School": "Le Fevre Peninsula",
+    
+    # Marion Coastal Partnership
+    "Darlington Primary School": "Marion Coastal",
+    "Marino Cove School": "Marion Coastal",
+    "Marion Primary School": "Marion Coastal",
+    "Mitchell Park School": "Marion Coastal",
+    "Seacliff Primary School": "Marion Coastal",
+    "Southern Vocational College": "Marion Coastal",
+    
+    # Marion Inland Partnership
+    "Ascot Park Primary School": "Marion Inland",
+    "Clovelly Park Primary School": "Marion Inland",
+    "Glandore Community Centre": "Marion Inland",
+    "Glandore Primary School": "Marion Inland",
+    "Marion High School": "Marion Inland",
+    "Parkside Primary School": "Marion Inland",
+    "Warradale North Primary School": "Marion Inland",
+    
+    # Mitcham Hills Partnership
+    "Aberfoyle Park Primary School": "Mitcham Hills",
+    "Belair Primary School": "Mitcham Hills",
+    "Bellevue Heights Primary School": "Mitcham Hills",
+    "Blackwood Primary School": "Mitcham Hills",
+    "Brownhill Creek Primary School": "Mitcham Hills",
+    "Craigburn Primary School": "Mitcham Hills",
+    "Cumberland Park Primary School": "Mitcham Hills",
+    "Sturt Street Community School": "Mitcham Hills",
+    
+    # Onkaparinga Partnership
+    "Christies Beach High School": "Onkaparinga",
+    "Hackham East Primary School": "Onkaparinga",
+    "Hackham West Primary School": "Onkaparinga",
+    "Noarlunga Centre Primary School": "Onkaparinga",
+    "Noarlunga Downs Primary School": "Onkaparinga",
+    "Reynella East College": "Onkaparinga",
+    "Reynella Primary School": "Onkaparinga",
+    "Reynella South Primary School": "Onkaparinga",
+    "Southern Vales Christian College": "Onkaparinga",
+    "Willunga High School": "Onkaparinga",
+    
+    # Orion Partnership
+    "Evanston Gardens Primary School": "Orion",
+    "Evanston Primary School": "Orion",
+    "Evanston South Primary School": "Orion",
+    "Hillcrest Primary School": "Orion",
+    "Mark Oliphant College": "Orion",
     "Paralowie R-12": "Orion",
     "Paralowie School": "Orion",
-    "Walkerville PS": "Adelaide Prospect",
-    "Warradale PS": "Holdfast",
+    "Playford International College": "Orion",
+    
+    # West Torrens Partnership
+    "Cowandilla Primary School": "West Torrens",
+    "Fulham Gardens Primary School": "West Torrens",
+    "Fulham North Primary School": "West Torrens",
+    "Henley Beach Primary School": "West Torrens",
+    "Hilton Primary School": "West Torrens",
+    "Underdale High School": "West Torrens",
+    
+    # Western Adelaide Shores Partnership
+    "Hendon Primary School": "Western Adelaide Shores",
+    "Hendon School": "Western Adelaide Shores",
+    "Ottoway Primary School": "Western Adelaide Shores",
+    "Peterhead Primary School": "Western Adelaide Shores",
+    "Rosewater Primary School": "Western Adelaide Shores",
+    "St Clair Primary School": "Western Adelaide Shores",
     "West Lakes Shore School": "Western Adelaide Shores",
-    "West Lakes Shores": "Western Adelaide Shores"
+    "West Lakes Shores": "Western Adelaide Shores",
+    "Woodville High School": "Western Adelaide Shores",
+    "Woodville Gardens School": "Western Adelaide Shores"
 }
 
 # All schools (sorted for dropdown)
