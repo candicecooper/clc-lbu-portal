@@ -152,16 +152,146 @@ if st.session_state.page == 'students':
         new_name = st.text_input("Student Name")
         new_prog = st.selectbox("Program", ["JP", "PY", "SY"])
         
+        st.markdown("**Optional: Target Behaviours with Definitions**")
+        st.caption("Type a behaviour name and click ✨ to auto-generate a definition")
+        
+        # Behaviour 1
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            beh1_name = st.text_input("Behaviour 1", key="new_beh1")
+        with col2:
+            if st.button("✨", key="gen1", use_container_width=True, help="AI Generate"):
+                if beh1_name:
+                    try:
+                        from groq import Groq
+                        api_key = st.secrets.get("GROQ_API_KEY", st.secrets.get("groq", {}).get("api_key", ""))
+                        
+                        if not api_key:
+                            st.error("Groq API key not found in secrets")
+                        else:
+                            client = Groq(api_key=api_key)
+                            
+                            response = client.chat.completions.create(
+                                model="llama-3.3-70b-versatile",
+                                messages=[{
+                                    "role": "user",
+                                    "content": f"Create a concise 2-3 sentence operational definition for the behaviour '{beh1_name}' suitable for school tracking. Format: Observable description. Include examples. Exclude non-examples. No preamble."
+                                }],
+                                temperature=0.3,
+                                max_tokens=150
+                            )
+                            
+                            definition = response.choices[0].message.content.strip()
+                            st.session_state['ai_def1'] = definition
+                            st.rerun()
+                    except ImportError:
+                        st.error("Groq library not installed")
+                    except Exception as e:
+                        st.error(f"Generation failed: {str(e)[:80]}")
+        
+        beh1_def = st.text_area(
+            "Definition 1",
+            value=st.session_state.get('ai_def1', ''),
+            height=70,
+            key="def1",
+            help="Observable, measurable description"
+        )
+        
+        # Behaviour 2
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            beh2_name = st.text_input("Behaviour 2", key="new_beh2")
+        with col2:
+            if st.button("✨", key="gen2", use_container_width=True):
+                if beh2_name:
+                    try:
+                        from groq import Groq
+                        api_key = st.secrets.get("GROQ_API_KEY", st.secrets.get("groq", {}).get("api_key", ""))
+                        
+                        if api_key:
+                            client = Groq(api_key=api_key)
+                            
+                            response = client.chat.completions.create(
+                                model="llama-3.3-70b-versatile",
+                                messages=[{
+                                    "role": "user",
+                                    "content": f"Create a concise 2-3 sentence operational definition for the behaviour '{beh2_name}' suitable for school tracking. Format: Observable description. Include examples. Exclude non-examples. No preamble."
+                                }],
+                                temperature=0.3,
+                                max_tokens=150
+                            )
+                            
+                            definition = response.choices[0].message.content.strip()
+                            st.session_state['ai_def2'] = definition
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Generation failed: {str(e)[:80]}")
+        
+        beh2_def = st.text_area(
+            "Definition 2",
+            value=st.session_state.get('ai_def2', ''),
+            height=70,
+            key="def2"
+        )
+        
+        # Behaviour 3
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            beh3_name = st.text_input("Behaviour 3", key="new_beh3")
+        with col2:
+            if st.button("✨", key="gen3", use_container_width=True):
+                if beh3_name:
+                    try:
+                        from groq import Groq
+                        api_key = st.secrets.get("GROQ_API_KEY", st.secrets.get("groq", {}).get("api_key", ""))
+                        
+                        if api_key:
+                            client = Groq(api_key=api_key)
+                            
+                            response = client.chat.completions.create(
+                                model="llama-3.3-70b-versatile",
+                                messages=[{
+                                    "role": "user",
+                                    "content": f"Create a concise 2-3 sentence operational definition for the behaviour '{beh3_name}' suitable for school tracking. Format: Observable description. Include examples. Exclude non-examples. No preamble."
+                                }],
+                                temperature=0.3,
+                                max_tokens=150
+                            )
+                            
+                            definition = response.choices[0].message.content.strip()
+                            st.session_state['ai_def3'] = definition
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Generation failed: {str(e)[:80]}")
+        
+        beh3_def = st.text_area(
+            "Definition 3",
+            value=st.session_state.get('ai_def3', ''),
+            height=70,
+            key="def3"
+        )
+        
         if st.button("Add Student", type="primary", use_container_width=True):
             if new_name:
+                # Build definitions dict
+                beh_defs = {}
+                if beh1_name and beh1_def: beh_defs[beh1_name] = beh1_def
+                if beh2_name and beh2_def: beh_defs[beh2_name] = beh2_def
+                if beh3_name and beh3_def: beh_defs[beh3_name] = beh3_def
+                
                 sb = get_sb()
                 if sb:
                     try:
                         sb.table("scatter_students").insert({
                             "student_name": new_name,
-                            "program_type": new_prog
+                            "program_type": new_prog,
+                            "behaviour_definitions": json.dumps(beh_defs) if beh_defs else None
                         }).execute()
                         st.success(f"✅ Added {new_name}")
+                        # Clear AI generated definitions
+                        for key in ['ai_def1', 'ai_def2', 'ai_def3']:
+                            if key in st.session_state:
+                                del st.session_state[key]
                         load_students.clear()
                         st.rerun()
                     except Exception as e:
@@ -171,17 +301,36 @@ if st.session_state.page == 'students':
     if students:
         st.markdown("### Current Students")
         for stu in students:
-            col1, col2 = st.columns([4, 1])
-            with col1:
-                st.markdown(f"**{stu['student_name']}** ({stu.get('program_type', '-')})")
-            with col2:
-                if st.button("🗑️", key=f"del_{stu['id']}", use_container_width=True):
-                    if st.checkbox(f"Confirm", key=f"conf_{stu['id']}"):
+            with st.expander(f"**{stu['student_name']}** ({stu.get('program_type', '-')})"):
+                st.markdown(f"**Program:** {stu.get('program_type', 'Not set')}")
+                
+                # Show behaviour definitions
+                beh_defs = stu.get('behaviour_definitions')
+                if beh_defs:
+                    if isinstance(beh_defs, str):
+                        try:
+                            beh_defs = json.loads(beh_defs)
+                        except:
+                            beh_defs = {}
+                    
+                    if beh_defs:
+                        st.markdown("**Target Behaviours:**")
+                        for beh_name, beh_def in beh_defs.items():
+                            st.markdown(f"- **{beh_name}:** {beh_def}")
+                    else:
+                        st.caption("No behaviour definitions set")
+                else:
+                    st.caption("No behaviour definitions set")
+                
+                st.markdown("---")
+                
+                if st.button("🗑️ Delete Student", key=f"del_{stu['id']}", use_container_width=True):
+                    if st.checkbox(f"Confirm delete {stu['student_name']}", key=f"conf_{stu['id']}"):
                         sb = get_sb()
                         if sb:
                             try:
                                 sb.table("scatter_students").delete().eq("id", stu['id']).execute()
-                                st.success("Deleted")
+                                st.success("✅ Deleted")
                                 load_students.clear()
                                 st.rerun()
                             except Exception as e:
@@ -255,7 +404,30 @@ elif st.session_state.page == 'setup':
     
     # Target behaviours
     st.markdown("### 3. Target Behaviours")
-    st.caption("Enter 1-3 behaviours to track this week (e.g., 'Hitting', 'Task refusal', 'Yelling')")
+    
+    # Check if student has pre-defined behaviours
+    student_obj = [s for s in students if s['student_name'] == selected][0] if selected else None
+    has_predefined = False
+    
+    if student_obj:
+        beh_defs = student_obj.get('behaviour_definitions')
+        if beh_defs:
+            if isinstance(beh_defs, str):
+                try:
+                    beh_defs = json.loads(beh_defs)
+                    has_predefined = bool(beh_defs)
+                except:
+                    pass
+            else:
+                has_predefined = bool(beh_defs)
+    
+    if has_predefined:
+        st.info(f"📋 {selected} has pre-defined behaviours: {', '.join(beh_defs.keys())}")
+        if st.button("✨ Use Pre-defined Behaviours", use_container_width=True):
+            st.session_state.behaviours = list(beh_defs.keys())[:3]
+            st.rerun()
+    
+    st.caption("Enter 1-3 behaviours to track this week")
     
     beh1 = st.text_input("Behaviour 1", value=st.session_state.behaviours[0] if len(st.session_state.behaviours) > 0 else "", key="beh1")
     beh2 = st.text_input("Behaviour 2 (optional)", value=st.session_state.behaviours[1] if len(st.session_state.behaviours) > 1 else "", key="beh2")
