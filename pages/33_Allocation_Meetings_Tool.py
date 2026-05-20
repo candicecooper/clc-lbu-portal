@@ -498,7 +498,10 @@ with tab1:
                             waitlist_status = st.selectbox("Waitlist Status", WAITLIST_STATUS_OPTIONS)
                         with col2:
                             if waitlist_status == "On Waitlist":
-                                waitlist_date = st.date_input("Waitlist Date", value=None)
+                                # Waitlist date: 1 year ago to 1 year from now
+                                waitlist_min = datetime.now().date() - timedelta(days=365)
+                                waitlist_max = datetime.now().date() + timedelta(days=365)
+                                waitlist_date = st.date_input("Waitlist Date", value=None, min_value=waitlist_min, max_value=waitlist_max)
                             else:
                                 waitlist_date = None
                         with col3:
@@ -514,9 +517,15 @@ with tab1:
                         with col1:
                             program = st.selectbox("Program *", [""] + PROGRAMS)
                         with col2:
-                            start_after = st.date_input("Start After", value=None)
+                            # Start date: today to 2 years from now
+                            start_min = datetime.now().date()
+                            start_max = datetime.now().date() + timedelta(days=365*2)
+                            start_after = st.date_input("Start After", value=None, min_value=start_min, max_value=start_max)
                         with col3:
-                            finishing_date = st.date_input("Finishing Date", value=None)
+                            # End date: today to 2 years from now
+                            finish_min = datetime.now().date()
+                            finish_max = datetime.now().date() + timedelta(days=365*2)
+                            finishing_date = st.date_input("Finishing Date", value=None, min_value=finish_min, max_value=finish_max)
                         with col4:
                             bespoke_placement = st.selectbox("Bespoke Placement?", ["No", "Yes"])
                         
@@ -613,7 +622,10 @@ with tab1:
             with col1:
                 student_name = st.text_input("Name *")
             with col2:
-                dob = st.date_input("Date of Birth", value=None)
+                # Date range: 20 years ago to today
+                min_date = datetime.now().date() - timedelta(days=365*20)
+                max_date = datetime.now().date()
+                dob = st.date_input("Date of Birth", value=None, min_value=min_date, max_value=max_date)
             with col3:
                 gender = st.selectbox("Gender", [""] + GENDER_OPTIONS)
             with col4:
