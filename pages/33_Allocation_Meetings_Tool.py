@@ -46,7 +46,7 @@ EXTENSION_OUTCOMES = ["Approved", "Not Approved"]
 
 # NEW: Additional options
 GENDER_OPTIONS = ["Male", "Female", "Other", "Prefer not to say"]
-PRIORITY_OPTIONS = ["Standard", "High", "Urgent"]
+PRIORITY_OPTIONS = ["1", "2", "3", "4", "5"]
 YEAR_LEVELS = ["R", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
 WAITLIST_STATUS_OPTIONS = ["Not Applicable", "On Waitlist", "Declined"]
 
@@ -263,7 +263,7 @@ def export_to_data_entry(selected_allocations):
             allocation.get('other_lc_name', ''),                 # 15. Other_LC_Name
             allocation.get('total_previous_placements', 0),      # 16. Total_Previous_Placements
             allocation.get('placement_history_notes', ''),       # 17. Placement_History_Notes
-            allocation.get('priority_level', 'Standard'),        # 18. Priority_Level
+            allocation.get('priority_level', '3'),               # 18. Priority_Level
         ] + flag_values + [  # 19-51. All comprehensive flags (33 flags)
             allocation.get('bespoke_placement', 'No'),           # 52. Bespoke_Placement
             allocation.get('waitlist_status', 'Not Applicable'), # 53. Waitlist_Status
@@ -468,7 +468,7 @@ with tab1:
                         st.write(f"**Gender:** {draft.get('gender', 'Not entered')}")
                         st.write(f"**Year Level:** {draft.get('year_level')}")
                     with col3:
-                        st.write(f"**Priority:** {draft.get('priority_level', 'Standard')}")
+                        st.write(f"**Priority:** {draft.get('priority_level', '3')}")
                         st.write(f"**Previous CLC:** {draft.get('previous_clc_placement', 'No')}")
                         queries_text = draft.get('queries') or 'None'
                 st.write(f"**Queries:** {queries_text[:50]}..." if len(queries_text) > 50 else f"**Queries:** {queries_text}")
@@ -787,7 +787,7 @@ with tab1:
                             "gender": gender,
                             "year_level": year_level,
                             "partnership_area": auto_partnership,
-                            "priority_level": priority_level if priority_level else "Standard",
+                            "priority_level": priority_level if priority_level else "3",
                             "previous_clc_placement": previous_clc,
                             "previous_other_lc": previous_other_lc,
                             "previously_referred": previously_referred,  # NEW
