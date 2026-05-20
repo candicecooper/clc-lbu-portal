@@ -162,14 +162,130 @@ if st.session_state.page == 'students':
                     
                     # Behaviour definitions editor
                     st.markdown("**Behaviour Definitions:**")
-                    beh1_name = st.text_input("Behaviour 1", key=f"b1n_{stu['id']}")
-                    beh1_def = st.text_area("Definition 1", key=f"b1d_{stu['id']}", height=60)
+                    st.caption("Click ✨ Generate for AI-suggested definitions")
                     
-                    beh2_name = st.text_input("Behaviour 2", key=f"b2n_{stu['id']}")
-                    beh2_def = st.text_area("Definition 2", key=f"b2d_{stu['id']}", height=60)
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        beh1_name = st.text_input("Behaviour 1", key=f"b1n_{stu['id']}")
+                    with col2:
+                        if st.button("✨", key=f"gen1_{stu['id']}", use_container_width=True):
+                            if beh1_name:
+                                try:
+                                    from groq import Groq
+                                    groq_client = Groq(api_key=st.secrets.get("groq", {}).get("api_key", ""))
+                                    
+                                    prompt = f"""Create a concise operational definition for the behaviour "{beh1_name}" suitable for school behaviour tracking. 
+
+Requirements:
+- Observable and measurable
+- Clear and specific
+- 2-3 sentences maximum
+- Include what it looks like
+- No medical/diagnostic language
+
+Format: Just the definition, no preamble."""
+                                    
+                                    response = groq_client.chat.completions.create(
+                                        model="llama-3.3-70b-versatile",
+                                        messages=[{"role": "user", "content": prompt}],
+                                        temperature=0.3,
+                                        max_tokens=200
+                                    )
+                                    
+                                    definition = response.choices[0].message.content.strip()
+                                    st.session_state[f'edit_gen1_{stu["id"]}'] = definition
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
                     
-                    beh3_name = st.text_input("Behaviour 3", key=f"b3n_{stu['id']}")
-                    beh3_def = st.text_area("Definition 3", key=f"b3d_{stu['id']}", height=60)
+                    beh1_def = st.text_area(
+                        "Definition 1", 
+                        value=st.session_state.get(f'edit_gen1_{stu["id"]}', ''),
+                        key=f"b1d_{stu['id']}", 
+                        height=60
+                    )
+                    
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        beh2_name = st.text_input("Behaviour 2", key=f"b2n_{stu['id']}")
+                    with col2:
+                        if st.button("✨", key=f"gen2_{stu['id']}", use_container_width=True):
+                            if beh2_name:
+                                try:
+                                    from groq import Groq
+                                    groq_client = Groq(api_key=st.secrets.get("groq", {}).get("api_key", ""))
+                                    
+                                    prompt = f"""Create a concise operational definition for the behaviour "{beh2_name}" suitable for school behaviour tracking. 
+
+Requirements:
+- Observable and measurable
+- Clear and specific
+- 2-3 sentences maximum
+- Include what it looks like
+- No medical/diagnostic language
+
+Format: Just the definition, no preamble."""
+                                    
+                                    response = groq_client.chat.completions.create(
+                                        model="llama-3.3-70b-versatile",
+                                        messages=[{"role": "user", "content": prompt}],
+                                        temperature=0.3,
+                                        max_tokens=200
+                                    )
+                                    
+                                    definition = response.choices[0].message.content.strip()
+                                    st.session_state[f'edit_gen2_{stu["id"]}'] = definition
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+                    
+                    beh2_def = st.text_area(
+                        "Definition 2",
+                        value=st.session_state.get(f'edit_gen2_{stu["id"]}', ''),
+                        key=f"b2d_{stu['id']}", 
+                        height=60
+                    )
+                    
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        beh3_name = st.text_input("Behaviour 3", key=f"b3n_{stu['id']}")
+                    with col2:
+                        if st.button("✨", key=f"gen3_{stu['id']}", use_container_width=True):
+                            if beh3_name:
+                                try:
+                                    from groq import Groq
+                                    groq_client = Groq(api_key=st.secrets.get("groq", {}).get("api_key", ""))
+                                    
+                                    prompt = f"""Create a concise operational definition for the behaviour "{beh3_name}" suitable for school behaviour tracking. 
+
+Requirements:
+- Observable and measurable
+- Clear and specific
+- 2-3 sentences maximum
+- Include what it looks like
+- No medical/diagnostic language
+
+Format: Just the definition, no preamble."""
+                                    
+                                    response = groq_client.chat.completions.create(
+                                        model="llama-3.3-70b-versatile",
+                                        messages=[{"role": "user", "content": prompt}],
+                                        temperature=0.3,
+                                        max_tokens=200
+                                    )
+                                    
+                                    definition = response.choices[0].message.content.strip()
+                                    st.session_state[f'edit_gen3_{stu["id"]}'] = definition
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+                    
+                    beh3_def = st.text_area(
+                        "Definition 3",
+                        value=st.session_state.get(f'edit_gen3_{stu["id"]}', ''),
+                        key=f"b3d_{stu['id']}", 
+                        height=60
+                    )
                     
                     new_defs = {}
                     if beh1_name: new_defs[beh1_name] = beh1_def
@@ -211,11 +327,131 @@ if st.session_state.page == 'students':
         new_prog = st.selectbox("Program", ["JP", "PY", "SY"])
         
         st.markdown("**Optional: Add Behaviour Definitions**")
-        new_beh1_name = st.text_input("Behaviour 1 Name")
-        new_beh1_def = st.text_area("Behaviour 1 Definition", height=60)
+        st.caption("Type a behaviour name and click 'Generate Definition' for an AI-suggested operational definition")
         
-        new_beh2_name = st.text_input("Behaviour 2 Name")
-        new_beh2_def = st.text_area("Behaviour 2 Definition", height=60)
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            new_beh1_name = st.text_input("Behaviour 1 Name", key="new_b1n")
+        with col2:
+            if st.button("✨ Generate", key="gen_b1", use_container_width=True):
+                if new_beh1_name:
+                    # Generate definition using Groq
+                    try:
+                        from groq import Groq
+                        groq_client = Groq(api_key=st.secrets.get("groq", {}).get("api_key", ""))
+                        
+                        prompt = f"""Create a concise operational definition for the behaviour "{new_beh1_name}" suitable for school behaviour tracking. 
+
+Requirements:
+- Observable and measurable
+- Clear and specific
+- 2-3 sentences maximum
+- Include what it looks like
+- No medical/diagnostic language
+
+Format: Just the definition, no preamble."""
+                        
+                        response = groq_client.chat.completions.create(
+                            model="llama-3.3-70b-versatile",
+                            messages=[{"role": "user", "content": prompt}],
+                            temperature=0.3,
+                            max_tokens=200
+                        )
+                        
+                        definition = response.choices[0].message.content.strip()
+                        st.session_state['gen_def_b1'] = definition
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Could not generate: {e}")
+        
+        new_beh1_def = st.text_area(
+            "Behaviour 1 Definition", 
+            value=st.session_state.get('gen_def_b1', ''),
+            height=80,
+            key="new_b1d"
+        )
+        
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            new_beh2_name = st.text_input("Behaviour 2 Name", key="new_b2n")
+        with col2:
+            if st.button("✨ Generate", key="gen_b2", use_container_width=True):
+                if new_beh2_name:
+                    try:
+                        from groq import Groq
+                        groq_client = Groq(api_key=st.secrets.get("groq", {}).get("api_key", ""))
+                        
+                        prompt = f"""Create a concise operational definition for the behaviour "{new_beh2_name}" suitable for school behaviour tracking. 
+
+Requirements:
+- Observable and measurable
+- Clear and specific
+- 2-3 sentences maximum
+- Include what it looks like
+- No medical/diagnostic language
+
+Format: Just the definition, no preamble."""
+                        
+                        response = groq_client.chat.completions.create(
+                            model="llama-3.3-70b-versatile",
+                            messages=[{"role": "user", "content": prompt}],
+                            temperature=0.3,
+                            max_tokens=200
+                        )
+                        
+                        definition = response.choices[0].message.content.strip()
+                        st.session_state['gen_def_b2'] = definition
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Could not generate: {e}")
+        
+        new_beh2_def = st.text_area(
+            "Behaviour 2 Definition",
+            value=st.session_state.get('gen_def_b2', ''),
+            height=80,
+            key="new_b2d"
+        )
+        
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            new_beh3_name = st.text_input("Behaviour 3 Name", key="new_b3n")
+        with col2:
+            if st.button("✨ Generate", key="gen_b3", use_container_width=True):
+                if new_beh3_name:
+                    try:
+                        from groq import Groq
+                        groq_client = Groq(api_key=st.secrets.get("groq", {}).get("api_key", ""))
+                        
+                        prompt = f"""Create a concise operational definition for the behaviour "{new_beh3_name}" suitable for school behaviour tracking. 
+
+Requirements:
+- Observable and measurable
+- Clear and specific
+- 2-3 sentences maximum
+- Include what it looks like
+- No medical/diagnostic language
+
+Format: Just the definition, no preamble."""
+                        
+                        response = groq_client.chat.completions.create(
+                            model="llama-3.3-70b-versatile",
+                            messages=[{"role": "user", "content": prompt}],
+                            temperature=0.3,
+                            max_tokens=200
+                        )
+                        
+                        definition = response.choices[0].message.content.strip()
+                        st.session_state['gen_def_b3'] = definition
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Could not generate: {e}")
+        
+        new_beh3_def = st.text_area(
+            "Behaviour 3 Definition",
+            value=st.session_state.get('gen_def_b3', ''),
+            height=80,
+            key="new_b3d"
+        )
         
         if st.button("➕ Add Student", type="primary", use_container_width=True):
             if not new_name:
