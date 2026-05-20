@@ -4,6 +4,8 @@
 # ==============================================================================
 import streamlit as st
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 from datetime import date, timedelta, datetime
 import json
 
@@ -80,7 +82,7 @@ def get_sb():
 # ==============================================================================
 def init():
     if 'page' not in st.session_state:
-        st.session_state.page = 'setup'
+        st.session_state.page = 'students'
     if 'student_name' not in st.session_state:
         st.session_state.student_name = ''
     if 'week_start' not in st.session_state:
@@ -107,22 +109,88 @@ st.markdown("""
 # ==============================================================================
 # PAGE NAVIGATION
 # ==============================================================================
-col1, col2 = st.columns([1, 1])
+col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
 with col1:
-    if st.button("📋 Setup Week", use_container_width=True, type="primary" if st.session_state.page == 'setup' else "secondary"):
-        st.session_state.page = 'setup'
+    if st.button("👤 Students", use_container_width=True, type="primary" if st.session_state.page == 'students' else "secondary"):
+        st.session_state.page = 'students'
         st.rerun()
 with col2:
-    if st.button("✏️ Record Behaviours", use_container_width=True, type="primary" if st.session_state.page == 'record' else "secondary"):
+    if st.button("📋 Setup", use_container_width=True, type="primary" if st.session_state.page == 'setup' else "secondary"):
+        st.session_state.page = 'setup'
+        st.rerun()
+with col3:
+    if st.button("✏️ Record", use_container_width=True, type="primary" if st.session_state.page == 'record' else "secondary"):
         st.session_state.page = 'record'
+        st.rerun()
+with col4:
+    if st.button("📈 Analysis", use_container_width=True, type="primary" if st.session_state.page == 'analysis' else "secondary"):
+        st.session_state.page = 'analysis'
         st.rerun()
 
 st.markdown("---")
 
 # ==============================================================================
-# PAGE 1: SETUP
+# PAGE 1: STUDENTS
 # ==============================================================================
-if st.session_state.page == 'setup':
+if st.session_state.page == 'students':
+    st.markdown("## 👤 Student Management")
+    
+    @st.cache_data(ttl=60)
+    def load_students():
+        sb = get_sb()
+        if not sb: return []
+        try:
+            res = sb.table("scatter_students").select("*").order("student_name").execute()
+            return res.data or []
+        except:
+            return []
+    
+    students = load_students()
+    
+    # Add student
+    with st.expander("➕ Add New Student", expanded=not students):
+        new_name = st.text_input("Student Name")
+        new_prog = st.selectbox("Program", ["JP", "PY", "SY"])
+        
+        if st.button("Add Student", type="primary", use_container_width=True):
+            if new_name:
+                sb = get_sb()
+                if sb:
+                    try:
+                        sb.table("scatter_students").insert({
+                            "student_name": new_name,
+                            "program_type": new_prog
+                        }).execute()
+                        st.success(f"✅ Added {new_name}")
+                        load_students.clear()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+    
+    # List students
+    if students:
+        st.markdown("### Current Students")
+        for stu in students:
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.markdown(f"**{stu['student_name']}** ({stu.get('program_type', '-')})")
+            with col2:
+                if st.button("🗑️", key=f"del_{stu['id']}", use_container_width=True):
+                    if st.checkbox(f"Confirm", key=f"conf_{stu['id']}"):
+                        sb = get_sb()
+                        if sb:
+                            try:
+                                sb.table("scatter_students").delete().eq("id", stu['id']).execute()
+                                st.success("Deleted")
+                                load_students.clear()
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error: {e}")
+
+# ==============================================================================
+# PAGE 2: SETUP
+# ==============================================================================
+elif st.session_state.page == 'setup':
     st.markdown("## 📋 Weekly Setup")
     st.caption("Set up your tracking sheet for the week")
     
@@ -247,7 +315,7 @@ if st.session_state.page == 'setup':
             st.rerun()
 
 # ==============================================================================
-# PAGE 2: RECORDING GRID
+# PAGE 3: RECORDING
 # ==============================================================================
 elif st.session_state.page == 'record':
     
@@ -424,5 +492,132 @@ elif st.session_state.page == 'record':
                 st.session_state.grid_data = {}
                 st.rerun()
 
+# ==============================================================================
+# PAGE 4: ANALYSIS
+# ==============================================================================
+elif st.session_state.page == 'analysis':
+    st.markdown("## 📈 Scatter Plot & Analysis")
+    
+    if not st.session_state.student_name:
+        st.warning("⚠️ Select a student in Setup first")
+        if st.button("Go to Setup"):
+            st.session_state.page = 'setup'
+            st.rerun()
+        st.stop()
+    
+    # Load saved weeks for analysis
+    @st.cache_data(ttl=30)
+    def load_all_weeks(student_name):
+        sb = get_sb()
+        if not sb: return []
+        try:
+            res = sb.table("scatter_weekly_data").select("*").eq("student_name", student_name).order("week_start").execute()
+            return res.data or []
+        except:
+            return []
+    
+    weeks = load_all_weeks(st.session_state.student_name)
+    
+    if not weeks:
+        st.info("No data yet. Record some observations first.")
+        st.stop()
+    
+    # Week selector
+    week_options = [f"{pd.to_datetime(w['week_start']).strftime('%-d %b %Y')}" for w in weeks]
+    selected_week_idx = st.selectbox("Select Week", range(len(weeks)), format_func=lambda i: week_options[i])
+    
+    week = weeks[selected_week_idx]
+    behaviours = json.loads(week.get('behaviours', '[]'))
+    schedule = json.loads(week.get('schedule', '[]'))
+    grid_data = json.loads(week.get('grid_data', '{}'))
+    week_start = pd.to_datetime(week['week_start']).date()
+    
+    st.markdown(f"**Week:** {week_start.strftime('%-d %b')} - {(week_start + timedelta(days=4)).strftime('%-d %b %Y')}")
+    st.markdown(f"**Behaviours:** {', '.join(behaviours)}")
+    
+    st.markdown("---")
+    
+    # Summary stats
+    days = [week_start + timedelta(days=i) for i in range(5)]
+    total_incidents = sum(grid_data.values())
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Incidents", total_incidents)
+    with col2:
+        avg_per_day = total_incidents / 5 if total_incidents > 0 else 0
+        st.metric("Avg Per Day", f"{avg_per_day:.1f}")
+    with col3:
+        # Peak time
+        time_totals = {}
+        for slot in schedule:
+            time = slot['time']
+            time_total = sum(grid_data.get(f"{d}_{time}_{i}", 0) for d in days for i in range(len(behaviours)))
+            time_totals[time] = time_total
+        peak_time = max(time_totals, key=time_totals.get) if time_totals and max(time_totals.values()) > 0 else "—"
+        st.metric("Peak Time", peak_time)
+    
+    st.markdown("---")
+    
+    # Build plot data
+    plot_data = []
+    for day_idx, day in enumerate(days):
+        for slot_idx, slot in enumerate(schedule):
+            time = slot['time']
+            activity = slot.get('activity', '')
+            
+            for beh_idx, beh in enumerate(behaviours):
+                cell_key = f"{day}_{time}_{beh_idx}"
+                value = grid_data.get(cell_key, 0)
+                
+                if value > 0:
+                    plot_data.append({
+                        "Day": day.strftime("%a %d/%m"),
+                        "Time": time,
+                        "Activity": activity,
+                        "Behaviour": beh,
+                        "Count": value
+                    })
+    
+    if plot_data:
+        df_plot = pd.DataFrame(plot_data)
+        
+        # Scatter plot
+        st.markdown("### 📍 Scatter Plot")
+        fig = px.scatter(
+            df_plot,
+            x="Day",
+            y="Time",
+            size="Count",
+            color="Behaviour",
+            hover_data=["Activity", "Count"],
+            title="Behaviour Occurrences by Day and Time",
+            height=500
+        )
+        fig.update_layout(
+            yaxis=dict(categoryorder='array', categoryarray=[s['time'] for s in schedule][::-1])
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # By behaviour
+        st.markdown("### 📊 By Behaviour")
+        beh_totals = df_plot.groupby("Behaviour")["Count"].sum().reset_index()
+        fig2 = px.bar(beh_totals, x="Behaviour", y="Count")
+        st.plotly_chart(fig2, use_container_width=True)
+        
+        # By day
+        st.markdown("### 📅 By Day")
+        day_totals = df_plot.groupby("Day")["Count"].sum().reset_index()
+        fig3 = px.bar(day_totals, x="Day", y="Count")
+        st.plotly_chart(fig3, use_container_width=True)
+        
+        # By time
+        st.markdown("### ⏰ By Time")
+        time_totals = df_plot.groupby("Time")["Count"].sum().reset_index()
+        fig4 = px.bar(time_totals, x="Time", y="Count")
+        st.plotly_chart(fig4, use_container_width=True)
+    else:
+        st.info("No observations recorded yet")
+
 st.markdown("---")
-st.caption("🏫 CLC-LBU · Simple Scatter Plot Tracker")
+st.caption("🏫 CLC-LBU · Scatter Plot Tracker")
