@@ -557,9 +557,8 @@ elif st.session_state.page == 'setup':
             key="beh1",
             placeholder="Select from dropdown OR type custom"
         )
-        # Save to session state
-        if beh1:
-            st.session_state['setup_beh1'] = beh1
+        # ALWAYS save to session state (not just on AI click)
+        st.session_state['setup_beh1'] = beh1 if beh1 else ''
     with col2:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("🤖 AI", key="setup_ai1", use_container_width=True):
@@ -632,9 +631,8 @@ elif st.session_state.page == 'setup':
             key="beh2",
             placeholder="Select from dropdown OR type custom"
         )
-        # Save to session state
-        if beh2:
-            st.session_state['setup_beh2'] = beh2
+        # ALWAYS save to session state
+        st.session_state['setup_beh2'] = beh2 if beh2 else ''
     with col2:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("🤖 AI", key="setup_ai2", use_container_width=True):
@@ -701,9 +699,8 @@ elif st.session_state.page == 'setup':
             key="beh3",
             placeholder="Select from dropdown OR type custom"
         )
-        # Save to session state
-        if beh3:
-            st.session_state['setup_beh3'] = beh3
+        # ALWAYS save to session state
+        st.session_state['setup_beh3'] = beh3 if beh3 else ''
     with col2:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("🤖 AI", key="setup_ai3", use_container_width=True):
