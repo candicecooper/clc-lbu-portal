@@ -757,12 +757,6 @@ elif st.session_state.page == 'setup':
     if def3:
         st.info(f"📋 {def3}")
     
-    behaviours = [b.strip() for b in [beh1, beh2, beh3] if b.strip()]
-    st.session_state.behaviours = behaviours
-    
-    if behaviours:
-        st.success(f"✅ Tracking: {', '.join(behaviours)}")
-    
     st.markdown("---")
     
     # Schedule
@@ -810,14 +804,26 @@ elif st.session_state.page == 'setup':
         st.write(f"- setup_beh2: `{st.session_state.get('setup_beh2', 'NOT SET')}`")
         st.write(f"- setup_beh3: `{st.session_state.get('setup_beh3', 'NOT SET')}`")
     
-    # Build behaviours list from inputs (use session_state as fallback)
+    # Build behaviours list from inputs (use template, then widget, then session_state)
     behaviours = []
-    for i, (beh, key) in enumerate([(beh1, 'setup_beh1'), (beh2, 'setup_beh2'), (beh3, 'setup_beh3')]):
-        # Use widget value or session_state
-        val = beh if beh else st.session_state.get(key, '')
-        if val and val.strip():
-            behaviours.append(val.strip())
-            st.write(f"DEBUG: Added behaviour {i+1}: '{val.strip()}'")
+    
+    # Behaviour 1
+    val1 = beh1 if beh1 else (template1 if template1 and template1 != "—" else st.session_state.get('setup_beh1', ''))
+    if val1 and val1.strip():
+        behaviours.append(val1.strip())
+        st.write(f"DEBUG: Added behaviour 1: '{val1.strip()}'")
+    
+    # Behaviour 2  
+    val2 = beh2 if beh2 else (template2 if template2 and template2 != "—" else st.session_state.get('setup_beh2', ''))
+    if val2 and val2.strip():
+        behaviours.append(val2.strip())
+        st.write(f"DEBUG: Added behaviour 2: '{val2.strip()}'")
+    
+    # Behaviour 3
+    val3 = beh3 if beh3 else (template3 if template3 and template3 != "—" else st.session_state.get('setup_beh3', ''))
+    if val3 and val3.strip():
+        behaviours.append(val3.strip())
+        st.write(f"DEBUG: Added behaviour 3: '{val3.strip()}'")
     
     st.session_state.behaviours = behaviours
     
