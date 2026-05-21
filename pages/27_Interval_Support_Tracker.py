@@ -1418,12 +1418,18 @@ with t_analysis:
 
     # ── Chart 2: Daily regulation trend ──────────────────────────────────────
     st.markdown("##### 📈 Daily regulation trend")
+    
+    # Load daily notes for this period to mark days with notes
+    daily_notes = get_all_daily_notes(student_name, date_from, date_to)
+    has_notes = len(daily_notes) > 0
+    
     st.caption(
         f"Percentage of each day's recorded intervals in each regulation state, "
         f"across **{n_days_with_data} attendance days with data** (non-attendance days excluded). "
         "Only states that were actually observed appear. "
         "The dashed green line marks the 70% in-window benchmark. "
         "🟡 Coping = dysregulated — at the edge of the window."
+        + (" **📝 Days with notes are marked with a note icon.**" if has_notes else "")
     )
 
     # ── Robust daily % calc (avoids pandas groupby.apply lambda issues) ───────
@@ -1435,6 +1441,11 @@ with t_analysis:
         _daily[_col] = (_dc.get(_state, pd.Series(0, index=_dc.index)) / _dt * 100).round(0).astype(int)
     _daily = _daily.reset_index()
     _daily["date_lbl"] = pd.to_datetime(_daily["obs_date_dt"]).dt.strftime("%a %-d %b")
+    
+    # Mark days with notes
+    _daily["has_note"] = _daily["obs_date_dt"].apply(
+        lambda d: d.strftime("%Y-%m-%d") in daily_notes
+    )
 
     # Build grouped bar chart — clearer than lines for ≤10 data points
     _state_cfg = [
@@ -1456,6 +1467,21 @@ with t_analysis:
                 textfont=dict(color="white", size=11, family="Arial"),
                 hovertemplate=f"{name}: %{{y}}%<extra></extra>",
             ))
+    
+    # Add note markers above bars for days with notes
+    if has_notes:
+        days_with_notes = _daily[_daily["has_note"]]
+        for idx, row in days_with_notes.iterrows():
+            fig2.add_annotation(
+                x=row["date_lbl"],
+                y=105,  # Position above the bars
+                text="📝",
+                showarrow=False,
+                font=dict(size=16),
+                xanchor="center",
+                yanchor="bottom"
+            )
+    
     fig2.add_hline(y=70, line_dash="dot", line_color="#16a34a", line_width=2,
                    annotation_text="70% in-window target",
                    annotation_font_color="#16a34a",
@@ -1472,6 +1498,16 @@ with t_analysis:
         bargap=0.25, bargroupgap=0.05,
     )
     st.plotly_chart(fig2, use_container_width=True)
+    
+    # Key for note markers
+    if has_notes:
+        st.markdown(
+            '<div style="background:#fef9c3;border-left:3px solid #eab308;padding:.35rem .7rem;'
+            'margin-top:.3rem;font-size:.75rem;color:#854d0e;">'
+            '<strong>📝 Note:</strong> Days marked with 📝 have anecdotal notes. '
+            'See the "Daily notes" section above for details.</div>',
+            unsafe_allow_html=True
+        )
 
     # ── Report version: pure HTML table with CSS bars — no Plotly export issues ──
     _state_colours = {
