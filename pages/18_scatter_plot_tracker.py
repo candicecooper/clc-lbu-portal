@@ -153,120 +153,166 @@ if st.session_state.page == 'students':
         new_prog = st.selectbox("Program", ["JP", "PY", "SY"])
         
         st.markdown("**Optional: Target Behaviours with Definitions**")
-        st.caption("Type a behaviour name and click ✨ to auto-generate a definition")
+        st.caption("Select from templates or type custom, then optionally use AI to generate")
+        
+        # Pre-built templates
+        TEMPLATES = {
+            "": "—",
+            "Hitting": "Making forceful contact with another person using an open or closed hand. Includes slapping, punching, striking. Excludes accidental contact, light taps, high-fives.",
+            "Pushing": "Using hands, arms, or body to forcefully move another person. Includes shoving, bumping with force. Excludes gentle guidance, accidental contact.",
+            "Kicking": "Making forceful contact with another person using foot or leg. Includes kicking, stomping, tripping. Excludes accidental contact, stretching.",
+            "Yelling": "Speaking louder than conversational tone for 3+ seconds. Includes shouting, screaming. Excludes excited play voice, calling from distance.",
+            "Task refusal": "Refusing to begin or continue assigned work. Includes saying 'no', pushing materials away. Excludes asking for help, requesting breaks.",
+            "Leaving area": "Moving beyond boundaries without permission. Includes leaving classroom, wandering. Excludes transitions with class.",
+            "Throwing objects": "Propelling objects through air with force. Includes throwing books, materials. Excludes passing items, accidental drops.",
+            "Swearing": "Using profanity or inappropriate language. Includes curse words. Excludes repeating without understanding.",
+            "Property destruction": "Damaging or breaking materials. Includes tearing, breaking, scratching. Excludes accidental damage.",
+            "Self-hitting": "Making forceful contact with own body. Includes hitting head with hand or on objects. Excludes scratching itch.",
+        }
         
         # Behaviour 1
+        st.markdown("**Behaviour 1**")
+        template1 = st.selectbox("Select template or leave blank for custom", list(TEMPLATES.keys()), key="temp1")
+        
         col1, col2 = st.columns([3, 1])
         with col1:
-            beh1_name = st.text_input("Behaviour 1", key="new_beh1")
+            beh1_name = st.text_input(
+                "Name", 
+                value=template1 if template1 else "",
+                key="new_beh1",
+                label_visibility="collapsed"
+            )
         with col2:
-            if st.button("✨", key="gen1", use_container_width=True, help="AI Generate"):
+            if st.button("✨ AI", key="gen1", use_container_width=True, help="Generate with AI"):
                 if beh1_name:
-                    try:
-                        from groq import Groq
-                        api_key = st.secrets.get("GROQ_API_KEY", st.secrets.get("groq", {}).get("api_key", ""))
-                        
-                        if not api_key:
-                            st.error("Groq API key not found in secrets")
-                        else:
-                            client = Groq(api_key=api_key)
+                    with st.spinner("Generating..."):
+                        try:
+                            from groq import Groq
+                            api_key = st.secrets.get("GROQ_API_KEY", st.secrets.get("groq", {}).get("api_key", ""))
                             
-                            response = client.chat.completions.create(
-                                model="llama-3.3-70b-versatile",
-                                messages=[{
-                                    "role": "user",
-                                    "content": f"Create a concise 2-3 sentence operational definition for the behaviour '{beh1_name}' suitable for school tracking. Format: Observable description. Include examples. Exclude non-examples. No preamble."
-                                }],
-                                temperature=0.3,
-                                max_tokens=150
-                            )
-                            
-                            definition = response.choices[0].message.content.strip()
-                            st.session_state['ai_def1'] = definition
-                            st.rerun()
-                    except ImportError:
-                        st.error("Groq library not installed")
-                    except Exception as e:
-                        st.error(f"Generation failed: {str(e)[:80]}")
+                            if not api_key:
+                                st.error("⚠️ GROQ_API_KEY not in Render secrets")
+                            else:
+                                client = Groq(api_key=api_key)
+                                
+                                response = client.chat.completions.create(
+                                    model="llama-3.3-70b-versatile",
+                                    messages=[{
+                                        "role": "user",
+                                        "content": f"Create a 2-3 sentence operational definition for '{beh1_name}'. Format: Description. Includes X. Excludes Y. No preamble."
+                                    }],
+                                    temperature=0.3,
+                                    max_tokens=150,
+                                    timeout=10
+                                )
+                                
+                                definition = response.choices[0].message.content.strip()
+                                st.session_state['ai_def1'] = definition
+                                st.success("✅ Generated!")
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ AI failed: {str(e)[:60]}. Use template instead.")
         
         beh1_def = st.text_area(
             "Definition 1",
-            value=st.session_state.get('ai_def1', ''),
+            value=st.session_state.get('ai_def1', TEMPLATES.get(template1, '')),
             height=70,
             key="def1",
-            help="Observable, measurable description"
+            placeholder="Observable, measurable description"
         )
         
         # Behaviour 2
+        st.markdown("**Behaviour 2 (optional)**")
+        template2 = st.selectbox("Select template or leave blank", list(TEMPLATES.keys()), key="temp2")
+        
         col1, col2 = st.columns([3, 1])
         with col1:
-            beh2_name = st.text_input("Behaviour 2", key="new_beh2")
+            beh2_name = st.text_input(
+                "Name",
+                value=template2 if template2 else "",
+                key="new_beh2",
+                label_visibility="collapsed"
+            )
         with col2:
-            if st.button("✨", key="gen2", use_container_width=True):
+            if st.button("✨ AI", key="gen2", use_container_width=True):
                 if beh2_name:
-                    try:
-                        from groq import Groq
-                        api_key = st.secrets.get("GROQ_API_KEY", st.secrets.get("groq", {}).get("api_key", ""))
-                        
-                        if api_key:
-                            client = Groq(api_key=api_key)
+                    with st.spinner("Generating..."):
+                        try:
+                            from groq import Groq
+                            api_key = st.secrets.get("GROQ_API_KEY", st.secrets.get("groq", {}).get("api_key", ""))
                             
-                            response = client.chat.completions.create(
-                                model="llama-3.3-70b-versatile",
-                                messages=[{
-                                    "role": "user",
-                                    "content": f"Create a concise 2-3 sentence operational definition for the behaviour '{beh2_name}' suitable for school tracking. Format: Observable description. Include examples. Exclude non-examples. No preamble."
-                                }],
-                                temperature=0.3,
-                                max_tokens=150
-                            )
-                            
-                            definition = response.choices[0].message.content.strip()
-                            st.session_state['ai_def2'] = definition
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"Generation failed: {str(e)[:80]}")
+                            if api_key:
+                                client = Groq(api_key=api_key)
+                                
+                                response = client.chat.completions.create(
+                                    model="llama-3.3-70b-versatile",
+                                    messages=[{
+                                        "role": "user",
+                                        "content": f"Create a 2-3 sentence operational definition for '{beh2_name}'. Format: Description. Includes X. Excludes Y. No preamble."
+                                    }],
+                                    temperature=0.3,
+                                    max_tokens=150,
+                                    timeout=10
+                                )
+                                
+                                definition = response.choices[0].message.content.strip()
+                                st.session_state['ai_def2'] = definition
+                                st.success("✅ Generated!")
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ AI failed. Use template.")
         
         beh2_def = st.text_area(
             "Definition 2",
-            value=st.session_state.get('ai_def2', ''),
+            value=st.session_state.get('ai_def2', TEMPLATES.get(template2, '')),
             height=70,
             key="def2"
         )
         
         # Behaviour 3
+        st.markdown("**Behaviour 3 (optional)**")
+        template3 = st.selectbox("Select template or leave blank", list(TEMPLATES.keys()), key="temp3")
+        
         col1, col2 = st.columns([3, 1])
         with col1:
-            beh3_name = st.text_input("Behaviour 3", key="new_beh3")
+            beh3_name = st.text_input(
+                "Name",
+                value=template3 if template3 else "",
+                key="new_beh3",
+                label_visibility="collapsed"
+            )
         with col2:
-            if st.button("✨", key="gen3", use_container_width=True):
+            if st.button("✨ AI", key="gen3", use_container_width=True):
                 if beh3_name:
-                    try:
-                        from groq import Groq
-                        api_key = st.secrets.get("GROQ_API_KEY", st.secrets.get("groq", {}).get("api_key", ""))
-                        
-                        if api_key:
-                            client = Groq(api_key=api_key)
+                    with st.spinner("Generating..."):
+                        try:
+                            from groq import Groq
+                            api_key = st.secrets.get("GROQ_API_KEY", st.secrets.get("groq", {}).get("api_key", ""))
                             
-                            response = client.chat.completions.create(
-                                model="llama-3.3-70b-versatile",
-                                messages=[{
-                                    "role": "user",
-                                    "content": f"Create a concise 2-3 sentence operational definition for the behaviour '{beh3_name}' suitable for school tracking. Format: Observable description. Include examples. Exclude non-examples. No preamble."
-                                }],
-                                temperature=0.3,
-                                max_tokens=150
-                            )
-                            
-                            definition = response.choices[0].message.content.strip()
-                            st.session_state['ai_def3'] = definition
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"Generation failed: {str(e)[:80]}")
+                            if api_key:
+                                client = Groq(api_key=api_key)
+                                
+                                response = client.chat.completions.create(
+                                    model="llama-3.3-70b-versatile",
+                                    messages=[{
+                                        "role": "user",
+                                        "content": f"Create a 2-3 sentence operational definition for '{beh3_name}'. Format: Description. Includes X. Excludes Y. No preamble."
+                                    }],
+                                    temperature=0.3,
+                                    max_tokens=150,
+                                    timeout=10
+                                )
+                                
+                                definition = response.choices[0].message.content.strip()
+                                st.session_state['ai_def3'] = definition
+                                st.success("✅ Generated!")
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ AI failed. Use template.")
         
         beh3_def = st.text_area(
             "Definition 3",
-            value=st.session_state.get('ai_def3', ''),
+            value=st.session_state.get('ai_def3', TEMPLATES.get(template3, '')),
             height=70,
             key="def3"
         )
@@ -505,6 +551,37 @@ elif st.session_state.page == 'record':
     
     st.markdown(f"<div class='info-box'><b>Week:</b> {week_start.strftime('%-d %b')} - {week_end.strftime('%-d %b %Y')} | <b>Behaviours:</b> {', '.join(st.session_state.behaviours)}</div>", unsafe_allow_html=True)
     
+    # Show behaviour definitions if student has them
+    @st.cache_data(ttl=60)
+    def load_students():
+        sb = get_sb()
+        if not sb: return []
+        try:
+            res = sb.table("scatter_students").select("*").order("student_name").execute()
+            return res.data or []
+        except:
+            return []
+    
+    students = load_students()
+    student_obj = [s for s in students if s['student_name'] == st.session_state.student_name]
+    
+    if student_obj:
+        beh_defs = student_obj[0].get('behaviour_definitions')
+        if beh_defs:
+            if isinstance(beh_defs, str):
+                try:
+                    beh_defs = json.loads(beh_defs)
+                except:
+                    beh_defs = {}
+            
+            if beh_defs:
+                with st.expander("📋 Behaviour Definitions (click to view)", expanded=False):
+                    for beh in st.session_state.behaviours:
+                        if beh in beh_defs:
+                            st.markdown(f"**{beh}:** {beh_defs[beh]}")
+                        else:
+                            st.caption(f"{beh}: No definition set")
+    
     # Days of week
     days = []
     for i in range(5):
@@ -706,6 +783,32 @@ elif st.session_state.page == 'analysis':
     
     st.markdown(f"**Week:** {week_start.strftime('%-d %b')} - {(week_start + timedelta(days=4)).strftime('%-d %b %Y')}")
     st.markdown(f"**Behaviours:** {', '.join(behaviours)}")
+    
+    # Show behaviour definitions
+    @st.cache_data(ttl=60)
+    def load_student_defs(student_name):
+        sb = get_sb()
+        if not sb: return {}
+        try:
+            res = sb.table("scatter_students").select("behaviour_definitions").eq("student_name", student_name).execute()
+            if res.data:
+                defs = res.data[0].get('behaviour_definitions')
+                if defs and isinstance(defs, str):
+                    return json.loads(defs)
+                return defs or {}
+            return {}
+        except:
+            return {}
+    
+    beh_defs = load_student_defs(st.session_state.student_name)
+    
+    if beh_defs:
+        with st.expander("📋 Operational Definitions", expanded=True):
+            for beh in behaviours:
+                if beh in beh_defs:
+                    st.markdown(f"**{beh}:** {beh_defs[beh]}")
+                else:
+                    st.caption(f"*{beh}: No definition recorded*")
     
     st.markdown("---")
     
