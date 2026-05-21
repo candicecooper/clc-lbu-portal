@@ -553,14 +553,20 @@ elif st.session_state.page == 'setup':
         template1 = st.selectbox("Select Behaviour 1 or type custom below", list(TEMPLATES.keys()), key="setup_temp1")
         beh1 = st.text_input(
             "Behaviour 1 name", 
-            value=template1 if template1 else (st.session_state.behaviours[0] if len(st.session_state.behaviours) > 0 else ""),
+            value=template1 if template1 else st.session_state.get('setup_beh1', ''),
             key="beh1",
             placeholder="Select from dropdown OR type custom"
         )
+        # Save to session state
+        if beh1:
+            st.session_state['setup_beh1'] = beh1
     with col2:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("🤖 AI", key="setup_ai1", use_container_width=True):
             if beh1:
+                # Save behaviour name before generating
+                st.session_state['setup_beh1'] = beh1
+                
                 with st.spinner("Generating..."):
                     try:
                         from groq import Groq
@@ -622,14 +628,20 @@ elif st.session_state.page == 'setup':
         template2 = st.selectbox("Select Behaviour 2 (optional)", list(TEMPLATES.keys()), key="setup_temp2")
         beh2 = st.text_input(
             "Behaviour 2 name",
-            value=template2 if template2 else (st.session_state.behaviours[1] if len(st.session_state.behaviours) > 1 else ""),
+            value=template2 if template2 else st.session_state.get('setup_beh2', ''),
             key="beh2",
             placeholder="Select from dropdown OR type custom"
         )
+        # Save to session state
+        if beh2:
+            st.session_state['setup_beh2'] = beh2
     with col2:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("🤖 AI", key="setup_ai2", use_container_width=True):
             if beh2:
+                # Save behaviour name before generating
+                st.session_state['setup_beh2'] = beh2
+                
                 with st.spinner("Generating..."):
                     try:
                         from groq import Groq
@@ -685,14 +697,20 @@ elif st.session_state.page == 'setup':
         template3 = st.selectbox("Select Behaviour 3 (optional)", list(TEMPLATES.keys()), key="setup_temp3")
         beh3 = st.text_input(
             "Behaviour 3 name",
-            value=template3 if template3 else (st.session_state.behaviours[2] if len(st.session_state.behaviours) > 2 else ""),
+            value=template3 if template3 else st.session_state.get('setup_beh3', ''),
             key="beh3",
             placeholder="Select from dropdown OR type custom"
         )
+        # Save to session state
+        if beh3:
+            st.session_state['setup_beh3'] = beh3
     with col2:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("🤖 AI", key="setup_ai3", use_container_width=True):
             if beh3:
+                # Save behaviour name before generating
+                st.session_state['setup_beh3'] = beh3
+                
                 with st.spinner("Generating..."):
                     try:
                         from groq import Groq
@@ -783,8 +801,14 @@ elif st.session_state.page == 'setup':
     
     st.markdown("---")
     
-    # Build behaviours list from inputs
-    behaviours = [b.strip() for b in [beh1, beh2, beh3] if b and b.strip()]
+    # Build behaviours list from inputs (use session_state as fallback)
+    behaviours = []
+    for i, (beh, key) in enumerate([(beh1, 'setup_beh1'), (beh2, 'setup_beh2'), (beh3, 'setup_beh3')]):
+        # Use widget value or session_state
+        val = beh if beh else st.session_state.get(key, '')
+        if val and val.strip():
+            behaviours.append(val.strip())
+    
     st.session_state.behaviours = behaviours
     
     # Save and continue
