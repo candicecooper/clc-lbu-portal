@@ -664,7 +664,7 @@ df['priority'] = df.get('priority_level', '')
 # Current status
 df['current_status'] = df.get('current_status', 'Active')
 
-# Define terms
+# Define terms (2026 - only Term 1 and 2 have occurred)
 def get_term(month):
     if pd.isna(month) or month is None:
         return "Unknown"
@@ -674,19 +674,15 @@ def get_term(month):
             return "Term 1"
         elif month <= 6:
             return "Term 2"
-        elif month <= 9:
-            return "Term 3"
         else:
-            return "Term 4"
+            # Future terms (3 & 4) return Unknown - they haven't happened yet
+            return "Unknown"
     except (ValueError, TypeError):
         return "Unknown"
 
 df['term'] = df['month'].apply(get_term)
+# Note: Only Term 1 & 2 are calculated (months 1-6). Future terms return "Unknown"
 
-# FILTER: Only show current and past terms (Term 1 & 2 in 2026)
-# Remove Term 3 & 4 as they haven't occurred yet
-df = df[df['term'].isin(['Term 1', 'Term 2', 'Unknown'])]
-st.info(f"📅 **Showing only past/current terms:** Term 1 & Term 2 (Term 3 & 4 filtered out)")
 
 
 # Program placement - use Excel's Bespoke_Placement flag
