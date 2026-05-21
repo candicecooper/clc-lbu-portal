@@ -6,7 +6,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 
 from auth import require_auth, logout_button, get_staff_name
 require_auth(app_title="CLC LBU Staff Portal", app_icon="🏫")
@@ -90,6 +90,7 @@ ACTIVITY_TYPES = [
     "Self directed wandering",
     "Transition in",
     "Transition out",
+    "Absconding",
     "Other",
 ]
 
@@ -322,6 +323,112 @@ def paste_interval_data(student_name, sel_date, sel_day, sel_time):
         if value:  # Only paste non-empty fields
             upsert_field(student_name, sel_date, sel_day, sel_time, field, value)
     return True
+
+
+def get_expected_intervals(student_name, date_from, date_to):
+    """
+    Calculate expected intervals based on:
+    - Student's time window (part-time vs full-time)
+    - Days marked as absent/holiday/transition
+    Returns: (expected_intervals, attendance_days, non_attendance_days)
+    """
+    # Get student's time window
+    time_window = get_student_time_window(student_name)
+    if time_window and time_window[0] and time_window[1]:
+        start_idx = SLOT_TIMES.index(time_window[0]) if time_window[0] in SLOT_TIMES else 0
+        end_idx = SLOT_TIMES.index(time_window[1]) if time_window[1] in SLOT_TIMES else len(SLOT_TIMES)-1
+        slots_per_day = end_idx - start_idx + 1
+    else:
+        slots_per_day = len(SLOT_TIMES)  # Default full day
+    
+    # Get all school days in range (Monday-Friday)
+    total_days = 0
+    attendance_days = 0
+    non_attendance_info = []
+    
+    current_date = date_from
+    while current_date <= date_to:
+        if current_date.weekday() < 5:  # Monday=0, Friday=4
+            total_days += 1
+            day_status = get_day_status(student_name, current_date)
+            if day_status:
+                non_attendance_info.append((current_date, day_status))
+            else:
+                attendance_days += 1
+        current_date += timedelta(days=1)
+    
+    expected_intervals = attendance_days * slots_per_day
+    
+    return expected_intervals, attendance_days, total_days, non_attendance_info
+
+
+def get_daily_note(student_name, obs_date):
+    """Get anecdotal note for a specific day. Returns note text or None."""
+    sb = get_sb()
+    if not sb: return None
+    try:
+        res = (sb.table("interval_daily_notes")
+               .select("note")
+               .eq("student_name", student_name)
+               .eq("obs_date", obs_date.isoformat())
+               .limit(1).execute())
+        if res.data:
+            return res.data[0].get("note", "")
+        return None
+    except Exception:
+        return None
+
+
+def set_daily_note(student_name, obs_date, note):
+    """Set anecdotal note for a day. Pass empty string to clear."""
+    sb = get_sb()
+    if not sb: return False
+    try:
+        if not note or note.strip() == "":
+            # Clear note
+            sb.table("interval_daily_notes").delete()\
+              .eq("student_name", student_name)\
+              .eq("obs_date", obs_date.isoformat()).execute()
+        else:
+            ex = (sb.table("interval_daily_notes")
+                  .select("id").eq("student_name", student_name)
+                  .eq("obs_date", obs_date.isoformat())
+                  .limit(1).execute())
+            if ex.data:
+                sb.table("interval_daily_notes").update({
+                    "note": note.strip(),
+                }).eq("id", ex.data[0]["id"]).execute()
+            else:
+                sb.table("interval_daily_notes").insert({
+                    "student_name": student_name,
+                    "obs_date": obs_date.isoformat(),
+                    "note": note.strip(),
+                }).execute()
+        return True
+    except Exception as e:
+        if "PGRST205" in str(e) or "schema cache" in str(e):
+            st.error("⚠️ Daily notes table not yet recognized. Create the table and restart the Supabase API.")
+        else:
+            st.error(f"Failed to save note: {e}")
+        return False
+
+
+def get_all_daily_notes(student_name, date_from, date_to):
+    """Get all daily notes for a date range. Returns dict {date: note}."""
+    sb = get_sb()
+    if not sb: return {}
+    try:
+        res = (sb.table("interval_daily_notes")
+               .select("obs_date,note")
+               .eq("student_name", student_name)
+               .gte("obs_date", date_from.isoformat())
+               .lte("obs_date", date_to.isoformat())
+               .execute())
+        if res.data:
+            return {row["obs_date"]: row["note"] for row in res.data}
+        return {}
+    except Exception:
+        return {}
 
 
 # ── Session state ─────────────────────────────────────────────────────────────
@@ -913,6 +1020,43 @@ with t_record:
                             clear_interval(student_name, sel_date, sel_time)
                             st.rerun()
 
+    # ── Daily notes section ───────────────────────────────────────────────────
+    st.markdown('<div style="border-top:1px solid #e2e8f0;margin:.6rem 0 .4rem;"></div>',
+                unsafe_allow_html=True)
+    
+    st.markdown(
+        '<div style="font-size:.75rem;font-weight:700;color:#1A6B8A;margin-bottom:.3rem;">'
+        f'📝 DAILY NOTE — {sel_day} {sel_date.strftime("%-d %b %Y")}</div>',
+        unsafe_allow_html=True)
+    
+    st.caption("Optional anecdotal information for this day (e.g., incidents, observations, context)")
+    
+    current_note = get_daily_note(student_name, sel_date) or ""
+    
+    note_text = st.text_area(
+        "Daily note",
+        value=current_note,
+        height=80,
+        key=f"daily_note_{sel_date}",
+        label_visibility="collapsed",
+        placeholder="e.g., Student arrived upset after family conflict. Early intervention by leadership at 10:00. Calmed after sensory break..."
+    )
+    
+    note_col1, note_col2 = st.columns([3, 1])
+    with note_col1:
+        if note_text != current_note:
+            if st.button("💾 Save note", key=f"save_note_{sel_date}", use_container_width=True, type="primary"):
+                if set_daily_note(student_name, sel_date, note_text):
+                    st.success("✅ Note saved")
+                    st.rerun()
+    
+    with note_col2:
+        if current_note:
+            if st.button("🗑️ Clear note", key=f"clear_note_{sel_date}", use_container_width=True):
+                if set_daily_note(student_name, sel_date, ""):
+                    st.success("✅ Note cleared")
+                    st.rerun()
+
 
 
     st.markdown('</div>', unsafe_allow_html=True)
@@ -1055,9 +1199,27 @@ with t_analysis:
     with fc1: date_from = st.date_input("From", value=all_obs["obs_date_dt"].min().date(), key="ist_af")
     with fc2: date_to   = st.date_input("To",   value=all_obs["obs_date_dt"].max().date(), key="ist_at")
 
+    # Calculate expected intervals based on attendance and time window
+    expected_intervals, attendance_days, total_school_days, non_attendance_info = get_expected_intervals(
+        student_name, date_from, date_to
+    )
+    
+    # Get student time window for display
+    time_window = get_student_time_window(student_name)
+    if time_window and time_window[0] and time_window[1]:
+        time_window_display = f"{time_window[0]}–{time_window[1]}"
+        is_part_time = True
+    else:
+        time_window_display = "Full day (default)"
+        is_part_time = False
+    
+    # Filter observations: exclude non-attendance days
+    non_attendance_dates = [info[0] for info in non_attendance_info]
+    
     filt = all_obs[
         (all_obs["obs_date_dt"].dt.date >= date_from) &
         (all_obs["obs_date_dt"].dt.date <= date_to) &
+        (~all_obs["obs_date_dt"].dt.date.isin(non_attendance_dates)) &  # Exclude non-attendance
         (all_obs["regulated"].notna()) &
         (all_obs["regulated"].str.strip() != "")
     ].copy()
@@ -1069,28 +1231,98 @@ with t_analysis:
     colour_map     = {v["emoji"]+" "+v["label"]: v["fg"] for v in REG_STATES.values()}
     state_order    = [v["emoji"]+" "+v["label"] for v in REG_STATES.values()]
 
-    # ── Time frame summary ────────────────────────────────────────────────────
+    # ── Time frame and attendance summary ─────────────────────────────────────
     slot_mins = filt["time_slot"].dropna().apply(_slot_to_min)
     min_slot  = filt.loc[slot_mins.idxmin(), "time_slot"] if not slot_mins.empty else "—"
     max_slot  = filt.loc[slot_mins.idxmax(), "time_slot"] if not slot_mins.empty else "—"
-    n_days    = filt["obs_date_dt"].dt.date.nunique()
+    n_days_with_data = filt["obs_date_dt"].dt.date.nunique()
     date_span = f"{date_from.strftime('%-d %b')} – {date_to.strftime('%-d %b %Y')}"
+    
+    # Attendance summary
+    non_attendance_days = len(non_attendance_info)
+    attendance_pct = round(100 * attendance_days / total_school_days) if total_school_days else 0
 
     st.markdown(
         f'<div style="background:#f0f9ff;border:1.5px solid #7dd3fc;border-radius:8px;'
         f'padding:.55rem 1rem;margin-bottom:.6rem;font-size:.82rem;color:#0c4a6e;">'
-        f'<strong>📅 Observation window:</strong> {date_span} &nbsp;·&nbsp; '
-        f'<strong>{n_days} school day{"s" if n_days != 1 else ""}</strong> with data &nbsp;·&nbsp; '
-        f'<strong>Time range recorded: {min_slot} – {max_slot}</strong>'
+        f'<strong>📅 Period:</strong> {date_span} &nbsp;·&nbsp; '
+        f'<strong>{n_days_with_data} day{"s" if n_days_with_data != 1 else ""}</strong> with data recorded'
+        f'</div>',
+        unsafe_allow_html=True)
+    
+    # Attendance breakdown
+    att_col1, att_col2 = st.columns([2, 3])
+    with att_col1:
+        st.markdown(
+            f'<div style="background:#dcfce7;border:1.5px solid #16a34a;border-radius:8px;'
+            f'padding:.5rem .9rem;font-size:.8rem;">'
+            f'<div style="color:#15803d;font-weight:700;margin-bottom:.2rem;">✅ Attendance</div>'
+            f'<div style="color:#166534;"><strong>{attendance_days}</strong> of {total_school_days} school days '
+            f'<span style="font-weight:600;">({attendance_pct}%)</span></div>'
+            f'</div>',
+            unsafe_allow_html=True)
+    
+    with att_col2:
+        if non_attendance_days > 0:
+            non_att_summary = ", ".join([f"{d.strftime('%-d/%m')} ({s})" for d, s in non_attendance_info[:3]])
+            if non_attendance_days > 3:
+                non_att_summary += f" +{non_attendance_days - 3} more"
+            
+            st.markdown(
+                f'<div style="background:#fef9c3;border:1.5px solid #eab308;border-radius:8px;'
+                f'padding:.5rem .9rem;font-size:.8rem;">'
+                f'<div style="color:#854d0e;font-weight:700;margin-bottom:.2rem;">⚠️ Non-attendance</div>'
+                f'<div style="color:#713f12;">{non_attendance_days} day{"s" if non_attendance_days != 1 else ""}: '
+                f'{non_att_summary}</div>'
+                f'</div>',
+                unsafe_allow_html=True)
+        else:
+            st.markdown(
+                f'<div style="background:#f1f5f9;border:1.5px solid #94a3b8;border-radius:8px;'
+                f'padding:.5rem .9rem;font-size:.8rem;">'
+                f'<div style="color:#475569;font-weight:600;">No absences marked</div>'
+                f'</div>',
+                unsafe_allow_html=True)
+    
+    # Time window info
+    st.markdown(
+        f'<div style="background:#fef3c7;border:1.5px solid #f59e0b;border-radius:8px;'
+        f'padding:.45rem .9rem;margin-top:.5rem;font-size:.78rem;color:#78350f;">'
+        f'<strong>⏰ Observation hours:</strong> {time_window_display}'
+        + (' <span style="background:#dc2626;color:white;padding:.1rem .4rem;border-radius:3px;font-size:.7rem;font-weight:600;">PART-TIME</span>' if is_part_time else '')
+        + f' &nbsp;·&nbsp; <strong>Expected intervals:</strong> {expected_intervals} '
+        f'({attendance_days} days × time window)'
         f'</div>',
         unsafe_allow_html=True)
 
+    # ── Daily notes (anecdotal context) ───────────────────────────────────────
+    daily_notes = get_all_daily_notes(student_name, date_from, date_to)
+    if daily_notes:
+        st.markdown("<div style='margin:.6rem 0;'></div>", unsafe_allow_html=True)
+        with st.expander(f"📝 Daily notes — anecdotal context ({len(daily_notes)} day{'s' if len(daily_notes) != 1 else ''} with notes)", expanded=False):
+            for note_date_str, note_text in sorted(daily_notes.items()):
+                note_date = datetime.strptime(note_date_str, "%Y-%m-%d").date()
+                day_name = DAYS[note_date.weekday()] if note_date.weekday() < 5 else note_date.strftime("%A")
+                
+                st.markdown(
+                    f'<div style="background:#fef9c3;border-left:3px solid #eab308;padding:.5rem .8rem;'
+                    f'margin-bottom:.5rem;font-size:.8rem;">'
+                    f'<div style="font-weight:700;color:#854d0e;margin-bottom:.2rem;">'
+                    f'{day_name} {note_date.strftime("%-d %b %Y")}</div>'
+                    f'<div style="color:#713f12;">{note_text}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True)
+
+    st.markdown("<div style='margin:.6rem 0;'></div>", unsafe_allow_html=True)
+
     # ── What does "interval" mean? ────────────────────────────────────────────
+    data_collection_rate = round(100 * len(filt) / expected_intervals) if expected_intervals else 0
+    
     st.info(
-        "ℹ️ **What is an interval?** Each interval represents one 15-minute observation window "
-        "during the school day. Staff record regulation state, grouping, activity type, and observable behaviour "
-        "for each interval in which they observe the student. Intervals outside the observation "
-        f"window ({min_slot}–{max_slot}) were not collected and are not represented in these charts."
+        f"ℹ️ **What is an interval?** Each interval represents one 15-minute observation window. "
+        f"This student's expected intervals: **{expected_intervals}** (based on {attendance_days} attendance days "
+        f"and their observation hours). Data was recorded for **{len(filt)} intervals ({data_collection_rate}%)**. "
+        f"Non-attendance days (absent/holiday/transition) are excluded from analysis."
     )
 
     n_tot  = len(filt)
@@ -1103,7 +1335,7 @@ with t_analysis:
     pct_cop_only = round(100*n_cop/n_tot) if n_tot else 0
 
     k1,k2,k3,k4,k5 = st.columns(5)
-    k1.markdown(f"<div class='kpi'><div class='val'>{n_tot}</div><div class='lbl'>Total intervals<br><span style='font-size:.58rem;'>15-min windows</span></div></div>", unsafe_allow_html=True)
+    k1.markdown(f"<div class='kpi'><div class='val'>{n_tot}</div><div class='lbl'>Intervals recorded<br><span style='font-size:.58rem;'>{data_collection_rate}% of expected</span></div></div>", unsafe_allow_html=True)
     k2.markdown(f"<div class='kpi kpi-g'><div class='val'>{n_win}</div><div class='lbl'>🟢 In window<br><span style='font-size:.58rem;'>{pct_inwin}%</span></div></div>", unsafe_allow_html=True)
     k3.markdown(f"<div class='kpi kpi-y'><div class='val'>{n_cop}</div><div class='lbl'>🟡 Coping<br><span style='font-size:.58rem;'>{pct_cop_only}% — at edge</span></div></div>", unsafe_allow_html=True)
     k4.markdown(f"<div class='kpi kpi-r'><div class='val'>{n_hyp}</div><div class='lbl'>🔴 Hyperaroused</div></div>", unsafe_allow_html=True)
@@ -1125,8 +1357,8 @@ with t_analysis:
     st.markdown("##### 📊 Regulation state across the day")
     st.caption(
         f"Each bar represents one 15-minute time slot. Height = number of intervals recorded at that time. "
-        f"Data was collected between **{min_slot}** and **{max_slot}**. "
-        f"Colour shows regulation state across all recorded days."
+        f"Colour shows regulation state across **{attendance_days} attendance days** (non-attendance days excluded). "
+        f"Time window: {time_window_display}"
     )
     slot_df = filt.groupby(["time_slot","State"]).size().reset_index(name="n")
     slot_df["sort_k"] = slot_df["time_slot"].apply(_slot_to_min)
@@ -1151,7 +1383,9 @@ with t_analysis:
     best_t  = best_slot.idxmax()  if not best_slot.empty  else None
     worst_t = worst_slot_df.idxmax() if not worst_slot_df.empty else None
     hyp1_prompt = (
-        f"Student has {n_tot} intervals recorded between {min_slot} and {max_slot} across {n_days} school days. "
+        f"Student attended {attendance_days} school days in this period (non-attendance days excluded). "
+        f"Observation hours: {time_window_display}. "
+        f"{n_tot} intervals recorded ({data_collection_rate}% of {expected_intervals} expected). "
         f"Regulation breakdown: {n_win} fully in-window (regulated), {n_cop} coping (at the edge — actively managing but not fully regulated), {n_hyp} hyperaroused, {n_hypo} hypoaroused. "
         f"Note: 'coping' means the student is at the edge of their window and actively managing — it is NOT a successful state. "
         + (f"Time slot with highest in-window count: {best_t}. " if best_t else "")
@@ -1179,7 +1413,7 @@ with t_analysis:
     st.markdown("##### 📈 Daily regulation trend")
     st.caption(
         f"Percentage of each day's recorded intervals in each regulation state, "
-        f"across the {n_days} observed school days. "
+        f"across **{n_days_with_data} attendance days with data** (non-attendance days excluded). "
         "Only states that were actually observed appear. "
         "The dashed green line marks the 70% in-window benchmark. "
         "🟡 Coping = dysregulated — at the edge of the window."
