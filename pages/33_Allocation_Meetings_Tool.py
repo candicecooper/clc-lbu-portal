@@ -946,29 +946,40 @@ with tab4:
     
     # Fetch completed allocations (outcome is NOT NULL)
     try:
-        # Correct way to query for NOT NULL in Supabase
-        completed = supabase.table("allocation_students")\
+        # First, try to get ALL records to see what exists
+        st.write("🔍 **Checking database...**")
+        
+        all_records = supabase.table("allocation_students")\
             .select("*")\
-            .in_("outcome", ["Allocated", "Not Allocated"])\
             .order("created_at", desc=True)\
             .execute()
         
-        st.write(f"**Debug:** Query returned {len(completed.data) if completed.data else 0} records")
-        if completed.data:
-            for record in completed.data:
-                st.write(f"- {record.get('student_name')}: outcome={record.get('outcome')}")
+        st.write(f"Total records in database: {len(all_records.data) if all_records.data else 0}")
         
-        if not completed.data:
+        # Show breakdown by outcome
+        if all_records.data:
+            from collections import Counter
+            outcome_counts = Counter(r.get('outcome') for r in all_records.data)
+            st.write("**Breakdown by outcome:**")
+            for outcome, count in outcome_counts.items():
+                outcome_display = outcome if outcome else "NULL (Draft)"
+                st.write(f"- {outcome_display}: {count} record(s)")
+        
+        # Filter for completed only
+        completed = [r for r in all_records.data if r.get('outcome') in ['Allocated', 'Not Allocated']]
+        
+        if not completed:
             st.info("📭 No completed allocations yet. Complete some drafts in the New Allocations tab!")
+            st.write("**Tip:** Go to Tab 1 → 'Complete Existing Draft' → Select a draft → Complete it")
         else:
-            st.success(f"✅ Found {len(completed.data)} completed allocation(s)")
+            st.success(f"✅ Found {len(completed)} completed allocation(s)")
             
             # Display table
             st.subheader("Completed Allocations")
             
             # Convert to simple display format
             display_data = []
-            for record in completed.data:
+            for record in completed:
                 display_data.append({
                     "Student": record.get("student_name", ""),
                     "School": record.get("school", ""),
@@ -989,12 +1000,12 @@ with tab4:
             all_selected = st.checkbox("Select all", value=True)
             
             if all_selected:
-                selected_ids = [r["id"] for r in completed.data]
+                selected_ids = [r["id"] for r in completed]
             else:
                 # Show checkboxes for individual selection
                 st.write("Select allocations to export:")
                 selected_ids = []
-                for record in completed.data:
+                for record in completed:
                     if st.checkbox(f"{record['student_name']} - {record.get('school', '')}", key=f"export_{record['id']}"):
                         selected_ids.append(record["id"])
             
@@ -1003,7 +1014,7 @@ with tab4:
                     st.error("Please select at least one allocation to export")
                 else:
                     # Filter to selected records
-                    to_export = [r for r in completed.data if r["id"] in selected_ids]
+                    to_export = [r for r in completed if r["id"] in selected_ids]
                     
                     try:
                         # Generate Excel
@@ -1013,7 +1024,7 @@ with tab4:
                         st.download_button(
                             label="💾 Save Excel File",
                             data=excel_bytes,
-                            file_name=f"CLC_Allocations_{meeting_week_label.replace(' ', '_')}_{st.session_state.current_term.replace(' ', '_')}.xlsx",
+                            file_name=f"CLC_Allocations_{datetime.now().strftime('%Y%m%d')}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
                         
@@ -1025,9 +1036,14 @@ with tab4:
                         st.code(traceback.format_exc())
     
     except Exception as e:
-        st.error(f"Error loading allocations: {e}")
+        st.error(f"❌ Error loading allocations: {e}")
         import traceback
         st.code(traceback.format_exc())
+        st.write("**Troubleshooting:**")
+        st.write("1. Check that allocation_students table exists in Supabase")
+        st.write("2. Verify SUPABASE_URL environment variable is correct")
+        st.write("3. Check Supabase permissions (RLS disabled for allocation_students)")
+
 
 # Caption
 st.caption("CLC-LBU Allocation Meetings Tool V3 | Simplified Draft System")
