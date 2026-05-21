@@ -1150,6 +1150,13 @@ if st.session_state.get('download_comms', False):
             .in_("outcome", ["Allocated", "Not Allocated"])\
             .execute()
         
+        # DEBUG: Show what was fetched
+        st.write("🔍 **Debug: Data fetched from database:**")
+        st.write(f"Total records: {len(comm_data.data) if comm_data.data else 0}")
+        if comm_data.data and len(comm_data.data) > 0:
+            st.write("**First record:**")
+            st.json(comm_data.data[0])
+        
         if comm_data.data:
             # Create Excel
             from openpyxl import Workbook
