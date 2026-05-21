@@ -712,6 +712,7 @@ with tab1:
                         notes = st.text_area("Additional Notes", height=80)
                     else:
                         # Not allocated - set defaults (None for database fields)
+                        # Don't show program/placement sections
                         waitlist_status = "Not Applicable"
                         waitlist_date = None
                         allocated_from_waitlist = "No"
@@ -722,9 +723,8 @@ with tab1:
                         case_worker = None  # None instead of empty string
                         bsc = None  # None instead of empty string
                         school_contact = None  # None instead of empty string
-                        information = None  # New field
-                        actioned_by = None  # New field
-                        notes = None  # None instead of empty string
+                        notes = st.text_area("Additional Notes", height=80)
+                        # NOTE: information and actioned_by are already set above - don't overwrite!
                     
                     # Submit
                     st.markdown("---")
