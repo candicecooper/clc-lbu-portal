@@ -948,8 +948,7 @@ elif st.session_state.committee_view == 'documents':
         navigate_to('home')
 
 # ========== COMMITTEE MEMBERS VIEW ==========
-
-# ========== COMMITTEE MEMBERS VIEW ==========
+# ========== COMMITTEE MEMBERS VIEW (HARDCODED - NO DATABASE) ==========
 elif st.session_state.committee_view == 'members':
     
     st.markdown("### 👥 Committee Members & Roles")
@@ -960,54 +959,75 @@ elif st.session_state.committee_view == 'members':
     
     st.divider()
     
-    try:
-        # Query committee_roles (the tables we just created in SQL)
-        committees_response = supabase.table('committee_roles')\
-            .select('*')\
-            .order('display_order', desc=False)\
-            .execute()
-        
-        committees = committees_response.data if committees_response.data else []
-        
-        # Get members for each committee
-        for committee in committees:
-            members_response = supabase.table('committee_role_members')\
-                .select('*')\
-                .eq('committee_id', committee['id'])\
-                .order('display_order', desc=False)\
-                .execute()
-            
-            committee['members'] = members_response.data if members_response.data else []
-        
-        if len(committees) == 0:
-            st.warning("No committees found. Did you run the SQL?")
-        else:
-            st.success(f"✅ Showing {len(committees)} committees")
-            
-            # Display each committee
-            for committee in committees:
-                st.markdown(f"### 🤝 {committee['name']}")
-                if committee.get('description'):
-                    st.caption(committee['description'])
-                
-                if committee.get('members'):
-                    member_list = []
-                    for member in committee['members']:
-                        staff = member['staff_name']
-                        role = member.get('role', '')
-                        if role:
-                            member_list.append(f"**{staff}** ({role})")
-                        else:
-                            member_list.append(f"**{staff}**")
-                    
-                    st.markdown("**Members:** " + " • ".join(member_list))
-                else:
-                    st.caption("_No members_")
-                
-                st.divider()
+    # Hardcoded committee data
+    committees_data = [
+        {'name': 'PAC', 'desc': 'Partnership & Cooperation Committee', 'members': [
+            {'name': 'Candice', 'role': 'Leader'},
+            {'name': 'Naomi', 'role': 'SSO rep'},
+            {'name': 'Ben', 'role': 'AEU Rep'},
+            {'name': 'Brenton', 'role': 'Teacher Rep'}
+        ]},
+        {'name': 'WHS', 'desc': 'Work Health & Safety', 'members': [
+            {'name': 'Candice', 'role': 'OHS Rep'},
+            {'name': 'Naomi', 'role': ''},
+            {'name': 'Ben Selga', 'role': ''},
+            {'name': 'Caitie', 'role': ''},
+            {'name': 'Roisin', 'role': ''}
+        ]},
+        {'name': 'Social Club', 'desc': '', 'members': [
+            {'name': 'Ben Sutton', 'role': ''},
+            {'name': 'Vinnie', 'role': ''},
+            {'name': 'Jacqui', 'role': ''},
+            {'name': 'Annette', 'role': ''}
+        ]},
+        {'name': 'Centre Spec Events', 'desc': 'Centre Special Events', 'members': [
+            {'name': 'Brenton', 'role': ''},
+            {'name': 'Ben Selga', 'role': ''},
+            {'name': 'Annette', 'role': ''}
+        ]},
+        {'name': 'Leaving Gift', 'desc': '', 'members': [
+            {'name': 'Caitie', 'role': ''},
+            {'name': 'Jacqui', 'role': ''},
+            {'name': 'Annette', 'role': ''},
+            {'name': 'Candice', 'role': ''},
+            {'name': 'Naomi', 'role': ''}
+        ]},
+        {'name': 'OHS', 'desc': 'Occupational Health & Safety', 'members': [
+            {'name': 'Roisin', 'role': 'Proxy'},
+            {'name': 'Caitie', 'role': 'Proxy'}
+        ]},
+        {'name': 'AEU', 'desc': 'Australian Education Union', 'members': [
+            {'name': 'Roisin', 'role': 'Proxy'},
+            {'name': 'Ben Sutton', 'role': 'Proxy'}
+        ]},
+        {'name': 'Fire Warden', 'desc': '', 'members': [
+            {'name': 'Brenton', 'role': ''},
+            {'name': 'Ben Selga', 'role': ''}
+        ]},
+        {'name': 'First Aid Officer', 'desc': '', 'members': [
+            {'name': 'Naomi', 'role': ''}
+        ]},
+        {'name': 'Mathletics Coordinator', 'desc': '3P Learning', 'members': [
+            {'name': 'Caitie', 'role': ''}
+        ]}
+    ]
     
-    except Exception as e:
-        st.error(f"⚠️ Error: {str(e)}")
+    st.success(f"✅ Showing {len(committees_data)} committees")
+    
+    for committee in committees_data:
+        st.markdown(f"### 🤝 {committee['name']}")
+        if committee['desc']:
+            st.caption(committee['desc'])
+        
+        member_list = []
+        for member in committee['members']:
+            if member['role']:
+                member_list.append(f"**{member['name']}** ({member['role']})")
+            else:
+                member_list.append(f"**{member['name']}**")
+        
+        st.markdown("**Members:** " + " • ".join(member_list))
+        st.divider()
 
 # ========== FOOTER ==========
 st.divider()
