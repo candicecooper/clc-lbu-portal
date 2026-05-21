@@ -198,14 +198,21 @@ if st.session_state.page == 'students':
         
         # Behaviour 1
         st.markdown("**Behaviour 1**")
-        template1 = st.selectbox("Select template or leave blank for custom", list(TEMPLATES.keys()), key="temp1")
+        
+        col1a, col1b = st.columns([1, 1])
+        with col1a:
+            template1 = st.selectbox("Quick select from templates", list(TEMPLATES.keys()), key="temp1")
+        with col1b:
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.caption("Or type your own below ↓")
         
         col1, col2 = st.columns([4, 1])
         with col1:
             beh1_name = st.text_input(
-                "Behaviour name", 
+                "Behaviour name (select from dropdown OR type custom)", 
                 value=template1 if template1 else "",
-                key="new_beh1"
+                key="new_beh1",
+                placeholder="e.g., 'Hitting' or 'Interrupting others'"
             )
         with col2:
             if st.button("🤖 AI", key="ai1", use_container_width=True, help="Generate definition with AI"):
@@ -231,28 +238,41 @@ if st.session_state.page == 'students':
                                 )
                                 
                                 st.session_state['ai_gen1'] = response.choices[0].message.content.strip()
+                                st.success("✅ Generated!")
                                 st.rerun()
                         except Exception as e:
                             st.error(f"AI Error: {str(e)[:100]}")
         
+        # Show definition in prominent box
+        def_value = st.session_state.get('ai_gen1', TEMPLATES.get(template1, ''))
+        if def_value:
+            st.info(f"📋 **Definition:** {def_value}")
+        
         beh1_def = st.text_area(
-            "Definition (auto-fills from template, or click AI button)",
-            value=st.session_state.get('ai_gen1', TEMPLATES.get(template1, '')),
-            height=70,
+            "Edit definition if needed",
+            value=def_value,
+            height=80,
             key="def1",
             placeholder="Observable, measurable description"
         )
         
         # Behaviour 2
         st.markdown("**Behaviour 2 (optional)**")
-        template2 = st.selectbox("Select template or leave blank", list(TEMPLATES.keys()), key="temp2")
+        
+        col2a, col2b = st.columns([1, 1])
+        with col2a:
+            template2 = st.selectbox("Quick select from templates", list(TEMPLATES.keys()), key="temp2")
+        with col2b:
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.caption("Or type your own below ↓")
         
         col1, col2 = st.columns([4, 1])
         with col1:
             beh2_name = st.text_input(
-                "Behaviour name",
+                "Behaviour name (select from dropdown OR type custom)",
                 value=template2 if template2 else "",
-                key="new_beh2"
+                key="new_beh2",
+                placeholder="e.g., 'Task refusal' or custom behaviour"
             )
         with col2:
             if st.button("🤖 AI", key="ai2", use_container_width=True):
@@ -278,27 +298,39 @@ if st.session_state.page == 'students':
                                 )
                                 
                                 st.session_state['ai_gen2'] = response.choices[0].message.content.strip()
+                                st.success("✅ Generated!")
                                 st.rerun()
                         except Exception as e:
                             st.error(f"AI Error: {str(e)[:100]}")
         
+        def_value2 = st.session_state.get('ai_gen2', TEMPLATES.get(template2, ''))
+        if def_value2:
+            st.info(f"📋 **Definition:** {def_value2}")
+        
         beh2_def = st.text_area(
-            "Definition 2",
-            value=st.session_state.get('ai_gen2', TEMPLATES.get(template2, '')),
-            height=70,
+            "Edit definition if needed",
+            value=def_value2,
+            height=80,
             key="def2"
         )
         
         # Behaviour 3
         st.markdown("**Behaviour 3 (optional)**")
-        template3 = st.selectbox("Select template or leave blank", list(TEMPLATES.keys()), key="temp3")
+        
+        col3a, col3b = st.columns([1, 1])
+        with col3a:
+            template3 = st.selectbox("Quick select from templates", list(TEMPLATES.keys()), key="temp3")
+        with col3b:
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.caption("Or type your own below ↓")
         
         col1, col2 = st.columns([4, 1])
         with col1:
             beh3_name = st.text_input(
-                "Behaviour name",
+                "Behaviour name (select from dropdown OR type custom)",
                 value=template3 if template3 else "",
-                key="new_beh3"
+                key="new_beh3",
+                placeholder="e.g., 'Swearing' or custom behaviour"
             )
         with col2:
             if st.button("🤖 AI", key="ai3", use_container_width=True):
@@ -324,14 +356,19 @@ if st.session_state.page == 'students':
                                 )
                                 
                                 st.session_state['ai_gen3'] = response.choices[0].message.content.strip()
+                                st.success("✅ Generated!")
                                 st.rerun()
                         except Exception as e:
                             st.error(f"AI Error: {str(e)[:100]}")
         
+        def_value3 = st.session_state.get('ai_gen3', TEMPLATES.get(template3, ''))
+        if def_value3:
+            st.info(f"📋 **Definition:** {def_value3}")
+        
         beh3_def = st.text_area(
-            "Definition 3",
-            value=st.session_state.get('ai_gen3', TEMPLATES.get(template3, '')),
-            height=70,
+            "Edit definition if needed",
+            value=def_value3,
+            height=80,
             key="def3"
         )
         
@@ -864,13 +901,19 @@ elif st.session_state.page == 'analysis':
     
     beh_defs = load_student_defs(st.session_state.student_name)
     
+    # Show definitions prominently
+    st.markdown("### 📋 Behaviour Definitions")
     if beh_defs:
-        with st.expander("📋 Operational Definitions", expanded=True):
-            for beh in behaviours:
-                if beh in beh_defs:
-                    st.markdown(f"**{beh}:** {beh_defs[beh]}")
-                else:
-                    st.caption(f"*{beh}: No definition recorded*")
+        for beh in behaviours:
+            if beh in beh_defs:
+                st.success(f"**{beh}**")
+                st.write(beh_defs[beh])
+                st.markdown("")
+            else:
+                st.warning(f"**{beh}** — No definition recorded")
+                st.markdown("")
+    else:
+        st.info("No behaviour definitions saved for this student")
     
     st.markdown("---")
     
