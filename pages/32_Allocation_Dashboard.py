@@ -683,6 +683,12 @@ def get_term(month):
 
 df['term'] = df['month'].apply(get_term)
 
+# FILTER: Only show current and past terms (Term 1 & 2 in 2026)
+# Remove Term 3 & 4 as they haven't occurred yet
+df = df[df['term'].isin(['Term 1', 'Term 2', 'Unknown'])]
+st.info(f"📅 **Showing only past/current terms:** Term 1 & Term 2 (Term 3 & 4 filtered out)")
+
+
 # Program placement - use Excel's Bespoke_Placement flag
 # This is YOUR authoritative definition of non-typical placement
 if 'bespoke_placement' in df.columns:
@@ -1134,7 +1140,7 @@ with tab2:
 with tab3:
     st.markdown("### 📅 Term-by-Term Allocation Trends")
     
-    term_counts = filtered_df['term'].value_counts().reindex(['Term 1', 'Term 2', 'Term 3', 'Term 4'], fill_value=0)
+    term_counts = filtered_df['term'].value_counts().reindex(['Term 1', 'Term 2'], fill_value=0)
     
     fig_terms = px.bar(
         x=term_counts.index,
@@ -1156,7 +1162,7 @@ with tab3:
     st.markdown("#### 🔍 Drill Down into Specific Term")
     selected_term_drill = st.selectbox(
         "Select a term to see detailed breakdown:",
-        [''] + ['Term 1', 'Term 2', 'Term 3', 'Term 4'],
+        [''] + ['Term 1', 'Term 2'],  # Only show current/past terms
         key="term_drill"
     )
     
