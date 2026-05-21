@@ -948,7 +948,7 @@ elif st.session_state.committee_view == 'documents':
         navigate_to('home')
 
 # ========== COMMITTEE MEMBERS VIEW ==========
-# ========== COMMITTEE MEMBERS VIEW (USING EXISTING TABLES) ==========
+# ========== COMMITTEE MEMBERS VIEW (DIRECT QUERY) ==========
 elif st.session_state.committee_view == 'members':
     
     st.markdown("### 👥 Committee Members & Roles")
@@ -961,55 +961,50 @@ elif st.session_state.committee_view == 'members':
     st.divider()
     
     try:
-        # Use EXISTING committees table
-        committees_response = supabase.table('committees')\
+        # Query all members directly
+        members_response = supabase.table('committee_members')\
             .select('*')\
+            .order('display_order', desc=False)\
             .execute()
         
-        committees = committees_response.data if committees_response.data else []
+        members = members_response.data if members_response.data else []
         
-        # Get members for each committee from EXISTING committee_members table
-        for committee in committees:
-            members_response = supabase.table('committee_members')\
-                .select('*')\
-                .eq('committee_id', committee['id'])\
-                .execute()
-            
-            committee['members'] = members_response.data if members_response.data else []
-        
-        if len(committees) == 0:
-            st.info("👋 No committees found.")
+        if len(members) == 0:
+            st.info("👋 No committee members found.")
         else:
-            st.success(f"✅ Showing {len(committees)} committees")
+            st.success(f"✅ Found {len(members)} committee member assignments")
+            
+            # Group by committee_id
+            from collections import defaultdict
+            committees_dict = defaultdict(list)
+            
+            for member in members:
+                committee_id = member.get('committee_id', 'Unknown')
+                committees_dict[committee_id].append(member)
             
             # Display each committee
-            for committee in committees:
+            for committee_id, committee_members in committees_dict.items():
                 with st.container():
-                    st.markdown(f"### 🤝 {committee.get('committee_name', committee.get('name', 'Unknown'))}")
+                    st.markdown(f"### 🤝 Committee")
                     
                     # Display members
-                    if committee.get('members'):
-                        member_display = []
-                        for member in committee['members']:
-                            staff = member.get('staff_name', '')
-                            role = member.get('role', '')
-                            if role:
-                                member_display.append(f"**{staff}** ({role})")
-                            else:
-                                member_display.append(f"**{staff}**")
-                        
-                        if member_display:
-                            st.markdown("**Members:** " + " • ".join(member_display))
+                    member_display = []
+                    for member in committee_members:
+                        staff = member.get('staff_name', '')
+                        role = member.get('role', '')
+                        if role:
+                            member_display.append(f"**{staff}** ({role})")
                         else:
-                            st.caption("_No members assigned_")
-                    else:
-                        st.caption("_No members assigned_")
+                            member_display.append(f"**{staff}**")
+                    
+                    if member_display:
+                        st.markdown("**Members:** " + " • ".join(member_display))
                     
                     st.divider()
     
     except Exception as e:
-        st.error(f"⚠️ Error loading committees: {str(e)}")
-        st.info("If you see this error, the committees data structure might be different than expected.")
+        st.error(f"⚠️ Error: {str(e)}")
+        st.code(str(e), language="text")
 # ========== FOOTER ==========
 st.divider()
 st.caption("💡 Tip: Use AI-assisted minutes generation to save time, or enter minutes manually following DfE format.")
