@@ -13,12 +13,38 @@ st.set_page_config(
     layout="wide"
 )
 
-# Import database connection
+# Import database connection - Try multiple methods
+import os
+from supabase import create_client, Client
+
+supabase = None
+
+# Method 1: Try importing from database.py (if it exists)
 try:
     from database import get_supabase_client
     supabase = get_supabase_client()
-except:
-    st.error("⚠️ Could not connect to database")
+except ImportError:
+    pass
+except Exception as e:
+    st.warning(f"Method 1 failed: {e}")
+
+# Method 2: Try direct connection with environment variables
+if supabase is None:
+    try:
+        SUPABASE_URL = os.getenv("SUPABASE_URL")
+        SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+        
+        if SUPABASE_URL and SUPABASE_KEY:
+            supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        else:
+            st.error("⚠️ SUPABASE_URL and SUPABASE_KEY environment variables not set")
+    except Exception as e:
+        st.error(f"⚠️ Database connection failed: {e}")
+
+# If still no connection, stop
+if supabase is None:
+    st.error("⚠️ Could not connect to database using any method")
+    st.info("💡 Check that SUPABASE_URL and SUPABASE_KEY are set in Render environment variables")
     st.stop()
 
 # Title
