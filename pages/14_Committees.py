@@ -948,63 +948,67 @@ elif st.session_state.committee_view == 'documents':
         navigate_to('home')
 
 # ========== COMMITTEE MEMBERS VIEW ==========
-# ========== COMMITTEE MEMBERS VIEW (DIRECT QUERY) ==========
+
+# ========== COMMITTEE MEMBERS VIEW ==========
 elif st.session_state.committee_view == 'members':
     
     st.markdown("### 👥 Committee Members & Roles")
     st.markdown("View all staff committee assignments and roles.")
     
-    # Back button
     if st.button("↩ Return to Committees Home", use_container_width=True):
         navigate_to('home')
     
     st.divider()
     
     try:
-        # Query all members directly
-        members_response = supabase.table('committee_members')\
+        # Query committee_roles (the tables we just created in SQL)
+        committees_response = supabase.table('committee_roles')\
             .select('*')\
             .order('display_order', desc=False)\
             .execute()
         
-        members = members_response.data if members_response.data else []
+        committees = committees_response.data if committees_response.data else []
         
-        if len(members) == 0:
-            st.info("👋 No committee members found.")
+        # Get members for each committee
+        for committee in committees:
+            members_response = supabase.table('committee_role_members')\
+                .select('*')\
+                .eq('committee_id', committee['id'])\
+                .order('display_order', desc=False)\
+                .execute()
+            
+            committee['members'] = members_response.data if members_response.data else []
+        
+        if len(committees) == 0:
+            st.warning("No committees found. Did you run the SQL?")
         else:
-            st.success(f"✅ Found {len(members)} committee member assignments")
-            
-            # Group by committee_id
-            from collections import defaultdict
-            committees_dict = defaultdict(list)
-            
-            for member in members:
-                committee_id = member.get('committee_id', 'Unknown')
-                committees_dict[committee_id].append(member)
+            st.success(f"✅ Showing {len(committees)} committees")
             
             # Display each committee
-            for committee_id, committee_members in committees_dict.items():
-                with st.container():
-                    st.markdown(f"### 🤝 Committee")
-                    
-                    # Display members
-                    member_display = []
-                    for member in committee_members:
-                        staff = member.get('staff_name', '')
+            for committee in committees:
+                st.markdown(f"### 🤝 {committee['name']}")
+                if committee.get('description'):
+                    st.caption(committee['description'])
+                
+                if committee.get('members'):
+                    member_list = []
+                    for member in committee['members']:
+                        staff = member['staff_name']
                         role = member.get('role', '')
                         if role:
-                            member_display.append(f"**{staff}** ({role})")
+                            member_list.append(f"**{staff}** ({role})")
                         else:
-                            member_display.append(f"**{staff}**")
+                            member_list.append(f"**{staff}**")
                     
-                    if member_display:
-                        st.markdown("**Members:** " + " • ".join(member_display))
-                    
-                    st.divider()
+                    st.markdown("**Members:** " + " • ".join(member_list))
+                else:
+                    st.caption("_No members_")
+                
+                st.divider()
     
     except Exception as e:
         st.error(f"⚠️ Error: {str(e)}")
-        st.code(str(e), language="text")
+
 # ========== FOOTER ==========
 st.divider()
 st.caption("💡 Tip: Use AI-assisted minutes generation to save time, or enter minutes manually following DfE format.")
