@@ -1854,7 +1854,7 @@ with t_analysis:
 
     questions_data_summary = (
         f"Student: {student_name}. Observation period: {date_span}. "
-        f"Time range: {min_slot}–{max_slot}. Days observed: {n_days}. "
+        f"Time range: {min_slot}–{max_slot}. Days observed: {n_days_with_data}. "
         f"Total intervals: {n_tot}. In-window: {n_win} ({pct_inwin}%). Coping (dysregulated): {n_cop} ({pct_cop_only}%). "
         f"Hyperaroused: {n_hyp}. Hypoaroused: {n_hypo}. "
         + (f"Time slots with ≥70% in-window (consistently regulated): {', '.join(strong_slots.index.tolist())}. " if not strong_slots.empty else "")
@@ -2076,7 +2076,7 @@ with t_analysis:
 
   <div class="obs-box">
     <strong>📅 Observation window:</strong> {date_span} &nbsp;·&nbsp;
-    <strong>{n_days} school day{"s" if n_days!=1 else ""}</strong> with data &nbsp;·&nbsp;
+    <strong>{n_days_with_data} school day{"s" if n_days_with_data!=1 else ""}</strong> with data &nbsp;·&nbsp;
     <strong>Time range: {min_slot}–{max_slot}</strong>
   </div>
 
@@ -2103,7 +2103,7 @@ with t_analysis:
 
   {_chart_block(
     "📊 Regulation state across the day",
-    f"Each bar = one 15-minute time slot between {min_slot} and {max_slot}, across all {n_days} observed days. "
+    f"Each bar = one 15-minute time slot between {min_slot} and {max_slot}, across all {n_days_with_data} observed days. "
     "Bar height = number of intervals recorded at that time. Colour = regulation state. "
     "<strong>🟡 Yellow (Coping) = dysregulated</strong> — the student is at the edge of their window and struggling to manage. "
     "Tall green bars = the student was consistently within their window at that time.",
@@ -2112,7 +2112,7 @@ with t_analysis:
 
   <h2>📈 Daily regulation trend</h2>
   <div class="info-box">
-    Percentage of each day's recorded intervals in each regulation state, across the {n_days} observed school days.
+    Percentage of each day's recorded intervals in each regulation state, across the {n_days_with_data} observed school days.
     Each row is one school day. The bar in each cell shows the proportion visually.
     <strong>Days with the longest green bar are the strongest days for regulation.</strong>
     🟡 Coping = dysregulated — at the edge of the window, not stable.
