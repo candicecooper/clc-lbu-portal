@@ -427,7 +427,12 @@ def get_all_daily_notes(student_name, date_from, date_to):
         if res.data:
             return {row["obs_date"]: row["note"] for row in res.data}
         return {}
-    except Exception:
+    except Exception as e:
+        # Silently return empty dict if table not available yet
+        error_str = str(e)
+        if "PGRST205" not in error_str and "schema cache" not in error_str:
+            # Log unexpected errors for debugging
+            st.warning(f"Note: Daily notes feature requires database setup. Error: {error_str}")
         return {}
 
 
@@ -1024,14 +1029,17 @@ with t_record:
     st.markdown('<div style="border-top:1px solid #e2e8f0;margin:.6rem 0 .4rem;"></div>',
                 unsafe_allow_html=True)
     
+    current_note = get_daily_note(student_name, sel_date) or ""
+    has_note = bool(current_note and current_note.strip())
+    
     st.markdown(
         '<div style="font-size:.75rem;font-weight:700;color:#1A6B8A;margin-bottom:.3rem;">'
-        f'📝 DAILY NOTE — {sel_day} {sel_date.strftime("%-d %b %Y")}</div>',
+        f'📝 DAILY NOTE — {sel_day} {sel_date.strftime("%-d %b %Y")}'
+        + (' <span style="background:#16a34a;color:white;padding:.1rem .4rem;border-radius:3px;font-size:.65rem;margin-left:.3rem;">✓ SAVED</span>' if has_note else '')
+        + '</div>',
         unsafe_allow_html=True)
     
     st.caption("Optional anecdotal information for this day (e.g., incidents, observations, context)")
-    
-    current_note = get_daily_note(student_name, sel_date) or ""
     
     note_text = st.text_area(
         "Daily note",
@@ -1044,11 +1052,10 @@ with t_record:
     
     note_col1, note_col2 = st.columns([3, 1])
     with note_col1:
-        if note_text != current_note:
-            if st.button("💾 Save note", key=f"save_note_{sel_date}", use_container_width=True, type="primary"):
-                if set_daily_note(student_name, sel_date, note_text):
-                    st.success("✅ Note saved")
-                    st.rerun()
+        if st.button("💾 Save note", key=f"save_note_{sel_date}", use_container_width=True, type="primary"):
+            if set_daily_note(student_name, sel_date, note_text):
+                st.success("✅ Note saved!")
+                st.rerun()
     
     with note_col2:
         if current_note:
@@ -1299,7 +1306,7 @@ with t_analysis:
     daily_notes = get_all_daily_notes(student_name, date_from, date_to)
     if daily_notes:
         st.markdown("<div style='margin:.6rem 0;'></div>", unsafe_allow_html=True)
-        with st.expander(f"📝 Daily notes — anecdotal context ({len(daily_notes)} day{'s' if len(daily_notes) != 1 else ''} with notes)", expanded=False):
+        with st.expander(f"📝 Daily notes — anecdotal context ({len(daily_notes)} day{'s' if len(daily_notes) != 1 else ''} with notes)", expanded=True):
             for note_date_str, note_text in sorted(daily_notes.items()):
                 note_date = datetime.strptime(note_date_str, "%Y-%m-%d").date()
                 day_name = DAYS[note_date.weekday()] if note_date.weekday() < 5 else note_date.strftime("%A")
