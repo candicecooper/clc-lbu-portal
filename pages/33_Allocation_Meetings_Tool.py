@@ -511,17 +511,41 @@ with st.sidebar:
     
     if st.button("🔍 Search Archive", use_container_width=True):
         st.session_state.show_archive = True
+    
+    # Communication with Sites Quick Action
+    st.markdown("---")
+    st.markdown("**📧 Communication with Sites**")
+    
+    # Show current week communication count
+    try:
+        comm_count = supabase.table("allocation_students")\
+            .select("id", count="exact")\
+            .eq("meeting_week", selected_week)\
+            .eq("meeting_term", st.session_state.current_term)\
+            .in_("outcome", ["Allocated", "Not Allocated"])\
+            .not_.is_("information", "null")\
+            .execute()
+        
+        count = comm_count.count if comm_count.count else 0
+        st.metric("This Week", f"{count} comms")
+    except:
+        st.metric("This Week", "—")
+    
+    if st.button("📋 View Communications", use_container_width=True):
+        st.session_state.show_comms = True
+    
+    if st.button("📥 Download Week Summary", use_container_width=True, type="primary"):
+        st.session_state.download_comms = True
 
 # Main content area
 meeting_week_label = f"{selected_week}"
 
 # Tabs for different sections
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "📝 New Allocations", 
     "🔄 Extensions", 
     "⏸️ Not Placed",
-    "📊 View & Export",
-    "📧 Communication with Sites"
+    "📊 View & Export"
 ])
 
 # TAB 1: New Student Allocations - SIMPLIFIED TWO-STAGE
@@ -1058,155 +1082,125 @@ with tab4:
         import traceback
         st.code(traceback.format_exc())
 
-# TAB 5: Communication with Sites
-with tab5:
+# ============================================================================
+# COMMUNICATION MODAL/SECTION (triggered from sidebar)
+# ============================================================================
+
+# Show communications view if button clicked
+if st.session_state.get('show_comms', False):
+    st.markdown("---")
     st.header("📧 Communication with Sites")
-    st.caption("Weekly communication summary for referring schools")
     
     try:
-        # Fetch allocations with communication details
+        # Fetch current week communications
         comm_data = supabase.table("allocation_students")\
-            .select("id, student_name, school, program, school_contact, outcome, information, actioned_by, meeting_date, meeting_week")\
+            .select("student_name, school, program, school_contact, outcome, information, actioned_by")\
+            .eq("meeting_week", selected_week)\
+            .eq("meeting_term", st.session_state.current_term)\
             .in_("outcome", ["Allocated", "Not Allocated"])\
-            .order("meeting_date", desc=True)\
             .execute()
         
-        if not comm_data.data:
-            st.info("📭 No allocations with communication details yet.")
-        else:
-            # Filter options
-            st.subheader("🔍 Filter Communication Records")
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                # Get unique weeks
-                weeks = sorted(list(set([r.get('meeting_week', 'Unknown') for r in comm_data.data if r.get('meeting_week')])), reverse=True)
-                selected_week = st.selectbox("Meeting Week", ["All Weeks"] + weeks)
-            
-            with col2:
-                # Get unique schools
-                schools = sorted(list(set([r.get('school', '') for r in comm_data.data if r.get('school')])))
-                selected_school = st.selectbox("School", ["All Schools"] + schools)
-            
-            with col3:
-                # Outcome filter
-                selected_outcome = st.selectbox("Outcome", ["All", "Allocated", "Not Allocated"])
-            
-            # Apply filters
-            filtered_comm = comm_data.data.copy()
-            
-            if selected_week != "All Weeks":
-                filtered_comm = [r for r in filtered_comm if r.get('meeting_week') == selected_week]
-            
-            if selected_school != "All Schools":
-                filtered_comm = [r for r in filtered_comm if r.get('school') == selected_school]
-            
-            if selected_outcome != "All":
-                filtered_comm = [r for r in filtered_comm if r.get('outcome') == selected_outcome]
-            
-            st.success(f"✅ Showing {len(filtered_comm)} communication record(s)")
+        if comm_data.data:
+            st.success(f"✅ {len(comm_data.data)} communication(s) for {selected_week}")
             
             # Display table
-            if filtered_comm:
-                st.subheader("📋 Communication Summary")
-                
-                # Create display dataframe
-                display_data = []
-                for record in filtered_comm:
-                    display_data.append({
-                        "School": record.get("school", ""),
-                        "Student": record.get("student_name", ""),
-                        "Program": record.get("program", ""),
-                        "School Contact": record.get("school_contact", ""),
-                        "Outcome": record.get("outcome", ""),
-                        "Information": record.get("information", ""),
-                        "To be Actioned By": record.get("actioned_by", ""),
-                        "Meeting Week": record.get("meeting_week", "")
-                    })
-                
-                df_comm = pd.DataFrame(display_data)
-                
-                # Show table
-                st.dataframe(df_comm, use_container_width=True, hide_index=True)
-                
-                # Export section
-                st.markdown("---")
-                st.subheader("📥 Download Communication Summary")
-                
-                col1, col2 = st.columns([3, 1])
-                
-                with col1:
-                    st.write("Download filtered communication records for school distribution")
-                    if selected_week != "All Weeks":
-                        st.info(f"📅 Currently filtered to: **{selected_week}**")
-                
-                with col2:
-                    if st.button("📥 Download Excel", type="primary", key="download_comm"):
-                        # Create Excel
-                        from openpyxl import Workbook
-                        from openpyxl.styles import PatternFill, Font, Alignment
-                        from io import BytesIO
-                        
-                        wb = Workbook()
-                        ws = wb.active
-                        ws.title = "Communication Summary"
-                        
-                        # Headers
-                        headers = ["School", "Student", "Program", "School Contact", "Outcome", "Information", "To be Actioned By", "Meeting Week"]
-                        
-                        # Style header
-                        header_fill = PatternFill(start_color="1A7A6E", end_color="1A7A6E", fill_type="solid")
-                        header_font = Font(bold=True, color="FFFFFF")
-                        
-                        for col_idx, header in enumerate(headers, 1):
-                            cell = ws.cell(1, col_idx, header)
-                            cell.fill = header_fill
-                            cell.font = header_font
-                            cell.alignment = Alignment(horizontal='center', vertical='center')
-                        
-                        # Add data
-                        for row_idx, record in enumerate(filtered_comm, 2):
-                            ws.cell(row_idx, 1, record.get('school', ''))
-                            ws.cell(row_idx, 2, record.get('student_name', ''))
-                            ws.cell(row_idx, 3, record.get('program', ''))
-                            ws.cell(row_idx, 4, record.get('school_contact', ''))
-                            ws.cell(row_idx, 5, record.get('outcome', ''))
-                            ws.cell(row_idx, 6, record.get('information', ''))
-                            ws.cell(row_idx, 7, record.get('actioned_by', ''))
-                            ws.cell(row_idx, 8, record.get('meeting_week', ''))
-                        
-                        # Adjust column widths
-                        ws.column_dimensions['A'].width = 25
-                        ws.column_dimensions['B'].width = 20
-                        ws.column_dimensions['C'].width = 20
-                        ws.column_dimensions['D'].width = 20
-                        ws.column_dimensions['E'].width = 15
-                        ws.column_dimensions['F'].width = 40
-                        ws.column_dimensions['G'].width = 20
-                        ws.column_dimensions['H'].width = 15
-                        
-                        # Save to bytes
-                        output = BytesIO()
-                        wb.save(output)
-                        excel_data = output.getvalue()
-                        
-                        # Download button
-                        week_suffix = f"_{selected_week.replace(' ', '_')}" if selected_week != "All Weeks" else ""
-                        st.download_button(
-                            label="💾 Save Communication Summary",
-                            data=excel_data,
-                            file_name=f"Communication_Summary{week_suffix}_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        )
-                        
-                        st.success(f"✅ Communication summary ready! {len(filtered_comm)} record(s)")
-            else:
-                st.info("📭 No records match the current filters")
-    
+            display_data = []
+            for record in comm_data.data:
+                display_data.append({
+                    "School": record.get("school", ""),
+                    "Student": record.get("student_name", ""),
+                    "Program": record.get("program", ""),
+                    "School Contact": record.get("school_contact", ""),
+                    "Outcome": record.get("outcome", ""),
+                    "Information": record.get("information", ""),
+                    "To be Actioned By": record.get("actioned_by", "")
+                })
+            
+            df_comm = pd.DataFrame(display_data)
+            st.dataframe(df_comm, use_container_width=True, hide_index=True)
+            
+            if st.button("✖️ Close"):
+                st.session_state.show_comms = False
+                st.rerun()
+        else:
+            st.info("📭 No communications for this week yet")
     except Exception as e:
-        st.error(f"❌ Error loading communication data: {str(e)}")
-        import traceback
-        st.code(traceback.format_exc())
+        st.error(f"Error: {e}")
+
+# Download communications if button clicked
+if st.session_state.get('download_comms', False):
+    try:
+        # Fetch current week communications
+        comm_data = supabase.table("allocation_students")\
+            .select("student_name, school, program, school_contact, outcome, information, actioned_by")\
+            .eq("meeting_week", selected_week)\
+            .eq("meeting_term", st.session_state.current_term)\
+            .in_("outcome", ["Allocated", "Not Allocated"])\
+            .execute()
+        
+        if comm_data.data:
+            # Create Excel
+            from openpyxl import Workbook
+            from openpyxl.styles import PatternFill, Font, Alignment
+            from io import BytesIO
+            
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Communication Summary"
+            
+            # Headers
+            headers = ["School", "Student", "Program", "School Contact", "Outcome", "Information", "To be Actioned By"]
+            
+            # Style header
+            header_fill = PatternFill(start_color="1A7A6E", end_color="1A7A6E", fill_type="solid")
+            header_font = Font(bold=True, color="FFFFFF")
+            
+            for col_idx, header in enumerate(headers, 1):
+                cell = ws.cell(1, col_idx, header)
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal='center', vertical='center')
+            
+            # Add data
+            for row_idx, record in enumerate(comm_data.data, 2):
+                ws.cell(row_idx, 1, record.get('school', ''))
+                ws.cell(row_idx, 2, record.get('student_name', ''))
+                ws.cell(row_idx, 3, record.get('program', ''))
+                ws.cell(row_idx, 4, record.get('school_contact', ''))
+                ws.cell(row_idx, 5, record.get('outcome', ''))
+                ws.cell(row_idx, 6, record.get('information', ''))
+                ws.cell(row_idx, 7, record.get('actioned_by', ''))
+            
+            # Adjust column widths
+            ws.column_dimensions['A'].width = 25
+            ws.column_dimensions['B'].width = 20
+            ws.column_dimensions['C'].width = 20
+            ws.column_dimensions['D'].width = 20
+            ws.column_dimensions['E'].width = 15
+            ws.column_dimensions['F'].width = 40
+            ws.column_dimensions['G'].width = 20
+            
+            # Save to bytes
+            output = BytesIO()
+            wb.save(output)
+            excel_data = output.getvalue()
+            
+            # Download button
+            st.download_button(
+                label="💾 Save Communication Summary",
+                data=excel_data,
+                file_name=f"Communication_{selected_week.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            
+            st.success(f"✅ Communication summary ready! {len(comm_data.data)} record(s)")
+            st.session_state.download_comms = False
+        else:
+            st.info("📭 No communications for this week")
+            st.session_state.download_comms = False
+    except Exception as e:
+        st.error(f"Error: {e}")
+        st.session_state.download_comms = False
 
 
 
