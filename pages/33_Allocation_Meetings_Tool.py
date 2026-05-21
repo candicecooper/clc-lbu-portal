@@ -521,7 +521,6 @@ with st.sidebar:
         comm_count = supabase.table("allocation_students")\
             .select("id", count="exact")\
             .eq("meeting_week", selected_week)\
-            .eq("meeting_term", st.session_state.current_term)\
             .in_("outcome", ["Allocated", "Not Allocated"])\
             .not_.is_("information", "null")\
             .execute()
@@ -1096,7 +1095,6 @@ if st.session_state.get('show_comms', False):
         comm_data = supabase.table("allocation_students")\
             .select("student_name, school, program, school_contact, outcome, information, actioned_by")\
             .eq("meeting_week", selected_week)\
-            .eq("meeting_term", st.session_state.current_term)\
             .in_("outcome", ["Allocated", "Not Allocated"])\
             .execute()
         
@@ -1134,7 +1132,6 @@ if st.session_state.get('download_comms', False):
         comm_data = supabase.table("allocation_students")\
             .select("student_name, school, program, school_contact, outcome, information, actioned_by")\
             .eq("meeting_week", selected_week)\
-            .eq("meeting_term", st.session_state.current_term)\
             .in_("outcome", ["Allocated", "Not Allocated"])\
             .execute()
         
