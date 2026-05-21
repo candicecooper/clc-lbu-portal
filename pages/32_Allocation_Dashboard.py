@@ -686,9 +686,24 @@ df['term'] = df['month'].apply(get_term)
 # Program placement - use Excel's Bespoke_Placement flag
 # This is YOUR authoritative definition of non-typical placement
 if 'bespoke_placement' in df.columns:
-    # Convert Yes/No to boolean
-    df['program_mismatch'] = df['bespoke_placement'].map({'Yes': True, 'No': False, '': False})
-    df['program_mismatch'] = df['program_mismatch'].fillna(False)
+    # Handle BOTH boolean (from database) and text 'Yes'/'No' (from Excel)
+    def parse_bespoke(val):
+        if pd.isna(val) or val == '' or val is None:
+            return False
+        if isinstance(val, bool):
+            return val  # Already boolean from database
+        if isinstance(val, str):
+            return val.strip().lower() in ['yes', 'true', '1']
+        return False
+    
+    df['program_mismatch'] = df['bespoke_placement'].apply(parse_bespoke)
+    
+    # DEBUG: Show bespoke placement values
+    if st.checkbox("🔍 Debug: Show Bespoke Placement Data", value=False):
+        st.write("**Bespoke Placement Values:**")
+        debug_df = df[['student_id', 'referring_school', 'year_level', 'allocated_program', 'bespoke_placement', 'program_mismatch']].copy()
+        st.dataframe(debug_df[debug_df['program_mismatch'] == True])
+        st.write(f"**Total Non-Typical:** {len(debug_df[debug_df['program_mismatch'] == True])}")
     
     # Still calculate expected_program for display purposes
     def get_expected_program(year_level):
