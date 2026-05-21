@@ -684,16 +684,27 @@ with tab1:
                         with col3:
                             school_contact = st.text_input("School Contact")
                         
-                        # Communication fields
-                        st.markdown("**📧 Communication with Sites**")
+                        # Communication fields - MORE PROMINENT
+                        st.markdown("---")
+                        st.markdown("### 9️⃣ Communication with Sites")
+                        st.caption("📧 Information to share with referring school and action assignment")
+                        
                         col1, col2 = st.columns(2)
                         with col1:
-                            information = st.text_area("Information for School", height=80, 
-                                help="Details to communicate to the referring school")
+                            information = st.text_area(
+                                "Information to be Shared *", 
+                                height=100,
+                                placeholder="E.g., Student allocated to PY program, starting Term 3, 3 days per week",
+                                help="What information needs to be communicated to the referring school"
+                            )
                         with col2:
-                            actioned_by = st.text_input("To be Actioned By",
-                                help="Staff member responsible for school communication")
+                            actioned_by = st.text_input(
+                                "To be Actioned By *",
+                                placeholder="E.g., Annette, Candice, Tom",
+                                help="Staff member responsible for contacting the school"
+                            )
                         
+                        st.markdown("---")
                         notes = st.text_area("Additional Notes", height=80)
                     else:
                         # Not allocated - set defaults (None for database fields)
@@ -1110,7 +1121,7 @@ if st.session_state.get('show_comms', False):
                     "Program": record.get("program", ""),
                     "School Contact": record.get("school_contact", ""),
                     "Outcome": record.get("outcome", ""),
-                    "Information": record.get("information", ""),
+                    "Information to be Shared": record.get("information", ""),
                     "To be Actioned By": record.get("actioned_by", "")
                 })
             
@@ -1146,7 +1157,7 @@ if st.session_state.get('download_comms', False):
             ws.title = "Communication Summary"
             
             # Headers
-            headers = ["School", "Student", "Program", "School Contact", "Outcome", "Information", "To be Actioned By"]
+            headers = ["School", "Student", "Program", "School Contact", "Outcome", "Information to be Shared", "To be Actioned By"]
             
             # Style header
             header_fill = PatternFill(start_color="1A7A6E", end_color="1A7A6E", fill_type="solid")
