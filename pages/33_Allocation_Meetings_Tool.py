@@ -629,11 +629,35 @@ with tab1:
                     with col2:
                         details = st.text_area("Outcome Details", height=100)
                     
+                    # COMMUNICATION FIELDS - SHOW IMMEDIATELY AFTER OUTCOME
+                    if outcome:  # Only show if an outcome is selected
+                        st.markdown("---")
+                        st.markdown("### 6️⃣ Communication with Sites")
+                        st.caption("📧 Information to share with referring school")
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            information = st.text_area(
+                                "Information to be Shared *", 
+                                height=100,
+                                placeholder="E.g., Student allocated to PY, starting Term 3, 3 days/week",
+                                help="What information needs to be communicated to the referring school"
+                            )
+                        with col2:
+                            actioned_by = st.text_input(
+                                "To be Actioned By *",
+                                placeholder="E.g., Annette, Candice, Tom",
+                                help="Staff member responsible for contacting the school"
+                            )
+                    else:
+                        information = None
+                        actioned_by = None
+                    
                     # Only show these sections if Allocated
                     if outcome == "Allocated":
-                        # SECTION 6: Waitlist
+                        # SECTION 7: Waitlist
                         st.markdown("---")
-                        st.markdown("### 6️⃣ Waitlist Information")
+                        st.markdown("### 7️⃣ Waitlist Information")
                         col1, col2, col3 = st.columns(3)
                         with col1:
                             waitlist_status = st.selectbox("Waitlist Status", WAITLIST_STATUS_OPTIONS)
@@ -651,9 +675,9 @@ with tab1:
                             else:
                                 allocated_from_waitlist = "No"
                         
-                        # SECTION 7: Program & Placement
+                        # SECTION 8: Program & Placement
                         st.markdown("---")
-                        st.markdown("### 7️⃣ Program & Placement")
+                        st.markdown("### 8️⃣ Program & Placement")
                         col1, col2, col3, col4 = st.columns(4)
                         with col1:
                             program = st.selectbox("Program *", [""] + PROGRAMS)
@@ -673,9 +697,9 @@ with tab1:
                         if bespoke_placement == "Yes":
                             st.info("💡 **Bespoke:** Year level doesn't match standard program")
                         
-                        # SECTION 8: Case Support Team
+                        # SECTION 9: Case Support Team
                         st.markdown("---")
-                        st.markdown("### 8️⃣ Case Support Team")
+                        st.markdown("### 9️⃣ Case Support Team")
                         col1, col2, col3 = st.columns(3)
                         with col1:
                             case_worker = st.selectbox("Case Worker", [""] + STAFF_NAMES)
@@ -683,26 +707,6 @@ with tab1:
                             bsc = st.text_input("BSE (Behaviour Support Educator)")
                         with col3:
                             school_contact = st.text_input("School Contact")
-                        
-                        # Communication fields - MORE PROMINENT
-                        st.markdown("---")
-                        st.markdown("### 9️⃣ Communication with Sites")
-                        st.caption("📧 Information to share with referring school and action assignment")
-                        
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            information = st.text_area(
-                                "Information to be Shared *", 
-                                height=100,
-                                placeholder="E.g., Student allocated to PY program, starting Term 3, 3 days per week",
-                                help="What information needs to be communicated to the referring school"
-                            )
-                        with col2:
-                            actioned_by = st.text_input(
-                                "To be Actioned By *",
-                                placeholder="E.g., Annette, Candice, Tom",
-                                help="Staff member responsible for contacting the school"
-                            )
                         
                         st.markdown("---")
                         notes = st.text_area("Additional Notes", height=80)
