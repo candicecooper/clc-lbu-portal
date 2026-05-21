@@ -944,105 +944,105 @@ with tab3:
 with tab4:
     st.header("📊 View & Export Completed Allocations")
     
-    # Fetch completed allocations (outcome is NOT NULL)
+    # Comprehensive debugging
     try:
-        # First, try to get ALL records to see what exists
-        st.write("🔍 **Checking database...**")
+        st.write("🔍 **Database Diagnostic:**")
         
+        # Get ALL records
         all_records = supabase.table("allocation_students")\
-            .select("*")\
+            .select("id, student_name, school, outcome, program, created_at")\
             .order("created_at", desc=True)\
             .execute()
         
-        st.write(f"Total records in database: {len(all_records.data) if all_records.data else 0}")
+        total = len(all_records.data) if all_records.data else 0
+        st.write(f"**Total records in database:** {total}")
         
-        # Show breakdown by outcome
         if all_records.data:
+            # Show breakdown by outcome
             from collections import Counter
-            outcome_counts = Counter(r.get('outcome') for r in all_records.data)
-            st.write("**Breakdown by outcome:**")
-            for outcome, count in outcome_counts.items():
-                outcome_display = outcome if outcome else "NULL (Draft)"
+            outcome_counts = Counter()
+            
+            st.write("\n**All records with outcome values:**")
+            for r in all_records.data:
+                outcome_val = r.get('outcome')
+                outcome_counts[outcome_val] += 1
+                
+                # Show each record
+                outcome_display = f"'{outcome_val}'" if outcome_val else "NULL"
+                st.write(f"- {r.get('student_name', 'No name')}: outcome={outcome_display}, program={r.get('program', 'None')}")
+            
+            st.write("\n**Summary by outcome:**")
+            for outcome_val, count in outcome_counts.items():
+                outcome_display = f"'{outcome_val}'" if outcome_val else "NULL (Draft)"
                 st.write(f"- {outcome_display}: {count} record(s)")
         
-        # Filter for completed only
-        completed = [r for r in all_records.data if r.get('outcome') in ['Allocated', 'Not Allocated']]
-        
-        if not completed:
-            st.info("📭 No completed allocations yet. Complete some drafts in the New Allocations tab!")
-            st.write("**Tip:** Go to Tab 1 → 'Complete Existing Draft' → Select a draft → Complete it")
-        else:
-            st.success(f"✅ Found {len(completed)} completed allocation(s)")
+        # Filter for completed (must have outcome value)
+        if all_records.data:
+            completed = [r for r in all_records.data if r.get('outcome') and r.get('outcome') != '']
             
-            # Display table
-            st.subheader("Completed Allocations")
+            st.write(f"\n**Records where outcome is NOT NULL:** {len(completed)}")
             
-            # Convert to simple display format
-            display_data = []
-            for record in completed:
-                display_data.append({
-                    "Student": record.get("student_name", ""),
-                    "School": record.get("school", ""),
-                    "Year": record.get("year_level", ""),
-                    "Program": record.get("program", ""),
-                    "Outcome": record.get("outcome", ""),
-                    "Meeting": record.get("meeting_week", ""),
-                    "Date": record.get("meeting_date", "")
-                })
-            
-            st.dataframe(display_data, use_container_width=True)
-            
-            # Export section
-            st.markdown("---")
-            st.subheader("📤 Export to Excel")
-            
-            # Select allocations to export
-            all_selected = st.checkbox("Select all", value=True)
-            
-            if all_selected:
-                selected_ids = [r["id"] for r in completed]
+            if not completed:
+                st.warning("⚠️ No records have a value in the 'outcome' field!")
+                st.info("📝 **To fix:** Go to Tab 1 → Complete Existing Draft → Fill in outcome → Save")
             else:
-                # Show checkboxes for individual selection
-                st.write("Select allocations to export:")
-                selected_ids = []
-                for record in completed:
-                    if st.checkbox(f"{record['student_name']} - {record.get('school', '')}", key=f"export_{record['id']}"):
-                        selected_ids.append(record["id"])
-            
-            if st.button("📥 Download Excel", type="primary"):
-                if not selected_ids:
-                    st.error("Please select at least one allocation to export")
-                else:
-                    # Filter to selected records
-                    to_export = [r for r in completed if r["id"] in selected_ids]
-                    
+                st.success(f"✅ Found {len(completed)} completed allocation(s)")
+                
+                # Get full data for completed records
+                completed_ids = [r['id'] for r in completed]
+                full_data = supabase.table("allocation_students")\
+                    .select("*")\
+                    .in_("id", completed_ids)\
+                    .execute()
+                
+                # Display table
+                st.subheader("Completed Allocations")
+                
+                display_data = []
+                for record in full_data.data:
+                    display_data.append({
+                        "Student": record.get("student_name", ""),
+                        "School": record.get("school", ""),
+                        "Year": record.get("year_level", ""),
+                        "Program": record.get("program", ""),
+                        "Outcome": record.get("outcome", ""),
+                        "Meeting": record.get("meeting_week", ""),
+                        "Date": str(record.get("meeting_date", ""))[:10]
+                    })
+                
+                st.dataframe(display_data, use_container_width=True)
+                
+                # Export section
+                st.markdown("---")
+                st.subheader("📤 Export to Excel")
+                
+                if st.button("📥 Download Excel", type="primary"):
                     try:
                         # Generate Excel
-                        excel_bytes = export_to_data_entry(to_export)
+                        excel_bytes = export_to_data_entry(full_data.data)
                         
                         # Download button
                         st.download_button(
                             label="💾 Save Excel File",
                             data=excel_bytes,
-                            file_name=f"CLC_Allocations_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                            file_name=f"CLC_Allocations_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
                         
-                        st.success(f"✅ Excel file ready! {len(to_export)} allocation(s) exported.")
+                        st.success(f"✅ Excel file ready! {len(full_data.data)} allocation(s) exported.")
                         
                     except Exception as e:
-                        st.error(f"Error generating Excel: {e}")
+                        st.error(f"❌ Error generating Excel: {e}")
                         import traceback
                         st.code(traceback.format_exc())
+        else:
+            st.info("📭 No records found in database. Create some allocations in Tab 1!")
     
     except Exception as e:
-        st.error(f"❌ Error loading allocations: {e}")
+        st.error(f"❌ Error: {str(e)}")
         import traceback
         st.code(traceback.format_exc())
-        st.write("**Troubleshooting:**")
-        st.write("1. Check that allocation_students table exists in Supabase")
-        st.write("2. Verify SUPABASE_URL environment variable is correct")
-        st.write("3. Check Supabase permissions (RLS disabled for allocation_students)")
+
 
 
 # Caption
