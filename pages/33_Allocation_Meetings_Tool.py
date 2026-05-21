@@ -86,6 +86,8 @@ SCHOOL_PARTNERSHIP_MAP = {
     "Nairne Primary School": "Heysen",
     
     # Holdfast Partnership
+    "Brighton Primary School": "Holdfast",
+    "Brighton PS": "Holdfast",
     "Brighton Secondary School": "Holdfast",
     "Hallett Cove School": "Holdfast",
     "Hamilton Secondary College": "Holdfast",
@@ -125,6 +127,7 @@ SCHOOL_PARTNERSHIP_MAP = {
     # Marion Inland Partnership
     "Ascot Park Primary School": "Marion Inland",
     "Clovelly Park Primary School": "Marion Inland",
+    "Clovelly Park PS": "Marion Inland",  # Alternative name
     "Glandore Community Centre": "Marion Inland",
     "Glandore Primary School": "Marion Inland",
     "Marion High School": "Marion Inland",
@@ -181,7 +184,11 @@ SCHOOL_PARTNERSHIP_MAP = {
     "West Lakes Shore School": "Western Adelaide Shores",
     "West Lakes Shores": "Western Adelaide Shores",
     "Woodville High School": "Western Adelaide Shores",
-    "Woodville Gardens School": "Western Adelaide Shores"
+    "Woodville HS": "Western Adelaide Shores",
+    "Woodville Gardens School": "Western Adelaide Shores",
+    
+    # Other schools (partnership TBD)
+    "Warriappendia Secondary School": "Other"  # Partnership to be confirmed
 }
 
 # All schools (sorted for dropdown)
