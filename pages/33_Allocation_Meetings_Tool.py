@@ -1151,11 +1151,28 @@ if st.session_state.get('download_comms', False):
             .execute()
         
         # DEBUG: Show what was fetched
-        st.write("🔍 **Debug: Data fetched from database:**")
-        st.write(f"Total records: {len(comm_data.data) if comm_data.data else 0}")
+        st.write("=" * 50)
+        st.write("🔍 **DEBUG: What came from database:**")
+        st.write("=" * 50)
+        st.write(f"**Total records found:** {len(comm_data.data) if comm_data.data else 0}")
+        
         if comm_data.data and len(comm_data.data) > 0:
-            st.write("**First record:**")
-            st.json(comm_data.data[0])
+            st.write("\n**SHOWING ALL RECORDS:**")
+            for idx, record in enumerate(comm_data.data, 1):
+                st.write(f"\n**Record {idx}:**")
+                st.write(f"- Student: {record.get('student_name')}")
+                st.write(f"- School: {record.get('school')}")
+                st.write(f"- Outcome: {record.get('outcome')}")
+                st.write(f"- ⚠️ INFORMATION: '{record.get('information')}'")
+                st.write(f"- ⚠️ ACTIONED BY: '{record.get('actioned_by')}'")
+                
+                if not record.get('information') and not record.get('actioned_by'):
+                    st.error("❌ BOTH FIELDS ARE EMPTY/NULL!")
+        else:
+            st.warning("No records found for this week")
+        
+        st.write("=" * 50)
+        st.write("")
         
         if comm_data.data:
             # Create Excel
