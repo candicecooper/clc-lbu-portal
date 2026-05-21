@@ -153,7 +153,33 @@ if st.session_state.page == 'students':
         new_prog = st.selectbox("Program", ["JP", "PY", "SY"])
         
         st.markdown("**Optional: Target Behaviours with Definitions**")
-        st.caption("Select from templates or type custom, then optionally use AI to generate")
+        
+        # AI Connection Test
+        with st.expander("🔧 Test AI Connection (click if AI not working)"):
+            if st.button("Test Groq API Connection"):
+                try:
+                    from groq import Groq
+                    api_key = st.secrets.get("GROQ_API_KEY") or st.secrets.get("groq", {}).get("api_key")
+                    
+                    if not api_key:
+                        st.error("❌ No API key found. Add GROQ_API_KEY to Render secrets.")
+                    else:
+                        st.info(f"✓ API key found: {api_key[:8]}...")
+                        
+                        client = Groq(api_key=api_key)
+                        response = client.chat.completions.create(
+                            model="llama-3.3-70b-versatile",
+                            messages=[{"role": "user", "content": "Say 'test successful'"}],
+                            max_tokens=10
+                        )
+                        
+                        st.success(f"✅ AI Working! Response: {response.choices[0].message.content}")
+                except ImportError as e:
+                    st.error(f"❌ Groq library not installed: {e}")
+                except Exception as e:
+                    st.error(f"❌ Connection failed: {str(e)}")
+        
+        st.caption("Select from templates below, or use AI to generate custom definitions")
         
         # Pre-built templates
         TEMPLATES = {
@@ -174,24 +200,23 @@ if st.session_state.page == 'students':
         st.markdown("**Behaviour 1**")
         template1 = st.selectbox("Select template or leave blank for custom", list(TEMPLATES.keys()), key="temp1")
         
-        col1, col2 = st.columns([3, 1])
+        col1, col2 = st.columns([4, 1])
         with col1:
             beh1_name = st.text_input(
-                "Name", 
+                "Behaviour name", 
                 value=template1 if template1 else "",
-                key="new_beh1",
-                label_visibility="collapsed"
+                key="new_beh1"
             )
         with col2:
-            if st.button("✨ AI", key="gen1", use_container_width=True, help="Generate with AI"):
+            if st.button("🤖 AI", key="ai1", use_container_width=True, help="Generate definition with AI"):
                 if beh1_name:
                     with st.spinner("Generating..."):
                         try:
                             from groq import Groq
-                            api_key = st.secrets.get("GROQ_API_KEY", st.secrets.get("groq", {}).get("api_key", ""))
+                            api_key = st.secrets.get("GROQ_API_KEY") or st.secrets.get("groq", {}).get("api_key")
                             
                             if not api_key:
-                                st.error("⚠️ GROQ_API_KEY not in Render secrets")
+                                st.error("Add GROQ_API_KEY to Render Environment Variables")
                             else:
                                 client = Groq(api_key=api_key)
                                 
@@ -199,23 +224,20 @@ if st.session_state.page == 'students':
                                     model="llama-3.3-70b-versatile",
                                     messages=[{
                                         "role": "user",
-                                        "content": f"Create a 2-3 sentence operational definition for '{beh1_name}'. Format: Description. Includes X. Excludes Y. No preamble."
+                                        "content": f"Write a 2-3 sentence operational definition for the school behaviour '{beh1_name}'. Format: Description. Includes examples. Excludes non-examples."
                                     }],
                                     temperature=0.3,
-                                    max_tokens=150,
-                                    timeout=10
+                                    max_tokens=120
                                 )
                                 
-                                definition = response.choices[0].message.content.strip()
-                                st.session_state['ai_def1'] = definition
-                                st.success("✅ Generated!")
+                                st.session_state['ai_gen1'] = response.choices[0].message.content.strip()
                                 st.rerun()
                         except Exception as e:
-                            st.error(f"❌ AI failed: {str(e)[:60]}. Use template instead.")
+                            st.error(f"AI Error: {str(e)[:100]}")
         
         beh1_def = st.text_area(
-            "Definition 1",
-            value=st.session_state.get('ai_def1', TEMPLATES.get(template1, '')),
+            "Definition (auto-fills from template, or click AI button)",
+            value=st.session_state.get('ai_gen1', TEMPLATES.get(template1, '')),
             height=70,
             key="def1",
             placeholder="Observable, measurable description"
@@ -225,46 +247,44 @@ if st.session_state.page == 'students':
         st.markdown("**Behaviour 2 (optional)**")
         template2 = st.selectbox("Select template or leave blank", list(TEMPLATES.keys()), key="temp2")
         
-        col1, col2 = st.columns([3, 1])
+        col1, col2 = st.columns([4, 1])
         with col1:
             beh2_name = st.text_input(
-                "Name",
+                "Behaviour name",
                 value=template2 if template2 else "",
-                key="new_beh2",
-                label_visibility="collapsed"
+                key="new_beh2"
             )
         with col2:
-            if st.button("✨ AI", key="gen2", use_container_width=True):
+            if st.button("🤖 AI", key="ai2", use_container_width=True):
                 if beh2_name:
                     with st.spinner("Generating..."):
                         try:
                             from groq import Groq
-                            api_key = st.secrets.get("GROQ_API_KEY", st.secrets.get("groq", {}).get("api_key", ""))
+                            api_key = st.secrets.get("GROQ_API_KEY") or st.secrets.get("groq", {}).get("api_key")
                             
-                            if api_key:
+                            if not api_key:
+                                st.error("Add GROQ_API_KEY to Render")
+                            else:
                                 client = Groq(api_key=api_key)
                                 
                                 response = client.chat.completions.create(
                                     model="llama-3.3-70b-versatile",
                                     messages=[{
                                         "role": "user",
-                                        "content": f"Create a 2-3 sentence operational definition for '{beh2_name}'. Format: Description. Includes X. Excludes Y. No preamble."
+                                        "content": f"Write a 2-3 sentence operational definition for the school behaviour '{beh2_name}'. Format: Description. Includes examples. Excludes non-examples."
                                     }],
                                     temperature=0.3,
-                                    max_tokens=150,
-                                    timeout=10
+                                    max_tokens=120
                                 )
                                 
-                                definition = response.choices[0].message.content.strip()
-                                st.session_state['ai_def2'] = definition
-                                st.success("✅ Generated!")
+                                st.session_state['ai_gen2'] = response.choices[0].message.content.strip()
                                 st.rerun()
                         except Exception as e:
-                            st.error(f"❌ AI failed. Use template.")
+                            st.error(f"AI Error: {str(e)[:100]}")
         
         beh2_def = st.text_area(
             "Definition 2",
-            value=st.session_state.get('ai_def2', TEMPLATES.get(template2, '')),
+            value=st.session_state.get('ai_gen2', TEMPLATES.get(template2, '')),
             height=70,
             key="def2"
         )
@@ -273,46 +293,44 @@ if st.session_state.page == 'students':
         st.markdown("**Behaviour 3 (optional)**")
         template3 = st.selectbox("Select template or leave blank", list(TEMPLATES.keys()), key="temp3")
         
-        col1, col2 = st.columns([3, 1])
+        col1, col2 = st.columns([4, 1])
         with col1:
             beh3_name = st.text_input(
-                "Name",
+                "Behaviour name",
                 value=template3 if template3 else "",
-                key="new_beh3",
-                label_visibility="collapsed"
+                key="new_beh3"
             )
         with col2:
-            if st.button("✨ AI", key="gen3", use_container_width=True):
+            if st.button("🤖 AI", key="ai3", use_container_width=True):
                 if beh3_name:
                     with st.spinner("Generating..."):
                         try:
                             from groq import Groq
-                            api_key = st.secrets.get("GROQ_API_KEY", st.secrets.get("groq", {}).get("api_key", ""))
+                            api_key = st.secrets.get("GROQ_API_KEY") or st.secrets.get("groq", {}).get("api_key")
                             
-                            if api_key:
+                            if not api_key:
+                                st.error("Add GROQ_API_KEY to Render")
+                            else:
                                 client = Groq(api_key=api_key)
                                 
                                 response = client.chat.completions.create(
                                     model="llama-3.3-70b-versatile",
                                     messages=[{
                                         "role": "user",
-                                        "content": f"Create a 2-3 sentence operational definition for '{beh3_name}'. Format: Description. Includes X. Excludes Y. No preamble."
+                                        "content": f"Write a 2-3 sentence operational definition for the school behaviour '{beh3_name}'. Format: Description. Includes examples. Excludes non-examples."
                                     }],
                                     temperature=0.3,
-                                    max_tokens=150,
-                                    timeout=10
+                                    max_tokens=120
                                 )
                                 
-                                definition = response.choices[0].message.content.strip()
-                                st.session_state['ai_def3'] = definition
-                                st.success("✅ Generated!")
+                                st.session_state['ai_gen3'] = response.choices[0].message.content.strip()
                                 st.rerun()
                         except Exception as e:
-                            st.error(f"❌ AI failed. Use template.")
+                            st.error(f"AI Error: {str(e)[:100]}")
         
         beh3_def = st.text_area(
             "Definition 3",
-            value=st.session_state.get('ai_def3', TEMPLATES.get(template3, '')),
+            value=st.session_state.get('ai_gen3', TEMPLATES.get(template3, '')),
             height=70,
             key="def3"
         )
@@ -473,11 +491,55 @@ elif st.session_state.page == 'setup':
             st.session_state.behaviours = list(beh_defs.keys())[:3]
             st.rerun()
     
-    st.caption("Enter 1-3 behaviours to track this week")
+    st.caption("Select from templates or type custom behaviour names")
     
-    beh1 = st.text_input("Behaviour 1", value=st.session_state.behaviours[0] if len(st.session_state.behaviours) > 0 else "", key="beh1")
-    beh2 = st.text_input("Behaviour 2 (optional)", value=st.session_state.behaviours[1] if len(st.session_state.behaviours) > 1 else "", key="beh2")
-    beh3 = st.text_input("Behaviour 3 (optional)", value=st.session_state.behaviours[2] if len(st.session_state.behaviours) > 2 else "", key="beh3")
+    # Behaviour templates
+    TEMPLATES = {
+        "": "—",
+        "Hitting": "Making forceful contact with another person using an open or closed hand. Includes slapping, punching, striking. Excludes accidental contact, light taps, high-fives.",
+        "Pushing": "Using hands, arms, or body to forcefully move another person. Includes shoving, bumping with force. Excludes gentle guidance, accidental contact.",
+        "Kicking": "Making forceful contact with another person using foot or leg. Includes kicking, stomping, tripping. Excludes accidental contact, stretching.",
+        "Yelling": "Speaking louder than conversational tone for 3+ seconds. Includes shouting, screaming. Excludes excited play voice, calling from distance.",
+        "Task refusal": "Refusing to begin or continue assigned work. Includes saying 'no', pushing materials away. Excludes asking for help, requesting breaks.",
+        "Leaving area": "Moving beyond boundaries without permission. Includes leaving classroom, wandering. Excludes transitions with class.",
+        "Throwing objects": "Propelling objects through air with force. Includes throwing books, materials. Excludes passing items, accidental drops.",
+        "Swearing": "Using profanity or inappropriate language. Includes curse words. Excludes repeating without understanding.",
+        "Property destruction": "Damaging or breaking materials. Includes tearing, breaking, scratching. Excludes accidental damage.",
+        "Self-hitting": "Making forceful contact with own body. Includes hitting head with hand or on objects. Excludes scratching itch.",
+    }
+    
+    # Behaviour 1
+    template1 = st.selectbox("Select Behaviour 1", list(TEMPLATES.keys()), key="setup_temp1")
+    beh1 = st.text_input(
+        "Or type custom name", 
+        value=template1 if template1 else (st.session_state.behaviours[0] if len(st.session_state.behaviours) > 0 else ""),
+        key="beh1",
+        label_visibility="collapsed"
+    )
+    if template1:
+        st.caption(TEMPLATES[template1])
+    
+    # Behaviour 2
+    template2 = st.selectbox("Select Behaviour 2 (optional)", list(TEMPLATES.keys()), key="setup_temp2")
+    beh2 = st.text_input(
+        "Or type custom name",
+        value=template2 if template2 else (st.session_state.behaviours[1] if len(st.session_state.behaviours) > 1 else ""),
+        key="beh2",
+        label_visibility="collapsed"
+    )
+    if template2:
+        st.caption(TEMPLATES[template2])
+    
+    # Behaviour 3
+    template3 = st.selectbox("Select Behaviour 3 (optional)", list(TEMPLATES.keys()), key="setup_temp3")
+    beh3 = st.text_input(
+        "Or type custom name",
+        value=template3 if template3 else (st.session_state.behaviours[2] if len(st.session_state.behaviours) > 2 else ""),
+        key="beh3",
+        label_visibility="collapsed"
+    )
+    if template3:
+        st.caption(TEMPLATES[template3])
     
     behaviours = [b.strip() for b in [beh1, beh2, beh3] if b.strip()]
     st.session_state.behaviours = behaviours
