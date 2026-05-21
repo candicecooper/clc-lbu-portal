@@ -811,6 +811,10 @@ elif st.session_state.page == 'setup':
     
     st.session_state.behaviours = behaviours
     
+    # Debug: Show what will be saved
+    if behaviours:
+        st.info(f"✅ Ready to track: **{', '.join(behaviours)}** ({len(behaviours)} behaviour(s))")
+    
     # Save and continue
     if st.button("✅ Setup Complete - Start Recording", type="primary", use_container_width=True):
         if not st.session_state.student_name:
@@ -906,6 +910,14 @@ elif st.session_state.page == 'record':
     # Initialize grid data if needed
     if not st.session_state.grid_data:
         st.session_state.grid_data = {}
+    
+    # Debug: Show exactly what we have
+    st.success(f"✅ Tracking **{len(behaviours)}** behaviour(s):")
+    for i, beh in enumerate(behaviours):
+        st.write(f"  {i+1}. {beh}")
+    
+    if len(behaviours) == 1:
+        st.warning("⚠️ Only 1 behaviour detected. If you set up multiple behaviours, they may not have been saved correctly. Check Setup page.")
     
     st.markdown("### 📊 Weekly Grid")
     st.caption("Click any cell to add a tally mark ( / ). Click repeatedly to add more.")
