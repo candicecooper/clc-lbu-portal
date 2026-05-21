@@ -783,6 +783,10 @@ elif st.session_state.page == 'setup':
     
     st.markdown("---")
     
+    # Build behaviours list from inputs
+    behaviours = [b.strip() for b in [beh1, beh2, beh3] if b and b.strip()]
+    st.session_state.behaviours = behaviours
+    
     # Save and continue
     if st.button("✅ Setup Complete - Start Recording", type="primary", use_container_width=True):
         if not st.session_state.student_name:
@@ -792,6 +796,22 @@ elif st.session_state.page == 'setup':
         elif not st.session_state.schedule:
             st.error("❌ Please add your daily schedule")
         else:
+            # Save week to database
+            sb = get_sb()
+            if sb:
+                try:
+                    week_start = st.session_state.week_start
+                    sb.table("scatter_weekly_data").upsert({
+                        "student_name": st.session_state.student_name,
+                        "week_start": str(week_start),
+                        "behaviours": json.dumps(behaviours),
+                        "schedule": json.dumps(st.session_state.schedule),
+                        "grid_data": json.dumps({}),
+                        "created_by": get_staff_name() if hasattr(get_staff_name, '__call__') else "Staff"
+                    }, on_conflict="student_name,week_start").execute()
+                except Exception as e:
+                    st.error(f"Save error: {e}")
+            
             st.session_state.page = 'record'
             st.rerun()
 
