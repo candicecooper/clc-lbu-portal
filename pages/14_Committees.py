@@ -157,10 +157,12 @@ if st.session_state.committee_view == 'home':
         if st.button("Open Special Events", key="btn_special", use_container_width=True):
             navigate_to('committee_home', 'special')
     
-    # Documents Card - Centered below
+    # Additional Cards - Below
     st.divider()
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Documents Card
         st.markdown("""
             <div style="border: 3px solid #0891b2; border-radius: 16px; padding: 2rem; 
                         background: white; margin-bottom: 1.5rem; min-height: 220px;
@@ -172,8 +174,24 @@ if st.session_state.committee_view == 'home':
                             border-radius: 20px; font-size: 0.85rem; font-weight: 600;">● Active</span>
             </div>
         """, unsafe_allow_html=True)
-        if st.button("📂 Open Documents Library", key="btn_docs", use_container_width=True):
+        if st.button("View Documents", key="btn_documents", use_container_width=True):
             navigate_to('documents')
+    
+    with col2:
+        # Committee Members Card (NEW!)
+        st.markdown("""
+            <div style="border: 3px solid #8b5cf6; border-radius: 16px; padding: 2rem; 
+                        background: white; margin-bottom: 1.5rem; min-height: 220px;
+                        box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                <div style="font-size: 3.5rem; margin-bottom: 1rem;">👥</div>
+                <h3 style="color: #1e3a5f; margin-bottom: 0.5rem;">Committee Members</h3>
+                <p style="color: #64748b; margin-bottom: 1rem;">Roles · Positions · Staff</p>
+                <span style="background: #ede9fe; color: #6b21a8; padding: 0.4rem 0.8rem; 
+                            border-radius: 20px; font-size: 0.85rem; font-weight: 600;">● Active</span>
+            </div>
+        """, unsafe_allow_html=True)
+        if st.button("View Members", key="btn_members", use_container_width=True):
+            navigate_to('members')
 
 # ========== COMMITTEE HOME VIEW ==========
 elif st.session_state.committee_view == 'committee_home':
