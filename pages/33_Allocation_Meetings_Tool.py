@@ -629,29 +629,25 @@ with tab1:
                     with col2:
                         details = st.text_area("Outcome Details", height=100)
                     
-                    # COMMUNICATION FIELDS - SHOW IMMEDIATELY AFTER OUTCOME
-                    if outcome:  # Only show if an outcome is selected
-                        st.markdown("---")
-                        st.markdown("### 6️⃣ Communication with Sites")
-                        st.caption("📧 Information to share with referring school")
-                        
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            information = st.text_area(
-                                "Information to be Shared *", 
-                                height=100,
-                                placeholder="E.g., Student allocated to PY, starting Term 3, 3 days/week",
-                                help="What information needs to be communicated to the referring school"
-                            )
-                        with col2:
-                            actioned_by = st.text_input(
-                                "To be Actioned By *",
-                                placeholder="E.g., Annette, Candice, Tom",
-                                help="Staff member responsible for contacting the school"
-                            )
-                    else:
-                        information = None
-                        actioned_by = None
+                    # COMMUNICATION FIELDS - ALWAYS SHOW (not conditional!)
+                    st.markdown("---")
+                    st.markdown("### 6️⃣ Communication with Sites")
+                    st.caption("📧 Information to share with referring school")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        information = st.text_area(
+                            "Information to be Shared *", 
+                            height=100,
+                            placeholder="E.g., Student allocated to PY, starting Term 3, 3 days/week",
+                            help="What information needs to be communicated to the referring school"
+                        )
+                    with col2:
+                        actioned_by = st.text_input(
+                            "To be Actioned By *",
+                            placeholder="E.g., Annette, Candice, Tom",
+                            help="Staff member responsible for contacting the school"
+                        )
                     
                     # Only show these sections if Allocated
                     if outcome == "Allocated":
