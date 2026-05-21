@@ -1,10 +1,255 @@
--- ============================================================================
--- CLC-LBU Committee Members Database Setup
--- Run this in your Supabase SQL Editor
--- Tables: committee_roles and committee_role_members (to avoid naming conflicts)
--- ============================================================================
+# ============================================================================
+# FIXED VERSION - Add this after the documents view (line 930)
+# ============================================================================
 
--- Create committee_roles table
+# ========== COMMITTEE MEMBERS VIEW ==========
+elif st.session_state.committee_view == 'members':
+    
+    st.markdown("### 👥 Committee Members & Roles")
+    st.markdown("View all staff committee assignments and roles.")
+    
+    # Back button
+    if st.button("↩ Return to Committees Home", use_container_width=True):
+        navigate_to('home')
+    
+    st.divider()
+    
+    # Try to load data with error handling
+    try:
+        # Test if tables exist
+        test_response = supabase.table('committee_roles').select('*').limit(1).execute()
+        
+        # Get all committees
+        committees_response = supabase.table('committee_roles')\
+            .select('*')\
+            .order('display_order', desc=False)\
+            .execute()
+        
+        committees = committees_response.data if committees_response.data else []
+        
+        # Get members for each committee
+        for committee in committees:
+            members_response = supabase.table('committee_role_members')\
+                .select('*')\
+                .eq('committee_id', committee['id'])\
+                .order('display_order', desc=False)\
+                .execute()
+            
+            committee['members'] = members_response.data if members_response.data else []
+        
+        # Display results
+        if len(committees) == 0:
+            st.info("👋 No committee roles found in database.")
+            st.warning("Tables exist but are empty. Click below to initialize with default data:")
+            
+            if st.button("🚀 Load Default Committees", use_container_width=True, type="primary"):
+                with st.spinner("Loading default committees..."):
+                    try:
+                        # PAC Committee
+                        pac = supabase.table('committee_roles').insert({
+                            'name': 'PAC',
+                            'description': 'Partnership & Cooperation Committee',
+                            'display_order': 0
+                        }).execute()
+                        
+                        if pac.data:
+                            pac_id = pac.data[0]['id']
+                            supabase.table('committee_role_members').insert([
+                                {'committee_id': pac_id, 'staff_name': 'Candice', 'role': 'Leader', 'display_order': 0},
+                                {'committee_id': pac_id, 'staff_name': 'Naomi', 'role': 'SSO rep', 'display_order': 1},
+                                {'committee_id': pac_id, 'staff_name': 'Ben', 'role': 'AEU Rep', 'display_order': 2},
+                                {'committee_id': pac_id, 'staff_name': 'Brenton', 'role': 'Teacher Rep', 'display_order': 3}
+                            ]).execute()
+                        
+                        # WHS
+                        whs = supabase.table('committee_roles').insert({
+                            'name': 'WHS',
+                            'description': 'Work Health & Safety',
+                            'display_order': 1
+                        }).execute()
+                        
+                        if whs.data:
+                            whs_id = whs.data[0]['id']
+                            supabase.table('committee_role_members').insert([
+                                {'committee_id': whs_id, 'staff_name': 'Candice', 'role': 'OHS Rep', 'display_order': 0},
+                                {'committee_id': whs_id, 'staff_name': 'Naomi', 'role': '', 'display_order': 1},
+                                {'committee_id': whs_id, 'staff_name': 'Ben Selga', 'role': '', 'display_order': 2},
+                                {'committee_id': whs_id, 'staff_name': 'Caitie', 'role': '', 'display_order': 3},
+                                {'committee_id': whs_id, 'staff_name': 'Roisin', 'role': '', 'display_order': 4}
+                            ]).execute()
+                        
+                        # Social Club
+                        social = supabase.table('committee_roles').insert({
+                            'name': 'Social Club',
+                            'description': '',
+                            'display_order': 2
+                        }).execute()
+                        
+                        if social.data:
+                            social_id = social.data[0]['id']
+                            supabase.table('committee_role_members').insert([
+                                {'committee_id': social_id, 'staff_name': 'Ben Sutton', 'role': '', 'display_order': 0},
+                                {'committee_id': social_id, 'staff_name': 'Vinnie', 'role': '', 'display_order': 1},
+                                {'committee_id': social_id, 'staff_name': 'Jacqui', 'role': '', 'display_order': 2},
+                                {'committee_id': social_id, 'staff_name': 'Annette', 'role': '', 'display_order': 3}
+                            ]).execute()
+                        
+                        # Centre Spec Events
+                        events = supabase.table('committee_roles').insert({
+                            'name': 'Centre Spec Events',
+                            'description': 'Centre Special Events',
+                            'display_order': 3
+                        }).execute()
+                        
+                        if events.data:
+                            events_id = events.data[0]['id']
+                            supabase.table('committee_role_members').insert([
+                                {'committee_id': events_id, 'staff_name': 'Brenton', 'role': '', 'display_order': 0},
+                                {'committee_id': events_id, 'staff_name': 'Ben Selga', 'role': '', 'display_order': 1},
+                                {'committee_id': events_id, 'staff_name': 'Annette', 'role': '', 'display_order': 2}
+                            ]).execute()
+                        
+                        # Leaving Gift
+                        leaving = supabase.table('committee_roles').insert({
+                            'name': 'Leaving Gift',
+                            'description': '',
+                            'display_order': 4
+                        }).execute()
+                        
+                        if leaving.data:
+                            leaving_id = leaving.data[0]['id']
+                            supabase.table('committee_role_members').insert([
+                                {'committee_id': leaving_id, 'staff_name': 'Caitie', 'role': '', 'display_order': 0},
+                                {'committee_id': leaving_id, 'staff_name': 'Jacqui', 'role': '', 'display_order': 1},
+                                {'committee_id': leaving_id, 'staff_name': 'Annette', 'role': '', 'display_order': 2},
+                                {'committee_id': leaving_id, 'staff_name': 'Candice', 'role': '', 'display_order': 3},
+                                {'committee_id': leaving_id, 'staff_name': 'Naomi', 'role': '', 'display_order': 4}
+                            ]).execute()
+                        
+                        # OHS
+                        ohs = supabase.table('committee_roles').insert({
+                            'name': 'OHS',
+                            'description': 'Occupational Health & Safety',
+                            'display_order': 5
+                        }).execute()
+                        
+                        if ohs.data:
+                            ohs_id = ohs.data[0]['id']
+                            supabase.table('committee_role_members').insert([
+                                {'committee_id': ohs_id, 'staff_name': 'Roisin', 'role': 'Proxy', 'display_order': 0},
+                                {'committee_id': ohs_id, 'staff_name': 'Caitie', 'role': 'Proxy', 'display_order': 1}
+                            ]).execute()
+                        
+                        # AEU
+                        aeu = supabase.table('committee_roles').insert({
+                            'name': 'AEU',
+                            'description': 'Australian Education Union',
+                            'display_order': 6
+                        }).execute()
+                        
+                        if aeu.data:
+                            aeu_id = aeu.data[0]['id']
+                            supabase.table('committee_role_members').insert([
+                                {'committee_id': aeu_id, 'staff_name': 'Roisin', 'role': 'Proxy', 'display_order': 0},
+                                {'committee_id': aeu_id, 'staff_name': 'Ben Sutton', 'role': 'Proxy', 'display_order': 1}
+                            ]).execute()
+                        
+                        # Fire Warden
+                        fire = supabase.table('committee_roles').insert({
+                            'name': 'Fire Warden',
+                            'description': '',
+                            'display_order': 7
+                        }).execute()
+                        
+                        if fire.data:
+                            fire_id = fire.data[0]['id']
+                            supabase.table('committee_role_members').insert([
+                                {'committee_id': fire_id, 'staff_name': 'Brenton', 'role': '', 'display_order': 0},
+                                {'committee_id': fire_id, 'staff_name': 'Ben Selga', 'role': '', 'display_order': 1}
+                            ]).execute()
+                        
+                        # First Aid Officer
+                        first_aid = supabase.table('committee_roles').insert({
+                            'name': 'First Aid Officer',
+                            'description': '',
+                            'display_order': 8
+                        }).execute()
+                        
+                        if first_aid.data:
+                            first_aid_id = first_aid.data[0]['id']
+                            supabase.table('committee_role_members').insert([
+                                {'committee_id': first_aid_id, 'staff_name': 'Naomi', 'role': '', 'display_order': 0}
+                            ]).execute()
+                        
+                        # Mathletics Coordinator (was 3P Learning Coordinator)
+                        mathletics = supabase.table('committee_roles').insert({
+                            'name': 'Mathletics Coordinator',
+                            'description': '3P Learning',
+                            'display_order': 9
+                        }).execute()
+                        
+                        if mathletics.data:
+                            mathletics_id = mathletics.data[0]['id']
+                            supabase.table('committee_role_members').insert([
+                                {'committee_id': mathletics_id, 'staff_name': 'Caitie', 'role': '', 'display_order': 0}
+                            ]).execute()
+                        
+                        st.success("✅ All committees loaded successfully!")
+                        st.balloons()
+                        st.rerun()
+                    
+                    except Exception as e:
+                        st.error(f"Error loading committees: {str(e)}")
+        
+        else:
+            # Display committees
+            st.success(f"✅ Loaded {len(committees)} committees")
+            
+            # Edit mode toggle
+            edit_mode = st.toggle("✏️ Edit Mode", value=False)
+            
+            if edit_mode:
+                st.info("✏️ **Edit Mode Active** - Click on a committee name to edit it.")
+            
+            st.divider()
+            
+            # Display each committee
+            for committee in committees:
+                with st.container():
+                    col1, col2 = st.columns([4, 1])
+                    
+                    with col1:
+                        st.markdown(f"### 🤝 {committee['name']}")
+                        if committee.get('description'):
+                            st.caption(committee['description'])
+                    
+                    with col2:
+                        if edit_mode:
+                            if st.button("✏️", key=f"edit_{committee['id']}", help="Edit committee"):
+                                st.info("Editing features coming soon!")
+                    
+                    # Display members
+                    if committee['members']:
+                        member_display = []
+                        for member in committee['members']:
+                            if member['role']:
+                                member_display.append(f"**{member['staff_name']}** ({member['role']})")
+                            else:
+                                member_display.append(f"**{member['staff_name']}**")
+                        
+                        st.markdown("**Members:** " + " • ".join(member_display))
+                    else:
+                        st.caption("_No members assigned_")
+                    
+                    st.divider()
+    
+    except Exception as e:
+        st.error(f"⚠️ Error: {str(e)}")
+        
+        st.warning("**Tables might not exist yet.** Run this SQL in Supabase SQL Editor:")
+        
+        with st.expander("📋 Click to see SQL setup"):
+            st.code("""
 CREATE TABLE IF NOT EXISTS committee_roles (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
@@ -14,261 +259,19 @@ CREATE TABLE IF NOT EXISTS committee_roles (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Create committee_role_members table
 CREATE TABLE IF NOT EXISTS committee_role_members (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     committee_id UUID REFERENCES committee_roles(id) ON DELETE CASCADE,
     staff_name TEXT NOT NULL,
     role TEXT,
     display_order INTEGER DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(committee_id, staff_name, role)
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Create indexes for better performance
-CREATE INDEX IF NOT EXISTS idx_committee_role_members_committee 
-    ON committee_role_members(committee_id);
-CREATE INDEX IF NOT EXISTS idx_committee_roles_display_order 
-    ON committee_roles(display_order);
-CREATE INDEX IF NOT EXISTS idx_committee_role_members_display_order 
-    ON committee_role_members(display_order);
-
--- Enable Row Level Security
+CREATE INDEX idx_committee_role_members_committee ON committee_role_members(committee_id);
 ALTER TABLE committee_roles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE committee_role_members ENABLE ROW LEVEL SECURITY;
 
--- Drop existing policies if they exist
-DROP POLICY IF EXISTS "Allow read for authenticated users" ON committee_roles;
-DROP POLICY IF EXISTS "Allow read for authenticated users" ON committee_role_members;
-DROP POLICY IF EXISTS "Allow all for service role" ON committee_roles;
-DROP POLICY IF EXISTS "Allow all for service role" ON committee_role_members;
-
--- Create RLS policies
-CREATE POLICY "Allow read for authenticated users" ON committee_roles
-    FOR SELECT USING (auth.role() = 'authenticated');
-
-CREATE POLICY "Allow read for authenticated users" ON committee_role_members
-    FOR SELECT USING (auth.role() = 'authenticated');
-
-CREATE POLICY "Allow all for service role" ON committee_roles
-    FOR ALL USING (true);
-
-CREATE POLICY "Allow all for service role" ON committee_role_members
-    FOR ALL USING (true);
-
--- ============================================================================
--- Insert default committee roles and members
--- ============================================================================
-
--- PAC Committee
-INSERT INTO committee_roles (name, description, display_order) 
-VALUES ('PAC', 'Partnership & Cooperation Committee', 0)
-ON CONFLICT (name) DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Candice', 'Leader', 0
-FROM committee_roles c WHERE c.name = 'PAC'
-ON CONFLICT DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Naomi', 'SSO rep', 1
-FROM committee_roles c WHERE c.name = 'PAC'
-ON CONFLICT DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Ben', 'AEU Rep', 2
-FROM committee_roles c WHERE c.name = 'PAC'
-ON CONFLICT DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Brenton', 'Teacher Rep', 3
-FROM committee_roles c WHERE c.name = 'PAC'
-ON CONFLICT DO NOTHING;
-
--- WHS Committee
-INSERT INTO committee_roles (name, description, display_order) 
-VALUES ('WHS', 'Work Health & Safety', 1)
-ON CONFLICT (name) DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Candice', 'OHS Rep', 0
-FROM committee_roles c WHERE c.name = 'WHS'
-ON CONFLICT DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Naomi', '', 1
-FROM committee_roles c WHERE c.name = 'WHS'
-ON CONFLICT DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Ben Selga', '', 2
-FROM committee_roles c WHERE c.name = 'WHS'
-ON CONFLICT DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Caitie', '', 3
-FROM committee_roles c WHERE c.name = 'WHS'
-ON CONFLICT DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Roisin', '', 4
-FROM committee_roles c WHERE c.name = 'WHS'
-ON CONFLICT DO NOTHING;
-
--- Social Club
-INSERT INTO committee_roles (name, description, display_order) 
-VALUES ('Social Club', '', 2)
-ON CONFLICT (name) DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Ben Sutton', '', 0
-FROM committee_roles c WHERE c.name = 'Social Club'
-ON CONFLICT DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Vinnie', '', 1
-FROM committee_roles c WHERE c.name = 'Social Club'
-ON CONFLICT DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Jacqui', '', 2
-FROM committee_roles c WHERE c.name = 'Social Club'
-ON CONFLICT DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Annette', '', 3
-FROM committee_roles c WHERE c.name = 'Social Club'
-ON CONFLICT DO NOTHING;
-
--- Centre Spec Events
-INSERT INTO committee_roles (name, description, display_order) 
-VALUES ('Centre Spec Events', 'Centre Special Events', 3)
-ON CONFLICT (name) DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Brenton', '', 0
-FROM committee_roles c WHERE c.name = 'Centre Spec Events'
-ON CONFLICT DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Ben Selga', '', 1
-FROM committee_roles c WHERE c.name = 'Centre Spec Events'
-ON CONFLICT DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Annette', '', 2
-FROM committee_roles c WHERE c.name = 'Centre Spec Events'
-ON CONFLICT DO NOTHING;
-
--- Leaving Gift
-INSERT INTO committee_roles (name, description, display_order) 
-VALUES ('Leaving Gift', '', 4)
-ON CONFLICT (name) DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Caitie', '', 0
-FROM committee_roles c WHERE c.name = 'Leaving Gift'
-ON CONFLICT DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Jacqui', '', 1
-FROM committee_roles c WHERE c.name = 'Leaving Gift'
-ON CONFLICT DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Annette', '', 2
-FROM committee_roles c WHERE c.name = 'Leaving Gift'
-ON CONFLICT DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Candice', '', 3
-FROM committee_roles c WHERE c.name = 'Leaving Gift'
-ON CONFLICT DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Naomi', '', 4
-FROM committee_roles c WHERE c.name = 'Leaving Gift'
-ON CONFLICT DO NOTHING;
-
--- OHS
-INSERT INTO committee_roles (name, description, display_order) 
-VALUES ('OHS', 'Occupational Health & Safety', 5)
-ON CONFLICT (name) DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Roisin', 'Proxy', 0
-FROM committee_roles c WHERE c.name = 'OHS'
-ON CONFLICT DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Caitie', 'Proxy', 1
-FROM committee_roles c WHERE c.name = 'OHS'
-ON CONFLICT DO NOTHING;
-
--- AEU
-INSERT INTO committee_roles (name, description, display_order) 
-VALUES ('AEU', 'Australian Education Union', 6)
-ON CONFLICT (name) DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Roisin', 'Proxy', 0
-FROM committee_roles c WHERE c.name = 'AEU'
-ON CONFLICT DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Ben Sutton', 'Proxy', 1
-FROM committee_roles c WHERE c.name = 'AEU'
-ON CONFLICT DO NOTHING;
-
--- Fire Warden
-INSERT INTO committee_roles (name, description, display_order) 
-VALUES ('Fire Warden', '', 7)
-ON CONFLICT (name) DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Brenton', '', 0
-FROM committee_roles c WHERE c.name = 'Fire Warden'
-ON CONFLICT DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Ben Selga', '', 1
-FROM committee_roles c WHERE c.name = 'Fire Warden'
-ON CONFLICT DO NOTHING;
-
--- First Aid Officer
-INSERT INTO committee_roles (name, description, display_order) 
-VALUES ('First Aid Officer', '', 8)
-ON CONFLICT (name) DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Naomi', '', 0
-FROM committee_roles c WHERE c.name = 'First Aid Officer'
-ON CONFLICT DO NOTHING;
-
--- 3P Learning Coordinator
-INSERT INTO committee_roles (name, description, display_order) 
-VALUES ('3P Learning Coordinator', '', 9)
-ON CONFLICT (name) DO NOTHING;
-
-INSERT INTO committee_role_members (committee_id, staff_name, role, display_order)
-SELECT c.id, 'Caitie', '', 0
-FROM committee_roles c WHERE c.name = '3P Learning Coordinator'
-ON CONFLICT DO NOTHING;
-
--- ============================================================================
--- Verify the data
--- ============================================================================
-
-SELECT 'Committee roles created:' as status, COUNT(*) as count FROM committee_roles;
-SELECT 'Committee role members created:' as status, COUNT(*) as count FROM committee_role_members;
-
--- View all committee roles with their members
-SELECT 
-    c.name as committee,
-    c.description,
-    cm.staff_name,
-    cm.role,
-    cm.display_order
-FROM committee_roles c
-LEFT JOIN committee_role_members cm ON c.id = cm.committee_id
-ORDER BY c.display_order, cm.display_order;
+CREATE POLICY "Allow all for service role" ON committee_roles FOR ALL USING (true);
+CREATE POLICY "Allow all for service role" ON committee_role_members FOR ALL USING (true);
+            """, language="sql")
