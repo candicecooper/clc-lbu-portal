@@ -303,6 +303,8 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                     # 'Flag_Medical_condition': 'flag_medical_condition',  # Add to DB first
                     # 'Flag_Speech_and_Lang': 'flag_speech_and_lang',  # Add to DB first
                     'Flag_Care_CPS': 'flag_care_cps',
+                    'Flag_DCP_involvement': 'flag_dcp_involvement',
+                    'Flag_Child_in_care': 'flag_child_in_care',
                     'Flag_Aboriginal': 'flag_aboriginal',
                     'Flag_ATSI': 'flag_aboriginal',  # Map to existing column until DB updated
                     'Flag_EALD': 'flag_eald',
@@ -341,7 +343,8 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                 flag_columns = ['flag_asd', 'flag_adhd', 'flag_mental_health', 'flag_odd_cd', 'flag_odd', 'flag_pda',
                               'flag_intellectual', 'flag_learning_difficulty', 'flag_sensory_processing', 
                               'flag_medical_condition', 'flag_speech_and_lang',
-                              'flag_care_cps', 'flag_aboriginal', 'flag_atsi', 'flag_eald', 'flag_other',
+                              'flag_care_cps', 'flag_dcp_involvement', 'flag_child_in_care',
+                              'flag_aboriginal', 'flag_atsi', 'flag_eald', 'flag_other',
                               'bespoke_placement',  # Include bespoke_placement in flag conversion
                               'disability_flag', 'behaviour_flag', 'extended_placement']  # NEW analytics flags
                 
@@ -2172,8 +2175,9 @@ with col1:
     st.markdown("### Multiple Priority Flags")
     
     # Create disability flag from existing disability columns (ASD, ADHD, etc.)
+    # NOTE: Medical condition is NOT included (not a disability)
     disability_columns = ['flag_asd', 'flag_adhd', 'flag_intellectual', 'flag_learning_difficulty', 
-                         'flag_sensory_processing', 'flag_medical_condition']
+                         'flag_sensory_processing', 'flag_odd', 'flag_pda']
     
     has_disability_cols = any(col in filtered_df.columns for col in disability_columns)
     has_behaviour = 'behaviour_flag' in filtered_df.columns or 'behavior_flag' in filtered_df.columns
@@ -2272,8 +2276,9 @@ st.markdown('<div class="section-header">🌏 Cultural & Linguistic Demographics
 
 col1, col2, col3 = st.columns(3)
 
-# Use actual Excel column names: Flag_ATSI and Flag_EALD
-atsi_col = 'flag_atsi' if 'flag_atsi' in filtered_df.columns else 'atsi_status' if 'atsi_status' in filtered_df.columns else None
+# Use actual DATABASE column names (not Excel names)
+# Flag_ATSI maps to flag_aboriginal, Flag_EALD maps to flag_eald
+atsi_col = 'flag_aboriginal' if 'flag_aboriginal' in filtered_df.columns else 'atsi_status' if 'atsi_status' in filtered_df.columns else None
 eald_col = 'flag_eald' if 'flag_eald' in filtered_df.columns else 'eald_status' if 'eald_status' in filtered_df.columns else None
 
 with col1:
@@ -2376,6 +2381,79 @@ with col3:
         st.plotly_chart(fig_demo, use_container_width=True)
     else:
         st.info("Add ATSI and EALD tracking for overlap analysis")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DCP INVOLVEMENT & CHILD IN CARE
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown('<div class="section-header">👨‍👩‍👧 DCP Involvement & Child in Care</div>', unsafe_allow_html=True)
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.markdown("### DCP Involvement")
+    if 'flag_dcp_involvement' in filtered_df.columns:
+        dcp_count = len(filtered_df[
+            (filtered_df['flag_dcp_involvement'] == True) |
+            (filtered_df['flag_dcp_involvement'].fillna('').astype(str).str.lower().isin(['yes', 'true', '1']))
+        ])
+        dcp_pct = (dcp_count / len(filtered_df) * 100) if len(filtered_df) > 0 else 0
+        
+        st.metric("DCP Involved", dcp_count, f"{dcp_pct:.1f}% of cohort")
+        
+        # Trend by year
+        if 'year' in filtered_df.columns and len(filtered_df['year'].unique()) > 1:
+            dcp_by_year = filtered_df[
+                (filtered_df['flag_dcp_involvement'] == True) |
+                (filtered_df['flag_dcp_involvement'].fillna('').astype(str).str.lower().isin(['yes', 'true', '1']))
+            ].groupby('year').size()
+            total_by_year = filtered_df.groupby('year').size()
+            dcp_pct_by_year = (dcp_by_year / total_by_year * 100).fillna(0)
+            
+            fig_dcp = go.Figure()
+            fig_dcp.add_trace(go.Bar(
+                x=dcp_pct_by_year.index,
+                y=dcp_pct_by_year.values,
+                marker_color='#E67E22',
+                text=[f"{v:.1f}%" for v in dcp_pct_by_year.values],
+                textposition='auto'
+            ))
+            fig_dcp.update_layout(title="DCP % by Year", yaxis_title="%", height=250, showlegend=False)
+            st.plotly_chart(fig_dcp, use_container_width=True)
+    else:
+        st.info("DCP involvement data available - add Flag_DCP_involvement column")
+
+with col2:
+    st.markdown("### Child in Care")
+    if 'flag_child_in_care' in filtered_df.columns:
+        care_count = len(filtered_df[
+            (filtered_df['flag_child_in_care'] == True) |
+            (filtered_df['flag_child_in_care'].fillna('').astype(str).str.lower().isin(['yes', 'true', '1']))
+        ])
+        care_pct = (care_count / len(filtered_df) * 100) if len(filtered_df) > 0 else 0
+        
+        st.metric("In Care", care_count, f"{care_pct:.1f}% of cohort")
+        
+        # Trend by year
+        if 'year' in filtered_df.columns and len(filtered_df['year'].unique()) > 1:
+            care_by_year = filtered_df[
+                (filtered_df['flag_child_in_care'] == True) |
+                (filtered_df['flag_child_in_care'].fillna('').astype(str).str.lower().isin(['yes', 'true', '1']))
+            ].groupby('year').size()
+            total_by_year = filtered_df.groupby('year').size()
+            care_pct_by_year = (care_by_year / total_by_year * 100).fillna(0)
+            
+            fig_care = go.Figure()
+            fig_care.add_trace(go.Bar(
+                x=care_pct_by_year.index,
+                y=care_pct_by_year.values,
+                marker_color='#9B59B6',
+                text=[f"{v:.1f}%" for v in care_pct_by_year.values],
+                textposition='auto'
+            ))
+            fig_care.update_layout(title="In Care % by Year", yaxis_title="%", height=250, showlegend=False)
+            st.plotly_chart(fig_care, use_container_width=True)
+    else:
+        st.info("Child in care data available - add Flag_Child_in_care column")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PLACEMENT DURATION & EXTENSIONS
