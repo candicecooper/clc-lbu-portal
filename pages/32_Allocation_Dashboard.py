@@ -279,6 +279,7 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                     'Year Level': 'year_level',
                     'Referring_School': 'referring_school',
                     'Referral_Date': 'referral_date',
+                    'Referral_Year': 'referral_year',  # Year column for multi-year data
                     'Allocation_Status': 'allocation_status',
                     'Allocated_Program': 'allocated_program',
                     'Placement_Start': 'placement_start',
@@ -304,7 +305,15 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                     'Allocated_From_Waitlist': 'allocated_from_waitlist',  # Previously waitlisted
                     'Exit_Reason': 'exit_reason',
                     'Transition_Plan': 'transition_plan',
-                    'Notes': 'notes'
+                    'Notes': 'notes',
+                    # NEW ANALYTICS COLUMNS
+                    'Disability_Flag': 'disability_flag',  # Identified disability
+                    'Behaviour_Flag': 'behaviour_flag',  # Behaviour-focused referral
+                    'ATSI_Status': 'atsi_status',  # Aboriginal Torres Strait Islander
+                    'EALD_Status': 'eald_status',  # English as Additional Language
+                    'Exclusion_End_Date': 'exclusion_end_date',  # Original exclusion end
+                    'Actual_Finish_Date': 'actual_finish_date',  # Actual finish date
+                    'Extended_Placement': 'extended_placement'  # Was placement extended
                 }
                 
                 # Map columns
@@ -323,7 +332,8 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                 # Previous placements will be handled separately
                 flag_columns = ['flag_asd', 'flag_adhd', 'flag_mental_health', 'flag_odd_cd',
                               'flag_care_cps', 'flag_aboriginal', 'flag_eald', 'flag_other',
-                              'bespoke_placement']  # Include bespoke_placement in flag conversion
+                              'bespoke_placement',  # Include bespoke_placement in flag conversion
+                              'disability_flag', 'behaviour_flag', 'extended_placement']  # NEW analytics flags
                 
                 for flag_col in flag_columns:
                     if flag_col in sync_df.columns:
@@ -336,8 +346,18 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                     # Replace 'nan' string with None
                     sync_df['year_level'] = sync_df['year_level'].replace('nan', None)
                 
+                # Handle ATSI and EALD status (keep as text, not boolean)
+                if 'atsi_status' in sync_df.columns:
+                    sync_df['atsi_status'] = sync_df['atsi_status'].astype(str).str.strip()
+                    sync_df['atsi_status'] = sync_df['atsi_status'].replace('nan', None)
+                
+                if 'eald_status' in sync_df.columns:
+                    sync_df['eald_status'] = sync_df['eald_status'].astype(str).str.strip()
+                    sync_df['eald_status'] = sync_df['eald_status'].replace('nan', None)
+                
                 # Handle dates
-                date_columns = ['referral_date', 'placement_start', 'placement_end', 'waitlist_date']
+                date_columns = ['referral_date', 'placement_start', 'placement_end', 'waitlist_date',
+                              'exclusion_end_date', 'actual_finish_date']  # NEW analytics dates
                 for date_col in date_columns:
                     if date_col in sync_df.columns:
                         sync_df[date_col] = pd.to_datetime(sync_df[date_col], errors='coerce')
@@ -734,15 +754,21 @@ def get_term(month):
 
 df['term'] = df['month'].apply(get_term)
 
-# Extract year from referral_date or placement_start for multi-year filtering
-if 'referral_date' in df.columns:
+# Extract year - USE REFERRAL_YEAR COLUMN IF IT EXISTS (preferred for multi-year data)
+if 'referral_year' in df.columns:
+    # Use the Referral_Year column from Excel (handles 2024, 2025, 2026 data)
+    df['year'] = df['referral_year'].fillna(datetime.now().year).astype(int)
+elif 'referral_date' in df.columns:
+    # Fall back to extracting from referral_date
     df['year'] = pd.to_datetime(df['referral_date'], errors='coerce').dt.year
 elif 'placement_start' in df.columns:
+    # Last resort: extract from placement_start
     df['year'] = pd.to_datetime(df['placement_start'], errors='coerce').dt.year
 else:
+    # Default to current year
     df['year'] = datetime.now().year
 
-# Fill NaN years with current year
+# Fill any remaining NaN years with current year
 df['year'] = df['year'].fillna(datetime.now().year).astype(int)
 
 
@@ -1953,6 +1979,177 @@ with tab7:
             st.markdown("**Top Schools (Declined):**")
             for school, count in declined_schools.items():
                 st.markdown(f"• **{school}:** {count} student(s)")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# YEAR-OVER-YEAR ANALYSIS
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Only show this section if we have multiple years of data
+if 'year' in df.columns and len(df['year'].unique()) > 1:
+    st.markdown('<div class="section-header">📊 Year-Over-Year Analysis</div>', unsafe_allow_html=True)
+    
+    # Get year range
+    years_available = sorted([int(y) for y in df['year'].unique() if pd.notna(y)])
+    
+    st.info(f"📅 **Data Available:** {', '.join([str(y) for y in years_available])} | Comparing {len(years_available)} years of allocation data")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown("### Total Allocations by Year")
+        
+        year_counts = df.groupby('year').size().sort_index()
+        
+        fig_year_trend = go.Figure()
+        fig_year_trend.add_trace(go.Bar(
+            x=year_counts.index,
+            y=year_counts.values,
+            marker_color='#3498DB',
+            text=year_counts.values,
+            textposition='auto'
+        ))
+        
+        fig_year_trend.update_layout(
+            title="Allocations by Year",
+            xaxis_title="Year",
+            yaxis_title="Number of Students",
+            height=300,
+            showlegend=False
+        )
+        
+        st.plotly_chart(fig_year_trend, use_container_width=True)
+        
+        # Calculate growth
+        if len(year_counts) >= 2:
+            earliest = year_counts.iloc[0]
+            latest = year_counts.iloc[-1]
+            growth = ((latest - earliest) / earliest * 100) if earliest > 0 else 0
+            
+            if growth > 0:
+                st.success(f"**↗️ Growth:** +{growth:.1f}% from {int(year_counts.index[0])} to {int(year_counts.index[-1])}")
+            elif growth < 0:
+                st.info(f"**↘️ Change:** {growth:.1f}% from {int(year_counts.index[0])} to {int(year_counts.index[-1])}")
+            else:
+                st.info(f"**→ Stable:** No change from {int(year_counts.index[0])} to {int(year_counts.index[-1])}")
+    
+    with col2:
+        st.markdown("### Program Distribution")
+        
+        # Program breakdown by year
+        program_by_year = df.groupby(['year', 'program']).size().unstack(fill_value=0)
+        
+        fig_prog_year = go.Figure()
+        
+        colors = {'JP': '#E74C3C', 'PY': '#3498DB', 'SY': '#2ECC71'}
+        for program in program_by_year.columns:
+            if program in ['JP', 'PY', 'SY']:
+                fig_prog_year.add_trace(go.Bar(
+                    name=program,
+                    x=program_by_year.index,
+                    y=program_by_year[program],
+                    marker_color=colors.get(program, '#95A5A6'),
+                    text=program_by_year[program],
+                    textposition='auto'
+                ))
+        
+        fig_prog_year.update_layout(
+            title="Programs by Year",
+            xaxis_title="Year",
+            yaxis_title="Students",
+            height=300,
+            barmode='stack'
+        )
+        
+        st.plotly_chart(fig_prog_year, use_container_width=True)
+    
+    with col3:
+        st.markdown("### Partnership Distribution")
+        
+        # Top partnerships by year
+        partnership_by_year = df.groupby(['year', 'partnership']).size().unstack(fill_value=0)
+        
+        # Get top 5 partnerships overall
+        top_partnerships = df['partnership'].value_counts().head(5).index
+        
+        fig_part_year = go.Figure()
+        
+        for partnership in top_partnerships:
+            if partnership in partnership_by_year.columns:
+                fig_part_year.add_trace(go.Scatter(
+                    name=partnership,
+                    x=partnership_by_year.index,
+                    y=partnership_by_year[partnership],
+                    mode='lines+markers',
+                    line=dict(width=2),
+                    marker=dict(size=8)
+                ))
+        
+        fig_part_year.update_layout(
+            title="Top 5 Partnerships",
+            xaxis_title="Year",
+            yaxis_title="Students",
+            height=300,
+            legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.02)
+        )
+        
+        st.plotly_chart(fig_part_year, use_container_width=True)
+    
+    # Detailed year comparison table
+    st.markdown("### 📋 Detailed Year Comparison")
+    
+    comparison_data = []
+    for year in sorted(years_available):
+        year_df = df[df['year'] == year]
+        
+        comparison_data.append({
+            'Year': int(year),
+            'Total Students': len(year_df),
+            'JP Program': len(year_df[year_df['program'] == 'JP']),
+            'PY Program': len(year_df[year_df['program'] == 'PY']),
+            'SY Program': len(year_df[year_df['program'] == 'SY']),
+            'Unique Schools': year_df['school'].nunique(),
+            'Unique Partnerships': year_df['partnership'].nunique(),
+            'Previous CLC (Yes)': len(year_df[year_df['prev_clc'].fillna('').astype(str).str.lower() == 'yes'])
+        })
+    
+    comparison_df = pd.DataFrame(comparison_data)
+    st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+    
+    # Year-over-year insights
+    st.markdown("### 💡 Key Insights")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if len(years_available) >= 2:
+            latest_year = max(years_available)
+            prev_year = years_available[-2]
+            
+            latest_count = len(df[df['year'] == latest_year])
+            prev_count = len(df[df['year'] == prev_year])
+            change = latest_count - prev_count
+            change_pct = (change / prev_count * 100) if prev_count > 0 else 0
+            
+            st.markdown(f"""
+            **{latest_year} vs {prev_year} Comparison:**
+            - {latest_year}: {latest_count} students
+            - {prev_year}: {prev_count} students
+            - Change: {'+' if change > 0 else ''}{change} students ({'+' if change_pct > 0 else ''}{change_pct:.1f}%)
+            """)
+    
+    with col2:
+        # Check for program shifts
+        if len(years_available) >= 2:
+            latest_programs = df[df['year'] == latest_year]['program'].value_counts(normalize=True) * 100
+            prev_programs = df[df['year'] == prev_year]['program'].value_counts(normalize=True) * 100
+            
+            st.markdown(f"**Program Distribution Changes ({prev_year} → {latest_year}):**")
+            for program in ['JP', 'PY', 'SY']:
+                if program in latest_programs.index and program in prev_programs.index:
+                    prev_pct = prev_programs[program]
+                    latest_pct = latest_programs[program]
+                    change = latest_pct - prev_pct
+                    st.write(f"- {program}: {prev_pct:.0f}% → {latest_pct:.0f}% ({'+'if change > 0 else ''}{change:.1f}%)")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STUDENT COMPLEXITY & PRIORITY FLAGS ANALYSIS
