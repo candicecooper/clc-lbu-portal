@@ -295,16 +295,16 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                     'Flag_ADHD': 'flag_adhd',
                     'Flag_MentalHealth': 'flag_mental_health',
                     'Flag_ODD_CD': 'flag_odd_cd',
-                    'Flag_ODD': 'flag_odd',
-                    'Flag_PDA': 'flag_pda',
-                    'Flag_Intellectual': 'flag_intellectual',
-                    'Flag_Learning_Difficulty': 'flag_learning_difficulty',
-                    'Flag_Sensory_Processing': 'flag_sensory_processing',
-                    'Flag_Medical_condition': 'flag_medical_condition',
-                    'Flag_Speech_and_Lang': 'flag_speech_and_lang',
+                    # 'Flag_ODD': 'flag_odd',  # Add to DB first with SQL script
+                    # 'Flag_PDA': 'flag_pda',  # Add to DB first with SQL script
+                    # 'Flag_Intellectual': 'flag_intellectual',  # Add to DB first
+                    # 'Flag_Learning_Difficulty': 'flag_learning_difficulty',  # Add to DB first
+                    # 'Flag_Sensory_Processing': 'flag_sensory_processing',  # Add to DB first
+                    # 'Flag_Medical_condition': 'flag_medical_condition',  # Add to DB first
+                    # 'Flag_Speech_and_Lang': 'flag_speech_and_lang',  # Add to DB first
                     'Flag_Care_CPS': 'flag_care_cps',
                     'Flag_Aboriginal': 'flag_aboriginal',
-                    'Flag_ATSI': 'flag_atsi',  # Your actual ATSI column
+                    'Flag_ATSI': 'flag_aboriginal',  # Map to existing column until DB updated
                     'Flag_EALD': 'flag_eald',
                     'Flag_Other': 'flag_other',
                     'Bespoke_Placement': 'bespoke_placement',  # Your non-typical placement flag
@@ -314,14 +314,14 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                     'Exit_Reason': 'exit_reason',
                     'Transition_Plan': 'transition_plan',
                     'Notes': 'notes',
-                    # NEW ANALYTICS COLUMNS
-                    'Disability_Flag': 'disability_flag',  # Identified disability
-                    'Behaviour_Flag': 'behaviour_flag',  # Behaviour-focused referral
-                    'ATSI_Status': 'atsi_status',  # Aboriginal Torres Strait Islander
-                    'EALD_Status': 'eald_status',  # English as Additional Language
-                    'Exclusion_End_Date': 'exclusion_end_date',  # Original exclusion end
-                    'Actual_Finish_Date': 'actual_finish_date',  # Actual finish date
-                    'Extended_Placement': 'extended_placement'  # Was placement extended
+                    # NEW ANALYTICS COLUMNS - Run ADD_ALL_ANALYTICS_COLUMNS.sql first!
+                    # 'Disability_Flag': 'disability_flag',
+                    # 'Behaviour_Flag': 'behaviour_flag',
+                    # 'ATSI_Status': 'atsi_status',
+                    # 'EALD_Status': 'eald_status',
+                    # 'Exclusion_End_Date': 'exclusion_end_date',
+                    # 'Actual_Finish_Date': 'actual_finish_date',
+                    # 'Extended_Placement': 'extended_placement'
                 }
                 
                 # Map columns
