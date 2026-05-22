@@ -833,28 +833,37 @@ else:
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown('<div class="section-header">🔍 Filters & View Options</div>', unsafe_allow_html=True)
 
-col1, col2, col3, col4, col5 = st.columns(5)
-
-with col1:
-    years = ['All Years'] + sorted([int(y) for y in df['year'].unique() if pd.notna(y)], reverse=True)
-    selected_year = st.selectbox("📅 Year", years, key="year_filter")
-
-with col2:
-    terms = ['All Terms'] + sorted([t for t in df['term'].unique() if pd.notna(t)])
-    selected_term = st.selectbox("🗓️ Term", terms, key="term_filter")
-
-with col3:
-    # Add current status filter - default to Active only
-    statuses = ['Active Only', 'All Statuses', 'Inactive Only', 'Pending Only']
-    selected_status = st.selectbox("📊 Status", statuses, key="status_filter")
-
-with col4:
-    partnerships = ['All Partnerships'] + sorted([p for p in df['partnership'].unique() if p != '' and pd.notna(p)])
-    selected_partnership = st.selectbox("🤝 Partnership", partnerships, key="partnership_filter")
-
-with col5:
-    programs = ['All Programs'] + sorted([p for p in df['program'].unique() if pd.notna(p)])
-    selected_program = st.selectbox("📚 Program", programs, key="program_filter")
+with st.expander("⚙️ Configure Filters", expanded=True):
+    # Row 1: Time & Status filters
+    st.markdown("**📅 Time & Status**")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        years = ['All Years'] + sorted([int(y) for y in df['year'].unique() if pd.notna(y)], reverse=True)
+        selected_year = st.selectbox("Year", years, key="year_filter")
+    
+    with col2:
+        terms = ['All Terms'] + sorted([t for t in df['term'].unique() if pd.notna(t)])
+        selected_term = st.selectbox("Term", terms, key="term_filter")
+    
+    with col3:
+        # Add current status filter - default to Active only
+        statuses = ['Active Only', 'All Statuses', 'Inactive Only', 'Pending Only']
+        selected_status = st.selectbox("Current Status", statuses, key="status_filter")
+    
+    st.markdown("---")
+    
+    # Row 2: Location & Program filters
+    st.markdown("**🏫 Location & Program**")
+    col4, col5 = st.columns(2)
+    
+    with col4:
+        partnerships = ['All Partnerships'] + sorted([p for p in df['partnership'].unique() if p != '' and pd.notna(p)])
+        selected_partnership = st.selectbox("Partnership Area", partnerships, key="partnership_filter")
+    
+    with col5:
+        programs = ['All Programs'] + sorted([p for p in df['program'].unique() if pd.notna(p)])
+        selected_program = st.selectbox("Program", programs, key="program_filter")
 
 # Apply filters
 filtered_df = df.copy()
@@ -986,58 +995,66 @@ partnership_regions = {
     "Onkaparinga": {"color": "#D35400", "coords": [[-35.10, 138.50], [-35.10, 138.58], [-35.18, 138.58], [-35.18, 138.50]]}
 }
 
-# Map layout
-map_col, stats_col = st.columns([3, 1])
+# Create map (full width)
+m = folium.Map(location=[-34.92, 138.60], zoom_start=10, tiles='OpenStreetMap')
+max_count = max(partnership_counts.values()) if partnership_counts else 1
 
-with map_col:
-    # Create map
-    m = folium.Map(location=[-34.92, 138.60], zoom_start=10, tiles='OpenStreetMap')
-    max_count = max(partnership_counts.values()) if partnership_counts else 1
-    
-    # Add partnership regions
-    for partnership_name, region_data in partnership_regions.items():
-        count = partnership_counts.get(partnership_name, 0)
-        if count > 0:
-            opacity = 0.3 + (count / max_count) * 0.5
-            percentage = (count / total_map_students * 100) if total_map_students > 0 else 0
-            
-            folium.Polygon(
-                locations=region_data["coords"],
-                color=region_data["color"],
-                fill=True,
-                fillColor=region_data["color"],
-                fillOpacity=opacity,
-                weight=3,
-                popup=folium.Popup(
-                    f"""<div style='font-family: Arial; padding: 10px;'>
-                    <h4 style='margin: 0; color: {region_data["color"]};'>{partnership_name}</h4>
-                    <p style='margin: 5px 0; font-size: 24px; font-weight: bold;'>{count}</p>
-                    <p style='margin: 0; color: #666;'>{percentage:.1f}% of total</p></div>""",
-                    max_width=200
-                ),
-                tooltip=f"{partnership_name}: {count} students"
-            ).add_to(m)
-    
-    # Add CLC marker
-    folium.Marker(
-        location=[-34.9286, 138.5830],
-        popup="🏫 CLC-LBU<br>Cowandilla Learning Centre",
-        tooltip="Cowandilla Learning Centre",
-        icon=folium.Icon(color='green', icon='home', prefix='fa')
-    ).add_to(m)
-    
-    st_folium(m, width=None, height=500)
+# Add partnership regions
+for partnership_name, region_data in partnership_regions.items():
+    count = partnership_counts.get(partnership_name, 0)
+    if count > 0:
+        opacity = 0.3 + (count / max_count) * 0.5
+        percentage = (count / total_map_students * 100) if total_map_students > 0 else 0
+        
+        folium.Polygon(
+            locations=region_data["coords"],
+            color=region_data["color"],
+            fill=True,
+            fillColor=region_data["color"],
+            fillOpacity=opacity,
+            weight=3,
+            popup=folium.Popup(
+                f"""<div style='font-family: Arial; padding: 10px;'>
+                <h4 style='margin: 0; color: {region_data["color"]};'>{partnership_name}</h4>
+                <p style='margin: 5px 0; font-size: 24px; font-weight: bold;'>{count}</p>
+                <p style='margin: 0; color: #666;'>{percentage:.1f}% of total</p></div>""",
+                max_width=200
+            ),
+            tooltip=f"{partnership_name}: {count} students"
+        ).add_to(m)
 
-with stats_col:
-    st.markdown("**Distribution**")
-    for partnership, count in sorted(partnership_counts.items(), key=lambda x: x[1], reverse=True):
+# Add CLC marker
+folium.Marker(
+    location=[-34.9286, 138.5830],
+    popup="🏫 CLC-LBU<br>Cowandilla Learning Centre",
+    tooltip="Cowandilla Learning Centre",
+    icon=folium.Icon(color='green', icon='home', prefix='fa')
+).add_to(m)
+    
+# Map layout - full width map with compact stats
+st_folium(m, width=None, height=500)
+
+# Partnership distribution in collapsible section below map
+with st.expander("📊 View Partnership Distribution", expanded=False):
+    # Create 3 columns for compact layout
+    cols = st.columns(3)
+    sorted_partnerships = sorted(partnership_counts.items(), key=lambda x: x[1], reverse=True)
+    
+    for idx, (partnership, count) in enumerate(sorted_partnerships):
         if partnership:
             percentage = (count / total_map_students * 100) if total_map_students > 0 else 0
             color = partnership_regions.get(partnership, {}).get('color', '#95A5A6')
-            st.markdown(f"""
-                <div style='padding: 10px; margin-bottom: 8px; border-left: 4px solid {color}; 
-                            background: white; border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);'>
-                    <div style='font-weight: 600; font-size: 0.85em;'>{partnership}</div>
+            
+            col_idx = idx % 3
+            with cols[col_idx]:
+                st.markdown(f"""
+                    <div style='padding: 8px; margin-bottom: 6px; border-left: 3px solid {color}; 
+                                background: white; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);'>
+                        <div style='font-weight: 600; font-size: 0.8em;'>{partnership}</div>
+                        <div style='font-size: 1.3em; font-weight: bold; color: {color};'>{count}</div>
+                        <div style='font-size: 0.75em; color: #666;'>{percentage:.1f}%</div>
+                    </div>
+                """, unsafe_allow_html=True)
                     <div style='font-size: 1.6em; font-weight: bold; color: {color};'>{count}</div>
                     <div style='font-size: 0.8em; color: #666;'>{percentage:.1f}%</div>
                 </div>
