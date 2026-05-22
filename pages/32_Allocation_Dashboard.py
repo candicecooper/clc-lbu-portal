@@ -466,6 +466,12 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
             # Convert to list of dicts
             records = sync_data.to_dict('records')
             
+            # SET DEFAULTS FOR REQUIRED FIELDS (before NaN cleaning)
+            for record in records:
+                # If allocation_status is missing, default to 'Allocated'
+                if not record.get('allocation_status') or pd.isna(record.get('allocation_status')) or record.get('allocation_status') == '':
+                    record['allocation_status'] = 'Allocated'
+            
             # FINAL ULTIMATE NaN KILLER - check every single value before Supabase
             def kill_all_nans(record):
                 """Remove ALL NaN values from a record, no matter what"""
@@ -529,13 +535,22 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
             for record in records:
                 # Check required fields
                 has_school = record.get('referring_school') is not None and record.get('referring_school') != ''
+                has_status = record.get('allocation_status') is not None and record.get('allocation_status') != ''
                 
-                if has_school:
+                # Both required fields must be present
+                if has_school and has_status:
                     valid_records.append(record)
                 else:
+                    reasons = []
+                    if not has_school:
+                        reasons.append('Missing referring_school')
+                    if not has_status:
+                        reasons.append('Missing allocation_status')
+                    
                     skipped_records.append({
                         'student_id': record.get('student_id', 'Unknown'),
-                        'reason': 'Missing referring_school'
+                        'school': record.get('referring_school', 'Unknown'),
+                        'reason': ', '.join(reasons)
                     })
             
             # Show validation results
@@ -543,12 +558,13 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
             📊 **Validation Results:**
             - ✅ Valid records: {len(valid_records)}
             - ⚠️ Skipped records: {len(skipped_records)} (missing required fields)
+            - ℹ️ Records with missing Allocation_Status were set to 'Allocated' by default
             """)
             
             if skipped_records and len(skipped_records) < 10:
                 with st.expander("⚠️ View Skipped Records"):
                     for skip in skipped_records:
-                        st.write(f"• Student ID: {skip['student_id']} - {skip['reason']}")
+                        st.write(f"• School: {skip['school']} | ID: {skip['student_id']} | Issue: {skip['reason']}")
             elif len(skipped_records) >= 10:
                 st.warning(f"⚠️ {len(skipped_records)} records skipped. Check your Excel file for rows with missing school names.")
             
