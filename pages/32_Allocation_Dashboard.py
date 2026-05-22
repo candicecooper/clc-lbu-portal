@@ -6,6 +6,8 @@ from datetime import datetime
 import folium
 from streamlit_folium import st_folium
 from collections import Counter
+from supabase import create_client
+import os
 
 st.set_page_config(page_title="CLC Allocation Dashboard - Interactive", page_icon="📊", layout="wide")
 
@@ -73,65 +75,88 @@ st.markdown("""
 st.markdown('<h1 style="text-align: center; color: #2c3e50; font-size: 2.5rem; margin-bottom: 0;">📊 CLC Allocation Dashboard</h1>', unsafe_allow_html=True)
 st.markdown('<p style="text-align: center; color: #7f8c8d; font-size: 1.2rem; margin-top: 0;">Interactive Analytics & Deep Dive</p>', unsafe_allow_html=True)
 
-# Load data function
-@st.cache_data
-def load_data():
-    """Load and prepare allocation data"""
-    try:
-        # Import Supabase connection
-        from supabase import create_client
-        import os
-        
-        # Get connection from environment or auth
-        try:
-            from database import supabase
-        except:
-            # Fallback: create connection directly
-            SUPABASE_URL = os.getenv('SUPABASE_URL')
-            SUPABASE_KEY = os.getenv('SUPABASE_SERVICE_KEY')
-            if SUPABASE_URL and SUPABASE_KEY:
-                supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-            else:
-                st.error("Supabase credentials not configured")
-                return pd.DataFrame()
-        
-        response = supabase.table('allocation_tracker').select('*').execute()
-        
-        if response.data:
-            df = pd.DataFrame(response.data)
-            
-            # Extract year
-            if 'referral_year' in df.columns:
-                df['year'] = df['referral_year'].fillna(datetime.now().year).astype(int)
-            elif 'referral_date' in df.columns:
-                df['year'] = pd.to_datetime(df['referral_date'], errors='coerce').dt.year
-            else:
-                df['year'] = datetime.now().year
-            
-            # Process bespoke placement - case insensitive
-            if 'bespoke_placement' in df.columns:
-                df['program_mismatch'] = df['bespoke_placement'].fillna('').astype(str).str.lower().map({
-                    'yes': True, 'y': True, '1': True, 'true': True,
-                    'no': False, 'n': False, '0': False, 'false': False, '': False
-                }).fillna(False)
-            else:
-                df['program_mismatch'] = False
-            
-            return df
-        else:
-            st.error("No data found in allocation_tracker table")
-            return pd.DataFrame()
-    
-    except Exception as e:
-        st.error(f"Error loading data: {str(e)}")
-        return pd.DataFrame()
+# ══════════════════════════════════════════════════════════════════════════════
+# SUPABASE CONNECTION (Direct - no database.py import)
+# ══════════════════════════════════════════════════════════════════════════════
 
-# Load data
-df = load_data()
+# Check credentials first (before caching)
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-if df.empty:
-    st.warning("No data available. Please sync data from Excel first.")
+if not SUPABASE_URL or not SUPABASE_KEY:
+    st.error("⚠️ Supabase credentials not found. Please set SUPABASE_URL and SUPABASE_KEY environment variables in Render.")
     st.stop()
+
+@st.cache_resource
+def init_supabase():
+    """Initialize Supabase client - cached to avoid reconnecting"""
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+@st.cache_data(ttl=60)  # Cache for 60 seconds, then refresh
+def load_allocation_data():
+    """Load allocation data from Supabase - refreshes every 60 seconds"""
+    supabase = init_supabase()
+    
+    # Fetch all records from allocation_tracker table
+    response = supabase.table('allocation_tracker').select('*').execute()
+    
+    if not response.data:
+        return pd.DataFrame()
+    
+    # Convert to DataFrame
+    return pd.DataFrame(response.data)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# LOAD DATA
+# ══════════════════════════════════════════════════════════════════════════════
+try:
+    df_raw = load_allocation_data()
+except Exception as e:
+    st.error(f"❌ Error loading data from Supabase: {str(e)}")
+    st.info("""
+    **Troubleshooting:**
+    1. Check that SUPABASE_URL and SUPABASE_KEY are set in Render
+    2. Verify the allocation_tracker table exists in Supabase
+    3. Try syncing data from the main Allocation Dashboard (page 32)
+    """)
+    st.stop()
+
+if len(df_raw) == 0:
+    st.info("""
+    📭 **No allocation data in dashboard yet.**
+    
+    **To get started:**
+    1. Go to the main Allocation Dashboard (page 32)
+    2. Click "🔧 ADMIN: Sync Data from Excel"
+    3. Upload your allocation Excel file
+    4. Click "Sync to Dashboard"
+    5. Return here - data will be available!
+    """)
+    st.stop()
+
+# Create working copy and process data
+df = df_raw.copy()
+
+# Extract year from referral_year or referral_date
+if 'referral_year' in df.columns:
+    df['year'] = df['referral_year'].fillna(datetime.now().year).astype(int)
+elif 'referral_date' in df.columns:
+    df['referral_date'] = pd.to_datetime(df['referral_date'], errors='coerce')
+    df['year'] = df['referral_date'].dt.year.fillna(datetime.now().year).astype(int)
+else:
+    df['year'] = datetime.now().year
+
+# Process bespoke placement - case insensitive
+if 'bespoke_placement' in df.columns:
+    df['program_mismatch'] = df['bespoke_placement'].fillna('').astype(str).str.lower().map({
+        'yes': True, 'y': True, '1': True, 'true': True,
+        'no': False, 'n': False, '0': False, 'false': False, '': False
+    }).fillna(False)
+else:
+    df['program_mismatch'] = False
+
+# Show last update
+st.caption(f"📅 Last updated: {datetime.now().strftime('%d/%m/%Y %I:%M %p')} | Total records: {len(df)}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # FILTERS
