@@ -295,8 +295,16 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                     'Flag_ADHD': 'flag_adhd',
                     'Flag_MentalHealth': 'flag_mental_health',
                     'Flag_ODD_CD': 'flag_odd_cd',
+                    'Flag_ODD': 'flag_odd',
+                    'Flag_PDA': 'flag_pda',
+                    'Flag_Intellectual': 'flag_intellectual',
+                    'Flag_Learning_Difficulty': 'flag_learning_difficulty',
+                    'Flag_Sensory_Processing': 'flag_sensory_processing',
+                    'Flag_Medical_condition': 'flag_medical_condition',
+                    'Flag_Speech_and_Lang': 'flag_speech_and_lang',
                     'Flag_Care_CPS': 'flag_care_cps',
                     'Flag_Aboriginal': 'flag_aboriginal',
+                    'Flag_ATSI': 'flag_atsi',  # Your actual ATSI column
                     'Flag_EALD': 'flag_eald',
                     'Flag_Other': 'flag_other',
                     'Bespoke_Placement': 'bespoke_placement',  # Your non-typical placement flag
@@ -330,8 +338,10 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                 
                 # Convert Yes/No to boolean for flags ONLY
                 # Previous placements will be handled separately
-                flag_columns = ['flag_asd', 'flag_adhd', 'flag_mental_health', 'flag_odd_cd',
-                              'flag_care_cps', 'flag_aboriginal', 'flag_eald', 'flag_other',
+                flag_columns = ['flag_asd', 'flag_adhd', 'flag_mental_health', 'flag_odd_cd', 'flag_odd', 'flag_pda',
+                              'flag_intellectual', 'flag_learning_difficulty', 'flag_sensory_processing', 
+                              'flag_medical_condition', 'flag_speech_and_lang',
+                              'flag_care_cps', 'flag_aboriginal', 'flag_atsi', 'flag_eald', 'flag_other',
                               'bespoke_placement',  # Include bespoke_placement in flag conversion
                               'disability_flag', 'behaviour_flag', 'extended_placement']  # NEW analytics flags
                 
@@ -2161,27 +2171,37 @@ col1, col2 = st.columns(2)
 with col1:
     st.markdown("### Multiple Priority Flags")
     
-    # Check if columns exist
-    has_disability = 'disability_flag' in filtered_df.columns
+    # Create disability flag from existing disability columns (ASD, ADHD, etc.)
+    disability_columns = ['flag_asd', 'flag_adhd', 'flag_intellectual', 'flag_learning_difficulty', 
+                         'flag_sensory_processing', 'flag_medical_condition']
+    
+    has_disability_cols = any(col in filtered_df.columns for col in disability_columns)
     has_behaviour = 'behaviour_flag' in filtered_df.columns or 'behavior_flag' in filtered_df.columns
     
-    if has_disability and has_behaviour:
-        behaviour_col = 'behaviour_flag' if 'behaviour_flag' in filtered_df.columns else 'behavior_flag'
+    if has_disability_cols:
+        # Create combined disability flag
+        disability_mask = pd.Series(False, index=filtered_df.index)
+        for col in disability_columns:
+            if col in filtered_df.columns:
+                disability_mask = disability_mask | (filtered_df[col] == True) | (filtered_df[col].fillna('').astype(str).str.lower() == 'yes')
         
-        # Count students with multiple flags
-        both_flags = len(filtered_df[
-            (filtered_df['disability_flag'].fillna('').astype(str).str.lower().isin(['yes', 'true', '1'])) &
-            (filtered_df[behaviour_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1']))
-        ])
-        disability_only = len(filtered_df[
-            (filtered_df['disability_flag'].fillna('').astype(str).str.lower().isin(['yes', 'true', '1'])) &
-            ~(filtered_df[behaviour_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1']))
-        ])
-        behaviour_only = len(filtered_df[
-            ~(filtered_df['disability_flag'].fillna('').astype(str).str.lower().isin(['yes', 'true', '1'])) &
-            (filtered_df[behaviour_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1']))
-        ])
-        neither = len(filtered_df) - both_flags - disability_only - behaviour_only
+        filtered_df['has_disability'] = disability_mask
+        
+        # Count students with behaviour flag
+        if has_behaviour:
+            behaviour_col = 'behaviour_flag' if 'behaviour_flag' in filtered_df.columns else 'behavior_flag'
+            behaviour_mask = (filtered_df[behaviour_col] == True) | (filtered_df[behaviour_col].fillna('').astype(str).str.lower() == 'yes')
+            
+            both_flags = len(filtered_df[disability_mask & behaviour_mask])
+            disability_only = len(filtered_df[disability_mask & ~behaviour_mask])
+            behaviour_only = len(filtered_df[~disability_mask & behaviour_mask])
+            neither = len(filtered_df) - both_flags - disability_only - behaviour_only
+        else:
+            # No behaviour column - just show disability breakdown
+            disability_only = len(filtered_df[disability_mask])
+            both_flags = 0
+            behaviour_only = 0
+            neither = len(filtered_df) - disability_only
         
         # Create pie chart
         fig_flags = go.Figure()
@@ -2203,17 +2223,29 @@ with col1:
         
         if both_flags > 0:
             st.info(f"**💡 {both_flags} students ({both_flags/len(filtered_df)*100:.1f}%) have both disability and behaviour flags**")
+        
+        # Show which disability flags were found
+        found_flags = [col.replace('flag_', '').replace('_', ' ').upper() for col in disability_columns if col in filtered_df.columns]
+        if found_flags:
+            st.caption(f"*Disability includes: {', '.join(found_flags)}*")
     else:
-        st.warning("⚠️ Add 'Disability_Flag' and 'Behaviour_Flag' columns to Excel to enable this analysis")
+        st.info("💡 Disability data derived from: ASD, ADHD, Intellectual, Learning Difficulty, Sensory Processing, Medical Condition flags")
 
 with col2:
     st.markdown("### Disability vs Behaviour Representation")
     
-    if has_disability and has_behaviour:
-        behaviour_col = 'behaviour_flag' if 'behaviour_flag' in filtered_df.columns else 'behavior_flag'
+    if has_disability_cols:
+        # Use the disability_mask we created
+        disability_count = len(filtered_df[disability_mask]) if 'has_disability' in filtered_df.columns else 0
         
-        disability_count = len(filtered_df[filtered_df['disability_flag'].fillna('').astype(str).str.lower().isin(['yes', 'true', '1'])])
-        behaviour_count = len(filtered_df[filtered_df[behaviour_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1'])])
+        # Count behaviour
+        behaviour_count = 0
+        if has_behaviour:
+            behaviour_col = 'behaviour_flag' if 'behaviour_flag' in filtered_df.columns else 'behavior_flag'
+            behaviour_count = len(filtered_df[
+                (filtered_df[behaviour_col] == True) | 
+                (filtered_df[behaviour_col].fillna('').astype(str).str.lower() == 'yes')
+            ])
         
         fig_rep = go.Figure()
         fig_rep.add_trace(go.Bar(
@@ -2231,7 +2263,7 @@ with col2:
             pct = disability_count / len(filtered_df) * 100
             st.warning(f"**⚠️ {pct:.1f}% have disabilities - yet many referrals framed as 'behaviour' issues**")
     else:
-        st.info("Add disability and behaviour flag tracking to see representation analysis")
+        st.info("Disability flags detected in Excel - showing representation")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CULTURAL & LINGUISTIC DEMOGRAPHICS
@@ -2240,20 +2272,29 @@ st.markdown('<div class="section-header">🌏 Cultural & Linguistic Demographics
 
 col1, col2, col3 = st.columns(3)
 
-atsi_col = 'atsi_status' if 'atsi_status' in filtered_df.columns else None
-eald_col = 'eald_status' if 'eald_status' in filtered_df.columns else None
+# Use actual Excel column names: Flag_ATSI and Flag_EALD
+atsi_col = 'flag_atsi' if 'flag_atsi' in filtered_df.columns else 'atsi_status' if 'atsi_status' in filtered_df.columns else None
+eald_col = 'flag_eald' if 'flag_eald' in filtered_df.columns else 'eald_status' if 'eald_status' in filtered_df.columns else None
 
 with col1:
     st.markdown("### ATSI Students")
     if atsi_col and atsi_col in filtered_df.columns:
-        atsi_count = len(filtered_df[filtered_df[atsi_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1', 'aboriginal', 'torres strait islander', 'both'])])
+        # Handle boolean True or text 'Yes'
+        atsi_count = len(filtered_df[
+            (filtered_df[atsi_col] == True) | 
+            (filtered_df[atsi_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1', 'aboriginal', 'torres strait islander', 'both']))
+        ])
         atsi_pct = (atsi_count / len(filtered_df) * 100) if len(filtered_df) > 0 else 0
         
         st.metric("ATSI Students", atsi_count, f"{atsi_pct:.1f}% of cohort")
         
         # Trend by year if multiple years
         if 'year' in filtered_df.columns and len(filtered_df['year'].unique()) > 1:
-            atsi_by_year = filtered_df[filtered_df[atsi_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1', 'aboriginal', 'torres strait islander', 'both'])].groupby('year').size()
+            # Handle both boolean and text values
+            atsi_by_year = filtered_df[
+                (filtered_df[atsi_col] == True) | 
+                (filtered_df[atsi_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1', 'aboriginal', 'torres strait islander', 'both']))
+            ].groupby('year').size()
             total_by_year = filtered_df.groupby('year').size()
             atsi_pct_by_year = (atsi_by_year / total_by_year * 100).fillna(0)
             
@@ -2272,19 +2313,26 @@ with col1:
                 trend = "Increasing ↗️" if atsi_pct_by_year.iloc[-1] > atsi_pct_by_year.iloc[0] else "Decreasing ↘️" if atsi_pct_by_year.iloc[-1] < atsi_pct_by_year.iloc[0] else "Stable →"
                 st.info(f"**Trend:** {trend}")
     else:
-        st.warning("Add 'ATSI_Status' column to track")
+        st.warning("Using Flag_ATSI or ATSI_Status column to track ATSI students")
 
 with col2:
     st.markdown("### EALD Students")
     if eald_col and eald_col in filtered_df.columns:
-        eald_count = len(filtered_df[filtered_df[eald_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1'])])
+        # Handle boolean True or text 'Yes'
+        eald_count = len(filtered_df[
+            (filtered_df[eald_col] == True) |
+            (filtered_df[eald_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1']))
+        ])
         eald_pct = (eald_count / len(filtered_df) * 100) if len(filtered_df) > 0 else 0
         
         st.metric("EALD Students", eald_count, f"{eald_pct:.1f}% of cohort")
         
         # Trend by year
         if 'year' in filtered_df.columns and len(filtered_df['year'].unique()) > 1:
-            eald_by_year = filtered_df[filtered_df[eald_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1'])].groupby('year').size()
+            eald_by_year = filtered_df[
+                (filtered_df[eald_col] == True) |
+                (filtered_df[eald_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1']))
+            ].groupby('year').size()
             total_by_year = filtered_df.groupby('year').size()
             eald_pct_by_year = (eald_by_year / total_by_year * 100).fillna(0)
             
@@ -2303,17 +2351,18 @@ with col2:
                 trend = "Increasing ↗️" if eald_pct_by_year.iloc[-1] > eald_pct_by_year.iloc[0] else "Decreasing ↘️" if eald_pct_by_year.iloc[-1] < eald_pct_by_year.iloc[0] else "Stable →"
                 st.info(f"**Trend:** {trend}")
     else:
-        st.warning("Add 'EALD_Status' column to track")
+        st.warning("Using Flag_EALD or EALD_Status column to track EALD students")
 
 with col3:
     st.markdown("### Combined Demographics")
     if atsi_col and eald_col and atsi_col in filtered_df.columns and eald_col in filtered_df.columns:
-        atsi_count = len(filtered_df[filtered_df[atsi_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1', 'aboriginal', 'torres strait islander', 'both'])])
-        eald_count = len(filtered_df[filtered_df[eald_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1'])])
-        both_count = len(filtered_df[
-            (filtered_df[atsi_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1', 'aboriginal', 'torres strait islander', 'both'])) &
-            (filtered_df[eald_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1']))
-        ])
+        # Handle boolean True or text 'Yes' for both
+        atsi_mask = (filtered_df[atsi_col] == True) | (filtered_df[atsi_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1', 'aboriginal', 'torres strait islander', 'both']))
+        eald_mask = (filtered_df[eald_col] == True) | (filtered_df[eald_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1']))
+        
+        atsi_count = len(filtered_df[atsi_mask])
+        eald_count = len(filtered_df[eald_mask])
+        both_count = len(filtered_df[atsi_mask & eald_mask])
         
         fig_demo = go.Figure()
         fig_demo.add_trace(go.Bar(
