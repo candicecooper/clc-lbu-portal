@@ -948,87 +948,238 @@ elif st.session_state.committee_view == 'documents':
         navigate_to('home')
 
 # ========== COMMITTEE MEMBERS VIEW ==========
-# ========== COMMITTEE MEMBERS VIEW (HARDCODED - NO DATABASE) ==========
+# ========== COMMITTEE MEMBERS VIEW (EDITABLE WITH ARCHIVING) ==========
 elif st.session_state.committee_view == 'members':
     
     st.markdown("### 👥 Committee Members & Roles")
     st.markdown("View all staff committee assignments and roles.")
     
-    if st.button("↩ Return to Committees Home", use_container_width=True):
-        navigate_to('home')
+    col1, col2, col3 = st.columns([2, 2, 1])
+    with col1:
+        if st.button("↩ Return to Committees Home"):
+            navigate_to('home')
+    with col2:
+        # Year selection for archiving
+        current_year = datetime.now().year
+        years = list(range(current_year - 2, current_year + 2))
+        selected_year = st.selectbox("Year", years, index=years.index(current_year), label_visibility="visible")
+    with col3:
+        edit_mode = st.toggle("✏️ Edit Mode", value=False)
     
     st.divider()
     
-    # Hardcoded committee data
-    committees_data = [
-        {'name': 'PAC', 'desc': 'Partnership & Cooperation Committee', 'members': [
-            {'name': 'Candice', 'role': 'Leader'},
-            {'name': 'Naomi', 'role': 'SSO rep'},
-            {'name': 'Ben', 'role': 'AEU Rep'},
-            {'name': 'Brenton', 'role': 'Teacher Rep'}
-        ]},
-        {'name': 'WHS', 'desc': 'Work Health & Safety', 'members': [
-            {'name': 'Candice', 'role': 'OHS Rep'},
-            {'name': 'Naomi', 'role': ''},
-            {'name': 'Ben Selga', 'role': ''},
-            {'name': 'Caitie', 'role': ''},
-            {'name': 'Roisin', 'role': ''}
-        ]},
-        {'name': 'Social Club', 'desc': '', 'members': [
-            {'name': 'Ben Sutton', 'role': ''},
-            {'name': 'Vinnie', 'role': ''},
-            {'name': 'Jacqui', 'role': ''},
-            {'name': 'Annette', 'role': ''}
-        ]},
-        {'name': 'Centre Spec Events', 'desc': 'Centre Special Events', 'members': [
-            {'name': 'Brenton', 'role': ''},
-            {'name': 'Ben Selga', 'role': ''},
-            {'name': 'Annette', 'role': ''}
-        ]},
-        {'name': 'Leaving Gift', 'desc': '', 'members': [
-            {'name': 'Caitie', 'role': ''},
-            {'name': 'Jacqui', 'role': ''},
-            {'name': 'Annette', 'role': ''},
-            {'name': 'Candice', 'role': ''},
-            {'name': 'Naomi', 'role': ''}
-        ]},
-        {'name': 'OHS', 'desc': 'Occupational Health & Safety', 'members': [
-            {'name': 'Roisin', 'role': 'Proxy'},
-            {'name': 'Caitie', 'role': 'Proxy'}
-        ]},
-        {'name': 'AEU', 'desc': 'Australian Education Union', 'members': [
-            {'name': 'Roisin', 'role': 'Proxy'},
-            {'name': 'Ben Sutton', 'role': 'Proxy'}
-        ]},
-        {'name': 'Fire Warden', 'desc': '', 'members': [
-            {'name': 'Brenton', 'role': ''},
-            {'name': 'Ben Selga', 'role': ''}
-        ]},
-        {'name': 'First Aid Officer', 'desc': '', 'members': [
-            {'name': 'Naomi', 'role': ''}
-        ]},
-        {'name': 'Mathletics Coordinator', 'desc': '3P Learning', 'members': [
-            {'name': 'Caitie', 'role': ''}
-        ]}
-    ]
+    # Note about archiving
+    if selected_year != current_year:
+        st.info(f"📅 Viewing committee members for {selected_year}")
     
-    st.success(f"✅ Showing {len(committees_data)} committees")
-    
-    for committee in committees_data:
-        st.markdown(f"### 🤝 {committee['name']}")
-        if committee['desc']:
-            st.caption(committee['desc'])
+    # Try to load from database first, fall back to hardcoded
+    try:
+        committees_response = supabase.table('committee_roles')\
+            .select('*')\
+            .order('display_order', desc=False)\
+            .execute()
         
-        member_list = []
-        for member in committee['members']:
-            if member['role']:
-                member_list.append(f"**{member['name']}** ({member['role']})")
+        if committees_response.data and len(committees_response.data) > 0:
+            # Database works! Use it
+            committees = committees_response.data
+            
+            for committee in committees:
+                members_response = supabase.table('committee_role_members')\
+                    .select('*')\
+                    .eq('committee_id', committee['id'])\
+                    .order('display_order', desc=False)\
+                    .execute()
+                committee['members'] = members_response.data if members_response.data else []
+            
+            using_database = True
+            st.info("✅ Using database (edits will be saved)")
+        else:
+            raise Exception("No data in database")
+    
+    except:
+        # Fallback to hardcoded
+        using_database = False
+        st.warning("⚠️ Using hardcoded data (edits won't be saved until database cache refreshes)")
+        
+        committees = [
+            {'id': 'pac', 'name': 'PAC', 'description': 'Partnership & Cooperation Committee', 'display_order': 0, 'members': [
+                {'id': 'pac_1', 'staff_name': 'Candice', 'role': 'Leader', 'display_order': 0},
+                {'id': 'pac_2', 'staff_name': 'Naomi', 'role': 'SSO rep', 'display_order': 1},
+                {'id': 'pac_3', 'staff_name': 'Ben', 'role': 'AEU Rep', 'display_order': 2},
+                {'id': 'pac_4', 'staff_name': 'Brenton', 'role': 'Teacher Rep', 'display_order': 3}
+            ]},
+            {'id': 'whs', 'name': 'WHS', 'description': 'Work Health & Safety', 'display_order': 1, 'members': [
+                {'id': 'whs_1', 'staff_name': 'Candice', 'role': 'OHS Rep', 'display_order': 0},
+                {'id': 'whs_2', 'staff_name': 'Naomi', 'role': '', 'display_order': 1},
+                {'id': 'whs_3', 'staff_name': 'Ben Selga', 'role': '', 'display_order': 2},
+                {'id': 'whs_4', 'staff_name': 'Caitie', 'role': '', 'display_order': 3},
+                {'id': 'whs_5', 'staff_name': 'Roisin', 'role': '', 'display_order': 4}
+            ]},
+            {'id': 'social', 'name': 'Social Club', 'description': '', 'display_order': 2, 'members': [
+                {'id': 'social_1', 'staff_name': 'Ben Sutton', 'role': '', 'display_order': 0},
+                {'id': 'social_2', 'staff_name': 'Vinnie', 'role': '', 'display_order': 1},
+                {'id': 'social_3', 'staff_name': 'Jacqui', 'role': '', 'display_order': 2},
+                {'id': 'social_4', 'staff_name': 'Annette', 'role': '', 'display_order': 3}
+            ]},
+            {'id': 'events', 'name': 'Centre Spec Events', 'description': 'Centre Special Events', 'display_order': 3, 'members': [
+                {'id': 'events_1', 'staff_name': 'Brenton', 'role': '', 'display_order': 0},
+                {'id': 'events_2', 'staff_name': 'Ben Selga', 'role': '', 'display_order': 1},
+                {'id': 'events_3', 'staff_name': 'Annette', 'role': '', 'display_order': 2}
+            ]},
+            {'id': 'leaving', 'name': 'Leaving Gift', 'description': '', 'display_order': 4, 'members': [
+                {'id': 'leaving_1', 'staff_name': 'Caitie', 'role': '', 'display_order': 0},
+                {'id': 'leaving_2', 'staff_name': 'Jacqui', 'role': '', 'display_order': 1},
+                {'id': 'leaving_3', 'staff_name': 'Annette', 'role': '', 'display_order': 2},
+                {'id': 'leaving_4', 'staff_name': 'Candice', 'role': '', 'display_order': 3},
+                {'id': 'leaving_5', 'staff_name': 'Naomi', 'role': '', 'display_order': 4}
+            ]},
+            {'id': 'ohs', 'name': 'OHS', 'description': 'Occupational Health & Safety', 'display_order': 5, 'members': [
+                {'id': 'ohs_1', 'staff_name': 'Roisin', 'role': 'Proxy', 'display_order': 0},
+                {'id': 'ohs_2', 'staff_name': 'Caitie', 'role': 'Proxy', 'display_order': 1}
+            ]},
+            {'id': 'aeu', 'name': 'AEU', 'description': 'Australian Education Union', 'display_order': 6, 'members': [
+                {'id': 'aeu_1', 'staff_name': 'Roisin', 'role': 'Proxy', 'display_order': 0},
+                {'id': 'aeu_2', 'staff_name': 'Ben Sutton', 'role': 'Proxy', 'display_order': 1}
+            ]},
+            {'id': 'fire', 'name': 'Fire Warden', 'description': '', 'display_order': 7, 'members': [
+                {'id': 'fire_1', 'staff_name': 'Brenton', 'role': '', 'display_order': 0},
+                {'id': 'fire_2', 'staff_name': 'Ben Selga', 'role': '', 'display_order': 1}
+            ]},
+            {'id': 'firstaid', 'name': 'First Aid Officer', 'description': '', 'display_order': 8, 'members': [
+                {'id': 'firstaid_1', 'staff_name': 'Naomi', 'role': '', 'display_order': 0}
+            ]},
+            {'id': 'mathletics', 'name': 'Mathletics Coordinator', 'description': '3P Learning', 'display_order': 9, 'members': [
+                {'id': 'mathletics_1', 'staff_name': 'Caitie', 'role': '', 'display_order': 0}
+            ]}
+        ]
+    
+    # Display committees
+    for committee in committees:
+        # Check if this committee is being edited
+        editing = st.session_state.get(f'editing_{committee["id"]}', False)
+        
+        if editing:
+            # EDIT MODE
+            st.markdown(f"### ✏️ Editing: {committee['name']}")
+            if committee.get('description'):
+                st.caption(committee['description'])
+            
+            st.markdown("#### Members")
+            
+            # Show existing members with edit options
+            for member in committee['members']:
+                col1, col2, col3, col4 = st.columns([3, 2, 1, 1])
+                
+                with col1:
+                    new_name = st.text_input(
+                        "Name",
+                        value=member.get('staff_name', ''),
+                        key=f"name_{member['id']}",
+                        label_visibility="collapsed"
+                    )
+                
+                with col2:
+                    new_role = st.text_input(
+                        "Role",
+                        value=member.get('role', ''),
+                        key=f"role_{member['id']}",
+                        label_visibility="collapsed"
+                    )
+                
+                with col3:
+                    if st.button("💾", key=f"save_{member['id']}", help="Save"):
+                        if using_database:
+                            try:
+                                supabase.table('committee_role_members')\
+                                    .update({'staff_name': new_name, 'role': new_role})\
+                                    .eq('id', member['id'])\
+                                    .execute()
+                                st.success("Saved!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error: {str(e)}")
+                        else:
+                            st.warning("Can't save - database not available")
+                
+                with col4:
+                    if st.button("🗑️", key=f"del_{member['id']}", help="Delete"):
+                        if using_database:
+                            try:
+                                supabase.table('committee_role_members')\
+                                    .delete()\
+                                    .eq('id', member['id'])\
+                                    .execute()
+                                st.success("Deleted!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error: {str(e)}")
+                        else:
+                            st.warning("Can't delete - database not available")
+            
+            # Add new member
+            st.markdown("#### Add New Member")
+            with st.form(key=f"add_member_{committee['id']}"):
+                col1, col2, col3 = st.columns([3, 2, 2])
+                with col1:
+                    new_staff = st.text_input("Staff Name")
+                with col2:
+                    new_role = st.text_input("Role (optional)")
+                with col3:
+                    st.write("")
+                    if st.form_submit_button("➕ Add", use_container_width=True):
+                        if new_staff:
+                            if using_database:
+                                try:
+                                    supabase.table('committee_role_members').insert({
+                                        'committee_id': committee['id'],
+                                        'staff_name': new_staff,
+                                        'role': new_role,
+                                        'display_order': len(committee['members'])
+                                    }).execute()
+                                    st.success(f"Added {new_staff}!")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {str(e)}")
+                            else:
+                                st.warning("Can't add - database not available")
+            
+            if st.button("✅ Done Editing", key=f"done_{committee['id']}"):
+                st.session_state[f'editing_{committee["id"]}'] = False
+                st.rerun()
+            
+            st.divider()
+        
+        else:
+            # VIEW MODE
+            col1, col2 = st.columns([4, 1])
+            
+            with col1:
+                st.markdown(f"### 🤝 {committee['name']}")
+                if committee.get('description'):
+                    st.caption(committee['description'])
+            
+            with col2:
+                if edit_mode:
+                    if st.button("✏️", key=f"edit_{committee['id']}", help="Edit"):
+                        st.session_state[f'editing_{committee["id"]}'] = True
+                        st.rerun()
+            
+            # Display members
+            if committee['members']:
+                member_list = []
+                for member in committee['members']:
+                    name = member.get('staff_name', '')
+                    role = member.get('role', '')
+                    if role:
+                        member_list.append(f"**{name}** ({role})")
+                    else:
+                        member_list.append(f"**{name}**")
+                
+                st.markdown("**Members:** " + " • ".join(member_list))
             else:
-                member_list.append(f"**{member['name']}**")
-        
-        st.markdown("**Members:** " + " • ".join(member_list))
-        st.divider()
-
+                st.caption("_No members assigned_")
+            
+            st.divider()
 # ========== FOOTER ==========
 st.divider()
 st.caption("💡 Tip: Use AI-assisted minutes generation to save time, or enter minutes manually following DfE format.")
