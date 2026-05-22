@@ -387,7 +387,7 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                         sync_df[col] = sync_df[col].where(pd.notna(sync_df[col]), None)
                 
                 # Convert integer columns with NaN to nullable int or None
-                int_columns = ['total_previous_placements']
+                int_columns = ['total_previous_placements', 'referral_year']
                 for col in int_columns:
                     if col in sync_df.columns:
                         sync_df[col] = sync_df[col].where(pd.notna(sync_df[col]), None)
@@ -507,7 +507,7 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                 """Remove ALL NaN values from a record, no matter what"""
                 clean = {}
                 # Integer columns that must be int, not float or string
-                int_columns = {'total_previous_placements'}
+                int_columns = {'total_previous_placements', 'referral_year'}
                 
                 for key, value in record.items():
                     # Check for NaN in every possible way
