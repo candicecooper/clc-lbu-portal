@@ -355,27 +355,27 @@ if st.session_state.drill_down_view:
                 partnership_data.columns = ['Partnership', 'Referrals']
                 partnership_data['Percentage'] = (partnership_data['Referrals'] / total_referrals * 100).round(1)
                 partnership_data = partnership_data.sort_values('Referrals', ascending=False)
-            
-            col_chart, col_table = st.columns([2, 1])
-            
-            with col_chart:
-                fig = go.Figure(go.Bar(
-                    y=partnership_data['Partnership'],
-                    x=partnership_data['Referrals'],
-                    orientation='h',
-                    text=[f"{r} ({p}%)" for r, p in zip(partnership_data['Referrals'], partnership_data['Percentage'])],
-                    textposition='auto',
-                    marker=dict(color=partnership_data['Referrals'], colorscale='Viridis', showscale=False)
-                ))
-                fig.update_layout(title="Referrals by Partnership", xaxis_title="Referrals", height=400)
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with col_table:
-                st.markdown("**Top Partnerships**")
-                for _, row in partnership_data.head(10).iterrows():
-                    st.markdown(f"**{row['Partnership']}**")
-                    st.progress(row['Percentage'] / 100)
-                    st.caption(f"{row['Referrals']} ({row['Percentage']}%)")
+                
+                col_chart, col_table = st.columns([2, 1])
+                
+                with col_chart:
+                    fig = go.Figure(go.Bar(
+                        y=partnership_data['Partnership'],
+                        x=partnership_data['Referrals'],
+                        orientation='h',
+                        text=[f"{r} ({p}%)" for r, p in zip(partnership_data['Referrals'], partnership_data['Percentage'])],
+                        textposition='auto',
+                        marker=dict(color=partnership_data['Referrals'], colorscale='Viridis', showscale=False)
+                    ))
+                    fig.update_layout(title="Referrals by Partnership", xaxis_title="Referrals", height=400)
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col_table:
+                    st.markdown("**Top Partnerships**")
+                    for _, row in partnership_data.head(10).iterrows():
+                        st.markdown(f"**{row['Partnership']}**")
+                        st.progress(row['Percentage'] / 100)
+                        st.caption(f"{row['Referrals']} ({row['Percentage']}%)")
             else:
                 st.info("Partnership data not available in dataset")
         
