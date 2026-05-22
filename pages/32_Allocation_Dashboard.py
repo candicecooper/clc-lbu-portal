@@ -171,7 +171,10 @@ with col1:
     selected_year = st.selectbox("📅 Year", years, index=year_index, key="year_filter")
 
 with col2:
-    terms = ['All Terms'] + sorted([t for t in df['term'].unique() if pd.notna(t)])
+    if 'term' in df.columns:
+        terms = ['All Terms'] + sorted([t for t in df['term'].unique() if pd.notna(t)])
+    else:
+        terms = ['All Terms']
     selected_term = st.selectbox("🗓️ Term", terms, key="term_filter")
 
 with col3:
@@ -179,11 +182,17 @@ with col3:
     selected_status = st.selectbox("📊 Status", statuses, index=0, key="status_filter")
 
 with col4:
-    partnerships = ['All Partnerships'] + sorted([p for p in df['partnership'].unique() if p != '' and pd.notna(p)])
+    if 'partnership' in df.columns:
+        partnerships = ['All Partnerships'] + sorted([p for p in df['partnership'].unique() if p != '' and pd.notna(p)])
+    else:
+        partnerships = ['All Partnerships']
     selected_partnership = st.selectbox("🤝 Partnership", partnerships, key="partnership_filter")
 
 with col5:
-    programs = ['All Programs'] + sorted([p for p in df['program'].unique() if pd.notna(p)])
+    if 'program' in df.columns:
+        programs = ['All Programs'] + sorted([p for p in df['program'].unique() if pd.notna(p)])
+    else:
+        programs = ['All Programs']
     selected_program = st.selectbox("📚 Program", programs, key="program_filter")
 
 # Apply filters
@@ -192,7 +201,7 @@ filtered_df = df.copy()
 if selected_year != 'All Years':
     filtered_df = filtered_df[filtered_df['year'] == selected_year]
 
-if selected_term != 'All Terms':
+if selected_term != 'All Terms' and 'term' in filtered_df.columns:
     filtered_df = filtered_df[filtered_df['term'] == selected_term]
 
 # Apply status filter
@@ -204,10 +213,10 @@ if 'current_status' in filtered_df.columns:
     elif selected_status == 'Pending Only':
         filtered_df = filtered_df[filtered_df['current_status'].fillna('').astype(str).str.lower() == 'pending']
 
-if selected_partnership != 'All Partnerships':
+if selected_partnership != 'All Partnerships' and 'partnership' in filtered_df.columns:
     filtered_df = filtered_df[filtered_df['partnership'] == selected_partnership]
 
-if selected_program != 'All Programs':
+if selected_program != 'All Programs' and 'program' in filtered_df.columns:
     filtered_df = filtered_df[filtered_df['program'] == selected_program]
 
 # Show filter status
@@ -275,7 +284,7 @@ if 'flag_dcp_involvement' in filtered_df.columns:
 else:
     dcp_count = 0
 
-partnerships_count = filtered_df['partnership'].nunique()
+partnerships_count = filtered_df['partnership'].nunique() if 'partnership' in filtered_df.columns else 0
 
 # Display clickable metrics
 st.markdown('<div class="section-header">📊 Key Metrics - Click Any Card to Explore</div>', unsafe_allow_html=True)
@@ -341,10 +350,11 @@ if st.session_state.drill_down_view:
         
         with tab1:
             st.markdown("### Referrals by Partnership")
-            partnership_data = filtered_df['partnership'].value_counts().reset_index()
-            partnership_data.columns = ['Partnership', 'Referrals']
-            partnership_data['Percentage'] = (partnership_data['Referrals'] / total_referrals * 100).round(1)
-            partnership_data = partnership_data.sort_values('Referrals', ascending=False)
+            if 'partnership' in filtered_df.columns:
+                partnership_data = filtered_df['partnership'].value_counts().reset_index()
+                partnership_data.columns = ['Partnership', 'Referrals']
+                partnership_data['Percentage'] = (partnership_data['Referrals'] / total_referrals * 100).round(1)
+                partnership_data = partnership_data.sort_values('Referrals', ascending=False)
             
             col_chart, col_table = st.columns([2, 1])
             
@@ -366,31 +376,36 @@ if st.session_state.drill_down_view:
                     st.markdown(f"**{row['Partnership']}**")
                     st.progress(row['Percentage'] / 100)
                     st.caption(f"{row['Referrals']} ({row['Percentage']}%)")
+            else:
+                st.info("Partnership data not available in dataset")
         
         with tab2:
             st.markdown("### Referrals by Program")
-            program_data = filtered_df['program'].value_counts().reset_index()
-            program_data.columns = ['Program', 'Referrals']
-            program_data['Percentage'] = (program_data['Referrals'] / total_referrals * 100).round(1)
-            
-            col_pie, col_stats = st.columns([2, 1])
-            
-            with col_pie:
-                colors = {'JP': '#E74C3C', 'PY': '#3498DB', 'SY': '#2ECC71'}
-                fig = go.Figure(go.Pie(
-                    labels=program_data['Program'],
-                    values=program_data['Referrals'],
-                    hole=0.4,
-                    textinfo='label+percent',
-                    marker=dict(colors=[colors.get(p, '#95A5A6') for p in program_data['Program']])
-                ))
-                fig.update_layout(title="Program Distribution", height=400)
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with col_stats:
-                st.markdown("**Program Breakdown**")
-                for _, row in program_data.iterrows():
-                    st.metric(row['Program'], row['Referrals'], f"{row['Percentage']}%")
+            if 'program' in filtered_df.columns:
+                program_data = filtered_df['program'].value_counts().reset_index()
+                program_data.columns = ['Program', 'Referrals']
+                program_data['Percentage'] = (program_data['Referrals'] / total_referrals * 100).round(1)
+                
+                col_pie, col_stats = st.columns([2, 1])
+                
+                with col_pie:
+                    colors = {'JP': '#E74C3C', 'PY': '#3498DB', 'SY': '#2ECC71'}
+                    fig = go.Figure(go.Pie(
+                        labels=program_data['Program'],
+                        values=program_data['Referrals'],
+                        hole=0.4,
+                        textinfo='label+percent',
+                        marker=dict(colors=[colors.get(p, '#95A5A6') for p in program_data['Program']])
+                    ))
+                    fig.update_layout(title="Program Distribution", height=400)
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col_stats:
+                    st.markdown("**Program Breakdown**")
+                    for _, row in program_data.iterrows():
+                        st.metric(row['Program'], row['Referrals'], f"{row['Percentage']}%")
+            else:
+                st.info("Program data not available in dataset")
         
         with tab3:
             st.markdown("### Referrals by Term")
@@ -407,6 +422,8 @@ if st.session_state.drill_down_view:
                 ))
                 fig.update_layout(title="Referral Trends by Term", xaxis_title="Term", yaxis_title="Referrals", height=400)
                 st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Term data not available in dataset")
         
         with tab4:
             st.markdown("### Top Referring Schools")
