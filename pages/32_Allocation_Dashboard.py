@@ -1055,10 +1055,6 @@ with st.expander("📊 View Partnership Distribution", expanded=False):
                         <div style='font-size: 0.75em; color: #666;'>{percentage:.1f}%</div>
                     </div>
                 """, unsafe_allow_html=True)
-                    <div style='font-size: 1.6em; font-weight: bold; color: {color};'>{count}</div>
-                    <div style='font-size: 0.8em; color: #666;'>{percentage:.1f}%</div>
-                </div>
-            """, unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
