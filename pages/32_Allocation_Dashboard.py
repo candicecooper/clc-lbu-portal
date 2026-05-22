@@ -314,6 +314,7 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                     'Waitlist_Date': 'waitlist_date',  # When joined waitlist
                     'Allocated_From_Waitlist': 'allocated_from_waitlist',  # Previously waitlisted
                     'Exit_Reason': 'exit_reason',
+                    'Current_Status': 'current_status',
                     'Transition_Plan': 'transition_plan',
                     'Notes': 'notes',
                     # NEW ANALYTICS COLUMNS - Run ADD_ALL_ANALYTICS_COLUMNS.sql first!
@@ -832,23 +833,28 @@ else:
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown('<div class="section-header">🔍 Filters & View Options</div>', unsafe_allow_html=True)
 
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5 = st.columns(5)
 
 with col1:
     years = ['All Years'] + sorted([int(y) for y in df['year'].unique() if pd.notna(y)], reverse=True)
-    selected_year = st.selectbox("📅 Select Year", years, key="year_filter")
+    selected_year = st.selectbox("📅 Year", years, key="year_filter")
 
 with col2:
     terms = ['All Terms'] + sorted([t for t in df['term'].unique() if pd.notna(t)])
-    selected_term = st.selectbox("🗓️ Select Term", terms, key="term_filter")
+    selected_term = st.selectbox("🗓️ Term", terms, key="term_filter")
 
 with col3:
-    partnerships = ['All Partnerships'] + sorted([p for p in df['partnership'].unique() if p != '' and pd.notna(p)])
-    selected_partnership = st.selectbox("🤝 Select Partnership", partnerships, key="partnership_filter")
+    # Add current status filter - default to Active only
+    statuses = ['Active Only', 'All Statuses', 'Inactive Only', 'Pending Only']
+    selected_status = st.selectbox("📊 Status", statuses, key="status_filter")
 
 with col4:
+    partnerships = ['All Partnerships'] + sorted([p for p in df['partnership'].unique() if p != '' and pd.notna(p)])
+    selected_partnership = st.selectbox("🤝 Partnership", partnerships, key="partnership_filter")
+
+with col5:
     programs = ['All Programs'] + sorted([p for p in df['program'].unique() if pd.notna(p)])
-    selected_program = st.selectbox("📚 Select Program", programs, key="program_filter")
+    selected_program = st.selectbox("📚 Program", programs, key="program_filter")
 
 # Apply filters
 filtered_df = df.copy()
@@ -859,6 +865,16 @@ if selected_year != 'All Years':
 if selected_term != 'All Terms':
     filtered_df = filtered_df[filtered_df['term'] == selected_term]
 
+# Apply status filter
+if 'current_status' in filtered_df.columns:
+    if selected_status == 'Active Only':
+        filtered_df = filtered_df[filtered_df['current_status'].fillna('').astype(str).str.lower() == 'active']
+    elif selected_status == 'Inactive Only':
+        filtered_df = filtered_df[filtered_df['current_status'].fillna('').astype(str).str.lower() == 'inactive']
+    elif selected_status == 'Pending Only':
+        filtered_df = filtered_df[filtered_df['current_status'].fillna('').astype(str).str.lower() == 'pending']
+    # 'All Statuses' = no filter applied
+
 if selected_partnership != 'All Partnerships':
     filtered_df = filtered_df[filtered_df['partnership'] == selected_partnership]
 
@@ -866,17 +882,20 @@ if selected_program != 'All Programs':
     filtered_df = filtered_df[filtered_df['program'] == selected_program]
 
 # Show filter status
-if selected_year != 'All Years' or selected_term != 'All Terms' or selected_partnership != 'All Partnerships' or selected_program != 'All Programs':
-    active_filters = []
-    if selected_year != 'All Years':
-        active_filters.append(f"**{selected_year}**")
-    if selected_term != 'All Terms':
-        active_filters.append(f"**{selected_term}**")
-    if selected_partnership != 'All Partnerships':
-        active_filters.append(f"**{selected_partnership}**")
-    if selected_program != 'All Programs':
-        active_filters.append(f"**{selected_program}**")
-    st.info(f"🔎 Showing data for: {' • '.join(active_filters)} | Displaying {len(filtered_df)} of {len(df)} records")
+active_filters = []
+if selected_year != 'All Years':
+    active_filters.append(f"**{selected_year}**")
+if selected_term != 'All Terms':
+    active_filters.append(f"**{selected_term}**")
+if selected_status != 'All Statuses':
+    active_filters.append(f"**{selected_status}**")
+if selected_partnership != 'All Partnerships':
+    active_filters.append(f"**{selected_partnership}**")
+if selected_program != 'All Programs':
+    active_filters.append(f"**{selected_program}**")
+
+if active_filters:
+    st.info(f"🔎 Showing: {' • '.join(active_filters)} | {len(filtered_df)} of {len(df)} records")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # KEY METRICS
