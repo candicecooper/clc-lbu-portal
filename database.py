@@ -76,55 +76,61 @@ st.markdown('<h1 style="text-align: center; color: #2c3e50; font-size: 2.5rem; m
 st.markdown('<p style="text-align: center; color: #7f8c8d; font-size: 1.2rem; margin-top: 0;">Interactive Analytics & Deep Dive</p>', unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SUPABASE CONNECTION
+# SUPABASE CONNECTION (Direct - no database.py import)
 # ══════════════════════════════════════════════════════════════════════════════
+
+# Check credentials first (before caching)
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    st.error("⚠️ Supabase credentials not found. Please set SUPABASE_URL and SUPABASE_KEY environment variables in Render.")
+    st.stop()
+
 @st.cache_resource
 def init_supabase():
     """Initialize Supabase client - cached to avoid reconnecting"""
-    SUPABASE_URL = os.environ.get("SUPABASE_URL")
-    SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-    
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        st.error("⚠️ Supabase credentials not found. Please set SUPABASE_URL and SUPABASE_KEY environment variables.")
-        st.stop()
-    
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 @st.cache_data(ttl=60)  # Cache for 60 seconds, then refresh
 def load_allocation_data():
     """Load allocation data from Supabase - refreshes every 60 seconds"""
-    try:
-        supabase = init_supabase()
-        
-        # Fetch all records from allocation_tracker table
-        response = supabase.table('allocation_tracker').select('*').execute()
-        
-        if not response.data:
-            return pd.DataFrame()
-        
-        # Convert to DataFrame
-        df = pd.DataFrame(response.data)
-        
-        return df
-        
-    except Exception as e:
-        st.error(f"❌ Error loading data from Supabase: {str(e)}")
+    supabase = init_supabase()
+    
+    # Fetch all records from allocation_tracker table
+    response = supabase.table('allocation_tracker').select('*').execute()
+    
+    if not response.data:
         return pd.DataFrame()
+    
+    # Convert to DataFrame
+    return pd.DataFrame(response.data)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # LOAD DATA
 # ══════════════════════════════════════════════════════════════════════════════
-df_raw = load_allocation_data()
+try:
+    df_raw = load_allocation_data()
+except Exception as e:
+    st.error(f"❌ Error loading data from Supabase: {str(e)}")
+    st.info("""
+    **Troubleshooting:**
+    1. Check that SUPABASE_URL and SUPABASE_KEY are set in Render
+    2. Verify the allocation_tracker table exists in Supabase
+    3. Try syncing data from the main Allocation Dashboard (page 32)
+    """)
+    st.stop()
 
 if len(df_raw) == 0:
     st.info("""
     📭 **No allocation data in dashboard yet.**
     
     **To get started:**
-    1. Sync data using the main Allocation Dashboard (page 32)
-    2. Upload your allocation Excel file there
-    3. Return to this Interactive Dashboard
-    4. Data will be available!
+    1. Go to the main Allocation Dashboard (page 32)
+    2. Click "🔧 ADMIN: Sync Data from Excel"
+    3. Upload your allocation Excel file
+    4. Click "Sync to Dashboard"
+    5. Return here - data will be available!
     """)
     st.stop()
 
