@@ -931,23 +931,39 @@ elif st.session_state.step == 3:
         if has_school:
             status.info("📋 Extracting risks from school safety plan…")
             progress.progress(15)
-            school_risks = ai_extract_from_school_plan(
-                st.session_state.school_plan_text, student["name"]
-            )
-            all_risks.extend(school_risks)
-            progress.progress(40)
+            try:
+                school_risks = ai_extract_from_school_plan(
+                    st.session_state.school_plan_text, student["name"]
+                )
+                all_risks.extend(school_risks)
+                # SAVE IMMEDIATELY after extraction succeeds
+                st.session_state.risks = all_risks
+                update_last_save()
+                progress.progress(40)
+            except Exception as e:
+                status.error(f"⚠️ School plan extraction failed: {str(e)[:150]}")
+                st.error("The AI extraction timed out or failed. You can continue and add risks manually, or try again.")
+                progress.progress(100)
+                time.sleep(2)
 
         if has_docs:
             status.info(f"📄 Synthesising {len(st.session_state.support_docs)} supporting document(s)…")
-            doc_risks = ai_synthesise_from_docs(
-                st.session_state.support_docs, student
-            )
-            # Deduplicate by title similarity
-            existing_titles = {r["issue_title"].lower()[:30] for r in all_risks}
-            for r in doc_risks:
-                if r["issue_title"].lower()[:30] not in existing_titles:
-                    all_risks.append(r)
-                    existing_titles.add(r["issue_title"].lower()[:30])
+            try:
+                doc_risks = ai_synthesise_from_docs(
+                    st.session_state.support_docs, student
+                )
+                # Deduplicate by title similarity
+                existing_titles = {r["issue_title"].lower()[:30] for r in all_risks}
+                for r in doc_risks:
+                    if r["issue_title"].lower()[:30] not in existing_titles:
+                        all_risks.append(r)
+                        existing_titles.add(r["issue_title"].lower()[:30])
+                # SAVE IMMEDIATELY after extraction succeeds
+                st.session_state.risks = all_risks
+                update_last_save()
+            except Exception as e:
+                status.error(f"⚠️ Document synthesis failed: {str(e)[:150]}")
+                st.error("The AI synthesis timed out or failed. Any risks extracted so far are saved. You can continue and add more risks manually.")
             progress.progress(75)
 
         # Ensure BLANK_RISK keys present on all
@@ -957,6 +973,7 @@ elif st.session_state.step == 3:
             merged = {**BLANK_RISK, **r}
             clean.append(merged)
         st.session_state.risks = clean
+        update_last_save()  # SAVE immediately after finalizing risks
         progress.progress(100)
 
         status.success(f"✅ Done — {len(clean)} risk row(s) ready. Click Continue to review each one.")
