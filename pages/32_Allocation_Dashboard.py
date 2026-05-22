@@ -137,6 +137,22 @@ if len(df_raw) == 0:
 # Create working copy and process data
 df = df_raw.copy()
 
+# Ensure required columns exist (add with safe defaults if missing)
+required_columns = {
+    'partnership': '',
+    'program': 'Unknown',
+    'term': 'Unknown',
+    'year_level': 'Unknown',
+    'student_name': 'Student',
+    'referring_school': 'Unknown School',
+    'current_status': 'Unknown'
+}
+
+for col, default_value in required_columns.items():
+    if col not in df.columns:
+        df[col] = default_value
+        st.warning(f"⚠️ Column '{col}' not found in data - using default values")
+
 # Extract year from referral_year or referral_date
 if 'referral_year' in df.columns:
     df['year'] = df['referral_year'].fillna(datetime.now().year).astype(int)
@@ -481,7 +497,7 @@ if st.session_state.drill_down_view:
             
             with col_a:
                 st.markdown("**By Partnership**")
-                if len(allocated_df) > 0:
+                if len(allocated_df) > 0 and 'partnership' in allocated_df.columns:
                     alloc_partnership = allocated_df['partnership'].value_counts().reset_index()
                     alloc_partnership.columns = ['Partnership', 'Allocated']
                     
@@ -494,10 +510,12 @@ if st.session_state.drill_down_view:
                     ))
                     fig.update_layout(title="Allocated by Partnership", height=300)
                     st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("No partnership data available")
             
             with col_b:
                 st.markdown("**By Program**")
-                if len(allocated_df) > 0:
+                if len(allocated_df) > 0 and 'program' in allocated_df.columns:
                     alloc_program = allocated_df['program'].value_counts().reset_index()
                     alloc_program.columns = ['Program', 'Allocated']
                     
@@ -508,6 +526,8 @@ if st.session_state.drill_down_view:
                     ))
                     fig.update_layout(title="Program Distribution", height=300)
                     st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("No program data available")
         
         with tab2:
             st.markdown("### Students Awaiting Allocation")
@@ -515,7 +535,7 @@ if st.session_state.drill_down_view:
             
             with col_a:
                 st.markdown("**Waitlist by Partnership**")
-                if len(waitlist_df) > 0:
+                if len(waitlist_df) > 0 and 'partnership' in waitlist_df.columns:
                     wait_partnership = waitlist_df['partnership'].value_counts().reset_index()
                     wait_partnership.columns = ['Partnership', 'Waiting']
                     
@@ -529,11 +549,11 @@ if st.session_state.drill_down_view:
                     fig.update_layout(title="Waitlist by Partnership", height=300)
                     st.plotly_chart(fig, use_container_width=True)
                 else:
-                    st.info("✓ No students on waitlist")
+                    st.info("✓ No students on waitlist or partnership data unavailable")
             
             with col_b:
                 st.markdown("**Waitlist by Program**")
-                if len(waitlist_df) > 0:
+                if len(waitlist_df) > 0 and 'program' in waitlist_df.columns:
                     wait_program = waitlist_df['program'].value_counts().reset_index()
                     wait_program.columns = ['Program', 'Waiting']
                     
@@ -544,6 +564,8 @@ if st.session_state.drill_down_view:
                     ))
                     fig.update_layout(title="Program Waitlist", height=300)
                     st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("✓ No students on waitlist or program data unavailable")
         
         with tab3:
             st.markdown("### Side-by-Side Comparison")
