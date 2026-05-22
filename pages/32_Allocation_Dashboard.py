@@ -831,39 +831,33 @@ else:
 # ══════════════════════════════════════════════════════════════════════════════
 # FILTERS
 # ══════════════════════════════════════════════════════════════════════════════
-st.markdown('<div class="section-header">🔍 Filters & View Options</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-header">🔍 Filters</div>', unsafe_allow_html=True)
 
-with st.expander("⚙️ Configure Filters", expanded=True):
-    # Row 1: Time & Status filters
-    st.markdown("**📅 Time & Status**")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        years = ['All Years'] + sorted([int(y) for y in df['year'].unique() if pd.notna(y)], reverse=True)
-        selected_year = st.selectbox("Year", years, key="year_filter")
-    
-    with col2:
-        terms = ['All Terms'] + sorted([t for t in df['term'].unique() if pd.notna(t)])
-        selected_term = st.selectbox("Term", terms, key="term_filter")
-    
-    with col3:
-        # Add current status filter - default to Active only
-        statuses = ['Active Only', 'All Statuses', 'Inactive Only', 'Pending Only']
-        selected_status = st.selectbox("Current Status", statuses, key="status_filter")
-    
-    st.markdown("---")
-    
-    # Row 2: Location & Program filters
-    st.markdown("**🏫 Location & Program**")
-    col4, col5 = st.columns(2)
-    
-    with col4:
-        partnerships = ['All Partnerships'] + sorted([p for p in df['partnership'].unique() if p != '' and pd.notna(p)])
-        selected_partnership = st.selectbox("Partnership Area", partnerships, key="partnership_filter")
-    
-    with col5:
-        programs = ['All Programs'] + sorted([p for p in df['program'].unique() if pd.notna(p)])
-        selected_program = st.selectbox("Program", programs, key="program_filter")
+col1, col2, col3, col4, col5 = st.columns([1.5, 1.5, 2, 2, 1.5])
+
+with col1:
+    years = ['All Years'] + sorted([int(y) for y in df['year'].unique() if pd.notna(y)], reverse=True)
+    # Default to current year (2026)
+    default_year = '2026' if 2026 in [int(y) for y in df['year'].unique()] else 'All Years'
+    year_index = years.index(2026) if 2026 in years else 0
+    selected_year = st.selectbox("📅 Year", years, index=year_index, key="year_filter")
+
+with col2:
+    terms = ['All Terms'] + sorted([t for t in df['term'].unique() if pd.notna(t)])
+    selected_term = st.selectbox("🗓️ Term", terms, key="term_filter")
+
+with col3:
+    # Default to Active Only
+    statuses = ['Active Only', 'All Statuses', 'Inactive Only', 'Pending Only']
+    selected_status = st.selectbox("📊 Status", statuses, index=0, key="status_filter")
+
+with col4:
+    partnerships = ['All Partnerships'] + sorted([p for p in df['partnership'].unique() if p != '' and pd.notna(p)])
+    selected_partnership = st.selectbox("🤝 Partnership", partnerships, key="partnership_filter")
+
+with col5:
+    programs = ['All Programs'] + sorted([p for p in df['program'].unique() if pd.notna(p)])
+    selected_program = st.selectbox("📚 Program", programs, key="program_filter")
 
 # Apply filters
 filtered_df = df.copy()
@@ -905,6 +899,12 @@ if selected_program != 'All Programs':
 
 if active_filters:
     st.info(f"🔎 Showing: {' • '.join(active_filters)} | {len(filtered_df)} of {len(df)} records")
+
+# Warning for partial year data
+if selected_year == 2026:
+    st.warning("⚠️ **2026 Data is Partial Year** (Terms 1-2 only). Percentages reflect current cohort, not full-year projections.")
+elif selected_year == 'All Years' and len(df['year'].unique()) > 1:
+    st.warning("⚠️ **Multi-Year View**: Comparing full year (2025) with partial year (2026). Use single-year view for accurate percentages.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # KEY METRICS
@@ -2047,7 +2047,7 @@ if 'year' in df.columns and len(df['year'].unique()) > 1:
         
         fig_year_trend = go.Figure()
         fig_year_trend.add_trace(go.Bar(
-            x=year_counts.index,
+            x=[str(int(y)) for y in year_counts.index],  # Convert to strings
             y=year_counts.values,
             marker_color='#3498DB',
             text=year_counts.values,
@@ -2057,6 +2057,7 @@ if 'year' in df.columns and len(df['year'].unique()) > 1:
         fig_year_trend.update_layout(
             title="Allocations by Year",
             xaxis_title="Year",
+            xaxis_type='category',  # Treat as categories not numbers
             yaxis_title="Number of Students",
             height=300,
             showlegend=False
@@ -2090,7 +2091,7 @@ if 'year' in df.columns and len(df['year'].unique()) > 1:
             if program in ['JP', 'PY', 'SY']:
                 fig_prog_year.add_trace(go.Bar(
                     name=program,
-                    x=program_by_year.index,
+                    x=[str(int(y)) for y in program_by_year.index],  # Convert to strings
                     y=program_by_year[program],
                     marker_color=colors.get(program, '#95A5A6'),
                     text=program_by_year[program],
@@ -2100,6 +2101,7 @@ if 'year' in df.columns and len(df['year'].unique()) > 1:
         fig_prog_year.update_layout(
             title="Programs by Year",
             xaxis_title="Year",
+            xaxis_type='category',  # Treat as categories
             yaxis_title="Students",
             height=300,
             barmode='stack'
@@ -2122,7 +2124,7 @@ if 'year' in df.columns and len(df['year'].unique()) > 1:
             if partnership in partnership_by_year.columns:
                 fig_part_year.add_trace(go.Scatter(
                     name=partnership,
-                    x=partnership_by_year.index,
+                    x=[str(int(y)) for y in partnership_by_year.index],  # Convert to strings
                     y=partnership_by_year[partnership],
                     mode='lines+markers',
                     line=dict(width=2),
@@ -2132,6 +2134,7 @@ if 'year' in df.columns and len(df['year'].unique()) > 1:
         fig_part_year.update_layout(
             title="Top 5 Partnerships",
             xaxis_title="Year",
+            xaxis_type='category',  # Treat as categories
             yaxis_title="Students",
             height=300,
             legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.02)
@@ -2424,32 +2427,41 @@ col1, col2 = st.columns(2)
 with col1:
     st.markdown("### DCP Involvement")
     if 'flag_dcp_involvement' in filtered_df.columns:
+        # Debug: show what values we have
+        unique_vals = filtered_df['flag_dcp_involvement'].unique()
+        
         dcp_count = len(filtered_df[
             (filtered_df['flag_dcp_involvement'] == True) |
-            (filtered_df['flag_dcp_involvement'].fillna('').astype(str).str.lower().isin(['yes', 'true', '1']))
+            (filtered_df['flag_dcp_involvement'] == 'Yes') |
+            (filtered_df['flag_dcp_involvement'].fillna('').astype(str).str.lower().isin(['yes', 'true', '1', 'y']))
         ])
         dcp_pct = (dcp_count / len(filtered_df) * 100) if len(filtered_df) > 0 else 0
         
         st.metric("DCP Involved", dcp_count, f"{dcp_pct:.1f}% of cohort")
         
-        # Trend by year
+        # Show debug info if count is 0 but we expect data
+        if dcp_count == 0 and len(filtered_df) > 0:
+            st.caption(f"⚠️ Values found: {unique_vals.tolist()}")
+        
+        # Trend by year - fix year formatting
         if 'year' in filtered_df.columns and len(filtered_df['year'].unique()) > 1:
             dcp_by_year = filtered_df[
                 (filtered_df['flag_dcp_involvement'] == True) |
-                (filtered_df['flag_dcp_involvement'].fillna('').astype(str).str.lower().isin(['yes', 'true', '1']))
+                (filtered_df['flag_dcp_involvement'] == 'Yes') |
+                (filtered_df['flag_dcp_involvement'].fillna('').astype(str).str.lower().isin(['yes', 'true', '1', 'y']))
             ].groupby('year').size()
             total_by_year = filtered_df.groupby('year').size()
             dcp_pct_by_year = (dcp_by_year / total_by_year * 100).fillna(0)
             
             fig_dcp = go.Figure()
             fig_dcp.add_trace(go.Bar(
-                x=dcp_pct_by_year.index,
+                x=[str(int(y)) for y in dcp_pct_by_year.index],  # Convert to strings
                 y=dcp_pct_by_year.values,
                 marker_color='#E67E22',
                 text=[f"{v:.1f}%" for v in dcp_pct_by_year.values],
                 textposition='auto'
             ))
-            fig_dcp.update_layout(title="DCP % by Year", yaxis_title="%", height=250, showlegend=False)
+            fig_dcp.update_layout(title="DCP % by Year", xaxis_type='category', yaxis_title="%", height=250, showlegend=False)
             st.plotly_chart(fig_dcp, use_container_width=True)
     else:
         st.info("DCP involvement data available - add Flag_DCP_involvement column")
@@ -2457,32 +2469,41 @@ with col1:
 with col2:
     st.markdown("### Child in Care")
     if 'flag_child_in_care' in filtered_df.columns:
+        # Debug: show what values we have
+        unique_vals = filtered_df['flag_child_in_care'].unique()
+        
         care_count = len(filtered_df[
             (filtered_df['flag_child_in_care'] == True) |
-            (filtered_df['flag_child_in_care'].fillna('').astype(str).str.lower().isin(['yes', 'true', '1']))
+            (filtered_df['flag_child_in_care'] == 'Yes') |
+            (filtered_df['flag_child_in_care'].fillna('').astype(str).str.lower().isin(['yes', 'true', '1', 'y']))
         ])
         care_pct = (care_count / len(filtered_df) * 100) if len(filtered_df) > 0 else 0
         
         st.metric("In Care", care_count, f"{care_pct:.1f}% of cohort")
         
-        # Trend by year
+        # Show debug info if count is 0 but we expect data
+        if care_count == 0 and len(filtered_df) > 0:
+            st.caption(f"⚠️ Values found: {unique_vals.tolist()}")
+        
+        # Trend by year - fix year formatting
         if 'year' in filtered_df.columns and len(filtered_df['year'].unique()) > 1:
             care_by_year = filtered_df[
                 (filtered_df['flag_child_in_care'] == True) |
-                (filtered_df['flag_child_in_care'].fillna('').astype(str).str.lower().isin(['yes', 'true', '1']))
+                (filtered_df['flag_child_in_care'] == 'Yes') |
+                (filtered_df['flag_child_in_care'].fillna('').astype(str).str.lower().isin(['yes', 'true', '1', 'y']))
             ].groupby('year').size()
             total_by_year = filtered_df.groupby('year').size()
             care_pct_by_year = (care_by_year / total_by_year * 100).fillna(0)
             
             fig_care = go.Figure()
             fig_care.add_trace(go.Bar(
-                x=care_pct_by_year.index,
+                x=[str(int(y)) for y in care_pct_by_year.index],  # Convert to strings
                 y=care_pct_by_year.values,
                 marker_color='#9B59B6',
                 text=[f"{v:.1f}%" for v in care_pct_by_year.values],
                 textposition='auto'
             ))
-            fig_care.update_layout(title="In Care % by Year", yaxis_title="%", height=250, showlegend=False)
+            fig_care.update_layout(title="In Care % by Year", xaxis_type='category', yaxis_title="%", height=250, showlegend=False)
             st.plotly_chart(fig_care, use_container_width=True)
     else:
         st.info("Child in care data available - add Flag_Child_in_care column")
