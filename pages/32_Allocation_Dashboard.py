@@ -1939,6 +1939,263 @@ with tab7:
                 st.markdown(f"• **{school}:** {count} student(s)")
 
 # ══════════════════════════════════════════════════════════════════════════════
+# STUDENT COMPLEXITY & PRIORITY FLAGS ANALYSIS
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown('<div class="section-header">🎯 Student Complexity & Priority Needs</div>', unsafe_allow_html=True)
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.markdown("### Multiple Priority Flags")
+    
+    # Check if columns exist
+    has_disability = 'disability_flag' in filtered_df.columns
+    has_behaviour = 'behaviour_flag' in filtered_df.columns or 'behavior_flag' in filtered_df.columns
+    
+    if has_disability and has_behaviour:
+        behaviour_col = 'behaviour_flag' if 'behaviour_flag' in filtered_df.columns else 'behavior_flag'
+        
+        # Count students with multiple flags
+        both_flags = len(filtered_df[
+            (filtered_df['disability_flag'].fillna('').astype(str).str.lower().isin(['yes', 'true', '1'])) &
+            (filtered_df[behaviour_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1']))
+        ])
+        disability_only = len(filtered_df[
+            (filtered_df['disability_flag'].fillna('').astype(str).str.lower().isin(['yes', 'true', '1'])) &
+            ~(filtered_df[behaviour_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1']))
+        ])
+        behaviour_only = len(filtered_df[
+            ~(filtered_df['disability_flag'].fillna('').astype(str).str.lower().isin(['yes', 'true', '1'])) &
+            (filtered_df[behaviour_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1']))
+        ])
+        neither = len(filtered_df) - both_flags - disability_only - behaviour_only
+        
+        # Create pie chart
+        fig_flags = go.Figure()
+        
+        labels = ['Both Flags', 'Disability Only', 'Behaviour Only', 'Neither']
+        values = [both_flags, disability_only, behaviour_only, neither]
+        colors = ['#E74C3C', '#F39C12', '#3498DB', '#95A5A6']
+        
+        fig_flags.add_trace(go.Pie(
+            labels=labels,
+            values=values,
+            hole=0.4,
+            marker=dict(colors=colors),
+            textinfo='label+value+percent'
+        ))
+        
+        fig_flags.update_layout(title="Priority Flag Overlap", height=350, showlegend=False)
+        st.plotly_chart(fig_flags, use_container_width=True)
+        
+        if both_flags > 0:
+            st.info(f"**💡 {both_flags} students ({both_flags/len(filtered_df)*100:.1f}%) have both disability and behaviour flags**")
+    else:
+        st.warning("⚠️ Add 'Disability_Flag' and 'Behaviour_Flag' columns to Excel to enable this analysis")
+
+with col2:
+    st.markdown("### Disability vs Behaviour Representation")
+    
+    if has_disability and has_behaviour:
+        behaviour_col = 'behaviour_flag' if 'behaviour_flag' in filtered_df.columns else 'behavior_flag'
+        
+        disability_count = len(filtered_df[filtered_df['disability_flag'].fillna('').astype(str).str.lower().isin(['yes', 'true', '1'])])
+        behaviour_count = len(filtered_df[filtered_df[behaviour_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1'])])
+        
+        fig_rep = go.Figure()
+        fig_rep.add_trace(go.Bar(
+            x=['Disability', 'Behaviour'],
+            y=[disability_count, behaviour_count],
+            marker_color=['#2ECC71', '#E74C3C'],
+            text=[disability_count, behaviour_count],
+            textposition='auto'
+        ))
+        
+        fig_rep.update_layout(title="Primary Need Representation", yaxis_title="Students", height=350, showlegend=False)
+        st.plotly_chart(fig_rep, use_container_width=True)
+        
+        if disability_count > 0:
+            pct = disability_count / len(filtered_df) * 100
+            st.warning(f"**⚠️ {pct:.1f}% have disabilities - yet many referrals framed as 'behaviour' issues**")
+    else:
+        st.info("Add disability and behaviour flag tracking to see representation analysis")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CULTURAL & LINGUISTIC DEMOGRAPHICS
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown('<div class="section-header">🌏 Cultural & Linguistic Demographics</div>', unsafe_allow_html=True)
+
+col1, col2, col3 = st.columns(3)
+
+atsi_col = 'atsi_status' if 'atsi_status' in filtered_df.columns else None
+eald_col = 'eald_status' if 'eald_status' in filtered_df.columns else None
+
+with col1:
+    st.markdown("### ATSI Students")
+    if atsi_col and atsi_col in filtered_df.columns:
+        atsi_count = len(filtered_df[filtered_df[atsi_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1', 'aboriginal', 'torres strait islander', 'both'])])
+        atsi_pct = (atsi_count / len(filtered_df) * 100) if len(filtered_df) > 0 else 0
+        
+        st.metric("ATSI Students", atsi_count, f"{atsi_pct:.1f}% of cohort")
+        
+        # Trend by year if multiple years
+        if 'year' in filtered_df.columns and len(filtered_df['year'].unique()) > 1:
+            atsi_by_year = filtered_df[filtered_df[atsi_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1', 'aboriginal', 'torres strait islander', 'both'])].groupby('year').size()
+            total_by_year = filtered_df.groupby('year').size()
+            atsi_pct_by_year = (atsi_by_year / total_by_year * 100).fillna(0)
+            
+            fig_atsi = go.Figure()
+            fig_atsi.add_trace(go.Bar(
+                x=atsi_pct_by_year.index,
+                y=atsi_pct_by_year.values,
+                marker_color='#E74C3C',
+                text=[f"{v:.1f}%" for v in atsi_pct_by_year.values],
+                textposition='auto'
+            ))
+            fig_atsi.update_layout(title="ATSI % by Year", yaxis_title="%", height=250, showlegend=False)
+            st.plotly_chart(fig_atsi, use_container_width=True)
+            
+            if len(atsi_pct_by_year) >= 2:
+                trend = "Increasing ↗️" if atsi_pct_by_year.iloc[-1] > atsi_pct_by_year.iloc[0] else "Decreasing ↘️" if atsi_pct_by_year.iloc[-1] < atsi_pct_by_year.iloc[0] else "Stable →"
+                st.info(f"**Trend:** {trend}")
+    else:
+        st.warning("Add 'ATSI_Status' column to track")
+
+with col2:
+    st.markdown("### EALD Students")
+    if eald_col and eald_col in filtered_df.columns:
+        eald_count = len(filtered_df[filtered_df[eald_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1'])])
+        eald_pct = (eald_count / len(filtered_df) * 100) if len(filtered_df) > 0 else 0
+        
+        st.metric("EALD Students", eald_count, f"{eald_pct:.1f}% of cohort")
+        
+        # Trend by year
+        if 'year' in filtered_df.columns and len(filtered_df['year'].unique()) > 1:
+            eald_by_year = filtered_df[filtered_df[eald_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1'])].groupby('year').size()
+            total_by_year = filtered_df.groupby('year').size()
+            eald_pct_by_year = (eald_by_year / total_by_year * 100).fillna(0)
+            
+            fig_eald = go.Figure()
+            fig_eald.add_trace(go.Bar(
+                x=eald_pct_by_year.index,
+                y=eald_pct_by_year.values,
+                marker_color='#3498DB',
+                text=[f"{v:.1f}%" for v in eald_pct_by_year.values],
+                textposition='auto'
+            ))
+            fig_eald.update_layout(title="EALD % by Year", yaxis_title="%", height=250, showlegend=False)
+            st.plotly_chart(fig_eald, use_container_width=True)
+            
+            if len(eald_pct_by_year) >= 2:
+                trend = "Increasing ↗️" if eald_pct_by_year.iloc[-1] > eald_pct_by_year.iloc[0] else "Decreasing ↘️" if eald_pct_by_year.iloc[-1] < eald_pct_by_year.iloc[0] else "Stable →"
+                st.info(f"**Trend:** {trend}")
+    else:
+        st.warning("Add 'EALD_Status' column to track")
+
+with col3:
+    st.markdown("### Combined Demographics")
+    if atsi_col and eald_col and atsi_col in filtered_df.columns and eald_col in filtered_df.columns:
+        atsi_count = len(filtered_df[filtered_df[atsi_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1', 'aboriginal', 'torres strait islander', 'both'])])
+        eald_count = len(filtered_df[filtered_df[eald_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1'])])
+        both_count = len(filtered_df[
+            (filtered_df[atsi_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1', 'aboriginal', 'torres strait islander', 'both'])) &
+            (filtered_df[eald_col].fillna('').astype(str).str.lower().isin(['yes', 'true', '1']))
+        ])
+        
+        fig_demo = go.Figure()
+        fig_demo.add_trace(go.Bar(
+            x=['ATSI Only', 'EALD Only', 'Both'],
+            y=[atsi_count - both_count, eald_count - both_count, both_count],
+            marker_color=['#E74C3C', '#3498DB', '#9B59B6'],
+            text=[atsi_count - both_count, eald_count - both_count, both_count],
+            textposition='auto'
+        ))
+        fig_demo.update_layout(title="Demographic Overlap", yaxis_title="Students", height=300, showlegend=False)
+        st.plotly_chart(fig_demo, use_container_width=True)
+    else:
+        st.info("Add ATSI and EALD tracking for overlap analysis")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PLACEMENT DURATION & EXTENSIONS
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown('<div class="section-header">⏱️ Placement Duration & Extensions</div>', unsafe_allow_html=True)
+
+col1, col2 = st.columns(2)
+
+has_exclusion = 'exclusion_end_date' in filtered_df.columns or 'placement_end' in filtered_df.columns
+has_finish = 'actual_finish_date' in filtered_df.columns or 'finishing_date' in filtered_df.columns
+
+with col1:
+    st.markdown("### Placement Completion")
+    
+    if has_exclusion and has_finish:
+        excl_col = 'exclusion_end_date' if 'exclusion_end_date' in filtered_df.columns else 'placement_end'
+        finish_col = 'actual_finish_date' if 'actual_finish_date' in filtered_df.columns else 'finishing_date'
+        
+        # Convert to datetime
+        temp_df = filtered_df.copy()
+        temp_df[excl_col] = pd.to_datetime(temp_df[excl_col], errors='coerce')
+        temp_df[finish_col] = pd.to_datetime(temp_df[finish_col], errors='coerce')
+        
+        finished = temp_df[temp_df[finish_col].notna()].copy()
+        
+        if len(finished) > 0:
+            on_time = len(finished[finished[finish_col] <= finished[excl_col]])
+            extended = len(finished[finished[finish_col] > finished[excl_col]])
+            no_excl = len(finished[finished[excl_col].isna()])
+            
+            fig_comp = go.Figure()
+            fig_comp.add_trace(go.Pie(
+                labels=['At Exclusion', 'Extended', 'No Exclusion'],
+                values=[on_time, extended, no_excl],
+                marker=dict(colors=['#2ECC71', '#F39C12', '#95A5A6']),
+                hole=0.4,
+                textinfo='label+value+percent'
+            ))
+            fig_comp.update_layout(title=f"Completion (n={len(finished)})", height=350)
+            st.plotly_chart(fig_comp, use_container_width=True)
+            
+            ext_pct = (extended / len(finished) * 100) if len(finished) > 0 else 0
+            st.success(f"**✅ {ext_pct:.1f}% extended beyond exclusion → successful engagement!**")
+        else:
+            st.info("No finished placements yet")
+    else:
+        st.warning("Add 'Exclusion_End_Date' and 'Actual_Finish_Date' columns")
+
+with col2:
+    st.markdown("### Average Duration")
+    
+    if 'placement_start' in filtered_df.columns and has_finish:
+        finish_col = 'actual_finish_date' if 'actual_finish_date' in filtered_df.columns else 'finishing_date'
+        
+        temp_df = filtered_df.copy()
+        temp_df['placement_start'] = pd.to_datetime(temp_df['placement_start'], errors='coerce')
+        temp_df[finish_col] = pd.to_datetime(temp_df[finish_col], errors='coerce')
+        
+        finished = temp_df[(temp_df['placement_start'].notna()) & (temp_df[finish_col].notna())].copy()
+        
+        if len(finished) > 0:
+            finished['duration'] = (finished[finish_col] - finished['placement_start']).dt.days
+            
+            avg = finished['duration'].mean()
+            median = finished['duration'].median()
+            
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.metric("Average", f"{avg:.0f} days")
+            with col_b:
+                st.metric("Median", f"{median:.0f} days")
+            
+            fig_dur = go.Figure()
+            fig_dur.add_trace(go.Histogram(x=finished['duration'], nbinsx=10, marker_color='#3498DB'))
+            fig_dur.update_layout(title="Duration Distribution", xaxis_title="Days", yaxis_title="Students", height=250, showlegend=False)
+            st.plotly_chart(fig_dur, use_container_width=True)
+        else:
+            st.info("No finished placements with dates")
+    else:
+        st.info("Add start and finish dates to track duration")
+
+# ══════════════════════════════════════════════════════════════════════════════
 # SUMMARY STATISTICS TABLE
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown('<div class="section-header">📋 Complete Allocation Summary</div>', unsafe_allow_html=True)
