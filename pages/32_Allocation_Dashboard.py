@@ -137,7 +137,20 @@ if len(df_raw) == 0:
 # Create working copy and process data
 df = df_raw.copy()
 
-# Ensure required columns exist (add with safe defaults if missing)
+# Map Supabase column names to dashboard expected names
+column_mapping = {
+    'partnership_area': 'partnership',
+    'allocated_program': 'program',
+    'referral_term': 'term',
+    'allocation_status': 'current_status'
+}
+
+# Apply mappings if source columns exist
+for supabase_col, dashboard_col in column_mapping.items():
+    if supabase_col in df.columns and dashboard_col not in df.columns:
+        df[dashboard_col] = df[supabase_col]
+
+# Ensure required columns exist (add with safe defaults if still missing)
 required_columns = {
     'partnership': '',
     'program': 'Unknown',
@@ -159,8 +172,31 @@ if 'referral_year' in df.columns:
 elif 'referral_date' in df.columns:
     df['referral_date'] = pd.to_datetime(df['referral_date'], errors='coerce')
     df['year'] = df['referral_date'].dt.year.fillna(datetime.now().year).astype(int)
+    df['month'] = df['referral_date'].dt.month
 else:
     df['year'] = datetime.now().year
+
+# Calculate term from month (like old dashboard)
+def get_term(month):
+    if pd.isna(month) or month is None:
+        return "Unknown"
+    try:
+        month = int(month)
+        if month <= 3:
+            return "Term 1"
+        elif month <= 6:
+            return "Term 2"
+        elif month <= 9:
+            return "Term 3"
+        else:
+            return "Term 4"
+    except:
+        return "Unknown"
+
+if 'month' in df.columns:
+    df['term'] = df['month'].apply(get_term)
+elif 'term' not in df.columns or df['term'].isna().all():
+    df['term'] = 'Unknown'
 
 # Process bespoke placement - case insensitive
 if 'bespoke_placement' in df.columns:
@@ -1090,3 +1126,4 @@ st.markdown("""
     <p style='margin: 0.5rem 0 0 0; font-size: 0.8rem;'>Click any metric card to explore detailed analysis</p>
 </div>
 """, unsafe_allow_html=True)
+
