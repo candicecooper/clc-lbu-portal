@@ -78,8 +78,23 @@ st.markdown('<p style="text-align: center; color: #7f8c8d; font-size: 1.2rem; ma
 def load_data():
     """Load and prepare allocation data"""
     try:
-        from database import get_supabase_connection
-        supabase = get_supabase_connection()
+        # Import Supabase connection
+        from supabase import create_client
+        import os
+        
+        # Get connection from environment or auth
+        try:
+            from database import supabase
+        except:
+            # Fallback: create connection directly
+            SUPABASE_URL = os.getenv('SUPABASE_URL')
+            SUPABASE_KEY = os.getenv('SUPABASE_SERVICE_KEY')
+            if SUPABASE_URL and SUPABASE_KEY:
+                supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+            else:
+                st.error("Supabase credentials not configured")
+                return pd.DataFrame()
+        
         response = supabase.table('allocation_tracker').select('*').execute()
         
         if response.data:
