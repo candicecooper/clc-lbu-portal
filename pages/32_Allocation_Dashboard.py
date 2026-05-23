@@ -211,6 +211,154 @@ else:
 # Show last update
 st.caption(f"📅 Last updated: {datetime.now().strftime('%d/%m/%Y %I:%M %p')} | Total records: {len(df)}")
 
+st.markdown("---")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ADMIN SECTION: DATA SYNC
+# ══════════════════════════════════════════════════════════════════════════════
+with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
+    st.markdown("""
+    **🔒 Privacy-Preserving Sync**  
+    Upload your allocation Excel file to update the dashboard. **Student names are automatically removed** during sync.
+    """)
+    
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        uploaded_file = st.file_uploader(
+            "Upload Allocation Excel File",
+            type=['xlsx', 'xlsm'],
+            help="CLC_Allocation_Dashboard Excel file - student names will NOT be synced",
+            key="excel_upload_interactive"
+        )
+    
+    with col2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        sync_button = st.button("🔄 Sync to Dashboard", type="primary", use_container_width=True, disabled=(uploaded_file is None))
+    
+    if uploaded_file is not None and sync_button:
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        try:
+            # Read Excel file
+            status_text.text("Reading Excel file...")
+            progress_bar.progress(10)
+            df_excel = pd.read_excel(uploaded_file, sheet_name='Data_Model')
+            
+            st.info(f"📄 **Excel file read:** {len(df_excel)} rows")
+            
+            # Map Excel columns to Supabase schema (copy from old dashboard)
+            status_text.text(f"Processing {len(df_excel)} student records...")
+            progress_bar.progress(20)
+            
+            sync_df = pd.DataFrame()
+            
+            column_mapping = {
+                'Student_ID': 'student_id',
+                'Gender': 'gender',
+                'Year_Level': 'year_level',
+                'Referring_School': 'referring_school',
+                'Referral_Date': 'referral_date',
+                'Referral_Year': 'referral_year',
+                'Allocation_Status': 'allocation_status',
+                'Allocated_Program': 'allocated_program',
+                'Placement_Start': 'placement_start',
+                'Placement_End': 'placement_end',
+                'Partnership_Area': 'partnership_area',
+                'Previous_CLC_Placement': 'previous_clc_placement',
+                'Flag_ASD': 'flag_asd',
+                'Flag_ADHD': 'flag_adhd',
+                'Flag_DCP_involvement': 'flag_dcp_involvement',
+                'Flag_Child_in_care': 'flag_child_in_care',
+                'Flag_Aboriginal': 'flag_aboriginal',
+                'Flag_ATSI': 'flag_aboriginal',
+                'Flag_EALD': 'flag_eald',
+                'Bespoke_Placement': 'bespoke_placement',
+                'Current_Status': 'current_status',
+                'Notes': 'notes'
+            }
+            
+            # Map columns
+            for excel_col, db_col in column_mapping.items():
+                if excel_col in df_excel.columns:
+                    sync_df[db_col] = df_excel[excel_col]
+            
+            # Convert Yes/No to boolean for flags
+            flag_columns = ['flag_asd', 'flag_adhd', 'flag_dcp_involvement', 'flag_child_in_care',
+                          'flag_aboriginal', 'flag_eald', 'bespoke_placement']
+            
+            for flag_col in flag_columns:
+                if flag_col in sync_df.columns:
+                    sync_df[flag_col] = sync_df[flag_col].map({'Yes': True, 'No': False, '': False}).fillna(False)
+            
+            # Convert dates
+            date_columns = ['referral_date', 'placement_start', 'placement_end']
+            for date_col in date_columns:
+                if date_col in sync_df.columns:
+                    sync_df[date_col] = pd.to_datetime(sync_df[date_col], errors='coerce')
+                    sync_df[date_col] = sync_df[date_col].dt.strftime('%Y-%m-%d')
+            
+            # Convert integers
+            int_columns = ['referral_year']
+            for int_col in int_columns:
+                if int_col in sync_df.columns:
+                    sync_df[int_col] = pd.to_numeric(sync_df[int_col], errors='coerce').fillna(0).astype(int)
+            
+            # Clean NaNs
+            sync_df = sync_df.replace({float('nan'): None, 'nan': None, 'NaT': None})
+            
+            # Validate required fields
+            records = sync_df.to_dict('records')
+            
+            for record in records:
+                if not record.get('allocation_status'):
+                    record['allocation_status'] = 'Allocated'
+            
+            # Clear old data
+            status_text.text("Clearing old dashboard data...")
+            progress_bar.progress(50)
+            supabase = init_supabase()
+            supabase.table('allocation_tracker').delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
+            
+            # Insert new data
+            status_text.text(f"Uploading {len(records)} de-identified records...")
+            progress_bar.progress(60)
+            
+            # Insert in batches
+            batch_size = 50
+            for i in range(0, len(records), batch_size):
+                batch = records[i:i + batch_size]
+                supabase.table('allocation_tracker').insert(batch).execute()
+                progress_bar.progress(60 + int(30 * ((i + len(batch)) / len(records))))
+            
+            # Clear cache
+            load_allocation_data.clear()
+            
+            # Complete
+            progress_bar.progress(100)
+            status_text.empty()
+            progress_bar.empty()
+            
+            st.success(f"""
+            ✅ **Sync Successful!** {len(records)} records synced to dashboard.
+            
+            **Privacy Status:** ✅ No student names were transmitted or stored in database.
+            
+            Dashboard will refresh now...
+            """)
+            
+            # Force page rerun
+            st.rerun()
+            
+        except Exception as e:
+            progress_bar.empty()
+            status_text.empty()
+            st.error(f"❌ Sync failed: {str(e)}")
+            st.exception(e)
+
+st.markdown("---")
+
 # ══════════════════════════════════════════════════════════════════════════════
 # FILTERS
 # ══════════════════════════════════════════════════════════════════════════════
