@@ -150,22 +150,6 @@ for supabase_col, dashboard_col in column_mapping.items():
     if supabase_col in df.columns and dashboard_col not in df.columns:
         df[dashboard_col] = df[supabase_col]
 
-# Ensure required columns exist (add with safe defaults if still missing)
-required_columns = {
-    'partnership': '',
-    'program': 'Unknown',
-    'term': 'Unknown',
-    'year_level': 'Unknown',
-    'student_name': 'Student',
-    'referring_school': 'Unknown School',
-    'current_status': 'Unknown'
-}
-
-for col, default_value in required_columns.items():
-    if col not in df.columns:
-        df[col] = default_value
-        st.warning(f"⚠️ Column '{col}' not found in data - using default values")
-
 # Extract year from referral_year or referral_date
 if 'referral_year' in df.columns:
     df['year'] = df['referral_year'].fillna(datetime.now().year).astype(int)
@@ -176,7 +160,7 @@ elif 'referral_date' in df.columns:
 else:
     df['year'] = datetime.now().year
 
-# Calculate term from month (like old dashboard)
+# Calculate term from month (like old dashboard) - DO THIS BEFORE required columns check
 def get_term(month):
     if pd.isna(month) or month is None:
         return "Unknown"
@@ -193,10 +177,27 @@ def get_term(month):
     except:
         return "Unknown"
 
-if 'month' in df.columns:
-    df['term'] = df['month'].apply(get_term)
-elif 'term' not in df.columns or df['term'].isna().all():
-    df['term'] = 'Unknown'
+# Only calculate term if not already present
+if 'term' not in df.columns or df['term'].isna().all():
+    if 'month' in df.columns:
+        df['term'] = df['month'].apply(get_term)
+    else:
+        df['term'] = 'Unknown'
+
+# Ensure required columns exist (add with safe defaults if still missing)
+required_columns = {
+    'partnership': '',
+    'program': 'Unknown',
+    'year_level': 'Unknown',
+    'student_name': 'Student',
+    'referring_school': 'Unknown School',
+    'current_status': 'Unknown'
+}
+
+for col, default_value in required_columns.items():
+    if col not in df.columns:
+        df[col] = default_value
+        st.warning(f"⚠️ Column '{col}' not found in data - using default values")
 
 # Process bespoke placement - case insensitive
 if 'bespoke_placement' in df.columns:
@@ -1126,4 +1127,3 @@ st.markdown("""
     <p style='margin: 0.5rem 0 0 0; font-size: 0.8rem;'>Click any metric card to explore detailed analysis</p>
 </div>
 """, unsafe_allow_html=True)
-
