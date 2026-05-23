@@ -501,6 +501,8 @@ with col1:
         st.rerun()
 
 with col2:
+    conversion_rate = (allocated_count / total_referrals * 100) if total_referrals > 0 else 0
+    st.caption(f"{conversion_rate:.1f}% conversion")
     if st.button(f"**{allocated_count}**\n\nAllocated", use_container_width=True, key="btn_allocated"):
         st.session_state.drill_down_view = "allocated"
         st.rerun()
@@ -528,6 +530,7 @@ with col6:
 with col7:
     # Calculate extensions - with improved detection
     extended_count = 0
+    extension_method = "No data"
     
     # Check what extension-related columns we have
     has_exclusion_end = 'exclusion_end_date' in filtered_df.columns or 'placement_end' in filtered_df.columns
@@ -546,6 +549,10 @@ with col7:
             pd.notna(temp_df['actual_dt']) &
             (temp_df['actual_dt'] > temp_df['exclusion_dt'])
         ])
+        
+        completed_count = len(temp_df[pd.notna(temp_df['actual_dt'])])
+        extension_method = f"From dates ({completed_count} completed)"
+        
     elif has_extended_flag:
         # Use flag
         extended_count = len(filtered_df[
@@ -553,7 +560,12 @@ with col7:
             (filtered_df['extended_placement'] == 'Yes') |
             (filtered_df['extended_placement'].fillna('').astype(str).str.lower().isin(['yes', 'true', '1', 'y']))
         ])
+        extension_method = "From flag"
+    else:
+        extension_method = "Add columns to Excel"
     
+    # Show button with tooltip
+    st.caption(extension_method)
     if st.button(f"**{extended_count}**\n\nExtensions", use_container_width=True, key="btn_extensions"):
         st.session_state.drill_down_view = "extensions"
         st.rerun()
@@ -781,7 +793,7 @@ if st.session_state.drill_down_view:
                 st.info("Term or year data not available for trend analysis")
     
     # ═══════════════════════════════════════════════════════════════════════
-    # ALLOCATED VS WAITLIST DRILL-DOWN
+    # ALLOCATED VS WAITLIST DRILL-DOWN (ENHANCED WITH CONVERSION ANALYSIS)
     # ═══════════════════════════════════════════════════════════════════════
     elif st.session_state.drill_down_view == "allocated":
         if 'allocation_status' in filtered_df.columns:
@@ -797,20 +809,85 @@ if st.session_state.drill_down_view:
         
         st.markdown(f"""
         <div class="drill-down-header" style="background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);">
-            <h2 class="drill-down-title">✅ Allocated vs Waitlist Analysis</h2>
-            <p class="drill-down-subtitle">{len(allocated_df)} allocated • {len(waitlist_df)} on waitlist</p>
+            <h2 class="drill-down-title">📊 Referral to Placement Pipeline</h2>
+            <p class="drill-down-subtitle">Analyzing conversion from referral to allocation</p>
         </div>
         """, unsafe_allow_html=True)
         
-        col_m1, col_m2 = st.columns(2)
-        with col_m1:
-            st.metric("✅ Allocated", len(allocated_df), f"{len(allocated_df)/total_referrals*100:.1f}%")
-        with col_m2:
-            st.metric("⏳ Waiting", len(waitlist_df), f"{len(waitlist_df)/total_referrals*100:.1f}%")
+        # Calculate conversion metrics
+        total_referred = len(filtered_df)
+        total_allocated = len(allocated_df)
+        total_waiting = len(waitlist_df)
+        conversion_rate = (total_allocated / total_referred * 100) if total_referred > 0 else 0
         
-        tab1, tab2, tab3 = st.tabs(["✅ Allocated Details", "⏳ Waitlist Analysis", "📊 Comparison"])
+        # Key metrics
+        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+        with col_m1:
+            st.metric("Total Referred", total_referred)
+        with col_m2:
+            st.metric("✅ Allocated", total_allocated, f"{conversion_rate:.1f}%")
+        with col_m3:
+            st.metric("⏳ Waiting", total_waiting, f"{total_waiting/total_referred*100:.1f}%")
+        with col_m4:
+            st.metric("📈 Conversion Rate", f"{conversion_rate:.1f}%")
+        
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+            "🔄 Pipeline Overview", 
+            "✅ Allocated Analysis", 
+            "⏳ Waitlist Analysis", 
+            "📊 Conversion by Partnership",
+            "📈 Conversion Trends"
+        ])
         
         with tab1:
+            st.markdown("### Referral to Placement Pipeline")
+            
+            # Funnel visualization
+            col_funnel, col_breakdown = st.columns([2, 1])
+            
+            with col_funnel:
+                # Create funnel chart
+                funnel_data = pd.DataFrame({
+                    'Stage': ['Referred', 'Allocated', 'Active'],
+                    'Count': [total_referred, total_allocated, total_allocated],  # Simplified - can expand with more stages
+                    'Color': ['#3498DB', '#2ECC71', '#27AE60']
+                })
+                
+                fig = go.Figure(go.Funnel(
+                    y=funnel_data['Stage'],
+                    x=funnel_data['Count'],
+                    textinfo="value+percent initial",
+                    marker=dict(color=funnel_data['Color']),
+                    connector=dict(line=dict(color='gray', width=3))
+                ))
+                fig.update_layout(title="Referral → Allocation Funnel", height=400)
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col_breakdown:
+                st.markdown("**Status Breakdown**")
+                
+                # Get status distribution
+                if status_col in filtered_df.columns:
+                    status_counts = filtered_df[status_col].fillna('Unknown').value_counts()
+                    
+                    for status, count in status_counts.items():
+                        pct = count / total_referred * 100
+                        st.markdown(f"**{status}**")
+                        st.progress(pct / 100)
+                        st.caption(f"{count} ({pct:.1f}%)")
+            
+            st.markdown("### Conversion Summary")
+            
+            conversion_text = f"""
+            **Of {total_referred} students referred:**
+            - ✅ **{total_allocated} ({conversion_rate:.1f}%)** have been allocated to programs
+            - ⏳ **{total_waiting} ({total_waiting/total_referred*100:.1f}%)** are waiting for placement
+            
+            {'🎯 **Strong conversion rate!** Most referrals are being placed.' if conversion_rate >= 75 else '⚠️ **Placement opportunity** - consider strategies to increase allocation rate.' if conversion_rate >= 50 else '🔴 **Low conversion** - significant waitlist backlog.'}
+            """
+            st.info(conversion_text)
+        
+        with tab2:
             st.markdown("### Where Students Are Allocated")
             col_a, col_b = st.columns(2)
             
@@ -848,7 +925,7 @@ if st.session_state.drill_down_view:
                 else:
                     st.info("No program data available")
         
-        with tab2:
+        with tab3:
             st.markdown("### Students Awaiting Allocation")
             col_a, col_b = st.columns(2)
             
@@ -886,23 +963,189 @@ if st.session_state.drill_down_view:
                 else:
                     st.info("✓ No students on waitlist or program data unavailable")
         
-        with tab3:
-            st.markdown("### Side-by-Side Comparison")
+        with tab4:
+            st.markdown("### Placement Rate by Partnership")
             
-            comparison_data = pd.DataFrame({
-                'Status': ['Allocated', 'Waiting'],
-                'Count': [len(allocated_df), len(waitlist_df)]
-            })
+            if 'partnership' in filtered_df.columns:
+                # Calculate conversion rate per partnership
+                partnership_conversion = []
+                
+                for partnership in filtered_df['partnership'].unique():
+                    if pd.notna(partnership) and partnership != '':
+                        part_total = len(filtered_df[filtered_df['partnership'] == partnership])
+                        part_allocated = len(allocated_df[allocated_df['partnership'] == partnership])
+                        part_rate = (part_allocated / part_total * 100) if part_total > 0 else 0
+                        
+                        partnership_conversion.append({
+                            'Partnership': partnership,
+                            'Referred': part_total,
+                            'Allocated': part_allocated,
+                            'Waiting': part_total - part_allocated,
+                            'Conversion Rate': part_rate
+                        })
+                
+                conv_df = pd.DataFrame(partnership_conversion).sort_values('Conversion Rate', ascending=False)
+                
+                # Stacked bar chart
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    name='Allocated',
+                    x=conv_df['Partnership'],
+                    y=conv_df['Allocated'],
+                    marker_color='#2ECC71'
+                ))
+                fig.add_trace(go.Bar(
+                    name='Waiting',
+                    x=conv_df['Partnership'],
+                    y=conv_df['Waiting'],
+                    marker_color='#E74C3C'
+                ))
+                
+                fig.update_layout(
+                    title="Referred vs. Allocated by Partnership",
+                    yaxis_title="Students",
+                    barmode='stack',
+                    height=400
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Conversion rate chart
+                fig2 = go.Figure(go.Bar(
+                    x=conv_df['Partnership'],
+                    y=conv_df['Conversion Rate'],
+                    text=[f"{rate:.1f}%" for rate in conv_df['Conversion Rate']],
+                    textposition='auto',
+                    marker=dict(
+                        color=conv_df['Conversion Rate'],
+                        colorscale=[[0, '#E74C3C'], [0.5, '#F39C12'], [1, '#2ECC71']],
+                        showscale=True,
+                        colorbar=dict(title="Rate %")
+                    )
+                ))
+                fig2.update_layout(
+                    title="Placement Rate by Partnership (%)",
+                    yaxis_title="Conversion Rate (%)",
+                    height=400
+                )
+                st.plotly_chart(fig2, use_container_width=True)
+                
+                # Data table
+                display_conv = conv_df.copy()
+                display_conv['Conversion Rate'] = display_conv['Conversion Rate'].apply(lambda x: f"{x:.1f}%")
+                st.dataframe(display_conv, use_container_width=True, hide_index=True)
+                
+                # Insights
+                best_partnership = conv_df.iloc[0] if len(conv_df) > 0 else None
+                worst_partnership = conv_df.iloc[-1] if len(conv_df) > 0 else None
+                
+                if best_partnership is not None:
+                    st.success(f"🏆 **Best Placement Rate:** {best_partnership['Partnership']} ({best_partnership['Conversion Rate']:.1f}%)")
+                if worst_partnership is not None and worst_partnership['Conversion Rate'] < 50:
+                    st.warning(f"⚠️ **Needs Support:** {worst_partnership['Partnership']} ({worst_partnership['Conversion Rate']:.1f}%) - High waitlist")
+            else:
+                st.info("Partnership data not available")
+        
+        with tab5:
+            st.markdown("### Conversion Rate Trends Over Time")
             
-            fig = go.Figure(go.Bar(
-                x=comparison_data['Status'],
-                y=comparison_data['Count'],
-                text=comparison_data['Count'],
-                textposition='auto',
-                marker_color=['#2ECC71', '#E74C3C']
-            ))
-            fig.update_layout(title="Allocation Status Overview", yaxis_title="Students", height=400)
-            st.plotly_chart(fig, use_container_width=True)
+            if 'year' in filtered_df.columns or 'term' in filtered_df.columns:
+                # Year-over-year conversion
+                if 'year' in filtered_df.columns:
+                    st.markdown("#### Placement Rate by Year")
+                    
+                    year_conversion = []
+                    for year in sorted(filtered_df['year'].unique()):
+                        year_total = len(filtered_df[filtered_df['year'] == year])
+                        year_allocated = len(allocated_df[allocated_df['year'] == year])
+                        year_rate = (year_allocated / year_total * 100) if year_total > 0 else 0
+                        
+                        year_conversion.append({
+                            'Year': int(year),
+                            'Referred': year_total,
+                            'Allocated': year_allocated,
+                            'Rate': year_rate
+                        })
+                    
+                    year_conv_df = pd.DataFrame(year_conversion)
+                    
+                    # Line + bar combo chart
+                    fig = go.Figure()
+                    
+                    fig.add_trace(go.Bar(
+                        name='Referred',
+                        x=year_conv_df['Year'],
+                        y=year_conv_df['Referred'],
+                        marker_color='#3498DB'
+                    ))
+                    
+                    fig.add_trace(go.Bar(
+                        name='Allocated',
+                        x=year_conv_df['Year'],
+                        y=year_conv_df['Allocated'],
+                        marker_color='#2ECC71'
+                    ))
+                    
+                    fig.add_trace(go.Scatter(
+                        name='Conversion Rate',
+                        x=year_conv_df['Year'],
+                        y=year_conv_df['Rate'],
+                        mode='lines+markers',
+                        yaxis='y2',
+                        line=dict(color='#E74C3C', width=3),
+                        marker=dict(size=10)
+                    ))
+                    
+                    fig.update_layout(
+                        title="Referrals, Allocations, and Conversion Rate by Year",
+                        yaxis=dict(title="Student Count"),
+                        yaxis2=dict(title="Conversion Rate (%)", overlaying='y', side='right'),
+                        barmode='group',
+                        height=400,
+                        hovermode='x unified'
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Show table
+                    display_year = year_conv_df.copy()
+                    display_year['Rate'] = display_year['Rate'].apply(lambda x: f"{x:.1f}%")
+                    st.dataframe(display_year, use_container_width=True, hide_index=True)
+                
+                # Term trends
+                if 'term' in filtered_df.columns:
+                    st.markdown("#### Placement Rate by Term")
+                    
+                    term_conversion = []
+                    for term in sorted(filtered_df['term'].unique()):
+                        if pd.notna(term):
+                            term_total = len(filtered_df[filtered_df['term'] == term])
+                            term_allocated = len(allocated_df[allocated_df['term'] == term])
+                            term_rate = (term_allocated / term_total * 100) if term_total > 0 else 0
+                            
+                            term_conversion.append({
+                                'Term': term,
+                                'Referred': term_total,
+                                'Allocated': term_allocated,
+                                'Rate': term_rate
+                            })
+                    
+                    term_conv_df = pd.DataFrame(term_conversion)
+                    
+                    fig = go.Figure()
+                    fig.add_trace(go.Bar(
+                        x=term_conv_df['Term'],
+                        y=term_conv_df['Rate'],
+                        text=[f"{r:.1f}%" for r in term_conv_df['Rate']],
+                        textposition='auto',
+                        marker_color='#3498DB'
+                    ))
+                    fig.update_layout(
+                        title="Conversion Rate by Term",
+                        yaxis_title="Conversion Rate (%)",
+                        height=300
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Year/term data not available for trend analysis")
 
     # ═══════════════════════════════════════════════════════════════════════
     # NON-TYPICAL PLACEMENT DRILL-DOWN
@@ -1318,31 +1561,108 @@ if st.session_state.drill_down_view:
         </div>
         """, unsafe_allow_html=True)
         
-        # DEBUG: Show available columns
-        with st.expander("🔍 Debug: Available Extension Columns", expanded=False):
-            st.write("**Checking for extension-related columns:**")
-            
-            cols_check = {
-                'exclusion_end_date': 'exclusion_end_date' in extensions_df.columns,
-                'placement_end': 'placement_end' in extensions_df.columns,
-                'actual_finish_date': 'actual_finish_date' in extensions_df.columns,
-                'extended_placement': 'extended_placement' in extensions_df.columns
-            }
-            
-            for col, exists in cols_check.items():
-                if exists:
-                    st.success(f"✅ `{col}` column found")
-                    # Show sample data
-                    non_null = extensions_df[col].notna().sum()
-                    st.caption(f"   {non_null} non-null values out of {len(extensions_df)}")
-                else:
-                    st.error(f"❌ `{col}` column not found")
-            
-            st.write(f"\n**All available columns:**")
-            st.write(list(extensions_df.columns))
-        
         # Calculate extension data
         extensions_df = filtered_df.copy()
+        
+        # ALWAYS SHOW DEBUG INFO (not hidden in expander)
+        st.markdown("### 🔍 Extension Data Diagnostic")
+        
+        col_debug1, col_debug2 = st.columns(2)
+        
+        with col_debug1:
+            st.markdown("**Checking Columns:**")
+            
+            cols_to_check = ['exclusion_end_date', 'placement_end', 'actual_finish_date', 'extended_placement']
+            for col in cols_to_check:
+                if col in extensions_df.columns:
+                    non_null = extensions_df[col].notna().sum()
+                    st.success(f"✅ `{col}`: {non_null}/{len(extensions_df)} values")
+                    
+                    # Show sample values
+                    if non_null > 0:
+                        sample_val = extensions_df[col].dropna().iloc[0]
+                        st.caption(f"   Sample: {sample_val}")
+                else:
+                    st.error(f"❌ `{col}` not found")
+        
+        with col_debug2:
+            st.markdown("**Your Excel should have:**")
+            st.info("""
+            **Option 1 (Automatic):**
+            - `Exclusion_End_Date` (date column)
+            - `Actual_Finish_Date` (date column)
+            
+            **Option 2 (Manual Flag):**
+            - `Extended_Placement` (Yes/No)
+            """)
+        
+        # Show all columns that exist
+        st.markdown("**All Columns in Your Data:**")
+        st.code(", ".join(sorted(extensions_df.columns)), language=None)
+        
+        st.markdown("---")
+        
+        # Add helper section
+        st.markdown("### 📝 How to Add Extension Tracking to Your Excel")
+        
+        with st.expander("Click here for step-by-step instructions", expanded=False):
+            st.markdown("""
+            **To track extensions, add these columns to your Excel file:**
+            
+            #### Method 1: Automatic Calculation (Recommended)
+            
+            1. Open your CLC Allocation Excel file
+            2. In the Data_Model sheet, add two columns:
+               - **Exclusion_End_Date**: The date the student's exclusion ends (should match placement end)
+               - **Actual_Finish_Date**: The date the student actually finished at CLC
+            
+            3. Fill in the dates for students who have completed
+            4. Save and re-upload to dashboard
+            
+            **Example:**
+            ```
+            Student_ID | Exclusion_End_Date | Actual_Finish_Date | Result
+            12345      | 15/06/2026        | 15/06/2026        | On Time
+            12346      | 20/06/2026        | 05/07/2026        | Extended (15 days)
+            12347      | 30/06/2026        | 28/06/2026        | Finished Early
+            ```
+            
+            ⚠️ **IMPORTANT: Exact column names matter!**
+            - Must be spelled exactly: `Exclusion_End_Date` and `Actual_Finish_Date`
+            - Use underscores, not spaces
+            - Capitalize the first letter of each word
+            
+            #### Method 2: Simple Flag
+            
+            1. Add column **Extended_Placement** 
+            2. Fill with "Yes" or "No"
+            3. Less detailed but easier to maintain
+            
+            ---
+            
+            **Quick Reference - Copy these exact names:**
+            ```
+            Exclusion_End_Date
+            Actual_Finish_Date
+            Extended_Placement
+            ```
+            
+            After adding columns, **re-sync your Excel file** using the upload section above!
+            """)
+        
+        st.markdown("---")
+        
+        # Add a visual indicator of what to do
+        if 'exclusion_end_date' not in extensions_df.columns and 'actual_finish_date' not in extensions_df.columns:
+            st.warning("""
+            ⚠️ **Extension tracking not set up yet**
+            
+            **Next Steps:**
+            1. Add `Exclusion_End_Date` and `Actual_Finish_Date` columns to your Excel
+            2. Click "🔧 ADMIN: Sync Data from Excel" above
+            3. Upload your updated Excel file
+            4. Return to this Extensions view to see the analysis!
+            """)
         
         # Check for exclusion_end_date or placement_end column
         exclusion_col = None
