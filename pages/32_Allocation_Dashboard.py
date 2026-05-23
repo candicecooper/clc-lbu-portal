@@ -211,6 +211,14 @@ else:
 # Show last update
 st.caption(f"📅 Last updated: {datetime.now().strftime('%d/%m/%Y %I:%M %p')} | Total records: {len(df)}")
 
+# Determine status column (used across drill-downs)
+if 'allocation_status' in df.columns:
+    status_col = 'allocation_status'
+elif 'current_status' in df.columns:
+    status_col = 'current_status'
+else:
+    status_col = None
+
 st.markdown("---")
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -493,7 +501,7 @@ partnerships_count = filtered_df['partnership'].nunique() if 'partnership' in fi
 # Display clickable metrics
 st.markdown('<div class="section-header">📊 Key Metrics - Click Any Card to Explore</div>', unsafe_allow_html=True)
 
-col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
+col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(8)
 
 with col1:
     if st.button(f"**{total_referrals}**\n\nTotal\nReferrals", use_container_width=True, key="btn_referrals"):
@@ -568,6 +576,18 @@ with col7:
     st.caption(extension_method)
     if st.button(f"**{extended_count}**\n\nExtensions", use_container_width=True, key="btn_extensions"):
         st.session_state.drill_down_view = "extensions"
+        st.rerun()
+
+with col8:
+    # Count terms with data
+    if 'term' in filtered_df.columns:
+        terms_with_data = len([t for t in filtered_df['term'].unique() if pd.notna(t) and t != 'Unknown'])
+    else:
+        terms_with_data = 0
+    
+    st.caption(f"{terms_with_data} terms")
+    if st.button(f"**📅**\n\nTerms", use_container_width=True, key="btn_terms"):
+        st.session_state.drill_down_view = "terms"
         st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1942,6 +1962,241 @@ if st.session_state.drill_down_view:
             
             Add these columns to your Excel file to enable extension tracking.
             """)
+    
+    # ═══════════════════════════════════════════════════════════════════════
+    # TERMS DRILL-DOWN
+    # ═══════════════════════════════════════════════════════════════════════
+    elif st.session_state.drill_down_view == "terms":
+        st.markdown(f"""
+        <div class="drill-down-header" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+            <h2 class="drill-down-title">📅 Term-by-Term Breakdown</h2>
+            <p class="drill-down-subtitle">Deep dive into each term's referrals, allocations, and patterns</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        if 'term' not in filtered_df.columns:
+            st.warning("Term data not available in dataset")
+        else:
+            # Get available terms
+            available_terms = sorted([t for t in filtered_df['term'].unique() if pd.notna(t) and t != 'Unknown'])
+            
+            if len(available_terms) == 0:
+                st.warning("No term data available")
+            else:
+                # Create tabs for each term + overview
+                tab_names = ["📊 Overview"] + [f"📅 {term}" for term in available_terms]
+                tabs = st.tabs(tab_names)
+                
+                # Overview tab
+                with tabs[0]:
+                    st.markdown("### All Terms Summary")
+                    
+                    # Summary metrics
+                    term_summary = []
+                    for term in available_terms:
+                        term_df = filtered_df[filtered_df['term'] == term]
+                        term_allocated = len(term_df[term_df[status_col].fillna('').astype(str).str.lower().isin(['allocated', 'active'])]) if status_col in term_df.columns else 0
+                        
+                        term_summary.append({
+                            'Term': term,
+                            'Referrals': len(term_df),
+                            'Allocated': term_allocated,
+                            'Conversion': (term_allocated / len(term_df) * 100) if len(term_df) > 0 else 0
+                        })
+                    
+                    summary_df = pd.DataFrame(term_summary)
+                    
+                    # Metrics row
+                    cols = st.columns(len(available_terms))
+                    for idx, row in summary_df.iterrows():
+                        with cols[idx]:
+                            st.metric(
+                                row['Term'],
+                                f"{row['Referrals']} referrals",
+                                f"{row['Conversion']:.1f}% allocated"
+                            )
+                    
+                    # Comparison charts
+                    col_chart1, col_chart2 = st.columns(2)
+                    
+                    with col_chart1:
+                        # Referrals by term
+                        fig = go.Figure(go.Bar(
+                            x=summary_df['Term'],
+                            y=summary_df['Referrals'],
+                            text=summary_df['Referrals'],
+                            textposition='auto',
+                            marker_color='#667eea'
+                        ))
+                        fig.update_layout(
+                            title="Referrals by Term",
+                            xaxis_title="Term",
+                            yaxis_title="Referrals",
+                            height=400
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    with col_chart2:
+                        # Conversion rate by term
+                        fig = go.Figure(go.Bar(
+                            x=summary_df['Term'],
+                            y=summary_df['Conversion'],
+                            text=[f"{c:.1f}%" for c in summary_df['Conversion']],
+                            textposition='auto',
+                            marker_color='#2ECC71'
+                        ))
+                        fig.update_layout(
+                            title="Allocation Rate by Term",
+                            xaxis_title="Term",
+                            yaxis_title="Conversion Rate (%)",
+                            height=400
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Data table
+                    display_summary = summary_df.copy()
+                    display_summary['Conversion'] = display_summary['Conversion'].apply(lambda x: f"{x:.1f}%")
+                    st.dataframe(display_summary, use_container_width=True, hide_index=True)
+                
+                # Individual term tabs
+                for idx, term in enumerate(available_terms):
+                    with tabs[idx + 1]:
+                        term_df = filtered_df[filtered_df['term'] == term]
+                        term_allocated = term_df[term_df[status_col].fillna('').astype(str).str.lower().isin(['allocated', 'active'])] if status_col in term_df.columns else pd.DataFrame()
+                        
+                        st.markdown(f"### {term} Deep Dive")
+                        
+                        # Key metrics for this term
+                        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+                        
+                        with col_m1:
+                            st.metric("Total Referrals", len(term_df))
+                        
+                        with col_m2:
+                            st.metric("Allocated", len(term_allocated), 
+                                     f"{len(term_allocated)/len(term_df)*100:.1f}%" if len(term_df) > 0 else "0%")
+                        
+                        with col_m3:
+                            if 'partnership' in term_df.columns:
+                                st.metric("Partnerships", term_df['partnership'].nunique())
+                            else:
+                                st.metric("Partnerships", 0)
+                        
+                        with col_m4:
+                            if 'program' in term_df.columns:
+                                st.metric("Programs", term_df['program'].nunique())
+                            else:
+                                st.metric("Programs", 0)
+                        
+                        # Breakdown charts
+                        st.markdown(f"#### {term} Breakdown")
+                        
+                        col_a, col_b = st.columns(2)
+                        
+                        with col_a:
+                            st.markdown("**By Partnership**")
+                            if 'partnership' in term_df.columns:
+                                partnership_counts = term_df['partnership'].value_counts().reset_index()
+                                partnership_counts.columns = ['Partnership', 'Count']
+                                
+                                fig = go.Figure(go.Bar(
+                                    y=partnership_counts['Partnership'],
+                                    x=partnership_counts['Count'],
+                                    orientation='h',
+                                    text=partnership_counts['Count'],
+                                    textposition='auto',
+                                    marker_color='#3498DB'
+                                ))
+                                fig.update_layout(
+                                    title=f"{term} by Partnership",
+                                    xaxis_title="Referrals",
+                                    height=400
+                                )
+                                st.plotly_chart(fig, use_container_width=True)
+                            else:
+                                st.info("Partnership data not available")
+                        
+                        with col_b:
+                            st.markdown("**By Program**")
+                            if 'program' in term_df.columns:
+                                program_counts = term_df['program'].value_counts().reset_index()
+                                program_counts.columns = ['Program', 'Count']
+                                
+                                colors = {'JP': '#E74C3C', 'PY': '#3498DB', 'SY': '#2ECC71'}
+                                fig = go.Figure(go.Pie(
+                                    labels=program_counts['Program'],
+                                    values=program_counts['Count'],
+                                    hole=0.4,
+                                    marker=dict(colors=[colors.get(p, '#95A5A6') for p in program_counts['Program']])
+                                ))
+                                fig.update_layout(
+                                    title=f"{term} Program Distribution",
+                                    height=400
+                                )
+                                st.plotly_chart(fig, use_container_width=True)
+                            else:
+                                st.info("Program data not available")
+                        
+                        # Year comparison for this term
+                        if 'year' in term_df.columns:
+                            st.markdown(f"#### {term} Across Years")
+                            
+                            # Get all data for this term across all years (not just filtered)
+                            all_term_data = df[df['term'] == term] if 'term' in df.columns else pd.DataFrame()
+                            
+                            if len(all_term_data) > 0:
+                                year_comparison = all_term_data.groupby('year').size().reset_index(name='Referrals')
+                                year_comparison = year_comparison.sort_values('year')
+                                
+                                fig = go.Figure(go.Bar(
+                                    x=[str(int(y)) for y in year_comparison['year']],
+                                    y=year_comparison['Referrals'],
+                                    text=year_comparison['Referrals'],
+                                    textposition='auto',
+                                    marker_color='#9B59B6'
+                                ))
+                                fig.update_layout(
+                                    title=f"{term} Referrals: Year-over-Year Comparison",
+                                    xaxis_title="Year",
+                                    yaxis_title="Referrals",
+                                    height=350
+                                )
+                                st.plotly_chart(fig, use_container_width=True)
+                                
+                                # Calculate year-over-year change
+                                if len(year_comparison) > 1:
+                                    year_comparison['Change'] = year_comparison['Referrals'].diff()
+                                    year_comparison['Change %'] = (year_comparison['Referrals'].pct_change() * 100).round(1)
+                                    
+                                    display_yoy = year_comparison.copy()
+                                    display_yoy['year'] = display_yoy['year'].astype(int)
+                                    display_yoy.columns = ['Year', 'Referrals', 'Change from Prior', 'Change %']
+                                    st.dataframe(display_yoy, use_container_width=True, hide_index=True)
+                        
+                        # Top schools for this term
+                        if 'referring_school' in term_df.columns:
+                            st.markdown(f"#### Top Referring Schools in {term}")
+                            
+                            school_counts = term_df['referring_school'].value_counts().head(10).reset_index()
+                            school_counts.columns = ['School', 'Referrals']
+                            school_counts['% of Term'] = (school_counts['Referrals'] / len(term_df) * 100).round(1)
+                            
+                            fig = go.Figure(go.Bar(
+                                y=school_counts['School'],
+                                x=school_counts['Referrals'],
+                                orientation='h',
+                                text=school_counts['Referrals'],
+                                textposition='auto',
+                                marker_color='#E67E22'
+                            ))
+                            fig.update_layout(
+                                title=f"Top 10 Schools - {term}",
+                                xaxis_title="Referrals",
+                                height=400
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                            
+                            st.dataframe(school_counts, use_container_width=True, hide_index=True)
 
     st.markdown("---")
 
