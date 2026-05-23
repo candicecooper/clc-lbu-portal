@@ -490,7 +490,7 @@ partnerships_count = filtered_df['partnership'].nunique() if 'partnership' in fi
 # Display clickable metrics
 st.markdown('<div class="section-header">📊 Key Metrics - Click Any Card to Explore</div>', unsafe_allow_html=True)
 
-col1, col2, col3, col4, col5, col6 = st.columns(6)
+col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
 
 with col1:
     if st.button(f"**{total_referrals}**\n\nTotal\nReferrals", use_container_width=True, key="btn_referrals"):
@@ -520,6 +520,24 @@ with col5:
 with col6:
     if st.button(f"**{partnerships_count}**\n\nPartnerships", use_container_width=True, key="btn_partnerships"):
         st.session_state.drill_down_view = "partnerships"
+        st.rerun()
+
+with col7:
+    # Calculate extensions
+    if 'placement_end' in filtered_df.columns and 'actual_finish_date' in filtered_df.columns:
+        extended_count = len(filtered_df[
+            pd.notna(filtered_df['placement_end']) & 
+            pd.notna(filtered_df['actual_finish_date']) &
+            (pd.to_datetime(filtered_df['actual_finish_date'], errors='coerce') > 
+             pd.to_datetime(filtered_df['placement_end'], errors='coerce'))
+        ])
+    elif 'extended_placement' in filtered_df.columns:
+        extended_count = len(filtered_df[filtered_df['extended_placement'] == True])
+    else:
+        extended_count = 0
+    
+    if st.button(f"**{extended_count}**\n\nExtensions", use_container_width=True, key="btn_extensions"):
+        st.session_state.drill_down_view = "extensions"
         st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1172,6 +1190,299 @@ if st.session_state.drill_down_view:
                 height=400
             )
             st.plotly_chart(fig, use_container_width=True)
+    
+    # ═══════════════════════════════════════════════════════════════════════
+    # EXTENSIONS DRILL-DOWN
+    # ═══════════════════════════════════════════════════════════════════════
+    elif st.session_state.drill_down_view == "extensions":
+        st.markdown(f"""
+        <div class="drill-down-header" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);">
+            <h2 class="drill-down-title">⏱️ Placement Extensions vs. Exclusion End Date</h2>
+            <p class="drill-down-subtitle">Comparing students who finished at exclusion end date vs. those with extensions</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Calculate extension data
+        extensions_df = filtered_df.copy()
+        
+        # Check for exclusion_end_date or placement_end column
+        exclusion_col = None
+        if 'exclusion_end_date' in extensions_df.columns:
+            exclusion_col = 'exclusion_end_date'
+        elif 'placement_end' in extensions_df.columns:
+            exclusion_col = 'placement_end'
+        
+        has_dates = exclusion_col and 'actual_finish_date' in extensions_df.columns
+        
+        if has_dates:
+            # Convert dates
+            extensions_df['exclusion_end_dt'] = pd.to_datetime(extensions_df[exclusion_col], errors='coerce')
+            extensions_df['actual_finish_dt'] = pd.to_datetime(extensions_df['actual_finish_date'], errors='coerce')
+            
+            # Only consider completed placements (have actual finish date)
+            completed_df = extensions_df[pd.notna(extensions_df['actual_finish_dt'])].copy()
+            
+            if len(completed_df) > 0:
+                # Calculate categories
+                completed_df['status'] = completed_df.apply(
+                    lambda row: 'Extended' if pd.notna(row['exclusion_end_dt']) and row['actual_finish_dt'] > row['exclusion_end_dt']
+                    else 'On Time' if pd.notna(row['exclusion_end_dt']) and row['actual_finish_dt'] == row['exclusion_end_dt']
+                    else 'Early' if pd.notna(row['exclusion_end_dt']) and row['actual_finish_dt'] < row['exclusion_end_dt']
+                    else 'Unknown',
+                    axis=1
+                )
+                
+                # Count by status
+                extended_count = len(completed_df[completed_df['status'] == 'Extended'])
+                on_time_count = len(completed_df[completed_df['status'] == 'On Time'])
+                early_count = len(completed_df[completed_df['status'] == 'Early'])
+                
+                # Display summary metrics
+                col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+                with col_m1:
+                    st.metric("Total Completed", len(completed_df))
+                with col_m2:
+                    st.metric("✅ At Exclusion Date", on_time_count, f"{on_time_count/len(completed_df)*100:.1f}%")
+                with col_m3:
+                    st.metric("⏱️ Extended", extended_count, f"{extended_count/len(completed_df)*100:.1f}%")
+                with col_m4:
+                    st.metric("⚡ Finished Early", early_count, f"{early_count/len(completed_df)*100:.1f}%")
+                
+                tab1, tab2, tab3, tab4 = st.tabs(["📊 Overview", "📈 By Partnership", "📚 By Program", "👥 Student Details"])
+                
+                with tab1:
+                    st.markdown("### Completion vs. Exclusion End Date")
+                    
+                    col_pie, col_bar = st.columns(2)
+                    
+                    with col_pie:
+                        # Pie chart of completion status
+                        status_counts = completed_df['status'].value_counts()
+                        
+                        fig = go.Figure(go.Pie(
+                            labels=status_counts.index,
+                            values=status_counts.values,
+                            hole=0.4,
+                            marker=dict(colors=['#2ECC71', '#3498DB', '#E74C3C', '#95A5A6'])
+                        ))
+                        fig.update_layout(title="Exclusion Date Compliance", height=400)
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    with col_bar:
+                        # Bar chart
+                        fig = go.Figure(go.Bar(
+                            x=status_counts.index,
+                            y=status_counts.values,
+                            text=status_counts.values,
+                            textposition='auto',
+                            marker_color=['#2ECC71', '#3498DB', '#E74C3C', '#95A5A6']
+                        ))
+                        fig.update_layout(
+                            title="Students by Completion Status",
+                            yaxis_title="Students",
+                            height=400
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Extension duration analysis
+                    if extended_count > 0:
+                        st.markdown("### Extension Duration Beyond Exclusion Date")
+                        
+                        extended_students = completed_df[completed_df['status'] == 'Extended'].copy()
+                        extended_students['extension_days'] = (
+                            extended_students['actual_finish_dt'] - extended_students['exclusion_end_dt']
+                        ).dt.days
+                        
+                        col_stats1, col_stats2, col_stats3 = st.columns(3)
+                        
+                        with col_stats1:
+                            avg_extension = extended_students['extension_days'].mean()
+                            st.metric("Average Extension", f"{avg_extension:.0f} days")
+                        
+                        with col_stats2:
+                            max_extension = extended_students['extension_days'].max()
+                            st.metric("Longest Extension", f"{max_extension:.0f} days")
+                        
+                        with col_stats3:
+                            min_extension = extended_students['extension_days'].min()
+                            st.metric("Shortest Extension", f"{min_extension:.0f} days")
+                        
+                        # Histogram of extension lengths
+                        fig = go.Figure(go.Histogram(
+                            x=extended_students['extension_days'],
+                            nbinsx=20,
+                            marker_color='#3498DB'
+                        ))
+                        fig.update_layout(
+                            title="Distribution of Days Extended Beyond Exclusion Date",
+                            xaxis_title="Days Beyond Exclusion Date",
+                            yaxis_title="Number of Students",
+                            height=300
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Show comparison
+                    st.markdown("### Summary")
+                    st.info(f"""
+                    **Of {len(completed_df)} completed placements:**
+                    - ✅ **{on_time_count} students ({on_time_count/len(completed_df)*100:.1f}%)** finished exactly at their exclusion end date
+                    - ⏱️ **{extended_count} students ({extended_count/len(completed_df)*100:.1f}%)** were extended beyond their exclusion date
+                    - ⚡ **{early_count} students ({early_count/len(completed_df)*100:.1f}%)** finished before their exclusion date
+                    """)
+                
+                with tab2:
+                    st.markdown("### Extensions by Partnership")
+                    
+                    if 'partnership' in completed_df.columns:
+                        partnership_status = completed_df.groupby(['partnership', 'status']).size().unstack(fill_value=0)
+                        
+                        fig = go.Figure()
+                        
+                        colors = {'On Time': '#2ECC71', 'Extended': '#3498DB', 'Early': '#E74C3C', 'Unknown': '#95A5A6'}
+                        for status in partnership_status.columns:
+                            fig.add_trace(go.Bar(
+                                name=status,
+                                x=partnership_status.index,
+                                y=partnership_status[status],
+                                marker_color=colors.get(status, '#95A5A6')
+                            ))
+                        
+                        fig.update_layout(
+                            title="Completion vs Exclusion Date by Partnership",
+                            xaxis_title="Partnership",
+                            yaxis_title="Students",
+                            barmode='stack',
+                            height=400
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Table with percentages
+                        partnership_summary = pd.DataFrame()
+                        for partnership in partnership_status.index:
+                            total = partnership_status.loc[partnership].sum()
+                            extended_pct = (partnership_status.loc[partnership].get('Extended', 0) / total * 100) if total > 0 else 0
+                            on_time_pct = (partnership_status.loc[partnership].get('On Time', 0) / total * 100) if total > 0 else 0
+                            partnership_summary = pd.concat([partnership_summary, pd.DataFrame({
+                                'Partnership': [partnership],
+                                'Total': [total],
+                                'At Exclusion Date': [partnership_status.loc[partnership].get('On Time', 0)],
+                                'Extended': [partnership_status.loc[partnership].get('Extended', 0)],
+                                'Extended %': [f"{extended_pct:.1f}%"]
+                            })])
+                        
+                        st.dataframe(partnership_summary.reset_index(drop=True), use_container_width=True, hide_index=True)
+                    else:
+                        st.info("Partnership data not available")
+                
+                with tab3:
+                    st.markdown("### Extensions by Program")
+                    
+                    if 'program' in completed_df.columns:
+                        program_status = completed_df.groupby(['program', 'status']).size().unstack(fill_value=0)
+                        
+                        fig = go.Figure()
+                        
+                        colors = {'On Time': '#2ECC71', 'Extended': '#3498DB', 'Early': '#E74C3C', 'Unknown': '#95A5A6'}
+                        for status in program_status.columns:
+                            fig.add_trace(go.Bar(
+                                name=status,
+                                x=program_status.index,
+                                y=program_status[status],
+                                marker_color=colors.get(status, '#95A5A6')
+                            ))
+                        
+                        fig.update_layout(
+                            title="Completion Status by Program (JP/PY/SY)",
+                            xaxis_title="Program",
+                            yaxis_title="Students",
+                            barmode='group',
+                            height=400
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.info("Program data not available")
+                
+                with tab4:
+                    st.markdown("### Student Details")
+                    
+                    # Filter options
+                    status_filter = st.selectbox("Filter by Status:", ['All'] + list(completed_df['status'].unique()))
+                    
+                    display_df = completed_df if status_filter == 'All' else completed_df[completed_df['status'] == status_filter]
+                    
+                    # Show relevant columns
+                    display_cols = []
+                    for col in ['student_name', 'partnership', 'program', exclusion_col, 'actual_finish_date', 'status']:
+                        if col in display_df.columns:
+                            display_cols.append(col)
+                    
+                    if display_cols:
+                        show_df = display_df[display_cols].copy()
+                        col_names = []
+                        for c in display_cols:
+                            if c == exclusion_col:
+                                col_names.append('Exclusion End Date')
+                            else:
+                                col_names.append(c.replace('_', ' ').title())
+                        show_df.columns = col_names
+                        
+                        # Add extension days column for extended students
+                        if 'Status' in show_df.columns and 'Extended' in show_df['Status'].values:
+                            extended_mask = display_df['status'] == 'Extended'
+                            extension_days = (display_df['actual_finish_dt'] - display_df['exclusion_end_dt']).dt.days
+                            show_df['Days Extended'] = extension_days
+                            show_df.loc[~extended_mask, 'Days Extended'] = ''
+                        
+                        st.dataframe(show_df, use_container_width=True, hide_index=True)
+                        
+                        st.caption(f"Showing {len(display_df)} of {len(completed_df)} completed placements")
+            else:
+                st.info("No completed placements found (students need an actual_finish_date)")
+        
+        elif 'extended_placement' in extensions_df.columns:
+            # Simplified view using extended_placement flag
+            extended_students = extensions_df[extensions_df['extended_placement'] == True]
+            not_extended = extensions_df[extensions_df['extended_placement'] == False]
+            
+            col_m1, col_m2 = st.columns(2)
+            with col_m1:
+                st.metric("Extended Beyond Exclusion", len(extended_students), 
+                         f"{len(extended_students)/len(extensions_df)*100:.1f}%")
+            with col_m2:
+                st.metric("Finished at Exclusion Date", len(not_extended),
+                         f"{len(not_extended)/len(extensions_df)*100:.1f}%")
+            
+            st.markdown("### Extension Status")
+            
+            status_data = pd.DataFrame({
+                'Status': ['Extended', 'At Exclusion Date'],
+                'Count': [len(extended_students), len(not_extended)]
+            })
+            
+            fig = go.Figure(go.Bar(
+                x=status_data['Status'],
+                y=status_data['Count'],
+                text=status_data['Count'],
+                textposition='auto',
+                marker_color=['#3498DB', '#2ECC71']
+            ))
+            fig.update_layout(title="Extensions vs. Exclusion Date Compliance", yaxis_title="Students", height=400)
+            st.plotly_chart(fig, use_container_width=True)
+        
+        else:
+            st.warning("""
+            **Extension data not available**
+            
+            To track extensions vs. exclusion dates, your Excel file needs:
+            - `Exclusion_End_Date` (or `Placement_End`) column AND
+            - `Actual_Finish_Date` column
+            
+            OR
+            
+            - `Extended_Placement` column (Yes/No flag)
+            
+            Add these columns to your Excel file to enable extension tracking.
+            """)
 
     st.markdown("---")
 
