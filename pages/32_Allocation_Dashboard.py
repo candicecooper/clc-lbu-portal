@@ -265,6 +265,9 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                 'Allocated_Program': 'allocated_program',
                 'Placement_Start': 'placement_start',
                 'Placement_End': 'placement_end',
+                'Exclusion_End_Date': 'exclusion_end_date',
+                'Actual_Finish_Date': 'actual_finish_date',
+                'Extended_Placement': 'extended_placement',
                 'Partnership_Area': 'partnership_area',
                 'Previous_CLC_Placement': 'previous_clc_placement',
                 'Flag_ASD': 'flag_asd',
@@ -286,7 +289,7 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
             
             # Convert Yes/No to boolean for flags
             flag_columns = ['flag_asd', 'flag_adhd', 'flag_dcp_involvement', 'flag_child_in_care',
-                          'flag_aboriginal', 'flag_eald', 'bespoke_placement']
+                          'flag_aboriginal', 'flag_eald', 'bespoke_placement', 'extended_placement']
             
             for flag_col in flag_columns:
                 if flag_col in sync_df.columns:
@@ -523,18 +526,33 @@ with col6:
         st.rerun()
 
 with col7:
-    # Calculate extensions
-    if 'placement_end' in filtered_df.columns and 'actual_finish_date' in filtered_df.columns:
-        extended_count = len(filtered_df[
-            pd.notna(filtered_df['placement_end']) & 
-            pd.notna(filtered_df['actual_finish_date']) &
-            (pd.to_datetime(filtered_df['actual_finish_date'], errors='coerce') > 
-             pd.to_datetime(filtered_df['placement_end'], errors='coerce'))
+    # Calculate extensions - with improved detection
+    extended_count = 0
+    
+    # Check what extension-related columns we have
+    has_exclusion_end = 'exclusion_end_date' in filtered_df.columns or 'placement_end' in filtered_df.columns
+    has_actual_finish = 'actual_finish_date' in filtered_df.columns
+    has_extended_flag = 'extended_placement' in filtered_df.columns
+    
+    if has_exclusion_end and has_actual_finish:
+        # Calculate from dates
+        exclusion_col = 'exclusion_end_date' if 'exclusion_end_date' in filtered_df.columns else 'placement_end'
+        temp_df = filtered_df.copy()
+        temp_df['exclusion_dt'] = pd.to_datetime(temp_df[exclusion_col], errors='coerce')
+        temp_df['actual_dt'] = pd.to_datetime(temp_df['actual_finish_date'], errors='coerce')
+        
+        extended_count = len(temp_df[
+            pd.notna(temp_df['exclusion_dt']) & 
+            pd.notna(temp_df['actual_dt']) &
+            (temp_df['actual_dt'] > temp_df['exclusion_dt'])
         ])
-    elif 'extended_placement' in filtered_df.columns:
-        extended_count = len(filtered_df[filtered_df['extended_placement'] == True])
-    else:
-        extended_count = 0
+    elif has_extended_flag:
+        # Use flag
+        extended_count = len(filtered_df[
+            (filtered_df['extended_placement'] == True) |
+            (filtered_df['extended_placement'] == 'Yes') |
+            (filtered_df['extended_placement'].fillna('').astype(str).str.lower().isin(['yes', 'true', '1', 'y']))
+        ])
     
     if st.button(f"**{extended_count}**\n\nExtensions", use_container_width=True, key="btn_extensions"):
         st.session_state.drill_down_view = "extensions"
@@ -565,7 +583,7 @@ if st.session_state.drill_down_view:
         </div>
         """, unsafe_allow_html=True)
         
-        tab1, tab2, tab3, tab4 = st.tabs(["📍 By Partnership", "📚 By Program", "📅 By Term", "🏫 By School"])
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📍 By Partnership", "📚 By Program", "📅 By Term", "🏫 By School", "📊 Year Comparison", "📈 Term Trends"])
         
         with tab1:
             st.markdown("### Referrals by Partnership")
@@ -663,6 +681,104 @@ if st.session_state.drill_down_view:
                 st.plotly_chart(fig, use_container_width=True)
                 
                 st.dataframe(school_data, use_container_width=True, hide_index=True)
+        
+        with tab5:
+            st.markdown("### Year-over-Year Comparison")
+            
+            if 'year' in filtered_df.columns:
+                year_data = filtered_df.groupby('year').size().reset_index(name='Referrals')
+                year_data = year_data.sort_values('year')
+                
+                col_chart, col_table = st.columns([2, 1])
+                
+                with col_chart:
+                    fig = go.Figure(go.Bar(
+                        x=year_data['year'].astype(str),
+                        y=year_data['Referrals'],
+                        text=year_data['Referrals'],
+                        textposition='auto',
+                        marker_color='#3498DB'
+                    ))
+                    fig.update_layout(
+                        title="Referrals by Year",
+                        xaxis_title="Year",
+                        yaxis_title="Referrals",
+                        height=400
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col_table:
+                    st.markdown("**Year Summary**")
+                    for _, row in year_data.iterrows():
+                        st.metric(f"Year {int(row['year'])}", int(row['Referrals']))
+                
+                # Year-over-year change
+                if len(year_data) > 1:
+                    st.markdown("### Year-over-Year Growth")
+                    year_data['YoY Change'] = year_data['Referrals'].diff()
+                    year_data['YoY %'] = (year_data['Referrals'].pct_change() * 100).round(1)
+                    
+                    display_yoy = year_data[['year', 'Referrals', 'YoY Change', 'YoY %']].copy()
+                    display_yoy.columns = ['Year', 'Referrals', 'Change from Prior Year', 'Change %']
+                    st.dataframe(display_yoy, use_container_width=True, hide_index=True)
+            else:
+                st.info("Year data not available")
+        
+        with tab6:
+            st.markdown("### Term Trends")
+            
+            if 'term' in filtered_df.columns and 'year' in filtered_df.columns:
+                term_year_data = filtered_df.groupby(['year', 'term']).size().reset_index(name='Referrals')
+                
+                # Create line chart showing term trends across years
+                fig = go.Figure()
+                
+                for year in sorted(term_year_data['year'].unique()):
+                    year_data = term_year_data[term_year_data['year'] == year]
+                    fig.add_trace(go.Scatter(
+                        x=year_data['term'],
+                        y=year_data['Referrals'],
+                        mode='lines+markers',
+                        name=str(int(year)),
+                        line=dict(width=3),
+                        marker=dict(size=10)
+                    ))
+                
+                fig.update_layout(
+                    title="Referral Trends by Term (Multi-Year)",
+                    xaxis_title="Term",
+                    yaxis_title="Referrals",
+                    height=400,
+                    hovermode='x unified'
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Heatmap
+                st.markdown("### Term Heatmap")
+                pivot_data = term_year_data.pivot(index='year', columns='term', values='Referrals').fillna(0)
+                
+                fig = go.Figure(go.Heatmap(
+                    z=pivot_data.values,
+                    x=pivot_data.columns,
+                    y=[str(int(y)) for y in pivot_data.index],
+                    colorscale='Blues',
+                    text=pivot_data.values,
+                    texttemplate='%{text}',
+                    textfont={"size": 16},
+                    colorbar=dict(title="Referrals")
+                ))
+                fig.update_layout(
+                    title="Referrals Heatmap (Year x Term)",
+                    xaxis_title="Term",
+                    yaxis_title="Year",
+                    height=300
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Data table
+                st.dataframe(pivot_data, use_container_width=True)
+            else:
+                st.info("Term or year data not available for trend analysis")
     
     # ═══════════════════════════════════════════════════════════════════════
     # ALLOCATED VS WAITLIST DRILL-DOWN
@@ -1201,6 +1317,29 @@ if st.session_state.drill_down_view:
             <p class="drill-down-subtitle">Comparing students who finished at exclusion end date vs. those with extensions</p>
         </div>
         """, unsafe_allow_html=True)
+        
+        # DEBUG: Show available columns
+        with st.expander("🔍 Debug: Available Extension Columns", expanded=False):
+            st.write("**Checking for extension-related columns:**")
+            
+            cols_check = {
+                'exclusion_end_date': 'exclusion_end_date' in extensions_df.columns,
+                'placement_end': 'placement_end' in extensions_df.columns,
+                'actual_finish_date': 'actual_finish_date' in extensions_df.columns,
+                'extended_placement': 'extended_placement' in extensions_df.columns
+            }
+            
+            for col, exists in cols_check.items():
+                if exists:
+                    st.success(f"✅ `{col}` column found")
+                    # Show sample data
+                    non_null = extensions_df[col].notna().sum()
+                    st.caption(f"   {non_null} non-null values out of {len(extensions_df)}")
+                else:
+                    st.error(f"❌ `{col}` column not found")
+            
+            st.write(f"\n**All available columns:**")
+            st.write(list(extensions_df.columns))
         
         # Calculate extension data
         extensions_df = filtered_df.copy()
