@@ -109,6 +109,192 @@ def load_allocation_data():
 # ══════════════════════════════════════════════════════════════════════════════
 # LOAD DATA
 # ══════════════════════════════════════════════════════════════════════════════
+
+# Show upload section FIRST (before data check) so users can upload even if no data exists
+st.markdown("---")
+with st.expander("🔧 **ADMIN: Upload Excel Data**", expanded=True):
+    st.markdown("""
+    **🔒 Privacy-Preserving Upload**  
+    Upload your allocation Excel file to populate the dashboard. **Student names are automatically removed** during sync.
+    
+    **Required Excel columns:**
+    - Student_ID, Referring_School, Referral_Date, Partnership_Area, Allocated_Program
+    - Flag_Category_1 (your support categories)
+    - Disability flags (Flag_ASD, Flag_ADHD, etc.)
+    """)
+    
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        uploaded_file = st.file_uploader(
+            "Upload Allocation Excel File (Data_Model sheet)",
+            type=['xlsx', 'xlsm'],
+            help="CLC_Allocation_Dashboard Excel file - student names will NOT be synced",
+            key="excel_upload_interactive"
+        )
+    
+    with col2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        sync_button = st.button("🔄 Upload to Dashboard", type="primary", use_container_width=True, disabled=(uploaded_file is None))
+    
+    if uploaded_file is not None and sync_button:
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        try:
+            # Read Excel file
+            status_text.text("Reading Excel file...")
+            progress_bar.progress(10)
+            df_excel = pd.read_excel(uploaded_file, sheet_name='Data_Model')
+            
+            st.info(f"📄 **Excel file read:** {len(df_excel)} rows")
+            
+            # Map Excel columns to Supabase schema
+            status_text.text(f"Processing {len(df_excel)} student records...")
+            progress_bar.progress(20)
+            
+            sync_df = pd.DataFrame()
+            
+            column_mapping = {
+                'Student_ID': 'student_id',
+                'Gender': 'gender',
+                'Year_Level': 'year_level',
+                'Referring_School': 'referring_school',
+                'Referral_Date': 'referral_date',
+                'Referral_Year': 'referral_year',
+                'Allocation_Status': 'allocation_status',
+                'Allocated_Program': 'allocated_program',
+                'Placement_Start': 'placement_start',
+                'Placement_End': 'placement_end',
+                'Exclusion_End_Date': 'exclusion_end_date',
+                'Actual_Finish_Date': 'actual_finish_date',
+                'Extended_Placement': 'extended_placement',
+                'Partnership_Area': 'partnership_area',
+                'Category_of_Support': 'category_of_support',
+                'Previous_CLC_Placement': 'previous_clc_placement',
+                'Flag_ASD': 'flag_asd',
+                'Flag_ADHD': 'flag_adhd',
+                'Flag_Intellectual': 'flag_intellectual',
+                'Flag_Learning_Difficulty': 'flag_learning_difficulty',
+                'Flag_Sensory_Processing': 'flag_sensory_processing',
+                'Flag_ODD': 'flag_odd',
+                'Flag_PDA': 'flag_pda',
+                'Flag_DCP_involvement': 'flag_dcp_involvement',
+                'Flag_Child_in_care': 'flag_child_in_care',
+                'Flag_Aboriginal': 'flag_aboriginal',
+                'Flag_ATSI': 'flag_aboriginal',
+                'Flag_EALD': 'flag_eald',
+                'Bespoke_Placement': 'bespoke_placement',
+                'Current_Status': 'current_status',
+                'Notes': 'notes'
+            }
+            
+            # Map columns
+            for excel_col, db_col in column_mapping.items():
+                if excel_col in df_excel.columns:
+                    sync_df[db_col] = df_excel[excel_col]
+            
+            # Create category_of_support from Flag_Category columns if Category_of_Support doesn't exist
+            if 'category_of_support' not in sync_df.columns or sync_df['category_of_support'].isna().all():
+                # Check for Flag_Category columns in Excel
+                flag_cat_cols = [col for col in df_excel.columns if col.startswith('Flag_Category_')]
+                
+                if flag_cat_cols:
+                    # Combine flag categories - use first non-empty value
+                    def combine_categories(row):
+                        for col in sorted(flag_cat_cols):
+                            if pd.notna(row[col]) and str(row[col]).strip() != '':
+                                return str(row[col]).strip()
+                        return ''
+                    
+                    sync_df['category_of_support'] = df_excel.apply(combine_categories, axis=1)
+                    st.info(f"✅ Combined {len(flag_cat_cols)} flag category columns into category_of_support")
+                else:
+                    sync_df['category_of_support'] = ''
+            
+            # Convert Yes/No to boolean for flags
+            flag_columns = ['flag_asd', 'flag_adhd', 'flag_intellectual', 'flag_learning_difficulty', 
+                          'flag_sensory_processing', 'flag_odd', 'flag_pda',
+                          'flag_dcp_involvement', 'flag_child_in_care',
+                          'flag_aboriginal', 'flag_eald', 'bespoke_placement', 'extended_placement']
+            
+            for flag_col in flag_columns:
+                if flag_col in sync_df.columns:
+                    sync_df[flag_col] = sync_df[flag_col].map({'Yes': True, 'No': False, '': False}).fillna(False)
+            
+            # Convert dates
+            date_columns = ['referral_date', 'placement_start', 'placement_end', 'exclusion_end_date', 'actual_finish_date']
+            for date_col in date_columns:
+                if date_col in sync_df.columns:
+                    sync_df[date_col] = pd.to_datetime(sync_df[date_col], errors='coerce')
+                    sync_df[date_col] = sync_df[date_col].dt.strftime('%Y-%m-%d')
+            
+            # Clean data
+            sync_df = sync_df.replace({pd.NA: None, pd.NaT: None, float('nan'): None})
+            sync_df = sync_df.where(pd.notna(sync_df), None)
+            
+            # Validate required fields
+            status_text.text("Validating data...")
+            progress_bar.progress(40)
+            
+            required_fields = ['student_id', 'referring_school', 'referral_date']
+            missing_required = [f for f in required_fields if f not in sync_df.columns or sync_df[f].isna().all()]
+            
+            if missing_required:
+                st.error(f"❌ Missing required fields: {', '.join(missing_required)}")
+                st.stop()
+            
+            # Clear existing data
+            status_text.text("Clearing old data...")
+            progress_bar.progress(50)
+            
+            supabase = init_supabase()
+            supabase.table('allocation_tracker').delete().neq('student_id', '').execute()
+            
+            # Upload in batches
+            status_text.text("Uploading to database...")
+            progress_bar.progress(60)
+            
+            batch_size = 50
+            total_batches = (len(sync_df) + batch_size - 1) // batch_size
+            
+            for i in range(0, len(sync_df), batch_size):
+                batch = sync_df.iloc[i:i+batch_size].to_dict('records')
+                supabase.table('allocation_tracker').insert(batch).execute()
+                
+                current_batch = (i // batch_size) + 1
+                progress_pct = 60 + int((current_batch / total_batches) * 30)
+                status_text.text(f"Uploading batch {current_batch}/{total_batches}...")
+                progress_bar.progress(progress_pct)
+            
+            progress_bar.progress(100)
+            status_text.text("✅ Upload complete!")
+            
+            st.success(f"""
+            ✅ **Data synced successfully!**
+            
+            - Synced {len(sync_df)} records
+            - Student names excluded for privacy
+            - Data now available in dashboard
+            
+            **Refresh the page to see your data!**
+            """)
+            
+            # Clear cache to reload data
+            load_allocation_data.clear()
+            
+            # Rerun to show data
+            time.sleep(1)
+            st.rerun()
+            
+        except Exception as e:
+            st.error(f"❌ Sync failed: {str(e)}")
+            import traceback
+            st.code(traceback.format_exc())
+
+st.markdown("---")
+
+# Now try to load data
 try:
     df_raw = load_allocation_data()
 except Exception as e:
@@ -117,7 +303,7 @@ except Exception as e:
     **Troubleshooting:**
     1. Check that SUPABASE_URL and SUPABASE_KEY are set in Render
     2. Verify the allocation_tracker table exists in Supabase
-    3. Try syncing data from the main Allocation Dashboard (page 32)
+    3. Use the upload section above to add data
     """)
     st.stop()
 
@@ -126,11 +312,7 @@ if len(df_raw) == 0:
     📭 **No allocation data in dashboard yet.**
     
     **To get started:**
-    1. Go to the main Allocation Dashboard (page 32)
-    2. Click "🔧 ADMIN: Sync Data from Excel"
-    3. Upload your allocation Excel file
-    4. Click "Sync to Dashboard"
-    5. Return here - data will be available!
+    Use the "🔧 ADMIN: Upload Excel Data" section above to upload your Excel file.
     """)
     st.stop()
 
@@ -228,176 +410,6 @@ st.markdown("---")
 # ══════════════════════════════════════════════════════════════════════════════
 # ADMIN SECTION: DATA SYNC
 # ══════════════════════════════════════════════════════════════════════════════
-with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
-    st.markdown("""
-    **🔒 Privacy-Preserving Sync**  
-    Upload your allocation Excel file to update the dashboard. **Student names are automatically removed** during sync.
-    """)
-    
-    col1, col2 = st.columns([3, 1])
-    
-    with col1:
-        uploaded_file = st.file_uploader(
-            "Upload Allocation Excel File",
-            type=['xlsx', 'xlsm'],
-            help="CLC_Allocation_Dashboard Excel file - student names will NOT be synced",
-            key="excel_upload_interactive"
-        )
-    
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        sync_button = st.button("🔄 Sync to Dashboard", type="primary", use_container_width=True, disabled=(uploaded_file is None))
-    
-    if uploaded_file is not None and sync_button:
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        try:
-            # Read Excel file
-            status_text.text("Reading Excel file...")
-            progress_bar.progress(10)
-            df_excel = pd.read_excel(uploaded_file, sheet_name='Data_Model')
-            
-            st.info(f"📄 **Excel file read:** {len(df_excel)} rows")
-            
-            # Map Excel columns to Supabase schema (copy from old dashboard)
-            status_text.text(f"Processing {len(df_excel)} student records...")
-            progress_bar.progress(20)
-            
-            sync_df = pd.DataFrame()
-            
-            column_mapping = {
-                'Student_ID': 'student_id',
-                'Gender': 'gender',
-                'Year_Level': 'year_level',
-                'Referring_School': 'referring_school',
-                'Referral_Date': 'referral_date',
-                'Referral_Year': 'referral_year',
-                'Allocation_Status': 'allocation_status',
-                'Allocated_Program': 'allocated_program',
-                'Placement_Start': 'placement_start',
-                'Placement_End': 'placement_end',
-                'Exclusion_End_Date': 'exclusion_end_date',
-                'Actual_Finish_Date': 'actual_finish_date',
-                'Extended_Placement': 'extended_placement',
-                'Partnership_Area': 'partnership_area',
-                'Category_of_Support': 'category_of_support',
-                'Previous_CLC_Placement': 'previous_clc_placement',
-                'Flag_ASD': 'flag_asd',
-                'Flag_ADHD': 'flag_adhd',
-                'Flag_Intellectual': 'flag_intellectual',
-                'Flag_Learning_Difficulty': 'flag_learning_difficulty',
-                'Flag_Sensory_Processing': 'flag_sensory_processing',
-                'Flag_ODD': 'flag_odd',
-                'Flag_PDA': 'flag_pda',
-                'Flag_DCP_involvement': 'flag_dcp_involvement',
-                'Flag_Child_in_care': 'flag_child_in_care',
-                'Flag_Aboriginal': 'flag_aboriginal',
-                'Flag_ATSI': 'flag_aboriginal',
-                'Flag_EALD': 'flag_eald',
-                'Bespoke_Placement': 'bespoke_placement',
-                'Current_Status': 'current_status',
-                'Notes': 'notes'
-            }
-            
-            # Map columns
-            for excel_col, db_col in column_mapping.items():
-                if excel_col in df_excel.columns:
-                    sync_df[db_col] = df_excel[excel_col]
-            
-            # Create category_of_support from Flag_Category columns if Category_of_Support doesn't exist
-            if 'category_of_support' not in sync_df.columns or sync_df['category_of_support'].isna().all():
-                # Check for Flag_Category columns in Excel
-                flag_cat_cols = [col for col in df_excel.columns if col.startswith('Flag_Category_')]
-                
-                if flag_cat_cols:
-                    # Combine flag categories - use first non-empty value
-                    def combine_categories(row):
-                        for col in sorted(flag_cat_cols):
-                            if pd.notna(row[col]) and str(row[col]).strip() != '':
-                                return str(row[col]).strip()
-                        return ''
-                    
-                    sync_df['category_of_support'] = df_excel.apply(combine_categories, axis=1)
-                    st.info(f"✅ Combined {len(flag_cat_cols)} flag category columns into category_of_support")
-                else:
-                    sync_df['category_of_support'] = ''
-            
-            # Convert Yes/No to boolean for flags
-            flag_columns = ['flag_asd', 'flag_adhd', 'flag_intellectual', 'flag_learning_difficulty', 
-                          'flag_sensory_processing', 'flag_odd', 'flag_pda',
-                          'flag_dcp_involvement', 'flag_child_in_care',
-                          'flag_aboriginal', 'flag_eald', 'bespoke_placement', 'extended_placement']
-            
-            for flag_col in flag_columns:
-                if flag_col in sync_df.columns:
-                    sync_df[flag_col] = sync_df[flag_col].map({'Yes': True, 'No': False, '': False}).fillna(False)
-            
-            # Convert dates
-            date_columns = ['referral_date', 'placement_start', 'placement_end']
-            for date_col in date_columns:
-                if date_col in sync_df.columns:
-                    sync_df[date_col] = pd.to_datetime(sync_df[date_col], errors='coerce')
-                    sync_df[date_col] = sync_df[date_col].dt.strftime('%Y-%m-%d')
-            
-            # Convert integers
-            int_columns = ['referral_year']
-            for int_col in int_columns:
-                if int_col in sync_df.columns:
-                    sync_df[int_col] = pd.to_numeric(sync_df[int_col], errors='coerce').fillna(0).astype(int)
-            
-            # Clean NaNs
-            sync_df = sync_df.replace({float('nan'): None, 'nan': None, 'NaT': None})
-            
-            # Validate required fields
-            records = sync_df.to_dict('records')
-            
-            for record in records:
-                if not record.get('allocation_status'):
-                    record['allocation_status'] = 'Allocated'
-            
-            # Clear old data
-            status_text.text("Clearing old dashboard data...")
-            progress_bar.progress(50)
-            supabase = init_supabase()
-            supabase.table('allocation_tracker').delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
-            
-            # Insert new data
-            status_text.text(f"Uploading {len(records)} de-identified records...")
-            progress_bar.progress(60)
-            
-            # Insert in batches
-            batch_size = 50
-            for i in range(0, len(records), batch_size):
-                batch = records[i:i + batch_size]
-                supabase.table('allocation_tracker').insert(batch).execute()
-                progress_bar.progress(60 + int(30 * ((i + len(batch)) / len(records))))
-            
-            # Clear cache
-            load_allocation_data.clear()
-            
-            # Complete
-            progress_bar.progress(100)
-            status_text.empty()
-            progress_bar.empty()
-            
-            st.success(f"""
-            ✅ **Sync Successful!** {len(records)} records synced to dashboard.
-            
-            **Privacy Status:** ✅ No student names were transmitted or stored in database.
-            
-            Dashboard will refresh now...
-            """)
-            
-            # Force page rerun
-            st.rerun()
-            
-        except Exception as e:
-            progress_bar.empty()
-            status_text.empty()
-            st.error(f"❌ Sync failed: {str(e)}")
-            st.exception(e)
-
 st.markdown("---")
 
 # ══════════════════════════════════════════════════════════════════════════════
