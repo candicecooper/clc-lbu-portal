@@ -277,9 +277,15 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                 'Actual_Finish_Date': 'actual_finish_date',
                 'Extended_Placement': 'extended_placement',
                 'Partnership_Area': 'partnership_area',
+                'Category_of_Support': 'category_of_support',
                 'Previous_CLC_Placement': 'previous_clc_placement',
                 'Flag_ASD': 'flag_asd',
                 'Flag_ADHD': 'flag_adhd',
+                'Flag_Intellectual': 'flag_intellectual',
+                'Flag_Learning_Difficulty': 'flag_learning_difficulty',
+                'Flag_Sensory_Processing': 'flag_sensory_processing',
+                'Flag_ODD': 'flag_odd',
+                'Flag_PDA': 'flag_pda',
                 'Flag_DCP_involvement': 'flag_dcp_involvement',
                 'Flag_Child_in_care': 'flag_child_in_care',
                 'Flag_Aboriginal': 'flag_aboriginal',
@@ -296,7 +302,9 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                     sync_df[db_col] = df_excel[excel_col]
             
             # Convert Yes/No to boolean for flags
-            flag_columns = ['flag_asd', 'flag_adhd', 'flag_dcp_involvement', 'flag_child_in_care',
+            flag_columns = ['flag_asd', 'flag_adhd', 'flag_intellectual', 'flag_learning_difficulty', 
+                          'flag_sensory_processing', 'flag_odd', 'flag_pda',
+                          'flag_dcp_involvement', 'flag_child_in_care',
                           'flag_aboriginal', 'flag_eald', 'bespoke_placement', 'extended_placement']
             
             for flag_col in flag_columns:
@@ -478,7 +486,8 @@ else:
 mismatch_count = len(filtered_df[filtered_df['program_mismatch'] == True])
 
 # SWD count
-disability_cols = ['flag_asd', 'flag_adhd', 'flag_intellectual', 'flag_learning_difficulty', 'flag_sensory_processing', 'flag_odd', 'flag_pda']
+disability_cols = ['flag_asd', 'flag_adhd', 'flag_intellectual', 'flag_learning_difficulty', 
+                   'flag_sensory_processing', 'flag_odd', 'flag_pda']
 available_disability_cols = [col for col in disability_cols if col in filtered_df.columns]
 if available_disability_cols:
     swd_mask = filtered_df[available_disability_cols].fillna(False).any(axis=1)
@@ -501,7 +510,8 @@ partnerships_count = filtered_df['partnership'].nunique() if 'partnership' in fi
 # Display clickable metrics
 st.markdown('<div class="section-header">📊 Key Metrics - Click Any Card to Explore</div>', unsafe_allow_html=True)
 
-col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(8)
+# First row: 5 cards
+col1, col2, col3, col4, col5 = st.columns(5)
 
 with col1:
     if st.button(f"**{total_referrals}**\n\nTotal\nReferrals", use_container_width=True, key="btn_referrals"):
@@ -529,6 +539,9 @@ with col5:
     if st.button(f"**{dcp_count}**\n\nDCP", use_container_width=True, key="btn_dcp"):
         st.session_state.drill_down_view = "dcp"
         st.rerun()
+
+# Second row: 4 cards
+col6, col7, col8, col9 = st.columns(4)
 
 with col6:
     if st.button(f"**{partnerships_count}**\n\nPartnerships", use_container_width=True, key="btn_partnerships"):
@@ -588,6 +601,20 @@ with col8:
     st.caption(f"{terms_with_data} terms")
     if st.button(f"**📅**\n\nTerms", use_container_width=True, key="btn_terms"):
         st.session_state.drill_down_view = "terms"
+        st.rerun()
+
+with col9:
+    # Count students with category of support
+    if 'category_of_support' in filtered_df.columns:
+        category_count = len(filtered_df[pd.notna(filtered_df['category_of_support']) & (filtered_df['category_of_support'] != '')])
+        unique_categories = filtered_df['category_of_support'].nunique()
+        st.caption(f"{unique_categories} categories")
+    else:
+        category_count = total_referrals
+        st.caption("All students")
+    
+    if st.button(f"**{category_count}**\n\nCategory", use_container_width=True, key="btn_category"):
+        st.session_state.drill_down_view = "category"
         st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2197,6 +2224,320 @@ if st.session_state.drill_down_view:
                             st.plotly_chart(fig, use_container_width=True)
                             
                             st.dataframe(school_counts, use_container_width=True, hide_index=True)
+    
+    # ═══════════════════════════════════════════════════════════════════════
+    # CATEGORY OF SUPPORT DRILL-DOWN
+    # ═══════════════════════════════════════════════════════════════════════
+    elif st.session_state.drill_down_view == "category":
+        st.markdown(f"""
+        <div class="drill-down-header" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
+            <h2 class="drill-down-title">🎯 Category of Support Analysis</h2>
+            <p class="drill-down-subtitle">Comprehensive breakdown of student support categories</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        if 'category_of_support' not in filtered_df.columns:
+            st.warning("""
+            **Category of Support data not available**
+            
+            To track support categories, add a `Category_of_Support` column to your Excel file.
+            
+            Common categories might include:
+            - High Support
+            - Medium Support  
+            - Low Support
+            - Behaviour Support
+            - Academic Support
+            - Social/Emotional Support
+            """)
+        else:
+            category_df = filtered_df[pd.notna(filtered_df['category_of_support']) & (filtered_df['category_of_support'] != '')]
+            
+            if len(category_df) == 0:
+                st.info("No category of support data found in current filtered dataset")
+            else:
+                # Get category counts
+                category_counts = category_df['category_of_support'].value_counts().reset_index()
+                category_counts.columns = ['Category', 'Count']
+                category_counts['Percentage'] = (category_counts['Count'] / len(category_df) * 100).round(1)
+                
+                tab1, tab2, tab3, tab4, tab5 = st.tabs([
+                    "📊 Overview", 
+                    "📈 By Partnership", 
+                    "📚 By Program",
+                    "🔍 By Disability",
+                    "📅 Term Comparison"
+                ])
+                
+                with tab1:
+                    st.markdown("### Category Distribution")
+                    
+                    # Summary metrics
+                    col_m1, col_m2, col_m3 = st.columns(3)
+                    
+                    with col_m1:
+                        st.metric("Total with Category", len(category_df))
+                    
+                    with col_m2:
+                        st.metric("Unique Categories", len(category_counts))
+                    
+                    with col_m3:
+                        if len(category_counts) > 0:
+                            top_category = category_counts.iloc[0]
+                            st.metric("Most Common", top_category['Category'], f"{top_category['Percentage']:.1f}%")
+                    
+                    # Visualization
+                    col_chart1, col_chart2 = st.columns(2)
+                    
+                    with col_chart1:
+                        # Pie chart
+                        fig = go.Figure(go.Pie(
+                            labels=category_counts['Category'],
+                            values=category_counts['Count'],
+                            hole=0.4,
+                            textinfo='label+percent'
+                        ))
+                        fig.update_layout(title="Category Distribution", height=400)
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    with col_chart2:
+                        # Bar chart
+                        fig = go.Figure(go.Bar(
+                            x=category_counts['Category'],
+                            y=category_counts['Count'],
+                            text=category_counts['Count'],
+                            textposition='auto',
+                            marker=dict(
+                                color=category_counts['Count'],
+                                colorscale='Reds',
+                                showscale=False
+                            )
+                        ))
+                        fig.update_layout(
+                            title="Students by Category",
+                            yaxis_title="Students",
+                            height=400
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Data table
+                    st.markdown("### Detailed Breakdown")
+                    display_cat = category_counts.copy()
+                    display_cat['Percentage'] = display_cat['Percentage'].apply(lambda x: f"{x:.1f}%")
+                    st.dataframe(display_cat, use_container_width=True, hide_index=True)
+                
+                with tab2:
+                    st.markdown("### Categories by Partnership")
+                    
+                    if 'partnership' in category_df.columns:
+                        # Create cross-tab
+                        cat_partnership = pd.crosstab(
+                            category_df['partnership'],
+                            category_df['category_of_support']
+                        )
+                        
+                        # Stacked bar chart
+                        fig = go.Figure()
+                        
+                        for category in cat_partnership.columns:
+                            fig.add_trace(go.Bar(
+                                name=category,
+                                x=cat_partnership.index,
+                                y=cat_partnership[category],
+                                text=cat_partnership[category],
+                                textposition='auto'
+                            ))
+                        
+                        fig.update_layout(
+                            title="Support Categories by Partnership",
+                            xaxis_title="Partnership",
+                            yaxis_title="Students",
+                            barmode='stack',
+                            height=400
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Show table
+                        st.dataframe(cat_partnership, use_container_width=True)
+                        
+                        # Calculate percentages by partnership
+                        st.markdown("### Category Breakdown by Partnership")
+                        
+                        for partnership in cat_partnership.index:
+                            with st.expander(f"📍 {partnership}"):
+                                partnership_total = cat_partnership.loc[partnership].sum()
+                                partnership_breakdown = cat_partnership.loc[partnership].reset_index()
+                                partnership_breakdown.columns = ['Category', 'Count']
+                                partnership_breakdown = partnership_breakdown[partnership_breakdown['Count'] > 0]
+                                partnership_breakdown['Percentage'] = (partnership_breakdown['Count'] / partnership_total * 100).round(1)
+                                partnership_breakdown = partnership_breakdown.sort_values('Count', ascending=False)
+                                
+                                for _, row in partnership_breakdown.iterrows():
+                                    st.markdown(f"**{row['Category']}**: {row['Count']} ({row['Percentage']:.1f}%)")
+                                    st.progress(row['Percentage'] / 100)
+                    else:
+                        st.info("Partnership data not available")
+                
+                with tab3:
+                    st.markdown("### Categories by Program (JP/PY/SY)")
+                    
+                    if 'program' in category_df.columns:
+                        # Create cross-tab
+                        cat_program = pd.crosstab(
+                            category_df['program'],
+                            category_df['category_of_support']
+                        )
+                        
+                        # Grouped bar chart
+                        fig = go.Figure()
+                        
+                        for category in cat_program.columns:
+                            fig.add_trace(go.Bar(
+                                name=category,
+                                x=cat_program.index,
+                                y=cat_program[category],
+                                text=cat_program[category],
+                                textposition='auto'
+                            ))
+                        
+                        fig.update_layout(
+                            title="Support Categories by Program",
+                            xaxis_title="Program",
+                            yaxis_title="Students",
+                            barmode='group',
+                            height=400
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Show table
+                        st.dataframe(cat_program, use_container_width=True)
+                    else:
+                        st.info("Program data not available")
+                
+                with tab4:
+                    st.markdown("### Support Category vs. Disability Profile")
+                    
+                    # Check for disability flags
+                    disability_cols = ['flag_asd', 'flag_adhd', 'flag_intellectual', 'flag_learning_difficulty',
+                                     'flag_sensory_processing', 'flag_odd', 'flag_pda']
+                    available_disability_cols = [col for col in disability_cols if col in category_df.columns]
+                    
+                    if available_disability_cols:
+                        # For each category, show disability breakdown
+                        for category in category_counts['Category']:
+                            with st.expander(f"🎯 {category} - Disability Breakdown"):
+                                cat_students = category_df[category_df['category_of_support'] == category]
+                                
+                                st.markdown(f"**{len(cat_students)} students in {category}**")
+                                
+                                disability_breakdown = []
+                                for col in available_disability_cols:
+                                    disability_name = col.replace('flag_', '').replace('_', ' ').upper()
+                                    count = int(cat_students[col].fillna(False).sum())
+                                    pct = (count / len(cat_students) * 100) if len(cat_students) > 0 else 0
+                                    
+                                    if count > 0:
+                                        disability_breakdown.append({
+                                            'Disability': disability_name,
+                                            'Count': count,
+                                            'Percentage': pct
+                                        })
+                                
+                                if disability_breakdown:
+                                    dis_df = pd.DataFrame(disability_breakdown).sort_values('Count', ascending=False)
+                                    
+                                    # Create chart
+                                    fig = go.Figure(go.Bar(
+                                        y=dis_df['Disability'],
+                                        x=dis_df['Count'],
+                                        orientation='h',
+                                        text=dis_df['Count'],
+                                        textposition='auto',
+                                        marker_color='#E74C3C'
+                                    ))
+                                    fig.update_layout(
+                                        title=f"{category} - Disability Profile",
+                                        xaxis_title="Students",
+                                        height=300
+                                    )
+                                    st.plotly_chart(fig, use_container_width=True)
+                                else:
+                                    st.info("No disability flags for students in this category")
+                    else:
+                        st.info("Disability data not available for comparison")
+                
+                with tab5:
+                    st.markdown("### Support Categories by Term")
+                    
+                    if 'term' in category_df.columns:
+                        # Create cross-tab
+                        cat_term = pd.crosstab(
+                            category_df['term'],
+                            category_df['category_of_support']
+                        )
+                        
+                        # Line chart showing trends
+                        fig = go.Figure()
+                        
+                        for category in cat_term.columns:
+                            fig.add_trace(go.Scatter(
+                                x=cat_term.index,
+                                y=cat_term[category],
+                                mode='lines+markers',
+                                name=category,
+                                line=dict(width=3),
+                                marker=dict(size=10)
+                            ))
+                        
+                        fig.update_layout(
+                            title="Category Trends Across Terms",
+                            xaxis_title="Term",
+                            yaxis_title="Students",
+                            height=400,
+                            hovermode='x unified'
+                        ))
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Show table
+                        st.dataframe(cat_term, use_container_width=True)
+                        
+                        # Year comparison if available
+                        if 'year' in category_df.columns:
+                            st.markdown("### Year-over-Year Comparison by Category")
+                            
+                            # Use full df for multi-year comparison
+                            full_cat_df = df[pd.notna(df['category_of_support']) & (df['category_of_support'] != '')] if 'category_of_support' in df.columns else pd.DataFrame()
+                            
+                            if len(full_cat_df) > 0 and 'year' in full_cat_df.columns:
+                                cat_year = pd.crosstab(
+                                    full_cat_df['year'],
+                                    full_cat_df['category_of_support']
+                                )
+                                
+                                # Stacked bar showing year trends
+                                fig = go.Figure()
+                                
+                                for category in cat_year.columns:
+                                    fig.add_trace(go.Bar(
+                                        name=category,
+                                        x=[str(int(y)) for y in cat_year.index],
+                                        y=cat_year[category],
+                                        text=cat_year[category],
+                                        textposition='auto'
+                                    ))
+                                
+                                fig.update_layout(
+                                    title="Categories by Year",
+                                    xaxis_title="Year",
+                                    yaxis_title="Students",
+                                    barmode='stack',
+                                    height=400
+                                )
+                                st.plotly_chart(fig, use_container_width=True)
+                                
+                                st.dataframe(cat_year, use_container_width=True)
+                    else:
+                        st.info("Term data not available for comparison")
 
     st.markdown("---")
 
