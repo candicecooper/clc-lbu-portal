@@ -255,6 +255,36 @@ with st.expander("🔧 **ADMIN: Upload Excel Data**", expanded=True):
             status_text.text("Uploading to database...")
             progress_bar.progress(60)
             
+            # First, test what columns exist in Supabase by trying a small insert
+            test_record = sync_df.iloc[0:1].to_dict('records')[0]
+            
+            # Try inserting with all columns, catch error to see what's missing
+            try:
+                supabase.table('allocation_tracker').insert([test_record]).execute()
+                # If successful, all columns exist
+                available_columns = list(sync_df.columns)
+                st.info("✅ All columns available in database")
+            except Exception as test_error:
+                # Some columns don't exist - find which ones
+                error_msg = str(test_error)
+                
+                # Extract missing columns from error
+                missing_cols = []
+                for col in sync_df.columns:
+                    if f"'{col}'" in error_msg:
+                        missing_cols.append(col)
+                
+                if missing_cols:
+                    st.warning(f"⚠️ These columns don't exist in database yet: {', '.join(missing_cols)}")
+                    st.info("Dashboard will upload data without these columns. Add them to Supabase for full functionality.")
+                    
+                    # Remove missing columns from sync_df
+                    available_columns = [col for col in sync_df.columns if col not in missing_cols]
+                    sync_df = sync_df[available_columns]
+                else:
+                    # Unknown error, re-raise
+                    raise
+            
             batch_size = 50
             total_batches = (len(sync_df) + batch_size - 1) // batch_size
             
