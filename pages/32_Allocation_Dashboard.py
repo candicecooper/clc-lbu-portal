@@ -2495,7 +2495,7 @@ if st.session_state.drill_down_view:
                             yaxis_title="Students",
                             height=400,
                             hovermode='x unified'
-                        ))
+                        )
                         st.plotly_chart(fig, use_container_width=True)
                         
                         # Show table
