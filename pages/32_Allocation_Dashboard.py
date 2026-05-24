@@ -184,33 +184,9 @@ if 'term' not in df.columns or df['term'].isna().all():
     else:
         df['term'] = 'Unknown'
 
-# Create category_of_support from flag_category columns if not already present
+# Ensure category_of_support column exists (already created during sync from flag_category columns)
 if 'category_of_support' not in df.columns:
-    # Check for flag_category columns
-    flag_cat_cols = [col for col in df.columns if col.startswith('flag_category_')]
-    
-    if flag_cat_cols:
-        # Combine all flag_category columns, taking the first non-null value
-        # Or combine all values if multiple are present
-        def combine_categories(row):
-            categories = []
-            for col in sorted(flag_cat_cols):
-                if pd.notna(row[col]) and row[col] != '':
-                    categories.append(str(row[col]))
-            
-            if categories:
-                # Use first category as primary
-                return categories[0]
-            return ''
-        
-        df['category_of_support'] = df.apply(combine_categories, axis=1)
-        
-        # Show info about category mapping
-        unique_cats = df['category_of_support'].value_counts()
-        if len(unique_cats) > 0:
-            st.sidebar.success(f"✅ Mapped categories from {', '.join(flag_cat_cols)}")
-    else:
-        df['category_of_support'] = ''
+    df['category_of_support'] = ''
 
 # Ensure required columns exist (add with safe defaults if still missing)
 required_columns = {
@@ -306,9 +282,6 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                 'Extended_Placement': 'extended_placement',
                 'Partnership_Area': 'partnership_area',
                 'Category_of_Support': 'category_of_support',
-                'Flag_Category_1': 'flag_category_1',
-                'Flag_Category_2': 'flag_category_2',
-                'Flag_Category_3': 'flag_category_3',
                 'Previous_CLC_Placement': 'previous_clc_placement',
                 'Flag_ASD': 'flag_asd',
                 'Flag_ADHD': 'flag_adhd',
@@ -331,6 +304,24 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
             for excel_col, db_col in column_mapping.items():
                 if excel_col in df_excel.columns:
                     sync_df[db_col] = df_excel[excel_col]
+            
+            # Create category_of_support from Flag_Category columns if Category_of_Support doesn't exist
+            if 'category_of_support' not in sync_df.columns or sync_df['category_of_support'].isna().all():
+                # Check for Flag_Category columns in Excel
+                flag_cat_cols = [col for col in df_excel.columns if col.startswith('Flag_Category_')]
+                
+                if flag_cat_cols:
+                    # Combine flag categories - use first non-empty value
+                    def combine_categories(row):
+                        for col in sorted(flag_cat_cols):
+                            if pd.notna(row[col]) and str(row[col]).strip() != '':
+                                return str(row[col]).strip()
+                        return ''
+                    
+                    sync_df['category_of_support'] = df_excel.apply(combine_categories, axis=1)
+                    st.info(f"✅ Combined {len(flag_cat_cols)} flag category columns into category_of_support")
+                else:
+                    sync_df['category_of_support'] = ''
             
             # Convert Yes/No to boolean for flags
             flag_columns = ['flag_asd', 'flag_adhd', 'flag_intellectual', 'flag_learning_difficulty', 
