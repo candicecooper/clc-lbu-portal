@@ -184,6 +184,34 @@ if 'term' not in df.columns or df['term'].isna().all():
     else:
         df['term'] = 'Unknown'
 
+# Create category_of_support from flag_category columns if not already present
+if 'category_of_support' not in df.columns:
+    # Check for flag_category columns
+    flag_cat_cols = [col for col in df.columns if col.startswith('flag_category_')]
+    
+    if flag_cat_cols:
+        # Combine all flag_category columns, taking the first non-null value
+        # Or combine all values if multiple are present
+        def combine_categories(row):
+            categories = []
+            for col in sorted(flag_cat_cols):
+                if pd.notna(row[col]) and row[col] != '':
+                    categories.append(str(row[col]))
+            
+            if categories:
+                # Use first category as primary
+                return categories[0]
+            return ''
+        
+        df['category_of_support'] = df.apply(combine_categories, axis=1)
+        
+        # Show info about category mapping
+        unique_cats = df['category_of_support'].value_counts()
+        if len(unique_cats) > 0:
+            st.sidebar.success(f"✅ Mapped categories from {', '.join(flag_cat_cols)}")
+    else:
+        df['category_of_support'] = ''
+
 # Ensure required columns exist (add with safe defaults if still missing)
 required_columns = {
     'partnership': '',
@@ -278,6 +306,9 @@ with st.expander("🔧 **ADMIN: Sync Data from Excel**", expanded=False):
                 'Extended_Placement': 'extended_placement',
                 'Partnership_Area': 'partnership_area',
                 'Category_of_Support': 'category_of_support',
+                'Flag_Category_1': 'flag_category_1',
+                'Flag_Category_2': 'flag_category_2',
+                'Flag_Category_3': 'flag_category_3',
                 'Previous_CLC_Placement': 'previous_clc_placement',
                 'Flag_ASD': 'flag_asd',
                 'Flag_ADHD': 'flag_adhd',
