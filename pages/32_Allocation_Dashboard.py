@@ -10,6 +10,49 @@ from supabase import create_client
 import os
 import time
 
+# ══════════════════════════════════════════════════════════════════════════════
+# NUMBER FORMATTING HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def format_count(value):
+    """Format student counts as whole numbers (no decimals)"""
+    if pd.isna(value):
+        return 0
+    return int(value)
+
+def format_percent(value, decimals=1):
+    """Format percentages cleanly"""
+    if pd.isna(value):
+        return "0%"
+    return f"{value:.{decimals}f}%"
+
+def format_chart_text(values, percentages=None):
+    """Format chart text labels as whole numbers with optional percentages"""
+    if percentages is not None:
+        return [f"{int(v)} ({p:.1f}%)" for v, p in zip(values, percentages)]
+    else:
+        return [f"{int(v)}" for v in values]
+
+def apply_integer_formatting(fig):
+    """Apply integer formatting to all chart text and hover data"""
+    fig.update_traces(
+        texttemplate='%{text}',
+        hovertemplate='%{y}: %{x}<extra></extra>'
+    )
+    return fig
+
+# Global Plotly configuration for clean integer display
+import plotly.io as pio
+pio.templates.default = "plotly_white"
+
+# Configure plotly to show integers without decimals
+go.layout.Template(
+    layout=go.Layout(
+        yaxis=dict(tickformat=',.0f'),  # No decimals on y-axis
+        xaxis=dict(tickformat=',.0f'),  # No decimals on x-axis
+    )
+)
+
 st.set_page_config(page_title="CLC Allocation Dashboard - Interactive", page_icon="📊", layout="wide")
 
 # Custom CSS for professional appearance
@@ -756,9 +799,9 @@ if st.session_state.drill_down_view:
                 with col_chart:
                     fig = go.Figure(go.Bar(
                         y=partnership_data['Partnership'],
-                        x=partnership_data['Referrals'],
+                        x=partnership_data['Referrals'].astype(int),
                         orientation='h',
-                        text=[f"{r} ({p}%)" for r, p in zip(partnership_data['Referrals'], partnership_data['Percentage'])],
+                        text=format_chart_text(partnership_data['Referrals'], partnership_data['Percentage']),
                         textposition='auto',
                         marker=dict(color=partnership_data['Referrals'], colorscale='Viridis', showscale=False)
                     ))
