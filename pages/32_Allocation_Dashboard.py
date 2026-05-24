@@ -229,6 +229,16 @@ with st.expander("🔧 **ADMIN: Upload Excel Data**", expanded=True):
                     sync_df[date_col] = pd.to_datetime(sync_df[date_col], errors='coerce')
                     sync_df[date_col] = sync_df[date_col].dt.strftime('%Y-%m-%d')
             
+            # Convert integers (CRITICAL: must be proper integers, not strings like "2026.0")
+            int_columns = ['referral_year']
+            for int_col in int_columns:
+                if int_col in sync_df.columns:
+                    # Convert to numeric, drop decimals, convert to int, then handle NaN
+                    sync_df[int_col] = pd.to_numeric(sync_df[int_col], errors='coerce')
+                    sync_df[int_col] = sync_df[int_col].fillna(0).astype(int)
+                    # Replace 0 with None for proper NULL in database
+                    sync_df[int_col] = sync_df[int_col].replace(0, None)
+            
             # Clean data
             sync_df = sync_df.replace({pd.NA: None, pd.NaT: None, float('nan'): None})
             sync_df = sync_df.where(pd.notna(sync_df), None)
