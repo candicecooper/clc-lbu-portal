@@ -8,6 +8,7 @@ from streamlit_folium import st_folium
 from collections import Counter
 from supabase import create_client
 import os
+import time
 
 st.set_page_config(page_title="CLC Allocation Dashboard - Interactive", page_icon="📊", layout="wide")
 
@@ -378,9 +379,13 @@ if 'referral_year' in df.columns:
 elif 'referral_date' in df.columns:
     df['referral_date'] = pd.to_datetime(df['referral_date'], errors='coerce')
     df['year'] = df['referral_date'].dt.year.fillna(datetime.now().year).astype(int)
-    df['month'] = df['referral_date'].dt.month
 else:
     df['year'] = datetime.now().year
+
+# ALWAYS extract month from referral_date for term calculation
+if 'referral_date' in df.columns:
+    df['referral_date'] = pd.to_datetime(df['referral_date'], errors='coerce')
+    df['month'] = df['referral_date'].dt.month
 
 # Calculate term from month (like old dashboard) - DO THIS BEFORE required columns check
 def get_term(month):
@@ -399,12 +404,32 @@ def get_term(month):
     except:
         return "Unknown"
 
-# Only calculate term if not already present
-if 'term' not in df.columns or df['term'].isna().all():
-    if 'month' in df.columns:
-        df['term'] = df['month'].apply(get_term)
+# Calculate term from month - ALWAYS do this from referral_date
+if 'month' in df.columns:
+    df['term'] = df['month'].apply(get_term)
+else:
+    df['term'] = 'Unknown'
+
+# Debug: Show term distribution
+with st.sidebar:
+    st.markdown("### 🔍 Term Data Debug")
+    if 'term' in df.columns:
+        term_counts = df['term'].value_counts()
+        st.write("Terms found:")
+        for term, count in term_counts.items():
+            st.write(f"- {term}: {count}")
     else:
-        df['term'] = 'Unknown'
+        st.warning("No term column found")
+    
+    if 'month' in df.columns:
+        st.write(f"Month column exists: {df['month'].notna().sum()} values")
+    else:
+        st.warning("No month column")
+    
+    if 'referral_date' in df.columns:
+        st.write(f"Referral dates: {df['referral_date'].notna().sum()} values")
+    else:
+        st.warning("No referral_date column")
 
 # Ensure category_of_support column exists (already created during sync from flag_category columns)
 if 'category_of_support' not in df.columns:
