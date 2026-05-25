@@ -249,6 +249,14 @@ def get_partnership_from_school(school_name):
     """Auto-lookup partnership from school name"""
     return SCHOOL_PARTNERSHIP_MAP.get(school_name, "")
 
+def calculate_weeks_between(start_date, end_date):
+    """Calculate number of weeks between two dates"""
+    if start_date and end_date:
+        delta = end_date - start_date
+        weeks = delta.days / 7
+        return round(weeks, 1)
+    return 0
+
 def map_flags_from_allocation(cat_funding, partnership):
     """Map comprehensive flags to Yes/No columns for export"""
     flags = {}
@@ -389,10 +397,10 @@ def export_to_data_entry(selected_allocations):
             allocation.get('waitlist_status', 'Not Applicable'), # 53. Waitlist_Status
             waitlist_date,                                       # 54. Waitlist_Date
             allocation.get('allocated_from_waitlist', 'No'),     # 55. Allocated_From_Waitlist
-            "Active",                                            # 56. Current_Status
-            allocation.get('exit_reason', ''),                   # 57. Exit_Reason
-            allocation.get('transition_plan', ''),               # 58. Transition_Plan
-            allocation.get('notes', '')                          # 59. Notes
+            'Active',                                            # 56. Current_Status
+            '',                                                  # 57. Exit_Reason
+            '',                                                  # 58. Transition_Plan
+            allocation.get('queries', '')                        # 59. Notes
         ]
         
         # Write row
@@ -521,7 +529,7 @@ with st.sidebar:
         comm_count = supabase.table("allocation_students")\
             .select("id", count="exact")\
             .eq("meeting_week", selected_week)\
-            .in_("outcome", ["Allocated", "Not Allocated"])\
+            .in_("outcome", ["Allocated", "Not Allocated", "Approved", "Not Approved"])\
             .not_.is_("information", "null")\
             .execute()
         
@@ -565,7 +573,7 @@ with tab1:
         st.subheader("📂 Select Draft to Complete")
         
         try:
-            # Fetch ALL records for debugging
+            # Fetch ALL records for this week
             all_records = supabase.table("allocation_students")\
                 .select("*")\
                 .eq("meeting_week", meeting_week_label)\
@@ -573,16 +581,13 @@ with tab1:
                 .eq("year", st.session_state.current_year)\
                 .execute()
             
-            st.write(f"**Debug:** Found {len(all_records.data) if all_records.data else 0} total records")
-            
-            # Filter for drafts - outcome is NULL/None
+            # Filter for drafts - outcome is NULL/None and no extension dates
             drafts_list = []
             if all_records.data:
                 for record in all_records.data:
                     outcome = record.get('outcome')
-                    # In Supabase, NULL comes back as None in Python
-                    is_draft = (outcome is None)
-                    st.write(f"- Record: {record.get('student_name')} | outcome='{outcome}' | type={type(outcome)} | is_draft={is_draft}")
+                    # Draft if outcome is None AND no extension fields
+                    is_draft = (outcome is None and not record.get('exclusion_finish_date'))
                     if is_draft:
                         drafts_list.append(record)
             
@@ -598,177 +603,88 @@ with tab1:
                 
                 draft = draft_options[selected_draft_display]
                 
-                # Show what was already entered
                 st.success(f"✅ Loaded draft for: **{draft['student_name']}**")
                 
-                with st.expander("👀 View Pre-Entered Information", expanded=False):
+                # Show draft details
+                with st.expander("📋 View Draft Details", expanded=True):
                     col1, col2, col3 = st.columns(3)
                     with col1:
-                        st.write(f"**Name:** {draft.get('student_name')}")
-                        st.write(f"**School:** {draft.get('school')}")
-                        st.write(f"**Partnership:** {draft.get('partnership_area')}")
+                        st.write(f"**School:** {draft.get('school', 'N/A')}")
+                        st.write(f"**Year Level:** {draft.get('year_level', 'N/A')}")
                     with col2:
-                        st.write(f"**DOB:** {draft.get('date_of_birth', 'Not entered')}")
-                        st.write(f"**Gender:** {draft.get('gender', 'Not entered')}")
-                        st.write(f"**Year Level:** {draft.get('year_level')}")
+                        st.write(f"**Gender:** {draft.get('gender', 'N/A')}")
+                        st.write(f"**Priority:** {draft.get('priority_level', 'N/A')}")
                     with col3:
-                        st.write(f"**Priority:** {draft.get('priority_level', '3')}")
-                        st.write(f"**Previous CLC:** {draft.get('previous_clc_placement', 'No')}")
-                        queries_text = draft.get('queries') or 'None'
-                st.write(f"**Queries:** {queries_text[:50]}..." if len(queries_text) > 50 else f"**Queries:** {queries_text}")
+                        st.write(f"**Partnership:** {draft.get('partnership_area', 'N/A')}")
+                        if draft.get('queries'):
+                            st.write(f"**Queries:** {draft.get('queries')}")
                 
+                # COMPLETION FORM
                 st.markdown("---")
-                st.markdown("### 🎯 Complete Allocation on Meeting Day")
+                st.subheader("✏️ Complete Allocation Decision")
                 
-                with st.form("complete_draft_form"):
-                    # SECTION 5: Outcome
-                    st.markdown("### 5️⃣ Allocation Outcome")
+                with st.form("complete_allocation_form"):
+                    # Allocation decision
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        program = st.selectbox("Program *", PROGRAMS)
+                    
+                    with col2:
+                        outcome = st.selectbox("Outcome *", OUTCOMES)
+                    
+                    with col3:
+                        school_contact = st.text_input("School Contact Person")
+                    
+                    # Dates
                     col1, col2 = st.columns(2)
                     with col1:
-                        outcome = st.selectbox("Outcome *", [""] + OUTCOMES)
+                        start_after = st.date_input("Start After", value=None)
                     with col2:
-                        details = st.text_area("Outcome Details", height=100)
+                        finishing_date = st.date_input("Finishing Date", value=None)
                     
-                    # COMMUNICATION FIELDS - ALWAYS SHOW (not conditional!)
-                    st.markdown("---")
-                    st.markdown("### 6️⃣ Communication with Sites")
-                    st.caption("📧 Information to share with referring school")
-                    
-                    col1, col2 = st.columns(2)
+                    # Bespoke and Waitlist
+                    col1, col2, col3 = st.columns(3)
                     with col1:
-                        information = st.text_area(
-                            "Information to be Shared *", 
-                            height=100,
-                            placeholder="E.g., Student allocated to PY, starting Term 3, 3 days/week",
-                            help="What information needs to be communicated to the referring school"
-                        )
+                        bespoke = st.selectbox("Bespoke Placement?", ["No", "Yes"])
                     with col2:
-                        actioned_by = st.text_input(
-                            "To be Actioned By *",
-                            placeholder="E.g., Annette, Candice, Tom",
-                            help="Staff member responsible for contacting the school"
-                        )
+                        waitlist_status = st.selectbox("Waitlist Status", WAITLIST_STATUS_OPTIONS)
+                    with col3:
+                        if waitlist_status == "On Waitlist":
+                            waitlist_date = st.date_input("Waitlist Date", value=datetime.now().date())
+                        else:
+                            waitlist_date = None
                     
-                    # Only show these sections if Allocated
-                    if outcome == "Allocated":
-                        # SECTION 7: Waitlist
-                        st.markdown("---")
-                        st.markdown("### 7️⃣ Waitlist Information")
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            waitlist_status = st.selectbox("Waitlist Status", WAITLIST_STATUS_OPTIONS)
-                        with col2:
-                            if waitlist_status == "On Waitlist":
-                                # Waitlist date: 1 year ago to 1 year from now
-                                waitlist_min = datetime.now().date() - timedelta(days=365)
-                                waitlist_max = datetime.now().date() + timedelta(days=365)
-                                waitlist_date = st.date_input("Waitlist Date", value=None, min_value=waitlist_min, max_value=waitlist_max)
-                            else:
-                                waitlist_date = None
-                        with col3:
-                            if waitlist_status == "On Waitlist":
-                                allocated_from_waitlist = st.selectbox("Allocated from Waitlist?", ["No", "Yes"])
-                            else:
-                                allocated_from_waitlist = "No"
-                        
-                        # SECTION 8: Program & Placement
-                        st.markdown("---")
-                        st.markdown("### 8️⃣ Program & Placement")
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            program = st.selectbox("Program *", [""] + PROGRAMS)
-                        with col2:
-                            # Exclusion start date: Jan 1, 2026 to end of 2028
-                            start_min = datetime(2026, 1, 1).date()
-                            start_max = datetime(2028, 12, 31).date()
-                            start_after = st.date_input("Exclusion Start Date", value=None, min_value=start_min, max_value=start_max)
-                        with col3:
-                            # Exclusion end date: Jan 1, 2026 to end of 2028
-                            finish_min = datetime(2026, 1, 1).date()
-                            finish_max = datetime(2028, 12, 31).date()
-                            finishing_date = st.date_input("Exclusion End Date", value=None, min_value=finish_min, max_value=finish_max)
-                        with col4:
-                            bespoke_placement = st.selectbox("Bespoke Placement?", ["No", "Yes"])
-                        
-                        if bespoke_placement == "Yes":
-                            st.info("💡 **Bespoke:** Year level doesn't match standard program")
-                        
-                        # SECTION 9: Case Support Team
-                        st.markdown("---")
-                        st.markdown("### 9️⃣ Case Support Team")
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            case_worker = st.selectbox("Case Worker", [""] + STAFF_NAMES)
-                        with col2:
-                            bsc = st.text_input("BSE (Behaviour Support Educator)")
-                        with col3:
-                            school_contact = st.text_input("School Contact")
-                        
-                        st.markdown("---")
-                        notes = st.text_area("Additional Notes", height=80)
-                    else:
-                        # Not allocated - set defaults (None for database fields)
-                        # Don't show program/placement sections
-                        waitlist_status = "Not Applicable"
-                        waitlist_date = None
-                        allocated_from_waitlist = "No"
-                        program = None  # Must be None, not empty string (database constraint)
-                        start_after = None
-                        finishing_date = None
-                        bespoke_placement = "No"
-                        case_worker = None  # None instead of empty string
-                        bsc = None  # None instead of empty string
-                        school_contact = None  # None instead of empty string
-                        notes = st.text_area("Additional Notes", height=80)
-                        # NOTE: information and actioned_by are already set above - don't overwrite!
+                    # Communication
+                    st.markdown("### 📧 Communication to School")
+                    information = st.text_area(
+                        "Information to be shared with school",
+                        help="This will be included in the communication summary"
+                    )
+                    
+                    actioned_by = st.selectbox("To be actioned by", [""] + STAFF_NAMES)
                     
                     # Submit
-                    st.markdown("---")
-                    submitted = st.form_submit_button("✅ Complete Allocation", type="primary", use_container_width=True)
+                    submitted = st.form_submit_button("✅ Complete & Save Allocation", type="primary", use_container_width=True)
                     
                     if submitted:
                         # Validation
-                        missing = []
                         if not outcome:
-                            missing.append("Outcome")
-                        if outcome == "Allocated" and not program:
-                            missing.append("Program")
-                        
-                        if missing:
-                            st.error(f"⚠️ Please fill in required fields: {', '.join(missing)}")
+                            st.error("⚠️ Please select an outcome")
                         else:
                             try:
-                                # Helper: Convert empty strings to None for database
-                                def none_if_empty(value):
-                                    return None if value == "" or value == [] else value
-                                
-                                # Update the draft with completion data
                                 update_data = {
+                                    "program": program,
                                     "outcome": outcome,
-                                    "details": none_if_empty(details),
-                                    "waitlist_status": waitlist_status,
-                                    "waitlist_date": waitlist_date.isoformat() if waitlist_date else None,
-                                    "allocated_from_waitlist": allocated_from_waitlist,
-                                    "program": none_if_empty(program),  # Convert "" to None
+                                    "school_contact": school_contact,
                                     "start_after": start_after.isoformat() if start_after else None,
                                     "finishing_date": finishing_date.isoformat() if finishing_date else None,
-                                    "bespoke_placement": bespoke_placement,
-                                    "case_worker": none_if_empty(case_worker),  # Convert "" to None
-                                    "bsc": none_if_empty(bsc),  # Convert "" to None
-                                    "school_contact": none_if_empty(school_contact),  # Convert "" to None
-                                    "information": none_if_empty(information),  # New field
-                                    "actioned_by": none_if_empty(actioned_by),  # New field
-                                    "notes": none_if_empty(notes)  # Convert "" to None
+                                    "bespoke_placement": bespoke,
+                                    "waitlist_status": waitlist_status,
+                                    "waitlist_date": waitlist_date.isoformat() if waitlist_date else None,
+                                    "information": information if information else None,
+                                    "actioned_by": actioned_by if actioned_by else None
                                 }
-                                
-                                # Debug: Show what we're sending
-                                st.write("🔍 **Debug: Data being saved:**")
-                                st.json({
-                                    "outcome": update_data["outcome"],
-                                    "program": update_data["program"],
-                                    "case_worker": update_data["case_worker"],
-                                    "bsc": update_data["bsc"]
-                                })
                                 
                                 result = supabase.table("allocation_students")\
                                     .update(update_data)\
@@ -777,26 +693,27 @@ with tab1:
                                 
                                 st.success(f"✅ Allocation completed for {draft['student_name']}!")
                                 st.balloons()
-                                st.info("🎉 This student is now ready for export in the View & Export tab")
+                                st.info("💡 Go to Tab 4 to view and export this allocation.")
                                 
                             except Exception as e:
-                                st.error(f"❌ Error completing allocation: {str(e)}")
+                                st.error(f"❌ Error updating allocation: {str(e)}")
                                 import traceback
                                 st.code(traceback.format_exc())
-                
+        
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"❌ Error loading drafts: {str(e)}")
             import traceback
             st.code(traceback.format_exc())
     
     else:
-        # STAGE 1: Create new draft - FULL VERSION
-        st.subheader("➕ Stage 1: Pre-Meeting Draft")
-        st.caption("Leadership enters student information before allocation meeting")
+        # STAGE 1: Create New Draft
+        st.subheader("➕ Create New Allocation Draft")
+        st.caption("Fill in student details before the meeting. Complete on meeting day.")
         
-        with st.form("create_draft_form", clear_on_submit=True):
-            # SECTION 1: Student Information
-            st.markdown("### 1️⃣ Student Information")
+        with st.form("new_allocation_draft"):
+            # SECTION 1: Basic Information
+            st.markdown("### 1️⃣ Student Details")
+            
             col1, col2, col3, col4 = st.columns(4)
             with col1:
                 student_name = st.text_input("Name *")
@@ -959,13 +876,13 @@ with tab1:
                             "priority_level": priority_level if priority_level else "3",
                             "previous_clc_placement": previous_clc,
                             "previous_other_lc": previous_other_lc,
-                            "previously_referred": previously_referred,  # NEW
+                            "previously_referred": previously_referred,
                             "other_lc_name": other_lc_name if previous_other_lc == "Yes" else None,
                             "total_previous_placements": total_placements,
                             "placement_history_notes": placement_history_notes,
-                            "medical_condition_details": medical_condition_details if "Medical condition" in selected_flags else None,  # NEW
-                            "cat_funding": json.dumps(selected_flags),  # All flags stored here
-                            "partnership": json.dumps([]),  # Legacy field, kept empty
+                            "medical_condition_details": medical_condition_details if "Medical condition" in selected_flags else None,
+                            "cat_funding": json.dumps(selected_flags),
+                            "partnership": json.dumps([]),
                             "queries": queries,
                             "outcome": None  # Draft status
                         }
@@ -979,113 +896,377 @@ with tab1:
                         import traceback
                         st.code(traceback.format_exc())
 
-# TAB 2: Extensions (placeholder)
+# TAB 2: Extensions - TWO-STAGE WORKFLOW
 with tab2:
     st.header("🔄 Extensions")
-    st.info("Extension requests feature coming soon...")
+    
+    # STAGE SELECTOR
+    extension_stage = st.radio(
+        "Select what you want to do:",
+        ["➕ Request New Extension (Stage 1)", "📝 Complete Extension Request (Stage 2)"],
+        horizontal=True,
+        key="extension_stage_selector"
+    )
+    
+    st.markdown("---")
+    
+    if extension_stage == "📝 Complete Extension Request (Stage 2)":
+        # STAGE 2: Complete existing extension request
+        st.subheader("📂 Select Extension Request to Complete")
+        
+        try:
+            # Fetch extension drafts - records with exclusion_finish_date but outcome is NULL
+            extension_records = supabase.table("allocation_students")\
+                .select("*")\
+                .eq("meeting_week", meeting_week_label)\
+                .eq("term", st.session_state.current_term)\
+                .eq("year", st.session_state.current_year)\
+                .not_.is_("exclusion_finish_date", "null")\
+                .execute()
+            
+            # Filter for drafts (outcome is None)
+            extension_drafts = []
+            if extension_records.data:
+                for record in extension_records.data:
+                    if record.get('outcome') is None:
+                        extension_drafts.append(record)
+            
+            if not extension_drafts:
+                st.info("✅ No extension requests found. Create one in Stage 1.")
+            else:
+                extension_options = {f"{d['student_name']} - {d.get('program', 'N/A')} ({d.get('school', 'N/A')})": d for d in extension_drafts}
+                
+                selected_extension_display = st.selectbox(
+                    f"Select one of {len(extension_drafts)} extension request(s):",
+                    list(extension_options.keys())
+                )
+                
+                extension_draft = extension_options[selected_extension_display]
+                
+                st.success(f"✅ Loaded extension request for: **{extension_draft['student_name']}**")
+                
+                # Show extension details (read-only)
+                with st.expander("📋 View Extension Request Details", expanded=True):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"**Student:** {extension_draft.get('student_name')}")
+                        st.write(f"**Program:** {extension_draft.get('program')}")
+                        st.write(f"**School:** {extension_draft.get('school')}")
+                    with col2:
+                        st.write(f"**Exclusion Finish Date:** {extension_draft.get('exclusion_finish_date')}")
+                        st.write(f"**Proposed Extension Date:** {extension_draft.get('proposed_extension_finish_date')}")
+                        st.write(f"**Proposed Weeks:** {extension_draft.get('extension_weeks', 0)}")
+                
+                # COMPLETION FORM
+                st.markdown("---")
+                st.subheader("✏️ Complete Extension Decision")
+                
+                with st.form("complete_extension_form"):
+                    # Extension decision
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        extension_outcome = st.radio(
+                            "Extension Decision *",
+                            EXTENSION_OUTCOMES,
+                            horizontal=True
+                        )
+                    
+                    with col2:
+                        actioned_by = st.selectbox("To be actioned by", [""] + STAFF_NAMES)
+                    
+                    # Communication
+                    st.markdown("### 📧 Communication to School")
+                    information = st.text_area(
+                        "Information to be shared with school",
+                        help="This will be included in the communication summary",
+                        key="extension_info"
+                    )
+                    
+                    # Submit
+                    submitted = st.form_submit_button("✅ Complete & Save Extension", type="primary", use_container_width=True)
+                    
+                    if submitted:
+                        if not extension_outcome:
+                            st.error("⚠️ Please select an outcome")
+                        else:
+                            try:
+                                update_data = {
+                                    "outcome": extension_outcome,
+                                    "information": information if information else None,
+                                    "actioned_by": actioned_by if actioned_by else None
+                                }
+                                
+                                result = supabase.table("allocation_students")\
+                                    .update(update_data)\
+                                    .eq("id", extension_draft['id'])\
+                                    .execute()
+                                
+                                st.success(f"✅ Extension {extension_outcome.lower()} for {extension_draft['student_name']}!")
+                                st.balloons()
+                                st.info("💡 Go to Tab 4 to view this extension or download communications.")
+                                
+                            except Exception as e:
+                                st.error(f"❌ Error updating extension: {str(e)}")
+                                import traceback
+                                st.code(traceback.format_exc())
+        
+        except Exception as e:
+            st.error(f"❌ Error loading extension requests: {str(e)}")
+            import traceback
+            st.code(traceback.format_exc())
+    
+    else:
+        # STAGE 1: Create New Extension Request
+        st.subheader("➕ Request New Extension")
+        st.caption("Fill in extension details before the meeting. Complete decision on meeting day.")
+        
+        with st.form("new_extension_request"):
+            # Extension Request Details
+            st.markdown("### 📝 Extension Request Details")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                student_name = st.text_input("Student Name *", key="ext_student_name")
+                program = st.selectbox("Program *", [""] + PROGRAMS, key="ext_program")
+                school = st.selectbox("School * (searchable)", [""] + ALL_SCHOOLS, key="ext_school")
+            
+            with col2:
+                exclusion_finish_date = st.date_input(
+                    "Current Exclusion Finish Date *",
+                    value=None,
+                    key="ext_exclusion_date"
+                )
+                proposed_extension_finish_date = st.date_input(
+                    "Proposed Extension Finish Date *",
+                    value=None,
+                    key="ext_proposed_date"
+                )
+                
+                # Calculate weeks
+                if exclusion_finish_date and proposed_extension_finish_date:
+                    extension_weeks = calculate_weeks_between(exclusion_finish_date, proposed_extension_finish_date)
+                    st.metric("Proposed Extension (weeks)", f"{extension_weeks}")
+                else:
+                    extension_weeks = 0
+                    st.metric("Proposed Extension (weeks)", "—")
+            
+            # Submit
+            st.markdown("---")
+            submitted = st.form_submit_button("💾 Save Extension Request (Complete Later)", type="primary", use_container_width=True)
+            
+            if submitted:
+                # Validation
+                missing = []
+                if not student_name:
+                    missing.append("Student Name")
+                if not program:
+                    missing.append("Program")
+                if not school:
+                    missing.append("School")
+                if not exclusion_finish_date:
+                    missing.append("Exclusion Finish Date")
+                if not proposed_extension_finish_date:
+                    missing.append("Proposed Extension Finish Date")
+                
+                if missing:
+                    st.error(f"⚠️ Please fill in required fields: {', '.join(missing)}")
+                elif proposed_extension_finish_date <= exclusion_finish_date:
+                    st.error("⚠️ Proposed extension date must be after the current exclusion finish date")
+                else:
+                    try:
+                        data = {
+                            "meeting_week": meeting_week_label,
+                            "meeting_date": meeting_date.isoformat(),
+                            "term": st.session_state.current_term,
+                            "year": st.session_state.current_year,
+                            "student_name": student_name,
+                            "program": program,
+                            "school": school,
+                            "exclusion_finish_date": exclusion_finish_date.isoformat(),
+                            "proposed_extension_finish_date": proposed_extension_finish_date.isoformat(),
+                            "extension_weeks": extension_weeks,
+                            "outcome": None  # Draft status
+                        }
+                        
+                        result = supabase.table("allocation_students").insert(data).execute()
+                        st.success(f"✅ Extension request saved for {student_name}! Complete on meeting day.")
+                        st.balloons()
+                        
+                    except Exception as e:
+                        st.error(f"❌ Error saving extension request: {str(e)}")
+                        import traceback
+                        st.code(traceback.format_exc())
 
-# TAB 3: Not Placed (placeholder)
+# TAB 3: Not Placed - AUTO-COMPILED
 with tab3:
-    st.header("⏸️ Not Placed")
-    st.info("Not placed tracking feature coming soon...")
+    st.header("⏸️ Not Placed Students")
+    st.caption("Automatically compiled from allocation outcomes")
+    
+    try:
+        # Fetch students marked as "Not Allocated"
+        not_allocated = supabase.table("allocation_students")\
+            .select("student_name, year_level, school, program")\
+            .eq("meeting_week", meeting_week_label)\
+            .eq("outcome", "Not Allocated")\
+            .execute()
+        
+        if not_allocated.data and len(not_allocated.data) > 0:
+            st.info(f"📊 **{len(not_allocated.data)} student(s)** not allocated this week")
+            
+            # Display as table
+            display_data = []
+            for record in not_allocated.data:
+                display_data.append({
+                    "Student Name": record.get("student_name", ""),
+                    "Year Level": record.get("year_level", ""),
+                    "School": record.get("school", ""),
+                    "Proposed Program": record.get("program", "")
+                })
+            
+            df_not_allocated = pd.DataFrame(display_data)
+            st.dataframe(df_not_allocated, use_container_width=True, hide_index=True)
+            
+            # Export option
+            st.markdown("---")
+            if st.button("📥 Download Not Allocated List", type="primary"):
+                # Create Excel
+                from openpyxl import Workbook
+                from io import BytesIO
+                
+                wb = Workbook()
+                ws = wb.active
+                ws.title = "Not Allocated"
+                
+                # Headers
+                headers = ["Student Name", "Year Level", "School", "Proposed Program"]
+                header_fill = PatternFill(start_color="DC3545", end_color="DC3545", fill_type="solid")
+                header_font = Font(bold=True, color="FFFFFF")
+                
+                for col_idx, header in enumerate(headers, 1):
+                    cell = ws.cell(1, col_idx, header)
+                    cell.fill = header_fill
+                    cell.font = header_font
+                    cell.alignment = Alignment(horizontal='center', vertical='center')
+                
+                # Add data
+                for row_idx, record in enumerate(not_allocated.data, 2):
+                    ws.cell(row_idx, 1, record.get('student_name', ''))
+                    ws.cell(row_idx, 2, record.get('year_level', ''))
+                    ws.cell(row_idx, 3, record.get('school', ''))
+                    ws.cell(row_idx, 4, record.get('program', ''))
+                
+                # Adjust widths
+                ws.column_dimensions['A'].width = 25
+                ws.column_dimensions['B'].width = 12
+                ws.column_dimensions['C'].width = 30
+                ws.column_dimensions['D'].width = 20
+                
+                # Save to bytes
+                output = BytesIO()
+                wb.save(output)
+                excel_data = output.getvalue()
+                
+                st.download_button(
+                    label="💾 Save Not Allocated List",
+                    data=excel_data,
+                    file_name=f"Not_Allocated_{selected_week.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+        else:
+            st.success("✅ No students marked as 'Not Allocated' for this week")
+    
+    except Exception as e:
+        st.error(f"❌ Error loading not allocated students: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
 
 # TAB 4: View & Export
 with tab4:
     st.header("📊 View & Export Completed Allocations")
     
-    # Comprehensive debugging
     try:
-        st.write("🔍 **Database Diagnostic:**")
-        
-        # Get ALL records
-        all_records = supabase.table("allocation_students")\
-            .select("id, student_name, school, outcome, program, created_at")\
-            .order("created_at", desc=True)\
+        # Get ALL records with outcomes (both allocations and extensions)
+        full_data = supabase.table("allocation_students")\
+            .select("*")\
+            .eq("meeting_week", meeting_week_label)\
+            .not_.is_("outcome", "null")\
             .execute()
         
-        total = len(all_records.data) if all_records.data else 0
-        st.write(f"**Total records in database:** {total}")
-        
-        if all_records.data:
-            # Show breakdown by outcome
-            from collections import Counter
-            outcome_counts = Counter()
+        if full_data.data and len(full_data.data) > 0:
+            # Separate allocations and extensions
+            allocations = [r for r in full_data.data if r.get('outcome') in ['Allocated', 'Not Allocated']]
+            extensions = [r for r in full_data.data if r.get('outcome') in ['Approved', 'Not Approved']]
             
-            st.write("\n**All records with outcome values:**")
-            for r in all_records.data:
-                outcome_val = r.get('outcome')
-                outcome_counts[outcome_val] += 1
-                
-                # Show each record
-                outcome_display = f"'{outcome_val}'" if outcome_val else "NULL"
-                st.write(f"- {r.get('student_name', 'No name')}: outcome={outcome_display}, program={r.get('program', 'None')}")
+            # Summary metrics
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Records", len(full_data.data))
+            with col2:
+                st.metric("Allocations", len(allocations))
+            with col3:
+                st.metric("Extensions", len(extensions))
             
-            st.write("\n**Summary by outcome:**")
-            for outcome_val, count in outcome_counts.items():
-                outcome_display = f"'{outcome_val}'" if outcome_val else "NULL (Draft)"
-                st.write(f"- {outcome_display}: {count} record(s)")
-        
-        # Filter for completed (must have outcome value)
-        if all_records.data:
-            completed = [r for r in all_records.data if r.get('outcome') and r.get('outcome') != '']
+            st.markdown("---")
             
-            st.write(f"\n**Records where outcome is NOT NULL:** {len(completed)}")
-            
-            if not completed:
-                st.warning("⚠️ No records have a value in the 'outcome' field!")
-                st.info("📝 **To fix:** Go to Tab 1 → Complete Existing Draft → Fill in outcome → Save")
-            else:
-                st.success(f"✅ Found {len(completed)} completed allocation(s)")
-                
-                # Get full data for completed records
-                completed_ids = [r['id'] for r in completed]
-                full_data = supabase.table("allocation_students")\
-                    .select("*")\
-                    .in_("id", completed_ids)\
-                    .execute()
-                
-                # Display table
-                st.subheader("Completed Allocations")
-                
+            # Display allocations
+            if allocations:
+                st.subheader(f"📝 Allocations ({len(allocations)})")
                 display_data = []
-                for record in full_data.data:
+                for record in allocations:
                     display_data.append({
                         "Student": record.get("student_name", ""),
-                        "School": record.get("school", ""),
                         "Year": record.get("year_level", ""),
                         "Program": record.get("program", ""),
                         "Outcome": record.get("outcome", ""),
-                        "Meeting": record.get("meeting_week", ""),
-                        "Date": str(record.get("meeting_date", ""))[:10]
+                        "School": record.get("school", "")
                     })
-                
                 st.dataframe(display_data, use_container_width=True)
-                
-                # Export section
+            
+            # Display extensions
+            if extensions:
                 st.markdown("---")
-                st.subheader("📤 Export to Excel")
-                
-                if st.button("📥 Download Excel", type="primary"):
-                    try:
-                        # Generate Excel
-                        excel_bytes = export_to_data_entry(full_data.data)
+                st.subheader(f"🔄 Extensions ({len(extensions)})")
+                display_data = []
+                for record in extensions:
+                    display_data.append({
+                        "Student": record.get("student_name", ""),
+                        "Program": record.get("program", ""),
+                        "School": record.get("school", ""),
+                        "Exclusion End": record.get("exclusion_finish_date", ""),
+                        "Proposed End": record.get("proposed_extension_finish_date", ""),
+                        "Weeks": record.get("extension_weeks", ""),
+                        "Outcome": record.get("outcome", "")
+                    })
+                st.dataframe(display_data, use_container_width=True)
+            
+            # Export section
+            st.markdown("---")
+            st.subheader("📤 Export to Excel")
+            
+            if st.button("📥 Download Data Entry Excel", type="primary"):
+                try:
+                    # Only export allocations (not extensions) to data entry format
+                    if allocations:
+                        excel_bytes = export_to_data_entry(allocations)
                         
-                        # Download button
                         st.download_button(
-                            label="💾 Save Excel File",
+                            label="💾 Save Data Entry Excel",
                             data=excel_bytes,
                             file_name=f"CLC_Allocations_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
                         
-                        st.success(f"✅ Excel file ready! {len(full_data.data)} allocation(s) exported.")
-                        
-                    except Exception as e:
-                        st.error(f"❌ Error generating Excel: {e}")
-                        import traceback
-                        st.code(traceback.format_exc())
+                        st.success(f"✅ Excel file ready! {len(allocations)} allocation(s) exported.")
+                    else:
+                        st.warning("⚠️ No allocations to export")
+                    
+                except Exception as e:
+                    st.error(f"❌ Error generating Excel: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
         else:
-            st.info("📭 No records found in database. Create some allocations in Tab 1!")
+            st.info("📭 No completed records found. Create allocations or extensions in Tabs 1-2!")
     
     except Exception as e:
         st.error(f"❌ Error: {str(e)}")
@@ -1102,11 +1283,11 @@ if st.session_state.get('show_comms', False):
     st.header("📧 Communication with Sites")
     
     try:
-        # Fetch current week communications
+        # Fetch current week communications (both allocations and extensions)
         comm_data = supabase.table("allocation_students")\
             .select("student_name, school, program, school_contact, outcome, information, actioned_by")\
             .eq("meeting_week", selected_week)\
-            .in_("outcome", ["Allocated", "Not Allocated"])\
+            .in_("outcome", ["Allocated", "Not Allocated", "Approved", "Not Approved"])\
             .execute()
         
         if comm_data.data:
@@ -1120,6 +1301,7 @@ if st.session_state.get('show_comms', False):
                     "Student": record.get("student_name", ""),
                     "Program": record.get("program", ""),
                     "School Contact": record.get("school_contact", ""),
+                    "Type": "Extension" if record.get("outcome") in ["Approved", "Not Approved"] else "Allocation",
                     "Outcome": record.get("outcome", ""),
                     "Information to be Shared": record.get("information", ""),
                     "To be Actioned By": record.get("actioned_by", "")
@@ -1139,36 +1321,12 @@ if st.session_state.get('show_comms', False):
 # Download communications if button clicked
 if st.session_state.get('download_comms', False):
     try:
-        # Fetch current week communications
+        # Fetch current week communications (both allocations and extensions)
         comm_data = supabase.table("allocation_students")\
-            .select("student_name, school, program, school_contact, outcome, information, actioned_by")\
+            .select("student_name, school, program, school_contact, outcome, information, actioned_by, exclusion_finish_date, proposed_extension_finish_date, extension_weeks")\
             .eq("meeting_week", selected_week)\
-            .in_("outcome", ["Allocated", "Not Allocated"])\
+            .in_("outcome", ["Allocated", "Not Allocated", "Approved", "Not Approved"])\
             .execute()
-        
-        # DEBUG: Show what was fetched
-        st.write("=" * 50)
-        st.write("🔍 **DEBUG: What came from database:**")
-        st.write("=" * 50)
-        st.write(f"**Total records found:** {len(comm_data.data) if comm_data.data else 0}")
-        
-        if comm_data.data and len(comm_data.data) > 0:
-            st.write("\n**SHOWING ALL RECORDS:**")
-            for idx, record in enumerate(comm_data.data, 1):
-                st.write(f"\n**Record {idx}:**")
-                st.write(f"- Student: {record.get('student_name')}")
-                st.write(f"- School: {record.get('school')}")
-                st.write(f"- Outcome: {record.get('outcome')}")
-                st.write(f"- ⚠️ INFORMATION: '{record.get('information')}'")
-                st.write(f"- ⚠️ ACTIONED BY: '{record.get('actioned_by')}'")
-                
-                if not record.get('information') and not record.get('actioned_by'):
-                    st.error("❌ BOTH FIELDS ARE EMPTY/NULL!")
-        else:
-            st.warning("No records found for this week")
-        
-        st.write("=" * 50)
-        st.write("")
         
         if comm_data.data:
             # Create Excel
@@ -1181,7 +1339,8 @@ if st.session_state.get('download_comms', False):
             ws.title = "Communication Summary"
             
             # Headers
-            headers = ["School", "Student", "Program", "School Contact", "Outcome", "Information to be Shared", "To be Actioned By"]
+            headers = ["School", "Student", "Program", "School Contact", "Type", "Outcome", 
+                      "Extension Details", "Information to be Shared", "To be Actioned By"]
             
             # Style header
             header_fill = PatternFill(start_color="1A7A6E", end_color="1A7A6E", fill_type="solid")
@@ -1195,22 +1354,35 @@ if st.session_state.get('download_comms', False):
             
             # Add data
             for row_idx, record in enumerate(comm_data.data, 2):
+                # Determine type
+                is_extension = record.get('outcome') in ['Approved', 'Not Approved']
+                record_type = "Extension" if is_extension else "Allocation"
+                
+                # Extension details
+                ext_details = ""
+                if is_extension:
+                    ext_details = f"Current end: {record.get('exclusion_finish_date', 'N/A')}, Proposed: {record.get('proposed_extension_finish_date', 'N/A')}, Weeks: {record.get('extension_weeks', 'N/A')}"
+                
                 ws.cell(row_idx, 1, record.get('school', ''))
                 ws.cell(row_idx, 2, record.get('student_name', ''))
                 ws.cell(row_idx, 3, record.get('program', ''))
                 ws.cell(row_idx, 4, record.get('school_contact', ''))
-                ws.cell(row_idx, 5, record.get('outcome', ''))
-                ws.cell(row_idx, 6, record.get('information', ''))
-                ws.cell(row_idx, 7, record.get('actioned_by', ''))
+                ws.cell(row_idx, 5, record_type)
+                ws.cell(row_idx, 6, record.get('outcome', ''))
+                ws.cell(row_idx, 7, ext_details)
+                ws.cell(row_idx, 8, record.get('information', ''))
+                ws.cell(row_idx, 9, record.get('actioned_by', ''))
             
             # Adjust column widths
             ws.column_dimensions['A'].width = 25
             ws.column_dimensions['B'].width = 20
             ws.column_dimensions['C'].width = 20
             ws.column_dimensions['D'].width = 20
-            ws.column_dimensions['E'].width = 15
-            ws.column_dimensions['F'].width = 40
-            ws.column_dimensions['G'].width = 20
+            ws.column_dimensions['E'].width = 12
+            ws.column_dimensions['F'].width = 15
+            ws.column_dimensions['G'].width = 40
+            ws.column_dimensions['H'].width = 40
+            ws.column_dimensions['I'].width = 20
             
             # Save to bytes
             output = BytesIO()
@@ -1234,7 +1406,5 @@ if st.session_state.get('download_comms', False):
         st.error(f"Error: {e}")
         st.session_state.download_comms = False
 
-
-
 # Caption
-st.caption("CLC-LBU Allocation Meetings Tool V3 | Simplified Draft System")
+st.caption("CLC-LBU Allocation Meetings Tool V4 | Extensions & Not Allocated Auto-compile")
