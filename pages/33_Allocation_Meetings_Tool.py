@@ -298,22 +298,50 @@ def export_to_data_entry(selected_allocations):
     ws = wb.active
     ws.title = "Data_Model"
     
-    # Define headers - COMPLETE SET with comprehensive flags
+    # Define headers - EXACT MATCH to Excel Data_Model structure
     # Generate flag headers from ALL_FLAGS list
     flag_headers = [f"Flag_{flag.replace(' ', '_').replace('/', '_').replace('+', 'plus').replace('-', '_')}" 
                     for flag in ALL_FLAGS]
     
     headers = [
-        "Student_ID", "Student_Name", "DOB", "Gender", "Year_Level", "Referring_School",
-        "Referral_Date", "Allocation_Status", "Allocated_Program", 
-        "Placement_Start", "Placement_End", "Partnership_Area",
-        "Previous_CLC_Placement", "Previous_Other_LC", "Other_LC_Name",
-        "Total_Previous_Placements", "Placement_History_Notes", "Priority_Level",
-        "Case_Worker"
-    ] + flag_headers + [
-        "Bespoke_Placement",
-        "Waitlist_Status", "Waitlist_Date", "Allocated_From_Waitlist",
-        "Current_Status", "Exit_Reason", "Transition_Plan", "Notes"
+        "Student_ID",                    # 1
+        "Previous_Referrals",            # 2 - Formula field
+        "Student_Name",                  # 3
+        "DOB",                           # 4
+        "Gender",                        # 5
+        "Year_Level",                    # 6
+        "Referring_School",              # 7
+        "Referral_Date",                 # 8
+        "Allocation_Status",             # 9
+        "Allocated_Program",             # 10
+        "Placement_Start",               # 11
+        "Partnership_Area",              # 12
+        "Previous_CLC_Placement",        # 13
+        "Previous_Other_LC",             # 14
+        "Other_LC_Name",                 # 15
+        "Total_Previous_Placements",     # 16
+        "Placement_History_Notes",       # 17
+        "Priority_Level",                # 18
+        "Case_Worker"                    # 19 - NEW FIELD
+    ] + flag_headers + [                 # 20-50 (31 flags total)
+        "Bespoke_Placement",             # 51
+        "Waitlist_Status",               # 52
+        "Waitlist_Date",                 # 53
+        "Allocated_From_Waitlist",       # 54
+        "Extension",                     # 55 - NEW
+        "Exension_Date",                 # 56 - NEW (keeping Excel's typo)
+        "Exit_Reason",                   # 57
+        "Transition_Plan",               # 58
+        "Notes",                         # 59
+        "Placement_End",                 # 60
+        "Current_Status",                # 61
+        "Behaviour_Flag",                # 62 - NEW
+        "Exclusion_End_Date",            # 63 - NEW
+        "Actual_Finish_Date",            # 64 - NEW
+        "Extended_Placement",            # 65 - NEW
+        "Referral_Year",                 # 66 - Formula field
+        "Term",                          # 67 - Formula field
+        "Extension_Status"               # 68 - Formula field
     ]
     
     # Style header row
@@ -394,16 +422,16 @@ def export_to_data_entry(selected_allocations):
         
         row_data = [
             student_id,                                          # 1. Student_ID
-            allocation.get('student_name', '').upper(),         # 2. Student_Name
-            dob,                                                 # 3. DOB
-            allocation.get('gender', ''),                        # 4. Gender
-            allocation.get('year_level', ''),                    # 5. Year_Level
-            allocation.get('school', ''),                        # 6. Referring_School
-            today,                                               # 7. Referral_Date
-            allocation_status,                                   # 8. Allocation_Status
-            mapped_program,                                      # 9. Allocated_Program
-            start_date,                                          # 10. Placement_Start
-            end_date,                                            # 11. Placement_End
+            f'=IF(A{row_num}="","",COUNTIF(A:A,A{row_num})-1)', # 2. Previous_Referrals (Formula)
+            allocation.get('student_name', '').upper(),          # 3. Student_Name
+            dob,                                                 # 4. DOB
+            allocation.get('gender', ''),                        # 5. Gender
+            allocation.get('year_level', ''),                    # 6. Year_Level
+            allocation.get('school', ''),                        # 7. Referring_School
+            today,                                               # 8. Referral_Date
+            allocation_status,                                   # 9. Allocation_Status
+            mapped_program,                                      # 10. Allocated_Program
+            start_date,                                          # 11. Placement_Start
             allocation.get('partnership_area', ''),              # 12. Partnership_Area
             allocation.get('previous_clc_placement', 'No'),      # 13. Previous_CLC_Placement
             allocation.get('previous_other_lc', 'No'),           # 14. Previous_Other_LC
@@ -412,15 +440,25 @@ def export_to_data_entry(selected_allocations):
             allocation.get('placement_history_notes', ''),       # 17. Placement_History_Notes
             allocation.get('priority_level', '3'),               # 18. Priority_Level
             allocation.get('case_worker', ''),                   # 19. Case_Worker
-        ] + flag_values + [  # 20-52. All comprehensive flags (33 flags)
-            allocation.get('bespoke_placement', 'No'),           # 53. Bespoke_Placement
-            waitlist_status,                                     # 54. Waitlist_Status
-            waitlist_date,                                       # 55. Waitlist_Date
-            allocation.get('allocated_from_waitlist', 'No'),     # 56. Allocated_From_Waitlist
-            'Active',                                            # 57. Current_Status
-            '',                                                  # 58. Exit_Reason
-            '',                                                  # 59. Transition_Plan
-            allocation.get('queries', '')                        # 60. Notes
+        ] + flag_values + [  # 20-50. All comprehensive flags (31 flags)
+            allocation.get('bespoke_placement', 'No'),           # 51. Bespoke_Placement
+            waitlist_status,                                     # 52. Waitlist_Status
+            waitlist_date,                                       # 53. Waitlist_Date
+            allocation.get('allocated_from_waitlist', 'No'),     # 54. Allocated_From_Waitlist
+            'No',                                                # 55. Extension (default No)
+            '',                                                  # 56. Exension_Date (blank)
+            '',                                                  # 57. Exit_Reason
+            '',                                                  # 58. Transition_Plan
+            allocation.get('queries', ''),                       # 59. Notes
+            end_date,                                            # 60. Placement_End
+            'Active',                                            # 61. Current_Status
+            'No',                                                # 62. Behaviour_Flag (default No)
+            '',                                                  # 63. Exclusion_End_Date (blank)
+            '',                                                  # 64. Actual_Finish_Date (blank)
+            'No',                                                # 65. Extended_Placement (default No)
+            f'=IFERROR(IF(H{row_num}="","",YEAR(H{row_num})),"")',  # 66. Referral_Year (Formula)
+            f'=IF(H{row_num}="","",IFERROR(INDEX(TermDates[Term],MATCH(_xlfn.MINIFS(TermDates[End_Date],TermDates[End_Date],">="&H{row_num}),TermDates[End_Date],0)),""))',  # 67. Term (Formula)
+            f'=IF(OR(BJ{row_num}="",BK{row_num}=""),"",IF(BK{row_num}=BJ{row_num},"On Time",IF(BK{row_num}>BJ{row_num},"Extended ("&(BK{row_num}-BJ{row_num})&" days)","Finished Early ("&(BJ{row_num}-BK{row_num})&" days)")))'  # 68. Extension_Status (Formula)
         ]
         
         # Write row
