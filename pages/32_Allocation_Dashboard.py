@@ -1069,8 +1069,7 @@ with col1:
 
 with col2:
     conversion_rate = (allocated_count / total_referrals * 100) if total_referrals > 0 else 0
-    st.caption(f"{conversion_rate:.1f}% conversion")
-    if st.button(f"**{allocated_count}**\n\nAllocated", use_container_width=True, key="btn_allocated"):
+    if st.button(f"**{allocated_count}**\n\nAllocated\n\n{conversion_rate:.1f}% conversion", use_container_width=True, key="btn_allocated"):
         st.session_state.drill_down_view = "allocated"
         st.rerun()
 
@@ -1134,9 +1133,8 @@ with col7:
     else:
         extension_method = "Add columns to Excel"
     
-    # Show button with tooltip
-    st.caption(extension_method)
-    if st.button(f"**{extended_count}**\n\nExtensions", use_container_width=True, key="btn_extensions"):
+    # Show button with method
+    if st.button(f"**{extended_count}**\n\nExtensions\n\n{extension_method}", use_container_width=True, key="btn_extensions"):
         st.session_state.drill_down_view = "extensions"
         st.rerun()
 
@@ -1147,8 +1145,7 @@ with col8:
     else:
         terms_with_data = 0
     
-    st.caption(f"{terms_with_data} terms")
-    if st.button(f"**📅**\n\nTerms", use_container_width=True, key="btn_terms"):
+    if st.button(f"**📅**\n\nTerms\n\n{terms_with_data} terms", use_container_width=True, key="btn_terms"):
         st.session_state.drill_down_view = "terms"
         st.rerun()
 
@@ -1157,12 +1154,12 @@ with col9:
     if 'category_of_support' in filtered_df.columns:
         category_count = len(filtered_df[pd.notna(filtered_df['category_of_support']) & (filtered_df['category_of_support'] != '')])
         unique_categories = filtered_df['category_of_support'].nunique()
-        st.caption(f"{unique_categories} categories")
+        category_label = f"{unique_categories} categories"
     else:
         category_count = total_referrals
-        st.caption("All students")
+        category_label = "All students"
     
-    if st.button(f"**{category_count}**\n\nCategory", use_container_width=True, key="btn_category"):
+    if st.button(f"**{category_count}**\n\nCategory\n\n{category_label}", use_container_width=True, key="btn_category"):
         st.session_state.drill_down_view = "category"
         st.rerun()
 
