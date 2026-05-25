@@ -40,7 +40,7 @@ MEDICAL_FLAGS = ["Medication", "Medical condition"]
 # Combine all for storage
 ALL_FLAGS = (LANGUAGE_CULTURAL_FLAGS + ATTENDANCE_FLAGS + CARE_CUSTODY_FLAGS + 
              FUNDING_FLAGS + SUPPORT_NEEDS_FLAGS + MEDICAL_FLAGS)
-STAFF_NAMES = ["Brenton McGorman", "Caitie Hook", "Ben Selga", "Ben Sutton", "Jacqui Simpson"]
+STAFF_NAMES = ["Candice", "Annette", "Naomi/Cheryl", "Catie", "Ben Selga", "Ben Sutton", "Jacqui", "Brenton"]
 OUTCOMES = ["Allocated", "Not Allocated"]
 EXTENSION_OUTCOMES = ["Approved", "Not Approved"]
 
