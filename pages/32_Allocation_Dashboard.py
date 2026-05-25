@@ -53,71 +53,337 @@ go.layout.Template(
     )
 )
 
-st.set_page_config(page_title="CLC Allocation Dashboard - Interactive", page_icon="📊", layout="wide")
+st.set_page_config(page_title="CLC Allocation Dashboard", page_icon="📊", layout="wide")
 
-# Custom CSS for professional appearance
+# Professional Design System with Modern Color Palette & Typography
 st.markdown("""
 <style>
-    .main > div {
-        padding-top: 2rem;
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+    
+    /* ═══ COLOR PALETTE ═══
+       Primary Navy: #0F172A (headers, primary actions)
+       Accent Teal: #14B8A6 (highlights, success states)
+       Accent Coral: #F97316 (warnings, attention)
+       Soft Blue: #3B82F6 (links, interactive)
+       Background: #F8FAFC (page background)
+       Surface: #FFFFFF (cards, panels)
+       Text Primary: #1E293B
+       Text Secondary: #64748B
+    */
+    
+    /* === GLOBAL RESETS === */
+    * {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
+    
+    html, body, [data-testid="stAppViewContainer"] {
+        background: #F8FAFC !important;
+    }
+    
+    .main > div {
+        padding: 1.5rem 2rem 3rem !important;
+        max-width: 1800px;
+        margin: 0 auto;
+    }
+    
+    /* === TYPOGRAPHY === */
+    h1, h2, h3, h4, h5, h6 {
+        font-family: 'Inter', sans-serif !important;
+        font-weight: 700 !important;
+        color: #0F172A !important;
+        letter-spacing: -0.02em !important;
+    }
+    
+    p, span, div {
+        color: #1E293B;
+        line-height: 1.6;
+    }
+    
+    /* === HEADER === */
+    .dashboard-header {
+        background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%);
+        padding: 2rem 2.5rem;
+        border-radius: 16px;
+        margin-bottom: 2rem;
+        box-shadow: 0 4px 20px rgba(15, 23, 42, 0.15);
+        border: 1px solid rgba(255,255,255,0.05);
+    }
+    
+    .dashboard-title {
+        color: #FFFFFF;
+        font-size: 2.25rem;
+        font-weight: 800;
+        margin: 0;
+        letter-spacing: -0.03em;
+    }
+    
+    .dashboard-subtitle {
+        color: #94A3B8;
+        font-size: 1rem;
+        margin: 0.5rem 0 0 0;
+        font-weight: 400;
+        letter-spacing: 0.01em;
+    }
+    
+    /* === METRIC BUTTONS === */
     .stButton>button {
         width: 100%;
-        height: 80px;
-        font-size: 1.1rem;
-        font-weight: 600;
-        border-radius: 8px;
-        border: 2px solid #e0e0e0;
-        transition: all 0.3s ease;
+        height: 100px !important;
+        background: white !important;
+        border: 1.5px solid #E2E8F0 !important;
+        border-radius: 12px !important;
+        font-size: 1rem !important;
+        font-weight: 600 !important;
+        color: #0F172A !important;
+        transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05) !important;
+        padding: 1.25rem !important;
     }
+    
     .stButton>button:hover {
-        border-color: #667eea;
-        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
-        transform: translateY(-2px);
+        border-color: #14B8A6 !important;
+        box-shadow: 0 8px 24px rgba(20, 184, 166, 0.2) !important;
+        transform: translateY(-2px) !important;
+        background: linear-gradient(135deg, #FFFFFF 0%, #F0FDFA 100%) !important;
     }
-    .metric-card {
-        background: white;
-        padding: 1.5rem;
-        border-radius: 10px;
-        border-left: 4px solid #667eea;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        margin-bottom: 1rem;
+    
+    .stButton>button:active {
+        transform: translateY(0px) !important;
     }
+    
+    /* === SECTION HEADERS === */
     .section-header {
-        font-size: 1.8rem;
-        font-weight: 700;
-        color: #2c3e50;
-        margin: 2rem 0 1rem 0;
-        padding-bottom: 0.5rem;
-        border-bottom: 3px solid #667eea;
+        font-size: 1.5rem !important;
+        font-weight: 700 !important;
+        color: #0F172A !important;
+        margin: 2.5rem 0 1.25rem 0 !important;
+        padding-bottom: 0.75rem !important;
+        border-bottom: 2px solid #E2E8F0 !important;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
     }
+    
+    /* === DRILL-DOWN HEADERS === */
     .drill-down-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 2rem;
-        border-radius: 12px;
-        margin-bottom: 1.5rem;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        background: linear-gradient(135deg, #0F172A 0%, #1E3A5F 100%);
+        padding: 2.5rem;
+        border-radius: 16px;
+        margin-bottom: 2rem;
+        box-shadow: 0 8px 32px rgba(15, 23, 42, 0.2);
+        border: 1px solid rgba(255,255,255,0.08);
+        position: relative;
+        overflow: hidden;
     }
+    
+    .drill-down-header::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 300px;
+        height: 300px;
+        background: radial-gradient(circle, rgba(20,184,166,0.15) 0%, transparent 70%);
+        border-radius: 50%;
+        transform: translate(40%, -40%);
+    }
+    
     .drill-down-title {
-        color: white;
+        color: #FFFFFF;
         margin: 0;
         font-size: 2rem;
-        font-weight: 700;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        position: relative;
+        z-index: 1;
     }
+    
     .drill-down-subtitle {
-        color: rgba(255,255,255,0.9);
-        margin: 0.5rem 0 0 0;
-        font-size: 1.2rem;
+        color: #94A3B8;
+        margin: 0.75rem 0 0 0;
+        font-size: 1.1rem;
+        font-weight: 400;
+        position: relative;
+        z-index: 1;
     }
+    
+    /* === CARDS === */
+    .metric-card {
+        background: white;
+        padding: 1.75rem;
+        border-radius: 12px;
+        border: 1.5px solid #E2E8F0;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        margin-bottom: 1.25rem;
+        transition: all 0.2s ease;
+    }
+    
+    .metric-card:hover {
+        border-color: #CBD5E1;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    }
+    
+    /* === TABS === */
+    [data-baseweb="tab-list"] {
+        background: transparent !important;
+        gap: 0.5rem !important;
+        border-bottom: 2px solid #E2E8F0 !important;
+        padding: 0 0 0.25rem 0 !important;
+    }
+    
+    [data-baseweb="tab"] {
+        background: transparent !important;
+        border-radius: 8px 8px 0 0 !important;
+        padding: 0.75rem 1.5rem !important;
+        font-family: 'Inter', sans-serif !important;
+        font-size: 0.9rem !important;
+        font-weight: 600 !important;
+        color: #64748B !important;
+        border: none !important;
+        transition: all 0.2s ease !important;
+    }
+    
+    [data-baseweb="tab"]:hover {
+        color: #0F172A !important;
+        background: #F8FAFC !important;
+    }
+    
+    [aria-selected="true"][data-baseweb="tab"] {
+        background: white !important;
+        color: #14B8A6 !important;
+        border-bottom: 3px solid #14B8A6 !important;
+        box-shadow: 0 -2px 8px rgba(20,184,166,0.1) !important;
+    }
+    
+    [data-baseweb="tab-panel"] {
+        padding: 1.5rem 0 !important;
+    }
+    
+    /* === INPUTS & FILTERS === */
+    .stSelectbox select, .stTextInput input, .stTextArea textarea {
+        border: 1.5px solid #E2E8F0 !important;
+        border-radius: 8px !important;
+        font-family: 'Inter', sans-serif !important;
+        font-size: 0.9rem !important;
+        background: white !important;
+        color: #1E293B !important;
+        padding: 0.65rem 0.85rem !important;
+        transition: all 0.2s ease !important;
+    }
+    
+    .stSelectbox select:focus, .stTextInput input:focus, .stTextArea textarea:focus {
+        border-color: #14B8A6 !important;
+        box-shadow: 0 0 0 3px rgba(20,184,166,0.1) !important;
+        outline: none !important;
+    }
+    
+    label[data-testid="stWidgetLabel"] p {
+        font-size: 0.8rem !important;
+        font-weight: 600 !important;
+        color: #475569 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.05em !important;
+        margin-bottom: 0.5rem !important;
+    }
+    
+    /* === DATAFRAMES === */
+    [data-testid="stDataFrame"] {
+        border: 1.5px solid #E2E8F0 !important;
+        border-radius: 12px !important;
+        overflow: hidden !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05) !important;
+    }
+    
+    /* === METRICS === */
     div[data-testid="stMetricValue"] {
-        font-size: 2rem;
+        font-size: 2.25rem !important;
+        font-weight: 700 !important;
+        color: #0F172A !important;
+    }
+    
+    div[data-testid="stMetricLabel"] {
+        font-size: 0.85rem !important;
+        font-weight: 600 !important;
+        color: #64748B !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.05em !important;
+    }
+    
+    div[data-testid="stMetricDelta"] {
+        font-size: 0.9rem !important;
+        font-weight: 600 !important;
+    }
+    
+    /* === INFO/WARNING/SUCCESS/ERROR BOXES === */
+    .stAlert {
+        border-radius: 10px !important;
+        border-width: 1.5px !important;
+        padding: 1rem 1.25rem !important;
+        font-size: 0.9rem !important;
+    }
+    
+    /* === EXPANDERS === */
+    .streamlit-expanderHeader {
+        background: white !important;
+        border: 1.5px solid #E2E8F0 !important;
+        border-radius: 10px !important;
+        font-weight: 600 !important;
+        color: #0F172A !important;
+        padding: 1rem 1.25rem !important;
+    }
+    
+    .streamlit-expanderHeader:hover {
+        border-color: #CBD5E1 !important;
+        background: #F8FAFC !important;
+    }
+    
+    /* === PROGRESS BARS === */
+    .stProgress > div > div > div {
+        background: linear-gradient(90deg, #14B8A6 0%, #0D9488 100%) !important;
+    }
+    
+    /* === CAPTIONS === */
+    .stCaption {
+        color: #64748B !important;
+        font-size: 0.85rem !important;
+        font-family: 'JetBrains Mono', monospace !important;
+    }
+    
+    /* === DIVIDERS === */
+    hr {
+        border-color: #E2E8F0 !important;
+        margin: 2rem 0 !important;
+    }
+    
+    /* === SCROLLBARS === */
+    ::-webkit-scrollbar {
+        width: 10px;
+        height: 10px;
+    }
+    
+    ::-webkit-scrollbar-track {
+        background: #F1F5F9;
+        border-radius: 10px;
+    }
+    
+    ::-webkit-scrollbar-thumb {
+        background: #CBD5E1;
+        border-radius: 10px;
+    }
+    
+    ::-webkit-scrollbar-thumb:hover {
+        background: #94A3B8;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Title
-st.markdown('<h1 style="text-align: center; color: #2c3e50; font-size: 2.5rem; margin-bottom: 0;">📊 CLC Allocation Dashboard</h1>', unsafe_allow_html=True)
-st.markdown('<p style="text-align: center; color: #7f8c8d; font-size: 1.2rem; margin-top: 0;">Interactive Analytics & Deep Dive</p>', unsafe_allow_html=True)
+# Modern Header
+st.markdown("""
+<div class="dashboard-header">
+    <h1 class="dashboard-title">📊 CLC Allocation Dashboard</h1>
+    <p class="dashboard-subtitle">Real-time analytics and insights for student allocation management</p>
+</div>
+""", unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SUPABASE CONNECTION (Direct - no database.py import)
