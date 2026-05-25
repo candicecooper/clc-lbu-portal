@@ -48,7 +48,14 @@ EXTENSION_OUTCOMES = ["Approved", "Not Approved"]
 GENDER_OPTIONS = ["Male", "Female", "Other", "Prefer not to say"]
 PRIORITY_OPTIONS = ["1", "2", "3", "4", "5"]
 YEAR_LEVELS = ["R", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
-WAITLIST_STATUS_OPTIONS = ["Not Applicable", "On Waitlist", "Declined", "Site Decision"]
+WAITLIST_STATUS_OPTIONS = ["Not Applicable", "On Waitlist", "Declined", "Site Decision", "Site Withdraw"]
+MEDICAL_CONDITION_TYPES = [
+    "Asthma", "Diabetes (Type 1)", "Diabetes (Type 2)", "Epilepsy/Seizure Disorder",
+    "Heart Condition", "Allergy (Severe/Anaphylaxis)", "Allergy (Other)",
+    "Autoimmune Disorder", "Cancer", "Chronic Pain Condition",
+    "Gastrointestinal Disorder", "Kidney Disease", "Vision Impairment",
+    "Hearing Impairment", "Mobility Impairment", "Other"
+]
 
 # SCHOOL-PARTNERSHIP MAPPING (from government PDF)
 SCHOOL_PARTNERSHIP_MAP = {
@@ -652,6 +659,7 @@ with tab1:
                                         "total_previous_placements": student.get('total_previous_placements', 0),
                                         "placement_history_notes": student.get('placement_history_notes'),
                                         "medical_condition_details": student.get('medical_condition_details'),
+                                        "medication_details": student.get('medication_details'),
                                         "cat_funding": student.get('cat_funding'),
                                         "partnership": student.get('partnership'),
                                         "queries": f"⏳ FROM WAITLIST - Original status: {student.get('waitlist_status')} (Week {student.get('meeting_week')})",
@@ -928,14 +936,28 @@ with tab1:
             
             with col2:
                 st.write("**Medical**")
-                medical_condition_details = ""  # Initialize first
+                medical_condition_details = ""  # Initialize
+                medication_details = ""  # Initialize
+                
                 for flag in MEDICAL_FLAGS:
                     if st.checkbox(flag, key=f"flag_{flag}"):
                         selected_flags.append(flag)
                 
-                # Medical condition details field - only show if checked
+                # Medical condition dropdown - REQUIRED if Medical condition is checked
                 if "Medical condition" in selected_flags:
-                    medical_condition_details = st.text_input("Medical Condition Details", placeholder="Please specify medical condition")
+                    medical_condition_details = st.selectbox(
+                        "Medical Condition Type *",
+                        [""] + MEDICAL_CONDITION_TYPES,
+                        help="Required - select the type of medical condition"
+                    )
+                
+                # Medication details text box - OPTIONAL if Medication is checked
+                if "Medication" in selected_flags:
+                    medication_details = st.text_input(
+                        "Medication Details (Optional)",
+                        placeholder="e.g., Ritalin 10mg twice daily",
+                        help="Optional - enter medication names and dosages if known"
+                    )
             
             # Row 3: Funding (full width - lots of options)
             st.write("**Funding & Categories**")
@@ -991,6 +1013,8 @@ with tab1:
                     missing.append("Year Level")
                 if not school:
                     missing.append("School")
+                if "Medical condition" in selected_flags and not medical_condition_details:
+                    missing.append("Medical Condition Type")
                 
                 if missing:
                     st.error(f"⚠️ Please fill in required fields: {', '.join(missing)}")
@@ -1015,6 +1039,7 @@ with tab1:
                             "total_previous_placements": total_placements,
                             "placement_history_notes": placement_history_notes,
                             "medical_condition_details": medical_condition_details if "Medical condition" in selected_flags else None,
+                            "medication_details": medication_details if "Medication" in selected_flags else None,
                             "cat_funding": json.dumps(selected_flags),
                             "partnership": json.dumps([]),
                             "queries": queries,
@@ -1489,31 +1514,46 @@ with tab5:
                 df_site_decision = pd.DataFrame(display_data)
                 st.dataframe(df_site_decision.drop(columns=['ID']), use_container_width=True, hide_index=True)
                 
-                # Delete option for site decision
-                st.markdown("#### ❌ Remove from Site Decision")
-                st.caption("Use if school has decided not to proceed")
+                # Update Site Decision status
+                st.markdown("#### ✏️ Update Site Decision")
+                st.caption("Move to waitlist when school confirms, or withdraw if school declines")
                 
-                col1, col2 = st.columns([3, 1])
+                col1, col2, col3 = st.columns([2, 1, 1])
                 with col1:
-                    student_to_remove = st.selectbox(
-                        "Select student to remove",
+                    student_to_update = st.selectbox(
+                        "Select student",
                         [""] + [f"{r['student_name']} - {r['school']}" for r in site_decision],
-                        key="remove_site_decision"
+                        key="update_site_decision"
                     )
                 
                 with col2:
-                    if st.button("🗑️ Remove", type="secondary", disabled=not student_to_remove):
-                        if student_to_remove:
+                    if st.button("📋 Move to Waitlist", type="primary", disabled=not student_to_update, use_container_width=True):
+                        if student_to_update:
                             # Find the record
-                            selected_record = next((r for r in site_decision if f"{r['student_name']} - {r['school']}" == student_to_remove), None)
+                            selected_record = next((r for r in site_decision if f"{r['student_name']} - {r['school']}" == student_to_update), None)
                             if selected_record:
-                                # Update to remove from waitlist but keep in database
                                 try:
                                     supabase.table("allocation_students")\
-                                        .update({"waitlist_status": "Declined"})\
+                                        .update({"waitlist_status": "On Waitlist"})\
                                         .eq("id", selected_record['id'])\
                                         .execute()
-                                    st.success(f"✅ Removed {selected_record['student_name']} from Site Decision")
+                                    st.success(f"✅ Moved {selected_record['student_name']} to Waitlist")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+                
+                with col3:
+                    if st.button("🚫 Site Withdraw", type="secondary", disabled=not student_to_update, use_container_width=True):
+                        if student_to_update:
+                            # Find the record
+                            selected_record = next((r for r in site_decision if f"{r['student_name']} - {r['school']}" == student_to_update), None)
+                            if selected_record:
+                                try:
+                                    supabase.table("allocation_students")\
+                                        .update({"waitlist_status": "Site Withdraw"})\
+                                        .eq("id", selected_record['id'])\
+                                        .execute()
+                                    st.success(f"✅ Marked {selected_record['student_name']} as Site Withdraw")
                                     st.rerun()
                                 except Exception as e:
                                     st.error(f"Error: {e}")
@@ -1571,69 +1611,104 @@ with tab5:
             
             # Export waitlist/site decision
             st.markdown("---")
-            st.subheader("📥 Export Waitlist/Site Decision")
+            st.subheader("📥 Export Waitlist/Site Decision Data")
+            st.caption("Includes all waitlist history: active, withdrawn, and declined")
             
-            if st.button("📥 Download Waitlist Summary", type="primary"):
-                from openpyxl import Workbook
-                from io import BytesIO
-                
-                wb = Workbook()
-                ws = wb.active
-                ws.title = "Waitlist Summary"
-                
-                # Headers
-                headers = ["Student", "Year", "School", "Program", "Case Worker", "Status", "Meeting Week", "Waitlist Date"]
-                header_fill = PatternFill(start_color="FFA500", end_color="FFA500", fill_type="solid")
-                header_font = Font(bold=True, color="FFFFFF")
-                
-                for col_idx, header in enumerate(headers, 1):
-                    cell = ws.cell(1, col_idx, header)
-                    cell.fill = header_fill
-                    cell.font = header_font
-                    cell.alignment = Alignment(horizontal='center', vertical='center')
-                
-                # Add data
-                row_idx = 2
-                for record in waitlist_data.data:
-                    ws.cell(row_idx, 1, record.get('student_name', ''))
-                    ws.cell(row_idx, 2, record.get('year_level', ''))
-                    ws.cell(row_idx, 3, record.get('school', ''))
-                    ws.cell(row_idx, 4, record.get('program', ''))
-                    ws.cell(row_idx, 5, record.get('case_worker', ''))
-                    ws.cell(row_idx, 6, record.get('waitlist_status', ''))
-                    ws.cell(row_idx, 7, record.get('meeting_week', ''))
-                    ws.cell(row_idx, 8, record.get('waitlist_date', ''))
+            if st.button("📥 Download Complete Waitlist Data", type="primary"):
+                try:
+                    # Fetch ALL waitlist-related records (including withdrawn and declined)
+                    all_waitlist_data = supabase.table("allocation_students")\
+                        .select("*")\
+                        .in_("waitlist_status", ["On Waitlist", "Site Decision", "Site Withdraw", "Declined"])\
+                        .not_.is_("outcome", "null")\
+                        .order("waitlist_date", desc=True)\
+                        .execute()
                     
-                    # Highlight site decision rows in RED
-                    if record.get('waitlist_status') == 'Site Decision':
-                        for col in range(1, 9):
-                            cell = ws.cell(row_idx, col)
-                            cell.fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
-                            cell.font = Font(color="FFFFFF", bold=True)
-                    
-                    row_idx += 1
-                
-                # Adjust widths
-                ws.column_dimensions['A'].width = 25
-                ws.column_dimensions['B'].width = 10
-                ws.column_dimensions['C'].width = 30
-                ws.column_dimensions['D'].width = 20
-                ws.column_dimensions['E'].width = 20
-                ws.column_dimensions['F'].width = 15
-                ws.column_dimensions['G'].width = 15
-                ws.column_dimensions['H'].width = 15
-                
-                # Save to bytes
-                output = BytesIO()
-                wb.save(output)
-                excel_data = output.getvalue()
-                
-                st.download_button(
-                    label="💾 Save Waitlist Summary",
-                    data=excel_data,
-                    file_name=f"Waitlist_Summary_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+                    if all_waitlist_data.data:
+                        from openpyxl import Workbook
+                        from io import BytesIO
+                        
+                        wb = Workbook()
+                        ws = wb.active
+                        ws.title = "Waitlist Summary"
+                        
+                        # Headers
+                        headers = ["Student", "Year", "School", "Program", "Case Worker", "Status", "Meeting Week", "Waitlist Date"]
+                        header_fill = PatternFill(start_color="FFA500", end_color="FFA500", fill_type="solid")
+                        header_font = Font(bold=True, color="FFFFFF")
+                        
+                        for col_idx, header in enumerate(headers, 1):
+                            cell = ws.cell(1, col_idx, header)
+                            cell.fill = header_fill
+                            cell.font = header_font
+                            cell.alignment = Alignment(horizontal='center', vertical='center')
+                        
+                        # Add data
+                        row_idx = 2
+                        for record in all_waitlist_data.data:
+                            ws.cell(row_idx, 1, record.get('student_name', ''))
+                            ws.cell(row_idx, 2, record.get('year_level', ''))
+                            ws.cell(row_idx, 3, record.get('school', ''))
+                            ws.cell(row_idx, 4, record.get('program', ''))
+                            ws.cell(row_idx, 5, record.get('case_worker', ''))
+                            ws.cell(row_idx, 6, record.get('waitlist_status', ''))
+                            ws.cell(row_idx, 7, record.get('meeting_week', ''))
+                            ws.cell(row_idx, 8, record.get('waitlist_date', ''))
+                            
+                            # Color coding
+                            waitlist_status = record.get('waitlist_status', '')
+                            
+                            # RED for site decision (urgent)
+                            if waitlist_status == 'Site Decision':
+                                for col in range(1, 9):
+                                    cell = ws.cell(row_idx, col)
+                                    cell.fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
+                                    cell.font = Font(color="FFFFFF", bold=True)
+                            
+                            # ORANGE for site withdraw
+                            elif waitlist_status == 'Site Withdraw':
+                                for col in range(1, 9):
+                                    cell = ws.cell(row_idx, col)
+                                    cell.fill = PatternFill(start_color="FF6600", end_color="FF6600", fill_type="solid")
+                                    cell.font = Font(color="FFFFFF")
+                            
+                            # GREY for declined
+                            elif waitlist_status == 'Declined':
+                                for col in range(1, 9):
+                                    cell = ws.cell(row_idx, col)
+                                    cell.fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
+                                    cell.font = Font(color="666666")
+                            
+                            row_idx += 1
+                        
+                        # Adjust widths
+                        ws.column_dimensions['A'].width = 25
+                        ws.column_dimensions['B'].width = 10
+                        ws.column_dimensions['C'].width = 30
+                        ws.column_dimensions['D'].width = 20
+                        ws.column_dimensions['E'].width = 20
+                        ws.column_dimensions['F'].width = 15
+                        ws.column_dimensions['G'].width = 15
+                        ws.column_dimensions['H'].width = 15
+                        
+                        # Save to bytes
+                        output = BytesIO()
+                        wb.save(output)
+                        excel_data = output.getvalue()
+                        
+                        st.download_button(
+                            label="💾 Save Complete Waitlist Data",
+                            data=excel_data,
+                            file_name=f"Waitlist_Complete_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                        
+                        st.success(f"✅ Export ready! {len(all_waitlist_data.data)} total records (active + historical)")
+                    else:
+                        st.info("No waitlist data to export")
+                        
+                except Exception as e:
+                    st.error(f"Error creating export: {e}")
         else:
             st.success("✅ No students currently on waitlist or awaiting site decision")
     
