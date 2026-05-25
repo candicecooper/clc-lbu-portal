@@ -447,6 +447,45 @@ def get_term(month):
     except:
         return "Unknown"
 
+def get_current_term():
+    """Determine current term based on today's date"""
+    today = datetime.now()
+    month = today.month
+    if month <= 3:
+        return "Term 1"
+    elif month <= 6:
+        return "Term 2"
+    elif month <= 9:
+        return "Term 3"
+    else:
+        return "Term 4"
+
+def should_show_term(term_name, year, current_year=None, current_term=None):
+    """Determine if a term should be shown in filters (only past and current terms)"""
+    if current_year is None:
+        current_year = datetime.now().year
+    if current_term is None:
+        current_term = get_current_term()
+    
+    # Always show unknown terms
+    if term_name == "Unknown":
+        return True
+    
+    # Past years: show all terms
+    if year < current_year:
+        return True
+    
+    # Future years: hide all terms
+    if year > current_year:
+        return False
+    
+    # Current year: only show terms that have started
+    term_order = {"Term 1": 1, "Term 2": 2, "Term 3": 3, "Term 4": 4}
+    current_term_num = term_order.get(current_term, 4)
+    term_num = term_order.get(term_name, 0)
+    
+    return term_num <= current_term_num
+
 # Calculate term from month - ALWAYS do this from referral_date
 if 'month' in df.columns:
     df['term'] = df['month'].apply(get_term)
@@ -534,7 +573,31 @@ with col1:
 
 with col2:
     if 'term' in df.columns:
-        terms = ['All Terms'] + sorted([t for t in df['term'].unique() if pd.notna(t)])
+        # Get all unique terms from data
+        all_terms = sorted([t for t in df['term'].unique() if pd.notna(t)])
+        
+        # Filter to only show terms that have started (current year aware)
+        current_year = datetime.now().year
+        current_term = get_current_term()
+        
+        # If a specific year is selected, use that for filtering
+        filter_year = selected_year if selected_year != 'All Years' else current_year
+        
+        # Filter terms based on whether they should be shown
+        available_terms = []
+        for term in all_terms:
+            # For each term, check if any data exists for it in the selected year
+            if selected_year != 'All Years':
+                # Only show terms that exist in the selected year and should be shown
+                term_exists = len(df[(df['term'] == term) & (df['year'] == selected_year)]) > 0
+                if term_exists and should_show_term(term, filter_year, current_year, current_term):
+                    available_terms.append(term)
+            else:
+                # For "All Years", show all terms that exist in any year that should be shown
+                if term in all_terms:  # Just include if it exists
+                    available_terms.append(term)
+        
+        terms = ['All Terms'] + available_terms
     else:
         terms = ['All Terms']
     selected_term = st.selectbox("🗓️ Term", terms, key="term_filter")
@@ -854,11 +917,11 @@ if st.session_state.drill_down_view:
                 fig = go.Figure(go.Bar(
                     x=term_data['Term'],
                     y=term_data['Referrals'],
-                    text=term_data['Referrals'],
+                    text=format_chart_text(term_data['Referrals']),
                     textposition='auto',
                     marker_color='#2ECC71'
                 ))
-                fig.update_layout(title="Referral Trends by Term", xaxis_title="Term", yaxis_title="Referrals", height=400)
+                fig.update_layout(title="Referral Trends by Term", xaxis_title="Term", yaxis_title="Referrals", height=400, yaxis=dict(tickformat=',.0f'))
                 st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info("Term data not available in dataset")
@@ -874,11 +937,11 @@ if st.session_state.drill_down_view:
                     y=school_data['School'],
                     x=school_data['Referrals'],
                     orientation='h',
-                    text=school_data['Referrals'],
+                    text=format_chart_text(school_data['Referrals']),
                     textposition='auto',
                     marker_color='#9B59B6'
                 ))
-                fig.update_layout(title="Top 15 Referring Schools", xaxis_title="Referrals", height=500)
+                fig.update_layout(title="Top 15 Referring Schools", xaxis_title="Referrals", height=500, xaxis=dict(tickformat=',.0f'))
                 st.plotly_chart(fig, use_container_width=True)
                 
                 st.dataframe(school_data, use_container_width=True, hide_index=True)
@@ -896,7 +959,7 @@ if st.session_state.drill_down_view:
                     fig = go.Figure(go.Bar(
                         x=year_data['year'].astype(str),
                         y=year_data['Referrals'],
-                        text=year_data['Referrals'],
+                        text=format_chart_text(year_data['Referrals']),
                         textposition='auto',
                         marker_color='#3498DB'
                     ))
@@ -904,7 +967,8 @@ if st.session_state.drill_down_view:
                         title="Referrals by Year",
                         xaxis_title="Year",
                         yaxis_title="Referrals",
-                        height=400
+                        height=400,
+                        yaxis=dict(tickformat=',.0f')
                     )
                     st.plotly_chart(fig, use_container_width=True)
                 
@@ -1089,11 +1153,11 @@ if st.session_state.drill_down_view:
                     fig = go.Figure(go.Bar(
                         x=alloc_partnership['Partnership'],
                         y=alloc_partnership['Allocated'],
-                        text=alloc_partnership['Allocated'],
+                        text=format_chart_text(alloc_partnership['Allocated']),
                         textposition='auto',
                         marker_color='#2ECC71'
                     ))
-                    fig.update_layout(title="Allocated by Partnership", height=300)
+                    fig.update_layout(title="Allocated by Partnership", height=300, yaxis=dict(tickformat=',.0f'))
                     st.plotly_chart(fig, use_container_width=True)
                 else:
                     st.info("No partnership data available")
@@ -1507,11 +1571,11 @@ if st.session_state.drill_down_view:
                 fig = go.Figure(go.Bar(
                     x=swd_partnership['Partnership'],
                     y=swd_partnership['SWD Count'],
-                    text=swd_partnership['SWD Count'],
+                    text=format_chart_text(swd_partnership['SWD Count']),
                     textposition='auto',
                     marker_color='#8E44AD'
                 ))
-                fig.update_layout(title="SWD Distribution by Partnership", yaxis_title="SWD Count", height=400)
+                fig.update_layout(title="SWD Distribution by Partnership", yaxis_title="SWD Count", height=400, yaxis=dict(tickformat=',.0f'))
                 st.plotly_chart(fig, use_container_width=True)
                 
                 st.dataframe(swd_partnership, use_container_width=True, hide_index=True)
@@ -1570,11 +1634,11 @@ if st.session_state.drill_down_view:
                     fig = go.Figure(go.Bar(
                         x=dcp_partnership['Partnership'],
                         y=dcp_partnership['DCP Count'],
-                        text=dcp_partnership['DCP Count'],
+                        text=format_chart_text(dcp_partnership['DCP Count']),
                         textposition='auto',
                         marker_color='#E67E22'
                     ))
-                    fig.update_layout(title="DCP Students by Partnership", yaxis_title="DCP Count", height=400)
+                    fig.update_layout(title="DCP Students by Partnership", yaxis_title="DCP Count", height=400, yaxis=dict(tickformat=',.0f'))
                     st.plotly_chart(fig, use_container_width=True)
                     
                     st.dataframe(dcp_partnership, use_container_width=True, hide_index=True)
