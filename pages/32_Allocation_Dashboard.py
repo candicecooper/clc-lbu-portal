@@ -41,43 +41,79 @@ def apply_integer_formatting(fig):
     )
     return fig
 
-# Global Plotly configuration for clean integer display
+# Dark Theme Plotly Configuration
 import plotly.io as pio
-pio.templates.default = "plotly_white"
+import plotly.graph_objects as go
 
-# Configure plotly to show integers without decimals
-go.layout.Template(
+# Create custom dark template
+pio.templates["clc_dark"] = go.layout.Template(
     layout=go.Layout(
-        yaxis=dict(tickformat=',.0f'),  # No decimals on y-axis
-        xaxis=dict(tickformat=',.0f'),  # No decimals on x-axis
+        paper_bgcolor='rgba(0,0,0,0)',  # Transparent background
+        plot_bgcolor='rgba(26, 41, 66, 0.3)',  # Subtle dark panel
+        font=dict(
+            family='Inter, sans-serif',
+            color='#8B9DC3',
+            size=12
+        ),
+        title=dict(
+            font=dict(color='#FFFFFF', size=16, family='Inter')
+        ),
+        xaxis=dict(
+            gridcolor='#2D3F5F',
+            linecolor='#2D3F5F',
+            tickcolor='#8B9DC3',
+            tickformat=',.0f',
+            zerolinecolor='#2D3F5F'
+        ),
+        yaxis=dict(
+            gridcolor='#2D3F5F',
+            linecolor='#2D3F5F',
+            tickcolor='#8B9DC3',
+            tickformat=',.0f',
+            zerolinecolor='#2D3F5F'
+        ),
+        colorway=['#00D9FF', '#FF6B6B', '#FFB800', '#8B5CF6', '#3B82F6', '#10B981', '#F59E0B'],  # Neon color palette
+        hovermode='closest',
+        hoverlabel=dict(
+            bgcolor='#1A2942',
+            font_color='#FFFFFF',
+            font_family='Inter'
+        )
     )
 )
 
+pio.templates.default = "clc_dark"
+
+
 st.set_page_config(page_title="CLC Allocation Dashboard", page_icon="📊", layout="wide")
 
-# Professional Design System with Modern Color Palette & Typography
+# Dark Theme Dashboard Design - Inspired by Modern Analytics Platforms
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
     
-    /* ═══ COLOR PALETTE ═══
-       Primary Navy: #0F172A (headers, primary actions)
-       Accent Teal: #14B8A6 (highlights, success states)
-       Accent Coral: #F97316 (warnings, attention)
-       Soft Blue: #3B82F6 (links, interactive)
-       Background: #F8FAFC (page background)
-       Surface: #FFFFFF (cards, panels)
-       Text Primary: #1E293B
-       Text Secondary: #64748B
+    /* ═══ DARK THEME COLOR PALETTE ═══
+       Background Dark: #0F1729 (main background)
+       Surface Dark: #1A2942 (cards, panels)
+       Accent Cyan: #00D9FF (primary highlights, success)
+       Accent Coral: #FF6B6B (warnings, critical)
+       Accent Amber: #FFB800 (attention, pending)
+       Text Primary: #FFFFFF (main text)
+       Text Secondary: #8B9DC3 (secondary text)
+       Border: #2D3F5F (subtle borders)
     */
     
-    /* === GLOBAL RESETS === */
+    /* === GLOBAL DARK THEME === */
     * {
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     }
     
-    html, body, [data-testid="stAppViewContainer"] {
-        background: #F8FAFC !important;
+    html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {
+        background: #0F1729 !important;
+    }
+    
+    .main {
+        background: #0F1729 !important;
     }
     
     .main > div {
@@ -90,88 +126,111 @@ st.markdown("""
     h1, h2, h3, h4, h5, h6 {
         font-family: 'Inter', sans-serif !important;
         font-weight: 700 !important;
-        color: #0F172A !important;
+        color: #FFFFFF !important;
         letter-spacing: -0.02em !important;
     }
     
-    p, span, div {
-        color: #1E293B;
+    p, span, div, label {
+        color: #8B9DC3 !important;
         line-height: 1.6;
     }
     
     /* === HEADER === */
     .dashboard-header {
-        background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%);
-        padding: 2rem 2.5rem;
+        background: linear-gradient(135deg, #1A2942 0%, #2D3F5F 100%);
+        padding: 2.5rem 3rem;
         border-radius: 16px;
         margin-bottom: 2rem;
-        box-shadow: 0 4px 20px rgba(15, 23, 42, 0.15);
-        border: 1px solid rgba(255,255,255,0.05);
+        box-shadow: 0 8px 32px rgba(0, 217, 255, 0.1),
+                    0 0 80px rgba(0, 217, 255, 0.05);
+        border: 1px solid rgba(0, 217, 255, 0.2);
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .dashboard-header::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        right: -10%;
+        width: 400px;
+        height: 400px;
+        background: radial-gradient(circle, rgba(0, 217, 255, 0.15) 0%, transparent 70%);
+        border-radius: 50%;
     }
     
     .dashboard-title {
         color: #FFFFFF;
-        font-size: 2.25rem;
+        font-size: 2.5rem;
         font-weight: 800;
         margin: 0;
         letter-spacing: -0.03em;
+        text-shadow: 0 0 30px rgba(0, 217, 255, 0.3);
+        position: relative;
+        z-index: 1;
     }
     
     .dashboard-subtitle {
-        color: #94A3B8;
-        font-size: 1rem;
-        margin: 0.5rem 0 0 0;
+        color: #8B9DC3;
+        font-size: 1.05rem;
+        margin: 0.75rem 0 0 0;
         font-weight: 400;
         letter-spacing: 0.01em;
+        position: relative;
+        z-index: 1;
     }
     
     /* === METRIC BUTTONS === */
     .stButton>button {
         width: 100%;
         height: 100px !important;
-        background: white !important;
-        border: 1.5px solid #E2E8F0 !important;
+        background: linear-gradient(135deg, #1A2942 0%, #243556 100%) !important;
+        border: 1.5px solid #2D3F5F !important;
         border-radius: 12px !important;
-        font-size: 1rem !important;
-        font-weight: 600 !important;
-        color: #0F172A !important;
-        transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05) !important;
+        font-size: 1.1rem !important;
+        font-weight: 700 !important;
+        color: #FFFFFF !important;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.3) !important;
         padding: 1.25rem !important;
+        position: relative !important;
     }
     
     .stButton>button:hover {
-        border-color: #14B8A6 !important;
-        box-shadow: 0 8px 24px rgba(20, 184, 166, 0.2) !important;
-        transform: translateY(-2px) !important;
-        background: linear-gradient(135deg, #FFFFFF 0%, #F0FDFA 100%) !important;
+        border-color: #00D9FF !important;
+        box-shadow: 0 8px 32px rgba(0, 217, 255, 0.4),
+                    0 0 40px rgba(0, 217, 255, 0.2) !important;
+        transform: translateY(-3px) !important;
+        background: linear-gradient(135deg, #1F3454 0%, #2A4068 100%) !important;
     }
     
     .stButton>button:active {
-        transform: translateY(0px) !important;
+        transform: translateY(-1px) !important;
     }
     
     /* === SECTION HEADERS === */
     .section-header {
         font-size: 1.5rem !important;
         font-weight: 700 !important;
-        color: #0F172A !important;
-        margin: 2.5rem 0 1.25rem 0 !important;
+        color: #FFFFFF !important;
+        margin: 2.5rem 0 1.5rem 0 !important;
         padding-bottom: 0.75rem !important;
-        border-bottom: 2px solid #E2E8F0 !important;
+        border-bottom: 2px solid #2D3F5F !important;
         display: flex;
         align-items: center;
         gap: 0.5rem;
+        text-shadow: 0 0 20px rgba(0, 217, 255, 0.2);
     }
     
     /* === DRILL-DOWN HEADERS === */
     .drill-down-header {
-        background: linear-gradient(135deg, #0F172A 0%, #1E3A5F 100%);
-        padding: 2.5rem;
+        background: linear-gradient(135deg, #1A2942 0%, #243556 100%);
+        padding: 2.5rem 3rem;
         border-radius: 16px;
         margin-bottom: 2rem;
-        box-shadow: 0 8px 32px rgba(15, 23, 42, 0.2);
-        border: 1px solid rgba(255,255,255,0.08);
+        box-shadow: 0 8px 32px rgba(0,0,0,0.4),
+                    0 0 60px rgba(0, 217, 255, 0.1);
+        border: 1px solid rgba(0, 217, 255, 0.3);
         position: relative;
         overflow: hidden;
     }
@@ -179,13 +238,12 @@ st.markdown("""
     .drill-down-header::before {
         content: '';
         position: absolute;
-        top: 0;
-        right: 0;
-        width: 300px;
-        height: 300px;
-        background: radial-gradient(circle, rgba(20,184,166,0.15) 0%, transparent 70%);
+        top: -40%;
+        right: -20%;
+        width: 400px;
+        height: 400px;
+        background: radial-gradient(circle, rgba(0, 217, 255, 0.2) 0%, transparent 70%);
         border-radius: 50%;
-        transform: translate(40%, -40%);
     }
     
     .drill-down-title {
@@ -196,10 +254,11 @@ st.markdown("""
         letter-spacing: -0.02em;
         position: relative;
         z-index: 1;
+        text-shadow: 0 0 20px rgba(0, 217, 255, 0.3);
     }
     
     .drill-down-subtitle {
-        color: #94A3B8;
+        color: #8B9DC3;
         margin: 0.75rem 0 0 0;
         font-size: 1.1rem;
         font-weight: 400;
@@ -209,25 +268,27 @@ st.markdown("""
     
     /* === CARDS === */
     .metric-card {
-        background: white;
+        background: linear-gradient(135deg, #1A2942 0%, #1F3050 100%);
         padding: 1.75rem;
         border-radius: 12px;
-        border: 1.5px solid #E2E8F0;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        border: 1.5px solid #2D3F5F;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.3);
         margin-bottom: 1.25rem;
-        transition: all 0.2s ease;
+        transition: all 0.3s ease;
     }
     
     .metric-card:hover {
-        border-color: #CBD5E1;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+        border-color: #00D9FF;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.4),
+                    0 0 30px rgba(0, 217, 255, 0.2);
+        transform: translateY(-2px);
     }
     
     /* === TABS === */
     [data-baseweb="tab-list"] {
         background: transparent !important;
         gap: 0.5rem !important;
-        border-bottom: 2px solid #E2E8F0 !important;
+        border-bottom: 2px solid #2D3F5F !important;
         padding: 0 0 0.25rem 0 !important;
     }
     
@@ -238,21 +299,22 @@ st.markdown("""
         font-family: 'Inter', sans-serif !important;
         font-size: 0.9rem !important;
         font-weight: 600 !important;
-        color: #64748B !important;
+        color: #8B9DC3 !important;
         border: none !important;
         transition: all 0.2s ease !important;
     }
     
     [data-baseweb="tab"]:hover {
-        color: #0F172A !important;
-        background: #F8FAFC !important;
+        color: #FFFFFF !important;
+        background: rgba(0, 217, 255, 0.05) !important;
     }
     
     [aria-selected="true"][data-baseweb="tab"] {
-        background: white !important;
-        color: #14B8A6 !important;
-        border-bottom: 3px solid #14B8A6 !important;
-        box-shadow: 0 -2px 8px rgba(20,184,166,0.1) !important;
+        background: linear-gradient(135deg, #1A2942, #243556) !important;
+        color: #00D9FF !important;
+        border-bottom: 3px solid #00D9FF !important;
+        box-shadow: 0 -2px 16px rgba(0, 217, 255, 0.2),
+                    0 0 20px rgba(0, 217, 255, 0.1) !important;
     }
     
     [data-baseweb="tab-panel"] {
@@ -261,52 +323,55 @@ st.markdown("""
     
     /* === INPUTS & FILTERS === */
     .stSelectbox select, .stTextInput input, .stTextArea textarea {
-        border: 1.5px solid #E2E8F0 !important;
+        border: 1.5px solid #2D3F5F !important;
         border-radius: 8px !important;
         font-family: 'Inter', sans-serif !important;
         font-size: 0.9rem !important;
-        background: white !important;
-        color: #1E293B !important;
+        background: #1A2942 !important;
+        color: #FFFFFF !important;
         padding: 0.65rem 0.85rem !important;
         transition: all 0.2s ease !important;
     }
     
     .stSelectbox select:focus, .stTextInput input:focus, .stTextArea textarea:focus {
-        border-color: #14B8A6 !important;
-        box-shadow: 0 0 0 3px rgba(20,184,166,0.1) !important;
+        border-color: #00D9FF !important;
+        box-shadow: 0 0 0 3px rgba(0, 217, 255, 0.15),
+                    0 0 20px rgba(0, 217, 255, 0.1) !important;
         outline: none !important;
     }
     
     label[data-testid="stWidgetLabel"] p {
-        font-size: 0.8rem !important;
+        font-size: 0.75rem !important;
         font-weight: 600 !important;
-        color: #475569 !important;
+        color: #8B9DC3 !important;
         text-transform: uppercase !important;
-        letter-spacing: 0.05em !important;
+        letter-spacing: 0.08em !important;
         margin-bottom: 0.5rem !important;
     }
     
     /* === DATAFRAMES === */
     [data-testid="stDataFrame"] {
-        border: 1.5px solid #E2E8F0 !important;
+        border: 1.5px solid #2D3F5F !important;
         border-radius: 12px !important;
         overflow: hidden !important;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05) !important;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.3) !important;
+        background: #1A2942 !important;
     }
     
     /* === METRICS === */
     div[data-testid="stMetricValue"] {
-        font-size: 2.25rem !important;
-        font-weight: 700 !important;
-        color: #0F172A !important;
+        font-size: 2.5rem !important;
+        font-weight: 800 !important;
+        color: #FFFFFF !important;
+        text-shadow: 0 0 20px rgba(0, 217, 255, 0.3) !important;
     }
     
     div[data-testid="stMetricLabel"] {
-        font-size: 0.85rem !important;
+        font-size: 0.8rem !important;
         font-weight: 600 !important;
-        color: #64748B !important;
+        color: #8B9DC3 !important;
         text-transform: uppercase !important;
-        letter-spacing: 0.05em !important;
+        letter-spacing: 0.08em !important;
     }
     
     div[data-testid="stMetricDelta"] {
@@ -320,38 +385,42 @@ st.markdown("""
         border-width: 1.5px !important;
         padding: 1rem 1.25rem !important;
         font-size: 0.9rem !important;
+        background: #1A2942 !important;
+        color: #FFFFFF !important;
     }
     
     /* === EXPANDERS === */
     .streamlit-expanderHeader {
-        background: white !important;
-        border: 1.5px solid #E2E8F0 !important;
+        background: #1A2942 !important;
+        border: 1.5px solid #2D3F5F !important;
         border-radius: 10px !important;
         font-weight: 600 !important;
-        color: #0F172A !important;
+        color: #FFFFFF !important;
         padding: 1rem 1.25rem !important;
     }
     
     .streamlit-expanderHeader:hover {
-        border-color: #CBD5E1 !important;
-        background: #F8FAFC !important;
+        border-color: #00D9FF !important;
+        background: #1F3050 !important;
+        box-shadow: 0 0 20px rgba(0, 217, 255, 0.1) !important;
     }
     
     /* === PROGRESS BARS === */
     .stProgress > div > div > div {
-        background: linear-gradient(90deg, #14B8A6 0%, #0D9488 100%) !important;
+        background: linear-gradient(90deg, #00D9FF 0%, #00B8D4 100%) !important;
+        box-shadow: 0 0 15px rgba(0, 217, 255, 0.4) !important;
     }
     
     /* === CAPTIONS === */
     .stCaption {
-        color: #64748B !important;
+        color: #8B9DC3 !important;
         font-size: 0.85rem !important;
         font-family: 'JetBrains Mono', monospace !important;
     }
     
     /* === DIVIDERS === */
     hr {
-        border-color: #E2E8F0 !important;
+        border-color: #2D3F5F !important;
         margin: 2rem 0 !important;
     }
     
@@ -362,26 +431,35 @@ st.markdown("""
     }
     
     ::-webkit-scrollbar-track {
-        background: #F1F5F9;
+        background: #1A2942;
         border-radius: 10px;
     }
     
     ::-webkit-scrollbar-thumb {
-        background: #CBD5E1;
+        background: #2D3F5F;
         border-radius: 10px;
     }
     
     ::-webkit-scrollbar-thumb:hover {
-        background: #94A3B8;
+        background: #3D5F8F;
+    }
+    
+    /* === PLOTLY CHART DARK THEME === */
+    .js-plotly-plot {
+        background: transparent !important;
+    }
+    
+    .user-select-none {
+        background: transparent !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Modern Header
+# Modern Dark Header with Glow Effect
 st.markdown("""
 <div class="dashboard-header">
     <h1 class="dashboard-title">📊 CLC Allocation Dashboard</h1>
-    <p class="dashboard-subtitle">Real-time analytics and insights for student allocation management</p>
+    <p class="dashboard-subtitle">Real-time analytics and insights • Student allocation management</p>
 </div>
 """, unsafe_allow_html=True)
 
