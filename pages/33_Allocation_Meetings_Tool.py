@@ -1202,10 +1202,19 @@ with tab4:
             .execute()
         
         if full_data.data and len(full_data.data) > 0:
+            # DEBUG: Show all outcomes
+            with st.expander("🔍 Debug: View All Outcomes", expanded=False):
+                st.write(f"**Total records fetched:** {len(full_data.data)}")
+                for idx, record in enumerate(full_data.data, 1):
+                    st.write(f"{idx}. {record.get('student_name', 'N/A')} - Outcome: '{record.get('outcome')}'")
+            
             # Separate allocations, not allocated, and extensions
             allocated = [r for r in full_data.data if r.get('outcome') == 'Allocated']
             not_allocated = [r for r in full_data.data if r.get('outcome') == 'Not Allocated']
             extensions = [r for r in full_data.data if r.get('outcome') in ['Approved', 'Not Approved']]
+            
+            # DEBUG: Show counts
+            st.write(f"**Debug counts:** Allocated={len(allocated)}, Not Allocated={len(not_allocated)}, Extensions={len(extensions)}")
             
             # Summary metrics
             col1, col2, col3, col4 = st.columns(4)
@@ -1235,9 +1244,9 @@ with tab4:
                 st.dataframe(display_data, use_container_width=True)
             
             # Display not allocated students
+            st.markdown("---")
+            st.subheader(f"⏸️ Not Allocated Students ({len(not_allocated)})")
             if not_allocated:
-                st.markdown("---")
-                st.subheader(f"⏸️ Not Allocated Students ({len(not_allocated)})")
                 display_data = []
                 for record in not_allocated:
                     display_data.append({
@@ -1248,6 +1257,8 @@ with tab4:
                         "School": record.get("school", "")
                     })
                 st.dataframe(display_data, use_container_width=True)
+            else:
+                st.info("✅ No students marked as 'Not Allocated' for this week")
             
             # Display extensions
             if extensions:
