@@ -48,7 +48,7 @@ EXTENSION_OUTCOMES = ["Approved", "Not Approved"]
 GENDER_OPTIONS = ["Male", "Female", "Other", "Prefer not to say"]
 PRIORITY_OPTIONS = ["1", "2", "3", "4", "5"]
 YEAR_LEVELS = ["R", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
-WAITLIST_STATUS_OPTIONS = ["Not Applicable", "On Waitlist", "Declined"]
+WAITLIST_STATUS_OPTIONS = ["Not Applicable", "On Waitlist", "Declined", "Site Decision"]
 
 # SCHOOL-PARTNERSHIP MAPPING (from government PDF)
 SCHOOL_PARTNERSHIP_MAP = {
@@ -301,7 +301,8 @@ def export_to_data_entry(selected_allocations):
         "Referral_Date", "Allocation_Status", "Allocated_Program", 
         "Placement_Start", "Placement_End", "Partnership_Area",
         "Previous_CLC_Placement", "Previous_Other_LC", "Other_LC_Name",
-        "Total_Previous_Placements", "Placement_History_Notes", "Priority_Level"
+        "Total_Previous_Placements", "Placement_History_Notes", "Priority_Level",
+        "Case_Worker"
     ] + flag_headers + [
         "Bespoke_Placement",
         "Waitlist_Status", "Waitlist_Date", "Allocated_From_Waitlist",
@@ -392,15 +393,16 @@ def export_to_data_entry(selected_allocations):
             allocation.get('total_previous_placements', 0),      # 16. Total_Previous_Placements
             allocation.get('placement_history_notes', ''),       # 17. Placement_History_Notes
             allocation.get('priority_level', '3'),               # 18. Priority_Level
-        ] + flag_values + [  # 19-51. All comprehensive flags (33 flags)
-            allocation.get('bespoke_placement', 'No'),           # 52. Bespoke_Placement
-            allocation.get('waitlist_status', 'Not Applicable'), # 53. Waitlist_Status
-            waitlist_date,                                       # 54. Waitlist_Date
-            allocation.get('allocated_from_waitlist', 'No'),     # 55. Allocated_From_Waitlist
-            'Active',                                            # 56. Current_Status
-            '',                                                  # 57. Exit_Reason
-            '',                                                  # 58. Transition_Plan
-            allocation.get('queries', '')                        # 59. Notes
+            allocation.get('case_worker', ''),                   # 19. Case_Worker
+        ] + flag_values + [  # 20-52. All comprehensive flags (33 flags)
+            allocation.get('bespoke_placement', 'No'),           # 53. Bespoke_Placement
+            allocation.get('waitlist_status', 'Not Applicable'), # 54. Waitlist_Status
+            waitlist_date,                                       # 55. Waitlist_Date
+            allocation.get('allocated_from_waitlist', 'No'),     # 56. Allocated_From_Waitlist
+            'Active',                                            # 57. Current_Status
+            '',                                                  # 58. Exit_Reason
+            '',                                                  # 59. Transition_Plan
+            allocation.get('queries', '')                        # 60. Notes
         ]
         
         # Write row
@@ -616,6 +618,8 @@ with tab1:
                         st.write(f"**Priority:** {draft.get('priority_level', 'N/A')}")
                     with col3:
                         st.write(f"**Partnership:** {draft.get('partnership_area', 'N/A')}")
+                        if draft.get('case_worker'):
+                            st.write(f"**Case Worker:** {draft.get('case_worker')}")
                         if draft.get('queries'):
                             st.write(f"**Queries:** {draft.get('queries')}")
                 
@@ -839,10 +843,13 @@ with tab1:
                     if st.checkbox(flag, key=f"flag_{flag}"):
                         selected_flags.append(flag)
             
-            # SECTION 4: Meeting Details
+            # SECTION 4: Case Worker & Meeting Details
             st.markdown("---")
-            st.markdown("### 4️⃣ Queries/Notes for Meeting")
-            queries = st.text_area("Queries/Notes", height=100)
+            st.markdown("### 4️⃣ Case Worker & Queries")
+            
+            case_worker = st.text_input("Case Worker Name", help="Name of the case worker assigned to this student")
+            
+            queries = st.text_area("Queries/Notes for Meeting", height=100)
             
             # Submit
             st.markdown("---")
@@ -881,6 +888,7 @@ with tab1:
                             "total_previous_placements": total_placements,
                             "placement_history_notes": placement_history_notes,
                             "medical_condition_details": medical_condition_details if "Medical condition" in selected_flags else None,
+                            "case_worker": case_worker if case_worker else None,
                             "cat_funding": json.dumps(selected_flags),
                             "partnership": json.dumps([]),
                             "queries": queries,
@@ -1194,31 +1202,49 @@ with tab4:
             .execute()
         
         if full_data.data and len(full_data.data) > 0:
-            # Separate allocations and extensions
-            allocations = [r for r in full_data.data if r.get('outcome') in ['Allocated', 'Not Allocated']]
+            # Separate allocations, not allocated, and extensions
+            allocated = [r for r in full_data.data if r.get('outcome') == 'Allocated']
+            not_allocated = [r for r in full_data.data if r.get('outcome') == 'Not Allocated']
             extensions = [r for r in full_data.data if r.get('outcome') in ['Approved', 'Not Approved']]
             
             # Summary metrics
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("Total Records", len(full_data.data))
             with col2:
-                st.metric("Allocations", len(allocations))
+                st.metric("Allocated", len(allocated))
             with col3:
+                st.metric("Not Allocated", len(not_allocated))
+            with col4:
                 st.metric("Extensions", len(extensions))
             
             st.markdown("---")
             
-            # Display allocations
-            if allocations:
-                st.subheader(f"📝 Allocations ({len(allocations)})")
+            # Display allocated students
+            if allocated:
+                st.subheader(f"✅ Allocated Students ({len(allocated)})")
                 display_data = []
-                for record in allocations:
+                for record in allocated:
                     display_data.append({
                         "Student": record.get("student_name", ""),
                         "Year": record.get("year_level", ""),
                         "Program": record.get("program", ""),
-                        "Outcome": record.get("outcome", ""),
+                        "Case Worker": record.get("case_worker", ""),
+                        "School": record.get("school", "")
+                    })
+                st.dataframe(display_data, use_container_width=True)
+            
+            # Display not allocated students
+            if not_allocated:
+                st.markdown("---")
+                st.subheader(f"⏸️ Not Allocated Students ({len(not_allocated)})")
+                display_data = []
+                for record in not_allocated:
+                    display_data.append({
+                        "Student": record.get("student_name", ""),
+                        "Year": record.get("year_level", ""),
+                        "Program": record.get("program", ""),
+                        "Case Worker": record.get("case_worker", ""),
                         "School": record.get("school", "")
                     })
                 st.dataframe(display_data, use_container_width=True)
@@ -1246,9 +1272,11 @@ with tab4:
             
             if st.button("📥 Download Data Entry Excel", type="primary"):
                 try:
-                    # Only export allocations (not extensions) to data entry format
-                    if allocations:
-                        excel_bytes = export_to_data_entry(allocations)
+                    # Combine allocated and not allocated for export
+                    all_allocations = allocated + not_allocated
+                    
+                    if all_allocations:
+                        excel_bytes = export_to_data_entry(all_allocations)
                         
                         st.download_button(
                             label="💾 Save Data Entry Excel",
@@ -1257,7 +1285,7 @@ with tab4:
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
                         
-                        st.success(f"✅ Excel file ready! {len(allocations)} allocation(s) exported.")
+                        st.success(f"✅ Excel file ready! {len(all_allocations)} allocation(s) exported ({len(allocated)} allocated, {len(not_allocated)} not allocated).")
                     else:
                         st.warning("⚠️ No allocations to export")
                     
