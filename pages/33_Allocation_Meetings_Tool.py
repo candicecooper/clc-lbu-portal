@@ -374,6 +374,17 @@ def export_to_data_entry(selected_allocations):
         # Get flag values in same order as headers
         flag_values = [flags.get(key, "No") for key in flag_keys]
         
+        # Determine Allocation_Status based on outcome and waitlist_status
+        waitlist_status = allocation.get('waitlist_status', 'Not Applicable')
+        outcome = allocation.get('outcome', '')
+        
+        if waitlist_status == 'Site Decision':
+            allocation_status = 'SITE DECISION'  # Uppercase to stand out
+        elif outcome == 'Allocated':
+            allocation_status = 'Allocated'
+        else:
+            allocation_status = 'Waitlist'
+        
         row_data = [
             student_id,                                          # 1. Student_ID
             allocation.get('student_name', '').upper(),         # 2. Student_Name
@@ -382,7 +393,7 @@ def export_to_data_entry(selected_allocations):
             allocation.get('year_level', ''),                    # 5. Year_Level
             allocation.get('school', ''),                        # 6. Referring_School
             today,                                               # 7. Referral_Date
-            "Allocated" if allocation.get('outcome') == 'Allocated' else "Waitlist",  # 8. Allocation_Status
+            allocation_status,                                   # 8. Allocation_Status
             mapped_program,                                      # 9. Allocated_Program
             start_date,                                          # 10. Placement_Start
             end_date,                                            # 11. Placement_End
@@ -396,7 +407,7 @@ def export_to_data_entry(selected_allocations):
             allocation.get('case_worker', ''),                   # 19. Case_Worker
         ] + flag_values + [  # 20-52. All comprehensive flags (33 flags)
             allocation.get('bespoke_placement', 'No'),           # 53. Bespoke_Placement
-            allocation.get('waitlist_status', 'Not Applicable'), # 54. Waitlist_Status
+            waitlist_status,                                     # 54. Waitlist_Status
             waitlist_date,                                       # 55. Waitlist_Date
             allocation.get('allocated_from_waitlist', 'No'),     # 56. Allocated_From_Waitlist
             'Active',                                            # 57. Current_Status
@@ -409,6 +420,11 @@ def export_to_data_entry(selected_allocations):
         for col, value in enumerate(row_data, 1):
             cell = ws.cell(row_num, col, value)
             cell.alignment = Alignment(horizontal="left", vertical="center")
+            
+            # RED HIGHLIGHT for Site Decision rows
+            if waitlist_status == 'Site Decision':
+                cell.fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
+                cell.font = Font(color="FFFFFF", bold=True)
     
     # Adjust column widths
     for col in range(1, len(headers) + 1):
@@ -550,16 +566,122 @@ with st.sidebar:
 meeting_week_label = f"{selected_week}"
 
 # Tabs for different sections
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📝 New Allocations", 
     "🔄 Extensions", 
     "⏸️ Not Placed",
-    "📊 View & Export"
+    "📊 View & Export",
+    "⏳ Waitlist / Site Decision"
 ])
 
 # TAB 1: New Student Allocations - SIMPLIFIED TWO-STAGE
 with tab1:
     st.header("New Student Allocations")
+    
+    # ============================================================================
+    # WAITLIST AUTO-POPULATION
+    # ============================================================================
+    
+    # Check for waitlist students that haven't been imported for this week yet
+    try:
+        # Get waitlist students
+        waitlist_students = supabase.table("allocation_students")\
+            .select("*")\
+            .in_("waitlist_status", ["On Waitlist", "Site Decision"])\
+            .not_.is_("outcome", "null")\
+            .execute()
+        
+        # Check if any have already been imported for this week
+        if waitlist_students.data and len(waitlist_students.data) > 0:
+            # Get existing drafts for this week
+            existing_drafts = supabase.table("allocation_students")\
+                .select("student_name, school")\
+                .eq("meeting_week", meeting_week_label)\
+                .eq("term", st.session_state.current_term)\
+                .eq("year", st.session_state.current_year)\
+                .is_("outcome", "null")\
+                .execute()
+            
+            # Create a set of existing draft student+school combinations
+            existing_combinations = set()
+            if existing_drafts.data:
+                for draft in existing_drafts.data:
+                    existing_combinations.add(f"{draft.get('student_name')}_{draft.get('school')}")
+            
+            # Filter waitlist students that haven't been imported yet
+            students_to_import = []
+            for student in waitlist_students.data:
+                combination = f"{student.get('student_name')}_{student.get('school')}"
+                if combination not in existing_combinations:
+                    students_to_import.append(student)
+            
+            if students_to_import:
+                # Show import banner
+                st.info(f"📋 **{len(students_to_import)} student(s) from waitlist/site decision** are ready to import for {meeting_week_label}")
+                
+                with st.expander("👁️ View Waitlist Students Ready to Import", expanded=False):
+                    for student in students_to_import:
+                        status_icon = "🔴" if student.get('waitlist_status') == 'Site Decision' else "📋"
+                        st.write(f"{status_icon} **{student.get('student_name')}** - {student.get('school')} ({student.get('waitlist_status')})")
+                
+                col1, col2 = st.columns([3, 1])
+                with col2:
+                    if st.button("📥 Import Waitlist Students", type="primary", use_container_width=True):
+                        imported_count = 0
+                        
+                        with st.spinner("Importing waitlist students..."):
+                            for student in students_to_import:
+                                try:
+                                    # Create draft from waitlist student
+                                    draft_data = {
+                                        "meeting_week": meeting_week_label,
+                                        "meeting_date": meeting_date.isoformat(),
+                                        "term": st.session_state.current_term,
+                                        "year": st.session_state.current_year,
+                                        "student_name": student.get('student_name'),
+                                        "school": student.get('school'),
+                                        "date_of_birth": student.get('date_of_birth'),
+                                        "gender": student.get('gender'),
+                                        "year_level": student.get('year_level'),
+                                        "partnership_area": student.get('partnership_area'),
+                                        "priority_level": student.get('priority_level', '3'),
+                                        "previous_clc_placement": student.get('previous_clc_placement', 'No'),
+                                        "previous_other_lc": student.get('previous_other_lc', 'No'),
+                                        "previously_referred": student.get('previously_referred', 'No'),
+                                        "other_lc_name": student.get('other_lc_name'),
+                                        "total_previous_placements": student.get('total_previous_placements', 0),
+                                        "placement_history_notes": student.get('placement_history_notes'),
+                                        "medical_condition_details": student.get('medical_condition_details'),
+                                        "cat_funding": student.get('cat_funding'),
+                                        "partnership": student.get('partnership'),
+                                        "queries": f"⏳ FROM WAITLIST - Original status: {student.get('waitlist_status')} (Week {student.get('meeting_week')})",
+                                        "allocated_from_waitlist": "Yes",  # Flag to track this came from waitlist
+                                        "original_waitlist_record_id": student.get('id'),  # Link to original record
+                                        "outcome": None  # Draft status
+                                    }
+                                    
+                                    supabase.table("allocation_students").insert(draft_data).execute()
+                                    imported_count += 1
+                                    
+                                except Exception as e:
+                                    st.error(f"Error importing {student.get('student_name')}: {e}")
+                        
+                        if imported_count > 0:
+                            st.success(f"✅ Successfully imported {imported_count} student(s) from waitlist!")
+                            st.balloons()
+                            st.info("💡 Go to Stage 2 to complete these allocations. They're flagged as 'FROM WAITLIST' in the queries field.")
+                            st.rerun()
+                        else:
+                            st.warning("No students were imported. Check errors above.")
+                
+                st.markdown("---")
+    
+    except Exception as e:
+        st.error(f"Error checking waitlist: {e}")
+    
+    # ============================================================================
+    # MAIN ALLOCATION WORKFLOW
+    # ============================================================================
     
     # STAGE SELECTOR
     stage_choice = st.radio(
@@ -605,7 +727,12 @@ with tab1:
                 
                 draft = draft_options[selected_draft_display]
                 
-                st.success(f"✅ Loaded draft for: **{draft['student_name']}**")
+                # Check if from waitlist
+                if draft.get('allocated_from_waitlist') == 'Yes':
+                    st.success(f"✅ Loaded draft for: **{draft['student_name']}** ⏳ FROM WAITLIST")
+                    st.info(f"📋 This student was previously on waitlist. Original week: {draft.get('queries', '').split('Week ')[-1].rstrip(')') if 'Week' in draft.get('queries', '') else 'Unknown'}")
+                else:
+                    st.success(f"✅ Loaded draft for: **{draft['student_name']}**")
                 
                 # Show draft details
                 with st.expander("📋 View Draft Details", expanded=True):
@@ -640,11 +767,13 @@ with tab1:
                     with col3:
                         school_contact = st.text_input("School Contact Person")
                     
-                    # Dates
-                    col1, col2 = st.columns(2)
+                    # Case Worker and Dates
+                    col1, col2, col3 = st.columns(3)
                     with col1:
-                        start_after = st.date_input("Start After", value=None)
+                        case_worker = st.text_input("Case Worker Name", help="Name of the case worker assigned to this student")
                     with col2:
+                        start_after = st.date_input("Start After", value=None)
+                    with col3:
                         finishing_date = st.date_input("Finishing Date", value=None)
                     
                     # Bespoke and Waitlist
@@ -681,6 +810,7 @@ with tab1:
                                     "program": program,
                                     "outcome": outcome,
                                     "school_contact": school_contact,
+                                    "case_worker": case_worker if case_worker else None,
                                     "start_after": start_after.isoformat() if start_after else None,
                                     "finishing_date": finishing_date.isoformat() if finishing_date else None,
                                     "bespoke_placement": bespoke,
@@ -843,13 +973,10 @@ with tab1:
                     if st.checkbox(flag, key=f"flag_{flag}"):
                         selected_flags.append(flag)
             
-            # SECTION 4: Case Worker & Meeting Details
+            # SECTION 4: Meeting Details
             st.markdown("---")
-            st.markdown("### 4️⃣ Case Worker & Queries")
-            
-            case_worker = st.text_input("Case Worker Name", help="Name of the case worker assigned to this student")
-            
-            queries = st.text_area("Queries/Notes for Meeting", height=100)
+            st.markdown("### 4️⃣ Queries/Notes for Meeting")
+            queries = st.text_area("Queries/Notes", height=100)
             
             # Submit
             st.markdown("---")
@@ -888,7 +1015,6 @@ with tab1:
                             "total_previous_placements": total_placements,
                             "placement_history_notes": placement_history_notes,
                             "medical_condition_details": medical_condition_details if "Medical condition" in selected_flags else None,
-                            "case_worker": case_worker if case_worker else None,
                             "cat_funding": json.dumps(selected_flags),
                             "partnership": json.dumps([]),
                             "queries": queries,
@@ -1312,6 +1438,210 @@ with tab4:
         import traceback
         st.code(traceback.format_exc())
 
+# TAB 5: Waitlist / Site Decision Management
+with tab5:
+    st.header("⏳ Waitlist / Site Decision Management")
+    st.caption("Students awaiting next allocation meeting or school decision")
+    
+    try:
+        # Fetch students on waitlist or site decision (across ALL weeks)
+        waitlist_data = supabase.table("allocation_students")\
+            .select("*")\
+            .in_("waitlist_status", ["On Waitlist", "Site Decision"])\
+            .not_.is_("outcome", "null")\
+            .order("waitlist_date", desc=True)\
+            .execute()
+        
+        if waitlist_data.data and len(waitlist_data.data) > 0:
+            # Separate by status
+            on_waitlist = [r for r in waitlist_data.data if r.get('waitlist_status') == 'On Waitlist']
+            site_decision = [r for r in waitlist_data.data if r.get('waitlist_status') == 'Site Decision']
+            
+            # Summary metrics
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Waiting", len(waitlist_data.data))
+            with col2:
+                st.metric("On Waitlist", len(on_waitlist))
+            with col3:
+                st.metric("Site Decision", len(site_decision))
+            
+            st.markdown("---")
+            
+            # SITE DECISION SECTION (Priority - needs immediate action)
+            if site_decision:
+                st.subheader(f"🔴 Site Decision ({len(site_decision)}) - ACTION REQUIRED")
+                st.warning("⚠️ These students are waiting for school decision. Cannot remain in this status long!")
+                
+                display_data = []
+                for record in site_decision:
+                    display_data.append({
+                        "Student": record.get("student_name", ""),
+                        "Year": record.get("year_level", ""),
+                        "School": record.get("school", ""),
+                        "Program": record.get("program", ""),
+                        "Case Worker": record.get("case_worker", ""),
+                        "Meeting Week": record.get("meeting_week", ""),
+                        "Waitlist Date": record.get("waitlist_date", ""),
+                        "ID": record.get("id", "")
+                    })
+                
+                df_site_decision = pd.DataFrame(display_data)
+                st.dataframe(df_site_decision.drop(columns=['ID']), use_container_width=True, hide_index=True)
+                
+                # Delete option for site decision
+                st.markdown("#### ❌ Remove from Site Decision")
+                st.caption("Use if school has decided not to proceed")
+                
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    student_to_remove = st.selectbox(
+                        "Select student to remove",
+                        [""] + [f"{r['student_name']} - {r['school']}" for r in site_decision],
+                        key="remove_site_decision"
+                    )
+                
+                with col2:
+                    if st.button("🗑️ Remove", type="secondary", disabled=not student_to_remove):
+                        if student_to_remove:
+                            # Find the record
+                            selected_record = next((r for r in site_decision if f"{r['student_name']} - {r['school']}" == student_to_remove), None)
+                            if selected_record:
+                                # Update to remove from waitlist but keep in database
+                                try:
+                                    supabase.table("allocation_students")\
+                                        .update({"waitlist_status": "Declined"})\
+                                        .eq("id", selected_record['id'])\
+                                        .execute()
+                                    st.success(f"✅ Removed {selected_record['student_name']} from Site Decision")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+            
+            # ON WAITLIST SECTION
+            if on_waitlist:
+                st.markdown("---")
+                st.subheader(f"📋 On Waitlist ({len(on_waitlist)})")
+                st.info("💡 These students will auto-populate when you create allocations for future weeks")
+                
+                display_data = []
+                for record in on_waitlist:
+                    display_data.append({
+                        "Student": record.get("student_name", ""),
+                        "Year": record.get("year_level", ""),
+                        "School": record.get("school", ""),
+                        "Program": record.get("program", ""),
+                        "Case Worker": record.get("case_worker", ""),
+                        "Meeting Week": record.get("meeting_week", ""),
+                        "Waitlist Date": record.get("waitlist_date", ""),
+                        "ID": record.get("id", "")
+                    })
+                
+                df_waitlist = pd.DataFrame(display_data)
+                st.dataframe(df_waitlist.drop(columns=['ID']), use_container_width=True, hide_index=True)
+                
+                # Delete option for waitlist
+                st.markdown("#### ❌ Remove from Waitlist")
+                st.caption("Use if school has withdrawn the referral")
+                
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    student_to_remove_wl = st.selectbox(
+                        "Select student to remove",
+                        [""] + [f"{r['student_name']} - {r['school']}" for r in on_waitlist],
+                        key="remove_waitlist"
+                    )
+                
+                with col2:
+                    if st.button("🗑️ Remove", type="secondary", disabled=not student_to_remove_wl, key="remove_wl_btn"):
+                        if student_to_remove_wl:
+                            # Find the record
+                            selected_record = next((r for r in on_waitlist if f"{r['student_name']} - {r['school']}" == student_to_remove_wl), None)
+                            if selected_record:
+                                # Update to remove from waitlist but keep in database
+                                try:
+                                    supabase.table("allocation_students")\
+                                        .update({"waitlist_status": "Declined"})\
+                                        .eq("id", selected_record['id'])\
+                                        .execute()
+                                    st.success(f"✅ Removed {selected_record['student_name']} from Waitlist")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+            
+            # Export waitlist/site decision
+            st.markdown("---")
+            st.subheader("📥 Export Waitlist/Site Decision")
+            
+            if st.button("📥 Download Waitlist Summary", type="primary"):
+                from openpyxl import Workbook
+                from io import BytesIO
+                
+                wb = Workbook()
+                ws = wb.active
+                ws.title = "Waitlist Summary"
+                
+                # Headers
+                headers = ["Student", "Year", "School", "Program", "Case Worker", "Status", "Meeting Week", "Waitlist Date"]
+                header_fill = PatternFill(start_color="FFA500", end_color="FFA500", fill_type="solid")
+                header_font = Font(bold=True, color="FFFFFF")
+                
+                for col_idx, header in enumerate(headers, 1):
+                    cell = ws.cell(1, col_idx, header)
+                    cell.fill = header_fill
+                    cell.font = header_font
+                    cell.alignment = Alignment(horizontal='center', vertical='center')
+                
+                # Add data
+                row_idx = 2
+                for record in waitlist_data.data:
+                    ws.cell(row_idx, 1, record.get('student_name', ''))
+                    ws.cell(row_idx, 2, record.get('year_level', ''))
+                    ws.cell(row_idx, 3, record.get('school', ''))
+                    ws.cell(row_idx, 4, record.get('program', ''))
+                    ws.cell(row_idx, 5, record.get('case_worker', ''))
+                    ws.cell(row_idx, 6, record.get('waitlist_status', ''))
+                    ws.cell(row_idx, 7, record.get('meeting_week', ''))
+                    ws.cell(row_idx, 8, record.get('waitlist_date', ''))
+                    
+                    # Highlight site decision rows in RED
+                    if record.get('waitlist_status') == 'Site Decision':
+                        for col in range(1, 9):
+                            cell = ws.cell(row_idx, col)
+                            cell.fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
+                            cell.font = Font(color="FFFFFF", bold=True)
+                    
+                    row_idx += 1
+                
+                # Adjust widths
+                ws.column_dimensions['A'].width = 25
+                ws.column_dimensions['B'].width = 10
+                ws.column_dimensions['C'].width = 30
+                ws.column_dimensions['D'].width = 20
+                ws.column_dimensions['E'].width = 20
+                ws.column_dimensions['F'].width = 15
+                ws.column_dimensions['G'].width = 15
+                ws.column_dimensions['H'].width = 15
+                
+                # Save to bytes
+                output = BytesIO()
+                wb.save(output)
+                excel_data = output.getvalue()
+                
+                st.download_button(
+                    label="💾 Save Waitlist Summary",
+                    data=excel_data,
+                    file_name=f"Waitlist_Summary_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+        else:
+            st.success("✅ No students currently on waitlist or awaiting site decision")
+    
+    except Exception as e:
+        st.error(f"❌ Error loading waitlist: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
+
 # ============================================================================
 # COMMUNICATION MODAL/SECTION (triggered from sidebar)
 # ============================================================================
@@ -1362,7 +1692,7 @@ if st.session_state.get('download_comms', False):
     try:
         # Fetch current week communications (both allocations and extensions)
         comm_data = supabase.table("allocation_students")\
-            .select("student_name, school, program, school_contact, outcome, information, actioned_by, exclusion_finish_date, proposed_extension_finish_date, extension_weeks")\
+            .select("student_name, school, program, school_contact, outcome, information, actioned_by, exclusion_finish_date, proposed_extension_finish_date, extension_weeks, waitlist_status")\
             .eq("meeting_week", selected_week)\
             .in_("outcome", ["Allocated", "Not Allocated", "Approved", "Not Approved"])\
             .execute()
@@ -1379,7 +1709,7 @@ if st.session_state.get('download_comms', False):
             
             # Headers
             headers = ["School", "Student", "Program", "School Contact", "Type", "Outcome", 
-                      "Extension Details", "Information to be Shared", "To be Actioned By"]
+                      "Waitlist Status", "Extension Details", "Information to be Shared", "To be Actioned By"]
             
             # Style header
             header_fill = PatternFill(start_color="1A7A6E", end_color="1A7A6E", fill_type="solid")
@@ -1402,26 +1732,37 @@ if st.session_state.get('download_comms', False):
                 if is_extension:
                     ext_details = f"Current end: {record.get('exclusion_finish_date', 'N/A')}, Proposed: {record.get('proposed_extension_finish_date', 'N/A')}, Weeks: {record.get('extension_weeks', 'N/A')}"
                 
+                waitlist_status = record.get('waitlist_status', 'Not Applicable')
+                
                 ws.cell(row_idx, 1, record.get('school', ''))
                 ws.cell(row_idx, 2, record.get('student_name', ''))
                 ws.cell(row_idx, 3, record.get('program', ''))
                 ws.cell(row_idx, 4, record.get('school_contact', ''))
                 ws.cell(row_idx, 5, record_type)
                 ws.cell(row_idx, 6, record.get('outcome', ''))
-                ws.cell(row_idx, 7, ext_details)
-                ws.cell(row_idx, 8, record.get('information', ''))
-                ws.cell(row_idx, 9, record.get('actioned_by', ''))
+                ws.cell(row_idx, 7, waitlist_status)
+                ws.cell(row_idx, 8, ext_details)
+                ws.cell(row_idx, 9, record.get('information', ''))
+                ws.cell(row_idx, 10, record.get('actioned_by', ''))
+                
+                # RED HIGHLIGHT for Site Decision rows
+                if waitlist_status == 'Site Decision':
+                    for col in range(1, 11):
+                        cell = ws.cell(row_idx, col)
+                        cell.fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
+                        cell.font = Font(color="FFFFFF", bold=True)
             
             # Adjust column widths
-            ws.column_dimensions['A'].width = 25
-            ws.column_dimensions['B'].width = 20
-            ws.column_dimensions['C'].width = 20
-            ws.column_dimensions['D'].width = 20
-            ws.column_dimensions['E'].width = 12
-            ws.column_dimensions['F'].width = 15
-            ws.column_dimensions['G'].width = 40
-            ws.column_dimensions['H'].width = 40
-            ws.column_dimensions['I'].width = 20
+            ws.column_dimensions['A'].width = 25  # School
+            ws.column_dimensions['B'].width = 20  # Student
+            ws.column_dimensions['C'].width = 20  # Program
+            ws.column_dimensions['D'].width = 20  # School Contact
+            ws.column_dimensions['E'].width = 12  # Type
+            ws.column_dimensions['F'].width = 15  # Outcome
+            ws.column_dimensions['G'].width = 18  # Waitlist Status
+            ws.column_dimensions['H'].width = 40  # Extension Details
+            ws.column_dimensions['I'].width = 40  # Information
+            ws.column_dimensions['J'].width = 20  # Actioned By
             
             # Save to bytes
             output = BytesIO()
