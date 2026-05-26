@@ -176,11 +176,48 @@ def check_language_objectivity(text: str) -> list:
 
 
 def compute_risk_level(likelihood: str, consequence: str) -> str:
-    l = likelihood.split("–")[0].strip().split(" ")[0]
-    c = consequence.split("–")[0].strip().split(" ")[0]
-    return RISK_MATRIX.get((l,c),"HIGH")
+    """
+    Compute risk level from likelihood and consequence.
+    Handles various input formats (full strings, partial strings, or integers from Excel).
+    """
+    # Convert to string if integer
+    likelihood = str(likelihood) if not isinstance(likelihood, str) else likelihood
+    consequence = str(consequence) if not isinstance(consequence, str) else consequence
+    
+    # Extract just the letter/number code
+    # Handles "D – Likely/frequently", "D", or just "D "
+    if "–" in likelihood:
+        l = likelihood.split("–")[0].strip().split(" ")[0]
+    else:
+        l = likelihood.strip().split(" ")[0]
+    
+    if "–" in consequence:
+        c = consequence.split("–")[0].strip().split(" ")[0]
+    else:
+        c = consequence.strip().split(" ")[0]
+    
+    return RISK_MATRIX.get((l, c), "HIGH")
 
 def risk_colour(level): return RISK_COLOURS.get(level,"#888")
+
+def normalize_risk_rating(value: str, options: list) -> str:
+    """
+    Normalize a risk rating value that may have been truncated by Excel.
+    E.g., "3" or "3.0" → "3 – Moderate"
+    """
+    value = str(value).strip()
+    
+    # If it's already a full option, return it
+    if value in options:
+        return value
+    
+    # Try to match by the first character/number
+    for option in options:
+        if option.startswith(value.split()[0]):
+            return option
+    
+    # If no match, return the value as-is
+    return value
 
 # ══════════════════════════════════════════════════════════════════════════════
 # EXCEL SAVE/LOAD FUNCTIONS - Privacy-first data handling
@@ -275,84 +312,121 @@ def load_excel_save(excel_file):
     """
     try:
         # Read all sheets
-        excel_data = pd.read_excel(excel_file, sheet_name=None)
+        excel_data = pd.read_excel(excel_file, sheet_name=None, engine='openpyxl')
         
         # Sheet 1: Student Details
         if 'Student Details' in excel_data:
-            student_df = excel_data['Student Details']
-            student_dict = dict(zip(student_df['Field'], student_df['Value']))
-            
-            # Handle NaN values
-            for k in student_dict:
-                if pd.isna(student_dict[k]):
-                    student_dict[k] = ''
-            
-            st.session_state.student = student_dict
+            try:
+                student_df = excel_data['Student Details']
+                student_dict = dict(zip(student_df['Field'], student_df['Value']))
+                
+                # Handle NaN values and convert to strings
+                for k in student_dict:
+                    if pd.isna(student_dict[k]):
+                        student_dict[k] = ''
+                    else:
+                        student_dict[k] = str(student_dict[k])
+                
+                st.session_state.student = student_dict
+            except Exception as e:
+                return False, f"Error loading student details: {str(e)}"
         
         # Sheet 2: Risks
         if 'Risks' in excel_data:
-            risks_df = excel_data['Risks']
-            
-            # Convert DataFrame to list of dicts
-            risks = []
-            for _, row in risks_df.iterrows():
-                risk_dict = row.to_dict()
-                # Handle NaN values
-                for k in risk_dict:
-                    if pd.isna(risk_dict[k]):
-                        risk_dict[k] = '' if k not in ['from_school', 'from_docs'] else False
-                risks.append(risk_dict)
-            
-            st.session_state.risks = risks
+            try:
+                risks_df = excel_data['Risks']
+                
+                # Convert DataFrame to list of dicts
+                risks = []
+                for _, row in risks_df.iterrows():
+                    risk_dict = row.to_dict()
+                    # Handle NaN values
+                    for k in risk_dict:
+                        if k in ['from_school', 'from_docs']:
+                            risk_dict[k] = bool(risk_dict[k]) if not pd.isna(risk_dict[k]) else False
+                        else:
+                            risk_dict[k] = str(risk_dict[k]) if not pd.isna(risk_dict[k]) else ''
+                    
+                    # Normalize likelihood and consequence (Excel may have truncated them)
+                    if 'likelihood' in risk_dict and risk_dict['likelihood']:
+                        risk_dict['likelihood'] = normalize_risk_rating(risk_dict['likelihood'], LIKELIHOOD_OPTIONS)
+                    if 'consequence' in risk_dict and risk_dict['consequence']:
+                        risk_dict['consequence'] = normalize_risk_rating(risk_dict['consequence'], CONSEQUENCE_OPTIONS)
+                    
+                    risks.append(risk_dict)
+                
+                st.session_state.risks = risks
+            except Exception as e:
+                return False, f"Error loading risks: {str(e)}"
         
         # Sheet 3: Final Details
         if 'Final Details' in excel_data:
-            final_df = excel_data['Final Details']
-            final_dict = dict(zip(final_df['Field'], final_df['Value']))
-            
-            st.session_state.priority_actions = final_dict.get('priority_actions', '') if not pd.isna(final_dict.get('priority_actions')) else ''
-            st.session_state.review_date = final_dict.get('review_date', '') if not pd.isna(final_dict.get('review_date')) else ''
-            st.session_state.mode = final_dict.get('mode', 'wizard') if not pd.isna(final_dict.get('mode')) else 'wizard'
-            st.session_state.step = int(final_dict.get('step', 1)) if not pd.isna(final_dict.get('step')) else 1
-            st.session_state.synthesis_done = bool(final_dict.get('synthesis_done', False)) if not pd.isna(final_dict.get('synthesis_done')) else False
+            try:
+                final_df = excel_data['Final Details']
+                final_dict = dict(zip(final_df['Field'], final_df['Value']))
+                
+                st.session_state.priority_actions = str(final_dict.get('priority_actions', '')) if not pd.isna(final_dict.get('priority_actions')) else ''
+                st.session_state.review_date = str(final_dict.get('review_date', '')) if not pd.isna(final_dict.get('review_date')) else ''
+                st.session_state.mode = str(final_dict.get('mode', 'wizard')) if not pd.isna(final_dict.get('mode')) else 'wizard'
+                
+                # Safely convert step to int
+                try:
+                    step_val = final_dict.get('step', 1)
+                    st.session_state.step = int(float(step_val)) if not pd.isna(step_val) else 1
+                except:
+                    st.session_state.step = 1
+                
+                # Safely convert synthesis_done to bool
+                try:
+                    synth_val = final_dict.get('synthesis_done', False)
+                    st.session_state.synthesis_done = bool(synth_val) if not pd.isna(synth_val) else False
+                except:
+                    st.session_state.synthesis_done = False
+            except Exception as e:
+                return False, f"Error loading final details: {str(e)}"
         
         # Sheet 4: Uploaded Documents
         if 'Uploaded Documents' in excel_data:
-            docs_df = excel_data['Uploaded Documents']
-            
-            # First row is usually school plan
-            if len(docs_df) > 0:
-                school_row = docs_df.iloc[0]
-                st.session_state.school_plan_text = str(school_row['Text']) if not pd.isna(school_row['Text']) else ''
-            
-            # Rest are support docs
-            support_docs = []
-            for i in range(1, len(docs_df)):
-                doc_row = docs_df.iloc[i]
-                doc_name = str(doc_row['Document'])
+            try:
+                docs_df = excel_data['Uploaded Documents']
                 
-                # Parse doc type from "Type: Name" format
-                if ':' in doc_name:
-                    parts = doc_name.split(':', 1)
-                    doc_type = parts[0].strip()
-                    name = parts[1].strip()
-                else:
-                    doc_type = 'Other'
-                    name = doc_name
+                # First row is usually school plan
+                if len(docs_df) > 0:
+                    school_row = docs_df.iloc[0]
+                    st.session_state.school_plan_text = str(school_row['Text']) if not pd.isna(school_row['Text']) else ''
                 
-                support_docs.append({
-                    'name': name,
-                    'doc_type': doc_type,
-                    'text': str(doc_row['Text']) if not pd.isna(doc_row['Text']) else ''
-                })
-            
-            st.session_state.support_docs = support_docs
+                # Rest are support docs
+                support_docs = []
+                for i in range(1, len(docs_df)):
+                    doc_row = docs_df.iloc[i]
+                    doc_name = str(doc_row['Document']) if not pd.isna(doc_row['Document']) else 'Unknown'
+                    
+                    # Parse doc type from "Type: Name" format
+                    if ':' in doc_name:
+                        parts = doc_name.split(':', 1)
+                        doc_type = parts[0].strip()
+                        name = parts[1].strip()
+                    else:
+                        doc_type = 'Other'
+                        name = doc_name
+                    
+                    support_docs.append({
+                        'name': name,
+                        'doc_type': doc_type,
+                        'text': str(doc_row['Text']) if not pd.isna(doc_row['Text']) else ''
+                    })
+                
+                st.session_state.support_docs = support_docs
+            except Exception as e:
+                # Don't fail if uploaded docs fail to load
+                st.session_state.support_docs = []
         
         student_name = st.session_state.student.get('name', 'Unknown')
-        return True, f"✅ Loaded save file for {student_name}"
+        risk_count = len(st.session_state.risks)
+        return True, f"✅ Successfully loaded: {student_name} with {risk_count} risk(s)"
         
     except Exception as e:
-        return False, f"❌ Error loading Excel file: {str(e)}"
+        return False, f"❌ Failed to read Excel file: {str(e)[:200]}"
 
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -859,19 +933,23 @@ with col_load:
         
         # Only load if this is a new file (not already loaded)
         if st.session_state.last_loaded_file != file_id:
-            success, message = load_excel_save(uploaded_save)
-            if success:
-                st.session_state.last_loaded_file = file_id  # Mark as loaded
-                st.success(message)
-                time.sleep(1.5)
-                st.rerun()
-            else:
-                st.error(message)
+            with st.spinner("Loading Excel file... Please wait..."):
+                try:
+                    success, message = load_excel_save(uploaded_save)
+                    if success:
+                        st.session_state.last_loaded_file = file_id  # Mark as loaded
+                        st.success(message)
+                        st.info("👆 Data loaded! Scroll down to continue working or download a new save file.")
+                    else:
+                        st.error(message)
+                except Exception as e:
+                    st.error(f"Failed to load file: {str(e)}")
+                    st.info("Try re-downloading your save file or contact Candice if the issue persists.")
         else:
             # File already loaded, show confirmation
             student_name = st.session_state.student.get('name', 'Unknown')
-            st.info(f"✅ Loaded: {student_name}")
-            if st.button("Clear & Upload Different File", key="clear_upload"):
+            st.success(f"✅ Currently loaded: {student_name}")
+            if st.button("Upload Different File", key="clear_upload"):
                 st.session_state.last_loaded_file = None
                 st.rerun()
 
