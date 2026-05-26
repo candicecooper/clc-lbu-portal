@@ -373,6 +373,8 @@ def init_state():
         "synthesis_done": False,
         "priority_actions": "",
         "review_date": "",
+        "file_loaded": False,        # Flag to prevent reload loop
+        "last_loaded_file": None,    # Track which file was loaded
     }
     for k,v in defaults.items():
         if k not in st.session_state:
@@ -852,13 +854,26 @@ with col_load:
     )
     
     if uploaded_save:
-        success, message = load_excel_save(uploaded_save)
-        if success:
-            st.success(message)
-            time.sleep(1.5)
-            st.rerun()
+        # Create unique ID for this file to prevent re-loading same file
+        file_id = f"{uploaded_save.name}_{uploaded_save.size}"
+        
+        # Only load if this is a new file (not already loaded)
+        if st.session_state.last_loaded_file != file_id:
+            success, message = load_excel_save(uploaded_save)
+            if success:
+                st.session_state.last_loaded_file = file_id  # Mark as loaded
+                st.success(message)
+                time.sleep(1.5)
+                st.rerun()
+            else:
+                st.error(message)
         else:
-            st.error(message)
+            # File already loaded, show confirmation
+            student_name = st.session_state.student.get('name', 'Unknown')
+            st.info(f"✅ Loaded: {student_name}")
+            if st.button("Clear & Upload Different File", key="clear_upload"):
+                st.session_state.last_loaded_file = None
+                st.rerun()
 
 st.markdown('</div>', unsafe_allow_html=True)
 
