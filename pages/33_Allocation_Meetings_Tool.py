@@ -61,6 +61,7 @@ MEDICAL_CONDITION_TYPES = [
 SCHOOL_PARTNERSHIP_MAP = {
     # Adelaide Prospect Partnership
     "Angle Vale School": "Adelaide Prospect",
+    "Adelaide Botanic High School": "Adelaide Prospect",
     "Gawler and District College": "Adelaide Prospect",
     "Gawler East Primary School": "Adelaide Prospect",
     "Gawler Primary School": "Adelaide Prospect",
@@ -150,6 +151,9 @@ SCHOOL_PARTNERSHIP_MAP = {
     "Craigburn Primary School": "Mitcham Hills",
     "Cumberland Park Primary School": "Mitcham Hills",
     "Sturt Street Community School": "Mitcham Hills",
+    
+    # Mitcham Plains Partnership
+    "Mitcham Girls High School": "Mitcham Plains",
     
     # Onkaparinga Partnership
     "Christies Beach High School": "Onkaparinga",
@@ -834,6 +838,17 @@ with tab1:
                         else:
                             waitlist_date = None
                     
+                    # BSE Section
+                    st.markdown("### 👤 BSE (Behaviour Support & Engagement)")
+                    col1, col2 = st.columns([1, 1])
+                    with col1:
+                        bse_involved = st.selectbox("BSE Involved?", ["No", "Yes"])
+                    with col2:
+                        if bse_involved == "Yes":
+                            bse_name = st.text_input("BSE Staff Name *", placeholder="Enter name of BSE staff member")
+                        else:
+                            bse_name = None
+                    
                     # Communication
                     st.markdown("### 📧 Communication to School")
                     information = st.text_area(
@@ -850,6 +865,8 @@ with tab1:
                         # Validation
                         if not outcome:
                             st.error("⚠️ Please select an outcome")
+                        elif bse_involved == "Yes" and not bse_name:
+                            st.error("⚠️ Please enter BSE staff name if BSE is involved")
                         else:
                             try:
                                 update_data = {
@@ -862,6 +879,8 @@ with tab1:
                                     "bespoke_placement": bespoke,
                                     "waitlist_status": waitlist_status,
                                     "waitlist_date": waitlist_date.isoformat() if waitlist_date else None,
+                                    "bse_involved": bse_involved,
+                                    "bse_name": bse_name if bse_name else None,
                                     "information": information if information else None,
                                     "actioned_by": actioned_by if actioned_by else None
                                 }
