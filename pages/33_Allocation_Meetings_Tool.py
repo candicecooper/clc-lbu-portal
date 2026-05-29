@@ -49,19 +49,39 @@ def load_school_partnership_map(df):
 def load_allocation_data(file_path):
     """Load allocation data from Excel"""
     try:
+        # Check if file exists first
+        if not os.path.exists(file_path):
+            st.warning(f"File not found at {file_path}")
+            return None
+        
+        # Try to read the Excel file
         df = pd.read_excel(file_path, sheet_name="Data_Model")
         return df
     except Exception as e:
         st.error(f"Error loading Excel file: {str(e)}")
+        st.info("💡 Try uploading your Excel file again, or refreshing the page.")
         return None
 
 # Save data to Excel
 def save_allocation_data(df, file_path):
     """Save allocation data back to Excel"""
     try:
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        
+        # Save to Excel
         with pd.ExcelWriter(file_path, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
             df.to_excel(writer, sheet_name="Data_Model", index=False)
-        return True
+        
+        # Verify file was saved
+        import time
+        time.sleep(0.5)  # Small delay to ensure write completes
+        
+        if os.path.exists(file_path):
+            return True
+        else:
+            st.error("File was not saved successfully")
+            return False
     except Exception as e:
         st.error(f"Error saving to Excel: {str(e)}")
         return False
@@ -136,6 +156,11 @@ with col2:
         # Save uploaded file to persistent storage
         with open(STORED_FILE_PATH, "wb") as f:
             f.write(uploaded_file.getbuffer())
+        
+        # Small delay to ensure file is fully written
+        import time
+        time.sleep(1)
+        
         st.success(f"✅ File uploaded and saved!")
         st.session_state.loaded_file = STORED_FILE_PATH
         st.session_state.df_cache = None  # Clear cache to reload
