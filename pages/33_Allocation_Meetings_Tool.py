@@ -555,7 +555,7 @@ st.markdown("<p>Manage student allocations and track meeting decisions</p>", uns
 st.markdown("---")
 
 # Load data
-df = load_allocation_data()
+df = load_allocation_data(STORED_FILE_PATH)
 
 if df is None:
     st.stop()
@@ -702,7 +702,7 @@ with tab2:
     st.caption("Select a draft to complete with allocation decision details")
     
     # Reload fresh data
-    df_fresh = load_allocation_data()
+    df_fresh = load_allocation_data(STORED_FILE_PATH)
     
     # Find drafts (rows with no Allocation_Status)
     drafts = df_fresh[df_fresh['Allocation_Status'].isna()]
@@ -840,7 +840,7 @@ with tab3:
     st.subheader("📊 View All Allocations")
     
     # Reload data
-    df_view = load_allocation_data()
+    df_view = load_allocation_data(STORED_FILE_PATH)
     
     col1, col2 = st.columns([3, 1])
     with col1:
