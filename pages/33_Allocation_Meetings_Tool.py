@@ -196,7 +196,7 @@ if file_exists or st.session_state.loaded_file:
     # Get school map from data
     school_map = load_school_partnership_map(df)
     ALL_SCHOOLS = sorted([s for s in school_map.keys() if pd.notna(s)])
-    PARTNERSHIP_AREAS = sorted(list(set(school_map.values())))
+    PARTNERSHIP_AREAS = sorted(list(set([p for p in school_map.values() if pd.notna(p)])))
     
     # Create tabs
     tab1, tab2, tab3, tab4 = st.tabs(["➕ Create New", "📝 Complete Existing", "📊 View All", "⚙️ Settings"])
