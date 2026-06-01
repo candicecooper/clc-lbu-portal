@@ -1,6 +1,3 @@
-# WORKING VERSION - All tabs function, export maps data correctly
-# Replace your entire tool file with this
-
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta, date
@@ -34,17 +31,12 @@ PRIORITY_OPTIONS = ["1", "2", "3", "4", "5"]
 YEAR_LEVELS = ["R", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
 WAITLIST_STATUS_OPTIONS = ["Not Applicable", "On Waitlist", "Declined", "Site Decision", "Site Withdraw"]
 
-ALL_FLAGS = ["EALD", "ATSI", "Attendance-Fulltime", "Attendance-Parttime", 
-             "Intervention/Custody Order", "DCP involvement", "Child in care",
-             "IESP Funding-yes", "IESP Funding-no", "Category 1-9", "9+RAAP", "SWD",
-             "Speech and Lang", "ASD", "Intellectual", "Learning Difficulty",
-             "Sensory Processing", "ADHD", "ODD", "PDA", "Medication", "Medical condition"]
-
 SCHOOL_PARTNERSHIP_MAP = {
     "Mitcham Girls High School": "Mitcham Plains",
     "Adelaide Botanic High School": "Adelaide Prospect",
     "Prospect High School": "Adelaide Prospect",
     "Henley Beach Primary": "Inner West",
+    "Cowandilla Primary": "Inner West",
 }
 
 ALL_SCHOOLS = sorted(list(SCHOOL_PARTNERSHIP_MAP.keys()))
@@ -100,28 +92,23 @@ def calculate_weeks_between(start_date, end_date):
     return 0
 
 def export_to_data_entry(selected_allocations):
-    """Export with proper data mapping"""
+    """Export allocations with proper data mapping to 76 columns"""
     
     df = pd.DataFrame(selected_allocations)
     
-    # Create output dataframe with all 76 columns
+    # Create output dataframe with all 76 columns in order
     df_export = pd.DataFrame(index=range(len(selected_allocations)))
     
-    # Map data: For each export column, try to find data in the source
     for col in EXPORT_COLUMNS:
         col_lower = col.lower()
         
-        # Try exact match first
+        # Try to find the column with various naming conventions
         if col in df.columns:
             df_export[col] = df[col]
-        # Try lowercase match
         elif col_lower in df.columns:
             df_export[col] = df[col_lower]
-        # Try underscore version
-        elif col_lower.replace(' ', '_') in df.columns:
-            df_export[col] = df[col_lower.replace(' ', '_')]
         else:
-            # Try specific mappings
+            # Mapping for specific fields
             mapping = {
                 'Student_Name': 'student_name',
                 'DOB': 'date_of_birth',
@@ -309,6 +296,7 @@ with tab1:
             with col3:
                 year_level = st.selectbox("Year Level *", [""] + YEAR_LEVELS)
             
+            priority_level = st.selectbox("Priority Level", [""] + PRIORITY_OPTIONS)
             queries = st.text_area("Queries/Notes")
             
             if st.form_submit_button("💾 Save Draft", type="primary", use_container_width=True):
@@ -327,6 +315,7 @@ with tab1:
                             "gender": gender,
                             "year_level": year_level,
                             "partnership_area": auto_partnership,
+                            "priority_level": priority_level if priority_level else "3",
                             "queries": queries,
                             "outcome": None
                         }).execute()
@@ -360,58 +349,197 @@ with tab3:
         st.error(f"Error: {e}")
 
 with tab4:
-    st.header("📊 View & Export")
+    st.header("📊 View & Export Completed Allocations")
     
     try:
-        records = supabase.table("allocation_students")\
+        full_data = supabase.table("allocation_students")\
             .select("*")\
             .eq("meeting_week", selected_week)\
             .not_.is_("outcome", "null")\
             .execute()
         
-        if records.data and len(records.data) > 0:
-            st.info(f"📊 {len(records.data)} completed record(s)")
+        if full_data.data and len(full_data.data) > 0:
+            allocated = [r for r in full_data.data if r.get('outcome') == 'Allocated']
+            not_allocated = [r for r in full_data.data if r.get('outcome') == 'Not Allocated']
             
-            allocated = [r for r in records.data if r['outcome'] == 'Allocated']
-            not_allocated = [r for r in records.data if r['outcome'] == 'Not Allocated']
-            
+            # Summary metrics
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("Total", len(records.data))
+                st.metric("Total Records", len(full_data.data))
             with col2:
                 st.metric("Allocated", len(allocated))
             with col3:
                 st.metric("Not Allocated", len(not_allocated))
             
             st.markdown("---")
-            st.subheader("📤 Export to Excel")
             
-            if st.button("📥 Download Data Entry Excel", type="primary", use_container_width=True):
-                try:
-                    all_allocations = allocated + not_allocated
-                    excel_bytes = export_to_data_entry(all_allocations)
-                    
-                    st.download_button(
-                        label="💾 Save Excel",
-                        data=excel_bytes.getvalue(),
-                        file_name=f"CLC_Allocations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
-                    )
-                    
-                    st.success(f"✅ {len(all_allocations)} record(s) ready to export!")
-                except Exception as e:
-                    st.error(f"Export error: {e}")
-                    import traceback
-                    st.code(traceback.format_exc())
+            # ===================================================================
+            # VALIDATION SECTION
+            # ===================================================================
+            st.subheader("📋 Pre-Export Review & Validation")
+            
+            validation_issues = []
+            export_records = allocated + not_allocated
+            
+            # Check 1: Required fields
+            for idx, record in enumerate(export_records):
+                issues = []
+                if not record.get('student_name'):
+                    issues.append("Missing student name")
+                if not record.get('program'):
+                    issues.append("Missing program")
+                if not record.get('outcome'):
+                    issues.append("Missing outcome")
+                if not record.get('school'):
+                    issues.append("Missing school")
+                
+                if issues:
+                    validation_issues.append({
+                        'student': record.get('student_name', 'Unknown'),
+                        'issues': issues
+                    })
+            
+            # Display validation results
+            if validation_issues:
+                st.warning(f"⚠️ **{len(validation_issues)} record(s) have issues:**")
+                for issue in validation_issues:
+                    st.write(f"  • **{issue['student']}**: {', '.join(issue['issues'])}")
+                st.info("💡 Fix these records before exporting or they'll have incomplete data.")
+            else:
+                st.success(f"✅ **All {len(export_records)} record(s) pass validation!**")
+            
+            st.markdown("---")
+            
+            # ===================================================================
+            # PREVIEW SECTION
+            # ===================================================================
+            st.subheader("👁️ Export Preview")
+            
+            with st.expander("📋 Click to review records being exported", expanded=True):
+                preview_data = []
+                for record in export_records:
+                    preview_data.append({
+                        "Student": record.get('student_name', ''),
+                        "Year": record.get('year_level', ''),
+                        "Program": record.get('program', ''),
+                        "School": record.get('school', ''),
+                        "Outcome": record.get('outcome', ''),
+                        "Case Worker": record.get('case_worker', ''),
+                    })
+                
+                df_preview = pd.DataFrame(preview_data)
+                st.dataframe(df_preview, use_container_width=True, hide_index=True)
+                
+                st.caption(f"📊 {len(export_records)} record(s) ready for export")
+            
+            st.markdown("---")
+            
+            # ===================================================================
+            # DUPLICATE CHECK
+            # ===================================================================
+            st.subheader("🔄 Duplicate Prevention")
+            
+            existing_students = st.text_area(
+                "**Paste existing student names from your main Excel** (to prevent duplicates)",
+                placeholder="John Smith\nMary Jones\nSarah Lee\n...",
+                height=80,
+                help="Copy & paste all student names from your main Excel file's Student_Name column",
+                key="duplicate_check"
+            )
+            
+            duplicates = []
+            new_records = export_records
+            export_count = len(export_records)
+            
+            if existing_students:
+                existing_list = [s.strip().lower() for s in existing_students.split('\n') if s.strip()]
+                duplicates = []
+                new_records = []
+                
+                for record in export_records:
+                    student_name = record.get('student_name', '').lower()
+                    if student_name in existing_list:
+                        duplicates.append(record.get('student_name'))
+                    else:
+                        new_records.append(record)
+                
+                if duplicates:
+                    st.warning(f"🔄 **{len(duplicates)} duplicate(s) found** (already in main file):")
+                    st.write(f"  {', '.join(duplicates)}")
+                    st.info(f"**ℹ️ Only exporting {len(new_records)} NEW records** - duplicates will be skipped")
+                    export_count = len(new_records)
+                else:
+                    st.success(f"✅ **No duplicates found.** All {len(export_records)} record(s) are new.")
+                    export_count = len(export_records)
+            else:
+                st.info("💡 Paste your existing student names above to check for duplicates")
+            
+            st.markdown("---")
+            
+            # ===================================================================
+            # EXPORT BUTTON
+            # ===================================================================
+            st.subheader("📤 Ready to Export?")
+            
+            if validation_issues:
+                st.error("❌ Fix validation issues above before exporting")
+                st.button("📥 Download Data Entry Excel", disabled=True, use_container_width=True)
+            else:
+                if st.button("📥 Download Data Entry Excel", type="primary", use_container_width=True):
+                    try:
+                        # Determine which records to export
+                        if existing_students and duplicates:
+                            records_to_export = new_records
+                            export_note = f"Exporting {len(records_to_export)} new record(s) (skipped {len(duplicates)} duplicate(s))"
+                        else:
+                            records_to_export = export_records
+                            export_note = f"Exporting {len(records_to_export)} record(s)"
+                        
+                        st.info(f"📊 {export_note}...")
+                        
+                        excel_bytes = export_to_data_entry(records_to_export)
+                        
+                        st.download_button(
+                            label=f"💾 Save Excel ({len(records_to_export)} rows)",
+                            data=excel_bytes.getvalue(),
+                            file_name=f"CLC_Allocations_{selected_week.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True
+                        )
+                        
+                        st.success(f"✅ Excel file ready!")
+                        
+                        st.markdown("---")
+                        st.subheader("📋 Next Steps:")
+                        st.markdown(f"""
+                        1. ✅ Download the Excel file above
+                        2. 📂 Open your main file: `CLC_Allocation_Dashboard_2026_WithNames_1.xlsx`
+                        3. 📄 Go to: **Data_Model** sheet
+                        4. Find: **First blank row** (use Ctrl+End to jump to end)
+                        5. 📌 Select that row's first cell
+                        6. 📋 Paste: All data from downloaded file (Ctrl+V)
+                        7. 💾 Save main file
+                        8. ✅ Done!
+                        
+                        **Tip:** The {len(records_to_export)} row(s) should paste starting in column A (Student_ID)
+                        
+                        **Column Count:** All 76 columns will be included
+                        """)
+                        
+                    except Exception as e:
+                        st.error(f"Export error: {e}")
+                        import traceback
+                        st.code(traceback.format_exc())
         else:
-            st.info("📭 No completed records")
-    
+            st.info("📭 No completed records for this week")
+
     except Exception as e:
         st.error(f"Error: {e}")
+        import traceback
+        st.code(traceback.format_exc())
 
 with tab5:
     st.header("⏳ Waitlist Management")
     st.info("Manage waitlist and site decision students")
 
-st.caption("CLC-LBU Allocation Meetings Tool - Working Version")
+st.caption("CLC-LBU Allocation Meetings Tool - Enhanced Export Version")
