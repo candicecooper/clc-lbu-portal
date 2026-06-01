@@ -114,10 +114,19 @@ SAVE_SIGNS = [
 ]
 
 SAVE_SUPPORTS = [
-    "Co-regulation", "Movement / brain break", "Reduced demand", "Offered choice",
-    "Change of space / retreat", "Sensory tool", "Reduced sensory input",
-    "Preferred task swap", "1:1 SSO", "1:1 Teacher", "Visual support",
-    "Leadership support",
+    # Relational / co-regulation
+    "Co-regulation / calm presence", "Emotion coaching / PACE",
+    # Movement & body
+    "Movement break", "Walk and talk", "Food / drink",
+    # Task & demand
+    "Reduced demand", "Task paused", "Offered choice",
+    "Preferred activity", "Group task change",
+    # Environment & sensory
+    "Change of space", "Quiet / retreat space",
+    "Sensory tool", "Reduced sensory input", "Visual support / cue",
+    # People & staffing
+    "1:1 SSO", "1:1 Teacher", "Carer support",
+    "Intentional parent engagement", "Leadership support",
 ]
 
 SAVE_OUTCOMES = {
@@ -1184,6 +1193,10 @@ with t_record:
 
         _chip_row("⚠️ Early sign(s) observed", SAVE_SIGNS, "ist_save_signs", "svsign")
         _chip_row("🛟 Support(s) applied", SAVE_SUPPORTS, "ist_save_supports", "svsup")
+        other_sup = st.text_input(
+            "Other support (if not listed)", key="ist_save_sup_other",
+            placeholder="Type any other support used (optional)",
+            label_visibility="collapsed")
 
         st.markdown('<div style="font-size:.72rem;font-weight:700;color:#1A6B8A;'
                     'margin:.4rem 0 .2rem;">🎯 Outcome</div>', unsafe_allow_html=True)
@@ -1210,17 +1223,22 @@ with t_record:
                 now_hhmm = datetime.now().strftime("%-H:%M")
                 _nm = datetime.now().hour * 60 + datetime.now().minute
                 nearest = min(SLOT_TIMES, key=lambda t: abs(int(t.split(":")[0]) * 60 + int(t.split(":")[1]) - _nm))
+                _supports = list(ss.ist_save_supports)
+                if other_sup and other_sup.strip():
+                    _supports.append(other_sup.strip())
                 if insert_save(student_name, sel_date, now_hhmm, nearest,
-                               ss.ist_save_signs, ss.ist_save_supports,
+                               ss.ist_save_signs, _supports,
                                ss.ist_save_outcome, save_note):
                     ss.ist_save_signs = []; ss.ist_save_supports = []; ss.ist_save_outcome = ""
-                    ss.ist_save_note = ""
+                    ss.ist_save_note = ""; ss.ist_save_sup_other = ""
                     st.success("✅ Save logged")
                     st.rerun()
         with lc2:
-            if (ss.ist_save_signs or ss.ist_save_supports or ss.ist_save_outcome) and \
+            if (ss.ist_save_signs or ss.ist_save_supports or ss.ist_save_outcome
+                or (other_sup and other_sup.strip())) and \
                st.button("Clear", key="ist_save_clear", use_container_width=True):
                 ss.ist_save_signs = []; ss.ist_save_supports = []; ss.ist_save_outcome = ""
+                ss.ist_save_sup_other = ""
                 st.rerun()
         if not ready:
             st.caption("Select at least one early sign and an outcome to log.")
