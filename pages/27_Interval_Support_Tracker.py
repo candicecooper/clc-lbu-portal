@@ -541,6 +541,7 @@ for k, v in [
     ("ist_save_signs", []),         # Saves log — selected early signs
     ("ist_save_supports", []),      # Saves log — selected supports
     ("ist_save_outcome", ""),       # Saves log — selected outcome
+    ("ist_save_nonce", 0),          # Saves log — bump to reset text inputs
 ]:
     if k not in ss: ss[k] = v
 
@@ -1194,7 +1195,7 @@ with t_record:
         _chip_row("⚠️ Early sign(s) observed", SAVE_SIGNS, "ist_save_signs", "svsign")
         _chip_row("🛟 Support(s) applied", SAVE_SUPPORTS, "ist_save_supports", "svsup")
         other_sup = st.text_input(
-            "Other support (if not listed)", key="ist_save_sup_other",
+            "Other support (if not listed)", key=f"ist_save_sup_other_{ss.ist_save_nonce}",
             placeholder="Type any other support used (optional)",
             label_visibility="collapsed")
 
@@ -1211,7 +1212,7 @@ with t_record:
                     st.rerun()
 
         save_note = st.text_input(
-            "Note (optional)", key="ist_save_note",
+            "Note (optional)", key=f"ist_save_note_{ss.ist_save_nonce}",
             placeholder="e.g., flagged at task change — offered choice + movement break, settled within 5 min",
             label_visibility="collapsed")
 
@@ -1230,7 +1231,7 @@ with t_record:
                                ss.ist_save_signs, _supports,
                                ss.ist_save_outcome, save_note):
                     ss.ist_save_signs = []; ss.ist_save_supports = []; ss.ist_save_outcome = ""
-                    ss.ist_save_note = ""; ss.ist_save_sup_other = ""
+                    ss.ist_save_nonce += 1
                     st.success("✅ Save logged")
                     st.rerun()
         with lc2:
@@ -1238,7 +1239,7 @@ with t_record:
                 or (other_sup and other_sup.strip())) and \
                st.button("Clear", key="ist_save_clear", use_container_width=True):
                 ss.ist_save_signs = []; ss.ist_save_supports = []; ss.ist_save_outcome = ""
-                ss.ist_save_sup_other = ""
+                ss.ist_save_nonce += 1
                 st.rerun()
         if not ready:
             st.caption("Select at least one early sign and an outcome to log.")
