@@ -1603,21 +1603,86 @@ with t_analysis:
                     'Saves by week &amp; outcome</div>', unsafe_allow_html=True)
         st.plotly_chart(figs, use_container_width=True)
 
-        # Top supports used in successful saves
-        succ_sv = sv[sv["outcome"].isin(["returned_to_window", "held_in_coping"])]
-        sup_series = (succ_sv["support_used"].fillna("").str.split(", ").explode().str.strip())
-        sup_series = sup_series[sup_series != ""]
-        if not sup_series.empty:
-            top_sup = sup_series.value_counts().head(7).sort_values()
-            figt = go.Figure(go.Bar(x=top_sup.values, y=top_sup.index, orientation="h",
-                                     marker_color="#1A6B8A"))
-            figt.update_layout(height=max(220, len(top_sup) * 34 + 70),
-                               margin=dict(l=10, r=20, t=30, b=30),
-                               xaxis_title="successful saves", font=dict(size=12), plot_bgcolor="white")
-            figt.update_xaxes(gridcolor="#eef2f6")
-            st.markdown('<div style="font-size:.82rem;font-weight:700;color:#334155;margin:.5rem 0 .1rem;">'
-                        'Supports most associated with successful saves</div>', unsafe_allow_html=True)
-            st.plotly_chart(figt, use_container_width=True)
+        # ── Support analysis: usage, effectiveness, repertoire ────────────────
+        # Explode supports across all saves, keeping each save's outcome alongside.
+        exp = sv[["support_used", "early_sign", "outcome"]].copy()
+        exp["support_used"] = exp["support_used"].fillna("")
+        exp["sup"] = exp["support_used"].str.split(", ")
+        exp = exp.explode("sup")
+        exp["sup"] = exp["sup"].str.strip()
+        exp = exp[exp["sup"] != ""]
+
+        if not exp.empty:
+            exp["ok"] = exp["outcome"].isin(["returned_to_window", "held_in_coping"])
+            eff = (exp.groupby("sup")
+                      .agg(used=("ok", "size"), turned=("ok", "sum"))
+                      .reset_index())
+            eff["rate"] = (100 * eff["turned"] / eff["used"]).round()
+            eff = eff.sort_values(["used", "rate"], ascending=[False, False])
+
+            st.markdown('<div style="font-size:.82rem;font-weight:700;color:#334155;margin:.6rem 0 .1rem;">'
+                        'Support effectiveness — what turns this student around</div>',
+                        unsafe_allow_html=True)
+            st.caption("How often each support was applied during a save, and how often that save ended in "
+                       "the student returning to window or being held in coping. Higher bars used more often; "
+                       "the % is the turn-around rate. ⚠️ Treat supports used fewer than 3 times as indicative only.")
+
+            # Horizontal bar: usage with success portion shaded, rate + n labelled
+            eff_plot = eff.sort_values("used")
+            fige = go.Figure()
+            fige.add_trace(go.Bar(
+                y=eff_plot["sup"], x=eff_plot["turned"], orientation="h",
+                name="Turned around", marker_color="#16a34a"))
+            fige.add_trace(go.Bar(
+                y=eff_plot["sup"], x=(eff_plot["used"] - eff_plot["turned"]), orientation="h",
+                name="Escalated anyway", marker_color="#dc2626"))
+            fige.update_layout(
+                barmode="stack", height=max(240, len(eff_plot) * 30 + 80),
+                margin=dict(l=10, r=20, t=30, b=35),
+                xaxis_title="times applied during saves",
+                legend=dict(orientation="h", y=1.08), font=dict(size=12), plot_bgcolor="white")
+            fige.update_xaxes(gridcolor="#eef2f6", tickformat="d")
+            st.plotly_chart(fige, use_container_width=True)
+
+            # Effectiveness table with low-n flag
+            tbl = eff.copy()
+            tbl["Support"] = tbl["sup"]
+            tbl["Times applied"] = tbl["used"].astype(int)
+            tbl["Turned around"] = tbl["turned"].astype(int)
+            tbl["Turn-around rate"] = tbl.apply(
+                lambda r: (f"{int(r['rate'])}%" + ("  ⚠️ low n" if r["used"] < 3 else "")), axis=1)
+            st.dataframe(
+                tbl[["Support", "Times applied", "Turned around", "Turn-around rate"]]
+                   .set_index("Support"),
+                use_container_width=True)
+
+            # ── Response repertoire: which supports for which early sign ───────
+            rep = sv[["early_sign", "support_used"]].copy()
+            rep["early_sign"] = rep["early_sign"].fillna("")
+            rep["support_used"] = rep["support_used"].fillna("")
+            rep["sign"] = rep["early_sign"].str.split(", ")
+            rep = rep.explode("sign")
+            rep["sign"] = rep["sign"].str.strip()
+            rep = rep[rep["sign"] != ""]
+            if not rep.empty:
+                st.markdown('<div style="font-size:.82rem;font-weight:700;color:#334155;margin:.7rem 0 .1rem;">'
+                            'Response repertoire — supports used for each early sign</div>',
+                            unsafe_allow_html=True)
+                st.caption("The go-to supports staff reach for when each warning sign appears. Useful for "
+                           "building a shared, consistent response plan.")
+                sign_order = rep["sign"].value_counts().index.tolist()
+                rep_rows = []
+                for sgn in sign_order:
+                    sub = rep[rep["sign"] == sgn]
+                    sup_counts = (sub["support_used"].str.split(", ").explode().str.strip())
+                    sup_counts = sup_counts[sup_counts != ""].value_counts().head(3)
+                    top_txt = ", ".join(f"{s} ({c})" for s, c in sup_counts.items()) or "—"
+                    rep_rows.append({"Early sign": f"{sgn}  ·  {len(sub)}×", "Most-used supports": top_txt})
+                st.dataframe(pd.DataFrame(rep_rows).set_index("Early sign"), use_container_width=True)
+
+            st.caption("Note: supports are often applied to the hardest moments, so a lower turn-around rate "
+                       "may reflect harder situations rather than a weaker support. Read alongside the regulation "
+                       "trend and anecdotal notes, not in isolation.")
     else:
         st.info("No saves logged in this period yet. Log saves from the **Record & View** tab "
                 "(⚡ Log a SAVE) to build the prevention picture.")
