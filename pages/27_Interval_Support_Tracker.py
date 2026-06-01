@@ -104,6 +104,28 @@ OUTCOMES = {
     "passive_observation": {"label": "Passive observation", "short": "PO", "bg": "#dcfce7", "fg": "#16a34a"},
 }
 
+# ── Saves log vocabulary (prevention / de-escalation) ────────────────────────
+# A "save" = an early escalation sign was caught, a support applied, an outcome
+# followed. Lists below drive the tap-chips; edit freely to match site language.
+SAVE_SIGNS = [
+    "Pacing / restless", "Raised voice", "Fidgeting", "Verbal refusal",
+    "Withdrawing / quiet", "Seeking to leave", "Physical tension",
+    "Escalating language", "Sensory overwhelm",
+]
+
+SAVE_SUPPORTS = [
+    "Co-regulation", "Movement / brain break", "Reduced demand", "Offered choice",
+    "Change of space / retreat", "Sensory tool", "Reduced sensory input",
+    "Preferred task swap", "1:1 SSO", "1:1 Teacher", "Visual support",
+    "Leadership support",
+]
+
+SAVE_OUTCOMES = {
+    "returned_to_window": {"label": "Returned to window", "emoji": "🟢", "bg": "#dcfce7", "fg": "#16a34a", "success": True},
+    "held_in_coping":     {"label": "Held in coping",     "emoji": "🟡", "bg": "#fef9c3", "fg": "#ca8a04", "success": True},
+    "escalated_anyway":   {"label": "Escalated anyway",   "emoji": "🔴", "bg": "#fee2e2", "fg": "#dc2626", "success": False},
+}
+
 
 def get_sb():
     try:
@@ -436,6 +458,69 @@ def get_all_daily_notes(student_name, date_from, date_to):
         return {}
 
 
+# ── Saves (prevention / de-escalation) ──────────────────────────────────────
+def insert_save(student_name, sel_date, save_time, time_slot, signs, supports, outcome, note):
+    sb = get_sb()
+    if not sb: return False
+    try:
+        sb.table("interval_saves").insert({
+            "student_name": student_name,
+            "obs_date":     sel_date.isoformat(),
+            "save_time":    save_time,
+            "time_slot":    time_slot,
+            "early_sign":   ", ".join(signs),
+            "support_used": ", ".join(supports),
+            "outcome":      outcome,
+            "notes":        note.strip() if note else "",
+            "created_by":   get_staff_name(),
+        }).execute()
+        return True
+    except Exception as e:
+        es = str(e)
+        if "PGRST205" in es or "schema cache" in es:
+            st.error("Saves table not found — run interval_saves_table.sql in Supabase first.")
+        else:
+            st.error("Save failed: " + es)
+        return False
+
+
+def load_saves_day(student_name, sel_date):
+    sb = get_sb()
+    if not sb: return []
+    try:
+        res = (sb.table("interval_saves").select("*")
+               .eq("student_name", student_name)
+               .eq("obs_date", sel_date.isoformat())
+               .order("save_time").execute())
+        return res.data or []
+    except Exception:
+        return []
+
+
+def load_all_saves(student_name):
+    sb = get_sb()
+    if not sb: return pd.DataFrame()
+    try:
+        res = (sb.table("interval_saves").select("*")
+               .eq("student_name", student_name)
+               .order("obs_date").execute())
+        df = pd.DataFrame(res.data) if res.data else pd.DataFrame()
+        if not df.empty:
+            df["obs_date_dt"] = pd.to_datetime(df["obs_date"])
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+def delete_save(save_id):
+    sb = get_sb()
+    if not sb: return
+    try:
+        sb.table("interval_saves").delete().eq("id", save_id).execute()
+    except Exception:
+        pass
+
+
 # ── Session state ─────────────────────────────────────────────────────────────
 ss = st.session_state
 for k, v in [
@@ -444,6 +529,9 @@ for k, v in [
     ("ist_sel_time", SLOT_TIMES[0]),
     ("ist_sel_day",  DAYS[min(date.today().weekday(), 4)]),
     ("ist_copied_interval", None),  # For copy/paste functionality
+    ("ist_save_signs", []),         # Saves log — selected early signs
+    ("ist_save_supports", []),      # Saves log — selected supports
+    ("ist_save_outcome", ""),       # Saves log — selected outcome
 ]:
     if k not in ss: ss[k] = v
 
@@ -1064,7 +1152,99 @@ with t_record:
                     st.success("✅ Note cleared")
                     st.rerun()
 
+    # ════════════════════════════════════════════════════════════════════
+    # LOG A SAVE — early sign caught & turned around
+    # ════════════════════════════════════════════════════════════════════
+    st.markdown("<div style='margin:.7rem 0 .2rem;'></div>", unsafe_allow_html=True)
+    todays_saves = load_saves_day(student_name, sel_date)
+    save_count_lbl = f" · {len(todays_saves)} logged today" if todays_saves else ""
+    with st.expander(f"⚡  Log a SAVE — early sign caught & turned around{save_count_lbl}", expanded=False):
+        st.caption(
+            f"For **{sel_day} {sel_date.strftime('%-d %b')}** — log when an escalation was "
+            "starting and a support turned it around. Tap the sign(s), the support(s), the outcome, then Log."
+        )
 
+        def _chip_row(label, options, state_key, key_prefix, ncols=3):
+            st.markdown(f'<div style="font-size:.72rem;font-weight:700;color:#1A6B8A;'
+                        f'margin:.4rem 0 .2rem;">{label}</div>', unsafe_allow_html=True)
+            sel = ss[state_key]
+            rows = [options[i:i+ncols] for i in range(0, len(options), ncols)]
+            for ri, row in enumerate(rows):
+                cols = st.columns(ncols)
+                for ci, opt in enumerate(row):
+                    with cols[ci]:
+                        on = opt in sel
+                        if st.button(("✓ " if on else "") + opt,
+                                     key=f"{key_prefix}_{ri}_{ci}",
+                                     use_container_width=True,
+                                     type="primary" if on else "secondary"):
+                            if on: sel.remove(opt)
+                            else:  sel.append(opt)
+                            st.rerun()
+
+        _chip_row("⚠️ Early sign(s) observed", SAVE_SIGNS, "ist_save_signs", "svsign")
+        _chip_row("🛟 Support(s) applied", SAVE_SUPPORTS, "ist_save_supports", "svsup")
+
+        st.markdown('<div style="font-size:.72rem;font-weight:700;color:#1A6B8A;'
+                    'margin:.4rem 0 .2rem;">🎯 Outcome</div>', unsafe_allow_html=True)
+        oc = st.columns(3)
+        for i, (okey, ov) in enumerate(SAVE_OUTCOMES.items()):
+            with oc[i]:
+                on = ss.ist_save_outcome == okey
+                if st.button(("✓ " if on else "") + ov["emoji"] + " " + ov["label"],
+                             key=f"svout_{okey}", use_container_width=True,
+                             type="primary" if on else "secondary"):
+                    ss.ist_save_outcome = "" if on else okey
+                    st.rerun()
+
+        save_note = st.text_input(
+            "Note (optional)", key="ist_save_note",
+            placeholder="e.g., flagged at task change — offered choice + movement break, settled within 5 min",
+            label_visibility="collapsed")
+
+        ready = bool(ss.ist_save_outcome) and len(ss.ist_save_signs) > 0
+        lc1, lc2 = st.columns([3, 1])
+        with lc1:
+            if st.button("💾  Log save", key="ist_log_save", use_container_width=True,
+                         type="primary", disabled=not ready):
+                now_hhmm = datetime.now().strftime("%-H:%M")
+                _nm = datetime.now().hour * 60 + datetime.now().minute
+                nearest = min(SLOT_TIMES, key=lambda t: abs(int(t.split(":")[0]) * 60 + int(t.split(":")[1]) - _nm))
+                if insert_save(student_name, sel_date, now_hhmm, nearest,
+                               ss.ist_save_signs, ss.ist_save_supports,
+                               ss.ist_save_outcome, save_note):
+                    ss.ist_save_signs = []; ss.ist_save_supports = []; ss.ist_save_outcome = ""
+                    ss.ist_save_note = ""
+                    st.success("✅ Save logged")
+                    st.rerun()
+        with lc2:
+            if (ss.ist_save_signs or ss.ist_save_supports or ss.ist_save_outcome) and \
+               st.button("Clear", key="ist_save_clear", use_container_width=True):
+                ss.ist_save_signs = []; ss.ist_save_supports = []; ss.ist_save_outcome = ""
+                st.rerun()
+        if not ready:
+            st.caption("Select at least one early sign and an outcome to log.")
+
+        # Today's saves
+        if todays_saves:
+            st.markdown("<div style='margin:.5rem 0 .2rem;font-size:.72rem;font-weight:700;"
+                        "color:#475569;'>Logged on this day</div>", unsafe_allow_html=True)
+            for sv in todays_saves:
+                ov = SAVE_OUTCOMES.get(sv.get("outcome", ""), {"emoji": "•", "label": sv.get("outcome", ""), "bg": "#f1f5f9", "fg": "#475569"})
+                sc1, sc2 = st.columns([6, 1])
+                with sc1:
+                    st.markdown(
+                        f'<div style="background:{ov["bg"]};border-radius:6px;padding:.35rem .6rem;'
+                        f'font-size:.74rem;color:#334155;margin-bottom:.25rem;">'
+                        f'<strong>{sv.get("save_time","")}</strong> &nbsp;'
+                        f'<span style="color:{ov["fg"]};font-weight:700;">{ov["emoji"]} {ov["label"]}</span><br>'
+                        f'<span style="font-size:.7rem;">⚠️ {sv.get("early_sign","—")} &nbsp;→&nbsp; '
+                        f'🛟 {sv.get("support_used","—")}</span>'
+                        + (f'<br><span style="font-size:.68rem;color:#64748b;">{sv.get("notes","")}</span>' if sv.get("notes") else "")
+                        + '</div>', unsafe_allow_html=True)
+                with sc2:
+                    if st.button("🗑️", key=f"del_save_{sv['id']}", use_container_width=True):
+                        delete_save(sv["id"]); st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1301,6 +1481,129 @@ with t_analysis:
         f'({attendance_days} days × time window)'
         f'</div>',
         unsafe_allow_html=True)
+
+    # ── Prevention & Regulation (the "what could have been" story) ────────────
+    st.markdown("<div style='margin:.8rem 0 .2rem;'></div>", unsafe_allow_html=True)
+    st.markdown('<div style="font-size:1rem;font-weight:800;color:#1A6B8A;">'
+                '🛡️ Prevention &amp; Regulation</div>', unsafe_allow_html=True)
+    st.caption("Regulation maintained through site modifications — and the escalations that were caught and turned around.")
+
+    _band_map = {"in_window": "In window", "coping": "Coping",
+                 "hyperaroused": "Outside window", "hypoaroused": "Outside window"}
+    _bands = filt["regulated"].map(_band_map)
+    total_int = int(len(filt))
+    n_win = int((_bands == "In window").sum())
+    n_cop = int((_bands == "Coping").sum())
+    n_out = int((_bands == "Outside window").sum())
+    pct_wincop = round(100 * (n_win + n_cop) / total_int) if total_int else 0
+    pct_out    = round(100 * n_out / total_int) if total_int else 0
+
+    # Saves in range
+    saves_all = load_all_saves(student_name)
+    if not saves_all.empty:
+        sv = saves_all[(saves_all["obs_date_dt"].dt.date >= date_from) &
+                       (saves_all["obs_date_dt"].dt.date <= date_to)].copy()
+    else:
+        sv = pd.DataFrame()
+    n_saves = int(len(sv))
+    n_succ  = int(sv["outcome"].isin(["returned_to_window", "held_in_coping"]).sum()) if n_saves else 0
+    succ_rate = round(100 * n_succ / n_saves) if n_saves else 0
+
+    # Proactive support dose (intervals with a support logged + saves)
+    mod_dose = 0
+    if "support_used" in filt.columns:
+        mod_dose = int(filt["support_used"].fillna("").apply(
+            lambda s: bool(str(s).strip()) and str(s).strip() not in ("None",)).sum())
+    mod_dose += n_saves
+
+    k1, k2, k3, k4 = st.columns(4)
+    with k1:
+        st.markdown(f'<div class="kpi kpi-g"><div class="val">{pct_wincop}%</div>'
+                    f'<div class="lbl">Intervals in window or coping</div></div>', unsafe_allow_html=True)
+    with k2:
+        st.markdown(f'<div class="kpi kpi-r"><div class="val">{pct_out}%</div>'
+                    f'<div class="lbl">Intervals outside window</div></div>', unsafe_allow_html=True)
+    with k3:
+        st.markdown(f'<div class="kpi kpi-b"><div class="val">{n_saves}</div>'
+                    f'<div class="lbl">Saves logged</div></div>', unsafe_allow_html=True)
+    with k4:
+        st.markdown(f'<div class="kpi kpi-g"><div class="val">{n_succ}</div>'
+                    f'<div class="lbl">Escalations turned around</div></div>', unsafe_allow_html=True)
+
+    st.markdown(
+        f'<div style="font-size:.76rem;color:#475569;margin:.1rem 0 .5rem;">'
+        f'<strong>{mod_dose}</strong> proactive supports recorded across this period'
+        + (f' &nbsp;·&nbsp; saves de-escalation rate <strong>{succ_rate}%</strong> '
+           f'({n_succ} of {n_saves} held in or returned to window)' if n_saves else '')
+        + '</div>', unsafe_allow_html=True)
+
+    # Regulation profile by week — shows the coping → in-window shift over time
+    fdf = filt.copy()
+    fdf["band"] = _bands.values
+    fdf["wkdt"] = fdf["obs_date_dt"].apply(lambda d: d - pd.Timedelta(days=d.weekday()))
+    fdf["wk"]   = fdf["wkdt"].dt.strftime("%-d %b")
+    wk_order = fdf.sort_values("wkdt")["wk"].unique().tolist()
+    if len(wk_order) >= 1:
+        tot_wk = fdf.groupby("wk").size().to_dict()
+        band_cols = {"In window": "#16a34a", "Coping": "#ca8a04", "Outside window": "#dc2626"}
+        figp = go.Figure()
+        for bname, bcol in band_cols.items():
+            yvals = []
+            for wk in wk_order:
+                sub = fdf[(fdf["wk"] == wk) & (fdf["band"] == bname)]
+                yvals.append(round(100 * len(sub) / tot_wk[wk], 1) if tot_wk.get(wk) else 0)
+            figp.add_trace(go.Bar(name=bname, x=wk_order, y=yvals, marker_color=bcol,
+                                  text=[f"{v:.0f}%" if v >= 8 else "" for v in yvals],
+                                  textposition="inside", insidetextanchor="middle"))
+        figp.update_layout(barmode="stack", height=330, margin=dict(l=45, r=20, t=30, b=40),
+                           yaxis_title="% of intervals", legend=dict(orientation="h", y=1.12),
+                           font=dict(size=12), plot_bgcolor="white")
+        figp.update_yaxes(range=[0, 100], gridcolor="#eef2f6")
+        st.markdown('<div style="font-size:.82rem;font-weight:700;color:#334155;margin:.3rem 0 .1rem;">'
+                    'Regulation profile by week</div>', unsafe_allow_html=True)
+        st.plotly_chart(figp, use_container_width=True)
+        st.caption("A shrinking amber band with a growing green band over time is the goal: "
+                   "less scaffolding needed to stay regulated.")
+
+    # Saves detail
+    if n_saves:
+        sv["wkdt"] = sv["obs_date_dt"].apply(lambda d: d - pd.Timedelta(days=d.weekday()))
+        sv["wk"]   = sv["wkdt"].dt.strftime("%-d %b")
+        sv["res"]  = sv["outcome"].map({k: v["label"] for k, v in SAVE_OUTCOMES.items()})
+        sv_wk_order = sv.sort_values("wkdt")["wk"].unique().tolist()
+        out_cols = {v["label"]: v["fg"] for v in SAVE_OUTCOMES.values()}
+        figs = go.Figure()
+        for lbl, col in out_cols.items():
+            yv = [int(((sv["wk"] == wk) & (sv["res"] == lbl)).sum()) for wk in sv_wk_order]
+            figs.add_trace(go.Bar(name=lbl, x=sv_wk_order, y=yv, marker_color=col))
+        figs.update_layout(barmode="stack", height=300, margin=dict(l=45, r=20, t=30, b=40),
+                           yaxis_title="saves", legend=dict(orientation="h", y=1.15),
+                           font=dict(size=12), plot_bgcolor="white")
+        figs.update_yaxes(gridcolor="#eef2f6")
+        st.markdown('<div style="font-size:.82rem;font-weight:700;color:#334155;margin:.5rem 0 .1rem;">'
+                    'Saves by week &amp; outcome</div>', unsafe_allow_html=True)
+        st.plotly_chart(figs, use_container_width=True)
+
+        # Top supports used in successful saves
+        succ_sv = sv[sv["outcome"].isin(["returned_to_window", "held_in_coping"])]
+        sup_series = (succ_sv["support_used"].fillna("").str.split(", ").explode().str.strip())
+        sup_series = sup_series[sup_series != ""]
+        if not sup_series.empty:
+            top_sup = sup_series.value_counts().head(7).sort_values()
+            figt = go.Figure(go.Bar(x=top_sup.values, y=top_sup.index, orientation="h",
+                                     marker_color="#1A6B8A"))
+            figt.update_layout(height=max(220, len(top_sup) * 34 + 70),
+                               margin=dict(l=10, r=20, t=30, b=30),
+                               xaxis_title="successful saves", font=dict(size=12), plot_bgcolor="white")
+            figt.update_xaxes(gridcolor="#eef2f6")
+            st.markdown('<div style="font-size:.82rem;font-weight:700;color:#334155;margin:.5rem 0 .1rem;">'
+                        'Supports most associated with successful saves</div>', unsafe_allow_html=True)
+            st.plotly_chart(figt, use_container_width=True)
+    else:
+        st.info("No saves logged in this period yet. Log saves from the **Record & View** tab "
+                "(⚡ Log a SAVE) to build the prevention picture.")
+
+    st.markdown("<hr style='border:none;border-top:1px solid #e2e8f0;margin:.7rem 0;'>", unsafe_allow_html=True)
 
     # ── Daily notes (anecdotal context) ───────────────────────────────────────
     daily_notes = get_all_daily_notes(student_name, date_from, date_to)
