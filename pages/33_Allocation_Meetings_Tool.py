@@ -135,7 +135,7 @@ SCHOOL_PARTNERSHIP_MAP = {
     # Marion Inland Partnership
     "Ascot Park Primary School": "Marion Inland",
     "Clovelly Park Primary School": "Marion Inland",
-    "Clovelly Park PS": "Marion Inland",  # Alternative name
+    "Clovelly Park PS": "Marion Inland",
     "Glandore Community Centre": "Marion Inland",
     "Glandore Primary School": "Marion Inland",
     "Marion High School": "Marion Inland",
@@ -199,7 +199,7 @@ SCHOOL_PARTNERSHIP_MAP = {
     "Woodville Gardens School": "Western Adelaide Shores",
     
     # Other schools (partnership TBD)
-    "Warriappendia Secondary School": "Other"  # Partnership to be confirmed
+    "Warriappendia Secondary School": "Other"
 }
 
 # All schools (sorted for dropdown)
@@ -212,7 +212,7 @@ PARTNERSHIP_AREAS = [
     "Coorong & Mallee", "Elizabeth", "Far North", "Far West", "Fleurieu", "Flinders",
     "Golden Way", "Goyder & Light", "Greater Gawler", "Greenhill South", "Heysen",
     "Holdfast", "Hollywood Lakes and Gardens", "Inner West", "Kangaroo Island",
-    "Le Fevre Peninsula", "Lower Mid North", "Marion Coast", "Marion Inland",
+    "Le Fevre Peninsula", "Lower Mid North", "Marion Coastal", "Marion Inland",
     "Mid North Clare", "Mitcham Hills", "Mitcham Plains", "Modbury", "Montague",
     "Morialta", "Mount Lofty", "Murraylands", "Northern Yorke", "Orion",
     "Panalatinga", "Peachey", "Pirie", "Port Augusta - Quorn", "Port Lincoln",
@@ -228,6 +228,29 @@ PROGRAM_MAPPING = {
     "Primary Years (PY)": "PY",
     "Senior Years (SY)": "SY"
 }
+
+# ============================================================================
+# ALL 76 COLUMNS IN CORRECT ORDER - MATCHES YOUR EXCEL DATA_MODEL EXACTLY
+# ============================================================================
+EXPORT_COLUMNS = [
+    'Student_ID', 'Previous_Referrals', 'Student_Name', 'DOB', 'Gender', 'Year_Level',
+    'Referring_School', 'Referral_Date', 'Meeting_Date', 'Meeting_Week', 'Previously_Referred',
+    'Allocation_Status', 'Allocated_Program', 'Placement_Start', 'Partnership_Area',
+    'Previous_CLC_Placement', 'Previous_Other_LC', 'Other_LC_Name', 'Total_Previous_Placements',
+    'Placement_History_Notes', 'Flag_EALD', 'Flag_ATSI', 'Flag_Attendance_Fulltime',
+    'Flag_Attendance_Parttime', 'Flag_Intervention_Custody_Order', 'Flag_DCP_involvement',
+    'Flag_Child_in_care', 'Flag_IESP_Funding_yes', 'Flag_IESP_Funding_no', 'Flag_Category_1',
+    'Flag_Category_2', 'Flag_Category_3', 'Flag_Category_4', 'Flag_Category_5', 'Flag_Category_6',
+    'Flag_Category_7', 'Flag_Category_8', 'Flag_Category_9', 'Flag_9plusRAAP', 'Flag_SWD',
+    'Flag_Speech_and_Lang', 'Flag_ASD', 'Flag_Intellectual', 'Flag_Learning_Difficulty',
+    'Flag_Sensory_Processing', 'Flag_ADHD', 'Flag_ODD', 'Flag_PDA', 'Flag_Medication',
+    'Flag_Medical_condition', 'Medical_Condition_Details', 'Medication_Details',
+    'Bespoke_Placement', 'Waitlist_Status', 'Waitlist_Date', 'Allocated_From_Waitlist',
+    'Extension', 'Extension_Date', 'Exit_Reason', 'Transition_Plan', 'Notes', 'Placement_End',
+    'Current_Status', 'Behaviour_Flag', 'Exclusion_End_Date', 'Proposed_Extension_Finish_Date',
+    'Extension_Weeks', 'Communication_to_school', 'Action_owner', 'Actual_Finish_Date',
+    'Extended_Placement', 'Referral_Year', 'Term', 'Extension_Status', 'Referral_Occurrence', 'Referral_ID'
+]
 
 # Helper functions
 def get_current_term_week():
@@ -295,196 +318,54 @@ def map_flags_from_allocation(cat_funding, partnership):
     return flags
 
 def export_to_data_entry(selected_allocations):
-    """Generate Excel file in Data Entry format with ALL database fields"""
+    """Generate Excel file with ALL 76 Data_Model columns in correct order"""
     
-    # Create workbook
-    wb = openpyxl.Workbook()
+    # Create DataFrame from allocations
+    df = pd.DataFrame(selected_allocations)
+    
+    # Ensure all EXPORT_COLUMNS exist in dataframe (add missing ones as blank)
+    for col in EXPORT_COLUMNS:
+        if col not in df.columns:
+            df[col] = None
+    
+    # Select only export columns in correct order
+    df_export = df[EXPORT_COLUMNS]
+    
+    # Create Excel with openpyxl for styling
+    output = BytesIO()
+    df_export.to_excel(output, sheet_name='Data_Model', index=False, engine='openpyxl')
+    
+    # Style the header row
+    output.seek(0)
+    wb = openpyxl.load_workbook(output)
     ws = wb.active
-    ws.title = "Data_Model"
     
-    # Define headers - EXACT MATCH to Excel Data_Model structure
-    # Generate flag headers from ALL_FLAGS list
-    flag_headers = [f"Flag_{flag.replace(' ', '_').replace('/', '_').replace('+', 'plus').replace('-', '_')}" 
-                    for flag in ALL_FLAGS]
-    
-    headers = [
-        "Student_ID",                    # 1
-        "Previous_Referrals",            # 2 - Formula field
-        "Student_Name",                  # 3
-        "DOB",                           # 4
-        "Gender",                        # 5
-        "Year_Level",                    # 6
-        "Referring_School",              # 7
-        "Referral_Date",                 # 8
-        "Allocation_Status",             # 9
-        "Allocated_Program",             # 10
-        "Placement_Start",               # 11
-        "Partnership_Area",              # 12
-        "Previous_CLC_Placement",        # 13
-        "Previous_Other_LC",             # 14
-        "Other_LC_Name",                 # 15
-        "Total_Previous_Placements",     # 16
-        "Placement_History_Notes",       # 17
-        "Priority_Level",                # 18
-        "Case_Worker"                    # 19 - NEW FIELD
-    ] + flag_headers + [                 # 20-50 (31 flags total)
-        "Bespoke_Placement",             # 51
-        "Waitlist_Status",               # 52
-        "Waitlist_Date",                 # 53
-        "Allocated_From_Waitlist",       # 54
-        "Extension",                     # 55 - NEW
-        "Exension_Date",                 # 56 - NEW (keeping Excel's typo)
-        "Exit_Reason",                   # 57
-        "Transition_Plan",               # 58
-        "Notes",                         # 59
-        "Placement_End",                 # 60
-        "Current_Status",                # 61
-        "Behaviour_Flag",                # 62 - NEW
-        "Exclusion_End_Date",            # 63 - NEW
-        "Actual_Finish_Date",            # 64 - NEW
-        "Extended_Placement",            # 65 - NEW
-        "Referral_Year",                 # 66 - Formula field
-        "Term",                          # 67 - Formula field
-        "Extension_Status"               # 68 - Formula field
-    ]
-    
-    # Style header row
     header_fill = PatternFill(start_color="1A7A6E", end_color="1A7A6E", fill_type="solid")
     header_font = Font(bold=True, color="FFFFFF")
     
-    for col, header in enumerate(headers, 1):
-        cell = ws.cell(1, col, header)
+    for cell in ws[1]:
         cell.fill = header_fill
         cell.font = header_font
-        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.alignment = Alignment(horizontal='center', vertical='center')
     
-    # Add data rows
-    for row_num, allocation in enumerate(selected_allocations, 2):
-        # Generate Student_ID
-        student_id = f"STU-{datetime.now().year}-{row_num-1:03d}"
-        
-        # Get flags from categorical funding and partnership
-        flags = map_flags_from_allocation(
-            allocation.get('cat_funding', []),
-            allocation.get('partnership', [])
-        )
-        
-        # Map program
-        program = allocation.get('program', '')
-        mapped_program = PROGRAM_MAPPING.get(program, program)
-        
-        # Format dates
-        dob = allocation.get('date_of_birth', '')
-        if dob and isinstance(dob, str):
+    # Auto-adjust column widths
+    for col in ws.columns:
+        max_length = 0
+        column_letter = col[0].column_letter
+        for cell in col:
             try:
-                dob = datetime.strptime(dob, '%Y-%m-%d').strftime('%Y-%m-%d')
+                if len(str(cell.value)) > max_length:
+                    max_length = len(str(cell.value))
             except:
                 pass
-        
-        start_date = allocation.get('start_after', '')
-        if start_date and isinstance(start_date, str):
-            try:
-                start_date = datetime.strptime(start_date, '%Y-%m-%d').strftime('%Y-%m-%d')
-            except:
-                pass
-        
-        end_date = allocation.get('finishing_date', '')
-        if end_date and isinstance(end_date, str):
-            try:
-                end_date = datetime.strptime(end_date, '%Y-%m-%d').strftime('%Y-%m-%d')
-            except:
-                pass
-        
-        waitlist_date = allocation.get('waitlist_date', '')
-        if waitlist_date and isinstance(waitlist_date, str):
-            try:
-                waitlist_date = datetime.strptime(waitlist_date, '%Y-%m-%d').strftime('%Y-%m-%d')
-            except:
-                pass
-        
-        # Today's date as referral date
-        today = datetime.now().strftime('%Y-%m-%d')
-        
-        # Build row data - COMPLETE SET with comprehensive flags
-        # Generate flag header keys to match the flags dictionary
-        flag_keys = [f"Flag_{flag.replace(' ', '_').replace('/', '_').replace('+', 'plus').replace('-', '_')}" 
-                     for flag in ALL_FLAGS]
-        
-        # Get flag values in same order as headers
-        flag_values = [flags.get(key, "No") for key in flag_keys]
-        
-        # Determine Allocation_Status based on outcome and waitlist_status
-        waitlist_status = allocation.get('waitlist_status', 'Not Applicable')
-        outcome = allocation.get('outcome', '')
-        
-        if waitlist_status == 'Site Decision':
-            allocation_status = 'SITE DECISION'  # Uppercase to stand out
-        elif outcome == 'Allocated':
-            allocation_status = 'Allocated'
-        else:
-            allocation_status = 'Waitlist'
-        
-        row_data = [
-            student_id,                                          # 1. Student_ID
-            f'=IF(A{row_num}="","",COUNTIF(A:A,A{row_num})-1)', # 2. Previous_Referrals (Formula)
-            allocation.get('student_name', '').upper(),          # 3. Student_Name
-            dob,                                                 # 4. DOB
-            allocation.get('gender', ''),                        # 5. Gender
-            allocation.get('year_level', ''),                    # 6. Year_Level
-            allocation.get('school', ''),                        # 7. Referring_School
-            today,                                               # 8. Referral_Date
-            allocation_status,                                   # 9. Allocation_Status
-            mapped_program,                                      # 10. Allocated_Program
-            start_date,                                          # 11. Placement_Start
-            allocation.get('partnership_area', ''),              # 12. Partnership_Area
-            allocation.get('previous_clc_placement', 'No'),      # 13. Previous_CLC_Placement
-            allocation.get('previous_other_lc', 'No'),           # 14. Previous_Other_LC
-            allocation.get('other_lc_name', ''),                 # 15. Other_LC_Name
-            allocation.get('total_previous_placements', 0),      # 16. Total_Previous_Placements
-            allocation.get('placement_history_notes', ''),       # 17. Placement_History_Notes
-            allocation.get('priority_level', '3'),               # 18. Priority_Level
-            allocation.get('case_worker', ''),                   # 19. Case_Worker
-        ] + flag_values + [  # 20-50. All comprehensive flags (31 flags)
-            allocation.get('bespoke_placement', 'No'),           # 51. Bespoke_Placement
-            waitlist_status,                                     # 52. Waitlist_Status
-            waitlist_date,                                       # 53. Waitlist_Date
-            allocation.get('allocated_from_waitlist', 'No'),     # 54. Allocated_From_Waitlist
-            'No',                                                # 55. Extension (default No)
-            '',                                                  # 56. Exension_Date (blank)
-            '',                                                  # 57. Exit_Reason
-            '',                                                  # 58. Transition_Plan
-            allocation.get('queries', ''),                       # 59. Notes
-            end_date,                                            # 60. Placement_End
-            'Active',                                            # 61. Current_Status
-            'No',                                                # 62. Behaviour_Flag (default No)
-            '',                                                  # 63. Exclusion_End_Date (blank)
-            '',                                                  # 64. Actual_Finish_Date (blank)
-            'No',                                                # 65. Extended_Placement (default No)
-            f'=IFERROR(IF(H{row_num}="","",YEAR(H{row_num})),"")',  # 66. Referral_Year (Formula)
-            f'=IF(H{row_num}="","",IFERROR(INDEX(TermDates[Term],MATCH(_xlfn.MINIFS(TermDates[End_Date],TermDates[End_Date],">="&H{row_num}),TermDates[End_Date],0)),""))',  # 67. Term (Formula)
-            f'=IF(OR(BJ{row_num}="",BK{row_num}=""),"",IF(BK{row_num}=BJ{row_num},"On Time",IF(BK{row_num}>BJ{row_num},"Extended ("&(BK{row_num}-BJ{row_num})&" days)","Finished Early ("&(BJ{row_num}-BK{row_num})&" days)")))'  # 68. Extension_Status (Formula)
-        ]
-        
-        # Write row
-        for col, value in enumerate(row_data, 1):
-            cell = ws.cell(row_num, col, value)
-            cell.alignment = Alignment(horizontal="left", vertical="center")
-            
-            # RED HIGHLIGHT for Site Decision rows
-            if waitlist_status == 'Site Decision':
-                cell.fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
-                cell.font = Font(color="FFFFFF", bold=True)
+        adjusted_width = min(max_length + 2, 50)
+        ws.column_dimensions[column_letter].width = adjusted_width
     
-    # Adjust column widths
-    for col in range(1, len(headers) + 1):
-        ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = 18
+    output_final = BytesIO()
+    wb.save(output_final)
+    output_final.seek(0)
     
-    # Save to BytesIO
-    output = BytesIO()
-    wb.save(output)
-    output.seek(0)
-    
-    return output
+    return output_final
 
 def export_to_excel(week_data):
     """Export meeting data to Excel (original format)"""
@@ -523,7 +404,7 @@ def export_to_excel(week_data):
 # Main app
 st.title("📋 Allocation Meetings")
 st.markdown("**Two-Stage Workflow: Pre-Meeting → Meeting Day → Export**")
-st.caption("✨ Smart autofill • Partnership auto-lookup • Draft system")
+st.caption("✨ Smart autofill • Partnership auto-lookup • Draft system • Export to Excel")
 
 # Initialize session state
 if 'current_term' not in st.session_state:
@@ -705,9 +586,9 @@ with tab1:
                                         "cat_funding": student.get('cat_funding'),
                                         "partnership": student.get('partnership'),
                                         "queries": f"⏳ FROM WAITLIST - Original status: {student.get('waitlist_status')} (Week {student.get('meeting_week')})",
-                                        "allocated_from_waitlist": "Yes",  # Flag to track this came from waitlist
-                                        "original_waitlist_record_id": student.get('id'),  # Link to original record
-                                        "outcome": None  # Draft status
+                                        "allocated_from_waitlist": "Yes",
+                                        "original_waitlist_record_id": student.get('id'),
+                                        "outcome": None
                                     }
                                     
                                     supabase.table("allocation_students").insert(draft_data).execute()
@@ -917,7 +798,6 @@ with tab1:
             with col1:
                 student_name = st.text_input("Name *")
             with col2:
-                # Date range: 20 years ago to today
                 min_date = datetime.now().date() - timedelta(days=365*20)
                 max_date = datetime.now().date()
                 dob = st.date_input("Date of Birth", value=None, min_value=min_date, max_value=max_date)
@@ -993,8 +873,8 @@ with tab1:
             
             with col2:
                 st.write("**Medical**")
-                medical_condition_details = ""  # Initialize
-                medication_details = ""  # Initialize
+                medical_condition_details = ""
+                medication_details = ""
                 
                 for flag in MEDICAL_FLAGS:
                     if st.checkbox(flag, key=f"flag_{flag}"):
@@ -1100,7 +980,7 @@ with tab1:
                             "cat_funding": json.dumps(selected_flags),
                             "partnership": json.dumps([]),
                             "queries": queries,
-                            "outcome": None  # Draft status
+                            "outcome": None
                         }
                         
                         result = supabase.table("allocation_students").insert(data).execute()
@@ -1302,7 +1182,7 @@ with tab2:
                             "exclusion_finish_date": exclusion_finish_date.isoformat(),
                             "proposed_extension_finish_date": proposed_extension_finish_date.isoformat(),
                             "extension_weeks": extension_weeks,
-                            "outcome": None  # Draft status
+                            "outcome": None
                         }
                         
                         result = supabase.table("allocation_students").insert(data).execute()
@@ -1410,19 +1290,10 @@ with tab4:
             .execute()
         
         if full_data.data and len(full_data.data) > 0:
-            # DEBUG: Show all outcomes
-            with st.expander("🔍 Debug: View All Outcomes", expanded=False):
-                st.write(f"**Total records fetched:** {len(full_data.data)}")
-                for idx, record in enumerate(full_data.data, 1):
-                    st.write(f"{idx}. {record.get('student_name', 'N/A')} - Outcome: '{record.get('outcome')}'")
-            
             # Separate allocations, not allocated, and extensions
             allocated = [r for r in full_data.data if r.get('outcome') == 'Allocated']
             not_allocated = [r for r in full_data.data if r.get('outcome') == 'Not Allocated']
             extensions = [r for r in full_data.data if r.get('outcome') in ['Approved', 'Not Approved']]
-            
-            # DEBUG: Show counts
-            st.write(f"**Debug counts:** Allocated={len(allocated)}, Not Allocated={len(not_allocated)}, Extensions={len(extensions)}")
             
             # Summary metrics
             col1, col2, col3, col4 = st.columns(4)
@@ -1499,12 +1370,13 @@ with tab4:
                         
                         st.download_button(
                             label="💾 Save Data Entry Excel",
-                            data=excel_bytes,
-                            file_name=f"CLC_Allocations_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                            data=excel_bytes.getvalue(),
+                            file_name=f"CLC_Allocations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
                         
                         st.success(f"✅ Excel file ready! {len(all_allocations)} allocation(s) exported ({len(allocated)} allocated, {len(not_allocated)} not allocated).")
+                        st.caption(f"📋 **All 76 columns** will be included in the export. Download → Open → Copy all → Paste into your Data_Model sheet.")
                     else:
                         st.warning("⚠️ No allocations to export")
                     
@@ -1586,7 +1458,6 @@ with tab5:
                 with col2:
                     if st.button("📋 Move to Waitlist", type="primary", disabled=not student_to_update, use_container_width=True):
                         if student_to_update:
-                            # Find the record
                             selected_record = next((r for r in site_decision if f"{r['student_name']} - {r['school']}" == student_to_update), None)
                             if selected_record:
                                 try:
@@ -1602,7 +1473,6 @@ with tab5:
                 with col3:
                     if st.button("🚫 Site Withdraw", type="secondary", disabled=not student_to_update, use_container_width=True):
                         if student_to_update:
-                            # Find the record
                             selected_record = next((r for r in site_decision if f"{r['student_name']} - {r['school']}" == student_to_update), None)
                             if selected_record:
                                 try:
@@ -1652,10 +1522,8 @@ with tab5:
                 with col2:
                     if st.button("🗑️ Remove", type="secondary", disabled=not student_to_remove_wl, key="remove_wl_btn"):
                         if student_to_remove_wl:
-                            # Find the record
                             selected_record = next((r for r in on_waitlist if f"{r['student_name']} - {r['school']}" == student_to_remove_wl), None)
                             if selected_record:
-                                # Update to remove from waitlist but keep in database
                                 try:
                                     supabase.table("allocation_students")\
                                         .update({"waitlist_status": "Declined"})\
@@ -1774,149 +1642,5 @@ with tab5:
         import traceback
         st.code(traceback.format_exc())
 
-# ============================================================================
-# COMMUNICATION MODAL/SECTION (triggered from sidebar)
-# ============================================================================
-
-# Show communications view if button clicked
-if st.session_state.get('show_comms', False):
-    st.markdown("---")
-    st.header("📧 Communication with Sites")
-    
-    try:
-        # Fetch current week communications (both allocations and extensions)
-        comm_data = supabase.table("allocation_students")\
-            .select("student_name, school, program, school_contact, outcome, information, actioned_by")\
-            .eq("meeting_week", selected_week)\
-            .in_("outcome", ["Allocated", "Not Allocated", "Approved", "Not Approved"])\
-            .execute()
-        
-        if comm_data.data:
-            st.success(f"✅ {len(comm_data.data)} communication(s) for {selected_week}")
-            
-            # Display table
-            display_data = []
-            for record in comm_data.data:
-                display_data.append({
-                    "School": record.get("school", ""),
-                    "Student": record.get("student_name", ""),
-                    "Program": record.get("program", ""),
-                    "School Contact": record.get("school_contact", ""),
-                    "Type": "Extension" if record.get("outcome") in ["Approved", "Not Approved"] else "Allocation",
-                    "Outcome": record.get("outcome", ""),
-                    "Information to be Shared": record.get("information", ""),
-                    "To be Actioned By": record.get("actioned_by", "")
-                })
-            
-            df_comm = pd.DataFrame(display_data)
-            st.dataframe(df_comm, use_container_width=True, hide_index=True)
-            
-            if st.button("✖️ Close"):
-                st.session_state.show_comms = False
-                st.rerun()
-        else:
-            st.info("📭 No communications for this week yet")
-    except Exception as e:
-        st.error(f"Error: {e}")
-
-# Download communications if button clicked
-if st.session_state.get('download_comms', False):
-    try:
-        # Fetch current week communications (both allocations and extensions)
-        comm_data = supabase.table("allocation_students")\
-            .select("student_name, school, program, school_contact, outcome, information, actioned_by, exclusion_finish_date, proposed_extension_finish_date, extension_weeks, waitlist_status")\
-            .eq("meeting_week", selected_week)\
-            .in_("outcome", ["Allocated", "Not Allocated", "Approved", "Not Approved"])\
-            .execute()
-        
-        if comm_data.data:
-            # Create Excel
-            from openpyxl import Workbook
-            from openpyxl.styles import PatternFill, Font, Alignment
-            from io import BytesIO
-            
-            wb = Workbook()
-            ws = wb.active
-            ws.title = "Communication Summary"
-            
-            # Headers
-            headers = ["School", "Student", "Program", "School Contact", "Type", "Outcome", 
-                      "Waitlist Status", "Extension Details", "Information to be Shared", "To be Actioned By"]
-            
-            # Style header
-            header_fill = PatternFill(start_color="1A7A6E", end_color="1A7A6E", fill_type="solid")
-            header_font = Font(bold=True, color="FFFFFF")
-            
-            for col_idx, header in enumerate(headers, 1):
-                cell = ws.cell(1, col_idx, header)
-                cell.fill = header_fill
-                cell.font = header_font
-                cell.alignment = Alignment(horizontal='center', vertical='center')
-            
-            # Add data
-            for row_idx, record in enumerate(comm_data.data, 2):
-                # Determine type
-                is_extension = record.get('outcome') in ['Approved', 'Not Approved']
-                record_type = "Extension" if is_extension else "Allocation"
-                
-                # Extension details
-                ext_details = ""
-                if is_extension:
-                    ext_details = f"Current end: {record.get('exclusion_finish_date', 'N/A')}, Proposed: {record.get('proposed_extension_finish_date', 'N/A')}, Weeks: {record.get('extension_weeks', 'N/A')}"
-                
-                waitlist_status = record.get('waitlist_status', 'Not Applicable')
-                
-                ws.cell(row_idx, 1, record.get('school', ''))
-                ws.cell(row_idx, 2, record.get('student_name', ''))
-                ws.cell(row_idx, 3, record.get('program', ''))
-                ws.cell(row_idx, 4, record.get('school_contact', ''))
-                ws.cell(row_idx, 5, record_type)
-                ws.cell(row_idx, 6, record.get('outcome', ''))
-                ws.cell(row_idx, 7, waitlist_status)
-                ws.cell(row_idx, 8, ext_details)
-                ws.cell(row_idx, 9, record.get('information', ''))
-                ws.cell(row_idx, 10, record.get('actioned_by', ''))
-                
-                # RED HIGHLIGHT for Site Decision rows
-                if waitlist_status == 'Site Decision':
-                    for col in range(1, 11):
-                        cell = ws.cell(row_idx, col)
-                        cell.fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
-                        cell.font = Font(color="FFFFFF", bold=True)
-            
-            # Adjust column widths
-            ws.column_dimensions['A'].width = 25  # School
-            ws.column_dimensions['B'].width = 20  # Student
-            ws.column_dimensions['C'].width = 20  # Program
-            ws.column_dimensions['D'].width = 20  # School Contact
-            ws.column_dimensions['E'].width = 12  # Type
-            ws.column_dimensions['F'].width = 15  # Outcome
-            ws.column_dimensions['G'].width = 18  # Waitlist Status
-            ws.column_dimensions['H'].width = 40  # Extension Details
-            ws.column_dimensions['I'].width = 40  # Information
-            ws.column_dimensions['J'].width = 20  # Actioned By
-            
-            # Save to bytes
-            output = BytesIO()
-            wb.save(output)
-            excel_data = output.getvalue()
-            
-            # Download button
-            st.download_button(
-                label="💾 Save Communication Summary",
-                data=excel_data,
-                file_name=f"Communication_{selected_week.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            
-            st.success(f"✅ Communication summary ready! {len(comm_data.data)} record(s)")
-            st.session_state.download_comms = False
-        else:
-            st.info("📭 No communications for this week")
-            st.session_state.download_comms = False
-    except Exception as e:
-        st.error(f"Error: {e}")
-        st.session_state.download_comms = False
-
 # Caption
-st.caption("CLC-LBU Allocation Meetings Tool V4 | Extensions & Not Allocated Auto-compile")
+st.caption("CLC-LBU Allocation Meetings Tool V5 | Complete with 76-Column Data_Model Export")
