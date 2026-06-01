@@ -136,6 +136,27 @@ SAVE_OUTCOMES = {
 }
 
 
+def multi_select_widget(label, options, key):
+    """Tappable multi-select. Prefers st.pills, falls back to multiselect."""
+    if hasattr(st, "pills"):
+        return st.pills(label, options, selection_mode="multi",
+                        key=key, label_visibility="collapsed") or []
+    return st.multiselect(label, options, key=key, label_visibility="collapsed")
+
+
+def single_choice_widget(label, options, key):
+    """Tappable single-select. Prefers segmented_control, then pills, then radio."""
+    if hasattr(st, "segmented_control"):
+        return st.segmented_control(label, options, selection_mode="single",
+                                    key=key, label_visibility="collapsed")
+    if hasattr(st, "pills"):
+        return st.pills(label, options, selection_mode="single",
+                        key=key, label_visibility="collapsed")
+    return st.radio(label, options, index=None, key=key,
+                    horizontal=True, label_visibility="collapsed")
+
+
+@st.cache_resource
 def get_sb():
     try:
         from supabase import create_client
@@ -144,6 +165,7 @@ def get_sb():
         return None
 
 
+@st.cache_data(ttl=60)
 def load_known_students():
     """Returns students with interval data, excluding archived ones."""
     sb = get_sb()
@@ -164,6 +186,7 @@ def load_known_students():
         return []
 
 
+@st.cache_data(ttl=60)
 def load_week_obs(student_name, week_start, week_end):
     sb = get_sb()
     if not sb: return pd.DataFrame()
@@ -181,6 +204,7 @@ def load_week_obs(student_name, week_start, week_end):
         st.error("Load error: " + str(e)); return pd.DataFrame()
 
 
+@st.cache_data(ttl=60)
 def load_all_obs(student_name):
     sb = get_sb()
     if not sb: return pd.DataFrame()
@@ -196,6 +220,13 @@ def load_all_obs(student_name):
         return df
     except Exception:
         return pd.DataFrame()
+
+
+def _bust_obs_caches():
+    """Clear caches affected by writes to interval_support_observations."""
+    for fn in (load_week_obs, load_all_obs, load_known_students, get_expected_intervals):
+        try: fn.clear()
+        except Exception: pass
 
 
 def upsert_field(student_name, sel_date, sel_day, sel_time, field, value):
@@ -219,6 +250,7 @@ def upsert_field(student_name, sel_date, sel_day, sel_time, field, value):
                 field:          value,
                 "created_by":   get_staff_name(),
             }).execute()
+        _bust_obs_caches()
         return True
     except Exception as e:
         st.error("Save failed: " + str(e)); return False
@@ -231,10 +263,12 @@ def clear_interval(student_name, sel_date, sel_time):
         sb.table("interval_support_observations").delete()\
           .eq("student_name", student_name).eq("obs_date", sel_date.isoformat())\
           .eq("time_slot", sel_time).execute()
+        _bust_obs_caches()
     except Exception:
         pass
 
 
+@st.cache_data(ttl=60)
 def get_student_time_window(student_name):
     """Get custom time window for student. Returns (start_time, end_time) or None."""
     sb = get_sb()
@@ -273,6 +307,9 @@ def set_student_time_window(student_name, start_time, end_time):
                 "start_time": start_time,
                 "end_time": end_time,
             }).execute()
+        try:
+            get_student_time_window.clear(); get_expected_intervals.clear()
+        except Exception: pass
         return True
     except Exception as e:
         error_msg = str(e)
@@ -283,6 +320,7 @@ def set_student_time_window(student_name, start_time, end_time):
         return False
 
 
+@st.cache_data(ttl=60)
 def get_day_status(student_name, obs_date):
     """Get status for a specific day (absent/holiday/etc). Returns status string or None."""
     sb = get_sb()
@@ -326,6 +364,9 @@ def set_day_status(student_name, obs_date, status):
                     "obs_date": obs_date.isoformat(),
                     "status": status,
                 }).execute()
+        try:
+            get_day_status.clear(); get_expected_intervals.clear()
+        except Exception: pass
         return True
     except Exception as e:
         error_msg = str(e)
@@ -356,6 +397,7 @@ def paste_interval_data(student_name, sel_date, sel_day, sel_time):
     return True
 
 
+@st.cache_data(ttl=60)
 def get_expected_intervals(student_name, date_from, date_to):
     """
     Calculate expected intervals based on:
@@ -393,6 +435,7 @@ def get_expected_intervals(student_name, date_from, date_to):
     return expected_intervals, attendance_days, total_days, non_attendance_info
 
 
+@st.cache_data(ttl=60)
 def get_daily_note(student_name, obs_date):
     """Get anecdotal note for a specific day. Returns note text or None."""
     sb = get_sb()
@@ -435,6 +478,9 @@ def set_daily_note(student_name, obs_date, note):
                     "obs_date": obs_date.isoformat(),
                     "note": note.strip(),
                 }).execute()
+        try:
+            get_daily_note.clear(); get_all_daily_notes.clear()
+        except Exception: pass
         return True
     except Exception as e:
         if "PGRST205" in str(e) or "schema cache" in str(e):
@@ -444,6 +490,7 @@ def set_daily_note(student_name, obs_date, note):
         return False
 
 
+@st.cache_data(ttl=60)
 def get_all_daily_notes(student_name, date_from, date_to):
     """Get all daily notes for a date range. Returns dict {date: note}."""
     sb = get_sb()
@@ -483,6 +530,9 @@ def insert_save(student_name, sel_date, save_time, time_slot, signs, supports, o
             "notes":        note.strip() if note else "",
             "created_by":   get_staff_name(),
         }).execute()
+        try:
+            load_saves_day.clear(); load_all_saves.clear()
+        except Exception: pass
         return True
     except Exception as e:
         es = str(e)
@@ -493,6 +543,7 @@ def insert_save(student_name, sel_date, save_time, time_slot, signs, supports, o
         return False
 
 
+@st.cache_data(ttl=60)
 def load_saves_day(student_name, sel_date):
     sb = get_sb()
     if not sb: return []
@@ -506,6 +557,7 @@ def load_saves_day(student_name, sel_date):
         return []
 
 
+@st.cache_data(ttl=60)
 def load_all_saves(student_name):
     sb = get_sb()
     if not sb: return pd.DataFrame()
@@ -526,6 +578,9 @@ def delete_save(save_id):
     if not sb: return
     try:
         sb.table("interval_saves").delete().eq("id", save_id).execute()
+        try:
+            load_saves_day.clear(); load_all_saves.clear()
+        except Exception: pass
     except Exception:
         pass
 
@@ -538,10 +593,6 @@ for k, v in [
     ("ist_sel_time", SLOT_TIMES[0]),
     ("ist_sel_day",  DAYS[min(date.today().weekday(), 4)]),
     ("ist_copied_interval", None),  # For copy/paste functionality
-    ("ist_save_signs", []),         # Saves log — selected early signs
-    ("ist_save_supports", []),      # Saves log — selected supports
-    ("ist_save_outcome", ""),       # Saves log — selected outcome
-    ("ist_save_nonce", 0),          # Saves log — bump to reset text inputs
 ]:
     if k not in ss: ss[k] = v
 
@@ -639,6 +690,7 @@ with st.expander("🗄️ Archive / manage student data", expanded=False):
                                 {"student_name": arch_name, "archived": True},
                                 on_conflict="student_name"
                             ).execute()
+                            _bust_obs_caches()
                             if ss.ist_name == arch_name:
                                 ss.ist_name = ""
                             st.success(f"✅ {arch_name} archived.")
@@ -667,6 +719,7 @@ with st.expander("🗄️ Archive / manage student data", expanded=False):
                                       .eq("student_name", arch_name).execute()
                                 except Exception:
                                     pass
+                                _bust_obs_caches()
                                 ss.pop("ist_confirm_del", None)
                                 if ss.ist_name == arch_name:
                                     ss.ist_name = ""
@@ -703,6 +756,7 @@ with st.expander("🗄️ Archive / manage student data", expanded=False):
                             sb.table("interval_archived_students").update(
                                 {"archived": False}
                             ).eq("student_name", aname).execute()
+                            _bust_obs_caches()
                             st.success(f"✅ {aname} restored.")
                             st.rerun()
                         except Exception as e:
@@ -1163,7 +1217,7 @@ with t_record:
                     st.rerun()
 
     # ════════════════════════════════════════════════════════════════════
-    # LOG A SAVE — early sign caught & turned around
+    # LOG A SAVE — early sign caught & turned around (form: no per-tap reruns)
     # ════════════════════════════════════════════════════════════════════
     st.markdown("<div style='margin:.7rem 0 .2rem;'></div>", unsafe_allow_html=True)
     todays_saves = load_saves_day(student_name, sel_date)
@@ -1171,80 +1225,51 @@ with t_record:
     with st.expander(f"⚡  Log a SAVE — early sign caught & turned around{save_count_lbl}", expanded=False):
         st.caption(
             f"For **{sel_day} {sel_date.strftime('%-d %b')}** — log when an escalation was "
-            "starting and a support turned it around. Tap the sign(s), the support(s), the outcome, then Log."
+            "starting and a support turned it around. Tap your selections, then Log once."
         )
 
-        def _chip_row(label, options, state_key, key_prefix, ncols=3):
-            st.markdown(f'<div style="font-size:.72rem;font-weight:700;color:#1A6B8A;'
-                        f'margin:.4rem 0 .2rem;">{label}</div>', unsafe_allow_html=True)
-            sel = ss[state_key]
-            rows = [options[i:i+ncols] for i in range(0, len(options), ncols)]
-            for ri, row in enumerate(rows):
-                cols = st.columns(ncols)
-                for ci, opt in enumerate(row):
-                    with cols[ci]:
-                        on = opt in sel
-                        if st.button(("✓ " if on else "") + opt,
-                                     key=f"{key_prefix}_{ri}_{ci}",
-                                     use_container_width=True,
-                                     type="primary" if on else "secondary"):
-                            if on: sel.remove(opt)
-                            else:  sel.append(opt)
-                            st.rerun()
+        _outcome_labels = [ov["emoji"] + " " + ov["label"] for ov in SAVE_OUTCOMES.values()]
+        _label_to_key   = {ov["emoji"] + " " + ov["label"]: k for k, ov in SAVE_OUTCOMES.items()}
 
-        _chip_row("⚠️ Early sign(s) observed", SAVE_SIGNS, "ist_save_signs", "svsign")
-        _chip_row("🛟 Support(s) applied", SAVE_SUPPORTS, "ist_save_supports", "svsup")
-        other_sup = st.text_input(
-            "Other support (if not listed)", key=f"ist_save_sup_other_{ss.ist_save_nonce}",
-            placeholder="Type any other support used (optional)",
-            label_visibility="collapsed")
+        with st.form("ist_save_form", clear_on_submit=True, border=False):
+            st.markdown('<div style="font-size:.72rem;font-weight:700;color:#1A6B8A;'
+                        'margin:.2rem 0 .15rem;">⚠️ Early sign(s) observed</div>', unsafe_allow_html=True)
+            f_signs = multi_select_widget("Early signs", SAVE_SIGNS, "ist_f_signs")
 
-        st.markdown('<div style="font-size:.72rem;font-weight:700;color:#1A6B8A;'
-                    'margin:.4rem 0 .2rem;">🎯 Outcome</div>', unsafe_allow_html=True)
-        oc = st.columns(3)
-        for i, (okey, ov) in enumerate(SAVE_OUTCOMES.items()):
-            with oc[i]:
-                on = ss.ist_save_outcome == okey
-                if st.button(("✓ " if on else "") + ov["emoji"] + " " + ov["label"],
-                             key=f"svout_{okey}", use_container_width=True,
-                             type="primary" if on else "secondary"):
-                    ss.ist_save_outcome = "" if on else okey
-                    st.rerun()
+            st.markdown('<div style="font-size:.72rem;font-weight:700;color:#1A6B8A;'
+                        'margin:.5rem 0 .15rem;">🛟 Support(s) applied</div>', unsafe_allow_html=True)
+            f_supports = multi_select_widget("Supports", SAVE_SUPPORTS, "ist_f_supports")
+            f_other = st.text_input("Other support (if not listed)", key="ist_f_other",
+                                    placeholder="Other support used (optional)",
+                                    label_visibility="collapsed")
 
-        save_note = st.text_input(
-            "Note (optional)", key=f"ist_save_note_{ss.ist_save_nonce}",
-            placeholder="e.g., flagged at task change — offered choice + movement break, settled within 5 min",
-            label_visibility="collapsed")
+            st.markdown('<div style="font-size:.72rem;font-weight:700;color:#1A6B8A;'
+                        'margin:.5rem 0 .15rem;">🎯 Outcome</div>', unsafe_allow_html=True)
+            f_outcome_label = single_choice_widget("Outcome", _outcome_labels, "ist_f_outcome")
 
-        ready = bool(ss.ist_save_outcome) and len(ss.ist_save_signs) > 0
-        lc1, lc2 = st.columns([3, 1])
-        with lc1:
-            if st.button("💾  Log save", key="ist_log_save", use_container_width=True,
-                         type="primary", disabled=not ready):
+            f_note = st.text_input("Note (optional)", key="ist_f_note",
+                                   placeholder="e.g., flagged at task change — offered choice + movement break, settled within 5 min",
+                                   label_visibility="collapsed")
+
+            submitted = st.form_submit_button("💾  Log save", use_container_width=True, type="primary")
+
+        if submitted:
+            outcome_key = _label_to_key.get(f_outcome_label, "")
+            if not f_signs or not outcome_key:
+                st.warning("Pick at least one early sign and an outcome, then Log.")
+            else:
+                supports = list(f_supports)
+                if f_other and f_other.strip():
+                    supports.append(f_other.strip())
                 now_hhmm = datetime.now().strftime("%-H:%M")
                 _nm = datetime.now().hour * 60 + datetime.now().minute
                 nearest = min(SLOT_TIMES, key=lambda t: abs(int(t.split(":")[0]) * 60 + int(t.split(":")[1]) - _nm))
-                _supports = list(ss.ist_save_supports)
-                if other_sup and other_sup.strip():
-                    _supports.append(other_sup.strip())
                 if insert_save(student_name, sel_date, now_hhmm, nearest,
-                               ss.ist_save_signs, _supports,
-                               ss.ist_save_outcome, save_note):
-                    ss.ist_save_signs = []; ss.ist_save_supports = []; ss.ist_save_outcome = ""
-                    ss.ist_save_nonce += 1
+                               list(f_signs), supports, outcome_key, f_note):
                     st.success("✅ Save logged")
                     st.rerun()
-        with lc2:
-            if (ss.ist_save_signs or ss.ist_save_supports or ss.ist_save_outcome
-                or (other_sup and other_sup.strip())) and \
-               st.button("Clear", key="ist_save_clear", use_container_width=True):
-                ss.ist_save_signs = []; ss.ist_save_supports = []; ss.ist_save_outcome = ""
-                ss.ist_save_nonce += 1
-                st.rerun()
-        if not ready:
-            st.caption("Select at least one early sign and an outcome to log.")
 
-        # Today's saves
+        # Today's saves (buttons must sit outside the form)
         if todays_saves:
             st.markdown("<div style='margin:.5rem 0 .2rem;font-size:.72rem;font-weight:700;"
                         "color:#475569;'>Logged on this day</div>", unsafe_allow_html=True)
