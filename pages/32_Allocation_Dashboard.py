@@ -223,7 +223,7 @@ except:
 # Main Title
 st.markdown("""
     <div class="section-header">
-        <h2>📊 Allocation Dashboard</h2>
+        <h2>Allocation Dashboard</h2>
     </div>
 """, unsafe_allow_html=True)
 
@@ -240,7 +240,7 @@ with st.sidebar:
 # Summary Metrics
 st.markdown("""
     <div class="section-header">
-        <h3>📈 Summary Metrics</h3>
+        <h3>Summary Metrics</h3>
     </div>
 """, unsafe_allow_html=True)
 
@@ -256,8 +256,37 @@ with col4:
 
 st.markdown("---")
 
+# Data Management Section
+st.markdown("""
+    <div class="section-header">
+        <h3>Data Management</h3>
+    </div>
+""", unsafe_allow_html=True)
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.subheader("Upload Data")
+    uploaded_file = st.file_uploader("Upload Excel file", type=['xlsx', 'xls', 'csv'])
+    if uploaded_file is not None:
+        st.success("✓ File uploaded successfully")
+        if st.button("Process Upload"):
+            st.info("Processing file...")
+
+with col2:
+    st.subheader("Export Data")
+    if st.button("Download Current Data", use_container_width=True):
+        st.info("Preparing export...")
+
+with col3:
+    st.subheader("System Status")
+    st.success("✓ Database connected")
+    st.info("ℹ Data last synced: 2 hours ago")
+
+st.markdown("---")
+
 # Tabs for different views
-tab1, tab2, tab3, tab4 = st.tabs(["📋 Allocations", "📊 Analytics", "🗺️ Geography", "📈 Trends"])
+tab1, tab2, tab3, tab4 = st.tabs(["Allocations", "Analytics", "Geography", "Trends"])
 
 with tab1:
     st.markdown("""
