@@ -58,81 +58,106 @@ st.set_page_config(page_title="CLC Allocation Dashboard - Interactive", page_ico
 # Custom CSS for professional appearance
 st.markdown("""
 <style>
-    /* Light gray page background for readability */
+    /* Clean, minimal background */
     [data-testid="stAppViewContainer"] {
-        background-color: #f5f5f5;
+        background-color: #fafbfc;
     }
     
     .main > div {
         padding-top: 2rem;
-        background-color: #f5f5f5;
+        background-color: #fafbfc;
     }
     
+    /* Refined buttons */
     .stButton>button {
         width: 100%;
         height: 80px;
         font-size: 1.1rem;
         font-weight: 600;
-        border-radius: 8px;
-        border: 2px solid #e0e0e0;
+        border-radius: 10px;
+        border: none;
+        background: linear-gradient(135deg, #ffffff 0%, #f5f7fa 100%);
+        color: #1a1a2e;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
         transition: all 0.3s ease;
     }
     .stButton>button:hover {
-        border-color: #667eea;
-        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+        box-shadow: 0 8px 24px rgba(0, 255, 255, 0.15);
         transform: translateY(-2px);
+        background: linear-gradient(135deg, #f5f7fa 0%, #ffffff 100%);
     }
+    
+    /* Clean metric cards */
     .metric-card {
         background: white;
         padding: 1.5rem;
-        border-radius: 10px;
-        border-left: 4px solid #667eea;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        border-radius: 12px;
+        border: 1px solid #e8eef7;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
         margin-bottom: 1rem;
+        transition: all 0.3s ease;
     }
+    .metric-card:hover {
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+        border-color: #d4e0f0;
+    }
+    
+    /* Sleek section headers with neon glow */
     .section-header {
         font-size: 1.8rem;
         font-weight: 700;
         color: white;
-        margin: 2rem 0 1rem 0;
-        padding: 1.5rem 2rem;
+        margin: 2.5rem 0 1.5rem 0;
+        padding: 1.8rem 2.5rem;
         background-color: #1a1a2e;
         border: 2px solid #00ffff;
-        border-radius: 8px;
-        box-shadow: 0 0 20px rgba(0, 255, 255, 0.5), inset 0 0 20px rgba(0, 255, 255, 0.1);
+        border-radius: 12px;
+        box-shadow: 0 0 30px rgba(0, 255, 255, 0.4), inset 0 0 20px rgba(0, 255, 255, 0.08);
+        letter-spacing: -0.5px;
     }
+    
+    /* Sleek drill-down headers with neon glow */
     .drill-down-header {
         background-color: #1a1a2e;
-        padding: 2rem;
-        border-radius: 12px;
-        margin-bottom: 1.5rem;
+        padding: 2.5rem 3rem;
+        border-radius: 14px;
+        margin-bottom: 2rem;
         border: 2px solid #00ffff;
-        box-shadow: 0 0 20px rgba(0, 255, 255, 0.5), inset 0 0 20px rgba(0, 255, 255, 0.1);
+        box-shadow: 0 0 30px rgba(0, 255, 255, 0.4), inset 0 0 20px rgba(0, 255, 255, 0.08);
     }
+    
     .drill-down-title {
         color: white;
         margin: 0;
-        font-size: 2rem;
-        font-weight: 700;
+        font-size: 2.2rem;
+        font-weight: 800;
+        letter-spacing: -0.5px;
     }
+    
     .drill-down-subtitle {
-        color: rgba(255,255,255,0.9);
-        margin: 0.5rem 0 0 0;
-        font-size: 1.2rem;
+        color: rgba(255, 255, 255, 0.85);
+        margin: 0.8rem 0 0 0;
+        font-size: 1.15rem;
+        font-weight: 400;
     }
-    div[data-testid="stMetricValue"] {
-        font-size: 2rem;
-    }
-    /* Uniform filter box sizing */
+    
+    /* Refined input styling */
     [data-testid="stSelectbox"],
     [data-testid="stNumberInput"],
     [data-testid="stTextInput"] {
         min-height: 50px;
     }
-    .stSelectbox div[data-baseweb="select"],
-    .stNumberInput div[data-baseweb="input"],
-    .stTextInput div[data-baseweb="input"] {
-        min-height: 50px !important;
+    
+    /* Enhanced metric values */
+    div[data-testid="stMetricValue"] {
+        font-size: 2.2rem;
+        font-weight: 700;
+        color: #1a1a2e;
+    }
+    
+    /* Smooth transitions */
+    * {
+        transition: background-color 0.2s ease, border-color 0.2s ease;
     }
 </style>
 """, unsafe_allow_html=True)
