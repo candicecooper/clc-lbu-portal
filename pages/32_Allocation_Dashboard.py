@@ -15,6 +15,16 @@ st.set_page_config(
     layout="wide"
 )
 
+# Initialize session state for filters
+if 'selected_programs' not in st.session_state:
+    st.session_state.selected_programs = {'JP', 'PY', 'SY'}
+if 'selected_status' not in st.session_state:
+    st.session_state.selected_status = {'Allocated', 'Pending'}
+if 'selected_partnership' not in st.session_state:
+    st.session_state.selected_partnership = {'Inner West', 'Adelaide Prospect', 'Greenhill South', 'Holdfast', 'Mitcham Hills'}
+if 'selected_year_level' not in st.session_state:
+    st.session_state.selected_year_level = {'R', '1', '2', '3', '4', '5', '6', '7'}
+
 # MODERN TYPOGRAPHY & COLOR SCHEME
 st.markdown("""
 <style>
@@ -75,6 +85,31 @@ st.markdown("""
         font-size: 1.2rem !important;
         margin: 1rem 0 0 0 !important;
         font-weight: 400 !important;
+    }
+    
+    /* Filter Cards */
+    .filter-card {
+        background-color: #1a1f3a;
+        border: 2px solid #2a3050;
+        border-radius: 10px;
+        padding: 12px 16px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        text-align: center;
+        font-weight: 600;
+        color: #b0b8d0;
+    }
+    
+    .filter-card:hover {
+        border-color: #00e5ff;
+        color: #00e5ff;
+    }
+    
+    .filter-card-active {
+        background-color: #1a1f3a;
+        border: 2px solid #00e5ff;
+        color: #00e5ff;
+        box-shadow: 0 0 15px rgba(0, 229, 255, 0.3);
     }
     
     /* Header Tiles */
@@ -162,28 +197,6 @@ st.markdown("""
         font-weight: 500 !important;
     }
     
-    /* Inputs */
-    [data-testid="stSelectbox"],
-    [data-testid="stNumberInput"],
-    [data-testid="stTextInput"],
-    [data-testid="stDateInput"],
-    [data-testid="stMultiSelect"] {
-        min-height: 50px !important;
-    }
-    
-    input, select, textarea {
-        background-color: #1a1f3a !important;
-        color: #e0e0e0 !important;
-        border: 1px solid #2a3050 !important;
-        border-radius: 8px !important;
-        font-family: 'Poppins', sans-serif !important;
-    }
-    
-    input:focus, select:focus, textarea:focus {
-        border-color: #00e5ff !important;
-        box-shadow: 0 0 10px rgba(0, 229, 255, 0.3) !important;
-    }
-    
     /* Tabs */
     [data-baseweb="tab-list"] {
         border-bottom: 2px solid #2a3050 !important;
@@ -220,45 +233,129 @@ except:
     supabase = None
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SIDEBAR - COMPREHENSIVE FILTERING
+# SIDEBAR - CARD-BASED FILTERS
 # ══════════════════════════════════════════════════════════════════════════════
 
 with st.sidebar:
-    st.markdown("### Filters & Options")
+    st.markdown("### Select What to Analyse")
     
-    # Year filter
-    selected_year = st.selectbox("Year", [2024, 2025, 2026], index=2)
+    # Year Selection
+    st.markdown("**Year**")
+    year_col1, year_col2, year_col3 = st.columns(3)
+    if year_col1.button("2024", use_container_width=True):
+        st.session_state.selected_year = 2024
+    if year_col2.button("2025", use_container_width=True):
+        st.session_state.selected_year = 2025
+    if year_col3.button("2026", use_container_width=True):
+        st.session_state.selected_year = 2026
     
-    # Term filter
-    selected_term = st.selectbox("Term", ["Term 1", "Term 2", "Term 3", "Term 4"], index=1)
+    st.markdown("---")
     
-    # Program filter
-    selected_program = st.multiselect(
-        "Program",
-        ["Junior Primary (JP)", "Primary Years (PY)", "Senior Years (SY)"],
-        default=["Junior Primary (JP)", "Primary Years (PY)", "Senior Years (SY)"]
-    )
+    # Term Selection
+    st.markdown("**Term**")
+    term_col1, term_col2, term_col3, term_col4 = st.columns(4)
+    if term_col1.button("Term 1", use_container_width=True):
+        st.session_state.selected_term = "Term 1"
+    if term_col2.button("Term 2", use_container_width=True):
+        st.session_state.selected_term = "Term 2"
+    if term_col3.button("Term 3", use_container_width=True):
+        st.session_state.selected_term = "Term 3"
+    if term_col4.button("Term 4", use_container_width=True):
+        st.session_state.selected_term = "Term 4"
     
-    # Status filter
-    selected_status = st.multiselect(
-        "Allocation Status",
-        ["Allocated", "Pending", "Not Placed", "On Waitlist"],
-        default=["Allocated", "Pending"]
-    )
+    st.markdown("---")
     
-    # Partnership area filter
-    selected_partnership = st.multiselect(
-        "Partnership Area",
-        ["Inner West", "Adelaide Prospect", "Greenhill South", "Holdfast", "Mitcham Hills"],
-        default=["Inner West", "Adelaide Prospect", "Greenhill South", "Holdfast", "Mitcham Hills"]
-    )
+    # Program Selection
+    st.markdown("**Program**")
+    prog_col1, prog_col2, prog_col3 = st.columns(3)
     
-    # Year level filter
-    selected_year_level = st.multiselect(
-        "Year Level",
-        ["R", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"],
-        default=["R", "1", "2", "3", "4", "5", "6", "7"]
-    )
+    if prog_col1.button("JP", use_container_width=True, key="btn_jp"):
+        if "JP" in st.session_state.selected_programs:
+            st.session_state.selected_programs.remove("JP")
+        else:
+            st.session_state.selected_programs.add("JP")
+    
+    if prog_col2.button("PY", use_container_width=True, key="btn_py"):
+        if "PY" in st.session_state.selected_programs:
+            st.session_state.selected_programs.remove("PY")
+        else:
+            st.session_state.selected_programs.add("PY")
+    
+    if prog_col3.button("SY", use_container_width=True, key="btn_sy"):
+        if "SY" in st.session_state.selected_programs:
+            st.session_state.selected_programs.remove("SY")
+        else:
+            st.session_state.selected_programs.add("SY")
+    
+    st.markdown("---")
+    
+    # Status Selection
+    st.markdown("**Allocation Status**")
+    status_col1, status_col2 = st.columns(2)
+    
+    if status_col1.button("Allocated", use_container_width=True, key="btn_allocated"):
+        if "Allocated" in st.session_state.selected_status:
+            st.session_state.selected_status.remove("Allocated")
+        else:
+            st.session_state.selected_status.add("Allocated")
+    
+    if status_col2.button("Pending", use_container_width=True, key="btn_pending"):
+        if "Pending" in st.session_state.selected_status:
+            st.session_state.selected_status.remove("Pending")
+        else:
+            st.session_state.selected_status.add("Pending")
+    
+    status_col3, status_col4 = st.columns(2)
+    
+    if status_col3.button("Not Placed", use_container_width=True, key="btn_notplaced"):
+        if "Not Placed" in st.session_state.selected_status:
+            st.session_state.selected_status.remove("Not Placed")
+        else:
+            st.session_state.selected_status.add("Not Placed")
+    
+    if status_col4.button("Waitlist", use_container_width=True, key="btn_waitlist"):
+        if "On Waitlist" in st.session_state.selected_status:
+            st.session_state.selected_status.remove("On Waitlist")
+        else:
+            st.session_state.selected_status.add("On Waitlist")
+    
+    st.markdown("---")
+    
+    # Partnership Selection
+    st.markdown("**Partnership Area**")
+    partnership_options = ["Inner West", "Adelaide Prospect", "Greenhill South", "Holdfast", "Mitcham Hills"]
+    
+    for i, partnership in enumerate(partnership_options):
+        if i % 2 == 0:
+            col1, col2 = st.columns(2)
+        
+        if i % 2 == 0:
+            if col1.button(partnership, use_container_width=True, key=f"btn_partner_{partnership}"):
+                if partnership in st.session_state.selected_partnership:
+                    st.session_state.selected_partnership.remove(partnership)
+                else:
+                    st.session_state.selected_partnership.add(partnership)
+        else:
+            if col2.button(partnership, use_container_width=True, key=f"btn_partner_{partnership}"):
+                if partnership in st.session_state.selected_partnership:
+                    st.session_state.selected_partnership.remove(partnership)
+                else:
+                    st.session_state.selected_partnership.add(partnership)
+    
+    st.markdown("---")
+    
+    # Year Level Selection
+    st.markdown("**Year Level**")
+    year_levels = ["R", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
+    
+    for i in range(0, len(year_levels), 3):
+        cols = st.columns(3)
+        for j, level in enumerate(year_levels[i:i+3]):
+            if cols[j].button(level, use_container_width=True, key=f"btn_level_{level}"):
+                if level in st.session_state.selected_year_level:
+                    st.session_state.selected_year_level.remove(level)
+                else:
+                    st.session_state.selected_year_level.add(level)
     
     st.markdown("---")
     
@@ -270,10 +367,6 @@ with st.sidebar:
     
     if st.button("Export Data", use_container_width=True):
         st.info("Preparing download...")
-    
-    st.markdown("---")
-    st.caption("✓ Connected")
-    st.caption("Last sync: 2h ago")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN DASHBOARD
@@ -303,6 +396,24 @@ with col3:
     st.metric("Pending", "28", "-3")
 with col4:
     st.metric("On Waitlist", "15", "+2")
+
+st.markdown("---")
+
+# Display current filters
+st.markdown("""
+    <div class="section-header">
+        <h3>Current Filters</h3>
+    </div>
+""", unsafe_allow_html=True)
+
+filter_text = f"""
+**Programs:** {', '.join(sorted(st.session_state.selected_programs)) if st.session_state.selected_programs else 'None'}  
+**Status:** {', '.join(sorted(st.session_state.selected_status)) if st.session_state.selected_status else 'None'}  
+**Partnership Areas:** {', '.join(sorted(st.session_state.selected_partnership)) if st.session_state.selected_partnership else 'None'}  
+**Year Levels:** {', '.join(sorted(st.session_state.selected_year_level)) if st.session_state.selected_year_level else 'None'}
+"""
+
+st.markdown(filter_text)
 
 st.markdown("---")
 
