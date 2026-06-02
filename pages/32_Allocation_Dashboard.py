@@ -214,9 +214,13 @@ st.markdown("""
         border-bottom: 3px solid #00e5ff !important;
     }
     
-    /* Divider */
-    hr {
-        border-color: #2a3050 !important;
+    /* Hide accessibility labels */
+    [aria-label="keyboard_double"] {
+        display: none !important;
+    }
+    
+    label {
+        display: none !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -267,6 +271,14 @@ with st.sidebar:
     
     # Program Selection
     st.markdown("**Program**")
+    prog_buttons = st.columns(5)
+    
+    if prog_buttons[0].button("Select All", use_container_width=True, key="btn_prog_all"):
+        st.session_state.selected_programs = {"JP", "PY", "SY"}
+    
+    if prog_buttons[4].button("Clear All", use_container_width=True, key="btn_prog_clear"):
+        st.session_state.selected_programs = set()
+    
     prog_col1, prog_col2, prog_col3 = st.columns(3)
     
     if prog_col1.button("JP", use_container_width=True, key="btn_jp"):
@@ -291,6 +303,14 @@ with st.sidebar:
     
     # Status Selection
     st.markdown("**Allocation Status**")
+    status_buttons = st.columns(6)
+    
+    if status_buttons[0].button("Select All", use_container_width=True, key="btn_status_all"):
+        st.session_state.selected_status = {"Allocated", "Pending", "Not Placed", "On Waitlist"}
+    
+    if status_buttons[5].button("Clear All", use_container_width=True, key="btn_status_clear"):
+        st.session_state.selected_status = set()
+    
     status_col1, status_col2 = st.columns(2)
     
     if status_col1.button("Allocated", use_container_width=True, key="btn_allocated"):
@@ -323,6 +343,14 @@ with st.sidebar:
     
     # Partnership Selection
     st.markdown("**Partnership Area**")
+    partner_buttons = st.columns(6)
+    
+    if partner_buttons[0].button("Select All", use_container_width=True, key="btn_partner_all"):
+        st.session_state.selected_partnership = {"Inner West", "Adelaide Prospect", "Greenhill South", "Holdfast", "Mitcham Hills"}
+    
+    if partner_buttons[5].button("Clear All", use_container_width=True, key="btn_partner_clear"):
+        st.session_state.selected_partnership = set()
+    
     partnership_options = ["Inner West", "Adelaide Prospect", "Greenhill South", "Holdfast", "Mitcham Hills"]
     
     for i, partnership in enumerate(partnership_options):
@@ -346,6 +374,14 @@ with st.sidebar:
     
     # Year Level Selection
     st.markdown("**Year Level**")
+    level_buttons = st.columns(6)
+    
+    if level_buttons[0].button("Select All", use_container_width=True, key="btn_level_all"):
+        st.session_state.selected_year_level = {"R", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"}
+    
+    if level_buttons[5].button("Clear All", use_container_width=True, key="btn_level_clear"):
+        st.session_state.selected_year_level = set()
+    
     year_levels = ["R", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
     
     for i in range(0, len(year_levels), 3):
