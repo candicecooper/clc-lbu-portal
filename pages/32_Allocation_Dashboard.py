@@ -12,21 +12,8 @@ import os
 st.set_page_config(
     page_title="CLC Allocation Dashboard",
     page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
-
-# Hide Streamlit header
-st.markdown("""
-    <style>
-        [data-testid="stHeader"] {
-            display: none !important;
-        }
-        [data-testid="stToolbar"] {
-            display: none !important;
-        }
-    </style>
-""", unsafe_allow_html=True)
 
 # MODERN TYPOGRAPHY & COLOR SCHEME
 st.markdown("""
@@ -41,12 +28,6 @@ st.markdown("""
     html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"], .main {
         background-color: #0a0e27 !important;
         color: #e0e0e0 !important;
-    }
-    
-    /* Keep sidebar visible */
-    [data-testid="stSidebar"] {
-        display: flex !important;
-        visibility: visible !important;
     }
     
     /* Typography */
@@ -185,7 +166,8 @@ st.markdown("""
     [data-testid="stSelectbox"],
     [data-testid="stNumberInput"],
     [data-testid="stTextInput"],
-    [data-testid="stDateInput"] {
+    [data-testid="stDateInput"],
+    [data-testid="stMultiSelect"] {
         min-height: 50px !important;
     }
     
@@ -217,13 +199,6 @@ st.markdown("""
     [aria-selected="true"] {
         color: #00e5ff !important;
         border-bottom: 3px solid #00e5ff !important;
-    }
-    
-    /* Expanders */
-    [data-testid="stExpander"] {
-        background-color: #1a1f3a !important;
-        border: 1px solid #2a3050 !important;
-        border-radius: 8px !important;
     }
     
     /* Divider */
