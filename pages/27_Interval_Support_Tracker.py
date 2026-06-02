@@ -599,7 +599,11 @@ for k, v in [
 
 st.markdown("""
 <div class="clc-header">
-  <h2>🔵 Interval Support Tracker</h2>
+  <h2>🔵 Interval Support Tracker
+    <span style="background:#16a34a;color:white;font-size:.6rem;font-weight:700;
+                 padding:.15rem .5rem;border-radius:10px;vertical-align:middle;
+                 margin-left:.5rem;">BUILD B · saves form + faster</span>
+  </h2>
   <p>Window of Tolerance — regulation state &amp; support per 15-minute interval
   &nbsp;·&nbsp; CLC Learning &amp; Behaviour Unit</p>
 </div>
