@@ -17,8 +17,17 @@ st.set_page_config(
     page_title="CLC Allocation Dashboard",
     page_icon="📊",
     layout="wide",
-    initial_sidebar_state="collapsed"  # Hide debug by default
+    initial_sidebar_state="expanded"
 )
+
+# Hide Streamlit header
+st.markdown("""
+    <style>
+        [data-testid="stHeader"] {
+            display: none;
+        }
+    </style>
+""", unsafe_allow_html=True)
 
 # MODERN TYPOGRAPHY & COLOR SCHEME
 st.markdown("""
@@ -229,13 +238,30 @@ st.markdown("""
 
 st.markdown("**Interactive student allocation analytics and insights**")
 
-# Sidebar Filters (Clean)
+# Sidebar Filters & Data Management (Clean)
 with st.sidebar:
-    st.markdown("### 🔍 Filters")
+    st.markdown("### Filters")
     
     selected_program = st.selectbox("Program", ["All", "JP", "PY", "SY"])
     selected_status = st.selectbox("Status", ["All", "Allocated", "Pending", "Not Placed"])
     selected_term = st.selectbox("Term", ["All", "Term 1", "Term 2", "Term 3", "Term 4"])
+    
+    st.markdown("---")
+    
+    st.markdown("### Data Management")
+    
+    uploaded_file = st.file_uploader("Upload Excel file", type=['xlsx', 'xls', 'csv'])
+    if uploaded_file is not None:
+        st.success("✓ File uploaded")
+        if st.button("Process Upload", use_container_width=True):
+            st.info("Processing...")
+    
+    if st.button("Download Data", use_container_width=True):
+        st.info("Preparing export...")
+    
+    st.markdown("---")
+    st.caption("✓ Database connected")
+    st.caption("Last synced: 2 hours ago")
 
 # Summary Metrics
 st.markdown("""
@@ -253,35 +279,6 @@ with col3:
     st.metric("Pending", "28", "-3")
 with col4:
     st.metric("On Waitlist", "15", "+2")
-
-st.markdown("---")
-
-# Data Management Section
-st.markdown("""
-    <div class="section-header">
-        <h3>Data Management</h3>
-    </div>
-""", unsafe_allow_html=True)
-
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.subheader("Upload Data")
-    uploaded_file = st.file_uploader("Upload Excel file", type=['xlsx', 'xls', 'csv'])
-    if uploaded_file is not None:
-        st.success("✓ File uploaded successfully")
-        if st.button("Process Upload"):
-            st.info("Processing file...")
-
-with col2:
-    st.subheader("Export Data")
-    if st.button("Download Current Data", use_container_width=True):
-        st.info("Preparing export...")
-
-with col3:
-    st.subheader("System Status")
-    st.success("✓ Database connected")
-    st.info("ℹ Data last synced: 2 hours ago")
 
 st.markdown("---")
 
@@ -353,7 +350,81 @@ with tab3:
         </div>
     """, unsafe_allow_html=True)
     
-    st.info("📍 Partnership area map would display here with interactive regions")
+    # Create map centered on Adelaide
+    m = folium.Map(
+        location=[-34.93, 138.60],
+        zoom_start=11,
+        tiles='OpenStreetMap'
+    )
+    
+    # Partnership areas with sample data
+    partnerships = {
+        'Inner West': {
+            'coords': [-34.90, 138.54],
+            'count': 28,
+            'color': '#00e5ff'
+        },
+        'Adelaide Prospect': {
+            'coords': [-34.85, 138.60],
+            'count': 35,
+            'color': '#00e5ff'
+        },
+        'Greenhill South': {
+            'coords': [-34.98, 138.63],
+            'count': 22,
+            'color': '#00e5ff'
+        },
+        'Holdfast': {
+            'coords': [-35.02, 138.52],
+            'count': 18,
+            'color': '#00e5ff'
+        },
+        'Mitcham Hills': {
+            'coords': [-34.99, 138.65],
+            'count': 15,
+            'color': '#00e5ff'
+        }
+    }
+    
+    # Add markers for each partnership
+    for partnership, data in partnerships.items():
+        folium.CircleMarker(
+            location=data['coords'],
+            radius=15,
+            popup=f"{partnership}<br>Students: {data['count']}",
+            color=data['color'],
+            fill=True,
+            fillColor=data['color'],
+            fillOpacity=0.7,
+            weight=2,
+            tooltip=f"{partnership}: {data['count']} students"
+        ).add_to(m)
+    
+    # Add CLC marker
+    folium.Marker(
+        location=[-34.9286, 138.5830],
+        popup="CLC-LBU<br>Cowandilla Learning Centre",
+        icon=folium.Icon(color='green', icon='home'),
+        tooltip="Cowandilla Learning Centre"
+    ).add_to(m)
+    
+    # Display map
+    st_folium(m, width=1200, height=500)
+    
+    # Summary stats
+    st.markdown("---")
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    with col1:
+        st.metric("Inner West", "28")
+    with col2:
+        st.metric("Adelaide Prospect", "35")
+    with col3:
+        st.metric("Greenhill South", "22")
+    with col4:
+        st.metric("Holdfast", "18")
+    with col5:
+        st.metric("Mitcham Hills", "15")
 
 with tab4:
     st.markdown("""
