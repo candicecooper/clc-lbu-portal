@@ -136,23 +136,25 @@ SAVE_OUTCOMES = {
 }
 
 
-def multi_select_widget(label, options, key):
+def multi_select_widget(label, options, key, default=None):
     """Tappable multi-select. Prefers st.pills, falls back to multiselect."""
+    default = default or []
     if hasattr(st, "pills"):
-        return st.pills(label, options, selection_mode="multi",
+        return st.pills(label, options, selection_mode="multi", default=default,
                         key=key, label_visibility="collapsed") or []
-    return st.multiselect(label, options, key=key, label_visibility="collapsed")
+    return st.multiselect(label, options, default=default, key=key, label_visibility="collapsed")
 
 
-def single_choice_widget(label, options, key):
+def single_choice_widget(label, options, key, default=None):
     """Tappable single-select. Prefers segmented_control, then pills, then radio."""
     if hasattr(st, "segmented_control"):
-        return st.segmented_control(label, options, selection_mode="single",
+        return st.segmented_control(label, options, selection_mode="single", default=default,
                                     key=key, label_visibility="collapsed")
     if hasattr(st, "pills"):
-        return st.pills(label, options, selection_mode="single",
+        return st.pills(label, options, selection_mode="single", default=default,
                         key=key, label_visibility="collapsed")
-    return st.radio(label, options, index=None, key=key,
+    idx = options.index(default) if default in options else None
+    return st.radio(label, options, index=idx, key=key,
                     horizontal=True, label_visibility="collapsed")
 
 
@@ -602,7 +604,7 @@ st.markdown("""
   <h2>🔵 Interval Support Tracker
     <span style="background:#16a34a;color:white;font-size:.6rem;font-weight:700;
                  padding:.15rem .5rem;border-radius:10px;vertical-align:middle;
-                 margin-left:.5rem;">BUILD B · saves form + faster</span>
+                 margin-left:.5rem;">BUILD C · Quick + Grid entry</span>
   </h2>
   <p>Window of Tolerance — regulation state &amp; support per 15-minute interval
   &nbsp;·&nbsp; CLC Learning &amp; Behaviour Unit</p>
@@ -897,289 +899,205 @@ with t_record:
     sel_day  = ss.ist_sel_day
     sel_date = week_start + timedelta(days=DAYS.index(sel_day))
 
-    # ── Legend ────────────────────────────────────────────────────────────
-    leg_parts = " &nbsp;".join(
-        f'<span style="background:{v["bg"]};color:{v["fg"]};padding:.1rem .4rem;'
-        f'border-radius:6px;font-weight:700;font-size:.68rem;">{v["short"]}</span>'
-        f'<span style="font-size:.68rem;color:#475569;"> {v["emoji"]} {v["label"]}</span>'
-        for v in REG_STATES.values()
-    )
-    st.markdown(f'<div style="margin:.15rem 0 .4rem;display:flex;flex-wrap:wrap;gap:.25rem;">'
-                f'{leg_parts}</div>', unsafe_allow_html=True)
+    # ── Field label/key maps ──────────────────────────────────────────────
+    REG_LABELS = [c["label"] for c in REG_STATES.values()]
+    REG_L2K    = {c["label"]: k for k, c in REG_STATES.items()}
+    REG_K2L    = {k: c["label"] for k, c in REG_STATES.items()}
+    GRP_LABELS = list(GROUPING_TYPES.values())
+    GRP_L2K    = {v: k for k, v in GROUPING_TYPES.items()}
+    GRP_K2L    = {k: v for k, v in GROUPING_TYPES.items()}
+    OUT_LABELS = [c["label"] for c in OUTCOMES.values()]
+    OUT_L2K    = {c["label"]: k for k, c in OUTCOMES.items()}
+    OUT_K2L    = {k: c["label"] for k, c in OUTCOMES.items()}
 
-    # ════════════════════════════════════════════════════════════════════
-    # INTERACTIVE GRID — each cell is a Streamlit button
-    # ════════════════════════════════════════════════════════════════════
-    
-    # Filter time slots based on student settings
+    # Slots limited to the student's recording window
     student_window = get_student_time_window(student_name)
-    if student_window and student_window[0] and student_window[1]:
-        start_idx = SLOT_TIMES.index(student_window[0]) if student_window[0] in SLOT_TIMES else 0
-        end_idx = SLOT_TIMES.index(student_window[1]) if student_window[1] in SLOT_TIMES else len(SLOT_TIMES)-1
-        display_slots = SLOT_TIMES[start_idx:end_idx+1]
+    if student_window and student_window[0] and student_window[1] \
+       and student_window[0] in SLOT_TIMES and student_window[1] in SLOT_TIMES:
+        s_i = SLOT_TIMES.index(student_window[0]); e_i = SLOT_TIMES.index(student_window[1])
+        display_slots = SLOT_TIMES[s_i:e_i + 1]
     else:
         display_slots = SLOT_TIMES
-    
-    hdr_cols = st.columns([1.2] + [1]*5)
-    with hdr_cols[0]:
+    if ss.ist_sel_time not in display_slots:
+        ss.ist_sel_time = display_slots[0]
+    sel_time = ss.ist_sel_time
+
+    # Compact legend
+    leg_parts = " &nbsp;".join(
+        f'<span style="background:{v["bg"]};color:{v["fg"]};padding:.05rem .35rem;'
+        f'border-radius:5px;font-weight:700;font-size:.62rem;">{v["short"]}</span>'
+        f'<span style="font-size:.62rem;color:#475569;"> {v["label"]}</span>'
+        for v in REG_STATES.values())
+    st.markdown(f'<div style="margin:.1rem 0 .35rem;display:flex;flex-wrap:wrap;gap:.2rem;">'
+                f'{leg_parts}</div>', unsafe_allow_html=True)
+
+    # ── Day picker (stable options) ────────────────────────────────────────
+    day_short = [d[:3] for d in DAYS]
+    picked_day = single_choice_widget("Day", day_short, "ist_day_pick", default=sel_day[:3])
+    if picked_day and DAYS[day_short.index(picked_day)] != ss.ist_sel_day:
+        ss.ist_sel_day = DAYS[day_short.index(picked_day)]
+        st.rerun()
+    sel_day  = ss.ist_sel_day
+    sel_date = week_start + timedelta(days=DAYS.index(sel_day))
+
+    # ── Entry mode toggle ──────────────────────────────────────────────────
+    mode = single_choice_widget("Mode", ["⚡ Quick", "📋 Grid"], "ist_entry_mode",
+                                default="⚡ Quick") or "⚡ Quick"
+
+    # ════════════════════════════════════════════════════════════════════════
+    # GRID MODE — whole day in a table, save once
+    # ════════════════════════════════════════════════════════════════════════
+    if mode == "📋 Grid":
+        st.caption(f"Fill the day top to bottom, then **Save day** once — no reload between cells. "
+                   f"Editing **{sel_day} {sel_date.strftime('%-d %b')}**.")
+        rows = []
+        for t in display_slots:
+            c = cell_data.get(t, {}).get(sel_day, {})
+            acts = [a.strip() for a in (c.get("activity_types", "") or "").split(",") if a.strip()]
+            rows.append({
+                "Time":       t,
+                "Regulation": REG_K2L.get(c.get("regulated", "") or "", ""),
+                "Grouping":   GRP_K2L.get(c.get("grouping_type", "") or "", ""),
+                "Activity":   acts[0] if acts else "",
+                "Behaviour":  OUT_K2L.get(c.get("outcome", "") or "", ""),
+            })
+        grid_df = pd.DataFrame(rows)
+        edited = st.data_editor(
+            grid_df, key=f"ist_grid_{sel_day}_{sel_date}", hide_index=True,
+            use_container_width=True, num_rows="fixed",
+            column_config={
+                "Time":       st.column_config.TextColumn("Time", disabled=True, width="small"),
+                "Regulation": st.column_config.SelectboxColumn("Regulation", options=[""] + REG_LABELS, width="medium"),
+                "Grouping":   st.column_config.SelectboxColumn("Grouping", options=[""] + GRP_LABELS, width="medium"),
+                "Activity":   st.column_config.SelectboxColumn("Activity", options=[""] + ACTIVITY_TYPES, width="medium"),
+                "Behaviour":  st.column_config.SelectboxColumn("Behaviour", options=[""] + OUT_LABELS, width="medium"),
+            },
+        )
+        st.caption("Grid sets a single activity per slot; use Quick mode for multiple activities on one interval.")
+        if st.button("💾  Save day", key="ist_grid_save", type="primary", use_container_width=True):
+            n = 0
+            for i, t in enumerate(display_slots):
+                o = grid_df.iloc[i]; nw = edited.iloc[i]
+                if nw["Regulation"] != o["Regulation"]:
+                    upsert_field(student_name, sel_date, sel_day, t, "regulated", REG_L2K.get(nw["Regulation"], "")); n += 1
+                if nw["Grouping"] != o["Grouping"]:
+                    upsert_field(student_name, sel_date, sel_day, t, "grouping_type", GRP_L2K.get(nw["Grouping"], "")); n += 1
+                if nw["Activity"] != o["Activity"]:
+                    upsert_field(student_name, sel_date, sel_day, t, "activity_types", nw["Activity"] or ""); n += 1
+                if nw["Behaviour"] != o["Behaviour"]:
+                    upsert_field(student_name, sel_date, sel_day, t, "outcome", OUT_L2K.get(nw["Behaviour"], "")); n += 1
+            st.success(f"✅ Saved {n} change(s) for {sel_day}")
+            st.rerun()
+
+    # ════════════════════════════════════════════════════════════════════════
+    # QUICK MODE — one interval, big targets, save & next
+    # ════════════════════════════════════════════════════════════════════════
+    else:
+        idx = display_slots.index(sel_time) if sel_time in display_slots else 0
+
+        def _fmt_slot(t):
+            return ("✓ " if cell_data.get(t, {}).get(sel_day, {}).get("regulated") else "") + t
+
+        sc1, sc2, sc3 = st.columns([1, 4, 1])
+        with sc1:
+            if st.button("◀", key="ist_slot_prev", use_container_width=True, disabled=(idx == 0)):
+                ss.ist_sel_time = display_slots[idx - 1]; st.rerun()
+        with sc2:
+            pick = st.selectbox("Slot", display_slots, index=idx, format_func=_fmt_slot,
+                                label_visibility="collapsed")
+            if pick != sel_time:
+                ss.ist_sel_time = pick; st.rerun()
+        with sc3:
+            if st.button("▶", key="ist_slot_next", use_container_width=True,
+                         disabled=(idx >= len(display_slots) - 1)):
+                ss.ist_sel_time = display_slots[idx + 1]; st.rerun()
+
+        cur = cell_data.get(sel_time, {}).get(sel_day, {})
+        cur_reg_l = REG_K2L.get(cur.get("regulated", "") or "", None)
+        cur_grp_l = GRP_K2L.get(cur.get("grouping_type", "") or "", None)
+        cur_out_l = OUT_K2L.get(cur.get("outcome", "") or "", None)
+        cur_acts  = [a.strip() for a in (cur.get("activity_types", "") or "").split(",") if a.strip()]
+        done = "✓ recorded" if cur.get("regulated") else "not yet recorded"
+        done_col = "#16a34a" if cur.get("regulated") else "#94a3b8"
         st.markdown(
-            '<div style="font-size:.68rem;font-weight:700;color:white;'
-            'background:#1A6B8A;border-radius:6px;padding:.3rem .4rem;'
-            'text-align:center;">Time</div>', unsafe_allow_html=True)
-    for di, d in enumerate(DAYS):
-        d_date   = week_start + timedelta(days=di)
-        day_status = get_day_status(student_name, d_date)
-        is_td    = (d == today_day and is_this)
-        is_sd    = (d == sel_day)
-        bg       = "#0f3d5c" if is_td else ("#1d5a7a" if is_sd else "#1A6B8A")
-        border   = "3px solid #fbbf24" if is_sd else "none"
-        
-        # Add status badge if day is marked
-        status_badge = ""
-        if day_status:
-            status_badge = f'<br><span style="background:#fbbf24;color:#78350f;font-size:.55rem;padding:.05rem .3rem;border-radius:3px;font-weight:600;">{day_status.upper()}</span>'
-        
-        with hdr_cols[di+1]:
-            st.markdown(
-                f'<div style="font-size:.68rem;font-weight:700;color:white;'
-                f'background:{bg};border-radius:6px;padding:.3rem .4rem;'
-                f'text-align:center;border:{border};">'
-                f'{d[:3]}<br><span style="font-weight:400;font-size:.6rem;">'
-                f'{d_date.strftime("%-d/%m")}</span>{status_badge}</div>',
-                unsafe_allow_html=True)
+            f'<div style="font-weight:700;color:{TEAL};margin:.2rem 0 .1rem;">'
+            f'📍 {sel_time} · {sel_day} {sel_date.strftime("%-d %b")} '
+            f'<span style="font-weight:600;font-size:.72rem;color:{done_col};">— {done}</span></div>',
+            unsafe_allow_html=True)
 
-    for t in display_slots:
-        row_cols = st.columns([1.2] + [1]*5)
+        ks = f"{sel_time}_{sel_day}"
+        with st.form(f"ist_quick_{ks}", border=True):
+            st.markdown('<div style="font-size:.66rem;font-weight:700;color:#1A6B8A;">REGULATION STATE</div>', unsafe_allow_html=True)
+            q_reg = single_choice_widget("Regulation", REG_LABELS, f"ist_q_reg_{ks}", default=cur_reg_l)
+            st.markdown('<div style="font-size:.66rem;font-weight:700;color:#1A6B8A;margin-top:.35rem;">GROUPING</div>', unsafe_allow_html=True)
+            q_grp = single_choice_widget("Grouping", GRP_LABELS, f"ist_q_grp_{ks}", default=cur_grp_l)
+            st.markdown('<div style="font-size:.66rem;font-weight:700;color:#1A6B8A;margin-top:.35rem;">ACTIVITY <span style="font-weight:400;">(tap multiple)</span></div>', unsafe_allow_html=True)
+            q_act = multi_select_widget("Activity", ACTIVITY_TYPES, f"ist_q_act_{ks}", default=cur_acts)
+            st.markdown('<div style="font-size:.66rem;font-weight:700;color:#1A6B8A;margin-top:.35rem;">OBSERVABLE BEHAVIOUR</div>', unsafe_allow_html=True)
+            q_out = single_choice_widget("Behaviour", OUT_LABELS, f"ist_q_out_{ks}", default=cur_out_l)
+            bq1, bq2 = st.columns([3, 2])
+            with bq1:
+                save_next = st.form_submit_button("💾  Save & next ▶", use_container_width=True, type="primary")
+            with bq2:
+                save_stay = st.form_submit_button("💾  Save", use_container_width=True)
 
-        is_sel_time = (t == sel_time)
-        with row_cols[0]:
-            st.markdown(
-                f'<div style="font-size:.72rem;font-weight:{"700" if is_sel_time else "500"};'
-                f'color:{TEAL if is_sel_time else "#475569"};'
-                f'background:{"#EBF4F9" if is_sel_time else "#f8fafc"};'
-                f'border-radius:6px;padding:.28rem .4rem;text-align:center;'
-                f'border:{"1.5px solid "+TEAL if is_sel_time else "1px solid #e2e8f0"};">'
-                f'{t}</div>', unsafe_allow_html=True)
+        if save_next or save_stay:
+            def _w(field, newval, oldval):
+                if (newval or "") != (oldval or ""):
+                    upsert_field(student_name, sel_date, sel_day, sel_time, field, newval or "")
+            _w("regulated",      REG_L2K.get(q_reg, ""),      cur.get("regulated", ""))
+            _w("grouping_type",  GRP_L2K.get(q_grp, ""),      cur.get("grouping_type", ""))
+            _w("activity_types", ",".join(q_act or []),       cur.get("activity_types", ""))
+            _w("outcome",        OUT_L2K.get(q_out, ""),      cur.get("outcome", ""))
+            if save_next and idx < len(display_slots) - 1:
+                ss.ist_sel_time = display_slots[idx + 1]
+            st.success("✅ Saved")
+            st.rerun()
 
+        # Copy / paste / clear (outside the form — buttons can't live in a form)
+        qc1, qc2, qc3 = st.columns(3)
+        with qc1:
+            if cur.get("regulated") and st.button("📋 Copy", key=f"ist_copy_{ks}", use_container_width=True):
+                copy_interval_data(cur); st.rerun()
+        with qc2:
+            if ss.ist_copied_interval and st.button("📥 Paste here", key=f"ist_paste_{ks}",
+                                                     use_container_width=True, type="primary"):
+                paste_interval_data(student_name, sel_date, sel_day, sel_time)
+                ss.ist_copied_interval = None; st.rerun()
+        with qc3:
+            if cur.get("regulated") and st.button("🗑️ Clear", key=f"ist_clear_{ks}", use_container_width=True):
+                clear_interval(student_name, sel_date, sel_time); st.rerun()
+        if ss.ist_copied_interval:
+            st.caption("📋 An interval is copied — open any slot and tap **Paste here**.")
+
+    # ── Week overview (read-only heatmap) ──────────────────────────────────
+    with st.expander("📅 Week overview (read-only)", expanded=False):
+        hc = st.columns([1.1] + [1] * 5)
+        with hc[0]:
+            st.markdown('<div style="font-size:.6rem;font-weight:700;color:white;background:#1A6B8A;'
+                        'border-radius:5px;padding:.2rem;text-align:center;">Time</div>', unsafe_allow_html=True)
         for di, d in enumerate(DAYS):
-            cell    = cell_data.get(t,{}).get(d,{})
-            reg     = cell.get("regulated","") or ""
-            grp     = cell.get("grouping_type","") or ""
-            cfg     = REG_STATES.get(reg,{})
-            is_this_cell = (t == sel_time and d == sel_day)
-
-            if reg:
-                bg_c   = cfg.get("bg","#f1f5f9")
-                fg_c   = cfg.get("fg","#334155")
-                sh     = cfg.get("short","·")
-                grp_lbl = GROUPING_TYPES.get(grp,"")[:3] if grp else ""
-                cell_txt = sh + ("\n" + grp_lbl if grp_lbl else "")
-            else:
-                bg_c   = "#f8fafc"
-                fg_c   = "#cbd5e1"
-                cell_txt = "·"
-
-            with row_cols[di+1]:
-                btn_clicked = st.button(
-                    cell_txt,
-                    key=f"gc_{t}_{d}",
-                    use_container_width=True,
-                    help=f"{t} {d} — {cfg.get('label','(empty)')} {GROUPING_TYPES.get(grp,'')}" if reg else f"{t} {d} — tap to record",
-                )
-                if btn_clicked:
-                    ss.ist_sel_time = t
-                    ss.ist_sel_day  = d
-                    st.rerun()
-
-    st.markdown("---")
-
-    # ════════════════════════════════════════════════════════════════════
-    # RECORDING CARD for selected cell
-    # ════════════════════════════════════════════════════════════════════
-    
-    # Show paste prompt if data is copied
-    if ss.ist_copied_interval:
-        paste_col1, paste_col2 = st.columns([3, 1])
-        with paste_col1:
-            copied_reg = ss.ist_copied_interval.get("regulated", "")
-            reg_cfg = REG_STATES.get(copied_reg, {})
-            st.markdown(
-                f'<div style="background:#dcfce7;border:2px solid #16a34a;'
-                f'border-radius:8px;padding:.4rem .8rem;margin-bottom:.5rem;font-size:.85rem;">'
-                f'<span style="font-weight:700;color:#16a34a;">📋 Ready to paste:</span> '
-                f'{reg_cfg.get("emoji", "")} {reg_cfg.get("label", "(data copied)")}'
-                f'</div>', unsafe_allow_html=True)
-        with paste_col2:
-            if st.button("❌ Cancel", key="paste_cancel", use_container_width=True, type="secondary"):
-                ss.ist_copied_interval = None
-                st.rerun()
-    
-    cur_cell = cell_data.get(sel_time,{}).get(sel_day,{})
-    cur_reg  = cur_cell.get("regulated","") or ""
-    cur_out  = cur_cell.get("outcome","") or ""
-    cur_grp  = cur_cell.get("grouping_type","") or ""
-    cur_acts = [a.strip() for a in (cur_cell.get("activity_types","") or "").split(",") if a.strip()]
-    cfg_cur  = REG_STATES.get(cur_reg,{})
-
-    banner_fg = cfg_cur.get("fg", TEAL) if cur_reg else TEAL
-    banner_bg = cfg_cur.get("bg", "#EBF4F9") if cur_reg else "#EBF4F9"
-
-    st.markdown(
-        f'<div style="background:{banner_fg if ss.ist_copied_interval else banner_bg};'
-        f'border:2px solid {banner_fg};'
-        f'border-radius:10px;padding:.5rem 1rem;margin-bottom:.5rem;">'
-        f'<span style="font-size:.95rem;font-weight:700;color:{"white" if ss.ist_copied_interval else banner_fg};">'
-        f'📍 {sel_time} · {sel_day} {sel_date.strftime("%-d %b")}'
-        + (f'</span> &nbsp;<span style="font-weight:600;color:{"white" if ss.ist_copied_interval else banner_fg};">'
-           f'{cfg_cur.get("emoji","")} {cfg_cur.get("label","")}</span>' if cur_reg else
-           '</span> <span style="color:#94a3b8;font-size:.8rem;">— tap a field to record</span>')
-        + '</div>', unsafe_allow_html=True)
-
-    st.markdown(
-        '<div style="background:white;border:1px solid #e2e8f0;border-radius:10px;padding:.6rem .9rem;">',
-        unsafe_allow_html=True)
-
-    fa1, fa2 = st.columns(2)
-    with fa1:
-        st.markdown('<div style="font-size:.65rem;font-weight:700;color:#1A6B8A;margin-bottom:.1rem;">'
-                    'REGULATION STATE</div>', unsafe_allow_html=True)
-        # Behaviour guide — shows on hover via CSS title, plus a compact visual reference
-        st.markdown("""
-<style>
-.reg-guide { display:flex; flex-direction:column; gap:3px; margin-bottom:.4rem; }
-.reg-tip {
-    font-size:.65rem; padding:.25rem .45rem; border-radius:5px;
-    cursor:default; line-height:1.4; position:relative;
-}
-.reg-tip .eg { color:#64748b; font-style:italic; }
-</style>
-<div class="reg-guide">
-  <div class="reg-tip" style="background:#dcfce7;border-left:3px solid #16a34a;" title="On task · Following instructions · Engaged · Calm body · Responding appropriately">
-    <span style="font-weight:700;color:#16a34a;">🟢 In window</span>
-    <span class="eg"> — on task, following instructions, engaged, calm body</span>
-  </div>
-  <div class="reg-tip" style="background:#fef9c3;border-left:3px solid #ca8a04;" title="Fidgeting · Tapping · Rocking · Making noises · Ignoring · Moving around · Avoiding · Restless">
-    <span style="font-weight:700;color:#ca8a04;">🟡 Coping</span>
-    <span class="eg"> — fidgeting, tapping, noises, ignoring, restless, avoiding</span>
-  </div>
-  <div class="reg-tip" style="background:#fee2e2;border-left:3px solid #dc2626;" title="Physiological: dilated pupils · dry mouth · shallow breathing · faster heartbeat · sweating · tensed muscles | Behavioural: agitated movement · unable to find stillness · hyper-vigilant · impulsive · emotionally flooded · reactive · defensive · self-destructive">
-    <span style="font-weight:700;color:#dc2626;">🔴 Hyperaroused</span>
-    <span class="eg"> — agitated, impulsive, reactive, hyper-vigilant, can't find stillness</span>
-  </div>
-  <div class="reg-tip" style="background:#dbeafe;border-left:3px solid #2563eb;" title="Staring blankly · Non-responsive · Slumped · Very slow · Head down · Zoned out · Mute · Shutdown">
-    <span style="font-weight:700;color:#2563eb;">🔵 Hypoaroused</span>
-    <span class="eg"> — staring, non-responsive, slumped, zoned out, shutdown</span>
-  </div>
-</div>
-<div style="font-size:.62rem;color:#94a3b8;margin-bottom:.35rem;">👆 Hover over each for more examples · then click a button to record</div>
-""", unsafe_allow_html=True)
-        for val, cfg in REG_STATES.items():
-            is_sel = (cur_reg == val)
-            col_a, col_b = st.columns([5,1]) if is_sel else [st.container(), None]
-            if col_b is None:
-                if st.button(cfg["emoji"]+" "+cfg["label"],
-                             key=f"rf_{val}_{sel_time}_{sel_day}",
-                             use_container_width=True,
-                             type="secondary", help=cfg["desc"]):
-                    upsert_field(student_name, sel_date, sel_day, sel_time,
-                                 "regulated", val); st.rerun()
-            else:
-                with col_a:
-                    if st.button(cfg["emoji"]+" "+cfg["label"],
-                                 key=f"rf_{val}_{sel_time}_{sel_day}",
-                                 use_container_width=True,
-                                 type="primary", help=cfg["desc"]):
-                        upsert_field(student_name, sel_date, sel_day, sel_time,
-                                     "regulated", ""); st.rerun()
-                with col_b:
-                    pass
-
-    with fa2:
-        st.markdown('<div style="font-size:.65rem;font-weight:700;color:#1A6B8A;margin-bottom:.1rem;">'
-                    'GROUPING</div>', unsafe_allow_html=True)
-        for val, lbl in GROUPING_TYPES.items():
-            is_sel = (cur_grp == val)
-            if st.button(lbl, key=f"gf_{val}_{sel_time}_{sel_day}",
-                         use_container_width=True,
-                         type="primary" if is_sel else "secondary"):
-                upsert_field(student_name, sel_date, sel_day, sel_time,
-                             "grouping_type", "" if is_sel else val); st.rerun()
-
-    st.markdown('<div style="border-top:1px solid #f1f5f9;margin:.4rem 0;"></div>',
-                unsafe_allow_html=True)
-
-    fb1, fb2 = st.columns(2)
-    with fb1:
-        st.markdown('<div style="font-size:.65rem;font-weight:700;color:#1A6B8A;margin-bottom:.1rem;">'
-                    'ACTIVITY <span style="font-weight:400;">(tap multiple)</span></div>',
-                    unsafe_allow_html=True)
-        for act in ACTIVITY_TYPES:
-            is_sel = (act in cur_acts)
-            if st.button(act, key=f"af_{act}_{sel_time}_{sel_day}",
-                         use_container_width=True,
-                         type="primary" if is_sel else "secondary"):
-                new_acts = list(cur_acts)
-                if is_sel: new_acts.remove(act)
-                else: new_acts.append(act)
-                upsert_field(student_name, sel_date, sel_day, sel_time,
-                             "activity_types", ",".join(new_acts)); st.rerun()
-
-    with fb2:
-        st.markdown('<div style="font-size:.65rem;font-weight:700;color:#1A6B8A;margin-bottom:.1rem;">'
-                    'OBSERVABLE BEHAVIOUR</div>', unsafe_allow_html=True)
-        for val, cfg in OUTCOMES.items():
-            is_sel = (cur_out == val)
-            if st.button(cfg["label"], key=f"of_{val}_{sel_time}_{sel_day}",
-                         use_container_width=True,
-                         type="primary" if is_sel else "secondary"):
-                upsert_field(student_name, sel_date, sel_day, sel_time,
-                             "outcome", "" if is_sel else val); st.rerun()
-
-        if cur_out or cur_reg or cur_grp or cur_acts or ss.ist_copied_interval:
-            st.markdown("")
-            
-            # If data is copied, show prominent PASTE button
-            if ss.ist_copied_interval:
-                paste_main, paste_copy, paste_clear = st.columns([2, 1, 1])
-                
-                with paste_main:
-                    if st.button("✅ PASTE DATA HERE", key=f"paste_big_{sel_time}_{sel_day}",
-                               use_container_width=True, type="primary"):
-                        paste_interval_data(student_name, sel_date, sel_day, sel_time)
-                        st.success("✅ Data pasted!")
-                        st.rerun()
-                
-                with paste_copy:
-                    if cur_reg:  # Only show copy if current cell has data
-                        if st.button("📋 Copy from here", key=f"copy_{sel_time}_{sel_day}",
-                                   use_container_width=True, type="secondary"):
-                            copy_interval_data(cur_cell)
-                            st.rerun()
-                
-                with paste_clear:
-                    if cur_reg:  # Only show clear if current cell has data
-                        if st.button("🗑️ Clear", key=f"clr_{sel_time}_{sel_day}",
-                                   use_container_width=True, type="secondary"):
-                            clear_interval(student_name, sel_date, sel_time)
-                            st.rerun()
-            
-            # If no data is copied, show copy and clear buttons
-            else:
-                if cur_reg:  # Only show if current cell has data
-                    btn_col1, btn_col2 = st.columns(2)
-                    
-                    with btn_col1:
-                        if st.button("📋 Copy this interval", key=f"copy_{sel_time}_{sel_day}",
-                                   use_container_width=True, type="primary"):
-                            copy_interval_data(cur_cell)
-                            st.success("✅ Copied! Now click any other cell to paste.")
-                            st.rerun()
-                    
-                    with btn_col2:
-                        if st.button("🗑️ Clear interval", key=f"clr_{sel_time}_{sel_day}",
-                                   use_container_width=True, type="secondary"):
-                            clear_interval(student_name, sel_date, sel_time)
-                            st.rerun()
+            with hc[di + 1]:
+                is_sd = (d == sel_day)
+                st.markdown(f'<div style="font-size:.6rem;font-weight:700;color:white;'
+                            f'background:{"#0f3d5c" if is_sd else "#1A6B8A"};border-radius:5px;'
+                            f'padding:.2rem;text-align:center;">{d[:3]}<br>'
+                            f'<span style="font-weight:400;">{day_dates[d]}</span></div>', unsafe_allow_html=True)
+        for t in display_slots:
+            rc = st.columns([1.1] + [1] * 5)
+            with rc[0]:
+                st.markdown(f'<div style="font-size:.62rem;color:#475569;text-align:center;'
+                            f'padding:.15rem;">{t}</div>', unsafe_allow_html=True)
+            for di, d in enumerate(DAYS):
+                c = cell_data.get(t, {}).get(d, {})
+                reg = c.get("regulated", "") or ""
+                cfg = REG_STATES.get(reg, {})
+                bg = cfg.get("bg", "#f8fafc"); fg = cfg.get("fg", "#cbd5e1")
+                txt = cfg.get("short", "·") if reg else "·"
+                with rc[di + 1]:
+                    st.markdown(f'<div style="font-size:.62rem;font-weight:700;color:{fg};'
+                                f'background:{bg};border-radius:5px;padding:.15rem;text-align:center;">'
+                                f'{txt}</div>', unsafe_allow_html=True)
 
     # ── Daily notes section ───────────────────────────────────────────────────
     st.markdown('<div style="border-top:1px solid #e2e8f0;margin:.6rem 0 .4rem;"></div>',
@@ -1293,8 +1211,6 @@ with t_record:
                 with sc2:
                     if st.button("🗑️", key=f"del_save_{sv['id']}", use_container_width=True):
                         delete_save(sv["id"]); st.rerun()
-
-    st.markdown('</div>', unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════════════
 # ANALYSIS
