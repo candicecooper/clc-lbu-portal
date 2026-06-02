@@ -9,10 +9,6 @@ from collections import Counter
 from supabase import create_client
 import os
 
-# ══════════════════════════════════════════════════════════════════════════════
-# MODERN DARK THEME - COMPLETE REDESIGN
-# ══════════════════════════════════════════════════════════════════════════════
-
 st.set_page_config(
     page_title="CLC Allocation Dashboard",
     page_icon="📊",
@@ -24,7 +20,10 @@ st.set_page_config(
 st.markdown("""
     <style>
         [data-testid="stHeader"] {
-            display: none;
+            display: none !important;
+        }
+        [data-testid="stToolbar"] {
+            display: none !important;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -44,6 +43,12 @@ st.markdown("""
         color: #e0e0e0 !important;
     }
     
+    /* Keep sidebar visible */
+    [data-testid="stSidebar"] {
+        display: flex !important;
+        visibility: visible !important;
+    }
+    
     /* Typography */
     h1, h2, h3, h4, h5, h6 {
         font-family: 'Poppins', sans-serif !important;
@@ -58,12 +63,40 @@ st.markdown("""
     
     /* Main Container */
     .main > div {
-        padding: 2rem;
+        padding: 2.5rem;
         max-width: 1600px;
         margin: 0 auto;
     }
     
-    /* ===== HEADER TILES - CONSISTENT COLOR & NEON GLOW ===== */
+    /* IMPRESSIVE MAIN TITLE */
+    .main-title {
+        background: linear-gradient(135deg, #1a1f3a 0%, #2a3050 100%);
+        border: 2px solid #00e5ff;
+        border-radius: 16px;
+        padding: 3.5rem 4rem;
+        margin-bottom: 3rem;
+        box-shadow: 0 0 40px rgba(0, 229, 255, 0.4), 
+                    inset 0 0 30px rgba(0, 229, 255, 0.1);
+        text-align: center;
+    }
+    
+    .main-title h1 {
+        font-size: 3.5rem !important;
+        color: #ffffff !important;
+        margin: 0 !important;
+        font-weight: 800 !important;
+        text-shadow: 0 0 20px rgba(0, 229, 255, 0.3);
+        letter-spacing: -1px !important;
+    }
+    
+    .main-title p {
+        color: rgba(255, 255, 255, 0.85) !important;
+        font-size: 1.2rem !important;
+        margin: 1rem 0 0 0 !important;
+        font-weight: 400 !important;
+    }
+    
+    /* Header Tiles */
     .section-header, .drill-down-header {
         background-color: #1a1f3a !important;
         border: 2px solid #00e5ff !important;
@@ -82,7 +115,7 @@ st.markdown("""
     
     .section-header h2, .section-header h3 {
         color: #ffffff !important;
-        font-size: 1.8rem !important;
+        font-size: 2rem !important;
         margin: 0 !important;
         font-weight: 700 !important;
     }
@@ -101,7 +134,7 @@ st.markdown("""
         font-weight: 400 !important;
     }
     
-    /* ===== BUTTONS ===== */
+    /* Buttons */
     .stButton > button {
         background-color: #1a1f3a !important;
         color: #00e5ff !important;
@@ -121,7 +154,7 @@ st.markdown("""
         transform: translateY(-2px) !important;
     }
     
-    /* ===== METRIC CARDS ===== */
+    /* Metric Cards */
     [data-testid="metric-container"] {
         background-color: #1a1f3a !important;
         border: 1px solid #2a3050 !important;
@@ -148,7 +181,7 @@ st.markdown("""
         font-weight: 500 !important;
     }
     
-    /* ===== INPUTS & SELECTS ===== */
+    /* Inputs */
     [data-testid="stSelectbox"],
     [data-testid="stNumberInput"],
     [data-testid="stTextInput"],
@@ -169,7 +202,7 @@ st.markdown("""
         box-shadow: 0 0 10px rgba(0, 229, 255, 0.3) !important;
     }
     
-    /* ===== TABS ===== */
+    /* Tabs */
     [data-baseweb="tab-list"] {
         border-bottom: 2px solid #2a3050 !important;
         gap: 1rem !important;
@@ -186,28 +219,14 @@ st.markdown("""
         border-bottom: 3px solid #00e5ff !important;
     }
     
-    /* ===== EXPANDERS ===== */
+    /* Expanders */
     [data-testid="stExpander"] {
         background-color: #1a1f3a !important;
         border: 1px solid #2a3050 !important;
         border-radius: 8px !important;
     }
     
-    /* ===== DATAFRAMES & TABLES ===== */
-    [data-testid="stDataframe"] {
-        background-color: #0a0e27 !important;
-    }
-    
-    .dataframe {
-        color: #e0e0e0 !important;
-    }
-    
-    /* ===== SIDEBAR ===== */
-    [data-testid="stSidebar"] {
-        background-color: #0a0e27 !important;
-    }
-    
-    /* ===== DIVIDER ===== */
+    /* Divider */
     hr {
         border-color: #2a3050 !important;
     }
@@ -226,47 +245,77 @@ except:
     supabase = None
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MAIN DASHBOARD
+# SIDEBAR - COMPREHENSIVE FILTERING
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Main Title
-st.markdown("""
-    <div class="section-header">
-        <h2>Allocation Dashboard</h2>
-    </div>
-""", unsafe_allow_html=True)
-
-st.markdown("**Interactive student allocation analytics and insights**")
-
-# Sidebar Filters & Data Management (Clean)
 with st.sidebar:
-    st.markdown("### Filters")
+    st.markdown("### Filters & Options")
     
-    selected_program = st.selectbox("Program", ["All", "JP", "PY", "SY"])
-    selected_status = st.selectbox("Status", ["All", "Allocated", "Pending", "Not Placed"])
-    selected_term = st.selectbox("Term", ["All", "Term 1", "Term 2", "Term 3", "Term 4"])
+    # Year filter
+    selected_year = st.selectbox("Year", [2024, 2025, 2026], index=2)
+    
+    # Term filter
+    selected_term = st.selectbox("Term", ["Term 1", "Term 2", "Term 3", "Term 4"], index=1)
+    
+    # Program filter
+    selected_program = st.multiselect(
+        "Program",
+        ["Junior Primary (JP)", "Primary Years (PY)", "Senior Years (SY)"],
+        default=["Junior Primary (JP)", "Primary Years (PY)", "Senior Years (SY)"]
+    )
+    
+    # Status filter
+    selected_status = st.multiselect(
+        "Allocation Status",
+        ["Allocated", "Pending", "Not Placed", "On Waitlist"],
+        default=["Allocated", "Pending"]
+    )
+    
+    # Partnership area filter
+    selected_partnership = st.multiselect(
+        "Partnership Area",
+        ["Inner West", "Adelaide Prospect", "Greenhill South", "Holdfast", "Mitcham Hills"],
+        default=["Inner West", "Adelaide Prospect", "Greenhill South", "Holdfast", "Mitcham Hills"]
+    )
+    
+    # Year level filter
+    selected_year_level = st.multiselect(
+        "Year Level",
+        ["R", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"],
+        default=["R", "1", "2", "3", "4", "5", "6", "7"]
+    )
     
     st.markdown("---")
     
     st.markdown("### Data Management")
     
-    uploaded_file = st.file_uploader("Upload Excel file", type=['xlsx', 'xls', 'csv'])
+    uploaded_file = st.file_uploader("Upload Excel", type=['xlsx', 'xls', 'csv'])
     if uploaded_file is not None:
-        st.success("✓ File uploaded")
-        if st.button("Process Upload", use_container_width=True):
-            st.info("Processing...")
+        st.success("File uploaded")
     
-    if st.button("Download Data", use_container_width=True):
-        st.info("Preparing export...")
+    if st.button("Export Data", use_container_width=True):
+        st.info("Preparing download...")
     
     st.markdown("---")
-    st.caption("✓ Database connected")
-    st.caption("Last synced: 2 hours ago")
+    st.caption("✓ Connected")
+    st.caption("Last sync: 2h ago")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN DASHBOARD
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Impressive Main Title
+st.markdown("""
+    <div class="main-title">
+        <h1>Allocation Dashboard</h1>
+        <p>Student placement analytics and management</p>
+    </div>
+""", unsafe_allow_html=True)
 
 # Summary Metrics
 st.markdown("""
     <div class="section-header">
-        <h3>Summary Metrics</h3>
+        <h2>Summary Metrics</h2>
     </div>
 """, unsafe_allow_html=True)
 
@@ -282,7 +331,7 @@ with col4:
 
 st.markdown("---")
 
-# Tabs for different views
+# Tabs
 tab1, tab2, tab3, tab4 = st.tabs(["Allocations", "Analytics", "Geography", "Trends"])
 
 with tab1:
@@ -293,13 +342,13 @@ with tab1:
         </div>
     """, unsafe_allow_html=True)
     
-    # Sample data
     df = pd.DataFrame({
         'Student': ['John Smith', 'Mary Jones', 'Sarah Lee', 'David Chen', 'Emma Wilson'],
         'Program': ['JP', 'PY', 'SY', 'JP', 'PY'],
         'Status': ['Allocated', 'Allocated', 'Pending', 'Allocated', 'Not Placed'],
-        'Start Date': ['2026-06-09', '2026-06-09', 'TBD', '2026-06-16', 'TBD'],
-        'School': ['Prospect Primary', 'Henley Beach', 'Cowandilla', 'Adelaide Botanic', 'Mitcham Girls']
+        'Year Level': ['2', '4', '7', '1', '5'],
+        'School': ['Prospect Primary', 'Henley Beach', 'Cowandilla', 'Adelaide Botanic', 'Mitcham Girls'],
+        'Partnership': ['Inner West', 'Inner West', 'Adelaide Prospect', 'Greenhill South', 'Holdfast']
     })
     
     st.dataframe(df, use_container_width=True, hide_index=True)
@@ -350,71 +399,44 @@ with tab3:
         </div>
     """, unsafe_allow_html=True)
     
-    # Create map centered on Adelaide
     m = folium.Map(
         location=[-34.93, 138.60],
         zoom_start=11,
         tiles='OpenStreetMap'
     )
     
-    # Partnership areas with sample data
-    partnerships = {
-        'Inner West': {
-            'coords': [-34.90, 138.54],
-            'count': 28,
-            'color': '#00e5ff'
-        },
-        'Adelaide Prospect': {
-            'coords': [-34.85, 138.60],
-            'count': 35,
-            'color': '#00e5ff'
-        },
-        'Greenhill South': {
-            'coords': [-34.98, 138.63],
-            'count': 22,
-            'color': '#00e5ff'
-        },
-        'Holdfast': {
-            'coords': [-35.02, 138.52],
-            'count': 18,
-            'color': '#00e5ff'
-        },
-        'Mitcham Hills': {
-            'coords': [-34.99, 138.65],
-            'count': 15,
-            'color': '#00e5ff'
-        }
+    partnerships_map = {
+        'Inner West': {'coords': [-34.90, 138.54], 'count': 28},
+        'Adelaide Prospect': {'coords': [-34.85, 138.60], 'count': 35},
+        'Greenhill South': {'coords': [-34.98, 138.63], 'count': 22},
+        'Holdfast': {'coords': [-35.02, 138.52], 'count': 18},
+        'Mitcham Hills': {'coords': [-34.99, 138.65], 'count': 15}
     }
     
-    # Add markers for each partnership
-    for partnership, data in partnerships.items():
+    for partnership, data in partnerships_map.items():
         folium.CircleMarker(
             location=data['coords'],
             radius=15,
             popup=f"{partnership}<br>Students: {data['count']}",
-            color=data['color'],
+            color='#00e5ff',
             fill=True,
-            fillColor=data['color'],
+            fillColor='#00e5ff',
             fillOpacity=0.7,
             weight=2,
-            tooltip=f"{partnership}: {data['count']} students"
+            tooltip=f"{partnership}: {data['count']}"
         ).add_to(m)
     
-    # Add CLC marker
     folium.Marker(
         location=[-34.9286, 138.5830],
-        popup="CLC-LBU<br>Cowandilla Learning Centre",
+        popup="CLC-LBU Cowandilla",
         icon=folium.Icon(color='green', icon='home'),
-        tooltip="Cowandilla Learning Centre"
+        tooltip="Cowandilla"
     ).add_to(m)
     
-    # Display map
     st_folium(m, width=1200, height=500)
     
-    # Summary stats
     st.markdown("---")
     col1, col2, col3, col4, col5 = st.columns(5)
-    
     with col1:
         st.metric("Inner West", "28")
     with col2:
