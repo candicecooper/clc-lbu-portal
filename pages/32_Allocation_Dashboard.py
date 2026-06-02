@@ -58,14 +58,14 @@ st.set_page_config(page_title="CLC Allocation Dashboard - Interactive", page_ico
 # Custom CSS for professional appearance
 st.markdown("""
 <style>
-    /* Dark page background */
+    /* Light gray page background for readability */
     [data-testid="stAppViewContainer"] {
-        background-color: #0f0f1e;
+        background-color: #f5f5f5;
     }
     
     .main > div {
         padding-top: 2rem;
-        background-color: #0f0f1e;
+        background-color: #f5f5f5;
     }
     
     .stButton>button {
