@@ -86,10 +86,13 @@ st.markdown("""
     .section-header {
         font-size: 1.8rem;
         font-weight: 700;
-        color: #2c3e50;
+        color: white;
         margin: 2rem 0 1rem 0;
-        padding-bottom: 0.5rem;
-        border-bottom: 3px solid #667eea;
+        padding: 1.5rem 2rem;
+        background-color: #1a1a2e;
+        border: 2px solid #00ffff;
+        border-radius: 8px;
+        box-shadow: 0 0 20px rgba(0, 255, 255, 0.5), inset 0 0 20px rgba(0, 255, 255, 0.1);
     }
     .drill-down-header {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
