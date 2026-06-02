@@ -58,9 +58,16 @@ st.set_page_config(page_title="CLC Allocation Dashboard - Interactive", page_ico
 # Custom CSS for professional appearance
 st.markdown("""
 <style>
+    /* Dark page background */
+    [data-testid="stAppViewContainer"] {
+        background-color: #0f0f1e;
+    }
+    
     .main > div {
         padding-top: 2rem;
+        background-color: #0f0f1e;
     }
+    
     .stButton>button {
         width: 100%;
         height: 80px;
@@ -95,11 +102,12 @@ st.markdown("""
         box-shadow: 0 0 20px rgba(0, 255, 255, 0.5), inset 0 0 20px rgba(0, 255, 255, 0.1);
     }
     .drill-down-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background-color: #1a1a2e;
         padding: 2rem;
         border-radius: 12px;
         margin-bottom: 1.5rem;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        border: 2px solid #00ffff;
+        box-shadow: 0 0 20px rgba(0, 255, 255, 0.5), inset 0 0 20px rgba(0, 255, 255, 0.1);
     }
     .drill-down-title {
         color: white;
@@ -114,6 +122,17 @@ st.markdown("""
     }
     div[data-testid="stMetricValue"] {
         font-size: 2rem;
+    }
+    /* Uniform filter box sizing */
+    [data-testid="stSelectbox"],
+    [data-testid="stNumberInput"],
+    [data-testid="stTextInput"] {
+        min-height: 50px;
+    }
+    .stSelectbox div[data-baseweb="select"],
+    .stNumberInput div[data-baseweb="input"],
+    .stTextInput div[data-baseweb="input"] {
+        min-height: 50px !important;
     }
 </style>
 """, unsafe_allow_html=True)
