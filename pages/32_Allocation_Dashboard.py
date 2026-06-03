@@ -5,9 +5,6 @@ import plotly.express as px
 from datetime import datetime
 import folium
 from streamlit_folium import st_folium
-from collections import Counter
-from supabase import create_client
-import os
 
 st.set_page_config(
     page_title="CLC Allocation Dashboard",
@@ -19,18 +16,29 @@ st.set_page_config(
 if 'selected_programs' not in st.session_state:
     st.session_state.selected_programs = {'JP', 'PY', 'SY'}
 if 'selected_status' not in st.session_state:
-    st.session_state.selected_status = {'Allocated', 'Pending'}
+    st.session_state.selected_status = {'Allocated', 'Pending', 'Not Placed', 'On Waitlist'}
+if 'selected_atsi' not in st.session_state:
+    st.session_state.selected_atsi = {'Yes', 'No'}
+if 'selected_attendance' not in st.session_state:
+    st.session_state.selected_attendance = {'Full-time', 'Part-time', 'Irregular'}
+if 'selected_swd' not in st.session_state:
+    st.session_state.selected_swd = {'Yes', 'No'}
+if 'selected_disability' not in st.session_state:
+    st.session_state.selected_disability = {'ASD', 'ADHD', 'Learning Disability', 'Physical', 'Hearing', 'Vision', 'Other'}
+if 'selected_eald' not in st.session_state:
+    st.session_state.selected_eald = {'Yes', 'No'}
+if 'selected_behaviour' not in st.session_state:
+    st.session_state.selected_behaviour = {'Mild', 'Moderate', 'Severe', 'None'}
+if 'selected_referral' not in st.session_state:
+    st.session_state.selected_referral = {'First', 'Multiple'}
 if 'selected_partnership' not in st.session_state:
     st.session_state.selected_partnership = {'Inner West', 'Adelaide Prospect', 'Greenhill South', 'Holdfast', 'Mitcham Hills'}
-if 'selected_year_level' not in st.session_state:
-    st.session_state.selected_year_level = {'R', '1', '2', '3', '4', '5', '6', '7'}
 
-# MODERN TYPOGRAPHY & COLOR SCHEME
+# MODERN DARK THEME
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap');
     
-    /* Global Font & Background */
     * {
         font-family: 'Poppins', sans-serif !important;
     }
@@ -40,19 +48,12 @@ st.markdown("""
         color: #e0e0e0 !important;
     }
     
-    /* Typography */
     h1, h2, h3, h4, h5, h6 {
         font-family: 'Poppins', sans-serif !important;
         font-weight: 700 !important;
         letter-spacing: -0.5px !important;
     }
     
-    p, span, div, label {
-        font-family: 'Poppins', sans-serif !important;
-        color: #b0b8d0 !important;
-    }
-    
-    /* Main Container */
     .main > div {
         padding: 2.5rem;
         max-width: 1600px;
@@ -66,8 +67,7 @@ st.markdown("""
         border-radius: 16px;
         padding: 3.5rem 4rem;
         margin-bottom: 3rem;
-        box-shadow: 0 0 40px rgba(0, 229, 255, 0.4), 
-                    inset 0 0 30px rgba(0, 229, 255, 0.1);
+        box-shadow: 0 0 40px rgba(0, 229, 255, 0.4), inset 0 0 30px rgba(0, 229, 255, 0.1);
         text-align: center;
     }
     
@@ -87,67 +87,34 @@ st.markdown("""
         font-weight: 400 !important;
     }
     
-    /* Filter Cards */
-    .filter-card {
-        background-color: #1a1f3a;
-        border: 2px solid #2a3050;
-        border-radius: 10px;
-        padding: 12px 16px;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        text-align: center;
-        font-weight: 600;
-        color: #b0b8d0;
-    }
-    
-    .filter-card:hover {
-        border-color: #00e5ff;
-        color: #00e5ff;
-    }
-    
-    .filter-card-active {
-        background-color: #1a1f3a;
-        border: 2px solid #00e5ff;
-        color: #00e5ff;
-        box-shadow: 0 0 15px rgba(0, 229, 255, 0.3);
-    }
-    
-    /* Header Tiles */
+    /* Section Headers */
     .section-header, .drill-down-header {
         background-color: #1a1f3a !important;
         border: 2px solid #00e5ff !important;
         border-radius: 14px !important;
         padding: 2rem !important;
         margin: 2rem 0 1.5rem 0 !important;
-        box-shadow: 0 0 30px rgba(0, 229, 255, 0.35), 
-                    inset 0 0 20px rgba(0, 229, 255, 0.08) !important;
+        box-shadow: 0 0 30px rgba(0, 229, 255, 0.35), inset 0 0 20px rgba(0, 229, 255, 0.08) !important;
         transition: all 0.3s ease !important;
     }
     
-    .section-header:hover, .drill-down-header:hover {
-        box-shadow: 0 0 40px rgba(0, 229, 255, 0.5), 
-                    inset 0 0 20px rgba(0, 229, 255, 0.12) !important;
-    }
-    
-    .section-header h2, .section-header h3 {
+    .section-header h2, .section-header h3, .drill-down-header h2 {
         color: #ffffff !important;
         font-size: 2rem !important;
         margin: 0 !important;
         font-weight: 700 !important;
     }
     
-    .drill-down-header h1, .drill-down-header h2 {
-        color: #ffffff !important;
-        font-size: 2.2rem !important;
-        margin: 0 !important;
-        font-weight: 800 !important;
+    /* Expanders */
+    [data-testid="stExpander"] {
+        background-color: #1a1f3a !important;
+        border: 1px solid #2a3050 !important;
+        border-radius: 10px !important;
     }
     
-    .drill-down-subtitle {
-        color: rgba(255, 255, 255, 0.8) !important;
-        font-size: 1.1rem !important;
-        margin-top: 0.5rem !important;
-        font-weight: 400 !important;
+    [data-testid="stExpanderDetails"] {
+        background-color: #141829 !important;
+        padding: 1rem !important;
     }
     
     /* Buttons */
@@ -155,34 +122,27 @@ st.markdown("""
         background-color: #1a1f3a !important;
         color: #00e5ff !important;
         border: 1.5px solid #00e5ff !important;
-        border-radius: 10px !important;
+        border-radius: 8px !important;
         font-weight: 600 !important;
-        font-size: 1rem !important;
-        padding: 0.75rem 1.5rem !important;
+        padding: 0.5rem 1rem !important;
         transition: all 0.3s ease !important;
         box-shadow: 0 0 15px rgba(0, 229, 255, 0.2) !important;
+        font-size: 0.85rem !important;
     }
     
     .stButton > button:hover {
         background-color: #00e5ff !important;
         color: #0a0e27 !important;
         box-shadow: 0 0 25px rgba(0, 229, 255, 0.5) !important;
-        transform: translateY(-2px) !important;
     }
     
-    /* Metric Cards */
+    /* Metrics */
     [data-testid="metric-container"] {
         background-color: #1a1f3a !important;
         border: 1px solid #2a3050 !important;
         border-radius: 12px !important;
         padding: 1.5rem !important;
         box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3) !important;
-        transition: all 0.3s ease !important;
-    }
-    
-    [data-testid="metric-container"]:hover {
-        border-color: #00e5ff !important;
-        box-shadow: 0 0 20px rgba(0, 229, 255, 0.2) !important;
     }
     
     [data-testid="metric-value"] {
@@ -197,210 +157,142 @@ st.markdown("""
         font-weight: 500 !important;
     }
     
-    /* Tabs */
-    [data-baseweb="tab-list"] {
-        border-bottom: 2px solid #2a3050 !important;
-        gap: 1rem !important;
-    }
-    
-    [data-baseweb="tab"] {
-        color: #b0b8d0 !important;
-        font-weight: 600 !important;
-        border-radius: 8px 8px 0 0 !important;
-    }
-    
-    [aria-selected="true"] {
-        color: #00e5ff !important;
-        border-bottom: 3px solid #00e5ff !important;
-    }
-    
     /* Hide accessibility labels */
-    [aria-label="keyboard_double"] {
+    [aria-label="keyboard_double"], label {
         display: none !important;
     }
     
-    label {
-        display: none !important;
+    hr {
+        border-color: #2a3050 !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-@st.cache_resource
-def init_supabase():
-    url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_KEY")
-    return create_client(url, key)
-
-try:
-    supabase = init_supabase()
-except:
-    supabase = None
-
 # ══════════════════════════════════════════════════════════════════════════════
-# SIDEBAR - CARD-BASED FILTERS
+# SIDEBAR - EXPANDABLE FILTER SECTIONS
 # ══════════════════════════════════════════════════════════════════════════════
 
 with st.sidebar:
-    st.markdown("### Select What to Analyse")
+    st.markdown("### Advanced Filters")
     
-    # Year Selection
-    st.markdown("**Year**")
-    year_col1, year_col2, year_col3 = st.columns(3)
-    if year_col1.button("2024", use_container_width=True):
-        st.session_state.selected_year = 2024
-    if year_col2.button("2025", use_container_width=True):
-        st.session_state.selected_year = 2025
-    if year_col3.button("2026", use_container_width=True):
-        st.session_state.selected_year = 2026
-    
-    st.markdown("---")
-    
-    # Term Selection
-    st.markdown("**Term**")
-    term_col1, term_col2, term_col3, term_col4 = st.columns(4)
-    if term_col1.button("Term 1", use_container_width=True):
-        st.session_state.selected_term = "Term 1"
-    if term_col2.button("Term 2", use_container_width=True):
-        st.session_state.selected_term = "Term 2"
-    if term_col3.button("Term 3", use_container_width=True):
-        st.session_state.selected_term = "Term 3"
-    if term_col4.button("Term 4", use_container_width=True):
-        st.session_state.selected_term = "Term 4"
-    
-    st.markdown("---")
-    
-    # Program Selection
-    st.markdown("**Program**")
-    prog_buttons = st.columns(5)
-    
-    if prog_buttons[0].button("Select All", use_container_width=True, key="btn_prog_all"):
-        st.session_state.selected_programs = {"JP", "PY", "SY"}
-    
-    if prog_buttons[4].button("Clear All", use_container_width=True, key="btn_prog_clear"):
-        st.session_state.selected_programs = set()
-    
-    prog_col1, prog_col2, prog_col3 = st.columns(3)
-    
-    if prog_col1.button("JP", use_container_width=True, key="btn_jp"):
-        if "JP" in st.session_state.selected_programs:
-            st.session_state.selected_programs.remove("JP")
-        else:
-            st.session_state.selected_programs.add("JP")
-    
-    if prog_col2.button("PY", use_container_width=True, key="btn_py"):
-        if "PY" in st.session_state.selected_programs:
-            st.session_state.selected_programs.remove("PY")
-        else:
-            st.session_state.selected_programs.add("PY")
-    
-    if prog_col3.button("SY", use_container_width=True, key="btn_sy"):
-        if "SY" in st.session_state.selected_programs:
-            st.session_state.selected_programs.remove("SY")
-        else:
-            st.session_state.selected_programs.add("SY")
-    
-    st.markdown("---")
-    
-    # Status Selection
-    st.markdown("**Allocation Status**")
-    status_buttons = st.columns(6)
-    
-    if status_buttons[0].button("Select All", use_container_width=True, key="btn_status_all"):
-        st.session_state.selected_status = {"Allocated", "Pending", "Not Placed", "On Waitlist"}
-    
-    if status_buttons[5].button("Clear All", use_container_width=True, key="btn_status_clear"):
-        st.session_state.selected_status = set()
-    
-    status_col1, status_col2 = st.columns(2)
-    
-    if status_col1.button("Allocated", use_container_width=True, key="btn_allocated"):
-        if "Allocated" in st.session_state.selected_status:
-            st.session_state.selected_status.remove("Allocated")
-        else:
-            st.session_state.selected_status.add("Allocated")
-    
-    if status_col2.button("Pending", use_container_width=True, key="btn_pending"):
-        if "Pending" in st.session_state.selected_status:
-            st.session_state.selected_status.remove("Pending")
-        else:
-            st.session_state.selected_status.add("Pending")
-    
-    status_col3, status_col4 = st.columns(2)
-    
-    if status_col3.button("Not Placed", use_container_width=True, key="btn_notplaced"):
-        if "Not Placed" in st.session_state.selected_status:
-            st.session_state.selected_status.remove("Not Placed")
-        else:
-            st.session_state.selected_status.add("Not Placed")
-    
-    if status_col4.button("Waitlist", use_container_width=True, key="btn_waitlist"):
-        if "On Waitlist" in st.session_state.selected_status:
-            st.session_state.selected_status.remove("On Waitlist")
-        else:
-            st.session_state.selected_status.add("On Waitlist")
-    
-    st.markdown("---")
-    
-    # Partnership Selection
-    st.markdown("**Partnership Area**")
-    partner_buttons = st.columns(6)
-    
-    if partner_buttons[0].button("Select All", use_container_width=True, key="btn_partner_all"):
-        st.session_state.selected_partnership = {"Inner West", "Adelaide Prospect", "Greenhill South", "Holdfast", "Mitcham Hills"}
-    
-    if partner_buttons[5].button("Clear All", use_container_width=True, key="btn_partner_clear"):
-        st.session_state.selected_partnership = set()
-    
-    partnership_options = ["Inner West", "Adelaide Prospect", "Greenhill South", "Holdfast", "Mitcham Hills"]
-    
-    for i, partnership in enumerate(partnership_options):
-        if i % 2 == 0:
-            col1, col2 = st.columns(2)
+    # Program & Status
+    with st.expander("📚 Program & Status", expanded=True):
+        st.markdown("**Program**")
+        prog_col1, prog_col2, prog_col3 = st.columns([1,1,1])
+        if prog_col1.button("JP", use_container_width=True, key="btn_jp"):
+            st.session_state.selected_programs ^= {"JP"}
+        if prog_col2.button("PY", use_container_width=True, key="btn_py"):
+            st.session_state.selected_programs ^= {"PY"}
+        if prog_col3.button("SY", use_container_width=True, key="btn_sy"):
+            st.session_state.selected_programs ^= {"SY"}
         
-        if i % 2 == 0:
-            if col1.button(partnership, use_container_width=True, key=f"btn_partner_{partnership}"):
-                if partnership in st.session_state.selected_partnership:
-                    st.session_state.selected_partnership.remove(partnership)
-                else:
-                    st.session_state.selected_partnership.add(partnership)
-        else:
-            if col2.button(partnership, use_container_width=True, key=f"btn_partner_{partnership}"):
-                if partnership in st.session_state.selected_partnership:
-                    st.session_state.selected_partnership.remove(partnership)
-                else:
-                    st.session_state.selected_partnership.add(partnership)
+        st.markdown("**Status**")
+        status_col1, status_col2 = st.columns(2)
+        if status_col1.button("Allocated", key="btn_allocated"):
+            st.session_state.selected_status ^= {"Allocated"}
+        if status_col2.button("Pending", key="btn_pending"):
+            st.session_state.selected_status ^= {"Pending"}
+        
+        status_col3, status_col4 = st.columns(2)
+        if status_col3.button("Not Placed", key="btn_notplaced"):
+            st.session_state.selected_status ^= {"Not Placed"}
+        if status_col4.button("Waitlist", key="btn_waitlist"):
+            st.session_state.selected_status ^= {"On Waitlist"}
+    
+    # Demographics
+    with st.expander("👥 Demographics"):
+        st.markdown("**ATSI (Aboriginal/Torres Strait Islander)**")
+        atsi_col1, atsi_col2 = st.columns(2)
+        if atsi_col1.button("Yes", key="btn_atsi_yes"):
+            st.session_state.selected_atsi ^= {"Yes"}
+        if atsi_col2.button("No", key="btn_atsi_no"):
+            st.session_state.selected_atsi ^= {"No"}
+        
+        st.markdown("**EALD (English as Additional Language)**")
+        eald_col1, eald_col2 = st.columns(2)
+        if eald_col1.button("Yes", key="btn_eald_yes"):
+            st.session_state.selected_eald ^= {"Yes"}
+        if eald_col2.button("No", key="btn_eald_no"):
+            st.session_state.selected_eald ^= {"No"}
+    
+    # Attendance
+    with st.expander("📅 Attendance"):
+        att_col1, att_col2, att_col3 = st.columns(3)
+        if att_col1.button("Full-time", key="btn_fulltime"):
+            st.session_state.selected_attendance ^= {"Full-time"}
+        if att_col2.button("Part-time", key="btn_parttime"):
+            st.session_state.selected_attendance ^= {"Part-time"}
+        if att_col3.button("Irregular", key="btn_irregular"):
+            st.session_state.selected_attendance ^= {"Irregular"}
+    
+    # Disability Support
+    with st.expander("♿ Disability Support"):
+        st.markdown("**SWD (Students with Disabilities)**")
+        swd_col1, swd_col2 = st.columns(2)
+        if swd_col1.button("Yes", key="btn_swd_yes"):
+            st.session_state.selected_swd ^= {"Yes"}
+        if swd_col2.button("No", key="btn_swd_no"):
+            st.session_state.selected_swd ^= {"No"}
+        
+        st.markdown("**Disability Type**")
+        dis_col1, dis_col2 = st.columns(2)
+        
+        if dis_col1.button("ASD", key="btn_asd"):
+            st.session_state.selected_disability ^= {"ASD"}
+        if dis_col2.button("ADHD", key="btn_adhd"):
+            st.session_state.selected_disability ^= {"ADHD"}
+        
+        dis_col3, dis_col4 = st.columns(2)
+        if dis_col3.button("Learning", key="btn_learning"):
+            st.session_state.selected_disability ^= {"Learning Disability"}
+        if dis_col4.button("Physical", key="btn_physical"):
+            st.session_state.selected_disability ^= {"Physical"}
+        
+        dis_col5, dis_col6 = st.columns(2)
+        if dis_col5.button("Hearing", key="btn_hearing"):
+            st.session_state.selected_disability ^= {"Hearing"}
+        if dis_col6.button("Vision", key="btn_vision"):
+            st.session_state.selected_disability ^= {"Vision"}
+    
+    # Behaviour & Support
+    with st.expander("⚠️ Behaviour & Support"):
+        st.markdown("**Behaviour Concerns**")
+        beh_col1, beh_col2 = st.columns(2)
+        if beh_col1.button("None", key="btn_beh_none"):
+            st.session_state.selected_behaviour ^= {"None"}
+        if beh_col2.button("Mild", key="btn_beh_mild"):
+            st.session_state.selected_behaviour ^= {"Mild"}
+        
+        beh_col3, beh_col4 = st.columns(2)
+        if beh_col3.button("Moderate", key="btn_beh_moderate"):
+            st.session_state.selected_behaviour ^= {"Moderate"}
+        if beh_col4.button("Severe", key="btn_beh_severe"):
+            st.session_state.selected_behaviour ^= {"Severe"}
+        
+        st.markdown("**Referral Type**")
+        ref_col1, ref_col2 = st.columns(2)
+        if ref_col1.button("First Time", key="btn_ref_first"):
+            st.session_state.selected_referral ^= {"First"}
+        if ref_col2.button("Multiple", key="btn_ref_multiple"):
+            st.session_state.selected_referral ^= {"Multiple"}
+    
+    # Partnership
+    with st.expander("🤝 Partnership Area"):
+        partner_options = ["Inner West", "Adelaide Prospect", "Greenhill South", "Holdfast", "Mitcham Hills"]
+        for i, opt in enumerate(partner_options):
+            if (i % 2) == 0:
+                col1, col2 = st.columns(2)
+            if (i % 2) == 0:
+                if col1.button(opt, key=f"btn_partner_{opt}"):
+                    st.session_state.selected_partnership ^= {opt}
+            else:
+                if col2.button(opt, key=f"btn_partner_{opt}"):
+                    st.session_state.selected_partnership ^= {opt}
     
     st.markdown("---")
-    
-    # Year Level Selection
-    st.markdown("**Year Level**")
-    level_buttons = st.columns(6)
-    
-    if level_buttons[0].button("Select All", use_container_width=True, key="btn_level_all"):
-        st.session_state.selected_year_level = {"R", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"}
-    
-    if level_buttons[5].button("Clear All", use_container_width=True, key="btn_level_clear"):
-        st.session_state.selected_year_level = set()
-    
-    year_levels = ["R", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
-    
-    for i in range(0, len(year_levels), 3):
-        cols = st.columns(3)
-        for j, level in enumerate(year_levels[i:i+3]):
-            if cols[j].button(level, use_container_width=True, key=f"btn_level_{level}"):
-                if level in st.session_state.selected_year_level:
-                    st.session_state.selected_year_level.remove(level)
-                else:
-                    st.session_state.selected_year_level.add(level)
-    
-    st.markdown("---")
-    
     st.markdown("### Data Management")
     
     uploaded_file = st.file_uploader("Upload Excel", type=['xlsx', 'xls', 'csv'])
-    if uploaded_file is not None:
-        st.success("File uploaded")
-    
     if st.button("Export Data", use_container_width=True):
         st.info("Preparing download...")
 
@@ -408,11 +300,11 @@ with st.sidebar:
 # MAIN DASHBOARD
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Impressive Main Title
+# Main Title
 st.markdown("""
     <div class="main-title">
         <h1>Allocation Dashboard</h1>
-        <p>Student placement analytics and management</p>
+        <p>Comprehensive student placement analytics and management</p>
     </div>
 """, unsafe_allow_html=True)
 
@@ -423,63 +315,64 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5, col6 = st.columns(6)
 with col1:
-    st.metric("Total Students", "145", "+12")
+    st.metric("Total", "145")
 with col2:
-    st.metric("Allocated", "112", "+8")
+    st.metric("Allocated", "112")
 with col3:
-    st.metric("Pending", "28", "-3")
+    st.metric("Pending", "28")
 with col4:
-    st.metric("On Waitlist", "15", "+2")
+    st.metric("ATSI", "42")
+with col5:
+    st.metric("SWD", "58")
+with col6:
+    st.metric("EALD", "31")
 
 st.markdown("---")
 
-# Display current filters
-st.markdown("""
-    <div class="section-header">
-        <h3>Current Filters</h3>
-    </div>
-""", unsafe_allow_html=True)
-
-filter_text = f"""
-**Programs:** {', '.join(sorted(st.session_state.selected_programs)) if st.session_state.selected_programs else 'None'}  
-**Status:** {', '.join(sorted(st.session_state.selected_status)) if st.session_state.selected_status else 'None'}  
-**Partnership Areas:** {', '.join(sorted(st.session_state.selected_partnership)) if st.session_state.selected_partnership else 'None'}  
-**Year Levels:** {', '.join(sorted(st.session_state.selected_year_level)) if st.session_state.selected_year_level else 'None'}
-"""
-
-st.markdown(filter_text)
+# Current Filters Display
+with st.expander("🔍 Active Filters (Click to see)", expanded=False):
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.caption(f"**Program:** {', '.join(sorted(st.session_state.selected_programs)) or 'None'}")
+        st.caption(f"**Status:** {', '.join(sorted(st.session_state.selected_status)) or 'None'}")
+    with col2:
+        st.caption(f"**ATSI:** {', '.join(sorted(st.session_state.selected_atsi)) or 'None'}")
+        st.caption(f"**SWD:** {', '.join(sorted(st.session_state.selected_swd)) or 'None'}")
+    with col3:
+        st.caption(f"**Attendance:** {', '.join(sorted(st.session_state.selected_attendance)) or 'None'}")
+        st.caption(f"**Partnership:** {', '.join(sorted(st.session_state.selected_partnership)) or 'None'}")
 
 st.markdown("---")
 
-# Tabs
-tab1, tab2, tab3, tab4 = st.tabs(["Allocations", "Analytics", "Geography", "Trends"])
+# Tabs for different views
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["All Students", "By Demographics", "By Disability", "By Partnership", "Analytics"])
 
 with tab1:
     st.markdown("""
         <div class="drill-down-header">
-            <h2>Student Allocations</h2>
-            <p class="drill-down-subtitle">Current placement status and details</p>
+            <h2>All Students</h2>
         </div>
     """, unsafe_allow_html=True)
     
-    df = pd.DataFrame({
-        'Student': ['John Smith', 'Mary Jones', 'Sarah Lee', 'David Chen', 'Emma Wilson'],
-        'Program': ['JP', 'PY', 'SY', 'JP', 'PY'],
-        'Status': ['Allocated', 'Allocated', 'Pending', 'Allocated', 'Not Placed'],
-        'Year Level': ['2', '4', '7', '1', '5'],
-        'School': ['Prospect Primary', 'Henley Beach', 'Cowandilla', 'Adelaide Botanic', 'Mitcham Girls'],
-        'Partnership': ['Inner West', 'Inner West', 'Adelaide Prospect', 'Greenhill South', 'Holdfast']
+    df_students = pd.DataFrame({
+        'Student': ['John Smith', 'Mary Jones', 'Sarah Lee', 'David Chen', 'Emma Wilson', 'Alex Brown', 'Sophie Green', 'Tom White'],
+        'Program': ['JP', 'PY', 'SY', 'JP', 'PY', 'SY', 'JP', 'PY'],
+        'Status': ['Allocated', 'Allocated', 'Pending', 'Allocated', 'Not Placed', 'Allocated', 'Pending', 'Allocated'],
+        'ATSI': ['No', 'Yes', 'No', 'Yes', 'No', 'No', 'Yes', 'No'],
+        'SWD': ['Yes', 'No', 'Yes', 'No', 'Yes', 'Yes', 'No', 'No'],
+        'Disability': ['ASD', 'None', 'ADHD', 'None', 'Learning', 'ASD', 'None', 'None'],
+        'Attendance': ['Full-time', 'Part-time', 'Full-time', 'Irregular', 'Full-time', 'Part-time', 'Full-time', 'Full-time'],
+        'Partnership': ['Inner West', 'Inner West', 'Adelaide Prospect', 'Greenhill South', 'Holdfast', 'Mitcham Hills', 'Inner West', 'Adelaide Prospect']
     })
     
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(df_students, use_container_width=True, hide_index=True)
 
 with tab2:
     st.markdown("""
         <div class="drill-down-header">
-            <h2>Analytics Overview</h2>
-            <p class="drill-down-subtitle">Distribution and breakdown analysis</p>
+            <h2>Demographics Breakdown</h2>
         </div>
     """, unsafe_allow_html=True)
     
@@ -487,47 +380,81 @@ with tab2:
     
     with col1:
         fig = go.Figure(data=[go.Pie(
-            labels=['Allocated', 'Pending', 'Not Placed'],
-            values=[112, 28, 5],
-            marker=dict(colors=['#00e5ff', '#ff6b6b', '#ffd93d'])
+            labels=['ATSI', 'Non-ATSI'],
+            values=[42, 103],
+            marker=dict(colors=['#00e5ff', '#ff6b6b'])
         )])
         fig.update_layout(
+            title='ATSI Status',
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)',
-            font=dict(color='#e0e0e0', family='Poppins'),
-            showlegend=True
+            font=dict(color='#e0e0e0', family='Poppins')
         )
         st.plotly_chart(fig, use_container_width=True)
     
     with col2:
-        fig = go.Figure(data=[
-            go.Bar(x=['JP', 'PY', 'SY'], y=[45, 55, 12], marker_color='#00e5ff')
-        ])
+        fig = go.Figure(data=[go.Pie(
+            labels=['EALD', 'Non-EALD'],
+            values=[31, 114],
+            marker=dict(colors=['#00e5ff', '#ffd93d'])
+        )])
         fig.update_layout(
-            title='By Program',
+            title='EALD Status',
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)',
-            font=dict(color='#e0e0e0', family='Poppins'),
-            xaxis_title='Program',
-            yaxis_title='Count'
+            font=dict(color='#e0e0e0', family='Poppins')
         )
         st.plotly_chart(fig, use_container_width=True)
 
 with tab3:
     st.markdown("""
         <div class="drill-down-header">
-            <h2>Geographic Distribution</h2>
-            <p class="drill-down-subtitle">Student allocation across partnership areas</p>
+            <h2>Disability Support Breakdown</h2>
         </div>
     """, unsafe_allow_html=True)
     
-    m = folium.Map(
-        location=[-34.93, 138.60],
-        zoom_start=11,
-        tiles='OpenStreetMap'
-    )
+    col1, col2 = st.columns(2)
     
-    partnerships_map = {
+    with col1:
+        fig = go.Figure(data=[go.Pie(
+            labels=['SWD', 'No Support Need'],
+            values=[58, 87],
+            marker=dict(colors=['#00e5ff', '#10b981'])
+        )])
+        fig.update_layout(
+            title='Students with Disabilities',
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color='#e0e0e0', family='Poppins')
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        fig = go.Figure(data=[go.Bar(
+            x=['ASD', 'ADHD', 'Learning', 'Physical', 'Hearing', 'Vision'],
+            y=[18, 14, 16, 5, 3, 2],
+            marker_color='#00e5ff'
+        )])
+        fig.update_layout(
+            title='Disability Types',
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color='#e0e0e0', family='Poppins'),
+            xaxis_title='Type',
+            yaxis_title='Count'
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+with tab4:
+    st.markdown("""
+        <div class="drill-down-header">
+            <h2>Partnership Area Distribution</h2>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    m = folium.Map(location=[-34.93, 138.60], zoom_start=11, tiles='OpenStreetMap')
+    
+    partnerships_data = {
         'Inner West': {'coords': [-34.90, 138.54], 'count': 28},
         'Adelaide Prospect': {'coords': [-34.85, 138.60], 'count': 35},
         'Greenhill South': {'coords': [-34.98, 138.63], 'count': 22},
@@ -535,7 +462,7 @@ with tab3:
         'Mitcham Hills': {'coords': [-34.99, 138.65], 'count': 15}
     }
     
-    for partnership, data in partnerships_map.items():
+    for partnership, data in partnerships_data.items():
         folium.CircleMarker(
             location=data['coords'],
             radius=15,
@@ -547,13 +474,6 @@ with tab3:
             weight=2,
             tooltip=f"{partnership}: {data['count']}"
         ).add_to(m)
-    
-    folium.Marker(
-        location=[-34.9286, 138.5830],
-        popup="CLC-LBU Cowandilla",
-        icon=folium.Icon(color='green', icon='home'),
-        tooltip="Cowandilla"
-    ).add_to(m)
     
     st_folium(m, width=1200, height=500)
     
@@ -570,37 +490,47 @@ with tab3:
     with col5:
         st.metric("Mitcham Hills", "15")
 
-with tab4:
+with tab5:
     st.markdown("""
         <div class="drill-down-header">
-            <h2>Allocation Trends</h2>
-            <p class="drill-down-subtitle">Historical data and forecasting</p>
+            <h2>Analytics & Trends</h2>
         </div>
     """, unsafe_allow_html=True)
     
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=['Week 1', 'Week 2', 'Week 3', 'Week 4', 'Week 5'],
-        y=[18, 22, 25, 28, 32],
-        mode='lines+markers',
-        name='Allocations',
-        line=dict(color='#00e5ff', width=3),
-        marker=dict(size=8)
-    ))
-    fig.update_layout(
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='#e0e0e0', family='Poppins'),
-        hovermode='x unified',
-        xaxis_title='Week',
-        yaxis_title='Allocations'
-    )
-    st.plotly_chart(fig, use_container_width=True)
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        fig = go.Figure(data=[
+            go.Bar(x=['JP', 'PY', 'SY'], y=[45, 55, 12], marker_color='#00e5ff')
+        ])
+        fig.update_layout(
+            title='Allocations by Program',
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color='#e0e0e0', family='Poppins'),
+            xaxis_title='Program',
+            yaxis_title='Count'
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=['Week 1', 'Week 2', 'Week 3', 'Week 4', 'Week 5'],
+            y=[18, 22, 25, 28, 32],
+            mode='lines+markers',
+            line=dict(color='#00e5ff', width=3),
+            marker=dict(size=8)
+        ))
+        fig.update_layout(
+            title='Allocation Trends',
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color='#e0e0e0', family='Poppins'),
+            xaxis_title='Week',
+            yaxis_title='Allocations'
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
 st.markdown("---")
-st.markdown("""
-<div style='text-align: center; color: #666; padding: 2rem 0;'>
-    <p style='font-size: 0.9rem; margin: 0;'>CLC-LBU Allocation Dashboard</p>
-    <p style='font-size: 0.8rem; margin: 0.5rem 0 0 0;'>Modern analytics platform</p>
-</div>
-""", unsafe_allow_html=True)
+st.caption("CLC-LBU Allocation Dashboard • Modern analytics platform")
