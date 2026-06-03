@@ -332,6 +332,16 @@ with st.sidebar:
                 st.session_state.filter_states['partnership'] ^= {opt}
     
     st.markdown("---")
+    
+    # DASHBOARD VIEW
+    st.markdown("### Dashboard View")
+    selected_view = st.radio(
+        "Select View",
+        ["All Students", "By Demographics", "By Disability", "By Partnership", "Analytics"],
+        label_visibility="collapsed"
+    )
+    
+    st.markdown("---")
     st.markdown("### Data Management")
     st.file_uploader("Upload Excel", type=['xlsx', 'xls', 'csv'])
     st.button("Export Data", use_container_width=True)
@@ -354,9 +364,8 @@ with col6: st.metric("EALD", "31")
 
 st.markdown("---")
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["All Students", "By Demographics", "By Disability", "By Partnership", "Analytics"])
-
-with tab1:
+# DISPLAY SELECTED VIEW
+if selected_view == "All Students":
     st.markdown('<div class="section-title"><h2>All Students</h2></div>', unsafe_allow_html=True)
     df = pd.DataFrame({
         'Student': ['John Smith', 'Mary Jones', 'Sarah Lee', 'David Chen', 'Emma Wilson'],
@@ -370,7 +379,7 @@ with tab1:
     })
     st.dataframe(df, use_container_width=True, hide_index=True)
 
-with tab2:
+elif selected_view == "By Demographics":
     st.markdown('<div class="section-title"><h2>Demographics Breakdown</h2></div>', unsafe_allow_html=True)
     col1, col2 = st.columns(2)
     with col1:
@@ -382,7 +391,7 @@ with tab2:
         fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14))
         st.plotly_chart(fig, use_container_width=True)
 
-with tab3:
+elif selected_view == "By Disability":
     st.markdown('<div class="section-title"><h2>Disability Support</h2></div>', unsafe_allow_html=True)
     col1, col2 = st.columns(2)
     with col1:
@@ -394,7 +403,7 @@ with tab3:
         fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14), xaxis_title='Type', yaxis_title='Count')
         st.plotly_chart(fig, use_container_width=True)
 
-with tab4:
+elif selected_view == "By Partnership":
     st.markdown('<div class="section-title"><h2>Partnership Distribution</h2></div>', unsafe_allow_html=True)
     m = folium.Map(location=[-34.93, 138.60], zoom_start=11, tiles='OpenStreetMap')
     partnerships = {'Inner West': {'coords': [-34.90, 138.54], 'count': 28}, 'Adelaide Prospect': {'coords': [-34.85, 138.60], 'count': 35}, 'Greenhill South': {'coords': [-34.98, 138.63], 'count': 22}, 'Holdfast': {'coords': [-35.02, 138.52], 'count': 18}, 'Mitcham Hills': {'coords': [-34.99, 138.65], 'count': 15}}
@@ -409,7 +418,7 @@ with tab4:
     with c4: st.metric("Holdfast", "18")
     with c5: st.metric("Mitcham Hills", "15")
 
-with tab5:
+elif selected_view == "Analytics":
     st.markdown('<div class="section-title"><h2>Analytics</h2></div>', unsafe_allow_html=True)
     col1, col2 = st.columns(2)
     with col1:
