@@ -1,40 +1,31 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
 from datetime import datetime
 import folium
 from streamlit_folium import st_folium
 
-st.set_page_config(
-    page_title="CLC Allocation Dashboard",
-    page_icon="📊",
-    layout="wide"
-)
+st.set_page_config(page_title="CLC Allocation Dashboard", page_icon="📊", layout="wide")
 
-# Initialize session state for filters
-if 'selected_programs' not in st.session_state:
-    st.session_state.selected_programs = {'JP', 'PY', 'SY'}
-if 'selected_status' not in st.session_state:
-    st.session_state.selected_status = {'Allocated', 'Pending', 'Not Placed', 'On Waitlist'}
-if 'selected_atsi' not in st.session_state:
-    st.session_state.selected_atsi = {'Yes', 'No'}
-if 'selected_attendance' not in st.session_state:
-    st.session_state.selected_attendance = {'Full-time', 'Part-time', 'Irregular'}
-if 'selected_swd' not in st.session_state:
-    st.session_state.selected_swd = {'Yes', 'No'}
-if 'selected_disability' not in st.session_state:
-    st.session_state.selected_disability = {'ASD', 'ADHD', 'Learning Disability', 'Physical', 'Hearing', 'Vision', 'Other'}
-if 'selected_eald' not in st.session_state:
-    st.session_state.selected_eald = {'Yes', 'No'}
-if 'selected_behaviour' not in st.session_state:
-    st.session_state.selected_behaviour = {'Mild', 'Moderate', 'Severe', 'None'}
-if 'selected_referral' not in st.session_state:
-    st.session_state.selected_referral = {'First', 'Multiple'}
-if 'selected_partnership' not in st.session_state:
-    st.session_state.selected_partnership = {'Inner West', 'Adelaide Prospect', 'Greenhill South', 'Holdfast', 'Mitcham Hills'}
+# Initialize session state
+defaults = {
+    'selected_programs': {'JP', 'PY', 'SY'},
+    'selected_status': {'Allocated', 'Pending', 'Not Placed', 'On Waitlist'},
+    'selected_atsi': {'Yes', 'No'},
+    'selected_attendance': {'Full-time', 'Part-time', 'Irregular'},
+    'selected_swd': {'Yes', 'No'},
+    'selected_disability': {'ASD', 'ADHD', 'Learning', 'Physical', 'Hearing', 'Vision'},
+    'selected_eald': {'Yes', 'No'},
+    'selected_behaviour': {'None', 'Mild', 'Moderate', 'Severe'},
+    'selected_referral': {'First', 'Multiple'},
+    'selected_partnership': {'Inner West', 'Adelaide Prospect', 'Greenhill South', 'Holdfast', 'Mitcham Hills'}
+}
 
-# MODERN DARK THEME
+for key, value in defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
+
+# DARK THEME CSS - MAXIMUM CONTRAST AND CLARITY
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap');
@@ -43,31 +34,53 @@ st.markdown("""
         font-family: 'Poppins', sans-serif !important;
     }
     
-    html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"], .main {
+    body, html, [data-testid="stAppViewContainer"] {
         background-color: #0a0e27 !important;
-        color: #e0e0e0 !important;
+    }
+    
+    .main {
+        background-color: #0a0e27 !important;
+        padding: 2rem !important;
+    }
+    
+    /* MAXIMUM CONTRAST TEXT */
+    p, span, div, label {
+        color: #ffffff !important;
     }
     
     h1, h2, h3, h4, h5, h6 {
-        font-family: 'Poppins', sans-serif !important;
+        color: #ffffff !important;
         font-weight: 700 !important;
-        letter-spacing: -0.5px !important;
     }
     
-    .main > div {
-        padding: 2.5rem;
-        max-width: 1600px;
-        margin: 0 auto;
+    /* Metric cards - BRIGHT VALUES */
+    [data-testid="metric-container"] {
+        background-color: #1a1f3a !important;
+        border: 2px solid #00e5ff !important;
+        border-radius: 12px !important;
+        padding: 2rem !important;
+        box-shadow: 0 0 20px rgba(0, 229, 255, 0.3) !important;
     }
     
-    /* IMPRESSIVE MAIN TITLE */
+    [data-testid="metric-value"] {
+        color: #00ff00 !important;
+        font-size: 3rem !important;
+        font-weight: 800 !important;
+    }
+    
+    [data-testid="metric-label"] {
+        color: #00e5ff !important;
+        font-size: 1.1rem !important;
+        font-weight: 600 !important;
+    }
+    
     .main-title {
         background: linear-gradient(135deg, #1a1f3a 0%, #2a3050 100%);
         border: 2px solid #00e5ff;
         border-radius: 16px;
         padding: 3.5rem 4rem;
         margin-bottom: 3rem;
-        box-shadow: 0 0 40px rgba(0, 229, 255, 0.4), inset 0 0 30px rgba(0, 229, 255, 0.1);
+        box-shadow: 0 0 40px rgba(0, 229, 255, 0.4);
         text-align: center;
     }
     
@@ -76,461 +89,257 @@ st.markdown("""
         color: #ffffff !important;
         margin: 0 !important;
         font-weight: 800 !important;
-        text-shadow: 0 0 20px rgba(0, 229, 255, 0.3);
-        letter-spacing: -1px !important;
     }
     
     .main-title p {
-        color: rgba(255, 255, 255, 0.85) !important;
+        color: #00e5ff !important;
         font-size: 1.2rem !important;
         margin: 1rem 0 0 0 !important;
-        font-weight: 400 !important;
+        font-weight: 500 !important;
     }
     
-    /* Section Headers */
-    .section-header, .drill-down-header {
+    .section-header {
         background-color: #1a1f3a !important;
         border: 2px solid #00e5ff !important;
         border-radius: 14px !important;
         padding: 2rem !important;
         margin: 2rem 0 1.5rem 0 !important;
-        box-shadow: 0 0 30px rgba(0, 229, 255, 0.35), inset 0 0 20px rgba(0, 229, 255, 0.08) !important;
-        transition: all 0.3s ease !important;
+        box-shadow: 0 0 30px rgba(0, 229, 255, 0.35) !important;
     }
     
-    .section-header h2, .section-header h3, .drill-down-header h2 {
+    .section-header h2 {
         color: #ffffff !important;
         font-size: 2rem !important;
         margin: 0 !important;
         font-weight: 700 !important;
     }
     
-    /* Expanders */
-    [data-testid="stExpander"] {
-        background-color: #1a1f3a !important;
-        border: 1px solid #2a3050 !important;
-        border-radius: 10px !important;
-    }
-    
-    [data-testid="stExpanderDetails"] {
-        background-color: #141829 !important;
-        padding: 1rem !important;
-    }
-    
-    /* Buttons */
     .stButton > button {
         background-color: #1a1f3a !important;
         color: #00e5ff !important;
-        border: 1.5px solid #00e5ff !important;
+        border: 2px solid #00e5ff !important;
         border-radius: 8px !important;
-        font-weight: 600 !important;
-        padding: 0.5rem 1rem !important;
+        font-weight: 700 !important;
+        padding: 0.6rem 1.2rem !important;
+        font-size: 0.9rem !important;
         transition: all 0.3s ease !important;
-        box-shadow: 0 0 15px rgba(0, 229, 255, 0.2) !important;
-        font-size: 0.85rem !important;
     }
     
     .stButton > button:hover {
         background-color: #00e5ff !important;
         color: #0a0e27 !important;
-        box-shadow: 0 0 25px rgba(0, 229, 255, 0.5) !important;
+        box-shadow: 0 0 20px rgba(0, 229, 255, 0.5) !important;
     }
     
-    /* Metrics */
-    [data-testid="metric-container"] {
+    [data-testid="stExpander"] {
         background-color: #1a1f3a !important;
         border: 1px solid #2a3050 !important;
-        border-radius: 12px !important;
+        border-radius: 10px !important;
+        margin-bottom: 1rem !important;
+    }
+    
+    [data-testid="stExpanderDetails"] {
+        background-color: #141829 !important;
         padding: 1.5rem !important;
-        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3) !important;
-    }
-    
-    [data-testid="metric-value"] {
-        color: #00e5ff !important;
-        font-size: 2.5rem !important;
-        font-weight: 700 !important;
-    }
-    
-    [data-testid="metric-label"] {
-        color: #b0b8d0 !important;
-        font-size: 0.95rem !important;
-        font-weight: 500 !important;
-    }
-    
-    /* Hide accessibility labels */
-    [aria-label="keyboard_double"], label {
-        display: none !important;
     }
     
     hr {
         border-color: #2a3050 !important;
+        margin: 2rem 0 !important;
+    }
+    
+    [data-baseweb="tab"] {
+        color: #ffffff !important;
+        font-weight: 700 !important;
+    }
+    
+    [aria-selected="true"] {
+        color: #00e5ff !important;
+        border-bottom: 3px solid #00e5ff !important;
+    }
+    
+    /* Hide problematic elements */
+    [aria-label*="arrow"], [aria-label*="keyboard"] {
+        display: none !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# SIDEBAR - EXPANDABLE FILTER SECTIONS
-# ══════════════════════════════════════════════════════════════════════════════
-
+# SIDEBAR FILTERS
 with st.sidebar:
     st.markdown("### Advanced Filters")
+    st.markdown("---")
     
-    # Program & Status
-    with st.expander("📚 Program & Status", expanded=True):
+    with st.expander("Program and Status", expanded=True):
         st.markdown("**Program**")
-        prog_col1, prog_col2, prog_col3 = st.columns([1,1,1])
-        if prog_col1.button("JP", use_container_width=True, key="btn_jp"):
-            st.session_state.selected_programs ^= {"JP"}
-        if prog_col2.button("PY", use_container_width=True, key="btn_py"):
-            st.session_state.selected_programs ^= {"PY"}
-        if prog_col3.button("SY", use_container_width=True, key="btn_sy"):
-            st.session_state.selected_programs ^= {"SY"}
+        p1, p2, p3 = st.columns(3)
+        if p1.button("JP", key="jp", use_container_width=True): st.session_state.selected_programs ^= {"JP"}
+        if p2.button("PY", key="py", use_container_width=True): st.session_state.selected_programs ^= {"PY"}
+        if p3.button("SY", key="sy", use_container_width=True): st.session_state.selected_programs ^= {"SY"}
         
         st.markdown("**Status**")
-        status_col1, status_col2 = st.columns(2)
-        if status_col1.button("Allocated", key="btn_allocated"):
-            st.session_state.selected_status ^= {"Allocated"}
-        if status_col2.button("Pending", key="btn_pending"):
-            st.session_state.selected_status ^= {"Pending"}
-        
-        status_col3, status_col4 = st.columns(2)
-        if status_col3.button("Not Placed", key="btn_notplaced"):
-            st.session_state.selected_status ^= {"Not Placed"}
-        if status_col4.button("Waitlist", key="btn_waitlist"):
-            st.session_state.selected_status ^= {"On Waitlist"}
+        s1, s2 = st.columns(2)
+        if s1.button("Allocated", key="alloc", use_container_width=True): st.session_state.selected_status ^= {"Allocated"}
+        if s2.button("Pending", key="pend", use_container_width=True): st.session_state.selected_status ^= {"Pending"}
+        s3, s4 = st.columns(2)
+        if s3.button("Not Placed", key="notpl", use_container_width=True): st.session_state.selected_status ^= {"Not Placed"}
+        if s4.button("Waitlist", key="wait", use_container_width=True): st.session_state.selected_status ^= {"On Waitlist"}
     
-    # Demographics
-    with st.expander("👥 Demographics"):
-        st.markdown("**ATSI (Aboriginal/Torres Strait Islander)**")
-        atsi_col1, atsi_col2 = st.columns(2)
-        if atsi_col1.button("Yes", key="btn_atsi_yes"):
-            st.session_state.selected_atsi ^= {"Yes"}
-        if atsi_col2.button("No", key="btn_atsi_no"):
-            st.session_state.selected_atsi ^= {"No"}
+    with st.expander("Demographics"):
+        st.markdown("**ATSI**")
+        a1, a2 = st.columns(2)
+        if a1.button("Yes", key="atsi_y", use_container_width=True): st.session_state.selected_atsi ^= {"Yes"}
+        if a2.button("No", key="atsi_n", use_container_width=True): st.session_state.selected_atsi ^= {"No"}
         
-        st.markdown("**EALD (English as Additional Language)**")
-        eald_col1, eald_col2 = st.columns(2)
-        if eald_col1.button("Yes", key="btn_eald_yes"):
-            st.session_state.selected_eald ^= {"Yes"}
-        if eald_col2.button("No", key="btn_eald_no"):
-            st.session_state.selected_eald ^= {"No"}
+        st.markdown("**EALD**")
+        e1, e2 = st.columns(2)
+        if e1.button("Yes", key="eald_y", use_container_width=True): st.session_state.selected_eald ^= {"Yes"}
+        if e2.button("No", key="eald_n", use_container_width=True): st.session_state.selected_eald ^= {"No"}
     
-    # Attendance
-    with st.expander("📅 Attendance"):
-        att_col1, att_col2, att_col3 = st.columns(3)
-        if att_col1.button("Full-time", key="btn_fulltime"):
-            st.session_state.selected_attendance ^= {"Full-time"}
-        if att_col2.button("Part-time", key="btn_parttime"):
-            st.session_state.selected_attendance ^= {"Part-time"}
-        if att_col3.button("Irregular", key="btn_irregular"):
-            st.session_state.selected_attendance ^= {"Irregular"}
+    with st.expander("Attendance"):
+        at1, at2, at3 = st.columns(3)
+        if at1.button("Full-time", key="ft", use_container_width=True): st.session_state.selected_attendance ^= {"Full-time"}
+        if at2.button("Part-time", key="pt", use_container_width=True): st.session_state.selected_attendance ^= {"Part-time"}
+        if at3.button("Irregular", key="irr", use_container_width=True): st.session_state.selected_attendance ^= {"Irregular"}
     
-    # Disability Support
-    with st.expander("♿ Disability Support"):
-        st.markdown("**SWD (Students with Disabilities)**")
-        swd_col1, swd_col2 = st.columns(2)
-        if swd_col1.button("Yes", key="btn_swd_yes"):
-            st.session_state.selected_swd ^= {"Yes"}
-        if swd_col2.button("No", key="btn_swd_no"):
-            st.session_state.selected_swd ^= {"No"}
+    with st.expander("Disability Support"):
+        st.markdown("**SWD**")
+        sw1, sw2 = st.columns(2)
+        if sw1.button("Yes", key="swd_y", use_container_width=True): st.session_state.selected_swd ^= {"Yes"}
+        if sw2.button("No", key="swd_n", use_container_width=True): st.session_state.selected_swd ^= {"No"}
         
-        st.markdown("**Disability Type**")
-        dis_col1, dis_col2 = st.columns(2)
-        
-        if dis_col1.button("ASD", key="btn_asd"):
-            st.session_state.selected_disability ^= {"ASD"}
-        if dis_col2.button("ADHD", key="btn_adhd"):
-            st.session_state.selected_disability ^= {"ADHD"}
-        
-        dis_col3, dis_col4 = st.columns(2)
-        if dis_col3.button("Learning", key="btn_learning"):
-            st.session_state.selected_disability ^= {"Learning Disability"}
-        if dis_col4.button("Physical", key="btn_physical"):
-            st.session_state.selected_disability ^= {"Physical"}
-        
-        dis_col5, dis_col6 = st.columns(2)
-        if dis_col5.button("Hearing", key="btn_hearing"):
-            st.session_state.selected_disability ^= {"Hearing"}
-        if dis_col6.button("Vision", key="btn_vision"):
-            st.session_state.selected_disability ^= {"Vision"}
+        st.markdown("**Type**")
+        d1, d2 = st.columns(2)
+        if d1.button("ASD", key="asd", use_container_width=True): st.session_state.selected_disability ^= {"ASD"}
+        if d2.button("ADHD", key="adhd", use_container_width=True): st.session_state.selected_disability ^= {"ADHD"}
+        d3, d4 = st.columns(2)
+        if d3.button("Learning", key="learn", use_container_width=True): st.session_state.selected_disability ^= {"Learning"}
+        if d4.button("Physical", key="phys", use_container_width=True): st.session_state.selected_disability ^= {"Physical"}
+        d5, d6 = st.columns(2)
+        if d5.button("Hearing", key="hear", use_container_width=True): st.session_state.selected_disability ^= {"Hearing"}
+        if d6.button("Vision", key="vis", use_container_width=True): st.session_state.selected_disability ^= {"Vision"}
     
-    # Behaviour & Support
-    with st.expander("⚠️ Behaviour & Support"):
-        st.markdown("**Behaviour Concerns**")
-        beh_col1, beh_col2 = st.columns(2)
-        if beh_col1.button("None", key="btn_beh_none"):
-            st.session_state.selected_behaviour ^= {"None"}
-        if beh_col2.button("Mild", key="btn_beh_mild"):
-            st.session_state.selected_behaviour ^= {"Mild"}
-        
-        beh_col3, beh_col4 = st.columns(2)
-        if beh_col3.button("Moderate", key="btn_beh_moderate"):
-            st.session_state.selected_behaviour ^= {"Moderate"}
-        if beh_col4.button("Severe", key="btn_beh_severe"):
-            st.session_state.selected_behaviour ^= {"Severe"}
-        
-        st.markdown("**Referral Type**")
-        ref_col1, ref_col2 = st.columns(2)
-        if ref_col1.button("First Time", key="btn_ref_first"):
-            st.session_state.selected_referral ^= {"First"}
-        if ref_col2.button("Multiple", key="btn_ref_multiple"):
-            st.session_state.selected_referral ^= {"Multiple"}
+    with st.expander("Behaviour"):
+        st.markdown("**Level**")
+        b1, b2 = st.columns(2)
+        if b1.button("None", key="beh_n", use_container_width=True): st.session_state.selected_behaviour ^= {"None"}
+        if b2.button("Mild", key="beh_m", use_container_width=True): st.session_state.selected_behaviour ^= {"Mild"}
+        b3, b4 = st.columns(2)
+        if b3.button("Moderate", key="beh_mo", use_container_width=True): st.session_state.selected_behaviour ^= {"Moderate"}
+        if b4.button("Severe", key="beh_s", use_container_width=True): st.session_state.selected_behaviour ^= {"Severe"}
     
-    # Partnership
-    with st.expander("🤝 Partnership Area"):
-        partner_options = ["Inner West", "Adelaide Prospect", "Greenhill South", "Holdfast", "Mitcham Hills"]
-        for i, opt in enumerate(partner_options):
+    with st.expander("Partnership"):
+        opts = ["Inner West", "Adelaide Prospect", "Greenhill South", "Holdfast", "Mitcham Hills"]
+        for i, opt in enumerate(opts):
             if (i % 2) == 0:
-                col1, col2 = st.columns(2)
+                co1, co2 = st.columns(2)
             if (i % 2) == 0:
-                if col1.button(opt, key=f"btn_partner_{opt}"):
-                    st.session_state.selected_partnership ^= {opt}
+                if co1.button(opt, key=f"par_{opt}", use_container_width=True): st.session_state.selected_partnership ^= {opt}
             else:
-                if col2.button(opt, key=f"btn_partner_{opt}"):
-                    st.session_state.selected_partnership ^= {opt}
+                if co2.button(opt, key=f"par_{opt}", use_container_width=True): st.session_state.selected_partnership ^= {opt}
     
     st.markdown("---")
     st.markdown("### Data Management")
-    
-    uploaded_file = st.file_uploader("Upload Excel", type=['xlsx', 'xls', 'csv'])
-    if st.button("Export Data", use_container_width=True):
-        st.info("Preparing download...")
+    st.file_uploader("Upload Excel", type=['xlsx', 'xls', 'csv'])
+    st.button("Export Data", use_container_width=True)
 
-# ══════════════════════════════════════════════════════════════════════════════
 # MAIN DASHBOARD
-# ══════════════════════════════════════════════════════════════════════════════
+st.markdown('<div class="main-title"><h1>Allocation Dashboard</h1><p>Comprehensive student placement analytics</p></div>', unsafe_allow_html=True)
 
-# Main Title
-st.markdown("""
-    <div class="main-title">
-        <h1>Allocation Dashboard</h1>
-        <p>Comprehensive student placement analytics and management</p>
-    </div>
-""", unsafe_allow_html=True)
-
-# Summary Metrics
-st.markdown("""
-    <div class="section-header">
-        <h2>Summary Metrics</h2>
-    </div>
-""", unsafe_allow_html=True)
+st.markdown('<div class="section-header"><h2>Summary Metrics</h2></div>', unsafe_allow_html=True)
 
 col1, col2, col3, col4, col5, col6 = st.columns(6)
+with col1: st.metric("Total", "145")
+with col2: st.metric("Allocated", "112")
+with col3: st.metric("Pending", "28")
+with col4: st.metric("ATSI", "42")
+with col5: st.metric("SWD", "58")
+with col6: st.metric("EALD", "31")
+
+st.markdown("---")
+
+# Active Filters - NOT in expander
+st.markdown('<div style="background-color: #1a1f3a; border: 2px solid #00e5ff; border-radius: 10px; padding: 1.5rem; margin: 2rem 0;"><h3 style="color: #ffffff; margin-top: 0;">Active Filters</h3></div>', unsafe_allow_html=True)
+
+col1, col2, col3 = st.columns(3)
 with col1:
-    st.metric("Total", "145")
+    st.markdown(f"**Program:** {', '.join(sorted(st.session_state.selected_programs))}")
+    st.markdown(f"**Status:** {', '.join(sorted(st.session_state.selected_status))}")
 with col2:
-    st.metric("Allocated", "112")
+    st.markdown(f"**ATSI:** {', '.join(sorted(st.session_state.selected_atsi))}")
+    st.markdown(f"**SWD:** {', '.join(sorted(st.session_state.selected_swd))}")
 with col3:
-    st.metric("Pending", "28")
-with col4:
-    st.metric("ATSI", "42")
-with col5:
-    st.metric("SWD", "58")
-with col6:
-    st.metric("EALD", "31")
+    st.markdown(f"**Attendance:** {', '.join(sorted(st.session_state.selected_attendance))}")
+    st.markdown(f"**Partnership:** {', '.join(sorted(st.session_state.selected_partnership))}")
 
 st.markdown("---")
 
-# Current Filters Display
-with st.expander("🔍 Active Filters (Click to see)", expanded=False):
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.caption(f"**Program:** {', '.join(sorted(st.session_state.selected_programs)) or 'None'}")
-        st.caption(f"**Status:** {', '.join(sorted(st.session_state.selected_status)) or 'None'}")
-    with col2:
-        st.caption(f"**ATSI:** {', '.join(sorted(st.session_state.selected_atsi)) or 'None'}")
-        st.caption(f"**SWD:** {', '.join(sorted(st.session_state.selected_swd)) or 'None'}")
-    with col3:
-        st.caption(f"**Attendance:** {', '.join(sorted(st.session_state.selected_attendance)) or 'None'}")
-        st.caption(f"**Partnership:** {', '.join(sorted(st.session_state.selected_partnership)) or 'None'}")
-
-st.markdown("---")
-
-# Tabs for different views
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["All Students", "By Demographics", "By Disability", "By Partnership", "Analytics"])
 
 with tab1:
-    st.markdown("""
-        <div class="drill-down-header">
-            <h2>All Students</h2>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    df_students = pd.DataFrame({
-        'Student': ['John Smith', 'Mary Jones', 'Sarah Lee', 'David Chen', 'Emma Wilson', 'Alex Brown', 'Sophie Green', 'Tom White'],
-        'Program': ['JP', 'PY', 'SY', 'JP', 'PY', 'SY', 'JP', 'PY'],
-        'Status': ['Allocated', 'Allocated', 'Pending', 'Allocated', 'Not Placed', 'Allocated', 'Pending', 'Allocated'],
-        'ATSI': ['No', 'Yes', 'No', 'Yes', 'No', 'No', 'Yes', 'No'],
-        'SWD': ['Yes', 'No', 'Yes', 'No', 'Yes', 'Yes', 'No', 'No'],
-        'Disability': ['ASD', 'None', 'ADHD', 'None', 'Learning', 'ASD', 'None', 'None'],
-        'Attendance': ['Full-time', 'Part-time', 'Full-time', 'Irregular', 'Full-time', 'Part-time', 'Full-time', 'Full-time'],
-        'Partnership': ['Inner West', 'Inner West', 'Adelaide Prospect', 'Greenhill South', 'Holdfast', 'Mitcham Hills', 'Inner West', 'Adelaide Prospect']
+    st.markdown('<div class="section-header"><h2>All Students</h2></div>', unsafe_allow_html=True)
+    df = pd.DataFrame({
+        'Student': ['John Smith', 'Mary Jones', 'Sarah Lee', 'David Chen', 'Emma Wilson'],
+        'Program': ['JP', 'PY', 'SY', 'JP', 'PY'],
+        'Status': ['Allocated', 'Allocated', 'Pending', 'Allocated', 'Not Placed'],
+        'ATSI': ['No', 'Yes', 'No', 'Yes', 'No'],
+        'SWD': ['Yes', 'No', 'Yes', 'No', 'Yes'],
+        'Disability': ['ASD', 'None', 'ADHD', 'None', 'Learning'],
+        'Attendance': ['Full-time', 'Part-time', 'Full-time', 'Irregular', 'Full-time'],
+        'Partnership': ['Inner West', 'Inner West', 'Adelaide Prospect', 'Greenhill South', 'Holdfast']
     })
-    
-    st.dataframe(df_students, use_container_width=True, hide_index=True)
+    st.dataframe(df, use_container_width=True, hide_index=True)
 
 with tab2:
-    st.markdown("""
-        <div class="drill-down-header">
-            <h2>Demographics Breakdown</h2>
-        </div>
-    """, unsafe_allow_html=True)
-    
+    st.markdown('<div class="section-header"><h2>Demographics Breakdown</h2></div>', unsafe_allow_html=True)
     col1, col2 = st.columns(2)
-    
     with col1:
-        fig = go.Figure(data=[go.Pie(
-            labels=['ATSI', 'Non-ATSI'],
-            values=[42, 103],
-            marker=dict(colors=['#00e5ff', '#ff6b6b'])
-        )])
-        fig.update_layout(
-            title='ATSI Status',
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            font=dict(color='#e0e0e0', family='Poppins')
-        )
+        fig = go.Figure(data=[go.Pie(labels=['ATSI', 'Non-ATSI'], values=[42, 103], marker=dict(colors=['#00e5ff', '#ff6b6b']))])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14))
         st.plotly_chart(fig, use_container_width=True)
-    
     with col2:
-        fig = go.Figure(data=[go.Pie(
-            labels=['EALD', 'Non-EALD'],
-            values=[31, 114],
-            marker=dict(colors=['#00e5ff', '#ffd93d'])
-        )])
-        fig.update_layout(
-            title='EALD Status',
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            font=dict(color='#e0e0e0', family='Poppins')
-        )
+        fig = go.Figure(data=[go.Pie(labels=['EALD', 'Non-EALD'], values=[31, 114], marker=dict(colors=['#00e5ff', '#ffd93d']))])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14))
         st.plotly_chart(fig, use_container_width=True)
 
 with tab3:
-    st.markdown("""
-        <div class="drill-down-header">
-            <h2>Disability Support Breakdown</h2>
-        </div>
-    """, unsafe_allow_html=True)
-    
+    st.markdown('<div class="section-header"><h2>Disability Support</h2></div>', unsafe_allow_html=True)
     col1, col2 = st.columns(2)
-    
     with col1:
-        fig = go.Figure(data=[go.Pie(
-            labels=['SWD', 'No Support Need'],
-            values=[58, 87],
-            marker=dict(colors=['#00e5ff', '#10b981'])
-        )])
-        fig.update_layout(
-            title='Students with Disabilities',
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            font=dict(color='#e0e0e0', family='Poppins')
-        )
+        fig = go.Figure(data=[go.Pie(labels=['SWD', 'No Support'], values=[58, 87], marker=dict(colors=['#00e5ff', '#10b981']))])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14))
         st.plotly_chart(fig, use_container_width=True)
-    
     with col2:
-        fig = go.Figure(data=[go.Bar(
-            x=['ASD', 'ADHD', 'Learning', 'Physical', 'Hearing', 'Vision'],
-            y=[18, 14, 16, 5, 3, 2],
-            marker_color='#00e5ff'
-        )])
-        fig.update_layout(
-            title='Disability Types',
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            font=dict(color='#e0e0e0', family='Poppins'),
-            xaxis_title='Type',
-            yaxis_title='Count'
-        )
+        fig = go.Figure(data=[go.Bar(x=['ASD', 'ADHD', 'Learning', 'Physical', 'Hearing', 'Vision'], y=[18, 14, 16, 5, 3, 2], marker_color='#00e5ff')])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14), xaxis_title='Type', yaxis_title='Count')
         st.plotly_chart(fig, use_container_width=True)
 
 with tab4:
-    st.markdown("""
-        <div class="drill-down-header">
-            <h2>Partnership Area Distribution</h2>
-        </div>
-    """, unsafe_allow_html=True)
-    
+    st.markdown('<div class="section-header"><h2>Partnership Distribution</h2></div>', unsafe_allow_html=True)
     m = folium.Map(location=[-34.93, 138.60], zoom_start=11, tiles='OpenStreetMap')
-    
-    partnerships_data = {
-        'Inner West': {'coords': [-34.90, 138.54], 'count': 28},
-        'Adelaide Prospect': {'coords': [-34.85, 138.60], 'count': 35},
-        'Greenhill South': {'coords': [-34.98, 138.63], 'count': 22},
-        'Holdfast': {'coords': [-35.02, 138.52], 'count': 18},
-        'Mitcham Hills': {'coords': [-34.99, 138.65], 'count': 15}
-    }
-    
-    for partnership, data in partnerships_data.items():
-        folium.CircleMarker(
-            location=data['coords'],
-            radius=15,
-            popup=f"{partnership}<br>Students: {data['count']}",
-            color='#00e5ff',
-            fill=True,
-            fillColor='#00e5ff',
-            fillOpacity=0.7,
-            weight=2,
-            tooltip=f"{partnership}: {data['count']}"
-        ).add_to(m)
-    
+    partnerships = {'Inner West': {'coords': [-34.90, 138.54], 'count': 28}, 'Adelaide Prospect': {'coords': [-34.85, 138.60], 'count': 35}, 'Greenhill South': {'coords': [-34.98, 138.63], 'count': 22}, 'Holdfast': {'coords': [-35.02, 138.52], 'count': 18}, 'Mitcham Hills': {'coords': [-34.99, 138.65], 'count': 15}}
+    for p, d in partnerships.items():
+        folium.CircleMarker(location=d['coords'], radius=15, popup=f"{p}: {d['count']}", color='#00e5ff', fill=True, fillColor='#00e5ff', fillOpacity=0.7, weight=2).add_to(m)
     st_folium(m, width=1200, height=500)
-    
     st.markdown("---")
-    col1, col2, col3, col4, col5 = st.columns(5)
-    with col1:
-        st.metric("Inner West", "28")
-    with col2:
-        st.metric("Adelaide Prospect", "35")
-    with col3:
-        st.metric("Greenhill South", "22")
-    with col4:
-        st.metric("Holdfast", "18")
-    with col5:
-        st.metric("Mitcham Hills", "15")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1: st.metric("Inner West", "28")
+    with c2: st.metric("Adelaide Prospect", "35")
+    with c3: st.metric("Greenhill South", "22")
+    with c4: st.metric("Holdfast", "18")
+    with c5: st.metric("Mitcham Hills", "15")
 
 with tab5:
-    st.markdown("""
-        <div class="drill-down-header">
-            <h2>Analytics & Trends</h2>
-        </div>
-    """, unsafe_allow_html=True)
-    
+    st.markdown('<div class="section-header"><h2>Analytics</h2></div>', unsafe_allow_html=True)
     col1, col2 = st.columns(2)
-    
     with col1:
-        fig = go.Figure(data=[
-            go.Bar(x=['JP', 'PY', 'SY'], y=[45, 55, 12], marker_color='#00e5ff')
-        ])
-        fig.update_layout(
-            title='Allocations by Program',
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            font=dict(color='#e0e0e0', family='Poppins'),
-            xaxis_title='Program',
-            yaxis_title='Count'
-        )
+        fig = go.Figure(data=[go.Bar(x=['JP', 'PY', 'SY'], y=[45, 55, 12], marker_color='#00e5ff')])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14))
         st.plotly_chart(fig, use_container_width=True)
-    
     with col2:
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=['Week 1', 'Week 2', 'Week 3', 'Week 4', 'Week 5'],
-            y=[18, 22, 25, 28, 32],
-            mode='lines+markers',
-            line=dict(color='#00e5ff', width=3),
-            marker=dict(size=8)
-        ))
-        fig.update_layout(
-            title='Allocation Trends',
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            font=dict(color='#e0e0e0', family='Poppins'),
-            xaxis_title='Week',
-            yaxis_title='Allocations'
-        )
+        fig = go.Figure(data=[go.Scatter(x=['Week 1', 'Week 2', 'Week 3', 'Week 4', 'Week 5'], y=[18, 22, 25, 28, 32], mode='lines+markers', line=dict(color='#00e5ff', width=3), marker=dict(size=8))])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14))
         st.plotly_chart(fig, use_container_width=True)
 
 st.markdown("---")
-st.caption("CLC-LBU Allocation Dashboard • Modern analytics platform")
+st.markdown("<p style='text-align: center; color: #00e5ff; font-weight: 600;'>CLC-LBU Allocation Dashboard</p>", unsafe_allow_html=True)
