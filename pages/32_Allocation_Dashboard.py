@@ -74,7 +74,55 @@ st.markdown("""
         background-color: #0a0e27 !important;
         padding: 2rem !important;
     }
-    h1, h2, h3, h4, h5, h6, p, span, div, label {
+    h1, h2, h3, h4, h5, h6 {
+        color: #ffffff !important;
+        font-weight: 700 !important;
+    }
+    p, span, div, label, li, td, th {
+        color: #ffffff !important;
+    }
+    /* Make all text in buttons bright */
+    button, .stButton {
+        color: #00e5ff !important;
+        font-weight: 700 !important;
+    }
+    /* Bright text for all inputs */
+    input, select, textarea {
+        color: #ffffff !important;
+        font-weight: 600 !important;
+    }
+    /* Chart labels bright */
+    text {
+        fill: #ffffff !important;
+    }
+    /* DataFrame text bright */
+    [data-testid="dataframe"] {
+        color: #ffffff !important;
+    }
+    .stDataFrame {
+        color: #ffffff !important;
+    }
+    [data-testid="stDataFrameTable"] {
+        background-color: #0a0e27 !important;
+    }
+    [data-testid="stDataFrameTable"] td, [data-testid="stDataFrameTable"] th {
+        color: #ffffff !important;
+        background-color: #1a1f3a !important;
+        border-color: #2a3050 !important;
+    }
+    /* Radio buttons and checkboxes */
+    [role="radio"], [role="checkbox"] {
+        color: #ffffff !important;
+    }
+    .stRadio > label {
+        color: #ffffff !important;
+        font-weight: 600 !important;
+    }
+    /* Sidebar text bright */
+    [data-testid="stSidebar"] {
+        background-color: #0a0e27 !important;
+    }
+    [data-testid="stSidebar"] p, [data-testid="stSidebar"] span, [data-testid="stSidebar"] div {
         color: #ffffff !important;
     }
     .main-title {
@@ -394,19 +442,19 @@ if st.session_state.selected_view == "Dashboard Overview":
     with col1:
         prog_counts = filtered_students['Program'].value_counts()
         fig = go.Figure(data=[go.Bar(x=prog_counts.index, y=prog_counts.values, marker_color='#00e5ff')])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=12), title="By Program", height=400, margin=dict(l=0, r=0, t=30, b=0))
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="By Program", height=400, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
     
     with col2:
         status_counts = filtered_students['Status'].value_counts()
         fig = go.Figure(data=[go.Bar(x=status_counts.index, y=status_counts.values, marker_color='#00ff00')])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=12), title="By Status", height=400, margin=dict(l=0, r=0, t=30, b=0))
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title="By Status", height=400, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
     
     with col3:
         att_counts = filtered_students['Attendance'].value_counts()
         fig = go.Figure(data=[go.Pie(labels=att_counts.index, values=att_counts.values, marker=dict(colors=['#00e5ff', '#ff6b6b', '#ffd93d']))])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=12), title="Attendance", height=400, margin=dict(l=0, r=0, t=30, b=0))
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title="Attendance", height=400, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
     
     # Row 2
@@ -415,19 +463,19 @@ if st.session_state.selected_view == "Dashboard Overview":
     with col1:
         atsi_counts = filtered_students['ATSI'].value_counts()
         fig = go.Figure(data=[go.Pie(labels=['ATSI', 'Non-ATSI'], values=[len(filtered_students[filtered_students['ATSI']=='Yes']), len(filtered_students[filtered_students['ATSI']=='No'])], marker=dict(colors=['#00e5ff', '#10b981']))])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=12), title="ATSI Status", height=400, margin=dict(l=0, r=0, t=30, b=0))
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title="ATSI Status", height=400, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
     
     with col2:
         swd_counts = filtered_students['SWD'].value_counts()
         fig = go.Figure(data=[go.Pie(labels=['SWD', 'Non-SWD'], values=[len(filtered_students[filtered_students['SWD']=='Yes']), len(filtered_students[filtered_students['SWD']=='No'])], marker=dict(colors=['#00e5ff', '#10b981']))])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=12), title="SWD Status", height=400, margin=dict(l=0, r=0, t=30, b=0))
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title="SWD Status", height=400, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
     
     with col3:
         eald_counts = filtered_students['EALD'].value_counts()
         fig = go.Figure(data=[go.Pie(labels=['EALD', 'Non-EALD'], values=[len(filtered_students[filtered_students['EALD']=='Yes']), len(filtered_students[filtered_students['EALD']=='No'])], marker=dict(colors=['#00e5ff', '#ffd93d']))])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=12), title="EALD Status", height=400, margin=dict(l=0, r=0, t=30, b=0))
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title="EALD Status", height=400, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
     
     # Row 3
@@ -436,14 +484,14 @@ if st.session_state.selected_view == "Dashboard Overview":
     with col1:
         beh_counts = filtered_students['Behaviour'].value_counts()
         fig = go.Figure(data=[go.Bar(x=beh_counts.index, y=beh_counts.values, marker_color='#ff6b6b')])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=12), title="By Behaviour Level", height=350, margin=dict(l=0, r=0, t=30, b=0))
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title="By Behaviour Level", height=350, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
     
     with col2:
         dis_counts = filtered_students[filtered_students['Disability'] != 'None']['Disability'].value_counts()
         if len(dis_counts) > 0:
             fig = go.Figure(data=[go.Bar(x=dis_counts.index, y=dis_counts.values, marker_color='#ffd93d')])
-            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=12), title="Disability Types", height=350, margin=dict(l=0, r=0, t=30, b=0))
+            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title="Disability Types", height=350, margin=dict(l=0, r=0, t=30, b=0))
             st.plotly_chart(fig, use_container_width=True)
 
 elif st.session_state.selected_view == "All Students":
