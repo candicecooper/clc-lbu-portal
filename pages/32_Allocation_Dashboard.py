@@ -1,18 +1,16 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
 import folium
 from streamlit_folium import st_folium
-from datetime import datetime
 
 st.set_page_config(page_title="CLC Allocation Dashboard", page_icon="📊", layout="wide")
 
-# Initialize session state
-if 'filter_states' not in st.session_state:
-    st.session_state.filter_states = {
+# Initialize filters
+if 'filters' not in st.session_state:
+    st.session_state.filters = {
         'year': {'2024', '2025', '2026'},
-        'programs': {'JP', 'PY', 'SY'},
+        'program': {'JP', 'PY', 'SY'},
         'status': {'Allocated', 'Pending', 'Not Placed', 'On Waitlist'},
         'atsi': {'Yes', 'No'},
         'eald': {'Yes', 'No'},
@@ -23,13 +21,13 @@ if 'filter_states' not in st.session_state:
         'partnership': {'Inner West', 'Adelaide Prospect', 'Greenhill South', 'Holdfast', 'Mitcham Hills'}
     }
 
-if 'selected_view' not in st.session_state:
-    st.session_state.selected_view = "Dashboard Overview"
+if 'view' not in st.session_state:
+    st.session_state.view = "Dashboard Overview"
 
-# SAMPLE DATA
+# Load sample data
 @st.cache_data
-def get_student_data():
-    data = {
+def load_data():
+    return pd.DataFrame({
         'Student': ['John Smith', 'Mary Jones', 'Sarah Lee', 'David Chen', 'Emma Wilson', 'Alex Brown', 'Sophie Green', 'Tom White', 'Lisa Anderson', 'James Taylor', 'Rachel Martin', 'Chris Davis', 'Katie Wilson', 'Michael Brown', 'Jessica Taylor'],
         'Year': ['2026', '2026', '2026', '2025', '2026', '2025', '2026', '2026', '2025', '2026', '2026', '2025', '2026', '2026', '2025'],
         'Program': ['JP', 'PY', 'SY', 'JP', 'PY', 'SY', 'JP', 'PY', 'SY', 'JP', 'PY', 'SY', 'JP', 'PY', 'SY'],
@@ -41,552 +39,263 @@ def get_student_data():
         'EALD': ['No', 'Yes', 'No', 'Yes', 'No', 'No', 'Yes', 'No', 'No', 'Yes', 'No', 'No', 'Yes', 'No', 'No'],
         'Category of Support': ['Moderate', 'Intensive', 'Specialist', 'Minimal', 'Intensive', 'Specialist', 'Moderate', 'Minimal', 'Intensive', 'Moderate', 'Specialist', 'Intensive', 'Minimal', 'Moderate', 'Specialist'],
         'Partnership': ['Inner West', 'Inner West', 'Adelaide Prospect', 'Greenhill South', 'Holdfast', 'Mitcham Hills', 'Inner West', 'Adelaide Prospect', 'Greenhill South', 'Holdfast', 'Mitcham Hills', 'Inner West', 'Adelaide Prospect', 'Greenhill South', 'Holdfast'],
-        'Term': ['Term 2', 'Term 2', 'Term 1', 'Term 2', 'Term 2', 'Term 1', 'Term 2', 'Term 2', 'Term 2', 'Term 1', 'Term 2', 'Term 2', 'Term 2', 'Term 1', 'Term 2']
-    }
-    return pd.DataFrame(data)
+    })
 
-def filter_data(df):
-    filtered = df[
-        (df['Year'].isin(st.session_state.filter_states['year'])) &
-        (df['Program'].isin(st.session_state.filter_states['programs'])) &
-        (df['Status'].isin(st.session_state.filter_states['status'])) &
-        (df['ATSI'].isin(st.session_state.filter_states['atsi'])) &
-        (df['EALD'].isin(st.session_state.filter_states['eald'])) &
-        (df['Attendance'].isin(st.session_state.filter_states['attendance'])) &
-        (df['SWD'].isin(st.session_state.filter_states['swd'])) &
-        (df['Disability'].isin(st.session_state.filter_states['disability'])) &
-        (df['Category of Support'].isin(st.session_state.filter_states['support'])) &
-        (df['Partnership'].isin(st.session_state.filter_states['partnership']))
-    ]
-    return filtered
+all_data = load_data()
 
-all_students = get_student_data()
-filtered_students = filter_data(all_students)
+# Apply filters
+filtered = all_data[
+    (all_data['Year'].isin(st.session_state.filters['year'])) &
+    (all_data['Program'].isin(st.session_state.filters['program'])) &
+    (all_data['Status'].isin(st.session_state.filters['status'])) &
+    (all_data['ATSI'].isin(st.session_state.filters['atsi'])) &
+    (all_data['EALD'].isin(st.session_state.filters['eald'])) &
+    (all_data['Attendance'].isin(st.session_state.filters['attendance'])) &
+    (all_data['SWD'].isin(st.session_state.filters['swd'])) &
+    (all_data['Disability'].isin(st.session_state.filters['disability'])) &
+    (all_data['Category of Support'].isin(st.session_state.filters['support'])) &
+    (all_data['Partnership'].isin(st.session_state.filters['partnership']))
+]
 
-# CSS
+# CSS Styling
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;800&display=swap');
-    * {
-        font-family: 'Poppins', sans-serif !important;
-    }
-    body, [data-testid="stAppViewContainer"] {
-        background-color: #0a0e27 !important;
-    }
-    .main {
-        background-color: #0a0e27 !important;
-        padding: 2rem !important;
-    }
-    h1, h2, h3, h4, h5, h6 {
-        color: #ffffff !important;
-        font-weight: 700 !important;
-    }
-    p, span, div, label, li, td, th {
-        color: #ffffff !important;
-    }
-    button, .stButton {
-        color: #00e5ff !important;
-        font-weight: 700 !important;
-    }
-    input, select, textarea {
-        color: #ffffff !important;
-        font-weight: 600 !important;
-    }
-    text {
-        fill: #ffffff !important;
-    }
-    [data-testid="stDataFrameTable"] td, [data-testid="stDataFrameTable"] th {
-        color: #ffffff !important;
-        background-color: #1a1f3a !important;
-        border-color: #2a3050 !important;
-    }
-    .stRadio > label {
-        color: #ffffff !important;
-        font-weight: 600 !important;
-    }
-    [data-testid="stSidebar"] p, [data-testid="stSidebar"] span, [data-testid="stSidebar"] div {
-        color: #ffffff !important;
-    }
-    .main-title {
-        background: linear-gradient(135deg, #1a1f3a 0%, #2a3050 100%);
-        border: 2px solid #00e5ff;
-        border-radius: 16px;
-        padding: 3.5rem 4rem;
-        margin-bottom: 3rem;
-        box-shadow: 0 0 40px rgba(0, 229, 255, 0.4);
-        text-align: center;
-    }
-    .main-title h1 {
-        font-size: 3.5rem !important;
-        color: #ffffff !important;
-        margin: 0 !important;
-        font-weight: 800 !important;
-    }
-    .main-title p {
-        color: #00e5ff !important;
-        font-size: 1.2rem !important;
-        margin: 1rem 0 0 0 !important;
-    }
-    .section-title {
-        background-color: #1a1f3a !important;
-        border: 2px solid #00e5ff !important;
-        border-radius: 14px !important;
-        padding: 2rem !important;
-        margin: 2rem 0 1.5rem 0 !important;
-    }
-    .section-title h2 {
-        color: #ffffff !important;
-        font-size: 2rem !important;
-        margin: 0 !important;
-        font-weight: 700 !important;
-    }
-    .stButton > button {
-        background-color: #1a1f3a !important;
-        color: #00e5ff !important;
-        border: 2px solid #00e5ff !important;
-        border-radius: 8px !important;
-        font-weight: 700 !important;
-        padding: 0.6rem 1rem !important;
-        font-size: 0.9rem !important;
-    }
-    .stButton > button:hover {
-        background-color: #00e5ff !important;
-        color: #0a0e27 !important;
-    }
-    [data-testid="metric-container"] {
-        background-color: #1a1f3a !important;
-        border: 2px solid #00e5ff !important;
-        border-radius: 12px !important;
-        padding: 2rem !important;
-    }
-    [data-testid="metric-value"] {
-        color: #00ff00 !important;
-        font-size: 3rem !important;
-        font-weight: 800 !important;
-    }
-    [data-testid="metric-label"] {
-        color: #00e5ff !important;
-        font-size: 1.1rem !important;
-        font-weight: 600 !important;
-    }
-    hr {
-        border-color: #2a3050 !important;
-        margin: 2rem 0 !important;
-    }
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;800&display=swap');
+* { font-family: 'Poppins', sans-serif !important; color: #ffffff !important; }
+body, [data-testid="stAppViewContainer"] { background-color: #0a0e27 !important; }
+.main { background-color: #0a0e27 !important; }
+[data-testid="metric-value"] { color: #00ff00 !important; font-size: 3rem !important; }
+[data-testid="metric-label"] { color: #00e5ff !important; }
+.stButton > button { background-color: #1a1f3a !important; color: #00e5ff !important; border: 2px solid #00e5ff !important; }
+.stButton > button:hover { background-color: #00e5ff !important; color: #0a0e27 !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# ══════════════════════════════════════════════════════════════════════════════
 # SIDEBAR FILTERS
-# ══════════════════════════════════════════════════════════════════════════════
-
 with st.sidebar:
     st.markdown("## Filters")
     st.markdown("---")
     
-    # VIEW SELECTION
-    st.markdown("### View")
-    st.session_state.selected_view = st.radio(
-        "Select Dashboard",
-        ["Dashboard Overview", "All Students", "By Demographics", "By Support", "By Partnership"],
-        label_visibility="collapsed"
-    )
+    view_opts = ["Dashboard Overview", "All Students", "By Demographics", "By Support", "By Partnership"]
+    st.session_state.view = st.radio("View", view_opts, label_visibility="collapsed")
     
     st.markdown("---")
     st.markdown("## Filter Data")
     st.markdown("---")
     
-    # YEAR
+    # Year
     st.markdown("### Year")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Select All", key="year_all", use_container_width=True):
-            st.session_state.filter_states['year'] = {'2024', '2025', '2026'}
-    with col2:
-        if st.button("Clear All", key="year_clear", use_container_width=True):
-            st.session_state.filter_states['year'] = set()
-    
+    c1, c2 = st.columns(2)
+    if c1.button("All", key="y_all"): st.session_state.filters['year'] = {'2024', '2025', '2026'}
+    if c2.button("Clear", key="y_clr"): st.session_state.filters['year'] = set()
     y1, y2, y3 = st.columns(3)
-    if y1.button("2024", key="y2024", use_container_width=True):
-        st.session_state.filter_states['year'] ^= {"2024"}
-    if y2.button("2025", key="y2025", use_container_width=True):
-        st.session_state.filter_states['year'] ^= {"2025"}
-    if y3.button("2026", key="y2026", use_container_width=True):
-        st.session_state.filter_states['year'] ^= {"2026"}
-    
+    if y1.button("2024", key="y1"): st.session_state.filters['year'] ^= {"2024"}
+    if y2.button("2025", key="y2"): st.session_state.filters['year'] ^= {"2025"}
+    if y3.button("2026", key="y3"): st.session_state.filters['year'] ^= {"2026"}
     st.markdown("---")
     
-    # PROGRAM
+    # Program
     st.markdown("### Program")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Select All", key="prog_all", use_container_width=True):
-            st.session_state.filter_states['programs'] = {'JP', 'PY', 'SY'}
-    with col2:
-        if st.button("Clear All", key="prog_clear", use_container_width=True):
-            st.session_state.filter_states['programs'] = set()
-    
+    c1, c2 = st.columns(2)
+    if c1.button("All", key="p_all"): st.session_state.filters['program'] = {'JP', 'PY', 'SY'}
+    if c2.button("Clear", key="p_clr"): st.session_state.filters['program'] = set()
     p1, p2, p3 = st.columns(3)
-    if p1.button("JP", key="jp", use_container_width=True):
-        st.session_state.filter_states['programs'] ^= {"JP"}
-    if p2.button("PY", key="py", use_container_width=True):
-        st.session_state.filter_states['programs'] ^= {"PY"}
-    if p3.button("SY", key="sy", use_container_width=True):
-        st.session_state.filter_states['programs'] ^= {"SY"}
-    
+    if p1.button("JP", key="p1"): st.session_state.filters['program'] ^= {"JP"}
+    if p2.button("PY", key="p2"): st.session_state.filters['program'] ^= {"PY"}
+    if p3.button("SY", key="p3"): st.session_state.filters['program'] ^= {"SY"}
     st.markdown("---")
     
-    # STATUS
+    # Status
     st.markdown("### Status")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Select All", key="status_all", use_container_width=True):
-            st.session_state.filter_states['status'] = {'Allocated', 'Pending', 'Not Placed', 'On Waitlist'}
-    with col2:
-        if st.button("Clear All", key="status_clear", use_container_width=True):
-            st.session_state.filter_states['status'] = set()
-    
+    c1, c2 = st.columns(2)
+    if c1.button("All", key="st_all"): st.session_state.filters['status'] = {'Allocated', 'Pending', 'Not Placed', 'On Waitlist'}
+    if c2.button("Clear", key="st_clr"): st.session_state.filters['status'] = set()
     s1, s2 = st.columns(2)
-    if s1.button("Allocated", key="alloc", use_container_width=True):
-        st.session_state.filter_states['status'] ^= {"Allocated"}
-    if s2.button("Pending", key="pend", use_container_width=True):
-        st.session_state.filter_states['status'] ^= {"Pending"}
-    
+    if s1.button("Allocated", key="st1"): st.session_state.filters['status'] ^= {"Allocated"}
+    if s2.button("Pending", key="st2"): st.session_state.filters['status'] ^= {"Pending"}
     s3, s4 = st.columns(2)
-    if s3.button("Not Placed", key="notpl", use_container_width=True):
-        st.session_state.filter_states['status'] ^= {"Not Placed"}
-    if s4.button("Waitlist", key="wait", use_container_width=True):
-        st.session_state.filter_states['status'] ^= {"On Waitlist"}
-    
+    if s3.button("Not Placed", key="st3"): st.session_state.filters['status'] ^= {"Not Placed"}
+    if s4.button("Waitlist", key="st4"): st.session_state.filters['status'] ^= {"On Waitlist"}
     st.markdown("---")
     
     # ATSI
     st.markdown("### ATSI")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Select All", key="atsi_all", use_container_width=True):
-            st.session_state.filter_states['atsi'] = {'Yes', 'No'}
-    with col2:
-        if st.button("Clear All", key="atsi_clear", use_container_width=True):
-            st.session_state.filter_states['atsi'] = set()
-    
+    c1, c2 = st.columns(2)
+    if c1.button("All", key="at_all"): st.session_state.filters['atsi'] = {'Yes', 'No'}
+    if c2.button("Clear", key="at_clr"): st.session_state.filters['atsi'] = set()
     a1, a2 = st.columns(2)
-    if a1.button("Yes", key="atsi_y", use_container_width=True):
-        st.session_state.filter_states['atsi'] ^= {"Yes"}
-    if a2.button("No", key="atsi_n", use_container_width=True):
-        st.session_state.filter_states['atsi'] ^= {"No"}
-    
+    if a1.button("Yes", key="at1"): st.session_state.filters['atsi'] ^= {"Yes"}
+    if a2.button("No", key="at2"): st.session_state.filters['atsi'] ^= {"No"}
     st.markdown("---")
     
     # SWD
     st.markdown("### SWD")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Select All", key="swd_all", use_container_width=True):
-            st.session_state.filter_states['swd'] = {'Yes', 'No'}
-    with col2:
-        if st.button("Clear All", key="swd_clear", use_container_width=True):
-            st.session_state.filter_states['swd'] = set()
-    
+    c1, c2 = st.columns(2)
+    if c1.button("All", key="sw_all"): st.session_state.filters['swd'] = {'Yes', 'No'}
+    if c2.button("Clear", key="sw_clr"): st.session_state.filters['swd'] = set()
     sw1, sw2 = st.columns(2)
-    if sw1.button("Yes", key="swd_y", use_container_width=True):
-        st.session_state.filter_states['swd'] ^= {"Yes"}
-    if sw2.button("No", key="swd_n", use_container_width=True):
-        st.session_state.filter_states['swd'] ^= {"No"}
-    
+    if sw1.button("Yes", key="sw1"): st.session_state.filters['swd'] ^= {"Yes"}
+    if sw2.button("No", key="sw2"): st.session_state.filters['swd'] ^= {"No"}
     st.markdown("---")
     
     # EALD
     st.markdown("### EALD")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Select All", key="eald_all", use_container_width=True):
-            st.session_state.filter_states['eald'] = {'Yes', 'No'}
-    with col2:
-        if st.button("Clear All", key="eald_clear", use_container_width=True):
-            st.session_state.filter_states['eald'] = set()
-    
+    c1, c2 = st.columns(2)
+    if c1.button("All", key="e_all"): st.session_state.filters['eald'] = {'Yes', 'No'}
+    if c2.button("Clear", key="e_clr"): st.session_state.filters['eald'] = set()
     e1, e2 = st.columns(2)
-    if e1.button("Yes", key="eald_y", use_container_width=True):
-        st.session_state.filter_states['eald'] ^= {"Yes"}
-    if e2.button("No", key="eald_n", use_container_width=True):
-        st.session_state.filter_states['eald'] ^= {"No"}
-    
+    if e1.button("Yes", key="e1"): st.session_state.filters['eald'] ^= {"Yes"}
+    if e2.button("No", key="e2"): st.session_state.filters['eald'] ^= {"No"}
     st.markdown("---")
     
-    # ATTENDANCE
+    # Attendance
     st.markdown("### Attendance")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Select All", key="att_all", use_container_width=True):
-            st.session_state.filter_states['attendance'] = {'Full-time', 'Part-time', 'Irregular'}
-    with col2:
-        if st.button("Clear All", key="att_clear", use_container_width=True):
-            st.session_state.filter_states['attendance'] = set()
-    
+    c1, c2 = st.columns(2)
+    if c1.button("All", key="at_a"): st.session_state.filters['attendance'] = {'Full-time', 'Part-time', 'Irregular'}
+    if c2.button("Clear", key="at_c"): st.session_state.filters['attendance'] = set()
     at1, at2, at3 = st.columns(3)
-    if at1.button("Full-time", key="ft", use_container_width=True):
-        st.session_state.filter_states['attendance'] ^= {"Full-time"}
-    if at2.button("Part-time", key="pt", use_container_width=True):
-        st.session_state.filter_states['attendance'] ^= {"Part-time"}
-    if at3.button("Irregular", key="irr", use_container_width=True):
-        st.session_state.filter_states['attendance'] ^= {"Irregular"}
-    
+    if at1.button("Full-time", key="at_1"): st.session_state.filters['attendance'] ^= {"Full-time"}
+    if at2.button("Part-time", key="at_2"): st.session_state.filters['attendance'] ^= {"Part-time"}
+    if at3.button("Irregular", key="at_3"): st.session_state.filters['attendance'] ^= {"Irregular"}
     st.markdown("---")
     
-    # DISABILITY TYPE
-    st.markdown("### Disability Type")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Select All", key="dis_all", use_container_width=True):
-            st.session_state.filter_states['disability'] = {'ASD', 'ADHD', 'Learning', 'Physical', 'Hearing', 'Vision'}
-    with col2:
-        if st.button("Clear All", key="dis_clear", use_container_width=True):
-            st.session_state.filter_states['disability'] = set()
-    
+    # Disability
+    st.markdown("### Disability")
+    c1, c2 = st.columns(2)
+    if c1.button("All", key="d_all"): st.session_state.filters['disability'] = {'ASD', 'ADHD', 'Learning', 'Physical', 'Hearing', 'Vision'}
+    if c2.button("Clear", key="d_clr"): st.session_state.filters['disability'] = set()
     d1, d2 = st.columns(2)
-    if d1.button("ASD", key="asd", use_container_width=True):
-        st.session_state.filter_states['disability'] ^= {"ASD"}
-    if d2.button("ADHD", key="adhd", use_container_width=True):
-        st.session_state.filter_states['disability'] ^= {"ADHD"}
-    
+    if d1.button("ASD", key="d1"): st.session_state.filters['disability'] ^= {"ASD"}
+    if d2.button("ADHD", key="d2"): st.session_state.filters['disability'] ^= {"ADHD"}
     d3, d4 = st.columns(2)
-    if d3.button("Learning", key="learn", use_container_width=True):
-        st.session_state.filter_states['disability'] ^= {"Learning"}
-    if d4.button("Physical", key="phys", use_container_width=True):
-        st.session_state.filter_states['disability'] ^= {"Physical"}
-    
+    if d3.button("Learning", key="d3"): st.session_state.filters['disability'] ^= {"Learning"}
+    if d4.button("Physical", key="d4"): st.session_state.filters['disability'] ^= {"Physical"}
     d5, d6 = st.columns(2)
-    if d5.button("Hearing", key="hear", use_container_width=True):
-        st.session_state.filter_states['disability'] ^= {"Hearing"}
-    if d6.button("Vision", key="vis", use_container_width=True):
-        st.session_state.filter_states['disability'] ^= {"Vision"}
-    
+    if d5.button("Hearing", key="d5"): st.session_state.filters['disability'] ^= {"Hearing"}
+    if d6.button("Vision", key="d6"): st.session_state.filters['disability'] ^= {"Vision"}
     st.markdown("---")
     
-    # CATEGORY OF SUPPORT
+    # Support
     st.markdown("### Category of Support")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Select All", key="sup_all", use_container_width=True):
-            st.session_state.filter_states['support'] = {'Minimal', 'Moderate', 'Intensive', 'Specialist'}
-    with col2:
-        if st.button("Clear All", key="sup_clear", use_container_width=True):
-            st.session_state.filter_states['support'] = set()
-    
+    c1, c2 = st.columns(2)
+    if c1.button("All", key="sup_all"): st.session_state.filters['support'] = {'Minimal', 'Moderate', 'Intensive', 'Specialist'}
+    if c2.button("Clear", key="sup_clr"): st.session_state.filters['support'] = set()
     sup1, sup2 = st.columns(2)
-    if sup1.button("Minimal", key="sup_min", use_container_width=True):
-        st.session_state.filter_states['support'] ^= {"Minimal"}
-    if sup2.button("Moderate", key="sup_mod", use_container_width=True):
-        st.session_state.filter_states['support'] ^= {"Moderate"}
-    
+    if sup1.button("Minimal", key="sup1"): st.session_state.filters['support'] ^= {"Minimal"}
+    if sup2.button("Moderate", key="sup2"): st.session_state.filters['support'] ^= {"Moderate"}
     sup3, sup4 = st.columns(2)
-    if sup3.button("Intensive", key="sup_int", use_container_width=True):
-        st.session_state.filter_states['support'] ^= {"Intensive"}
-    if sup4.button("Specialist", key="sup_spec", use_container_width=True):
-        st.session_state.filter_states['support'] ^= {"Specialist"}
-    
+    if sup3.button("Intensive", key="sup3"): st.session_state.filters['support'] ^= {"Intensive"}
+    if sup4.button("Specialist", key="sup4"): st.session_state.filters['support'] ^= {"Specialist"}
     st.markdown("---")
     
-    # PARTNERSHIP
-    st.markdown("### Partnership Area")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Select All", key="par_all", use_container_width=True):
-            st.session_state.filter_states['partnership'] = {'Inner West', 'Adelaide Prospect', 'Greenhill South', 'Holdfast', 'Mitcham Hills'}
-    with col2:
-        if st.button("Clear All", key="par_clear", use_container_width=True):
-            st.session_state.filter_states['partnership'] = set()
-    
+    # Partnership
+    st.markdown("### Partnership")
+    c1, c2 = st.columns(2)
+    if c1.button("All", key="par_all"): st.session_state.filters['partnership'] = {'Inner West', 'Adelaide Prospect', 'Greenhill South', 'Holdfast', 'Mitcham Hills'}
+    if c2.button("Clear", key="par_clr"): st.session_state.filters['partnership'] = set()
     opts = ["Inner West", "Adelaide Prospect", "Greenhill South", "Holdfast", "Mitcham Hills"]
     for i, opt in enumerate(opts):
         if (i % 2) == 0:
             co1, co2 = st.columns(2)
         if (i % 2) == 0:
-            if co1.button(opt, key=f"par_{opt}", use_container_width=True):
-                st.session_state.filter_states['partnership'] ^= {opt}
+            if co1.button(opt, key=f"p_{i}"): st.session_state.filters['partnership'] ^= {opt}
         else:
-            if co2.button(opt, key=f"par_{opt}", use_container_width=True):
-                st.session_state.filter_states['partnership'] ^= {opt}
+            if co2.button(opt, key=f"p_{i}"): st.session_state.filters['partnership'] ^= {opt}
 
-# ══════════════════════════════════════════════════════════════════════════════
 # MAIN DASHBOARD
-# ══════════════════════════════════════════════════════════════════════════════
+st.markdown('<div style="background: linear-gradient(135deg, #1a1f3a 0%, #2a3050 100%); border: 2px solid #00e5ff; border-radius: 16px; padding: 3rem 4rem; text-align: center; margin-bottom: 3rem;"><h1 style="font-size: 3.5rem; color: #ffffff; margin: 0;">Allocation Dashboard</h1><p style="color: #00e5ff; font-size: 1.2rem; margin: 1rem 0 0 0;">Comprehensive Analytics & Support Tracking</p></div>', unsafe_allow_html=True)
 
-st.markdown('<div class="main-title"><h1>Allocation Dashboard</h1><p>Comprehensive Analytics & Support Level Tracking</p></div>', unsafe_allow_html=True)
+# Metrics
+st.markdown('<div style="background-color: #1a1f3a; border: 2px solid #00e5ff; border-radius: 14px; padding: 2rem; margin: 2rem 0;"><h2 style="color: #ffffff; font-size: 2rem; margin: 0;">Summary Metrics</h2></div>', unsafe_allow_html=True)
 
-st.markdown('<div class="section-title"><h2>Summary Metrics</h2></div>', unsafe_allow_html=True)
-
-total = len(filtered_students)
-allocated = len(filtered_students[filtered_students['Status'] == 'Allocated'])
-pending = len(filtered_students[filtered_students['Status'] == 'Pending'])
-atsi = len(filtered_students[filtered_students['ATSI'] == 'Yes'])
-swd = len(filtered_students[filtered_students['SWD'] == 'Yes'])
-eald = len(filtered_students[filtered_students['EALD'] == 'Yes'])
-
-col1, col2, col3, col4, col5, col6 = st.columns(6)
-with col1: st.metric("Total", total)
-with col2: st.metric("Allocated", allocated)
-with col3: st.metric("Pending", pending)
-with col4: st.metric("ATSI", atsi)
-with col5: st.metric("SWD", swd)
-with col6: st.metric("EALD", eald)
+c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1.metric("Total", len(filtered))
+c2.metric("Allocated", len(filtered[filtered['Status']=='Allocated']))
+c3.metric("Pending", len(filtered[filtered['Status']=='Pending']))
+c4.metric("ATSI", len(filtered[filtered['ATSI']=='Yes']))
+c5.metric("SWD", len(filtered[filtered['SWD']=='Yes']))
+c6.metric("EALD", len(filtered[filtered['EALD']=='Yes']))
 
 st.markdown("---")
 
-# DISPLAY VIEWS
-if st.session_state.selected_view == "Dashboard Overview":
-    st.markdown('<div class="section-title"><h2>Dashboard Overview - All Analytics</h2></div>', unsafe_allow_html=True)
+# Display based on view
+if st.session_state.view == "Dashboard Overview":
+    st.markdown('<div style="background-color: #1a1f3a; border: 2px solid #00e5ff; border-radius: 14px; padding: 2rem;"><h2 style="color: #ffffff;">Dashboard Overview</h2></div>', unsafe_allow_html=True)
     
-    # Row 1
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        prog_counts = filtered_students['Program'].value_counts()
-        fig = go.Figure(data=[go.Bar(x=prog_counts.index, y=prog_counts.values, marker_color='#00e5ff')])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="By Program", height=400, margin=dict(l=0, r=0, t=30, b=0))
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        prog = filtered['Program'].value_counts()
+        fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color='#00e5ff')])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14), title="By Program", height=350)
         st.plotly_chart(fig, use_container_width=True)
-    
-    with col2:
-        status_counts = filtered_students['Status'].value_counts()
-        fig = go.Figure(data=[go.Bar(x=status_counts.index, y=status_counts.values, marker_color='#00ff00')])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="By Status", height=400, margin=dict(l=0, r=0, t=30, b=0))
+    with c2:
+        stat = filtered['Status'].value_counts()
+        fig = go.Figure([go.Bar(x=stat.index, y=stat.values, marker_color='#00ff00')])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14), title="By Status", height=350)
         st.plotly_chart(fig, use_container_width=True)
-    
-    with col3:
-        sup_counts = filtered_students['Category of Support'].value_counts()
-        fig = go.Figure(data=[go.Bar(x=sup_counts.index, y=sup_counts.values, marker_color='#ffd93d')])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="Support Levels", height=400, margin=dict(l=0, r=0, t=30, b=0))
-        st.plotly_chart(fig, use_container_width=True)
-    
-    # Row 2
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        atsi_counts = filtered_students['ATSI'].value_counts()
-        fig = go.Figure(data=[go.Pie(labels=['ATSI', 'Non-ATSI'], values=[len(filtered_students[filtered_students['ATSI']=='Yes']), len(filtered_students[filtered_students['ATSI']=='No'])], marker=dict(colors=['#00e5ff', '#10b981']))])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="ATSI Status", height=400, margin=dict(l=0, r=0, t=30, b=0))
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with col2:
-        swd_counts = filtered_students['SWD'].value_counts()
-        fig = go.Figure(data=[go.Pie(labels=['SWD', 'Non-SWD'], values=[len(filtered_students[filtered_students['SWD']=='Yes']), len(filtered_students[filtered_students['SWD']=='No'])], marker=dict(colors=['#00e5ff', '#10b981']))])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="SWD Status", height=400, margin=dict(l=0, r=0, t=30, b=0))
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with col3:
-        eald_counts = filtered_students['EALD'].value_counts()
-        fig = go.Figure(data=[go.Pie(labels=['EALD', 'Non-EALD'], values=[len(filtered_students[filtered_students['EALD']=='Yes']), len(filtered_students[filtered_students['EALD']=='No'])], marker=dict(colors=['#00e5ff', '#ffd93d']))])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="EALD Status", height=400, margin=dict(l=0, r=0, t=30, b=0))
-        st.plotly_chart(fig, use_container_width=True)
-    
-    # Row 3 - Support Comparisons
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        support_prog = pd.crosstab(filtered_students['Program'], filtered_students['Category of Support']).reindex(columns=['Minimal', 'Moderate', 'Intensive', 'Specialist'], fill_value=0)
-        fig = go.Figure(data=[
-            go.Bar(x=support_prog.index, y=support_prog['Minimal'], name='Minimal', marker_color='#10b981'),
-            go.Bar(x=support_prog.index, y=support_prog['Moderate'], name='Moderate', marker_color='#00e5ff'),
-            go.Bar(x=support_prog.index, y=support_prog['Intensive'], name='Intensive', marker_color='#ffd93d'),
-            go.Bar(x=support_prog.index, y=support_prog['Specialist'], name='Specialist', marker_color='#ff6b6b')
-        ])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="Support Levels by Program", height=350, barmode='stack', margin=dict(l=0, r=0, t=30, b=0))
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with col2:
-        support_status = pd.crosstab(filtered_students['Status'], filtered_students['Category of Support']).reindex(columns=['Minimal', 'Moderate', 'Intensive', 'Specialist'], fill_value=0)
-        fig = go.Figure(data=[
-            go.Bar(x=support_status.index, y=support_status['Minimal'], name='Minimal', marker_color='#10b981'),
-            go.Bar(x=support_status.index, y=support_status['Moderate'], name='Moderate', marker_color='#00e5ff'),
-            go.Bar(x=support_status.index, y=support_status['Intensive'], name='Intensive', marker_color='#ffd93d'),
-            go.Bar(x=support_status.index, y=support_status['Specialist'], name='Specialist', marker_color='#ff6b6b')
-        ])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="Support Levels by Status", height=350, barmode='stack', margin=dict(l=0, r=0, t=30, b=0))
+    with c3:
+        sup = filtered['Category of Support'].value_counts()
+        fig = go.Figure([go.Pie(labels=sup.index, values=sup.values, marker=dict(colors=['#10b981', '#00e5ff', '#ffd93d', '#ff6b6b']))])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14), title="Support Levels", height=350)
         st.plotly_chart(fig, use_container_width=True)
 
-elif st.session_state.selected_view == "All Students":
-    st.markdown('<div class="section-title"><h2>All Students</h2></div>', unsafe_allow_html=True)
-    display_cols = ['Student', 'Year', 'Program', 'Status', 'ATSI', 'SWD', 'EALD', 'Category of Support', 'Partnership']
-    st.dataframe(filtered_students[display_cols], use_container_width=True, hide_index=True)
+elif st.session_state.view == "All Students":
+    st.markdown('<div style="background-color: #1a1f3a; border: 2px solid #00e5ff; border-radius: 14px; padding: 2rem;"><h2 style="color: #ffffff;">All Students</h2></div>', unsafe_allow_html=True)
+    st.dataframe(filtered[['Student', 'Year', 'Program', 'Status', 'ATSI', 'SWD', 'EALD', 'Category of Support']], use_container_width=True, hide_index=True)
 
-elif st.session_state.selected_view == "By Demographics":
-    st.markdown('<div class="section-title"><h2>Demographics Analysis</h2></div>', unsafe_allow_html=True)
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        atsi_counts = filtered_students['ATSI'].value_counts()
-        fig = go.Figure(data=[go.Pie(labels=['ATSI', 'Non-ATSI'], values=[len(filtered_students[filtered_students['ATSI']=='Yes']), len(filtered_students[filtered_students['ATSI']=='No'])], marker=dict(colors=['#00e5ff', '#10b981']))])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'))
+elif st.session_state.view == "By Demographics":
+    st.markdown('<div style="background-color: #1a1f3a; border: 2px solid #00e5ff; border-radius: 14px; padding: 2rem;"><h2 style="color: #ffffff;">Demographics</h2></div>', unsafe_allow_html=True)
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        fig = go.Figure([go.Pie(labels=['ATSI', 'Non-ATSI'], values=[len(filtered[filtered['ATSI']=='Yes']), len(filtered[filtered['ATSI']=='No'])], marker=dict(colors=['#00e5ff', '#10b981']))])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="ATSI", height=350)
         st.plotly_chart(fig, use_container_width=True)
-    with col2:
-        eald_counts = filtered_students['EALD'].value_counts()
-        fig = go.Figure(data=[go.Pie(labels=['EALD', 'Non-EALD'], values=[len(filtered_students[filtered_students['EALD']=='Yes']), len(filtered_students[filtered_students['EALD']=='No'])], marker=dict(colors=['#00e5ff', '#ffd93d']))])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'))
+    with c2:
+        fig = go.Figure([go.Pie(labels=['EALD', 'Non-EALD'], values=[len(filtered[filtered['EALD']=='Yes']), len(filtered[filtered['EALD']=='No'])], marker=dict(colors=['#00e5ff', '#ffd93d']))])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="EALD", height=350)
         st.plotly_chart(fig, use_container_width=True)
-    with col3:
-        prog_counts = filtered_students['Program'].value_counts()
-        fig = go.Figure(data=[go.Bar(x=prog_counts.index, y=prog_counts.values, marker_color='#00e5ff')])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="By Program")
+    with c3:
+        prog = filtered['Program'].value_counts()
+        fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color='#00e5ff')])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="By Program", height=350)
         st.plotly_chart(fig, use_container_width=True)
 
-elif st.session_state.selected_view == "By Support":
-    st.markdown('<div class="section-title"><h2>Support Level Analysis</h2></div>', unsafe_allow_html=True)
-    col1, col2 = st.columns(2)
-    with col1:
-        sup_counts = filtered_students['Category of Support'].value_counts()
-        fig = go.Figure(data=[go.Pie(labels=sup_counts.index, values=sup_counts.values, marker=dict(colors=['#10b981', '#00e5ff', '#ffd93d', '#ff6b6b']))])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="Distribution of Support Levels")
-        st.plotly_chart(fig, use_container_width=True)
-    with col2:
-        support_prog = pd.crosstab(filtered_students['Program'], filtered_students['Category of Support']).reindex(columns=['Minimal', 'Moderate', 'Intensive', 'Specialist'], fill_value=0)
-        fig = go.Figure(data=[
-            go.Bar(x=support_prog.index, y=support_prog['Minimal'], name='Minimal', marker_color='#10b981'),
-            go.Bar(x=support_prog.index, y=support_prog['Moderate'], name='Moderate', marker_color='#00e5ff'),
-            go.Bar(x=support_prog.index, y=support_prog['Intensive'], name='Intensive', marker_color='#ffd93d'),
-            go.Bar(x=support_prog.index, y=support_prog['Specialist'], name='Specialist', marker_color='#ff6b6b')
+elif st.session_state.view == "By Support":
+    st.markdown('<div style="background-color: #1a1f3a; border: 2px solid #00e5ff; border-radius: 14px; padding: 2rem;"><h2 style="color: #ffffff;">Support Analysis</h2></div>', unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    with c1:
+        sup_prog = pd.crosstab(filtered['Program'], filtered['Category of Support']).reindex(columns=['Minimal', 'Moderate', 'Intensive', 'Specialist'], fill_value=0)
+        fig = go.Figure([
+            go.Bar(x=sup_prog.index, y=sup_prog['Minimal'], name='Minimal', marker_color='#10b981'),
+            go.Bar(x=sup_prog.index, y=sup_prog['Moderate'], name='Moderate', marker_color='#00e5ff'),
+            go.Bar(x=sup_prog.index, y=sup_prog['Intensive'], name='Intensive', marker_color='#ffd93d'),
+            go.Bar(x=sup_prog.index, y=sup_prog['Specialist'], name='Specialist', marker_color='#ff6b6b')
         ])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="Support by Program", barmode='group')
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="Support by Program", barmode='stack', height=400)
         st.plotly_chart(fig, use_container_width=True)
-    
-    st.markdown("---")
-    
-    # Support by SWD Status
-    col1, col2 = st.columns(2)
-    with col1:
-        support_swd = pd.crosstab(filtered_students['SWD'], filtered_students['Category of Support']).reindex(columns=['Minimal', 'Moderate', 'Intensive', 'Specialist'], fill_value=0)
-        fig = go.Figure(data=[
-            go.Bar(x=support_swd.index, y=support_swd['Minimal'], name='Minimal', marker_color='#10b981'),
-            go.Bar(x=support_swd.index, y=support_swd['Moderate'], name='Moderate', marker_color='#00e5ff'),
-            go.Bar(x=support_swd.index, y=support_swd['Intensive'], name='Intensive', marker_color='#ffd93d'),
-            go.Bar(x=support_swd.index, y=support_swd['Specialist'], name='Specialist', marker_color='#ff6b6b')
+    with c2:
+        sup_swd = pd.crosstab(filtered['SWD'], filtered['Category of Support']).reindex(columns=['Minimal', 'Moderate', 'Intensive', 'Specialist'], fill_value=0)
+        fig = go.Figure([
+            go.Bar(x=sup_swd.index, y=sup_swd['Minimal'], name='Minimal', marker_color='#10b981'),
+            go.Bar(x=sup_swd.index, y=sup_swd['Moderate'], name='Moderate', marker_color='#00e5ff'),
+            go.Bar(x=sup_swd.index, y=sup_swd['Intensive'], name='Intensive', marker_color='#ffd93d'),
+            go.Bar(x=sup_swd.index, y=sup_swd['Specialist'], name='Specialist', marker_color='#ff6b6b')
         ])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="Support by SWD Status", barmode='group')
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with col2:
-        support_atsi = pd.crosstab(filtered_students['ATSI'], filtered_students['Category of Support']).reindex(columns=['Minimal', 'Moderate', 'Intensive', 'Specialist'], fill_value=0)
-        fig = go.Figure(data=[
-            go.Bar(x=support_atsi.index, y=support_atsi['Minimal'], name='Minimal', marker_color='#10b981'),
-            go.Bar(x=support_atsi.index, y=support_atsi['Moderate'], name='Moderate', marker_color='#00e5ff'),
-            go.Bar(x=support_atsi.index, y=support_atsi['Intensive'], name='Intensive', marker_color='#ffd93d'),
-            go.Bar(x=support_atsi.index, y=support_atsi['Specialist'], name='Specialist', marker_color='#ff6b6b')
-        ])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="Support by ATSI Status", barmode='group')
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="Support by SWD", barmode='stack', height=400)
         st.plotly_chart(fig, use_container_width=True)
 
-elif st.session_state.selected_view == "By Partnership":
-    st.markdown('<div class="section-title"><h2>Partnership Area Distribution</h2></div>', unsafe_allow_html=True)
+elif st.session_state.view == "By Partnership":
+    st.markdown('<div style="background-color: #1a1f3a; border: 2px solid #00e5ff; border-radius: 14px; padding: 2rem;"><h2 style="color: #ffffff;">Partnership Distribution</h2></div>', unsafe_allow_html=True)
     m = folium.Map(location=[-34.93, 138.60], zoom_start=11, tiles='OpenStreetMap')
-    partnerships = {'Inner West': {'coords': [-34.90, 138.54]}, 'Adelaide Prospect': {'coords': [-34.85, 138.60]}, 'Greenhill South': {'coords': [-34.98, 138.63]}, 'Holdfast': {'coords': [-35.02, 138.52]}, 'Mitcham Hills': {'coords': [-34.99, 138.65]}}
-    for p, d in partnerships.items():
-        count = len(filtered_students[filtered_students['Partnership'] == p])
-        folium.CircleMarker(location=d['coords'], radius=max(15, count*2), popup=f"{p}<br>Students: {count}", color='#00e5ff', fill=True, fillColor='#00e5ff', fillOpacity=0.7, weight=2).add_to(m)
+    for p, coords in [('Inner West', [-34.90, 138.54]), ('Adelaide Prospect', [-34.85, 138.60]), ('Greenhill South', [-34.98, 138.63]), ('Holdfast', [-35.02, 138.52]), ('Mitcham Hills', [-34.99, 138.65])]:
+        cnt = len(filtered[filtered['Partnership']==p])
+        folium.CircleMarker(location=coords, radius=max(15, cnt*2), popup=f"{p}: {cnt}", color='#00e5ff', fill=True, fillColor='#00e5ff', fillOpacity=0.7, weight=2).add_to(m)
     st_folium(m, width=1200, height=600)
     st.markdown("---")
     c1, c2, c3, c4, c5 = st.columns(5)
-    for i, (p, d) in enumerate(partnerships.items()):
-        count = len(filtered_students[filtered_students['Partnership'] == p])
-        [c1, c2, c3, c4, c5][i].metric(p, count)
+    for i, p in enumerate(['Inner West', 'Adelaide Prospect', 'Greenhill South', 'Holdfast', 'Mitcham Hills']):
+        cnt = len(filtered[filtered['Partnership']==p])
+        [c1, c2, c3, c4, c5][i].metric(p, cnt)
 
 st.markdown("---")
-st.markdown("<p style='text-align: center; color: #00e5ff; font-weight: 600;'>CLC-LBU Allocation Dashboard • Comprehensive Student Allocation & Support Tracking</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #00e5ff;'>CLC-LBU Allocation Dashboard</p>", unsafe_allow_html=True)
