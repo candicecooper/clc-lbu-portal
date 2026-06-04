@@ -1348,7 +1348,37 @@ def render_program_meeting(program):
         f"{rec.get('meeting_date','')} - Term {rec.get('term','')} W{rec.get('week_number','')} - Week {rec.get('week_type','')}"
         for rec in recent_records
     ]
-    
+
+    # If we arrived back from the Goal Builder ("Return to Team Meeting"), reopen
+    # the exact meeting that was being worked on so the spotlight (with the goal
+    # just created) and all notes are right there.
+    _open_id = st.query_params.get("open_meeting")
+    if _open_id:
+        _match = next((r for r in recent_records if str(r.get("id")) == str(_open_id)), None)
+        if _match:
+            st.session_state.current_meeting_id = _match["id"]
+            try:
+                if _match.get("student_concerns"):
+                    st.session_state[f"pm_concerns_{program}"] = _json.loads(_match["student_concerns"])
+                if _match.get("smartar_spotlight"):
+                    st.session_state[f"pm_smartar_{program}"] = _json.loads(_match["smartar_spotlight"])
+                if _match.get("priority_focus"):
+                    st.session_state[f"pm_priority_{program}"] = _json.loads(_match["priority_focus"])
+                if _match.get("actions"):
+                    st.session_state[f"pm_actions_{program}"] = _json.loads(_match["actions"])
+            except Exception:
+                pass
+            # Pull the freshly created goal in from the Goal Builder right away
+            try:
+                fetch_student_smartar_goals.clear()
+            except Exception:
+                pass
+        # Clear the param so later manual navigation isn't forced back here
+        try:
+            del st.query_params["open_meeting"]
+        except Exception:
+            pass
+
     # Pre-select the meeting matching current_meeting_id (e.g. the one just saved).
     # This is driven entirely by the `index` argument with NO widget key, so we
     # never write the selectbox's own session_state key — Streamlit forbids that
