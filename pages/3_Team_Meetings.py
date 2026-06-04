@@ -484,6 +484,101 @@ def smartar_link_button(url, label="🎯 Open Goal Builder"):
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# CURRENT SMARTAR GOALS — fetched live from the Goal Builder so they can be
+# viewed (and noted against) right inside the spotlight.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _html_escape(text):
+    return (str(text or "")
+            .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_student_smartar_goals(student_name):
+    """Fetch a student's CURRENT SMARTAR goals from the Goal Builder
+    (Behaviour Support Supabase, smartar_goals table). Active goals first,
+    then newest first. Returns a list of dicts (empty if none / not configured).
+    Cached for 60s; use fetch_student_smartar_goals.clear() to refresh."""
+    if not student_name or not str(student_name).strip():
+        return []
+    try:
+        import os
+        from supabase import create_client as _cc
+        burl = st.secrets.get("BEHAVIOUR_SUPABASE_URL", "") or os.environ.get("BEHAVIOUR_SUPABASE_URL", "")
+        bkey = st.secrets.get("BEHAVIOUR_SUPABASE_KEY", "") or os.environ.get("BEHAVIOUR_SUPABASE_KEY", "")
+        # Fallback to a nested [supabase] secrets section if present
+        if not burl:
+            sb = st.secrets.get("supabase", {})
+            if isinstance(sb, dict):
+                burl = sb.get("url", "")
+                bkey = sb.get("key", "") or sb.get("service_key", "")
+        if not burl or not bkey:
+            return []
+        client = _cc(burl, bkey)
+        res = client.table("smartar_goals").select("*").eq("student_name", str(student_name).strip()).execute()
+        rows = res.data or []
+        # Newest first, then stable-sort so active goals come first
+        rows.sort(key=lambda r: str(r.get("updated_at") or r.get("created_at") or r.get("id") or ""), reverse=True)
+        rows.sort(key=lambda r: 0 if r.get("active", True) and str(r.get("status", "Active")).lower() not in ("archived", "achieved", "on hold") else 1)
+        return rows
+    except Exception:
+        return []
+
+
+def render_current_smartar_goals(student_name, max_goals=3):
+    """Display a student's current SMARTAR goal(s) inline, so the team can read
+    the live goal and record notes alongside it during the meeting."""
+    goals = fetch_student_smartar_goals(student_name)
+    if not goals:
+        st.caption("ℹ️ No saved SMARTAR goal found yet — use the Goal Builder button to create one, then ↻ Refresh.")
+        return
+
+    for g in goals[:max_goals]:
+        goal_text = (g.get("smartar_goal") or g.get("goal_text") or g.get("goal") or "").strip()
+        status    = (g.get("status") or ("Active" if g.get("active", True) else "Archived"))
+        skill     = (g.get("skill") or g.get("domain") or "").strip()
+        review    = (g.get("review_date") or g.get("target_date") or "")
+        header_bits = " · ".join(b for b in [status, skill] if b)
+
+        st.markdown(
+            "<div style='background:#f0f9f9;border:1px solid #1A7A6E;border-left:5px solid #1A7A6E;"
+            "border-radius:0 8px 8px 0;padding:8px 12px;margin:4px 0;'>"
+            "<div style='font-size:0.7rem;color:#1A7A6E;font-weight:700;letter-spacing:0.03em;'>"
+            f"CURRENT SMARTAR GOAL{(' · ' + _html_escape(header_bits)) if header_bits else ''}</div>"
+            f"<div style='font-size:0.9rem;color:#0f172a;margin-top:3px;'>{_html_escape(goal_text) or '—'}</div>"
+            + (f"<div style='font-size:0.7rem;color:#64748B;margin-top:4px;'>Review: {_html_escape(review)}</div>" if review else "")
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+
+        # GAS performance levels (Goal Builder schema), if present
+        gas = [
+            ("Exceeding",  g.get("gas_exceeding")),
+            ("Above",      g.get("gas_above")),
+            ("Expected",   g.get("gas_expected")),
+            ("Below",      g.get("gas_below")),
+            ("Not yet",    g.get("gas_not_yet")),
+        ]
+        if any(v for _, v in gas):
+            with st.expander("📊 GAS levels", expanded=False):
+                for lvl, txt in gas:
+                    if txt:
+                        st.markdown(f"**{lvl}:** {txt}")
+
+        # Other detail fields (alternate schema variant), if present
+        extra = [
+            ("Baseline",       g.get("baseline")),
+            ("Target",         g.get("target")),
+            ("Strategies",     g.get("strategies")),
+            ("Progress notes", g.get("progress_notes")),
+        ]
+        if any(v for _, v in extra):
+            with st.expander("📋 Goal detail", expanded=False):
+                for lbl, txt in extra:
+                    if txt:
+                        st.markdown(f"**{lbl}:** {txt}")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # WORD DOCUMENT HELPERS (keeping existing - truncated for brevity)
@@ -1590,22 +1685,25 @@ def render_program_meeting(program):
         
         smartar = st.session_state[smartar_key]
         
-        # Display existing students with Goal Builder buttons
+        # Display existing students with their CURRENT SMARTAR goal + notes
         if smartar:
+            hdr_l, hdr_r = st.columns([5, 1])
+            with hdr_r:
+                st.button("↻ Refresh goals", key=f"refresh_goals_{program}",
+                          on_click=fetch_student_smartar_goals.clear,
+                          help="Reload current goals from the Goal Builder")
             for idx, student_data in enumerate(smartar):
                 student_name = student_data.get("student_name", "")
                 if not student_name:
                     continue
-                    
-                col_name, col_goal_btn, col_status, col_remove = st.columns([3, 2, 1.5, 0.5])
-                
+
+                col_name, col_goal_btn, col_remove = st.columns([4, 2, 0.5])
                 with col_name:
                     st.markdown(f"**{idx + 1}. {student_name}**")
-                
                 with col_goal_btn:
                     if st.session_state.current_meeting_id:
                         smartar_url = get_smartar_goal_link(
-                            student_name, 
+                            student_name,
                             st.session_state.current_meeting_id,
                             program,
                             pm_term or "T1",
@@ -1614,31 +1712,25 @@ def render_program_meeting(program):
                         smartar_link_button(smartar_url)
                     else:
                         st.caption("Save meeting first")
-                
-                with col_status:
-                    # Auto-sync disabled to prevent UI freezing
-                    # Goal builder links still work - goals are created there and can be manually copied
-                    if student_data.get("notes") and "SMARTAR Goal:" in student_data.get("notes", ""):
-                        st.success("✓ Has goal")
-                    else:
-                        st.info("No goal yet")
-                
                 with col_remove:
                     if st.button("✕", key=f"sm_remove_{program}_{idx}"):
                         smartar.pop(idx)
                         st.rerun()
-                
-                # Optional notes field (collapsed)
-                with st.expander(f"📝 Notes for {student_name}", expanded=False):
-                    student_data["notes"] = st.text_area(
-                        f"Notes for {student_name}",
-                        value=student_data.get("notes", ""),
-                        key=f"sm_notes_{program}_{idx}",
-                        height=80,
-                        placeholder="Additional notes about this student's goals...",
-                        label_visibility="collapsed"
-                    )
-        
+
+                # Show the student's CURRENT SMARTAR goal(s) inline
+                render_current_smartar_goals(student_name)
+
+                # Meeting notes recorded alongside the goal
+                student_data["notes"] = st.text_area(
+                    f"Notes for {student_name}",
+                    value=student_data.get("notes", ""),
+                    key=f"sm_notes_{program}_{idx}",
+                    height=80,
+                    placeholder="Notes alongside this goal — progress, evidence, adjustments, next steps…",
+                    label_visibility="collapsed"
+                )
+                st.markdown("<div style='margin-bottom:6px;'></div>", unsafe_allow_html=True)
+
         st.markdown("---")
         
         # Add student section - SIMPLIFIED
@@ -1868,22 +1960,25 @@ RAW TRANSCRIPT:
 
         smartar = st.session_state[smartar_key]
         
-        # Display existing students
+        # Display existing students with their CURRENT SMARTAR goal + notes
         if smartar:
+            hdr_l, hdr_r = st.columns([5, 1])
+            with hdr_r:
+                st.button("↻ Refresh goals", key=f"refresh_goals_b_{program}",
+                          on_click=fetch_student_smartar_goals.clear,
+                          help="Reload current goals from the Goal Builder")
             for idx, student_data in enumerate(smartar):
                 student_name = student_data.get("student_name", "")
                 if not student_name:
                     continue
-                    
-                col_name, col_goal_btn, col_status, col_remove = st.columns([3, 2, 1.5, 0.5])
-                
+
+                col_name, col_goal_btn, col_remove = st.columns([4, 2, 0.5])
                 with col_name:
                     st.markdown(f"**{idx + 1}. {student_name}**")
-                
                 with col_goal_btn:
                     if st.session_state.current_meeting_id:
                         smartar_url = get_smartar_goal_link(
-                            student_name, 
+                            student_name,
                             st.session_state.current_meeting_id,
                             program,
                             pm_term or "T1",
@@ -1892,30 +1987,25 @@ RAW TRANSCRIPT:
                         smartar_link_button(smartar_url)
                     else:
                         st.caption("Save meeting first")
-                
-                with col_status:
-                    # Auto-sync disabled to prevent UI freezing
-                    # Goal builder links still work - goals are created there and can be manually copied
-                    if student_data.get("notes") and "SMARTAR Goal:" in student_data.get("notes", ""):
-                        st.success("✓ Has goal")
-                    else:
-                        st.info("No goal yet")
-                
                 with col_remove:
                     if st.button("✕", key=f"sm_remove_b_{program}_{idx}"):
                         smartar.pop(idx)
                         st.rerun()
-                
-                with st.expander(f"📝 Notes for {student_name}", expanded=False):
-                    student_data["notes"] = st.text_area(
-                        f"Notes for {student_name}",
-                        value=student_data.get("notes", ""),
-                        key=f"sm_notes_b_{program}_{idx}",
-                        height=80,
-                        placeholder="Additional notes about this student's goals...",
-                        label_visibility="collapsed"
-                    )
-        
+
+                # Show the student's CURRENT SMARTAR goal(s) inline
+                render_current_smartar_goals(student_name)
+
+                # Meeting notes recorded alongside the goal
+                student_data["notes"] = st.text_area(
+                    f"Notes for {student_name}",
+                    value=student_data.get("notes", ""),
+                    key=f"sm_notes_b_{program}_{idx}",
+                    height=80,
+                    placeholder="Notes alongside this goal — progress, evidence, adjustments, next steps…",
+                    label_visibility="collapsed"
+                )
+                st.markdown("<div style='margin-bottom:6px;'></div>", unsafe_allow_html=True)
+
         st.markdown("---")
         
         # Add student section
