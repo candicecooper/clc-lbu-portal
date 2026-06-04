@@ -1349,10 +1349,21 @@ def render_program_meeting(program):
         for rec in recent_records
     ]
     
+    # Pre-select the meeting matching current_meeting_id (e.g. the one just saved).
+    # This is driven entirely by the `index` argument with NO widget key, so we
+    # never write the selectbox's own session_state key — Streamlit forbids that
+    # once the widget has been instantiated, which was causing save failures.
+    default_index = 0
+    if st.session_state.current_meeting_id:
+        for _i, _rec in enumerate(recent_records):
+            if str(_rec.get("id")) == str(st.session_state.current_meeting_id):
+                default_index = _i + 1  # +1 to skip the "➕ New Meeting" entry
+                break
+
     selected_meeting = st.selectbox(
         "Choose a meeting to edit or create new",
         options=meeting_options,
-        key=f"meeting_select_{program}"
+        index=default_index,
     )
     
     # Load existing meeting if selected
@@ -2285,13 +2296,11 @@ RAW TRANSCRIPT:
                     st.success("✅ Meeting record saved!")
 
             # Keep the just-saved meeting loaded so you can carry on editing — this is
-            # what previously made it look like a student had been 'lost'.
+            # what previously made it look like a student had been 'lost'. The Select
+            # Meeting dropdown re-selects it automatically from current_meeting_id
+            # (index-driven), so no widget-key write is needed here.
             if saved_id:
                 st.session_state.current_meeting_id = saved_id
-                st.session_state[f"meeting_select_{program}"] = (
-                    f"{meeting_data['meeting_date']} - Term {meeting_data['term']} "
-                    f"W{meeting_data['week_number']} - Week {meeting_data['week_type']}"
-                )
 
             st.session_state.last_autosave_time = None
             st.session_state.autosave_message = ""
