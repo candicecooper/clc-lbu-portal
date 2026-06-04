@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta
 from io import BytesIO
 from supabase import create_client
 from groq import Groq
-from urllib.parse import unquote
+from urllib.parse import unquote, quote
 from collections import defaultdict
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -27,16 +27,33 @@ def check_team_meetings_integration():
     term_param      = params.get("term", None)
     week_param      = params.get("week", None)
     return_to       = params.get("return_to", None)
+    def _safe_int(v):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
     return {
         "active":     return_to == "team_meetings",
         "student":    unquote(student_param) if student_param else None,
-        "meeting_id": int(meeting_id_param) if meeting_id_param else None,
+        # meeting_id may be an integer OR a UUID string — never force int() or the
+        # whole page crashes to a white screen on load.
+        "meeting_id": meeting_id_param if meeting_id_param else None,
         "program":    program_param,
         "term":       term_param,
-        "week":       int(week_param) if week_param else None,
+        "week":       _safe_int(week_param),
     }
 
 integration = check_team_meetings_integration()
+
+def team_meeting_return_url(integ):
+    """Build a reliable URL back to the Team Meetings page, carrying the program
+    and the originating meeting id so the meeting re-opens on arrival."""
+    prog = integ.get("program") or "JP"
+    url = f"https://clc-lbu-portal.onrender.com/Team_Meetings?program={quote(str(prog))}"
+    if integ.get("meeting_id"):
+        url += f"&open_meeting={quote(str(integ['meeting_id']))}"
+    return url
+
 
 # ── Clients ───────────────────────────────────────────────────────────────────
 def _get_sb_creds():
@@ -622,12 +639,9 @@ if integration["active"]:
 st.sidebar.title("🎯 SMARTAR Tool")
 
 if integration["active"]:
-    meeting_url = f"https://clc-lbu-portal.onrender.com/Team_Meetings?program={integration['program']}"
-    st.sidebar.markdown(f"""
-    <a href="{meeting_url}" style="display:block;text-align:center;background:#7c3aed;color:white;
-    font-weight:600;font-size:0.85rem;padding:0.5rem;border-radius:8px;text-decoration:none;
-    margin-bottom:0.5rem;">← Back to Team Meeting</a>
-    """, unsafe_allow_html=True)
+    st.sidebar.link_button("← Back to Team Meeting",
+                           team_meeting_return_url(integration),
+                           use_container_width=True)
 
 view = st.sidebar.radio(
     "View",
@@ -1458,9 +1472,12 @@ No markdown, no explanation, pure JSON only."""
 
             st.success(f"✅ Goal saved for {selected_name}!")
             if integration["active"]:
-                meeting_url = f"https://clc-lbu-portal.onrender.com/Team_Meetings?program={integration['program']}"
-                st.markdown(f"[← Return to Team Meeting]({meeting_url})")
-            st.rerun()
+                st.link_button("← Return to Team Meeting",
+                               team_meeting_return_url(integration),
+                               type="primary", use_container_width=True)
+                st.caption("Your goal is saved. Click above to go back — the meeting will reopen with this goal showing.")
+            else:
+                st.rerun()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
