@@ -19,8 +19,18 @@ st.set_page_config(page_title="CLC Team Meetings", page_icon="👥", layout="wid
 apply_clc_theme()
 
 from auth import require_auth, logout_button, get_staff_name
-require_auth("Team Meetings", "👥")
-logout_button("sidebar")
+# Password gate removed by request — returning here from the Goal Builder (which
+# itself has no login) no longer prompts for a password. To re-enable the portal
+# login on this page, un-comment the two lines below.
+# require_auth("Team Meetings", "👥")
+# logout_button("sidebar")
+
+def _safe_staff_name():
+    """Facilitator default — works whether or not a portal login has happened."""
+    try:
+        return get_staff_name() or ""
+    except Exception:
+        return ""
 
 # ── Auto-save session state initialization ───────────────────────────────────
 if 'last_autosave_time' not in st.session_state:
@@ -927,7 +937,7 @@ def render_specialist_meeting():
     default_date = datetime.date.fromisoformat(selected_record['meeting_date']) if selected_record else datetime.date.today()
     default_term = selected_record.get('term', '') if selected_record else ''
     default_week = selected_record.get('week_number', 1) if selected_record else 1
-    default_facilitator = selected_record.get('facilitator', get_staff_name()) if selected_record else get_staff_name()
+    default_facilitator = selected_record.get('facilitator', _safe_staff_name()) if selected_record else _safe_staff_name()
     default_attendees = selected_record.get('attendees', '') if selected_record else ''
     
     # Get check-in notes if editing
@@ -1527,7 +1537,7 @@ def render_program_meeting(program):
     default_date = datetime.date.fromisoformat(selected_record['meeting_date']) if selected_record else datetime.date.today()
     default_term = selected_record.get('term', '') if selected_record else ''
     default_week = selected_record.get('week_number', 1) if selected_record else 1
-    default_facilitator = selected_record.get('facilitator', get_staff_name()) if selected_record else get_staff_name()
+    default_facilitator = selected_record.get('facilitator', _safe_staff_name()) if selected_record else _safe_staff_name()
     default_attendees = selected_record.get('attendees', '') if selected_record else ''
     default_checkin = selected_record.get('checkin_notes', '') if selected_record else ''
     default_reports = selected_record.get('reports_tac_notes', '') if selected_record else ''
@@ -2509,6 +2519,37 @@ def render_meeting_archive(program):
                         )
                     except Exception as _e:
                         st.caption(f"Minutes doc error: {_e}")
+
+                # ── Delete this meeting (admin only, with confirmation) ──
+                if st.session_state.get("admin"):
+                    _confirm_key = f"arch_delconfirm_{meeting_id}"
+                    if not st.session_state.get(_confirm_key):
+                        if st.button("🗑️ Delete this meeting", key=f"arch_del_{meeting_id}",
+                                     use_container_width=True):
+                            st.session_state[_confirm_key] = True
+                            st.rerun()
+                    else:
+                        st.warning("Permanently delete this meeting? This can't be undone.")
+                        c_yes, c_no = st.columns(2)
+                        with c_yes:
+                            if st.button("✅ Yes, delete permanently", key=f"arch_delyes_{meeting_id}",
+                                         type="primary", use_container_width=True):
+                                try:
+                                    delete_row("tm_program_meetings", meeting_id)
+                                    if str(st.session_state.get("current_meeting_id")) == str(meeting_id):
+                                        st.session_state.current_meeting_id = None
+                                    st.session_state.pop(_confirm_key, None)
+                                    st.success("Meeting deleted.")
+                                    st.rerun()
+                                except Exception as _e:
+                                    st.error(f"Could not delete: {_e}")
+                        with c_no:
+                            if st.button("Cancel", key=f"arch_delno_{meeting_id}",
+                                         use_container_width=True):
+                                st.session_state.pop(_confirm_key, None)
+                                st.rerun()
+                else:
+                    st.caption("🔐 Log in as admin (sidebar) to delete a meeting.")
 
             else:
                 # ── FULL EDIT MODE ─────────────────────────────────────────
