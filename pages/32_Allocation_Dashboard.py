@@ -11,6 +11,7 @@ st.set_page_config(page_title="CLC Allocation Dashboard", page_icon="📊", layo
 # Initialize session state
 if 'filter_states' not in st.session_state:
     st.session_state.filter_states = {
+        'year': {'2024', '2025', '2026'},
         'programs': {'JP', 'PY', 'SY'},
         'status': {'Allocated', 'Pending', 'Not Placed', 'On Waitlist'},
         'atsi': {'Yes', 'No'},
@@ -18,7 +19,7 @@ if 'filter_states' not in st.session_state:
         'attendance': {'Full-time', 'Part-time', 'Irregular'},
         'swd': {'Yes', 'No'},
         'disability': {'ASD', 'ADHD', 'Learning', 'Physical', 'Hearing', 'Vision'},
-        'behaviour': {'None', 'Mild', 'Moderate', 'Severe'},
+        'support': {'Minimal', 'Moderate', 'Intensive', 'Specialist'},
         'partnership': {'Inner West', 'Adelaide Prospect', 'Greenhill South', 'Holdfast', 'Mitcham Hills'}
     }
 
@@ -30,6 +31,7 @@ if 'selected_view' not in st.session_state:
 def get_student_data():
     data = {
         'Student': ['John Smith', 'Mary Jones', 'Sarah Lee', 'David Chen', 'Emma Wilson', 'Alex Brown', 'Sophie Green', 'Tom White', 'Lisa Anderson', 'James Taylor', 'Rachel Martin', 'Chris Davis', 'Katie Wilson', 'Michael Brown', 'Jessica Taylor'],
+        'Year': ['2026', '2026', '2026', '2025', '2026', '2025', '2026', '2026', '2025', '2026', '2026', '2025', '2026', '2026', '2025'],
         'Program': ['JP', 'PY', 'SY', 'JP', 'PY', 'SY', 'JP', 'PY', 'SY', 'JP', 'PY', 'SY', 'JP', 'PY', 'SY'],
         'Status': ['Allocated', 'Allocated', 'Pending', 'Allocated', 'Not Placed', 'Allocated', 'Pending', 'Allocated', 'Allocated', 'On Waitlist', 'Allocated', 'Pending', 'Allocated', 'Allocated', 'Not Placed'],
         'ATSI': ['No', 'Yes', 'No', 'Yes', 'No', 'No', 'Yes', 'No', 'Yes', 'No', 'No', 'Yes', 'No', 'Yes', 'No'],
@@ -37,14 +39,15 @@ def get_student_data():
         'Disability': ['ASD', 'None', 'ADHD', 'None', 'Learning', 'ASD', 'None', 'None', 'ADHD', 'None', 'Physical', 'ASD', 'None', 'None', 'Hearing'],
         'Attendance': ['Full-time', 'Part-time', 'Full-time', 'Irregular', 'Full-time', 'Part-time', 'Full-time', 'Full-time', 'Part-time', 'Full-time', 'Irregular', 'Full-time', 'Full-time', 'Part-time', 'Full-time'],
         'EALD': ['No', 'Yes', 'No', 'Yes', 'No', 'No', 'Yes', 'No', 'No', 'Yes', 'No', 'No', 'Yes', 'No', 'No'],
-        'Behaviour': ['None', 'Mild', 'Moderate', 'None', 'Severe', 'Mild', 'None', 'None', 'Mild', 'Moderate', 'None', 'Severe', 'Mild', 'None', 'Moderate'],
+        'Category of Support': ['Moderate', 'Intensive', 'Specialist', 'Minimal', 'Intensive', 'Specialist', 'Moderate', 'Minimal', 'Intensive', 'Moderate', 'Specialist', 'Intensive', 'Minimal', 'Moderate', 'Specialist'],
         'Partnership': ['Inner West', 'Inner West', 'Adelaide Prospect', 'Greenhill South', 'Holdfast', 'Mitcham Hills', 'Inner West', 'Adelaide Prospect', 'Greenhill South', 'Holdfast', 'Mitcham Hills', 'Inner West', 'Adelaide Prospect', 'Greenhill South', 'Holdfast'],
-        'Term': ['Term 2'] * 15
+        'Term': ['Term 2', 'Term 2', 'Term 1', 'Term 2', 'Term 2', 'Term 1', 'Term 2', 'Term 2', 'Term 2', 'Term 1', 'Term 2', 'Term 2', 'Term 2', 'Term 1', 'Term 2']
     }
     return pd.DataFrame(data)
 
 def filter_data(df):
     filtered = df[
+        (df['Year'].isin(st.session_state.filter_states['year'])) &
         (df['Program'].isin(st.session_state.filter_states['programs'])) &
         (df['Status'].isin(st.session_state.filter_states['status'])) &
         (df['ATSI'].isin(st.session_state.filter_states['atsi'])) &
@@ -52,7 +55,7 @@ def filter_data(df):
         (df['Attendance'].isin(st.session_state.filter_states['attendance'])) &
         (df['SWD'].isin(st.session_state.filter_states['swd'])) &
         (df['Disability'].isin(st.session_state.filter_states['disability'])) &
-        (df['Behaviour'].isin(st.session_state.filter_states['behaviour'])) &
+        (df['Category of Support'].isin(st.session_state.filter_states['support'])) &
         (df['Partnership'].isin(st.session_state.filter_states['partnership']))
     ]
     return filtered
@@ -81,46 +84,25 @@ st.markdown("""
     p, span, div, label, li, td, th {
         color: #ffffff !important;
     }
-    /* Make all text in buttons bright */
     button, .stButton {
         color: #00e5ff !important;
         font-weight: 700 !important;
     }
-    /* Bright text for all inputs */
     input, select, textarea {
         color: #ffffff !important;
         font-weight: 600 !important;
     }
-    /* Chart labels bright */
     text {
         fill: #ffffff !important;
-    }
-    /* DataFrame text bright */
-    [data-testid="dataframe"] {
-        color: #ffffff !important;
-    }
-    .stDataFrame {
-        color: #ffffff !important;
-    }
-    [data-testid="stDataFrameTable"] {
-        background-color: #0a0e27 !important;
     }
     [data-testid="stDataFrameTable"] td, [data-testid="stDataFrameTable"] th {
         color: #ffffff !important;
         background-color: #1a1f3a !important;
         border-color: #2a3050 !important;
     }
-    /* Radio buttons and checkboxes */
-    [role="radio"], [role="checkbox"] {
-        color: #ffffff !important;
-    }
     .stRadio > label {
         color: #ffffff !important;
         font-weight: 600 !important;
-    }
-    /* Sidebar text bright */
-    [data-testid="stSidebar"] {
-        background-color: #0a0e27 !important;
     }
     [data-testid="stSidebar"] p, [data-testid="stSidebar"] span, [data-testid="stSidebar"] div {
         color: #ffffff !important;
@@ -206,12 +188,32 @@ with st.sidebar:
     st.markdown("### View")
     st.session_state.selected_view = st.radio(
         "Select Dashboard",
-        ["Dashboard Overview", "All Students", "By Demographics", "By Disability", "By Partnership"],
+        ["Dashboard Overview", "All Students", "By Demographics", "By Support", "By Partnership"],
         label_visibility="collapsed"
     )
     
     st.markdown("---")
     st.markdown("## Filter Data")
+    st.markdown("---")
+    
+    # YEAR
+    st.markdown("### Year")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Select All", key="year_all", use_container_width=True):
+            st.session_state.filter_states['year'] = {'2024', '2025', '2026'}
+    with col2:
+        if st.button("Clear All", key="year_clear", use_container_width=True):
+            st.session_state.filter_states['year'] = set()
+    
+    y1, y2, y3 = st.columns(3)
+    if y1.button("2024", key="y2024", use_container_width=True):
+        st.session_state.filter_states['year'] ^= {"2024"}
+    if y2.button("2025", key="y2025", use_container_width=True):
+        st.session_state.filter_states['year'] ^= {"2025"}
+    if y3.button("2026", key="y2026", use_container_width=True):
+        st.session_state.filter_states['year'] ^= {"2026"}
+    
     st.markdown("---")
     
     # PROGRAM
@@ -362,27 +364,27 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # BEHAVIOUR
-    st.markdown("### Behaviour Level")
+    # CATEGORY OF SUPPORT
+    st.markdown("### Category of Support")
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("Select All", key="beh_all", use_container_width=True):
-            st.session_state.filter_states['behaviour'] = {'None', 'Mild', 'Moderate', 'Severe'}
+        if st.button("Select All", key="sup_all", use_container_width=True):
+            st.session_state.filter_states['support'] = {'Minimal', 'Moderate', 'Intensive', 'Specialist'}
     with col2:
-        if st.button("Clear All", key="beh_clear", use_container_width=True):
-            st.session_state.filter_states['behaviour'] = set()
+        if st.button("Clear All", key="sup_clear", use_container_width=True):
+            st.session_state.filter_states['support'] = set()
     
-    b1, b2 = st.columns(2)
-    if b1.button("None", key="beh_n", use_container_width=True):
-        st.session_state.filter_states['behaviour'] ^= {"None"}
-    if b2.button("Mild", key="beh_m", use_container_width=True):
-        st.session_state.filter_states['behaviour'] ^= {"Mild"}
+    sup1, sup2 = st.columns(2)
+    if sup1.button("Minimal", key="sup_min", use_container_width=True):
+        st.session_state.filter_states['support'] ^= {"Minimal"}
+    if sup2.button("Moderate", key="sup_mod", use_container_width=True):
+        st.session_state.filter_states['support'] ^= {"Moderate"}
     
-    b3, b4 = st.columns(2)
-    if b3.button("Moderate", key="beh_mo", use_container_width=True):
-        st.session_state.filter_states['behaviour'] ^= {"Moderate"}
-    if b4.button("Severe", key="beh_s", use_container_width=True):
-        st.session_state.filter_states['behaviour'] ^= {"Severe"}
+    sup3, sup4 = st.columns(2)
+    if sup3.button("Intensive", key="sup_int", use_container_width=True):
+        st.session_state.filter_states['support'] ^= {"Intensive"}
+    if sup4.button("Specialist", key="sup_spec", use_container_width=True):
+        st.session_state.filter_states['support'] ^= {"Specialist"}
     
     st.markdown("---")
     
@@ -411,7 +413,7 @@ with st.sidebar:
 # MAIN DASHBOARD
 # ══════════════════════════════════════════════════════════════════════════════
 
-st.markdown('<div class="main-title"><h1>Allocation Dashboard</h1><p>Term 2, 2026 - Comprehensive Analytics</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title"><h1>Allocation Dashboard</h1><p>Comprehensive Analytics & Support Level Tracking</p></div>', unsafe_allow_html=True)
 
 st.markdown('<div class="section-title"><h2>Summary Metrics</h2></div>', unsafe_allow_html=True)
 
@@ -448,13 +450,13 @@ if st.session_state.selected_view == "Dashboard Overview":
     with col2:
         status_counts = filtered_students['Status'].value_counts()
         fig = go.Figure(data=[go.Bar(x=status_counts.index, y=status_counts.values, marker_color='#00ff00')])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title="By Status", height=400, margin=dict(l=0, r=0, t=30, b=0))
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="By Status", height=400, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
     
     with col3:
-        att_counts = filtered_students['Attendance'].value_counts()
-        fig = go.Figure(data=[go.Pie(labels=att_counts.index, values=att_counts.values, marker=dict(colors=['#00e5ff', '#ff6b6b', '#ffd93d']))])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title="Attendance", height=400, margin=dict(l=0, r=0, t=30, b=0))
+        sup_counts = filtered_students['Category of Support'].value_counts()
+        fig = go.Figure(data=[go.Bar(x=sup_counts.index, y=sup_counts.values, marker_color='#ffd93d')])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="Support Levels", height=400, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
     
     # Row 2
@@ -463,40 +465,49 @@ if st.session_state.selected_view == "Dashboard Overview":
     with col1:
         atsi_counts = filtered_students['ATSI'].value_counts()
         fig = go.Figure(data=[go.Pie(labels=['ATSI', 'Non-ATSI'], values=[len(filtered_students[filtered_students['ATSI']=='Yes']), len(filtered_students[filtered_students['ATSI']=='No'])], marker=dict(colors=['#00e5ff', '#10b981']))])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title="ATSI Status", height=400, margin=dict(l=0, r=0, t=30, b=0))
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="ATSI Status", height=400, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
     
     with col2:
         swd_counts = filtered_students['SWD'].value_counts()
         fig = go.Figure(data=[go.Pie(labels=['SWD', 'Non-SWD'], values=[len(filtered_students[filtered_students['SWD']=='Yes']), len(filtered_students[filtered_students['SWD']=='No'])], marker=dict(colors=['#00e5ff', '#10b981']))])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title="SWD Status", height=400, margin=dict(l=0, r=0, t=30, b=0))
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="SWD Status", height=400, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
     
     with col3:
         eald_counts = filtered_students['EALD'].value_counts()
         fig = go.Figure(data=[go.Pie(labels=['EALD', 'Non-EALD'], values=[len(filtered_students[filtered_students['EALD']=='Yes']), len(filtered_students[filtered_students['EALD']=='No'])], marker=dict(colors=['#00e5ff', '#ffd93d']))])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title="EALD Status", height=400, margin=dict(l=0, r=0, t=30, b=0))
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="EALD Status", height=400, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
     
-    # Row 3
+    # Row 3 - Support Comparisons
     col1, col2 = st.columns(2)
     
     with col1:
-        beh_counts = filtered_students['Behaviour'].value_counts()
-        fig = go.Figure(data=[go.Bar(x=beh_counts.index, y=beh_counts.values, marker_color='#ff6b6b')])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title="By Behaviour Level", height=350, margin=dict(l=0, r=0, t=30, b=0))
+        support_prog = pd.crosstab(filtered_students['Program'], filtered_students['Category of Support'])
+        fig = go.Figure(data=[
+            go.Bar(x=support_prog.index, y=support_prog['Minimal'], name='Minimal', marker_color='#10b981'),
+            go.Bar(x=support_prog.index, y=support_prog['Moderate'], name='Moderate', marker_color='#00e5ff'),
+            go.Bar(x=support_prog.index, y=support_prog['Intensive'], name='Intensive', marker_color='#ffd93d'),
+            go.Bar(x=support_prog.index, y=support_prog['Specialist'], name='Specialist', marker_color='#ff6b6b')
+        ])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="Support Levels by Program", height=350, barmode='stack', margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
     
     with col2:
-        dis_counts = filtered_students[filtered_students['Disability'] != 'None']['Disability'].value_counts()
-        if len(dis_counts) > 0:
-            fig = go.Figure(data=[go.Bar(x=dis_counts.index, y=dis_counts.values, marker_color='#ffd93d')])
-            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title="Disability Types", height=350, margin=dict(l=0, r=0, t=30, b=0))
-            st.plotly_chart(fig, use_container_width=True)
+        support_status = pd.crosstab(filtered_students['Status'], filtered_students['Category of Support'])
+        fig = go.Figure(data=[
+            go.Bar(x=support_status.index, y=support_status['Minimal'], name='Minimal', marker_color='#10b981'),
+            go.Bar(x=support_status.index, y=support_status['Moderate'], name='Moderate', marker_color='#00e5ff'),
+            go.Bar(x=support_status.index, y=support_status['Intensive'], name='Intensive', marker_color='#ffd93d'),
+            go.Bar(x=support_status.index, y=support_status['Specialist'], name='Specialist', marker_color='#ff6b6b')
+        ])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="Support Levels by Status", height=350, barmode='stack', margin=dict(l=0, r=0, t=30, b=0))
+        st.plotly_chart(fig, use_container_width=True)
 
 elif st.session_state.selected_view == "All Students":
     st.markdown('<div class="section-title"><h2>All Students</h2></div>', unsafe_allow_html=True)
-    display_cols = ['Student', 'Program', 'Status', 'ATSI', 'SWD', 'EALD', 'Disability', 'Attendance', 'Behaviour', 'Partnership']
+    display_cols = ['Student', 'Year', 'Program', 'Status', 'ATSI', 'SWD', 'EALD', 'Category of Support', 'Partnership']
     st.dataframe(filtered_students[display_cols], use_container_width=True, hide_index=True)
 
 elif st.session_state.selected_view == "By Demographics":
@@ -505,33 +516,63 @@ elif st.session_state.selected_view == "By Demographics":
     with col1:
         atsi_counts = filtered_students['ATSI'].value_counts()
         fig = go.Figure(data=[go.Pie(labels=['ATSI', 'Non-ATSI'], values=[len(filtered_students[filtered_students['ATSI']=='Yes']), len(filtered_students[filtered_students['ATSI']=='No'])], marker=dict(colors=['#00e5ff', '#10b981']))])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'))
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'))
         st.plotly_chart(fig, use_container_width=True)
     with col2:
         eald_counts = filtered_students['EALD'].value_counts()
         fig = go.Figure(data=[go.Pie(labels=['EALD', 'Non-EALD'], values=[len(filtered_students[filtered_students['EALD']=='Yes']), len(filtered_students[filtered_students['EALD']=='No'])], marker=dict(colors=['#00e5ff', '#ffd93d']))])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'))
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'))
         st.plotly_chart(fig, use_container_width=True)
     with col3:
         prog_counts = filtered_students['Program'].value_counts()
         fig = go.Figure(data=[go.Bar(x=prog_counts.index, y=prog_counts.values, marker_color='#00e5ff')])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="By Program")
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="By Program")
         st.plotly_chart(fig, use_container_width=True)
 
-elif st.session_state.selected_view == "By Disability":
-    st.markdown('<div class="section-title"><h2>Disability Support Analysis</h2></div>', unsafe_allow_html=True)
+elif st.session_state.selected_view == "By Support":
+    st.markdown('<div class="section-title"><h2>Support Level Analysis</h2></div>', unsafe_allow_html=True)
     col1, col2 = st.columns(2)
     with col1:
-        swd_counts = filtered_students['SWD'].value_counts()
-        fig = go.Figure(data=[go.Pie(labels=['SWD', 'Non-SWD'], values=[len(filtered_students[filtered_students['SWD']=='Yes']), len(filtered_students[filtered_students['SWD']=='No'])], marker=dict(colors=['#00e5ff', '#10b981']))])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="Students with Disabilities")
+        sup_counts = filtered_students['Category of Support'].value_counts()
+        fig = go.Figure(data=[go.Pie(labels=sup_counts.index, values=sup_counts.values, marker=dict(colors=['#10b981', '#00e5ff', '#ffd93d', '#ff6b6b']))])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="Distribution of Support Levels")
         st.plotly_chart(fig, use_container_width=True)
     with col2:
-        dis_counts = filtered_students[filtered_students['Disability'] != 'None']['Disability'].value_counts()
-        if len(dis_counts) > 0:
-            fig = go.Figure(data=[go.Bar(x=dis_counts.index, y=dis_counts.values, marker_color='#ffd93d')])
-            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="Disability Types", xaxis_title='Type', yaxis_title='Count')
-            st.plotly_chart(fig, use_container_width=True)
+        support_prog = pd.crosstab(filtered_students['Program'], filtered_students['Category of Support'])
+        fig = go.Figure(data=[
+            go.Bar(x=support_prog.index, y=support_prog['Minimal'], name='Minimal', marker_color='#10b981'),
+            go.Bar(x=support_prog.index, y=support_prog['Moderate'], name='Moderate', marker_color='#00e5ff'),
+            go.Bar(x=support_prog.index, y=support_prog['Intensive'], name='Intensive', marker_color='#ffd93d'),
+            go.Bar(x=support_prog.index, y=support_prog['Specialist'], name='Specialist', marker_color='#ff6b6b')
+        ])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="Support by Program", barmode='group')
+        st.plotly_chart(fig, use_container_width=True)
+    
+    st.markdown("---")
+    
+    # Support by SWD Status
+    col1, col2 = st.columns(2)
+    with col1:
+        support_swd = pd.crosstab(filtered_students['SWD'], filtered_students['Category of Support'])
+        fig = go.Figure(data=[
+            go.Bar(x=support_swd.index, y=support_swd['Minimal'], name='Minimal', marker_color='#10b981'),
+            go.Bar(x=support_swd.index, y=support_swd['Moderate'], name='Moderate', marker_color='#00e5ff'),
+            go.Bar(x=support_swd.index, y=support_swd['Intensive'], name='Intensive', marker_color='#ffd93d'),
+            go.Bar(x=support_swd.index, y=support_swd['Specialist'], name='Specialist', marker_color='#ff6b6b')
+        ])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="Support by SWD Status", barmode='group')
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        support_atsi = pd.crosstab(filtered_students['ATSI'], filtered_students['Category of Support'])
+        fig = go.Figure(data=[
+            go.Bar(x=support_atsi.index, y=support_atsi['Minimal'], name='Minimal', marker_color='#10b981'),
+            go.Bar(x=support_atsi.index, y=support_atsi['Moderate'], name='Moderate', marker_color='#00e5ff'),
+            go.Bar(x=support_atsi.index, y=support_atsi['Intensive'], name='Intensive', marker_color='#ffd93d'),
+            go.Bar(x=support_atsi.index, y=support_atsi['Specialist'], name='Specialist', marker_color='#ff6b6b')
+        ])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="Support by ATSI Status", barmode='group')
+        st.plotly_chart(fig, use_container_width=True)
 
 elif st.session_state.selected_view == "By Partnership":
     st.markdown('<div class="section-title"><h2>Partnership Area Distribution</h2></div>', unsafe_allow_html=True)
@@ -548,4 +589,4 @@ elif st.session_state.selected_view == "By Partnership":
         [c1, c2, c3, c4, c5][i].metric(p, count)
 
 st.markdown("---")
-st.markdown("<p style='text-align: center; color: #00e5ff; font-weight: 600;'>CLC-LBU Allocation Dashboard • Term 2, 2026</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #00e5ff; font-weight: 600;'>CLC-LBU Allocation Dashboard • Comprehensive Student Allocation & Support Tracking</p>", unsafe_allow_html=True)
