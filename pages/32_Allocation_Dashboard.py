@@ -484,7 +484,7 @@ if st.session_state.selected_view == "Dashboard Overview":
     col1, col2 = st.columns(2)
     
     with col1:
-        support_prog = pd.crosstab(filtered_students['Program'], filtered_students['Category of Support'])
+        support_prog = pd.crosstab(filtered_students['Program'], filtered_students['Category of Support']).reindex(columns=['Minimal', 'Moderate', 'Intensive', 'Specialist'], fill_value=0)
         fig = go.Figure(data=[
             go.Bar(x=support_prog.index, y=support_prog['Minimal'], name='Minimal', marker_color='#10b981'),
             go.Bar(x=support_prog.index, y=support_prog['Moderate'], name='Moderate', marker_color='#00e5ff'),
@@ -495,7 +495,7 @@ if st.session_state.selected_view == "Dashboard Overview":
         st.plotly_chart(fig, use_container_width=True)
     
     with col2:
-        support_status = pd.crosstab(filtered_students['Status'], filtered_students['Category of Support'])
+        support_status = pd.crosstab(filtered_students['Status'], filtered_students['Category of Support']).reindex(columns=['Minimal', 'Moderate', 'Intensive', 'Specialist'], fill_value=0)
         fig = go.Figure(data=[
             go.Bar(x=support_status.index, y=support_status['Minimal'], name='Minimal', marker_color='#10b981'),
             go.Bar(x=support_status.index, y=support_status['Moderate'], name='Moderate', marker_color='#00e5ff'),
@@ -538,7 +538,7 @@ elif st.session_state.selected_view == "By Support":
         fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=14, family='Poppins'), title_font=dict(color='#ffffff', size=16), title="Distribution of Support Levels")
         st.plotly_chart(fig, use_container_width=True)
     with col2:
-        support_prog = pd.crosstab(filtered_students['Program'], filtered_students['Category of Support'])
+        support_prog = pd.crosstab(filtered_students['Program'], filtered_students['Category of Support']).reindex(columns=['Minimal', 'Moderate', 'Intensive', 'Specialist'], fill_value=0)
         fig = go.Figure(data=[
             go.Bar(x=support_prog.index, y=support_prog['Minimal'], name='Minimal', marker_color='#10b981'),
             go.Bar(x=support_prog.index, y=support_prog['Moderate'], name='Moderate', marker_color='#00e5ff'),
@@ -553,7 +553,7 @@ elif st.session_state.selected_view == "By Support":
     # Support by SWD Status
     col1, col2 = st.columns(2)
     with col1:
-        support_swd = pd.crosstab(filtered_students['SWD'], filtered_students['Category of Support'])
+        support_swd = pd.crosstab(filtered_students['SWD'], filtered_students['Category of Support']).reindex(columns=['Minimal', 'Moderate', 'Intensive', 'Specialist'], fill_value=0)
         fig = go.Figure(data=[
             go.Bar(x=support_swd.index, y=support_swd['Minimal'], name='Minimal', marker_color='#10b981'),
             go.Bar(x=support_swd.index, y=support_swd['Moderate'], name='Moderate', marker_color='#00e5ff'),
@@ -564,7 +564,7 @@ elif st.session_state.selected_view == "By Support":
         st.plotly_chart(fig, use_container_width=True)
     
     with col2:
-        support_atsi = pd.crosstab(filtered_students['ATSI'], filtered_students['Category of Support'])
+        support_atsi = pd.crosstab(filtered_students['ATSI'], filtered_students['Category of Support']).reindex(columns=['Minimal', 'Moderate', 'Intensive', 'Specialist'], fill_value=0)
         fig = go.Figure(data=[
             go.Bar(x=support_atsi.index, y=support_atsi['Minimal'], name='Minimal', marker_color='#10b981'),
             go.Bar(x=support_atsi.index, y=support_atsi['Moderate'], name='Moderate', marker_color='#00e5ff'),
