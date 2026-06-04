@@ -425,6 +425,67 @@ def delete_row(table, row_id):
     supabase.table(table).delete().eq("id", row_id).execute()
 
 # ─────────────────────────────────────────────────────────────────────────────
+# DUPLICATE DETECTION HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _meeting_signature(rec):
+    """A stable key that identifies 'the same meeting'. Two records sharing this
+    signature are considered duplicates of one another."""
+    return (
+        str(rec.get("program", "")).strip(),
+        str(rec.get("meeting_date", "")).strip(),
+        str(rec.get("week_type", "")).strip(),
+        str(rec.get("term", "")).strip(),
+        str(rec.get("week_number", "")).strip(),
+    )
+
+
+def find_existing_meetings(program, meeting_date, week_type, term, week_number):
+    """Return all saved records matching this meeting's signature (newest first)."""
+    target = (
+        str(program).strip(),
+        str(meeting_date).strip(),
+        str(week_type).strip(),
+        str(term).strip(),
+        str(week_number).strip(),
+    )
+    matches = []
+    for rec in fetch("tm_program_meetings", {"program": program}, "meeting_date"):
+        if _meeting_signature(rec) == target:
+            matches.append(rec)
+    # Newest first (by created/updated id ordering as a fallback)
+    matches.sort(key=lambda r: str(r.get("updated_at") or r.get("created_at") or r.get("id") or ""), reverse=True)
+    return matches
+
+
+def find_duplicate_meeting_groups(program):
+    """Scan all records for this program and return {signature: [records]} for any
+    signature that appears more than once (i.e. true duplicates in the database)."""
+    groups = {}
+    for rec in fetch("tm_program_meetings", {"program": program}, "meeting_date"):
+        sig = _meeting_signature(rec)
+        groups.setdefault(sig, []).append(rec)
+    return {sig: recs for sig, recs in groups.items() if len(recs) > 1}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SMARTAR LINK BUTTON (reliable, opens in a new tab)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def smartar_link_button(url, label="🎯 Open Goal Builder"):
+    """Render a styled anchor that reliably opens the Goal Builder in a NEW tab,
+    so the meeting form is never lost. Markdown links / meta-refresh were unreliable."""
+    st.markdown(
+        f'<a href="{url}" target="_blank" rel="noopener" '
+        f'style="display:inline-block;background:#1A7A6E;color:#fff;font-weight:600;'
+        f'font-size:0.82rem;padding:0.4rem 0.8rem;border-radius:8px;text-decoration:none;">'
+        f'{label}</a>',
+        unsafe_allow_html=True,
+    )
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # WORD DOCUMENT HELPERS (keeping existing - truncated for brevity)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -456,6 +517,226 @@ def _para_run(para, text, bold=False, italic=False, size_pt=10, colour="0f172a")
     return run
 
 # ─────────────────────────────────────────────────────────────────────────────
+# PROFESSIONAL MINUTES — WORD DOCUMENT BUILDER
+# ─────────────────────────────────────────────────────────────────────────────
+
+TEAL  = "1A7A6E"
+AMBER = "C8760A"
+INK   = "0F172A"
+GREY  = "64748B"
+
+def _safe_json(raw, default):
+    import json as _json
+    if raw is None:
+        return default
+    if not isinstance(raw, str):
+        return raw
+    try:
+        return _json.loads(raw)
+    except Exception:
+        return default
+
+def _doc_heading(doc, text, colour=TEAL, size=13, space_before=10, space_after=4):
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(space_before)
+    p.paragraph_format.space_after  = Pt(space_after)
+    _para_run(p, text, bold=True, size_pt=size, colour=colour)
+    return p
+
+def _doc_rule(doc):
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(2)
+    p.paragraph_format.space_after  = Pt(2)
+    pPr = p._p.get_or_add_pPr()
+    pbdr = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "single")
+    bottom.set(qn("w:sz"), "6")
+    bottom.set(qn("w:space"), "1")
+    bottom.set(qn("w:color"), TEAL)
+    pbdr.append(bottom)
+    pPr.append(pbdr)
+
+def build_minutes_docx(md, program):
+    """Build a polished, sendable Word minutes document from a meeting-data dict
+    (same column structure used for saving). Returns a BytesIO."""
+    week_type = md.get("week_type", "")
+    if program == "SPECIALIST":
+        type_label = "Specialist Program Meeting"
+    elif week_type == "A":
+        type_label = "Week A — Student Lens"
+    elif week_type == "B":
+        type_label = "Week B — System Lens"
+    else:
+        type_label = "Team Meeting"
+
+    prog_label = PROGRAMS.get(program, {}).get("label", program)
+
+    doc = Document()
+    # Base style
+    normal = doc.styles["Normal"]
+    normal.font.name = "Calibri"
+    normal.font.size = Pt(10.5)
+    normal.font.color.rgb = _rgb(INK)
+    for section in doc.sections:
+        section.top_margin    = Cm(1.8)
+        section.bottom_margin = Cm(1.8)
+        section.left_margin   = Cm(2.0)
+        section.right_margin  = Cm(2.0)
+
+    # ── Title band ──
+    title = doc.add_paragraph()
+    title.paragraph_format.space_after = Pt(0)
+    _para_run(title, "Cowandilla Learning Centre", bold=True, size_pt=18, colour=TEAL)
+    sub = doc.add_paragraph()
+    sub.paragraph_format.space_after = Pt(2)
+    _para_run(sub, "Learning & Behaviour Unit", bold=False, size_pt=10.5, colour=GREY)
+    mt = doc.add_paragraph()
+    mt.paragraph_format.space_after = Pt(6)
+    _para_run(mt, f"{prog_label}  ·  {type_label}", bold=True, size_pt=12, colour=AMBER)
+    _doc_rule(doc)
+
+    # ── Meeting details table ──
+    details = [
+        ("Date",        str(md.get("meeting_date", ""))),
+        ("Term / Week", f"{md.get('term','')}  ·  Week {md.get('week_number','')}"),
+        ("Facilitator", md.get("facilitator", "")),
+        ("Attendees",   md.get("attendees", "") or "Not recorded"),
+    ]
+    tbl = doc.add_table(rows=len(details), cols=2)
+    tbl.alignment = WD_TABLE_ALIGNMENT.LEFT
+    tbl.allow_autofit = True
+    for i, (label, value) in enumerate(details):
+        c0, c1 = tbl.rows[i].cells
+        c0.width = Cm(3.5); c1.width = Cm(13.0)
+        _shade_cell(c0, "F1F5F9")
+        p0 = c0.paragraphs[0]; p0.paragraph_format.space_after = Pt(1)
+        _para_run(p0, label, bold=True, size_pt=9.5, colour=TEAL)
+        p1 = c1.paragraphs[0]; p1.paragraph_format.space_after = Pt(1)
+        _para_run(p1, str(value), size_pt=10, colour=INK)
+    doc.add_paragraph().paragraph_format.space_after = Pt(2)
+
+    # ── Check-in notes ──
+    checkin = md.get("checkin_notes", "")
+    if program == "SPECIALIST":
+        cd = _safe_json(checkin, {})
+        mon = cd.get("monday_teacher", "") if isinstance(cd, dict) else ""
+        tf  = cd.get("tuefri_teacher", "") if isinstance(cd, dict) else ""
+        if mon or tf:
+            _doc_heading(doc, "Team Check-in & Handover")
+            if mon:
+                p = doc.add_paragraph(); _para_run(p, "Monday Teacher: ", bold=True, size_pt=10, colour=AMBER); _para_run(p, mon, size_pt=10)
+            if tf:
+                p = doc.add_paragraph(); _para_run(p, "Tuesday–Friday Teacher: ", bold=True, size_pt=10, colour=AMBER); _para_run(p, tf, size_pt=10)
+    else:
+        if isinstance(checkin, str) and checkin.strip():
+            _doc_heading(doc, "Team Check-in")
+            doc.add_paragraph(checkin.strip())
+
+    # ── Student concerns (Week A / Specialist) ──
+    concerns = _safe_json(md.get("student_concerns", ""), [])
+    concern_items = []
+    if isinstance(concerns, dict):
+        # Specialist structure
+        for c in concerns.get("concerns", []):
+            if isinstance(c, dict):
+                txt = " · ".join(v for v in [c.get("concern"), c.get("strategy"), c.get("adjustment"), c.get("who"), c.get("timeline")] if v)
+                if txt:
+                    concern_items.append(txt)
+        prog_c = concerns.get("program_concerns", "")
+    elif isinstance(concerns, list):
+        for c in concerns:
+            if isinstance(c, dict) and c.get("notes", "").strip():
+                concern_items.append(c["notes"].strip())
+        prog_c = ""
+    else:
+        prog_c = ""
+
+    if concern_items:
+        _doc_heading(doc, "Student Concerns")
+        for txt in concern_items:
+            p = doc.add_paragraph(style=None)
+            p.paragraph_format.left_indent = Cm(0.4)
+            p.paragraph_format.space_after = Pt(3)
+            _para_run(p, "•  ", bold=True, colour=AMBER)
+            _para_run(p, txt, size_pt=10)
+    if isinstance(concerns, dict) and prog_c and prog_c.strip():
+        p = doc.add_paragraph(); _para_run(p, "Program-level concerns: ", bold=True, size_pt=10, colour=AMBER); _para_run(p, prog_c.strip(), size_pt=10)
+
+    # ── SMARTAR spotlight ──
+    smartar = _safe_json(md.get("smartar_spotlight", ""), [])
+    if isinstance(smartar, list) and any(s.get("student_name") for s in smartar if isinstance(s, dict)):
+        _doc_heading(doc, "SMARTAR Goal Spotlight")
+        for s in smartar:
+            if isinstance(s, dict) and s.get("student_name"):
+                p = doc.add_paragraph()
+                p.paragraph_format.left_indent = Cm(0.4)
+                p.paragraph_format.space_after = Pt(2)
+                _para_run(p, "•  ", bold=True, colour=AMBER)
+                _para_run(p, s["student_name"], bold=True, size_pt=10)
+                if s.get("notes", "").strip():
+                    _para_run(p, "  —  " + s["notes"].strip(), size_pt=10, colour=GREY)
+
+    # ── Priority focus (Week B) ──
+    pf = _safe_json(md.get("priority_focus", ""), {})
+    pf_notes = pf.get("notes", "") if isinstance(pf, dict) else ""
+    if pf_notes and pf_notes.strip():
+        _doc_heading(doc, "Priority Focus — System Lens")
+        for line in pf_notes.strip().split("\n"):
+            if line.strip():
+                doc.add_paragraph(line.strip())
+
+    # ── Reports / TAC ──
+    reports = md.get("reports_tac_notes", "")
+    if isinstance(reports, str) and reports.strip():
+        _doc_heading(doc, "Reports / TAC / Transitions")
+        doc.add_paragraph(reports.strip())
+
+    # ── Meeting minutes ──
+    minutes = md.get("meeting_minutes", "")
+    if isinstance(minutes, str) and minutes.strip():
+        _doc_heading(doc, "Meeting Minutes")
+        for block in minutes.strip().split("\n"):
+            if block.strip():
+                doc.add_paragraph(block.strip())
+
+    # ── Actions table ──
+    actions = _safe_json(md.get("actions", ""), [])
+    real_actions = [a for a in actions if isinstance(a, dict) and a.get("action", "").strip()]
+    if real_actions:
+        _doc_heading(doc, "Actions")
+        at = doc.add_table(rows=1, cols=5)
+        at.alignment = WD_TABLE_ALIGNMENT.LEFT
+        hdr = ["Action", "Who", "By When", "Priority", "Done"]
+        widths = [Cm(7.0), Cm(3.0), Cm(2.6), Cm(2.2), Cm(1.6)]
+        for j, h in enumerate(hdr):
+            cell = at.rows[0].cells[j]
+            cell.width = widths[j]
+            _shade_cell(cell, TEAL)
+            pr = cell.paragraphs[0]; pr.paragraph_format.space_after = Pt(1)
+            _para_run(pr, h, bold=True, size_pt=9.5, colour="FFFFFF")
+        for a in real_actions:
+            row = at.add_row().cells
+            vals = [a.get("action",""), a.get("who",""), a.get("by_when",""),
+                    a.get("priority","Medium"), "✓" if a.get("done") else ""]
+            for j, v in enumerate(vals):
+                row[j].width = widths[j]
+                pr = row[j].paragraphs[0]; pr.paragraph_format.space_after = Pt(1)
+                _para_run(pr, str(v), size_pt=9.5)
+
+    # ── Footer line ──
+    doc.add_paragraph().paragraph_format.space_after = Pt(4)
+    _doc_rule(doc)
+    foot = doc.add_paragraph()
+    _para_run(foot, f"Minutes generated from the CLC LBU Portal · {datetime.date.today().isoformat()}",
+              italic=True, size_pt=8.5, colour=GREY)
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SPECIALIST PROGRAM MEETING (single template - not Week A/B)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -475,9 +756,10 @@ def render_specialist_meeting():
     
     # Meeting selection - New or Edit existing
     st.markdown("#### 📂 Select Meeting")
+    recent_records = past_meetings[:20]
     meeting_options = ["➕ New Meeting"] + [
         f"{rec.get('meeting_date','')} - Term {rec.get('term','')} W{rec.get('week_number','')}"
-        for rec in reversed(past_meetings[-20:])  # Show last 20 meetings
+        for rec in recent_records
     ]
     
     selected_meeting = st.selectbox(
@@ -489,9 +771,9 @@ def render_specialist_meeting():
     # Load existing meeting if selected
     selected_record = None
     if selected_meeting != "➕ New Meeting":
-        # Find the selected record
+        # Find the selected record (aligned with meeting_options order)
         selected_idx = meeting_options.index(selected_meeting) - 1
-        selected_record = list(reversed(past_meetings[-20:]))[selected_idx]
+        selected_record = recent_records[selected_idx]
         
         # Set current_meeting_id so it updates instead of creating new
         if not st.session_state.current_meeting_id or st.session_state.current_meeting_id != selected_record['id']:
@@ -865,27 +1147,57 @@ def render_specialist_meeting():
     trigger_autosave("SPECIALIST", meeting_data)
 
     # Manual save button
-    save_button_text = "💾 Update Meeting Record" if st.session_state.current_meeting_id else "💾 Save Meeting Record"
+    editing_existing = bool(st.session_state.current_meeting_id) and not str(st.session_state.current_meeting_id).startswith("temp_")
+    save_button_text = "💾 Update Meeting Record" if editing_existing else "💾 Save Meeting Record"
     if st.button(save_button_text, type="primary", use_container_width=True, key="sp_save"):
         try:
-            if st.session_state.current_meeting_id and not str(st.session_state.current_meeting_id).startswith("temp_"):
+            saved_id = None
+            if editing_existing:
                 supabase.table('tm_program_meetings').update(meeting_data).eq('id', st.session_state.current_meeting_id).execute()
+                saved_id = st.session_state.current_meeting_id
                 st.success("✅ Meeting record updated!")
             else:
-                result = supabase.table('tm_program_meetings').insert(meeting_data).execute()
-                if result.data:
-                    st.session_state.current_meeting_id = result.data[0]['id']
-                st.success("✅ Meeting record saved!")
-            
-            # Clear session state
-            for k in ["sp_concerns", "sp_curriculum", "sp_actions"]:
-                st.session_state.pop(k, None)
-            
+                existing = find_existing_meetings(
+                    "SPECIALIST", meeting_data["meeting_date"], meeting_data["week_type"],
+                    meeting_data["term"], meeting_data["week_number"]
+                )
+                if existing:
+                    saved_id = existing[0]['id']
+                    supabase.table('tm_program_meetings').update(meeting_data).eq('id', saved_id).execute()
+                    if len(existing) > 1:
+                        dup_ids = ", ".join(str(e['id']) for e in existing[1:])
+                        st.warning(f"⚠️ {len(existing)} copies of this meeting already exist. Updated the most recent. Extra IDs: {dup_ids}.")
+                    else:
+                        st.success("✅ A meeting for this date already existed — updated it instead of creating a duplicate.")
+                else:
+                    result = supabase.table('tm_program_meetings').insert(meeting_data).execute()
+                    saved_id = result.data[0]['id'] if result.data else None
+                    st.success("✅ Meeting record saved!")
+
+            if saved_id:
+                st.session_state.current_meeting_id = saved_id
+
             st.session_state.last_autosave_time = None
             st.session_state.autosave_message = ""
             st.rerun()
         except Exception as e:
             st.error(f"⚠️ Database save failed: {e}")
+
+    # ── Download professional minutes (Word) ──────────────────────────────────
+    st.markdown("")
+    try:
+        _docx_buf = build_minutes_docx(meeting_data, "SPECIALIST")
+        st.download_button(
+            "📥 Download Minutes (Word) — ready to send to members",
+            data=_docx_buf,
+            file_name=f"CLC_Specialist_Minutes_{meeting_data['meeting_date']}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True,
+            key="sp_download",
+        )
+        st.caption("Tip: save first so the download matches the stored record exactly.")
+    except Exception as _e:
+        st.caption(f"Minutes document could not be generated: {_e}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -903,12 +1215,43 @@ def render_program_meeting(program):
 
     # Fetch past meetings for this program
     past_meetings = fetch("tm_program_meetings", {"program": program}, "meeting_date")
-    
+
+    # ── Duplicate check banner ────────────────────────────────────────────────
+    dup_groups = find_duplicate_meeting_groups(program)
+    if dup_groups:
+        with st.expander(f"⚠️ Duplicate check — {len(dup_groups)} meeting(s) saved more than once", expanded=True):
+            st.caption("These meetings share the same date / term / week / type. Keep the newest and remove the extras.")
+            for sig, recs in dup_groups.items():
+                _, mdate, wtype, mterm, mweek = sig
+                st.markdown(f"**{mdate} · Term {mterm} · Week {mweek} · Type {wtype or '—'}** — {len(recs)} copies")
+                # recs are newest-first already from fetch order is by date; sort by id text desc
+                recs_sorted = sorted(recs, key=lambda r: str(r.get("updated_at") or r.get("created_at") or r.get("id") or ""), reverse=True)
+                keep = recs_sorted[0]
+                st.caption(f"Keeping most recent (ID {keep.get('id')}). Extras: {', '.join(str(r.get('id')) for r in recs_sorted[1:])}")
+                if st.session_state.get("admin"):
+                    if st.button(f"🗑️ Delete {len(recs_sorted)-1} extra copy(ies)", key=f"dedupe_{program}_{mdate}_{wtype}_{mweek}"):
+                        deleted = 0
+                        for r in recs_sorted[1:]:
+                            try:
+                                delete_row("tm_program_meetings", r.get("id"))
+                                deleted += 1
+                            except Exception as _e:
+                                st.error(f"Could not delete ID {r.get('id')}: {_e}")
+                        st.success(f"Removed {deleted} duplicate copy(ies).")
+                        st.rerun()
+                else:
+                    st.caption("🔐 Log in as admin (sidebar) to remove duplicates.")
+        # refresh list after potential changes
+        past_meetings = fetch("tm_program_meetings", {"program": program}, "meeting_date")
+
     # Meeting selection - New or Edit existing
     st.markdown("#### 📂 Select Meeting")
+    # past_meetings is date-descending; show the newest 20 (newest first) so a
+    # meeting you just saved is always selectable at the top.
+    recent_records = past_meetings[:20]
     meeting_options = ["➕ New Meeting"] + [
         f"{rec.get('meeting_date','')} - Term {rec.get('term','')} W{rec.get('week_number','')} - Week {rec.get('week_type','')}"
-        for rec in reversed(past_meetings[-20:])  # Show last 20 meetings
+        for rec in recent_records
     ]
     
     selected_meeting = st.selectbox(
@@ -920,9 +1263,9 @@ def render_program_meeting(program):
     # Load existing meeting if selected
     selected_record = None
     if selected_meeting != "➕ New Meeting":
-        # Find the selected record
+        # Find the selected record (aligned with meeting_options order)
         selected_idx = meeting_options.index(selected_meeting) - 1
-        selected_record = list(reversed(past_meetings[-20:]))[selected_idx]
+        selected_record = recent_records[selected_idx]
         
         # Set current_meeting_id so it updates instead of creating new
         if not st.session_state.current_meeting_id or st.session_state.current_meeting_id != selected_record['id']:
@@ -951,10 +1294,15 @@ def render_program_meeting(program):
         # Clear meeting_id for new meeting
         if selected_meeting == "➕ New Meeting" and st.session_state.current_meeting_id:
             st.session_state.current_meeting_id = None
-            # Clear session state
+            # Clear session state (lists)
             for k in [f"pm_concerns_{program}", f"pm_smartar_{program}",
                       f"pm_priority_{program}", f"pm_actions_{program}"]:
                 st.session_state.pop(k, None)
+            # Also purge per-row widget states so a fresh meeting starts genuinely blank
+            for wk in list(st.session_state.keys()):
+                if wk.startswith(f"con_notes_{program}_") or wk.startswith(f"sm_notes_{program}_") \
+                   or wk.startswith(f"sm_notes_b_{program}_"):
+                    st.session_state.pop(wk, None)
     
     st.markdown("---")
 
@@ -1089,6 +1437,7 @@ def render_program_meeting(program):
         # Manual entry section
         st.markdown("**Option A: Manual Entry**")
         
+        import uuid as _uuid
         concerns_key = f"pm_concerns_{program}"
         if concerns_key not in st.session_state:
             # Load from selected_record if editing
@@ -1102,26 +1451,38 @@ def render_program_meeting(program):
                 st.session_state[concerns_key] = [{"notes": ""}]
 
         concerns = st.session_state[concerns_key]
-        
+
+        # Give every row a STABLE id. Widget keys are tied to the id (not the list
+        # position) so adding/removing a student never scrambles what was typed.
+        for row in concerns:
+            if not row.get("_id"):
+                row["_id"] = _uuid.uuid4().hex
+
+        delete_id = None
         for idx, row in enumerate(concerns):
+            cid = row["_id"]
             col_text, col_del = st.columns([11, 0.5])
             with col_text:
                 row["notes"] = st.text_area(
                     f"Student {idx + 1}",
                     value=row.get("notes", ""),
-                    key=f"con_notes_{program}_{idx}",
+                    key=f"con_notes_{program}_{cid}",
                     height=100,
                     placeholder="Student name · Concern / behaviour · Hypothesis (why?) · Strategy to try · Who · By when",
                 )
             with col_del:
                 st.markdown("<div style='margin-top:2rem;'></div>", unsafe_allow_html=True)
                 if len(concerns) > 1:
-                    if st.button("✕", key=f"con_del_{program}_{idx}"):
-                        concerns.pop(idx)
-                        st.rerun()
-        
+                    if st.button("✕", key=f"con_del_{program}_{cid}"):
+                        delete_id = cid
+        if delete_id is not None:
+            # Remove the matching row AND its widget state, then rerun.
+            st.session_state[concerns_key] = [c for c in concerns if c.get("_id") != delete_id]
+            st.session_state.pop(f"con_notes_{program}_{delete_id}", None)
+            st.rerun()
+
         if st.button("➕ Add student concern", key=f"con_add_{program}"):
-            concerns.append({"notes": ""})
+            concerns.append({"notes": "", "_id": _uuid.uuid4().hex})
             st.rerun()
         
         # Show summary of documented students
@@ -1250,9 +1611,9 @@ def render_program_meeting(program):
                             pm_term or "T1",
                             pm_week
                         )
-                        st.markdown(f"[🎯 Open Goal Builder]({smartar_url})", unsafe_allow_html=True)
+                        smartar_link_button(smartar_url)
                     else:
-                        st.caption("Initializing...")
+                        st.caption("Save meeting first")
                 
                 with col_status:
                     # Auto-sync disabled to prevent UI freezing
@@ -1304,34 +1665,28 @@ def render_program_meeting(program):
         
         with col_add:
             st.markdown("<div style='margin-top:1.8rem;'></div>", unsafe_allow_html=True)
-            if st.button("➕ Add & Open Goal Builder", key=f"add_student_{program}", type="primary"):
+            if st.button("➕ Add to spotlight", key=f"add_student_{program}", type="primary"):
                 if new_student_name and new_student_name.strip():
-                    # Add to smartar list
-                    smartar.append({"student_name": new_student_name.strip(), "notes": ""})
-                    
-                    # Open SMARTAR Goal Builder immediately
-                    if st.session_state.current_meeting_id:
-                        smartar_url = get_smartar_goal_link(
-                            new_student_name.strip(), 
-                            st.session_state.current_meeting_id,
-                            program,
-                            pm_term or "T1",
-                            pm_week
-                        )
-                        st.markdown(f"""
-                        <meta http-equiv="refresh" content="0; url={smartar_url}">
-                        <div style="background:#dbeafe;border-left:4px solid #0284c7;border-radius:8px;
-                                    padding:12px 16px;margin:12px 0;font-size:14px;">
-                          🎯 <strong>Opening SMARTAR Goal Builder for {new_student_name}...</strong><br>
-                          If it doesn't open automatically, <a href="{smartar_url}" target="_blank">click here</a>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.warning("⚠️ Meeting not initialized yet - fill in meeting details first")
+                    nm = new_student_name.strip()
+                    if not any(s.get("student_name") == nm for s in smartar):
+                        smartar.append({"student_name": nm, "notes": ""})
+                    if not st.session_state.current_meeting_id:
+                        st.session_state[f"_smartar_added_{program}"] = nm
+                    st.rerun()
                 else:
                     st.warning("⚠️ Please select or enter a student name")
+
+        # After adding, show a clear, reliable link that opens the Goal Builder in a
+        # NEW tab (so this meeting form is never lost). Requires a saved meeting id.
+        _just_added = st.session_state.pop(f"_smartar_added_{program}", None)
+        if st.session_state.current_meeting_id and smartar:
+            last = smartar[-1].get("student_name", "")
+            if last:
+                _url = get_smartar_goal_link(last, st.session_state.current_meeting_id, program, pm_term or "T1", pm_week)
+                st.markdown("**Set this student's goal:**")
+                smartar_link_button(_url, f"🎯 Open Goal Builder for {last}")
+        elif not st.session_state.current_meeting_id:
+            st.info("💡 Save the meeting first (button at the bottom) — then a Goal Builder link will appear for each student.")
         
         st.markdown("---")
 
@@ -1534,9 +1889,9 @@ RAW TRANSCRIPT:
                             pm_term or "T1",
                             pm_week
                         )
-                        st.markdown(f"[🎯 Open Goal Builder]({smartar_url})", unsafe_allow_html=True)
+                        smartar_link_button(smartar_url)
                     else:
-                        st.caption("Initializing...")
+                        st.caption("Save meeting first")
                 
                 with col_status:
                     # Auto-sync disabled to prevent UI freezing
@@ -1585,32 +1940,23 @@ RAW TRANSCRIPT:
         
         with col_add:
             st.markdown("<div style='margin-top:1.8rem;'></div>", unsafe_allow_html=True)
-            if st.button("➕ Add & Open Goal Builder", key=f"add_student_b_{program}", type="primary"):
+            if st.button("➕ Add to spotlight", key=f"add_student_b_{program}", type="primary"):
                 if new_student_name and new_student_name.strip():
-                    smartar.append({"student_name": new_student_name.strip(), "notes": ""})
-                    
-                    if st.session_state.current_meeting_id:
-                        smartar_url = get_smartar_goal_link(
-                            new_student_name.strip(), 
-                            st.session_state.current_meeting_id,
-                            program,
-                            pm_term or "T1",
-                            pm_week
-                        )
-                        st.markdown(f"""
-                        <meta http-equiv="refresh" content="0; url={smartar_url}">
-                        <div style="background:#dbeafe;border-left:4px solid #0284c7;border-radius:8px;
-                                    padding:12px 16px;margin:12px 0;font-size:14px;">
-                          🎯 <strong>Opening SMARTAR Goal Builder for {new_student_name}...</strong><br>
-                          If it doesn't open automatically, <a href="{smartar_url}" target="_blank">click here</a>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.warning("⚠️ Meeting not initialized yet - fill in meeting details first")
+                    nm = new_student_name.strip()
+                    if not any(s.get("student_name") == nm for s in smartar):
+                        smartar.append({"student_name": nm, "notes": ""})
+                    st.rerun()
                 else:
                     st.warning("⚠️ Please select or enter a student name")
+
+        if st.session_state.current_meeting_id and smartar:
+            last = smartar[-1].get("student_name", "")
+            if last:
+                _url = get_smartar_goal_link(last, st.session_state.current_meeting_id, program, pm_term or "T1", pm_week)
+                st.markdown("**Set this student's goal:**")
+                smartar_link_button(_url, f"🎯 Open Goal Builder for {last}")
+        elif not st.session_state.current_meeting_id:
+            st.info("💡 Save the meeting first (button at the bottom) — then a Goal Builder link will appear for each student.")
 
         pm_reports = ""
         concerns = []
@@ -1773,8 +2119,20 @@ RAW TRANSCRIPT:
 
     # Prepare meeting data for save - FIXED: Use local variables instead of session state
     smartar_data = [{"student_name": r.get("student_name",""), "notes": r.get("notes","")} for r in smartar]
-    actions_data = actions  # Use local variable directly
-    concerns_data = [{"notes": r.get("notes","")} for r in concerns] if is_week_a else []
+    actions_data = [{k: v for k, v in a.items() if k != "_id"} for a in actions]
+
+    # Robustly capture student concerns straight from each row's widget by its
+    # stable id — this guarantees every student typed in (including the 2nd, 3rd…)
+    # is saved, and that empty rows are dropped.
+    if is_week_a:
+        concerns_data = []
+        for r in concerns:
+            cid = r.get("_id")
+            note = st.session_state.get(f"con_notes_{program}_{cid}", r.get("notes", "")) if cid else r.get("notes", "")
+            if note and note.strip():
+                concerns_data.append({"notes": note.strip()})
+    else:
+        concerns_data = []
     # Week B: priority_rows is [{notes: "..."}]; Week A: empty
     if not is_week_a and priority_rows:
         priority_data = priority_rows[0] if isinstance(priority_rows[0], dict) else {"notes": ""}
@@ -1802,28 +2160,71 @@ RAW TRANSCRIPT:
     trigger_autosave(program, meeting_data)
 
     # Manual save button
-    save_button_text = "💾 Update Meeting Record" if st.session_state.current_meeting_id and not str(st.session_state.current_meeting_id).startswith("temp_") else "💾 Save Meeting Record"
+    editing_existing = bool(st.session_state.current_meeting_id) and not str(st.session_state.current_meeting_id).startswith("temp_")
+    save_button_text = "💾 Update Meeting Record" if editing_existing else "💾 Save Meeting Record"
     if st.button(save_button_text, type="primary", use_container_width=True, key=f"pm_save_{program}"):
         try:
-            if st.session_state.current_meeting_id and not str(st.session_state.current_meeting_id).startswith("temp_"):
+            saved_id = None
+            if editing_existing:
                 supabase.table('tm_program_meetings').update(meeting_data).eq('id', st.session_state.current_meeting_id).execute()
+                saved_id = st.session_state.current_meeting_id
                 st.success("✅ Meeting record updated!")
             else:
-                result = supabase.table('tm_program_meetings').insert(meeting_data).execute()
-                if result.data:
-                    st.session_state.current_meeting_id = result.data[0]['id']
-                st.success("✅ Meeting record saved!")
-            
-            # Clear session state
-            for k in [f"pm_concerns_{program}", f"pm_smartar_{program}",
-                      f"pm_priority_{program}", f"pm_actions_{program}"]:
-                st.session_state.pop(k, None)
-            
+                # DUPLICATE GUARD — never create a 2nd copy of a meeting that already
+                # exists for the same date / term / week / type.
+                existing = find_existing_meetings(
+                    program, meeting_data["meeting_date"], meeting_data["week_type"],
+                    meeting_data["term"], meeting_data["week_number"]
+                )
+                if existing:
+                    saved_id = existing[0]['id']
+                    supabase.table('tm_program_meetings').update(meeting_data).eq('id', saved_id).execute()
+                    if len(existing) > 1:
+                        dup_ids = ", ".join(str(e['id']) for e in existing[1:])
+                        st.warning(
+                            f"⚠️ {len(existing)} saved copies of this meeting already exist "
+                            f"(same date / term / week / type). I updated the most recent one rather "
+                            f"than adding another. Extra copies still in the database — IDs: {dup_ids}. "
+                            f"Use the **Duplicate check** banner at the top of this tab to remove them."
+                        )
+                    else:
+                        st.success("✅ A meeting for this date already existed — updated it instead of creating a duplicate.")
+                else:
+                    result = supabase.table('tm_program_meetings').insert(meeting_data).execute()
+                    saved_id = result.data[0]['id'] if result.data else None
+                    st.success("✅ Meeting record saved!")
+
+            # Keep the just-saved meeting loaded so you can carry on editing — this is
+            # what previously made it look like a student had been 'lost'.
+            if saved_id:
+                st.session_state.current_meeting_id = saved_id
+                st.session_state[f"meeting_select_{program}"] = (
+                    f"{meeting_data['meeting_date']} - Term {meeting_data['term']} "
+                    f"W{meeting_data['week_number']} - Week {meeting_data['week_type']}"
+                )
+
             st.session_state.last_autosave_time = None
             st.session_state.autosave_message = ""
             st.rerun()
         except Exception as e:
             st.error(f"⚠️ Database save failed: {e}")
+
+    # ── Download professional minutes (Word) ──────────────────────────────────
+    st.markdown("")
+    try:
+        _docx_buf = build_minutes_docx(meeting_data, program)
+        _fname = f"CLC_{program}_Minutes_{meeting_data['meeting_date']}_Week{meeting_data['week_type']}.docx"
+        st.download_button(
+            "📥 Download Minutes (Word) — ready to send to members",
+            data=_docx_buf,
+            file_name=_fname,
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True,
+            key=f"pm_download_{program}",
+        )
+        st.caption("Tip: save first so the download matches the stored record exactly.")
+    except Exception as _e:
+        st.caption(f"Minutes document could not be generated: {_e}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1961,9 +2362,24 @@ def render_meeting_archive(program):
                         pass
 
                 st.markdown("")
-                if st.button("✏️ Edit / Add to This Meeting", key=f"arch_open_{meeting_id}", type="secondary"):
-                    st.session_state[edit_key] = True
-                    st.rerun()
+                col_edit_btn, col_dl_btn = st.columns(2)
+                with col_edit_btn:
+                    if st.button("✏️ Edit / Add to This Meeting", key=f"arch_open_{meeting_id}", type="secondary", use_container_width=True):
+                        st.session_state[edit_key] = True
+                        st.rerun()
+                with col_dl_btn:
+                    try:
+                        _abuf = build_minutes_docx(meeting, program)
+                        st.download_button(
+                            "📥 Download Minutes (Word)",
+                            data=_abuf,
+                            file_name=f"CLC_{program}_Minutes_{meeting_date}.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            use_container_width=True,
+                            key=f"arch_dl_{meeting_id}",
+                        )
+                    except Exception as _e:
+                        st.caption(f"Minutes doc error: {_e}")
 
             else:
                 # ── FULL EDIT MODE ─────────────────────────────────────────
