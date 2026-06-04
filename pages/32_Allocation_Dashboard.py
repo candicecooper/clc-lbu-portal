@@ -41,17 +41,29 @@ def get_sample():
 
 all_data = st.session_state.data if st.session_state.data is not None else get_sample()
 
-filtered = all_data[
-    (all_data['Year'].isin(st.session_state.filters['year'])) &
-    (all_data['Program'].isin(st.session_state.filters['program'])) &
-    (all_data['Status'].isin(st.session_state.filters['status'])) &
-    (all_data['ATSI'].isin(st.session_state.filters['atsi'])) &
-    (all_data['EALD'].isin(st.session_state.filters['eald'])) &
-    (all_data['Attendance'].isin(st.session_state.filters['attendance'])) &
-    (all_data['SWD'].isin(st.session_state.filters['swd'])) &
-    (all_data['Category of Support'].isin(st.session_state.filters['support'])) &
-    (all_data['Partnership'].isin(st.session_state.filters['partnership']))
-]
+# Build filter conditions only for columns that exist
+filter_conditions = pd.Series([True] * len(all_data), index=all_data.index)
+
+if 'Year' in all_data.columns:
+    filter_conditions &= all_data['Year'].isin(st.session_state.filters['year'])
+if 'Program' in all_data.columns:
+    filter_conditions &= all_data['Program'].isin(st.session_state.filters['program'])
+if 'Status' in all_data.columns:
+    filter_conditions &= all_data['Status'].isin(st.session_state.filters['status'])
+if 'ATSI' in all_data.columns:
+    filter_conditions &= all_data['ATSI'].isin(st.session_state.filters['atsi'])
+if 'EALD' in all_data.columns:
+    filter_conditions &= all_data['EALD'].isin(st.session_state.filters['eald'])
+if 'Attendance' in all_data.columns:
+    filter_conditions &= all_data['Attendance'].isin(st.session_state.filters['attendance'])
+if 'SWD' in all_data.columns:
+    filter_conditions &= all_data['SWD'].isin(st.session_state.filters['swd'])
+if 'Category of Support' in all_data.columns:
+    filter_conditions &= all_data['Category of Support'].isin(st.session_state.filters['support'])
+if 'Partnership' in all_data.columns:
+    filter_conditions &= all_data['Partnership'].isin(st.session_state.filters['partnership'])
+
+filtered = all_data[filter_conditions]
 
 st.markdown("""
 <style>
@@ -126,46 +138,61 @@ with st.sidebar:
 st.markdown("## Allocation Dashboard")
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("Total", len(filtered))
-c2.metric("Allocated", len(filtered[filtered['Status']=='Allocated']))
-c3.metric("Pending", len(filtered[filtered['Status']=='Pending']))
-c4.metric("ATSI", len(filtered[filtered['ATSI']=='Yes']))
-c5.metric("SWD", len(filtered[filtered['SWD']=='Yes']))
-c6.metric("EALD", len(filtered[filtered['EALD']=='Yes']))
+c2.metric("Allocated", len(filtered[filtered['Status']=='Allocated']) if 'Status' in filtered.columns else 0)
+c3.metric("Pending", len(filtered[filtered['Status']=='Pending']) if 'Status' in filtered.columns else 0)
+c4.metric("ATSI", len(filtered[filtered['ATSI']=='Yes']) if 'ATSI' in filtered.columns else 0)
+c5.metric("SWD", len(filtered[filtered['SWD']=='Yes']) if 'SWD' in filtered.columns else 0)
+c6.metric("EALD", len(filtered[filtered['EALD']=='Yes']) if 'EALD' in filtered.columns else 0)
 
 st.markdown("---")
 
 if st.session_state.view == "Dashboard Overview":
     c1, c2, c3 = st.columns(3)
     with c1:
-        prog = filtered['Program'].value_counts()
-        fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color='#00e5ff')])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Program", height=280, margin=dict(t=30))
-        st.plotly_chart(fig, use_container_width=True)
+        if 'Program' in filtered.columns:
+            prog = filtered['Program'].value_counts()
+            fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color='#00e5ff')])
+            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Program", height=280, margin=dict(t=30))
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Program column not found")
     with c2:
-        stat = filtered['Status'].value_counts()
-        fig = go.Figure([go.Bar(x=stat.index, y=stat.values, marker_color='#00ff00')])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Status", height=280, margin=dict(t=30))
-        st.plotly_chart(fig, use_container_width=True)
+        if 'Status' in filtered.columns:
+            stat = filtered['Status'].value_counts()
+            fig = go.Figure([go.Bar(x=stat.index, y=stat.values, marker_color='#00ff00')])
+            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Status", height=280, margin=dict(t=30))
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Status column not found")
     with c3:
-        sup = filtered['Category of Support'].value_counts()
-        fig = go.Figure([go.Pie(labels=sup.index, values=sup.values)])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Support", height=280, margin=dict(t=30))
-        st.plotly_chart(fig, use_container_width=True)
+        if 'Category of Support' in filtered.columns:
+            sup = filtered['Category of Support'].value_counts()
+            fig = go.Figure([go.Pie(labels=sup.index, values=sup.values)])
+            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Support", height=280, margin=dict(t=30))
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Support column not found")
     
     c1, c2 = st.columns(2)
     with c1:
-        sup_prog = pd.crosstab(filtered['Program'], filtered['Category of Support']).reindex(columns=['Minimal', 'Moderate', 'Intensive', 'Specialist'], fill_value=0)
-        fig = go.Figure([go.Bar(x=sup_prog.index, y=sup_prog['Minimal'], name='Min', marker_color='#10b981'), go.Bar(x=sup_prog.index, y=sup_prog['Moderate'], name='Mod', marker_color='#00e5ff'), go.Bar(x=sup_prog.index, y=sup_prog['Intensive'], name='Int', marker_color='#ffd93d'), go.Bar(x=sup_prog.index, y=sup_prog['Specialist'], name='Spec', marker_color='#ff6b6b')])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Support by Program", barmode='stack', height=280, margin=dict(t=30))
-        st.plotly_chart(fig, use_container_width=True)
+        if 'Program' in filtered.columns and 'Category of Support' in filtered.columns:
+            sup_prog = pd.crosstab(filtered['Program'], filtered['Category of Support']).reindex(columns=['Minimal', 'Moderate', 'Intensive', 'Specialist'], fill_value=0)
+            fig = go.Figure([go.Bar(x=sup_prog.index, y=sup_prog['Minimal'], name='Min', marker_color='#10b981'), go.Bar(x=sup_prog.index, y=sup_prog['Moderate'], name='Mod', marker_color='#00e5ff'), go.Bar(x=sup_prog.index, y=sup_prog['Intensive'], name='Int', marker_color='#ffd93d'), go.Bar(x=sup_prog.index, y=sup_prog['Specialist'], name='Spec', marker_color='#ff6b6b')])
+            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Support by Program", barmode='stack', height=280, margin=dict(t=30))
+            st.plotly_chart(fig, use_container_width=True)
     with c2:
-        sup_swd = pd.crosstab(filtered['SWD'], filtered['Category of Support']).reindex(columns=['Minimal', 'Moderate', 'Intensive', 'Specialist'], fill_value=0)
-        fig = go.Figure([go.Bar(x=sup_swd.index, y=sup_swd['Minimal'], name='Min', marker_color='#10b981'), go.Bar(x=sup_swd.index, y=sup_swd['Moderate'], name='Mod', marker_color='#00e5ff'), go.Bar(x=sup_swd.index, y=sup_swd['Intensive'], name='Int', marker_color='#ffd93d'), go.Bar(x=sup_swd.index, y=sup_swd['Specialist'], name='Spec', marker_color='#ff6b6b')])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Support by SWD", barmode='stack', height=280, margin=dict(t=30))
-        st.plotly_chart(fig, use_container_width=True)
+        if 'SWD' in filtered.columns and 'Category of Support' in filtered.columns:
+            sup_swd = pd.crosstab(filtered['SWD'], filtered['Category of Support']).reindex(columns=['Minimal', 'Moderate', 'Intensive', 'Specialist'], fill_value=0)
+            fig = go.Figure([go.Bar(x=sup_swd.index, y=sup_swd['Minimal'], name='Min', marker_color='#10b981'), go.Bar(x=sup_swd.index, y=sup_swd['Moderate'], name='Mod', marker_color='#00e5ff'), go.Bar(x=sup_swd.index, y=sup_swd['Intensive'], name='Int', marker_color='#ffd93d'), go.Bar(x=sup_swd.index, y=sup_swd['Specialist'], name='Spec', marker_color='#ff6b6b')])
+            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Support by SWD", barmode='stack', height=280, margin=dict(t=30))
+            st.plotly_chart(fig, use_container_width=True)
 
 elif st.session_state.view == "All Students":
-    st.dataframe(filtered[['Student', 'Program', 'Status', 'ATSI', 'SWD', 'Category of Support']], use_container_width=True, hide_index=True, height=400)
+    cols_to_show = [c for c in ['Student', 'Program', 'Status', 'ATSI', 'SWD', 'Category of Support'] if c in filtered.columns]
+    if cols_to_show:
+        st.dataframe(filtered[cols_to_show], use_container_width=True, hide_index=True, height=400)
+    else:
+        st.info("No matching columns found in data")
 
 elif st.session_state.view == "By Demographics":
     c1, c2, c3 = st.columns(3)
