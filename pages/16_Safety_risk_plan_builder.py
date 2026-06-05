@@ -1112,32 +1112,31 @@ if st.session_state.step == 1:
     with col_w:
         wizard_selected = st.session_state.mode == "wizard"
         st.markdown(f"""
-        <div style="border:2px solid {'#1A7A6E' if wizard_selected else '#ddd'};border-radius:10px;
-        padding:16px 18px;background:{'#D6EEEB' if wizard_selected else 'white'};cursor:pointer;height:130px;">
+        <div style="border:2px solid {'#1A7A6E'};border-radius:10px;
+        padding:16px 18px;background:{'#D6EEEB'};cursor:pointer;height:130px;">
         <div style="font-size:1.3rem;margin-bottom:6px;">🧱</div>
-        <div style="font-weight:700;font-size:14px;color:#2E4057;">Build step-by-step</div>
+        <div style="font-weight:700;font-size:14px;color:#2E4057;">Build step-by-step (Recommended)</div>
         <div style="font-size:12px;color:#666;margin-top:4px;line-height:1.5;">
-        Upload documents, review AI-extracted risks one by one, edit everything, then generate.
-        Best when you want full control over each risk row.</div>
+        Upload documents, add risks one at a time, generate strategies for each risk. 
+        <strong style="color:#1A7A6E;">Most reliable method.</strong></div>
         </div>""", unsafe_allow_html=True)
-        if st.button("Select: Build step-by-step", use_container_width=True,
-                     type="primary" if wizard_selected else "secondary"):
+        if st.button("Select: Build step-by-step", use_container_width=True, type="primary"):
             st.session_state.mode = "wizard"; st.rerun()
 
     with col_e:
         express_selected = st.session_state.mode == "express"
         st.markdown(f"""
-        <div style="border:2px solid {'#D97706' if express_selected else '#ddd'};border-radius:10px;
-        padding:16px 18px;background:{'#FEF3C7' if express_selected else 'white'};cursor:pointer;height:130px;">
+        <div style="border:2px solid #ddd;border-radius:10px;
+        padding:16px 18px;background:white;cursor:not-allowed;height:130px;opacity:0.6;">
         <div style="font-size:1.3rem;margin-bottom:6px;">⚡</div>
-        <div style="font-weight:700;font-size:14px;color:#2E4057;">Generate directly from documents</div>
-        <div style="font-size:12px;color:#666;margin-top:4px;line-height:1.5;">
-        Upload reports, BAPs, and incident data — AI writes the complete, formatted plan in one step.
-        Best when you have good source documents.</div>
+        <div style="font-weight:700;font-size:14px;color:#999;">Generate directly from documents</div>
+        <div style="font-size:12px;color:#999;margin-top:4px;line-height:1.5;">
+        ⛔ This feature is temporarily disabled. Use the step-by-step builder below instead (more reliable).</div>
         </div>""", unsafe_allow_html=True)
-        if st.button("Select: Generate from documents", use_container_width=True,
-                     type="primary" if express_selected else "secondary"):
-            st.session_state.mode = "express"; st.rerun()
+        # Express mode disabled - forced to use wizard
+        # if st.button("Select: Generate from documents", use_container_width=True,
+        #              type="primary" if express_selected else "secondary"):
+        #     st.session_state.mode = "express"; st.rerun()
 
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("Continue →", type="primary"):
