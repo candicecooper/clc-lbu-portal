@@ -23,16 +23,32 @@ h1, h2, h3, h4, h5, h6 { color: #ffffff !important; font-family: 'Inter', sans-s
     background: linear-gradient(135deg, #1a2942 0%, #0d1929 100%) !important; 
     color: #00e5ff !important; 
     border: 2px solid #00e5ff !important; 
-    font-weight: 600; 
+    font-weight: 600 !important; 
     box-shadow: 0 0 20px rgba(0, 229, 255, 0.3) !important;
     padding: 20px 10px !important;
     min-height: 80px !important;
     font-size: 16px !important;
+    border-radius: 8px !important;
 }
 .stButton > button:hover { 
     background: linear-gradient(135deg, #00e5ff 0%, #00b8d4 100%) !important; 
     color: #0a0e27 !important; 
     box-shadow: 0 0 40px rgba(0, 229, 255, 0.7) !important; 
+}
+
+button[kind="secondary"] {
+    background: linear-gradient(135deg, #1a2942 0%, #0d1929 100%) !important;
+    color: #00e5ff !important;
+    border: 2px solid #00e5ff !important;
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.3) !important;
+}
+
+/* Catch-all for any button element */
+button, [role="button"], input[type="button"] {
+    background: linear-gradient(135deg, #1a2942 0%, #0d1929 100%) !important;
+    color: #00e5ff !important;
+    border: 2px solid #00e5ff !important;
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.3) !important;
 }
 p { color: #ffffff !important; }
 
@@ -56,36 +72,6 @@ p { color: #ffffff !important; }
 .metric-card:hover {
     border-color: #00e5ff;
     box-shadow: 0 0 20px rgba(0, 229, 255, 0.3);
-}
-
-/* Tab styling - match filter box style */
-[data-testid="stTabs"] {
-    background: transparent !important;
-}
-
-[data-testid="stTabs"] button {
-    background: linear-gradient(135deg, #1a2942 0%, #0d1929 100%) !important;
-    color: #00e5ff !important;
-    border: 2px solid #00e5ff !important;
-    border-radius: 8px !important;
-    margin-right: 5px !important;
-    box-shadow: 0 0 15px rgba(0, 229, 255, 0.2) !important;
-}
-
-[data-testid="stTabs"] button:hover {
-    background: linear-gradient(135deg, #00e5ff 0%, #00b8d4 100%) !important;
-    color: #0a0e27 !important;
-    box-shadow: 0 0 30px rgba(0, 229, 255, 0.5) !important;
-}
-
-[data-testid="stTabs"] button[aria-selected="true"] {
-    background: linear-gradient(135deg, #00e5ff 0%, #00b8d4 100%) !important;
-    color: #0a0e27 !important;
-    box-shadow: 0 0 30px rgba(0, 229, 255, 0.6) !important;
-}
-
-[data-testid="stTabs"] [role="tabpanel"] {
-    background: transparent !important;
 }
 </style>
 
