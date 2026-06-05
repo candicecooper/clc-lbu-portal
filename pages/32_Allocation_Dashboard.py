@@ -57,6 +57,36 @@ p { color: #ffffff !important; }
     border-color: #00e5ff;
     box-shadow: 0 0 20px rgba(0, 229, 255, 0.3);
 }
+
+/* Tab styling - match filter box style */
+[data-testid="stTabs"] {
+    background: transparent !important;
+}
+
+[data-testid="stTabs"] button {
+    background: linear-gradient(135deg, #1a2942 0%, #0d1929 100%) !important;
+    color: #00e5ff !important;
+    border: 2px solid #00e5ff !important;
+    border-radius: 8px !important;
+    margin-right: 5px !important;
+    box-shadow: 0 0 15px rgba(0, 229, 255, 0.2) !important;
+}
+
+[data-testid="stTabs"] button:hover {
+    background: linear-gradient(135deg, #00e5ff 0%, #00b8d4 100%) !important;
+    color: #0a0e27 !important;
+    box-shadow: 0 0 30px rgba(0, 229, 255, 0.5) !important;
+}
+
+[data-testid="stTabs"] button[aria-selected="true"] {
+    background: linear-gradient(135deg, #00e5ff 0%, #00b8d4 100%) !important;
+    color: #0a0e27 !important;
+    box-shadow: 0 0 30px rgba(0, 229, 255, 0.6) !important;
+}
+
+[data-testid="stTabs"] [role="tabpanel"] {
+    background: transparent !important;
+}
 </style>
 
 <div class="dashboard-title">
