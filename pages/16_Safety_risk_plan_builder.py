@@ -124,14 +124,21 @@ def extract_docx_text(uploaded_file) -> str:
     except Exception as e:
         return f"[Extraction error: {e}]"
 
-def groq_call(prompt: str, max_tokens: int = 2000) -> str:
+def groq_call(prompt: str, max_tokens: int = 2000, timeout_seconds: int = 60) -> str:
+    """Call Groq API with timeout protection."""
     client = get_client()
-    resp = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        max_tokens=max_tokens,
-        messages=[{"role":"user","content":prompt}]
-    )
-    return resp.choices[0].message.content.strip()
+    try:
+        resp = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            max_tokens=max_tokens,
+            messages=[{"role":"user","content":prompt}],
+            timeout=timeout_seconds
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as e:
+        if "timeout" in str(e).lower():
+            raise Exception(f"AI request timed out after {timeout_seconds}s")
+        raise
 
 def check_language_objectivity(text: str) -> list:
     """
@@ -1148,7 +1155,7 @@ if st.session_state.step == 1:
         if errors:
             for e in errors: st.error(e)
         else:
-            st.session_state.step = 7 if st.session_state.mode == "express" else 2
+            st.session_state.step = 5 if st.session_state.mode == "express" else 2
             st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1238,11 +1245,10 @@ elif st.session_state.step == 2:
         if st.button("← Back"):
             st.session_state.step = 1; st.rerun()
     with col_b:
-        if st.button("Skip — build manually →"):
+        if st.button("Skip to manual →"):
             st.session_state.step = 4; st.rerun()
     with col_c:
-        btn_label = "Extract & synthesise with AI →" if (has_school or has_docs) else "No documents — build manually →"
-        if st.button(btn_label, type="primary"):
+        if st.button("Extract with AI →", type="primary", use_container_width=True):
             st.session_state.step = 3; st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1261,7 +1267,7 @@ elif st.session_state.step == 3:
                 st.session_state.step = 2; st.rerun()
         with col_b:
             if st.button("Continue to Risk Builder →", type="primary"):
-                st.session_state.step = 4; st.rerun()
+                st.session_state.step = 6; st.rerun()
     else:
         has_school = bool(st.session_state.school_plan_text)
         has_docs   = bool(st.session_state.support_docs)
@@ -1352,7 +1358,7 @@ elif st.session_state.step == 4:
             if all(r["issue_title"].strip() == "" for r in risks):
                 st.error("Please complete at least one risk.")
             else:
-                st.session_state.step = 5; st.rerun()
+                st.session_state.step = 6; st.rerun()
 
     with right:
         if not risks:
@@ -1512,7 +1518,7 @@ elif st.session_state.step == 5:
     col_a, col_b, col_c = st.columns([1,1,2])
     with col_a:
         if st.button("← Back to risks"):
-            st.session_state.step = 4; st.rerun()
+            st.session_state.step = 6; st.rerun()
     with col_c:
         if st.button("✅ Generate Safety Plan (.docx)", type="primary", use_container_width=True):
             if not risks or all(r["issue_title"].strip() == "" for r in risks):
@@ -1899,7 +1905,7 @@ elif st.session_state.step == 6:
     col_a, col_b = st.columns(2)
     with col_a:
         if st.button("← Back to Review"):
-            st.session_state.step = 5; st.rerun()
+            st.session_state.step = 6; st.rerun()
     with col_b:
         if st.button("🔄 Start a new plan"):
             for k in list(st.session_state.keys()): del st.session_state[k]
@@ -1908,7 +1914,7 @@ elif st.session_state.step == 6:
 # ══════════════════════════════════════════════════════════════════════════════
 # STEP 7 — Express: Upload & Generate directly
 # ══════════════════════════════════════════════════════════════════════════════
-elif st.session_state.step == 7:
+elif st.session_state.step == 5:
     student = st.session_state.student
 
     st.markdown(f"""<div class="card-amber">
@@ -1998,12 +2004,12 @@ elif st.session_state.step == 7:
         ready = has_school or has_docs
         if st.button("⚡ Generate complete plan now", type="primary",
                      use_container_width=True, disabled=not ready):
-            st.session_state.step = 8; st.rerun()
+            st.session_state.step = 6; st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STEP 8 — Express: AI generation + docx build + download
 # ══════════════════════════════════════════════════════════════════════════════
-elif st.session_state.step == 8:
+elif st.session_state.step == 6:
     student = st.session_state.student
 
     st.markdown('<div class="sec-head">⚡ Generating your plan…</div>', unsafe_allow_html=True)
@@ -2026,7 +2032,7 @@ elif st.session_state.step == 8:
         if result.get("error"):
             st.error(f"AI generation failed: {result['error']}")
             if st.button("← Try again"):
-                st.session_state.step = 7; st.rerun()
+                st.session_state.step = 5; st.rerun()
             st.stop()
 
         st.session_state.risks            = result.get("risks", [])
@@ -2400,13 +2406,13 @@ elif st.session_state.step == 8:
     with col_a:
         if st.button("← Upload different documents"):
             del st.session_state["express_result"]
-            st.session_state.step = 7; st.rerun()
+            st.session_state.step = 5; st.rerun()
     with col_b:
         if st.button("🧱 Switch to step-by-step to edit risks"):
             del st.session_state["express_result"]
             st.session_state.mode = "wizard"
             st.session_state.synthesis_done = True
-            st.session_state.step = 4; st.rerun()
+            st.session_state.step = 6; st.rerun()
     with col_c:
         if st.button("🔄 Start a new plan"):
             for k in list(st.session_state.keys()): del st.session_state[k]
