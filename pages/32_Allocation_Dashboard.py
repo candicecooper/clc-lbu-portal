@@ -21,8 +21,15 @@ p { color: #ffffff !important; }
 </style>
 """, unsafe_allow_html=True)
 
+# Initialize session state
+if 'year_filter' not in st.session_state:
+    st.session_state.year_filter = None
+if 'partnership_filter' not in st.session_state:
+    st.session_state.partnership_filter = None
+if 'school_filter' not in st.session_state:
+    st.session_state.school_filter = None
 if 'term_filter' not in st.session_state:
-    st.session_state.term_filter = None  # None = no filter
+    st.session_state.term_filter = None
 if 'program_filter' not in st.session_state:
     st.session_state.program_filter = None
 if 'atsi_filter' not in st.session_state:
@@ -50,6 +57,21 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 🎯 FILTERS")
     
+    # YEAR FILTER
+    st.markdown("**Year**")
+    yc1, yc2 = st.columns(2)
+    if yc1.button("All Years", key="y_all", use_container_width=True): 
+        st.session_state.year_filter = None
+    if yc2.button("Clear", key="y_clear", use_container_width=True): 
+        st.session_state.year_filter = None
+    y1, y2 = st.columns(2)
+    if y1.button("2025", use_container_width=True, key="y1"): 
+        st.session_state.year_filter = 2025.0
+    if y2.button("2026", use_container_width=True, key="y2"): 
+        st.session_state.year_filter = 2026.0
+    if st.session_state.year_filter is not None:
+        st.write(f"**Showing:** {int(st.session_state.year_filter)}")
+    
     # TERM FILTER
     st.markdown("**Term**")
     tc1, tc2 = st.columns(2)
@@ -66,7 +88,6 @@ with st.sidebar:
         st.session_state.term_filter = 3.0
     if t4.button("T4", use_container_width=True, key="t4"): 
         st.session_state.term_filter = 4.0
-    
     if st.session_state.term_filter is not None:
         st.write(f"**Showing:** Term {int(st.session_state.term_filter)}")
     
@@ -84,9 +105,53 @@ with st.sidebar:
         st.session_state.program_filter = "PY"
     if p3.button("SY", use_container_width=True, key="p3"): 
         st.session_state.program_filter = "SY"
-    
     if st.session_state.program_filter is not None:
         st.write(f"**Showing:** {st.session_state.program_filter}")
+    
+    # PARTNERSHIP FILTER
+    st.markdown("**Partnership**")
+    partc1, partc2 = st.columns(2)
+    if partc1.button("All Partnerships", key="part_all", use_container_width=True): 
+        st.session_state.partnership_filter = None
+    if partc2.button("Clear", key="part_clear", use_container_width=True): 
+        st.session_state.partnership_filter = None
+    
+    if uploaded_file:
+        all_data = pd.read_excel(uploaded_file)
+        partnerships = sorted(all_data['Partnership_Area'].dropna().unique())
+        
+        # Show as buttons for main ones, dropdown for all
+        if len(partnerships) <= 8:
+            for i, part in enumerate(partnerships):
+                if (i % 2) == 0:
+                    col1, col2 = st.columns(2)
+                if i % 2 == 0:
+                    if col1.button(part[:15], use_container_width=True, key=f"part_{i}"):
+                        st.session_state.partnership_filter = part
+                else:
+                    if col2.button(part[:15], use_container_width=True, key=f"part_{i}"):
+                        st.session_state.partnership_filter = part
+        else:
+            st.session_state.partnership_filter = st.selectbox("Select Partnership", [None] + partnerships, key="part_select", format_func=lambda x: "All" if x is None else x)
+    
+    if st.session_state.partnership_filter is not None:
+        st.write(f"**Showing:** {st.session_state.partnership_filter[:20]}")
+    
+    # SCHOOL FILTER
+    st.markdown("**Referring School**")
+    sc1, sc2 = st.columns(2)
+    if sc1.button("All Schools", key="sch_all", use_container_width=True): 
+        st.session_state.school_filter = None
+    if sc2.button("Clear", key="sch_clear", use_container_width=True): 
+        st.session_state.school_filter = None
+    
+    if uploaded_file:
+        all_data = pd.read_excel(uploaded_file)
+        schools = sorted(all_data['Referring_School'].dropna().unique())
+        st.session_state.school_filter = st.selectbox("Select School", [None] + schools, key="sch_select", format_func=lambda x: "All" if x is None else x)
+    
+    if st.session_state.school_filter is not None:
+        st.write(f"**Showing:** {st.session_state.school_filter[:25]}")
     
     # ATSI FILTER
     st.markdown("**ATSI**")
@@ -100,7 +165,6 @@ with st.sidebar:
         st.session_state.atsi_filter = "Yes"
     if a2.button("No", use_container_width=True, key="a2"): 
         st.session_state.atsi_filter = "No"
-    
     if st.session_state.atsi_filter is not None:
         st.write(f"**Showing:** {st.session_state.atsi_filter}")
     
@@ -116,7 +180,6 @@ with st.sidebar:
         st.session_state.swd_filter = "Yes"
     if swd2.button("No", use_container_width=True, key="swd2"): 
         st.session_state.swd_filter = "No"
-    
     if st.session_state.swd_filter is not None:
         st.write(f"**Showing:** {st.session_state.swd_filter}")
     
@@ -132,25 +195,8 @@ with st.sidebar:
         st.session_state.eald_filter = "Yes"
     if e2.button("No", use_container_width=True, key="e2"): 
         st.session_state.eald_filter = "No"
-    
     if st.session_state.eald_filter is not None:
         st.write(f"**Showing:** {st.session_state.eald_filter}")
-    
-    # STATUS FILTER
-    st.markdown("**Status**")
-    sc1, sc2 = st.columns(2)
-    if sc1.button("All Status", key="s_all", use_container_width=True): 
-        st.session_state.status_filter = None
-    if sc2.button("Clear", key="s_clear", use_container_width=True): 
-        st.session_state.status_filter = None
-    s1, s2 = st.columns(2)
-    if s1.button("Active", use_container_width=True, key="s1"): 
-        st.session_state.status_filter = "Active"
-    if s2.button("Allocated", use_container_width=True, key="s2"): 
-        st.session_state.status_filter = "Allocated"
-    
-    if st.session_state.status_filter is not None:
-        st.write(f"**Showing:** {st.session_state.status_filter}")
 
 st.markdown("## Allocation Dashboard")
 
@@ -166,16 +212,27 @@ else:
         all_data['Flag_EALD'] = all_data['Flag_EALD'].astype(str).str.strip()
         all_data['Allocated_Program'] = all_data['Allocated_Program'].astype(str).str.strip()
         all_data['Current_Status'] = all_data['Current_Status'].astype(str).str.strip()
+        all_data['Partnership_Area'] = all_data['Partnership_Area'].astype(str).str.strip()
+        all_data['Referring_School'] = all_data['Referring_School'].astype(str).str.strip()
         
-        # START WITH LANDING PAGE DEFAULTS
+        # START WITH ACTIVE STUDENTS
         filtered = all_data[all_data['Current_Status'] == 'Active'].copy()
         
-        # APPLY FILTERS if any are selected
+        # APPLY FILTERS
+        if st.session_state.year_filter is not None:
+            filtered = filtered[filtered['Referral_Year'] == st.session_state.year_filter]
+        
         if st.session_state.term_filter is not None:
             filtered = filtered[filtered['Term'] == st.session_state.term_filter]
         
         if st.session_state.program_filter is not None:
             filtered = filtered[filtered['Allocated_Program'] == st.session_state.program_filter]
+        
+        if st.session_state.partnership_filter is not None:
+            filtered = filtered[filtered['Partnership_Area'] == st.session_state.partnership_filter]
+        
+        if st.session_state.school_filter is not None:
+            filtered = filtered[filtered['Referring_School'] == st.session_state.school_filter]
         
         if st.session_state.atsi_filter is not None:
             filtered = filtered[filtered['Flag_ATSI'] == st.session_state.atsi_filter]
@@ -226,7 +283,7 @@ else:
                 fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="ATSI Distribution", height=280, margin=dict(t=30))
                 st.plotly_chart(fig, use_container_width=True)
             
-            c1, c2 = st.columns(2)
+            c1, c2, c3 = st.columns(3)
             with c1:
                 swd_yes = (filtered['Flag_SWD'] == 'Yes').sum()
                 swd_no = (filtered['Flag_SWD'] == 'No').sum()
@@ -240,9 +297,16 @@ else:
                 fig = go.Figure([go.Pie(labels=['EALD', 'Non-EALD'], values=[eald_yes, eald_no], marker=dict(colors=['#ffd93d', '#10b981']))])
                 fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="EALD Distribution", height=280, margin=dict(t=30))
                 st.plotly_chart(fig, use_container_width=True)
+            
+            with c3:
+                part = filtered['Partnership_Area'].value_counts()
+                if len(part) > 0:
+                    fig = go.Figure([go.Bar(x=part.index, y=part.values, marker_color='#ffd93d')])
+                    fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=9), title="Partnership", height=280, margin=dict(t=30), showlegend=False)
+                    st.plotly_chart(fig, use_container_width=True)
         
         elif st.session_state.view == "All Students":
-            cols_to_show = [c for c in ['Allocated_Program', 'Allocation_Status', 'Current_Status', 'Term', 'Flag_ATSI', 'Flag_SWD', 'Flag_EALD'] if c in filtered.columns]
+            cols_to_show = [c for c in ['Allocated_Program', 'Allocation_Status', 'Current_Status', 'Term', 'Partnership_Area', 'Referring_School', 'Flag_ATSI', 'Flag_SWD', 'Flag_EALD'] if c in filtered.columns]
             if cols_to_show:
                 st.dataframe(filtered[cols_to_show], use_container_width=True, hide_index=True, height=400)
     
