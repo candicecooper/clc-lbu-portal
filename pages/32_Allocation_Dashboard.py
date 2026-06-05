@@ -19,8 +19,8 @@ h1, h2, h3, h4, h5, h6 { color: #ffffff !important; font-family: 'Inter', sans-s
 [data-testid="stSidebar"] * { color: #00e5ff !important; }
 [data-testid="metric-value"] { color: #00ff00 !important; font-size: 2.5rem !important; }
 [data-testid="metric-label"] { color: #00e5ff !important; }
-.stButton > button { background-color: #1a1f3a !important; color: #00e5ff !important; border: 2px solid #00e5ff !important; font-weight: 600; }
-.stButton > button:hover { background-color: #00e5ff !important; color: #0a0e27 !important; }
+.stButton > button { background: linear-gradient(135deg, #1a2942 0%, #0d1929 100%) !important; color: #00e5ff !important; border: 2px solid #00e5ff !important; font-weight: 600; box-shadow: 0 0 20px rgba(0, 229, 255, 0.3) !important; }
+.stButton > button:hover { background: linear-gradient(135deg, #00e5ff 0%, #00b8d4 100%) !important; color: #0a0e27 !important; box-shadow: 0 0 30px rgba(0, 229, 255, 0.6) !important; }
 p { color: #ffffff !important; }
 
 .dashboard-title {
@@ -48,7 +48,7 @@ p { color: #ffffff !important; }
 
 <div class="dashboard-title">
     <h1 style="margin: 0; text-align: center; color: #00e5ff; font-size: 2.8em; letter-spacing: 2px; font-weight: 800;">
-        📊 CLC-LBU ALLOCATION DASHBOARD
+        CLC-LBU ALLOCATION DASHBOARD
     </h1>
     <p style="text-align: center; color: #ffffff; margin: 10px 0 0 0; font-size: 1.15em; font-weight: 500;">
         Student Allocation & Equity Analysis
@@ -66,14 +66,14 @@ if 'programs_selected' not in st.session_state:
     st.session_state.programs_selected = set()
 
 with st.sidebar:
-    st.markdown("### 📤 UPLOAD DATA")
+    st.markdown("### UPLOAD DATA")
     uploaded_file = st.file_uploader("Choose Excel file", type=['xlsx', 'xls', 'csv'], key='main_uploader')
     
     if uploaded_file:
         st.success(f"✅ {uploaded_file.name}")
     
     st.markdown("---")
-    st.markdown("### 🎯 FILTERS")
+    st.markdown("### FILTERS")
     
     st.markdown("**Term**")
     tc1, tc2, tc3 = st.columns(3)
@@ -154,32 +154,32 @@ else:
         col1, col2, col3, col4, col5 = st.columns(5)
         
         with col1:
-            if st.button(f"📊 Total\n{total}", key="metric_total", use_container_width=True, help="Click to drill down"):
+            if st.button(f"Total\n{total}", key="metric_total", use_container_width=True, help="Click to drill down"):
                 st.session_state.drill_down_view = "total"
         
         with col2:
-            if st.button(f"✅ Allocated\n{allocated}", key="metric_allocated", use_container_width=True, help="Click to drill down"):
+            if st.button(f"Allocated\n{allocated}", key="metric_allocated", use_container_width=True, help="Click to drill down"):
                 st.session_state.drill_down_view = "allocated"
         
         with col3:
-            if st.button(f"🔴 ATSI\n{atsi}", key="metric_atsi", use_container_width=True, help="Click to drill down"):
+            if st.button(f"ATSI\n{atsi}", key="metric_atsi", use_container_width=True, help="Click to drill down"):
                 st.session_state.drill_down_view = "atsi"
         
         with col4:
-            if st.button(f"🟡 SWD\n{swd}", key="metric_swd", use_container_width=True, help="Click to drill down"):
+            if st.button(f"SWD\n{swd}", key="metric_swd", use_container_width=True, help="Click to drill down"):
                 st.session_state.drill_down_view = "swd"
         
         with col5:
-            if st.button(f"🟠 EALD\n{eald}", key="metric_eald", use_container_width=True, help="Click to drill down"):
+            if st.button(f"EALD\n{eald}", key="metric_eald", use_container_width=True, help="Click to drill down"):
                 st.session_state.drill_down_view = "eald"
         
         st.markdown("---")
         
         # DRILL DOWN VIEWS
         if st.session_state.drill_down_view:
-            st.markdown(f"## 🔍 Detailed Analysis: {st.session_state.drill_down_view.upper()}")
+            st.markdown(f"## Detailed Analysis: {st.session_state.drill_down_view.upper()}")
             
-            if st.button("← Back to Overview", key="back_btn"):
+            if st.button("Back to Overview", key="back_btn"):
                 st.session_state.drill_down_view = None
                 st.rerun()
             
@@ -235,6 +235,48 @@ else:
                         fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, xaxis_title='Term', yaxis_title='Students')
                         st.plotly_chart(fig, use_container_width=True)
             
+            elif st.session_state.drill_down_view == "swd":
+                drill_data = filtered[filtered['Flag_SWD'] == 'Yes']
+                
+                with tabs[0]:
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Total SWD", int(len(drill_data)))
+                    c2.metric("Allocated", int(len(drill_data[drill_data['Allocation_Status'] == 'Allocated'])))
+                    allocated_pct = int(len(drill_data[drill_data['Allocation_Status'] == 'Allocated']) / len(drill_data) * 100) if len(drill_data) > 0 else 0
+                    c3.metric("Allocation %", f"{allocated_pct}%")
+                    c4.metric("Waiting List", int(len(drill_data[drill_data['Allocation_Status'] == 'On Waiting List'])))
+                
+                with tabs[1]:
+                    prog = drill_data['Allocated_Program'].value_counts().sort_index()
+                    if len(prog) > 0:
+                        fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color='#00e5ff', text=prog.values.astype(int), textposition='outside')])
+                        fig.update_yaxes(dtick=1)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[2]:
+                    part = drill_data['Partnership_Area'].value_counts()
+                    if len(part) > 0:
+                        fig = go.Figure([go.Bar(y=part.index, x=part.values, orientation='h', marker_color='#00e5ff', text=part.values.astype(int), textposition='outside')])
+                        fig.update_xaxes(dtick=1)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[3]:
+                    disability_cols = ['Flag_ASD', 'Flag_ADHD', 'Flag_Speech_and_Lang', 'Flag_Intellectual', 'Flag_Learning_Difficulty', 'Flag_Sensory_Processing', 'Flag_ODD', 'Flag_PDA']
+                    disability_labels = ['ASD', 'ADHD', 'Speech', 'Intellectual', 'Learning', 'Sensory', 'ODD', 'PDA']
+                    dis_counts = []
+                    for col in disability_cols:
+                        if col in drill_data.columns:
+                            dis_counts.append(int(len(drill_data[drill_data[col] == 'Yes'])))
+                        else:
+                            dis_counts.append(0)
+                    if sum(dis_counts) > 0:
+                        fig = go.Figure([go.Bar(x=disability_labels, y=dis_counts, marker_color='#00e5ff', text=dis_counts, textposition='outside')])
+                        fig.update_yaxes(dtick=1)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
+                        st.plotly_chart(fig, use_container_width=True)
+            
             elif st.session_state.drill_down_view == "eald":
                 drill_data = filtered[filtered['Flag_EALD'] == 'Yes']
                 
@@ -288,7 +330,7 @@ else:
                 st.plotly_chart(fig, use_container_width=True)
             
             st.markdown("---")
-            st.markdown("## 🗺️ Adelaide Partnership Map")
+            st.markdown("## Adelaide Partnership Map")
             
             partnership_coords = {
                 "Le Fevre Peninsula": {"color": "#E74C3C", "coords": [[-34.78, 138.48], [-34.78, 138.52], [-34.84, 138.52], [-34.85, 138.50], [-34.84, 138.48]]},
@@ -326,7 +368,7 @@ else:
             
             folium.Marker(
                 location=[-34.9286, 138.5830],
-                popup="🏫 CLC-LBU",
+                popup="CLC-LBU",
                 icon=folium.Icon(color='green', icon='home', prefix='fa')
             ).add_to(m)
             
