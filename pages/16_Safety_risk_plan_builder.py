@@ -1120,7 +1120,7 @@ st.markdown(bar, unsafe_allow_html=True)
 st.markdown("---")
 st.markdown("### 📍 Navigate Using Buttons Below")
 
-col_steps = st.columns(6)
+col_steps = st.columns(len(STEPS))
 for i, step_label in enumerate(STEPS, 1):
     with col_steps[i-1]:
         btn_type = "primary" if st.session_state.step == i else "secondary"
