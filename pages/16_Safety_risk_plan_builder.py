@@ -1914,9 +1914,9 @@ elif st.session_state.step == 6:
         " ".join([
             str(r.get("issue_title","")).strip(),
             str(r.get("issue_detail","")).strip(),
-            "\n".join(r.get("behaviour_descriptors",[])) if isinstance(r.get("behaviour_descriptors"),[]) else str(r.get("behaviour_descriptors","")),
-            "\n".join(r.get("proactive",[])) if isinstance(r.get("proactive"),[]) else str(r.get("proactive","")),
-            "\n".join(r.get("procedure",[])) if isinstance(r.get("procedure"),[]) else str(r.get("procedure",""))
+            "\n".join(r.get("behaviour_descriptors",[])) if isinstance(r.get("behaviour_descriptors"), list) else str(r.get("behaviour_descriptors","")),
+            "\n".join(r.get("proactive",[])) if isinstance(r.get("proactive"), list) else str(r.get("proactive","")),
+            "\n".join(r.get("procedure",[])) if isinstance(r.get("procedure"), list) else str(r.get("procedure",""))
         ])
         for r in risks_final
     ])
