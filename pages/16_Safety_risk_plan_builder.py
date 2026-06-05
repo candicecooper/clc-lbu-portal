@@ -1413,7 +1413,8 @@ elif st.session_state.step == 4:
 
             r["behaviour_descriptors"] = st.text_area(
                 "Specific behaviour descriptors (one per line, start with •)",
-                value=r["behaviour_descriptors"], key=f"bd_{idx}", height=90,
+                value="\n".join(r["behaviour_descriptors"]) if isinstance(r["behaviour_descriptors"], list) else r["behaviour_descriptors"],
+                key=f"bd_{idx}", height=90,
                 placeholder="• Running at speed away from supervised areas\n• Climbing boundary fence into carpark\n• Darting across Marion Road without checking for traffic")
 
             r["function"] = st.text_input("Function of behaviour",
@@ -1708,8 +1709,15 @@ elif st.session_state.step == 6:
             if r["behaviour_descriptors"]:
                 ph = c0.add_paragraph(); ph.paragraph_format.space_before = Pt(5)
                 arun(ph, "Characterised by:", bold=True, size=15, color=TEAL.lstrip("#"))
-                for bd_line in r["behaviour_descriptors"].splitlines():
-                    bl = bd_line.strip()
+                
+                # Handle both string (with newlines) and list formats
+                if isinstance(r["behaviour_descriptors"], list):
+                    bd_lines = r["behaviour_descriptors"]
+                else:
+                    bd_lines = r["behaviour_descriptors"].splitlines()
+                
+                for bd_line in bd_lines:
+                    bl = str(bd_line).strip()
                     if bl:
                         bp = c0.add_paragraph(style='List Bullet')
                         bp.paragraph_format.space_before = Pt(1)
@@ -2246,8 +2254,16 @@ elif st.session_state.step == 6:
             if r.get("behaviour_descriptors","").strip():
                 ph = c0.add_paragraph(); ph.paragraph_format.space_before = Pt(5)
                 arun(ph, "Characterised by:", bold=True, size=15, color=TEAL.lstrip("#"))
-                for bd in r["behaviour_descriptors"].splitlines():
-                    bd = bd.strip()
+                
+                # Handle both string (with newlines) and list formats
+                bd_data = r["behaviour_descriptors"]
+                if isinstance(bd_data, list):
+                    bd_lines = bd_data
+                else:
+                    bd_lines = str(bd_data).splitlines()
+                
+                for bd in bd_lines:
+                    bd = str(bd).strip()
                     if bd:
                         bp = c0.add_paragraph(style='List Bullet')
                         bp.paragraph_format.space_before = Pt(1); bp.paragraph_format.space_after = Pt(1)
