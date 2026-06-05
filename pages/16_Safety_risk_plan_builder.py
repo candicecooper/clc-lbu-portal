@@ -1591,10 +1591,6 @@ elif st.session_state.step == 5:
             else:
                 st.session_state.step = 6; st.rerun()
 
-                st.error("Please complete at least one risk row.")
-            else:
-                st.session_state.step = 6; st.rerun()
-
 # ══════════════════════════════════════════════════════════════════════════════
 # STEP 6 — Polish & Enhance (Optional)
 # ══════════════════════════════════════════════════════════════════════════════
