@@ -4,7 +4,6 @@ import plotly.graph_objects as go
 
 st.set_page_config(page_title="CLC Allocation Dashboard", page_icon="📊", layout="wide")
 
-# MINIMAL CSS
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;800&display=swap');
@@ -22,15 +21,18 @@ p { color: #ffffff !important; }
 </style>
 """, unsafe_allow_html=True)
 
-if 'filters' not in st.session_state:
-    st.session_state.filters = {
-        'term': set(),
-        'program': set(),
-        'status': set(),
-        'atsi': set(),
-        'eald': set(),
-        'swd': set(),
-    }
+if 'term_filter' not in st.session_state:
+    st.session_state.term_filter = None  # None = no filter
+if 'program_filter' not in st.session_state:
+    st.session_state.program_filter = None
+if 'atsi_filter' not in st.session_state:
+    st.session_state.atsi_filter = None
+if 'swd_filter' not in st.session_state:
+    st.session_state.swd_filter = None
+if 'eald_filter' not in st.session_state:
+    st.session_state.eald_filter = None
+if 'status_filter' not in st.session_state:
+    st.session_state.status_filter = None
 if 'view' not in st.session_state:
     st.session_state.view = "Current Status"
 
@@ -46,67 +48,109 @@ with st.sidebar:
     st.session_state.view = st.radio("", ["Current Status", "All Students"], label_visibility="collapsed")
     
     st.markdown("---")
-    st.markdown("### 🎯 QUICK FILTERS")
+    st.markdown("### 🎯 FILTERS")
     
     # TERM FILTER
     st.markdown("**Term**")
     tc1, tc2 = st.columns(2)
-    if tc1.button("All", key="t_all", use_container_width=True): st.session_state.filters['term'] = set()
-    if tc2.button("Clear", key="t_clear", use_container_width=True): st.session_state.filters['term'] = set()
+    if tc1.button("All Terms", key="t_all", use_container_width=True): 
+        st.session_state.term_filter = None
+    if tc2.button("Clear", key="t_clear", use_container_width=True): 
+        st.session_state.term_filter = None
     t1, t2, t3, t4 = st.columns(4)
-    if t1.button("1", use_container_width=True, key="t1"): st.session_state.filters['term'] ^= {1.0}
-    if t2.button("2", use_container_width=True, key="t2"): st.session_state.filters['term'] ^= {2.0}
-    if t3.button("3", use_container_width=True, key="t3"): st.session_state.filters['term'] ^= {3.0}
-    if t4.button("4", use_container_width=True, key="t4"): st.session_state.filters['term'] ^= {4.0}
+    if t1.button("T1", use_container_width=True, key="t1"): 
+        st.session_state.term_filter = 1.0
+    if t2.button("T2", use_container_width=True, key="t2"): 
+        st.session_state.term_filter = 2.0
+    if t3.button("T3", use_container_width=True, key="t3"): 
+        st.session_state.term_filter = 3.0
+    if t4.button("T4", use_container_width=True, key="t4"): 
+        st.session_state.term_filter = 4.0
+    
+    if st.session_state.term_filter is not None:
+        st.write(f"**Showing:** Term {int(st.session_state.term_filter)}")
     
     # PROGRAM FILTER
     st.markdown("**Program**")
     pc1, pc2 = st.columns(2)
-    if pc1.button("All", key="p_all", use_container_width=True): st.session_state.filters['program'] = set()
-    if pc2.button("Clear", key="p_clear", use_container_width=True): st.session_state.filters['program'] = set()
+    if pc1.button("All Programs", key="p_all", use_container_width=True): 
+        st.session_state.program_filter = None
+    if pc2.button("Clear", key="p_clear", use_container_width=True): 
+        st.session_state.program_filter = None
     p1, p2, p3 = st.columns(3)
-    if p1.button("JP", use_container_width=True, key="p1"): st.session_state.filters['program'] ^= {"JP"}
-    if p2.button("PY", use_container_width=True, key="p2"): st.session_state.filters['program'] ^= {"PY"}
-    if p3.button("SY", use_container_width=True, key="p3"): st.session_state.filters['program'] ^= {"SY"}
+    if p1.button("JP", use_container_width=True, key="p1"): 
+        st.session_state.program_filter = "JP"
+    if p2.button("PY", use_container_width=True, key="p2"): 
+        st.session_state.program_filter = "PY"
+    if p3.button("SY", use_container_width=True, key="p3"): 
+        st.session_state.program_filter = "SY"
     
-    # STATUS FILTER
-    st.markdown("**Status**")
-    sc1, sc2 = st.columns(2)
-    if sc1.button("All", key="s_all", use_container_width=True): st.session_state.filters['status'] = set()
-    if sc2.button("Clear", key="s_clear", use_container_width=True): st.session_state.filters['status'] = set()
-    s1, s2 = st.columns(2)
-    if s1.button("Allocated", use_container_width=True, key="s1"): st.session_state.filters['status'] ^= {"Allocated"}
-    if s2.button("Active", use_container_width=True, key="s2"): st.session_state.filters['status'] ^= {"Active"}
-    s3, s4 = st.columns(2)
-    if s3.button("Pending", use_container_width=True, key="s3"): st.session_state.filters['status'] ^= {"Pending"}
-    if s4.button("Waitlist", use_container_width=True, key="s4"): st.session_state.filters['status'] ^= {"On Waiting List"}
+    if st.session_state.program_filter is not None:
+        st.write(f"**Showing:** {st.session_state.program_filter}")
     
     # ATSI FILTER
     st.markdown("**ATSI**")
     ac1, ac2 = st.columns(2)
-    if ac1.button("All", key="a_all", use_container_width=True): st.session_state.filters['atsi'] = set()
-    if ac2.button("Clear", key="a_clear", use_container_width=True): st.session_state.filters['atsi'] = set()
+    if ac1.button("All ATSI", key="a_all", use_container_width=True): 
+        st.session_state.atsi_filter = None
+    if ac2.button("Clear", key="a_clear", use_container_width=True): 
+        st.session_state.atsi_filter = None
     a1, a2 = st.columns(2)
-    if a1.button("Yes", use_container_width=True, key="a1"): st.session_state.filters['atsi'] ^= {"Yes"}
-    if a2.button("No", use_container_width=True, key="a2"): st.session_state.filters['atsi'] ^= {"No"}
+    if a1.button("Yes", use_container_width=True, key="a1"): 
+        st.session_state.atsi_filter = "Yes"
+    if a2.button("No", use_container_width=True, key="a2"): 
+        st.session_state.atsi_filter = "No"
     
-    # EALD FILTER
-    st.markdown("**EALD**")
-    ec1, ec2 = st.columns(2)
-    if ec1.button("All", key="e_all", use_container_width=True): st.session_state.filters['eald'] = set()
-    if ec2.button("Clear", key="e_clear", use_container_width=True): st.session_state.filters['eald'] = set()
-    e1, e2 = st.columns(2)
-    if e1.button("Yes", use_container_width=True, key="e1"): st.session_state.filters['eald'] ^= {"Yes"}
-    if e2.button("No", use_container_width=True, key="e2"): st.session_state.filters['eald'] ^= {"No"}
+    if st.session_state.atsi_filter is not None:
+        st.write(f"**Showing:** {st.session_state.atsi_filter}")
     
     # SWD FILTER
     st.markdown("**SWD**")
     swdc1, swdc2 = st.columns(2)
-    if swdc1.button("All", key="swd_all", use_container_width=True): st.session_state.filters['swd'] = set()
-    if swdc2.button("Clear", key="swd_clear", use_container_width=True): st.session_state.filters['swd'] = set()
+    if swdc1.button("All SWD", key="swd_all", use_container_width=True): 
+        st.session_state.swd_filter = None
+    if swdc2.button("Clear", key="swd_clear", use_container_width=True): 
+        st.session_state.swd_filter = None
     swd1, swd2 = st.columns(2)
-    if swd1.button("Yes", use_container_width=True, key="swd1"): st.session_state.filters['swd'] ^= {"Yes"}
-    if swd2.button("No", use_container_width=True, key="swd2"): st.session_state.filters['swd'] ^= {"No"}
+    if swd1.button("Yes", use_container_width=True, key="swd1"): 
+        st.session_state.swd_filter = "Yes"
+    if swd2.button("No", use_container_width=True, key="swd2"): 
+        st.session_state.swd_filter = "No"
+    
+    if st.session_state.swd_filter is not None:
+        st.write(f"**Showing:** {st.session_state.swd_filter}")
+    
+    # EALD FILTER
+    st.markdown("**EALD**")
+    ec1, ec2 = st.columns(2)
+    if ec1.button("All EALD", key="e_all", use_container_width=True): 
+        st.session_state.eald_filter = None
+    if ec2.button("Clear", key="e_clear", use_container_width=True): 
+        st.session_state.eald_filter = None
+    e1, e2 = st.columns(2)
+    if e1.button("Yes", use_container_width=True, key="e1"): 
+        st.session_state.eald_filter = "Yes"
+    if e2.button("No", use_container_width=True, key="e2"): 
+        st.session_state.eald_filter = "No"
+    
+    if st.session_state.eald_filter is not None:
+        st.write(f"**Showing:** {st.session_state.eald_filter}")
+    
+    # STATUS FILTER
+    st.markdown("**Status**")
+    sc1, sc2 = st.columns(2)
+    if sc1.button("All Status", key="s_all", use_container_width=True): 
+        st.session_state.status_filter = None
+    if sc2.button("Clear", key="s_clear", use_container_width=True): 
+        st.session_state.status_filter = None
+    s1, s2 = st.columns(2)
+    if s1.button("Active", use_container_width=True, key="s1"): 
+        st.session_state.status_filter = "Active"
+    if s2.button("Allocated", use_container_width=True, key="s2"): 
+        st.session_state.status_filter = "Allocated"
+    
+    if st.session_state.status_filter is not None:
+        st.write(f"**Showing:** {st.session_state.status_filter}")
 
 st.markdown("## Allocation Dashboard")
 
@@ -116,67 +160,45 @@ else:
     try:
         all_data = pd.read_excel(uploaded_file)
         
-        # Clean and transform data
-        all_data['ATSI'] = all_data['Flag_ATSI'].fillna('No').astype(str).str.strip()
-        all_data['SWD'] = all_data['Flag_SWD'].fillna('No').astype(str).str.strip()
-        all_data['EALD'] = all_data['Flag_EALD'].fillna('No').astype(str).str.strip()
-        all_data['Program'] = all_data['Allocated_Program'].fillna('Unknown').astype(str).str.strip()
-        all_data['Status'] = all_data['Allocation_Status'].fillna('Unknown').astype(str).str.strip()
-        all_data['Current_Status'] = all_data['Current_Status'].fillna('Unknown').astype(str).str.strip()
-        all_data['Term'] = all_data['Term'].fillna(0).astype(float)
+        # Clean data
+        all_data['Flag_ATSI'] = all_data['Flag_ATSI'].astype(str).str.strip()
+        all_data['Flag_SWD'] = all_data['Flag_SWD'].astype(str).str.strip()
+        all_data['Flag_EALD'] = all_data['Flag_EALD'].astype(str).str.strip()
+        all_data['Allocated_Program'] = all_data['Allocated_Program'].astype(str).str.strip()
+        all_data['Current_Status'] = all_data['Current_Status'].astype(str).str.strip()
         
-        # DEFAULT FILTERS: Show Current Status of Allocated/Active students
-        default_filters = {
-            'term': set(),
-            'program': set(),
-            'status': {'Allocated', 'Active'},
-            'atsi': set(),
-            'eald': set(),
-            'swd': set(),
-        }
+        # START WITH LANDING PAGE DEFAULTS
+        filtered = all_data[all_data['Current_Status'] == 'Active'].copy()
         
-        # For landing page, use defaults. For filtered view, use session state
-        if st.session_state.view == "Current Status":
-            active_filters = default_filters
-        else:
-            active_filters = st.session_state.filters
+        # APPLY FILTERS if any are selected
+        if st.session_state.term_filter is not None:
+            filtered = filtered[filtered['Term'] == st.session_state.term_filter]
         
-        # Apply filters
-        filtered = all_data.copy()
+        if st.session_state.program_filter is not None:
+            filtered = filtered[filtered['Allocated_Program'] == st.session_state.program_filter]
         
-        # Term filter
-        if active_filters['term']:
-            filtered = filtered[filtered['Term'].isin(active_filters['term'])]
+        if st.session_state.atsi_filter is not None:
+            filtered = filtered[filtered['Flag_ATSI'] == st.session_state.atsi_filter]
         
-        # Program filter
-        if active_filters['program']:
-            filtered = filtered[filtered['Program'].isin(active_filters['program'])]
+        if st.session_state.swd_filter is not None:
+            filtered = filtered[filtered['Flag_SWD'] == st.session_state.swd_filter]
         
-        # Status filter - check both Status and Current_Status columns
-        if active_filters['status']:
-            mask = filtered['Status'].isin(active_filters['status']) | filtered['Current_Status'].isin(active_filters['status'])
-            filtered = filtered[mask]
+        if st.session_state.eald_filter is not None:
+            filtered = filtered[filtered['Flag_EALD'] == st.session_state.eald_filter]
         
-        # ATSI filter
-        if active_filters['atsi']:
-            filtered = filtered[filtered['ATSI'].isin(active_filters['atsi'])]
+        if st.session_state.status_filter == "Allocated":
+            filtered = filtered[filtered['Allocation_Status'] == 'Allocated']
+        elif st.session_state.status_filter == "Active":
+            filtered = filtered[filtered['Current_Status'] == 'Active']
         
-        # EALD filter
-        if active_filters['eald']:
-            filtered = filtered[filtered['EALD'].isin(active_filters['eald'])]
-        
-        # SWD filter
-        if active_filters['swd']:
-            filtered = filtered[filtered['SWD'].isin(active_filters['swd'])]
-        
-        # Metrics
+        # METRICS
         c1, c2, c3, c4, c5, c6 = st.columns(6)
         c1.metric("Total", len(filtered))
-        c2.metric("Allocated", len(filtered[filtered['Status']=='Allocated']))
-        c3.metric("Active", len(filtered[filtered['Current_Status']=='Active']))
-        c4.metric("ATSI", len(filtered[filtered['ATSI']=='Yes']))
-        c5.metric("SWD", len(filtered[filtered['SWD']=='Yes']))
-        c6.metric("EALD", len(filtered[filtered['EALD']=='Yes']))
+        c2.metric("Allocated", len(filtered[filtered['Allocation_Status'] == 'Allocated']))
+        c3.metric("Active", len(filtered[filtered['Current_Status'] == 'Active']))
+        c4.metric("ATSI", len(filtered[filtered['Flag_ATSI'] == 'Yes']))
+        c5.metric("SWD", len(filtered[filtered['Flag_SWD'] == 'Yes']))
+        c6.metric("EALD", len(filtered[filtered['Flag_EALD'] == 'Yes']))
         
         st.markdown("---")
         
@@ -184,43 +206,43 @@ else:
             c1, c2, c3 = st.columns(3)
             
             with c1:
-                prog = filtered['Program'].value_counts()
+                prog = filtered['Allocated_Program'].value_counts()
                 if len(prog) > 0:
                     fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color='#00e5ff')])
                     fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Program", height=280, margin=dict(t=30), showlegend=False)
                     st.plotly_chart(fig, use_container_width=True)
             
             with c2:
-                stat = filtered['Status'].value_counts()
+                stat = filtered['Allocation_Status'].value_counts()
                 if len(stat) > 0:
                     fig = go.Figure([go.Bar(x=stat.index, y=stat.values, marker_color='#00ff00')])
                     fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Allocation Status", height=280, margin=dict(t=30), showlegend=False)
                     st.plotly_chart(fig, use_container_width=True)
             
             with c3:
-                atsi_yes = (filtered['ATSI']=='Yes').sum()
-                atsi_no = (filtered['ATSI']=='No').sum()
+                atsi_yes = (filtered['Flag_ATSI'] == 'Yes').sum()
+                atsi_no = (filtered['Flag_ATSI'] == 'No').sum()
                 fig = go.Figure([go.Pie(labels=['ATSI', 'Non-ATSI'], values=[atsi_yes, atsi_no], marker=dict(colors=['#ff6b6b', '#10b981']))])
-                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="ATSI", height=280, margin=dict(t=30))
+                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="ATSI Distribution", height=280, margin=dict(t=30))
                 st.plotly_chart(fig, use_container_width=True)
             
             c1, c2 = st.columns(2)
             with c1:
-                swd_yes = (filtered['SWD']=='Yes').sum()
-                swd_no = (filtered['SWD']=='No').sum()
+                swd_yes = (filtered['Flag_SWD'] == 'Yes').sum()
+                swd_no = (filtered['Flag_SWD'] == 'No').sum()
                 fig = go.Figure([go.Pie(labels=['SWD', 'Non-SWD'], values=[swd_yes, swd_no], marker=dict(colors=['#ff6b6b', '#10b981']))])
-                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="SWD", height=280, margin=dict(t=30))
+                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="SWD Distribution", height=280, margin=dict(t=30))
                 st.plotly_chart(fig, use_container_width=True)
             
             with c2:
-                eald_yes = (filtered['EALD']=='Yes').sum()
-                eald_no = (filtered['EALD']=='No').sum()
+                eald_yes = (filtered['Flag_EALD'] == 'Yes').sum()
+                eald_no = (filtered['Flag_EALD'] == 'No').sum()
                 fig = go.Figure([go.Pie(labels=['EALD', 'Non-EALD'], values=[eald_yes, eald_no], marker=dict(colors=['#ffd93d', '#10b981']))])
-                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="EALD", height=280, margin=dict(t=30))
+                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="EALD Distribution", height=280, margin=dict(t=30))
                 st.plotly_chart(fig, use_container_width=True)
         
         elif st.session_state.view == "All Students":
-            cols_to_show = [c for c in ['Allocated_Program', 'Allocation_Status', 'Current_Status', 'Term', 'ATSI', 'SWD', 'EALD'] if c in filtered.columns]
+            cols_to_show = [c for c in ['Allocated_Program', 'Allocation_Status', 'Current_Status', 'Term', 'Flag_ATSI', 'Flag_SWD', 'Flag_EALD'] if c in filtered.columns]
             if cols_to_show:
                 st.dataframe(filtered[cols_to_show], use_container_width=True, hide_index=True, height=400)
     
