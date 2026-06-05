@@ -19,8 +19,21 @@ h1, h2, h3, h4, h5, h6 { color: #ffffff !important; font-family: 'Inter', sans-s
 [data-testid="stSidebar"] * { color: #00e5ff !important; }
 [data-testid="metric-value"] { color: #00ff00 !important; font-size: 2.5rem !important; }
 [data-testid="metric-label"] { color: #00e5ff !important; }
-.stButton > button { background: linear-gradient(135deg, #1a2942 0%, #0d1929 100%) !important; color: #00e5ff !important; border: 2px solid #00e5ff !important; font-weight: 600; box-shadow: 0 0 20px rgba(0, 229, 255, 0.3) !important; }
-.stButton > button:hover { background: linear-gradient(135deg, #00e5ff 0%, #00b8d4 100%) !important; color: #0a0e27 !important; box-shadow: 0 0 30px rgba(0, 229, 255, 0.6) !important; }
+.stButton > button { 
+    background: linear-gradient(135deg, #1a2942 0%, #0d1929 100%) !important; 
+    color: #00e5ff !important; 
+    border: 2px solid #00e5ff !important; 
+    font-weight: 600; 
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.3) !important;
+    padding: 20px 10px !important;
+    min-height: 80px !important;
+    font-size: 16px !important;
+}
+.stButton > button:hover { 
+    background: linear-gradient(135deg, #00e5ff 0%, #00b8d4 100%) !important; 
+    color: #0a0e27 !important; 
+    box-shadow: 0 0 40px rgba(0, 229, 255, 0.7) !important; 
+}
 p { color: #ffffff !important; }
 
 .dashboard-title {
@@ -328,6 +341,96 @@ else:
                 fig.update_yaxes(dtick=1)
                 fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=350, showlegend=False)
                 st.plotly_chart(fig, use_container_width=True)
+            
+            st.markdown("---")
+            st.markdown("## Students with Multiple Disabilities")
+            st.markdown("*Important: Students with 2+ identified disabilities are represented in multiple disability categories below - these are the SAME students, not duplicates*")
+            
+            disability_cols = ['Flag_ASD', 'Flag_ADHD', 'Flag_Speech_and_Lang', 'Flag_Intellectual', 'Flag_Learning_Difficulty', 'Flag_Sensory_Processing', 'Flag_ODD', 'Flag_PDA']
+            
+            # Count disabilities per student
+            filtered_copy = filtered.copy()
+            filtered_copy['disability_count'] = 0
+            for col in disability_cols:
+                if col in filtered_copy.columns:
+                    filtered_copy['disability_count'] += (filtered_copy[col] == 'Yes').astype(int)
+            
+            # Distribution of students by number of disabilities
+            disability_dist = filtered_copy['disability_count'].value_counts().sort_index()
+            
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("No Identified Disabilities", int(disability_dist.get(0, 0)))
+            c2.metric("1 Disability", int(disability_dist.get(1, 0)))
+            c3.metric("2 Disabilities", int(disability_dist.get(2, 0)))
+            c4.metric("3+ Disabilities", int(sum(disability_dist.get(i, 0) for i in range(3, 10))))
+            
+            # Chart showing distribution
+            dist_labels = ['None', '1 Disability', '2 Disabilities', '3+ Disabilities']
+            dist_values = [
+                int(disability_dist.get(0, 0)),
+                int(disability_dist.get(1, 0)),
+                int(disability_dist.get(2, 0)),
+                int(sum(disability_dist.get(i, 0) for i in range(3, 10)))
+            ]
+            
+            fig = go.Figure([go.Bar(
+                x=dist_labels,
+                y=dist_values,
+                marker_color=['#10b981', '#ffd93d', '#ff6b6b', '#ff3333'],
+                text=dist_values,
+                textposition='outside'
+            )])
+            fig.update_yaxes(dtick=1)
+            fig.update_layout(
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                font=dict(color='#ffffff'),
+                height=350,
+                showlegend=False,
+                title="Distribution of Students by Number of Identified Disabilities"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Show top disability combinations
+            if sum(disability_dist.get(i, 0) for i in range(2, 10)) > 0:
+                st.markdown("### Common Disability Combinations (Same Student, Multiple Categories)")
+                
+                multi_disability_students = filtered_copy[filtered_copy['disability_count'] >= 2]
+                
+                if len(multi_disability_students) > 0:
+                    # Find common combinations
+                    combinations = []
+                    for _, student in multi_disability_students.iterrows():
+                        student_disabilities = [col.replace('Flag_', '').replace('_', ' ') for col in disability_cols if col in student.index and student[col] == 'Yes']
+                        if len(student_disabilities) >= 2:
+                            combinations.append(', '.join(sorted(student_disabilities)))
+                    
+                    from collections import Counter
+                    combo_counts = Counter(combinations)
+                    top_combos = combo_counts.most_common(10)
+                    
+                    if top_combos:
+                        combo_names = [combo[0][:50] for combo in top_combos]  # Truncate long names
+                        combo_values = [combo[1] for combo in top_combos]
+                        
+                        fig = go.Figure([go.Bar(
+                            y=combo_names,
+                            x=combo_values,
+                            orientation='h',
+                            marker_color='#ff6b6b',
+                            text=combo_values,
+                            textposition='outside'
+                        )])
+                        fig.update_xaxes(dtick=1)
+                        fig.update_layout(
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            font=dict(color='#ffffff'),
+                            height=400,
+                            showlegend=False,
+                            title="Top Disability Combinations"
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
             
             st.markdown("---")
             st.markdown("## Adelaide Partnership Map")
