@@ -1013,7 +1013,18 @@ with col_load:
                     if success:
                         st.session_state.last_loaded_file = file_id  # Mark as loaded
                         st.success(message)
-                        st.info("👆 Data loaded! Scroll down to continue working or download a new save file.")
+                        st.info("✅ Data loaded! Click Continue below to proceed.")
+                        
+                        # Clear button and continue button
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.button("↓ Continue Working", type="primary", use_container_width=True):
+                                st.session_state.step = 1
+                                st.rerun()
+                        with col2:
+                            if st.button("Upload Different File", use_container_width=True):
+                                st.session_state.last_loaded_file = None
+                                st.rerun()
                     else:
                         st.error(message)
                 except Exception as e:
