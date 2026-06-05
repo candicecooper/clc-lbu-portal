@@ -2,15 +2,19 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import numpy as np
+import folium
+from streamlit_folium import st_folium
+from collections import Counter
 
 st.set_page_config(page_title="CLC Allocation Dashboard", page_icon="📊", layout="wide")
 
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 * { font-family: 'Poppins', sans-serif !important; }
 body, [data-testid="stAppViewContainer"] { background-color: #0a0e27 !important; }
-h1, h2, h3, h4, h5, h6 { color: #ffffff !important; }
+h1, h2, h3, h4, h5, h6 { color: #ffffff !important; font-family: 'Inter', sans-serif !important; }
 [data-testid="stSidebar"] { background-color: #0a0e27 !important; border-right: 2px solid #00e5ff !important; }
 [data-testid="stSidebar"] * { color: #00e5ff !important; }
 [data-testid="metric-value"] { color: #00ff00 !important; font-size: 2.5rem !important; }
@@ -27,6 +31,19 @@ p { color: #ffffff !important; }
     margin: 20px 0;
     box-shadow: 0 0 30px rgba(0, 229, 255, 0.15);
 }
+
+.metric-card {
+    background: linear-gradient(135deg, #1A2942 0%, #243556 100%);
+    border: 1.5px solid #2D3F5F;
+    border-radius: 12px;
+    padding: 15px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+.metric-card:hover {
+    border-color: #00e5ff;
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.3);
+}
 </style>
 
 <div class="dashboard-title">
@@ -39,6 +56,8 @@ p { color: #ffffff !important; }
 </div>
 """, unsafe_allow_html=True)
 
+if 'drill_down_view' not in st.session_state:
+    st.session_state.drill_down_view = None
 if 'terms_selected' not in st.session_state:
     st.session_state.terms_selected = {2.0}
 if 'years_selected' not in st.session_state:
@@ -66,18 +85,13 @@ with st.sidebar:
         st.session_state.terms_selected = {2.0}
     
     t1, t2, t3, t4 = st.columns(4)
-    t1_sel = 1.0 in st.session_state.terms_selected
-    t2_sel = 2.0 in st.session_state.terms_selected
-    t3_sel = 3.0 in st.session_state.terms_selected
-    t4_sel = 4.0 in st.session_state.terms_selected
-    
-    if t1.button("T1" + (" ✓" if t1_sel else ""), key="t1", use_container_width=True): 
+    if t1.button("T1" + (" ✓" if 1.0 in st.session_state.terms_selected else ""), key="t1", use_container_width=True): 
         st.session_state.terms_selected ^= {1.0}
-    if t2.button("T2" + (" ✓" if t2_sel else ""), key="t2", use_container_width=True): 
+    if t2.button("T2" + (" ✓" if 2.0 in st.session_state.terms_selected else ""), key="t2", use_container_width=True): 
         st.session_state.terms_selected ^= {2.0}
-    if t3.button("T3" + (" ✓" if t3_sel else ""), key="t3", use_container_width=True): 
+    if t3.button("T3" + (" ✓" if 3.0 in st.session_state.terms_selected else ""), key="t3", use_container_width=True): 
         st.session_state.terms_selected ^= {3.0}
-    if t4.button("T4" + (" ✓" if t4_sel else ""), key="t4", use_container_width=True): 
+    if t4.button("T4" + (" ✓" if 4.0 in st.session_state.terms_selected else ""), key="t4", use_container_width=True): 
         st.session_state.terms_selected ^= {4.0}
     
     st.markdown("**Year**")
@@ -88,12 +102,9 @@ with st.sidebar:
         st.session_state.years_selected = set()
     
     y1, y2 = st.columns(2)
-    y1_sel = 2025.0 in st.session_state.years_selected
-    y2_sel = 2026.0 in st.session_state.years_selected
-    
-    if y1.button("2025" + (" ✓" if y1_sel else ""), key="y1", use_container_width=True): 
+    if y1.button("2025" + (" ✓" if 2025.0 in st.session_state.years_selected else ""), key="y1", use_container_width=True): 
         st.session_state.years_selected ^= {2025.0}
-    if y2.button("2026" + (" ✓" if y2_sel else ""), key="y2", use_container_width=True): 
+    if y2.button("2026" + (" ✓" if 2026.0 in st.session_state.years_selected else ""), key="y2", use_container_width=True): 
         st.session_state.years_selected ^= {2026.0}
     
     st.markdown("**Program**")
@@ -104,15 +115,11 @@ with st.sidebar:
         st.session_state.programs_selected = set()
     
     p1, p2, p3 = st.columns(3)
-    p1_sel = "JP" in st.session_state.programs_selected
-    p2_sel = "PY" in st.session_state.programs_selected
-    p3_sel = "SY" in st.session_state.programs_selected
-    
-    if p1.button("JP" + (" ✓" if p1_sel else ""), key="p1", use_container_width=True): 
+    if p1.button("JP" + (" ✓" if "JP" in st.session_state.programs_selected else ""), key="p1", use_container_width=True): 
         st.session_state.programs_selected ^= {"JP"}
-    if p2.button("PY" + (" ✓" if p2_sel else ""), key="p2", use_container_width=True): 
+    if p2.button("PY" + (" ✓" if "PY" in st.session_state.programs_selected else ""), key="p2", use_container_width=True): 
         st.session_state.programs_selected ^= {"PY"}
-    if p3.button("SY" + (" ✓" if p3_sel else ""), key="p3", use_container_width=True): 
+    if p3.button("SY" + (" ✓" if "SY" in st.session_state.programs_selected else ""), key="p3", use_container_width=True): 
         st.session_state.programs_selected ^= {"SY"}
 
 if uploaded_file is None:
@@ -136,225 +143,194 @@ else:
         if st.session_state.programs_selected:
             filtered = filtered[filtered['Allocated_Program'].isin(st.session_state.programs_selected)]
         
-        # METRICS - WHOLE NUMBERS ONLY
         total = int(len(filtered))
         allocated = int(len(filtered[filtered['Allocation_Status'] == 'Allocated']))
         atsi = int(len(filtered[filtered['Flag_ATSI'] == 'Yes']))
         eald = int(len(filtered[filtered['Flag_EALD'] == 'Yes']))
         swd = int(len(filtered[filtered['Flag_SWD'] == 'Yes']))
         
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Total Students", total)
-        c2.metric("Allocated", allocated)
-        c3.metric("ATSI", atsi)
-        c4.metric("SWD", swd)
-        c5.metric("EALD", eald)
+        st.markdown("## Metrics & Drill Down")
+        
+        col1, col2, col3, col4, col5 = st.columns(5)
+        
+        with col1:
+            if st.button(f"📊 Total\n{total}", key="metric_total", use_container_width=True, help="Click to drill down"):
+                st.session_state.drill_down_view = "total"
+        
+        with col2:
+            if st.button(f"✅ Allocated\n{allocated}", key="metric_allocated", use_container_width=True, help="Click to drill down"):
+                st.session_state.drill_down_view = "allocated"
+        
+        with col3:
+            if st.button(f"🔴 ATSI\n{atsi}", key="metric_atsi", use_container_width=True, help="Click to drill down"):
+                st.session_state.drill_down_view = "atsi"
+        
+        with col4:
+            if st.button(f"🟡 SWD\n{swd}", key="metric_swd", use_container_width=True, help="Click to drill down"):
+                st.session_state.drill_down_view = "swd"
+        
+        with col5:
+            if st.button(f"🟠 EALD\n{eald}", key="metric_eald", use_container_width=True, help="Click to drill down"):
+                st.session_state.drill_down_view = "eald"
         
         st.markdown("---")
         
-        # PROGRAM DISTRIBUTION
-        st.markdown("## Program Distribution")
-        prog = filtered['Allocated_Program'].value_counts().sort_index()
-        if len(prog) > 0:
-            fig = go.Figure([go.Bar(
-                x=prog.index, 
-                y=prog.values, 
-                marker_color=['#00e5ff', '#ffd93d', '#ff6b6b'][:len(prog)],
-                text=prog.values.astype(int),
-                textposition='outside',
-                textfont=dict(size=16, color='#ffffff')
-            )])
-            fig.update_yaxes(dtick=1)
-            fig.update_layout(
-                paper_bgcolor='rgba(0,0,0,0)', 
-                plot_bgcolor='rgba(0,0,0,0)', 
-                font=dict(color='#ffffff', size=14),
-                height=350,
-                showlegend=False
-            )
-            st.plotly_chart(fig, use_container_width=True)
+        # DRILL DOWN VIEWS
+        if st.session_state.drill_down_view:
+            st.markdown(f"## 🔍 Detailed Analysis: {st.session_state.drill_down_view.upper()}")
+            
+            if st.button("← Back to Overview", key="back_btn"):
+                st.session_state.drill_down_view = None
+                st.rerun()
+            
+            tabs = st.tabs(["Overview", "By Program", "By Partnership", "Disability Profile", "Trends"])
+            
+            if st.session_state.drill_down_view == "atsi":
+                drill_data = filtered[filtered['Flag_ATSI'] == 'Yes']
+                
+                with tabs[0]:
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Total ATSI", int(len(drill_data)))
+                    c2.metric("Allocated", int(len(drill_data[drill_data['Allocation_Status'] == 'Allocated'])))
+                    allocated_pct = int(len(drill_data[drill_data['Allocation_Status'] == 'Allocated']) / len(drill_data) * 100) if len(drill_data) > 0 else 0
+                    c3.metric("Allocation %", f"{allocated_pct}%")
+                    c4.metric("Waiting List", int(len(drill_data[drill_data['Allocation_Status'] == 'On Waiting List'])))
+                
+                with tabs[1]:
+                    prog = drill_data['Allocated_Program'].value_counts().sort_index()
+                    if len(prog) > 0:
+                        fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color='#ff6b6b', text=prog.values.astype(int), textposition='outside')])
+                        fig.update_yaxes(dtick=1)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[2]:
+                    part = drill_data['Partnership_Area'].value_counts()
+                    if len(part) > 0:
+                        fig = go.Figure([go.Bar(y=part.index, x=part.values, orientation='h', marker_color='#ff6b6b', text=part.values.astype(int), textposition='outside')])
+                        fig.update_xaxes(dtick=1)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[3]:
+                    disability_cols = ['Flag_ASD', 'Flag_ADHD', 'Flag_Speech_and_Lang', 'Flag_Intellectual', 'Flag_Learning_Difficulty', 'Flag_Sensory_Processing', 'Flag_ODD', 'Flag_PDA']
+                    disability_labels = ['ASD', 'ADHD', 'Speech', 'Intellectual', 'Learning', 'Sensory', 'ODD', 'PDA']
+                    dis_counts = []
+                    for col in disability_cols:
+                        if col in drill_data.columns:
+                            dis_counts.append(int(len(drill_data[drill_data[col] == 'Yes'])))
+                        else:
+                            dis_counts.append(0)
+                    if sum(dis_counts) > 0:
+                        fig = go.Figure([go.Bar(x=disability_labels, y=dis_counts, marker_color='#ff6b6b', text=dis_counts, textposition='outside')])
+                        fig.update_yaxes(dtick=1)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[4]:
+                    if 'Term' in drill_data.columns:
+                        term_trend = drill_data['Term'].value_counts().sort_index()
+                        fig = go.Figure([go.Scatter(x=term_trend.index, y=term_trend.values, mode='lines+markers', marker_color='#ff6b6b', line=dict(width=3), marker_size=10)])
+                        fig.update_yaxes(dtick=1)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, xaxis_title='Term', yaxis_title='Students')
+                        st.plotly_chart(fig, use_container_width=True)
+            
+            elif st.session_state.drill_down_view == "eald":
+                drill_data = filtered[filtered['Flag_EALD'] == 'Yes']
+                
+                with tabs[0]:
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Total EALD", int(len(drill_data)))
+                    c2.metric("Allocated", int(len(drill_data[drill_data['Allocation_Status'] == 'Allocated'])))
+                    allocated_pct = int(len(drill_data[drill_data['Allocation_Status'] == 'Allocated']) / len(drill_data) * 100) if len(drill_data) > 0 else 0
+                    c3.metric("Allocation %", f"{allocated_pct}%")
+                    c4.metric("Waiting List", int(len(drill_data[drill_data['Allocation_Status'] == 'On Waiting List'])))
+                
+                with tabs[1]:
+                    prog = drill_data['Allocated_Program'].value_counts().sort_index()
+                    if len(prog) > 0:
+                        fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color='#ffd93d', text=prog.values.astype(int), textposition='outside')])
+                        fig.update_yaxes(dtick=1)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[2]:
+                    part = drill_data['Partnership_Area'].value_counts()
+                    if len(part) > 0:
+                        fig = go.Figure([go.Bar(y=part.index, x=part.values, orientation='h', marker_color='#ffd93d', text=part.values.astype(int), textposition='outside')])
+                        fig.update_xaxes(dtick=1)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[3]:
+                    disability_cols = ['Flag_ASD', 'Flag_ADHD', 'Flag_Speech_and_Lang', 'Flag_Intellectual', 'Flag_Learning_Difficulty', 'Flag_Sensory_Processing', 'Flag_ODD', 'Flag_PDA']
+                    disability_labels = ['ASD', 'ADHD', 'Speech', 'Intellectual', 'Learning', 'Sensory', 'ODD', 'PDA']
+                    dis_counts = []
+                    for col in disability_cols:
+                        if col in drill_data.columns:
+                            dis_counts.append(int(len(drill_data[drill_data[col] == 'Yes'])))
+                        else:
+                            dis_counts.append(0)
+                    if sum(dis_counts) > 0:
+                        fig = go.Figure([go.Bar(x=disability_labels, y=dis_counts, marker_color='#ffd93d', text=dis_counts, textposition='outside')])
+                        fig.update_yaxes(dtick=1)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
+                        st.plotly_chart(fig, use_container_width=True)
         
-        st.markdown("---")
-        
-        # ADELAIDE MAP WITH SATELLITE STYLE
-        st.markdown("## 🗺️ Partnership Distribution Across Adelaide")
-        
-        partnership_coords = {
-            'Inner West': (-34.800, 138.550),
-            'Le Fevre Peninsula': (-34.820, 138.480),
-            'Holdfast': (-35.030, 138.520),
-            'West Torrens': (-34.870, 138.500),
-            'Western Adelaide Shores': (-34.760, 138.400),
-            'Marion Inland': (-35.130, 138.580),
-            'Adelaide Prospect': (-34.930, 138.580),
-        }
-        
-        partnership_data = filtered['Partnership_Area'].value_counts()
-        
-        lats, lons, sizes, labels, colors_list = [], [], [], [], []
-        
-        for part, (lat, lon) in partnership_coords.items():
-            if part in partnership_data.index:
-                count = int(partnership_data[part])
-                lats.append(lat)
-                lons.append(lon)
-                sizes.append(max(20, count * 6))
-                labels.append(f"<b>{part}</b><br>{count} students")
-                colors_list.append(count)
-        
-        fig = go.Figure(data=go.Scattergeo(
-            lon=lons, lat=lats, mode='markers+text',
-            text=[p.split('<')[0].replace('<b>', '').replace('</b>', '') for p in labels],
-            textposition='top center', textfont=dict(size=11, color='#00e5ff', family='Poppins'),
-            marker=dict(
-                size=sizes, 
-                color=colors_list, 
-                colorscale='Reds', 
-                showscale=True,
-                colorbar=dict(title="Students", tickcolor='#ffffff', tickfont=dict(color='#ffffff')),
-                opacity=0.85, 
-                line=dict(width=2, color='#00e5ff')
-            ),
-            hovertext=labels, 
-            hoverinfo='text'
-        ))
-        
-        fig.update_layout(
-            title=dict(text='Click to zoom • Scroll to pan', x=0.5, xanchor='center'),
-            geo=dict(
-                scope='oceania',
-                showland=True,
-                landcolor='rgba(50, 50, 50, 0.6)',
-                oceancolor='rgba(20, 20, 40, 0.4)',
-                coastlinecolor='rgba(0, 229, 255, 0.5)',
-                center=dict(lon=138.5, lat=-34.95),
-                projection_type='mercator',
-                lataxis_range=[-35.4, -34.5],
-                lonaxis_range=[137.9, 139.1]
-            ),
-            paper_bgcolor='rgba(10,14,39,0.95)',
-            plot_bgcolor='rgba(10,14,39,0.95)',
-            font=dict(color='#ffffff', size=12),
-            height=550,
-            hovermode='closest',
-            margin=dict(r=0, t=50, l=0, b=0)
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        
-        st.markdown("---")
-        
-        # EQUITY ANALYSIS - ATSI
-        st.markdown("## ATSI Equity Analysis")
-        
-        atsi_allocated = int(len(filtered[(filtered['Flag_ATSI'] == 'Yes') & (filtered['Allocation_Status'] == 'Allocated')]))
-        atsi_total = int(len(filtered[filtered['Flag_ATSI'] == 'Yes']))
-        non_atsi_allocated = int(len(filtered[(filtered['Flag_ATSI'] == 'No') & (filtered['Allocation_Status'] == 'Allocated')]))
-        non_atsi_total = int(len(filtered[filtered['Flag_ATSI'] == 'No']))
-        
-        atsi_rate = (atsi_allocated / atsi_total * 100) if atsi_total > 0 else 0
-        non_atsi_rate = (non_atsi_allocated / non_atsi_total * 100) if non_atsi_total > 0 else 0
-        gap = atsi_rate - non_atsi_rate
-        
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("ATSI Allocated", atsi_allocated)
-        col2.metric("ATSI Allocation %", f"{int(atsi_rate)}%")
-        col3.metric("Non-ATSI %", f"{int(non_atsi_rate)}%")
-        col4.metric("Equity Gap", f"{int(gap):+d}%")
-        
-        fig = go.Figure(data=[
-            go.Bar(
-                x=['ATSI', 'Non-ATSI'], 
-                y=[atsi_rate, non_atsi_rate], 
-                marker_color=['#ff6b6b', '#10b981'], 
-                text=[f'{int(atsi_rate)}%', f'{int(non_atsi_rate)}%'], 
-                textposition='outside',
-                textfont=dict(size=14, color='#ffffff')
-            )
-        ])
-        fig.update_yaxes(dtick=20)
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
-        
-        atsi_by_prog = filtered[filtered['Flag_ATSI'] == 'Yes']['Allocated_Program'].value_counts().sort_index()
-        if len(atsi_by_prog) > 0:
-            fig = go.Figure([go.Bar(
-                x=atsi_by_prog.index, 
-                y=atsi_by_prog.values, 
-                marker_color='#ff6b6b', 
-                text=atsi_by_prog.values.astype(int), 
-                textposition='outside',
-                textfont=dict(size=14)
-            )])
-            fig.update_yaxes(dtick=1)
-            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="ATSI by Program", height=300, showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
-        
-        st.markdown("---")
-        
-        # EQUITY ANALYSIS - EALD
-        st.markdown("## EALD Equity Analysis")
-        
-        eald_allocated = int(len(filtered[(filtered['Flag_EALD'] == 'Yes') & (filtered['Allocation_Status'] == 'Allocated')]))
-        eald_total = int(len(filtered[filtered['Flag_EALD'] == 'Yes']))
-        non_eald_allocated = int(len(filtered[(filtered['Flag_EALD'] == 'No') & (filtered['Allocation_Status'] == 'Allocated')]))
-        non_eald_total = int(len(filtered[filtered['Flag_EALD'] == 'No']))
-        
-        eald_rate = (eald_allocated / eald_total * 100) if eald_total > 0 else 0
-        non_eald_rate = (non_eald_allocated / non_eald_total * 100) if non_eald_total > 0 else 0
-        eald_gap = eald_rate - non_eald_rate
-        
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("EALD Allocated", eald_allocated)
-        col2.metric("EALD Allocation %", f"{int(eald_rate)}%")
-        col3.metric("Non-EALD %", f"{int(non_eald_rate)}%")
-        col4.metric("Equity Gap", f"{int(eald_gap):+d}%")
-        
-        fig = go.Figure(data=[
-            go.Bar(
-                x=['EALD', 'Non-EALD'], 
-                y=[eald_rate, non_eald_rate], 
-                marker_color=['#ffd93d', '#10b981'], 
-                text=[f'{int(eald_rate)}%', f'{int(non_eald_rate)}%'], 
-                textposition='outside',
-                textfont=dict(size=14, color='#ffffff')
-            )
-        ])
-        fig.update_yaxes(dtick=20)
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
-        
-        eald_by_prog = filtered[filtered['Flag_EALD'] == 'Yes']['Allocated_Program'].value_counts().sort_index()
-        if len(eald_by_prog) > 0:
-            fig = go.Figure([go.Bar(
-                x=eald_by_prog.index, 
-                y=eald_by_prog.values, 
-                marker_color='#ffd93d', 
-                text=eald_by_prog.values.astype(int), 
-                textposition='outside',
-                textfont=dict(size=14)
-            )])
-            fig.update_yaxes(dtick=1)
-            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="EALD by Program", height=300, showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
-        
-        st.markdown("---")
-        
-        # TOP REFERRERS
-        st.markdown("## Top Referring Schools")
-        referrals = filtered['Referring_School'].value_counts().head(12)
-        if len(referrals) > 0:
-            fig = go.Figure([go.Bar(
-                y=referrals.index, 
-                x=referrals.values, 
-                orientation='h', 
-                marker_color='#00e5ff', 
-                text=referrals.values.astype(int), 
-                textposition='outside',
-                textfont=dict(size=14)
-            )])
-            fig.update_xaxes(dtick=1)
-            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
+        else:
+            # MAIN OVERVIEW
+            st.markdown("## Program Distribution")
+            prog = filtered['Allocated_Program'].value_counts().sort_index()
+            if len(prog) > 0:
+                fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color=['#00e5ff', '#ffd93d', '#ff6b6b'][:len(prog)], text=prog.values.astype(int), textposition='outside')])
+                fig.update_yaxes(dtick=1)
+                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=350, showlegend=False)
+                st.plotly_chart(fig, use_container_width=True)
+            
+            st.markdown("---")
+            st.markdown("## 🗺️ Adelaide Partnership Map")
+            
+            partnership_coords = {
+                "Le Fevre Peninsula": {"color": "#E74C3C", "coords": [[-34.78, 138.48], [-34.78, 138.52], [-34.84, 138.52], [-34.85, 138.50], [-34.84, 138.48]]},
+                "Western Adelaide Shores": {"color": "#1ABC9C", "coords": [[-34.85, 138.48], [-34.85, 138.52], [-34.88, 138.52], [-34.88, 138.48]]},
+                "Inner West": {"color": "#3498DB", "coords": [[-34.90, 138.54], [-34.90, 138.58], [-34.94, 138.58], [-34.94, 138.54]]},
+                "West Torrens": {"color": "#F39C12", "coords": [[-34.93, 138.55], [-34.93, 138.59], [-34.96, 138.59], [-34.96, 138.55]]},
+                "Adelaide Prospect": {"color": "#34495E", "coords": [[-34.84, 138.58], [-34.84, 138.62], [-34.88, 138.62], [-34.88, 138.58]]},
+                "Holdfast": {"color": "#E67E22", "coords": [[-35.00, 138.50], [-35.00, 138.55], [-35.05, 138.55], [-35.05, 138.50]]},
+                "Marion Inland": {"color": "#16A085", "coords": [[-35.00, 138.54], [-35.00, 138.59], [-35.05, 138.59], [-35.05, 138.54]]},
+            }
+            
+            partnership_counts = Counter()
+            for _, record in filtered.iterrows():
+                partnership = record.get('Partnership_Area', '')
+                if partnership and partnership != '':
+                    partnership_counts[partnership] += 1
+            
+            m = folium.Map(location=[-34.92, 138.60], zoom_start=10, tiles='OpenStreetMap')
+            max_count = max(partnership_counts.values()) if partnership_counts else 1
+            
+            for partnership_name, region_data in partnership_coords.items():
+                count = partnership_counts.get(partnership_name, 0)
+                if count > 0:
+                    opacity = 0.3 + (count / max_count) * 0.5
+                    folium.Polygon(
+                        locations=region_data["coords"],
+                        color=region_data["color"],
+                        fill=True,
+                        fillColor=region_data["color"],
+                        fillOpacity=opacity,
+                        weight=3,
+                        popup=folium.Popup(f"<b>{partnership_name}</b><br>{count} students", max_width=200),
+                        tooltip=f"{partnership_name}: {count} students"
+                    ).add_to(m)
+            
+            folium.Marker(
+                location=[-34.9286, 138.5830],
+                popup="🏫 CLC-LBU",
+                icon=folium.Icon(color='green', icon='home', prefix='fa')
+            ).add_to(m)
+            
+            st_folium(m, width=None, height=500)
     
     except Exception as e:
         st.error(f"❌ Error: {e}")
