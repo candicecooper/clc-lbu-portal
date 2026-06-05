@@ -18,19 +18,19 @@ h1, h2, h3, h4, h5, h6 { color: #ffffff !important; }
 [data-testid="metric-label"] { color: #00e5ff !important; }
 .stButton > button { background-color: #1a1f3a !important; color: #00e5ff !important; border: 2px solid #00e5ff !important; }
 .stButton > button:hover { background-color: #00e5ff !important; color: #0a0e27 !important; }
-p { color: #ffffff !important; }
+p, label { color: #ffffff !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize session state
-filters = {
-    'year_filter': None, 'term_filter': None, 'program_filter': None,
-    'partnership_filter': None, 'school_filter': None, 'atsi_filter': None,
-    'swd_filter': None, 'eald_filter': None, 'status_filter': None
-}
-for key in filters:
-    if key not in st.session_state:
-        st.session_state[key] = None
+# Initialize session state for MULTI-SELECT filters
+if 'years_selected' not in st.session_state:
+    st.session_state.years_selected = set()
+if 'terms_selected' not in st.session_state:
+    st.session_state.terms_selected = set()
+if 'programs_selected' not in st.session_state:
+    st.session_state.programs_selected = set()
+if 'partnerships_selected' not in st.session_state:
+    st.session_state.partnerships_selected = set()
 if 'view' not in st.session_state:
     st.session_state.view = "Dashboard"
 
@@ -42,48 +42,106 @@ with st.sidebar:
     
     st.markdown("---")
     st.markdown("### 📊 VIEW")
-    st.session_state.view = st.radio("", ["Dashboard", "Disability Analysis", "School Referrals", "Extensions", "Partnerships"], label_visibility="collapsed")
+    st.session_state.view = st.radio("", ["Dashboard", "Disability Analysis", "School Referrals", "Extensions", "Partnership Map"], label_visibility="collapsed")
     
     st.markdown("---")
-    st.markdown("### 🎯 FILTERS")
+    st.markdown("### 🎯 FILTERS (Click to Select Multiple)")
     
-    yc1, yc2 = st.columns(2)
-    if yc1.button("All Years", key="y_all"): st.session_state.year_filter = None
-    if yc2.button("Clear", key="y_clear"): st.session_state.year_filter = None
-    y1, y2 = st.columns(2)
-    if y1.button("2025", key="y1"): st.session_state.year_filter = 2025.0
-    if y2.button("2026", key="y2"): st.session_state.year_filter = 2026.0
-    if st.session_state.year_filter is not None: st.write(f"**Showing:** {int(st.session_state.year_filter)}")
+    # YEAR FILTER - MULTI-SELECT
+    st.markdown("**Year** (Select multiple)")
+    yc1, yc2, yc3 = st.columns(3)
+    if yc1.button("All", key="y_all", use_container_width=True): 
+        st.session_state.years_selected = {2025.0, 2026.0}
+    if yc2.button("None", key="y_none", use_container_width=True): 
+        st.session_state.years_selected = set()
     
-    st.markdown("**Term**")
-    tc1, tc2 = st.columns(2)
-    if tc1.button("All Terms", key="t_all"): st.session_state.term_filter = None
-    if tc2.button("Clear", key="t_clear"): st.session_state.term_filter = None
+    y1_col, y2_col = st.columns(2)
+    y1_selected = 2025.0 in st.session_state.years_selected
+    y2_selected = 2026.0 in st.session_state.years_selected
+    
+    if y1_col.button("2025" + (" ✓" if y1_selected else ""), key="y1", use_container_width=True, 
+                     help="Click to toggle"): 
+        st.session_state.years_selected ^= {2025.0}
+    
+    if y2_col.button("2026" + (" ✓" if y2_selected else ""), key="y2", use_container_width=True,
+                     help="Click to toggle"): 
+        st.session_state.years_selected ^= {2026.0}
+    
+    if st.session_state.years_selected:
+        st.write(f"**Selected:** {', '.join([str(int(y)) for y in sorted(st.session_state.years_selected)])}")
+    
+    # TERM FILTER - MULTI-SELECT
+    st.markdown("**Term** (Select multiple)")
+    tc1, tc2, tc3 = st.columns(3)
+    if tc1.button("All", key="t_all", use_container_width=True): 
+        st.session_state.terms_selected = {1.0, 2.0, 3.0, 4.0}
+    if tc2.button("None", key="t_none", use_container_width=True): 
+        st.session_state.terms_selected = set()
+    
     t1, t2, t3, t4 = st.columns(4)
-    if t1.button("T1", key="t1"): st.session_state.term_filter = 1.0
-    if t2.button("T2", key="t2"): st.session_state.term_filter = 2.0
-    if t3.button("T3", key="t3"): st.session_state.term_filter = 3.0
-    if t4.button("T4", key="t4"): st.session_state.term_filter = 4.0
-    if st.session_state.term_filter is not None: st.write(f"**Showing:** Term {int(st.session_state.term_filter)}")
+    t1_sel = 1.0 in st.session_state.terms_selected
+    t2_sel = 2.0 in st.session_state.terms_selected
+    t3_sel = 3.0 in st.session_state.terms_selected
+    t4_sel = 4.0 in st.session_state.terms_selected
     
-    st.markdown("**Program**")
-    pc1, pc2 = st.columns(2)
-    if pc1.button("All Programs", key="p_all"): st.session_state.program_filter = None
-    if pc2.button("Clear", key="p_clear"): st.session_state.program_filter = None
+    if t1.button("T1" + (" ✓" if t1_sel else ""), key="t1", use_container_width=True): 
+        st.session_state.terms_selected ^= {1.0}
+    if t2.button("T2" + (" ✓" if t2_sel else ""), key="t2", use_container_width=True): 
+        st.session_state.terms_selected ^= {2.0}
+    if t3.button("T3" + (" ✓" if t3_sel else ""), key="t3", use_container_width=True): 
+        st.session_state.terms_selected ^= {3.0}
+    if t4.button("T4" + (" ✓" if t4_sel else ""), key="t4", use_container_width=True): 
+        st.session_state.terms_selected ^= {4.0}
+    
+    if st.session_state.terms_selected:
+        st.write(f"**Selected:** {', '.join([f'T{int(t)}' for t in sorted(st.session_state.terms_selected)])}")
+    
+    # PROGRAM FILTER - MULTI-SELECT
+    st.markdown("**Program** (Select multiple)")
+    pc1, pc2, pc3 = st.columns(3)
+    if pc1.button("All", key="p_all", use_container_width=True): 
+        st.session_state.programs_selected = {"JP", "PY", "SY"}
+    if pc2.button("None", key="p_none", use_container_width=True): 
+        st.session_state.programs_selected = set()
+    
     p1, p2, p3 = st.columns(3)
-    if p1.button("JP", key="p1"): st.session_state.program_filter = "JP"
-    if p2.button("PY", key="p2"): st.session_state.program_filter = "PY"
-    if p3.button("SY", key="p3"): st.session_state.program_filter = "SY"
-    if st.session_state.program_filter is not None: st.write(f"**Showing:** {st.session_state.program_filter}")
+    p1_sel = "JP" in st.session_state.programs_selected
+    p2_sel = "PY" in st.session_state.programs_selected
+    p3_sel = "SY" in st.session_state.programs_selected
     
-    st.markdown("**Partnership**")
+    if p1.button("JP" + (" ✓" if p1_sel else ""), key="p1", use_container_width=True): 
+        st.session_state.programs_selected ^= {"JP"}
+    if p2.button("PY" + (" ✓" if p2_sel else ""), key="p2", use_container_width=True): 
+        st.session_state.programs_selected ^= {"PY"}
+    if p3.button("SY" + (" ✓" if p3_sel else ""), key="p3", use_container_width=True): 
+        st.session_state.programs_selected ^= {"SY"}
+    
+    if st.session_state.programs_selected:
+        st.write(f"**Selected:** {', '.join(sorted(st.session_state.programs_selected))}")
+    
+    # PARTNERSHIP FILTER - MULTI-SELECT
+    st.markdown("**Partnership** (Select multiple)")
     partc1, partc2 = st.columns(2)
-    if partc1.button("All", key="part_all"): st.session_state.partnership_filter = None
-    if partc2.button("Clear", key="part_clear"): st.session_state.partnership_filter = None
+    if partc1.button("All", key="part_all", use_container_width=True): 
+        if uploaded_file:
+            all_data = pd.read_excel(uploaded_file)
+            st.session_state.partnerships_selected = set(all_data['Partnership_Area'].dropna().unique())
+    if partc2.button("None", key="part_none", use_container_width=True): 
+        st.session_state.partnerships_selected = set()
+    
     if uploaded_file:
         all_data = pd.read_excel(uploaded_file)
         partnerships = sorted(all_data['Partnership_Area'].dropna().unique())
-        st.session_state.partnership_filter = st.selectbox("Select", [None] + partnerships, key="part_select", format_func=lambda x: "All" if x is None else x)
+        for part in partnerships[:8]:  # Show first 8
+            part_sel = part in st.session_state.partnerships_selected
+            if st.button(part[:18] + (" ✓" if part_sel else ""), key=f"part_{part}", use_container_width=True):
+                st.session_state.partnerships_selected ^= {part}
+        
+        if len(partnerships) > 8:
+            st.write(f"*(+{len(partnerships)-8} more partnerships)*")
+    
+    if st.session_state.partnerships_selected:
+        st.write(f"**Selected:** {len(st.session_state.partnerships_selected)} partnership(ies)")
 
 st.markdown("## Allocation Dashboard")
 
@@ -98,18 +156,21 @@ else:
             if all_data[col].dtype == 'object':
                 all_data[col] = all_data[col].astype(str).str.strip()
         
-        # FIX: Include both "Active" and "2025" status for current cohort
+        # Start with Active + 2025 students
         filtered = all_data[(all_data['Current_Status'] == 'Active') | (all_data['Current_Status'] == '2025')].copy()
         
-        # Apply filters
-        if st.session_state.year_filter is not None:
-            filtered = filtered[filtered['Referral_Year'] == st.session_state.year_filter]
-        if st.session_state.term_filter is not None:
-            filtered = filtered[filtered['Term'] == st.session_state.term_filter]
-        if st.session_state.program_filter is not None:
-            filtered = filtered[filtered['Allocated_Program'] == st.session_state.program_filter]
-        if st.session_state.partnership_filter is not None:
-            filtered = filtered[filtered['Partnership_Area'] == st.session_state.partnership_filter]
+        # APPLY MULTI-SELECT FILTERS
+        if st.session_state.years_selected:
+            filtered = filtered[filtered['Referral_Year'].isin(st.session_state.years_selected)]
+        
+        if st.session_state.terms_selected:
+            filtered = filtered[filtered['Term'].isin(st.session_state.terms_selected)]
+        
+        if st.session_state.programs_selected:
+            filtered = filtered[filtered['Allocated_Program'].isin(st.session_state.programs_selected)]
+        
+        if st.session_state.partnerships_selected:
+            filtered = filtered[filtered['Partnership_Area'].isin(st.session_state.partnerships_selected)]
         
         # METRICS
         c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -184,9 +245,9 @@ else:
             
             with c2:
                 # Heatmap: Partnerships x Disability Types
-                partnerships = filtered['Partnership_Area'].unique()
+                partnerships = sorted(filtered['Partnership_Area'].unique())
                 heatmap_data = []
-                for partner in sorted(partnerships):
+                for partner in partnerships:
                     partner_data = filtered[filtered['Partnership_Area'] == partner]
                     row = [len(partner_data[partner_data[col] == 'Yes']) for _, col in disability_types.items()]
                     heatmap_data.append(row)
@@ -194,7 +255,7 @@ else:
                 fig = go.Figure(data=go.Heatmap(
                     z=heatmap_data,
                     x=list(disability_types.keys()),
-                    y=sorted(partnerships),
+                    y=partnerships,
                     colorscale='Reds',
                     text=np.array(heatmap_data),
                     texttemplate='%{text}',
@@ -211,24 +272,11 @@ else:
             fig = go.Figure([go.Bar(y=referrals.index, x=referrals.values, orientation='h', marker_color='#00e5ff')])
             fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="Top Referring Schools", height=500, showlegend=False, xaxis_title="Count")
             st.plotly_chart(fig, use_container_width=True)
-            
-            st.markdown("---")
-            st.markdown("### Schools by Partnership")
-            
-            if st.session_state.partnership_filter:
-                part_schools = filtered[filtered['Partnership_Area'] == st.session_state.partnership_filter]['Referring_School'].value_counts()
-                fig = go.Figure([go.Bar(y=part_schools.index, x=part_schools.values, orientation='h', marker_color='#ffd93d')])
-                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title=f"Schools in {st.session_state.partnership_filter}", height=400, showlegend=False, xaxis_title="Referrals")
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("Select a Partnership in filters to see schools in that partnership")
         
         elif st.session_state.view == "Extensions":
             st.markdown("### Placement Extensions Analysis")
             
-            # Check if Extended_Placement column exists
             if 'Extended_Placement' in filtered.columns:
-                extended = filtered['Extended_Placement'].value_counts()
                 fig = go.Figure([go.Pie(labels=['Standard', 'Extended'], values=[len(filtered[filtered['Extended_Placement'] != 'Yes']), len(filtered[filtered['Extended_Placement'] == 'Yes'])], marker=dict(colors=['#10b981', '#ffd93d']))])
                 fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="Standard vs Extended Placements", height=400)
                 st.plotly_chart(fig, use_container_width=True)
@@ -236,14 +284,39 @@ else:
                 st.markdown("---")
                 st.markdown(f"**Standard Placements:** {len(filtered[filtered['Extended_Placement'] != 'Yes'])}")
                 st.markdown(f"**Extended Placements:** {len(filtered[filtered['Extended_Placement'] == 'Yes'])}")
-            else:
-                st.warning("Extended_Placement data not available")
         
-        elif st.session_state.view == "Partnerships":
-            st.markdown("### Partnership Comparison")
+        elif st.session_state.view == "Partnership Map":
+            st.markdown("### Partnership Referral Heatmap")
             
+            # Create heatmap: Top schools x Partnerships
+            top_schools = filtered['Referring_School'].value_counts().head(12).index.tolist()
+            partnerships = sorted(filtered['Partnership_Area'].unique())
+            
+            heatmap_data = []
+            for school in top_schools:
+                row = []
+                for part in partnerships:
+                    count = len(filtered[(filtered['Referring_School'] == school) & (filtered['Partnership_Area'] == part)])
+                    row.append(count)
+                heatmap_data.append(row)
+            
+            fig = go.Figure(data=go.Heatmap(
+                z=heatmap_data,
+                x=partnerships,
+                y=top_schools,
+                colorscale='YlOrRd',
+                text=np.array(heatmap_data),
+                texttemplate='%{text}',
+                textfont={"size": 10},
+                colorbar=dict(title="Referrals")
+            ))
+            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="Schools x Partnerships - Referral Heatmap", height=500, xaxis_title="Partnership Area", yaxis_title="Referring School")
+            st.plotly_chart(fig, use_container_width=True)
+            
+            st.markdown("---")
+            st.markdown("### Partnership Summary")
             partnership_stats = []
-            for partner in sorted(filtered['Partnership_Area'].unique()):
+            for partner in partnerships:
                 p_data = filtered[filtered['Partnership_Area'] == partner]
                 partnership_stats.append({
                     'Partnership': partner,
@@ -251,25 +324,11 @@ else:
                     'ATSI': len(p_data[p_data['Flag_ATSI'] == 'Yes']),
                     'SWD': len(p_data[p_data['Flag_SWD'] == 'Yes']),
                     'EALD': len(p_data[p_data['Flag_EALD'] == 'Yes']),
-                    'Allocated': len(p_data[p_data['Allocation_Status'] == 'Allocated'])
+                    'Schools': p_data['Referring_School'].nunique()
                 })
             
             partnership_df = pd.DataFrame(partnership_stats)
             st.dataframe(partnership_df, use_container_width=True, hide_index=True)
-            
-            c1, c2 = st.columns(2)
-            with c1:
-                fig = go.Figure([go.Bar(x=partnership_df['Partnership'], y=partnership_df['Total'], marker_color='#00e5ff')])
-                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="Students by Partnership", height=350, showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with c2:
-                fig = go.Figure()
-                fig.add_trace(go.Bar(x=partnership_df['Partnership'], y=partnership_df['ATSI'], name='ATSI', marker_color='#ff6b6b'))
-                fig.add_trace(go.Bar(x=partnership_df['Partnership'], y=partnership_df['SWD'], name='SWD', marker_color='#ffd93d'))
-                fig.add_trace(go.Bar(x=partnership_df['Partnership'], y=partnership_df['EALD'], name='EALD', marker_color='#00e5ff'))
-                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="Demographics by Partnership", height=350, barmode='group')
-                st.plotly_chart(fig, use_container_width=True)
     
     except Exception as e:
         st.error(f"❌ Error: {e}")
