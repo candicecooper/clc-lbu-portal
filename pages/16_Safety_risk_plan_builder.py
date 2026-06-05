@@ -499,6 +499,11 @@ PLAN TEXT:
     try:
         raw = groq_call(prompt, 3000)
         raw = raw.replace("```json","").replace("```","").strip()
+        
+        # Clean up control characters
+        import re
+        raw = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]', '', raw)
+        
         risks = json.loads(raw)
         for r in risks:
             r["from_school"] = True
@@ -570,6 +575,11 @@ Return ONLY valid JSON array. No markdown, no preamble."""
     try:
         raw = groq_call(prompt, 4000)
         raw = raw.replace("```json","").replace("```","").strip()
+        
+        # Clean up control characters
+        import re
+        raw = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]', '', raw)
+        
         risks = json.loads(raw)
         for r in risks:
             r["from_school"] = False
@@ -579,7 +589,7 @@ Return ONLY valid JSON array. No markdown, no preamble."""
                 r["behaviour_descriptors"] = ""
         return risks
     except Exception as e:
-        st.warning(f"Document synthesis issue ({e}). You can review and add risks manually.")
+        st.warning(f"Document synthesis issue. You can review and add risks manually.")
         return []
 
 
@@ -676,8 +686,24 @@ Procedure section: 4-6 subheaded scenarios, most critical first (e.g. early sign
     try:
         raw = groq_call(prompt, 1500)
         raw = raw.replace("```json","").replace("```","").strip()
-        return json.loads(raw)
-    except Exception:
+        
+        # Clean up control characters that might be in the JSON
+        import re
+        # Remove control characters except newline and tab
+        raw = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]', '', raw)
+        
+        # Try to parse JSON
+        result = json.loads(raw)
+        return result
+        
+    except json.JSONDecodeError as e:
+        # JSON parsing failed - return empty with error info
+        st.warning(f"⚠️ AI generation had formatting issues. You can enter strategies manually or try again.")
+        return {"proactive": "", "procedure": ""}
+    except Exception as e:
+        # Other errors
+        st.error(f"⚠️ AI generation failed: {str(e)[:100]}")
+        return {"proactive": "", "procedure": ""}
         return {"proactive":"","procedure":""}
 
 
@@ -820,6 +846,11 @@ Each risk: 6-8 proactive strategies across 2-3 subheadings; procedures in 3-5 sc
             start = raw.find("{")
             if start != -1:
                 raw = raw[start:]
+        
+        # Clean up control characters
+        import re
+        raw = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]', '', raw)
+        
         result = json.loads(raw)
         # Ensure all risk fields present
         for r in result.get("risks", []):
@@ -834,7 +865,7 @@ Each risk: 6-8 proactive strategies across 2-3 subheadings; procedures in 3-5 sc
                 student[key] = val
         return result
     except Exception as e:
-        return {"error": f"Generation failed: {e}. Try uploading richer documents or use the step-by-step builder.", "risks": [], "priority_actions": "", "review_date": ""}
+        return {"error": f"Generation failed: Try uploading richer documents or use the step-by-step builder.", "risks": [], "priority_actions": "", "review_date": ""}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1010,8 +1041,8 @@ if st.session_state.step == 1:
         s["edsas"] = st.text_input("EDSAS ID *", value=s["edsas"],
                         help="Required — enter the student's EDSAS number e.g. 10981999M")
     with c2:
-        s["program"] = st.selectbox("CLC Program *", ["JP","MP","SP","Other"],
-                            index=["JP","MP","SP","Other"].index(s["program"]) if s["program"] in ["JP","MP","SP","Other"] else 0)
+        s["program"] = st.selectbox("CLC Program *", ["JP","PY","SY"],
+                            index=["JP","PY","SY"].index(s["program"]) if s["program"] in ["JP","PY","SY"] else 0)
         s["home_school"] = st.text_input(
             "Home school (student's mainstream school) *",
             value=s["home_school"],
