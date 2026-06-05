@@ -39,9 +39,8 @@ p { color: #ffffff !important; }
 </div>
 """, unsafe_allow_html=True)
 
-# Initialize session state
 if 'terms_selected' not in st.session_state:
-    st.session_state.terms_selected = {2.0}  # Default to Term 2
+    st.session_state.terms_selected = {2.0}
 if 'years_selected' not in st.session_state:
     st.session_state.years_selected = set()
 if 'programs_selected' not in st.session_state:
@@ -57,7 +56,6 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 🎯 FILTERS")
     
-    # TERM FILTER - MULTI-SELECT
     st.markdown("**Term (Select Multiple)**")
     tc1, tc2, tc3 = st.columns(3)
     if tc1.button("All Terms", key="t_all", use_container_width=True): 
@@ -85,7 +83,6 @@ with st.sidebar:
     if st.session_state.terms_selected:
         st.write(f"**Selected:** {', '.join([f'T{int(t)}' for t in sorted(st.session_state.terms_selected)])}")
     
-    # YEAR FILTER
     st.markdown("**Year**")
     yc1, yc2 = st.columns(2)
     if yc1.button("All", key="y_all", use_container_width=True): 
@@ -102,7 +99,6 @@ with st.sidebar:
     if y2.button("2026" + (" ✓" if y2_sel else ""), key="y2", use_container_width=True): 
         st.session_state.years_selected ^= {2026.0}
     
-    # PROGRAM FILTER
     st.markdown("**Program**")
     pc1, pc2 = st.columns(2)
     if pc1.button("All", key="p_all", use_container_width=True): 
@@ -128,15 +124,12 @@ else:
     try:
         all_data = pd.read_excel(uploaded_file)
         
-        # Clean data
         for col in all_data.columns:
             if all_data[col].dtype == 'object':
                 all_data[col] = all_data[col].astype(str).str.strip()
         
-        # Start with Active + 2025 students
         filtered = all_data[(all_data['Current_Status'] == 'Active') | (all_data['Current_Status'] == '2025')].copy()
         
-        # APPLY FILTERS
         if st.session_state.terms_selected:
             filtered = filtered[filtered['Term'].isin(st.session_state.terms_selected)]
         
@@ -146,7 +139,6 @@ else:
         if st.session_state.programs_selected:
             filtered = filtered[filtered['Allocated_Program'].isin(st.session_state.programs_selected)]
         
-        # FILTER TITLE
         filter_text = "🔍 **Filters Applied:** "
         parts = []
         if st.session_state.terms_selected:
@@ -163,7 +155,6 @@ else:
         
         st.markdown("---")
         
-        # METRICS - WITH WHOLE NUMBERS
         c1, c2, c3, c4, c5, c6 = st.columns(6)
         c1.metric("Total", f"{int(len(filtered))}")
         c2.metric("Allocated", f"{int(len(filtered[filtered['Allocation_Status'] == 'Allocated']))}")
@@ -173,8 +164,6 @@ else:
         c6.metric("EALD", f"{int(len(filtered[filtered['Flag_EALD'] == 'Yes']))}")
         
         st.markdown("---")
-        
-        # MAIN DASHBOARD
         st.markdown("## Current Term Overview")
         c1, c2, c3 = st.columns(3)
         
@@ -221,166 +210,176 @@ else:
                 fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="Partnership Distribution", height=300, showlegend=False)
                 st.plotly_chart(fig, use_container_width=True)
         
-        # ADELAIDE MAP WITH PARTNERSHIPS
         st.markdown("---")
         st.markdown("## 🗺️ Partnership Map - Adelaide Metro")
         
         partnership_coords = {
-            'Inner West': (-34.800, 138.550, 'Inner Adelaide'),
-            'Le Fevre Peninsula': (-34.820, 138.480, 'Northern Beach'),
-            'Holdfast': (-35.030, 138.520, 'Southern Beach'),
-            'West Torrens': (-34.870, 138.500, 'Western Suburbs'),
-            'Western Adelaide Shores': (-34.760, 138.400, 'Far West'),
-            'Marion Inland': (-35.130, 138.580, 'South Metropolitan'),
-            'Adelaide Prospect': (-34.930, 138.580, 'Northern Metropolitan'),
-            'Heysen': (-34.950, 138.620, 'East Metropolitan'),
-            'Mitcham Plains': (-35.100, 138.650, 'Eastern Metropolitan'),
+            'Inner West': (-34.800, 138.550),
+            'Le Fevre Peninsula': (-34.820, 138.480),
+            'Holdfast': (-35.030, 138.520),
+            'West Torrens': (-34.870, 138.500),
+            'Western Adelaide Shores': (-34.760, 138.400),
+            'Marion Inland': (-35.130, 138.580),
+            'Adelaide Prospect': (-34.930, 138.580),
         }
         
         partnership_data = filtered['Partnership_Area'].value_counts()
         
-        lats = []
-        lons = []
-        sizes = []
-        labels = []
-        colors_list = []
+        lats, lons, sizes, labels, colors_list = [], [], [], [], []
         
-        for part, (lat, lon, region) in partnership_coords.items():
+        for part, (lat, lon) in partnership_coords.items():
             if part in partnership_data.index:
                 count = int(partnership_data[part])
                 lats.append(lat)
                 lons.append(lon)
                 sizes.append(max(15, count * 5))
-                labels.append(f"<b>{part}</b><br>{count} students<br><i>{region}</i>")
+                labels.append(f"<b>{part}</b><br>{count} students")
                 colors_list.append(count)
         
         fig = go.Figure(data=go.Scattergeo(
-            lon=lons,
-            lat=lats,
-            mode='markers+text',
+            lon=lons, lat=lats, mode='markers+text',
             text=[p.split('<')[0].replace('<b>', '').replace('</b>', '') for p in labels],
-            textposition='top center',
-            textfont=dict(size=10, color='#00e5ff'),
-            marker=dict(
-                size=sizes,
-                color=colors_list,
-                colorscale='YlOrRd',
-                showscale=True,
-                colorbar=dict(title="Students", tickcolor='#ffffff', tickfont=dict(color='#ffffff')),
-                opacity=0.8,
-                line=dict(width=2, color='#00e5ff')
-            ),
-            hovertext=labels,
-            hoverinfo='text'
+            textposition='top center', textfont=dict(size=10, color='#ffffff'),
+            marker=dict(size=sizes, color=colors_list, colorscale='Reds', showscale=True,
+                       colorbar=dict(title="Students", tickcolor='#ffffff'),
+                       opacity=0.85, line=dict(width=2, color='#00e5ff')),
+            hovertext=labels, hoverinfo='text'
         ))
         
         fig.update_layout(
-            title='Partnership Locations & Allocation Volume - Click to zoom',
+            title='Partnership Locations & Allocation Volume',
             geo=dict(
                 scope='oceania',
                 showland=True,
-                landcolor='rgba(100,100,100,0.15)',
-                coastlinecolor='rgba(0, 229, 255, 0.3)',
+                landcolor='rgba(40, 40, 40, 0.8)',
+                coastlinecolor='rgba(0, 229, 255, 0.5)',
                 center=dict(lon=138.5, lat=-34.95),
                 projection_type='mercator',
-                visible=True,
                 lataxis_range=[-35.4, -34.5],
                 lonaxis_range=[137.9, 139.1]
             ),
             paper_bgcolor='rgba(10,14,39,0.9)',
-            plot_bgcolor='rgba(10,14,39,0.9)',
+            plot_bgcolor='rgba(40,50,70,0.7)',
             font=dict(color='#ffffff', size=11),
-            height=500,
-            hovermode='closest',
+            height=500, hovermode='closest',
             margin=dict(r=0, t=40, l=0, b=0)
         )
         st.plotly_chart(fig, use_container_width=True)
         
-        # ATSI ANALYSIS
         st.markdown("---")
-        st.markdown("## ATSI Analysis & Drill Down")
+        st.markdown("## ATSI Deep Dive")
         
-        atsi_students = filtered[filtered['Flag_ATSI'] == 'Yes']
-        non_atsi_students = filtered[filtered['Flag_ATSI'] == 'No']
+        atsi_f = filtered[filtered['Flag_ATSI'] == 'Yes']
+        non_atsi_f = filtered[filtered['Flag_ATSI'] == 'No']
         
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown(f"**ATSI Students:** {int(len(atsi_students))} ({int(len(atsi_students))/int(len(filtered))*100:.1f}%)")
-            if len(atsi_students) > 0:
-                st.markdown(f"**ATSI Allocated:** {int(len(atsi_students[atsi_students['Allocation_Status'] == 'Allocated']))} ({int(len(atsi_students[atsi_students['Allocation_Status'] == 'Allocated']))/int(len(atsi_students))*100:.0f}%)")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("### ATSI Equity Analysis")
+            atsi_allocated = int(len(atsi_f[atsi_f['Allocation_Status'] == 'Allocated']))
+            atsi_total = int(len(atsi_f))
+            atsi_rate = (atsi_allocated / atsi_total * 100) if atsi_total > 0 else 0
+            
+            non_atsi_allocated = int(len(non_atsi_f[non_atsi_f['Allocation_Status'] == 'Allocated']))
+            non_atsi_total = int(len(non_atsi_f))
+            non_atsi_rate = (non_atsi_allocated / non_atsi_total * 100) if non_atsi_total > 0 else 0
+            
+            equity_df = pd.DataFrame({
+                'Group': ['ATSI', 'Non-ATSI', 'Difference'],
+                'Total': [atsi_total, non_atsi_total, ''],
+                'Allocated': [atsi_allocated, non_atsi_allocated, ''],
+                'Allocation %': [f'{atsi_rate:.1f}%', f'{non_atsi_rate:.1f}%', f'{atsi_rate - non_atsi_rate:+.1f}%']
+            })
+            st.dataframe(equity_df, use_container_width=True, hide_index=True)
         
-        with c2:
-            st.markdown(f"**Non-ATSI Students:** {int(len(non_atsi_students))} ({int(len(non_atsi_students))/int(len(filtered))*100:.1f}%)")
-            if len(non_atsi_students) > 0:
-                st.markdown(f"**Non-ATSI Allocated:** {int(len(non_atsi_students[non_atsi_students['Allocation_Status'] == 'Allocated']))} ({int(len(non_atsi_students[non_atsi_students['Allocation_Status'] == 'Allocated']))/int(len(non_atsi_students))*100:.0f}%)")
+        with col2:
+            st.markdown("### ATSI by Disability Type")
+            disability_cols = ['Flag_ASD', 'Flag_ADHD', 'Flag_Speech_and_Lang', 'Flag_Intellectual', 
+                             'Flag_Learning_Difficulty', 'Flag_Sensory_Processing', 'Flag_ODD', 'Flag_PDA']
+            disability_names = ['ASD', 'ADHD', 'Speech & Lg', 'Intellectual', 'Learning Diff', 'Sensory', 'ODD', 'PDA']
+            
+            atsi_disability = []
+            for col in disability_cols:
+                if col in atsi_f.columns:
+                    count = int(len(atsi_f[atsi_f[col] == 'Yes']))
+                    atsi_disability.append(count)
+                else:
+                    atsi_disability.append(0)
+            
+            fig = go.Figure([go.Bar(x=disability_names, y=atsi_disability, marker_color='#ff6b6b', text=atsi_disability, textposition='outside')])
+            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
+                            font=dict(color='#ffffff'), title="ATSI Students with Disabilities", height=300, showlegend=False)
+            st.plotly_chart(fig, use_container_width=True)
         
-        c1, c2 = st.columns(2)
-        with c1:
-            atsi_prog = atsi_students['Allocated_Program'].value_counts()
-            if len(atsi_prog) > 0:
-                fig = go.Figure([go.Bar(x=atsi_prog.index, y=atsi_prog.values, marker_color='#ff6b6b', text=atsi_prog.values, textposition='outside')])
-                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="ATSI by Program", height=300, showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
+        st.markdown("### ATSI × Program × Partnership Crosstab")
+        atsi_crosstab = pd.crosstab(
+            [atsi_f['Allocated_Program'], atsi_f['Partnership_Area']], 
+            atsi_f['Allocation_Status'],
+            margins=True
+        ).fillna(0).astype(int)
+        st.dataframe(atsi_crosstab, use_container_width=True)
         
-        with c2:
-            atsi_part = atsi_students['Partnership_Area'].value_counts()
-            if len(atsi_part) > 0:
-                fig = go.Figure([go.Bar(y=atsi_part.index, x=atsi_part.values, orientation='h', marker_color='#ff6b6b', text=atsi_part.values, textposition='outside')])
-                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="ATSI by Partnership", height=300, showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
-        
-        # EALD ANALYSIS
         st.markdown("---")
-        st.markdown("## EALD Analysis & Drill Down")
+        st.markdown("## EALD Deep Dive")
         
-        eald_students = filtered[filtered['Flag_EALD'] == 'Yes']
-        non_eald_students = filtered[filtered['Flag_EALD'] == 'No']
+        eald_f = filtered[filtered['Flag_EALD'] == 'Yes']
+        non_eald_f = filtered[filtered['Flag_EALD'] == 'No']
         
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown(f"**EALD Students:** {int(len(eald_students))} ({int(len(eald_students))/int(len(filtered))*100:.1f}%)")
-            if len(eald_students) > 0:
-                st.markdown(f"**EALD Allocated:** {int(len(eald_students[eald_students['Allocation_Status'] == 'Allocated']))} ({int(len(eald_students[eald_students['Allocation_Status'] == 'Allocated']))/int(len(eald_students))*100:.0f}%)")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("### EALD Equity Analysis")
+            eald_allocated = int(len(eald_f[eald_f['Allocation_Status'] == 'Allocated']))
+            eald_total = int(len(eald_f))
+            eald_rate = (eald_allocated / eald_total * 100) if eald_total > 0 else 0
+            
+            non_eald_allocated = int(len(non_eald_f[non_eald_f['Allocation_Status'] == 'Allocated']))
+            non_eald_total = int(len(non_eald_f))
+            non_eald_rate = (non_eald_allocated / non_eald_total * 100) if non_eald_total > 0 else 0
+            
+            equity_df = pd.DataFrame({
+                'Group': ['EALD', 'Non-EALD', 'Difference'],
+                'Total': [eald_total, non_eald_total, ''],
+                'Allocated': [eald_allocated, non_eald_allocated, ''],
+                'Allocation %': [f'{eald_rate:.1f}%', f'{non_eald_rate:.1f}%', f'{eald_rate - non_eald_rate:+.1f}%']
+            })
+            st.dataframe(equity_df, use_container_width=True, hide_index=True)
         
-        with c2:
-            st.markdown(f"**Non-EALD Students:** {int(len(non_eald_students))} ({int(len(non_eald_students))/int(len(filtered))*100:.1f}%)")
-            if len(non_eald_students) > 0:
-                st.markdown(f"**Non-EALD Allocated:** {int(len(non_eald_students[non_eald_students['Allocation_Status'] == 'Allocated']))} ({int(len(non_eald_students[non_eald_students['Allocation_Status'] == 'Allocated']))/int(len(non_eald_students))*100:.0f}%)")
+        with col2:
+            st.markdown("### EALD by Disability Type")
+            eald_disability = []
+            for col in disability_cols:
+                if col in eald_f.columns:
+                    count = int(len(eald_f[eald_f[col] == 'Yes']))
+                    eald_disability.append(count)
+                else:
+                    eald_disability.append(0)
+            
+            fig = go.Figure([go.Bar(x=disability_names, y=eald_disability, marker_color='#ffd93d', text=eald_disability, textposition='outside')])
+            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
+                            font=dict(color='#ffffff'), title="EALD Students with Disabilities", height=300, showlegend=False)
+            st.plotly_chart(fig, use_container_width=True)
         
-        c1, c2 = st.columns(2)
-        with c1:
-            eald_prog = eald_students['Allocated_Program'].value_counts()
-            if len(eald_prog) > 0:
-                fig = go.Figure([go.Bar(x=eald_prog.index, y=eald_prog.values, marker_color='#ffd93d', text=eald_prog.values, textposition='outside')])
-                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="EALD by Program", height=300, showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
+        st.markdown("### EALD × Program × Partnership Crosstab")
+        eald_crosstab = pd.crosstab(
+            [eald_f['Allocated_Program'], eald_f['Partnership_Area']], 
+            eald_f['Allocation_Status'],
+            margins=True
+        ).fillna(0).astype(int)
+        st.dataframe(eald_crosstab, use_container_width=True)
         
-        with c2:
-            eald_part = eald_students['Partnership_Area'].value_counts()
-            if len(eald_part) > 0:
-                fig = go.Figure([go.Bar(y=eald_part.index, x=eald_part.values, orientation='h', marker_color='#ffd93d', text=eald_part.values, textposition='outside')])
-                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="EALD by Partnership", height=300, showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
-        
-        # SCHOOL REFERRALS
         st.markdown("---")
         st.markdown("## Top Referring Schools")
-        
         referrals = filtered['Referring_School'].value_counts().head(15)
         if len(referrals) > 0:
             fig = go.Figure([go.Bar(y=referrals.index, x=referrals.values, orientation='h', marker_color='#00e5ff', text=referrals.values, textposition='outside')])
             fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="Top 15 Referrers", height=500, showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
         
-        # EXTENSIONS
         st.markdown("---")
         st.markdown("## Placement Extensions")
-        
         if 'Extended_Placement' in filtered.columns:
             ext_count = int(len(filtered[filtered['Extended_Placement'] == 'Yes']))
             std_count = int(len(filtered[filtered['Extended_Placement'] != 'Yes']))
-            
-            fig = go.Figure([go.Pie(labels=['Standard Placement', 'Extended Placement'], values=[std_count, ext_count], marker=dict(colors=['#10b981', '#ffd93d']), text=[f'{std_count}', f'{ext_count}'], textposition='inside')])
+            fig = go.Figure([go.Pie(labels=['Standard', 'Extended'], values=[std_count, ext_count], marker=dict(colors=['#10b981', '#ffd93d']), text=[f'{std_count}', f'{ext_count}'], textposition='inside')])
             fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="Placement Types", height=400)
             st.plotly_chart(fig, use_container_width=True)
     
@@ -390,4 +389,4 @@ else:
         st.write(traceback.format_exc())
 
 st.markdown("---")
-st.markdown("<p style='text-align: center; color: #00e5ff;'>CLC-LBU Allocation Dashboard • Active Student Allocations & Partnership Analysis</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #00e5ff;'>CLC-LBU Allocation Dashboard</p>", unsafe_allow_html=True)
