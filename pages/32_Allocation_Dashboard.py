@@ -5,127 +5,25 @@ import os
 
 st.set_page_config(page_title="CLC Allocation Dashboard", page_icon="📊", layout="wide")
 
-if 'filters' not in st.session_state:
-    st.session_state.filters = {
-        'year': {'2025', '2026'},
-        'program': {'JP', 'PY', 'SY'},
-        'status': {'Allocated', 'Pending', 'Not Placed', 'On Waitlist'},
-        'atsi': {'Yes', 'No'},
-        'eald': {'Yes', 'No'},
-        'attendance': {'Full-time', 'Part-time', 'Irregular'},
-        'swd': {'Yes', 'No'},
-        'swd_type': {'Speech and Language', 'ASD', 'Intellectual', 'Learning Difficulty', 'Sensory Processing', 'ADHD', 'ODD', 'PDA'},
-        'cat_support': {'1', '2', '3', '4', '5', '6', '7', '8', '9', '9+ RAAP'},
-        'partnership': {'Inner West', 'Adelaide Prospect', 'Greenhill South', 'Holdfast', 'Mitcham Hills'}
-    }
-
+if 'term_filter' not in st.session_state:
+    st.session_state.term_filter = 4.0
 if 'view' not in st.session_state:
-    st.session_state.view = "Dashboard Overview"
+    st.session_state.view = "Current Allocations"
 
-def process_data(df):
-    """Transform raw Excel data to dashboard format"""
-    df_processed = df.copy()
-    
-    # Map allocation status
-    df_processed['Status'] = 'Not Placed'
-    df_processed.loc[df_processed['Allocation_Status'].notna() & (df_processed['Allocation_Status'] != ''), 'Status'] = 'Allocated'
-    df_processed.loc[df_processed['Waitlist_Status'].notna() & (df_processed['Waitlist_Status'] != ''), 'Status'] = 'On Waitlist'
-    
-    # Map program
-    df_processed['Program'] = df_processed['Allocated_Program'].fillna('Not Placed')
-    
-    # Map year
-    df_processed['Year'] = '2026'
-    
-    # Map ATSI, EALD, SWD (1 = True, 0/NaN = False)
-    df_processed['ATSI'] = df_processed['Flag_ATSI'].fillna(0).apply(lambda x: 'Yes' if x == 1 else 'No')
-    df_processed['EALD'] = df_processed['Flag_EALD'].fillna(0).apply(lambda x: 'Yes' if x == 1 else 'No')
-    df_processed['SWD'] = df_processed['Flag_SWD'].fillna(0).apply(lambda x: 'Yes' if x == 1 else 'No')
-    
-    # Map SWD Type
-    def get_swd_type(row):
-        swd_flags = {
-            'Speech and Language': row.get('Flag_Speech_and_Lang', 0),
-            'ASD': row.get('Flag_ASD', 0),
-            'Intellectual': row.get('Flag_Intellectual', 0),
-            'Learning Difficulty': row.get('Flag_Learning_Difficulty', 0),
-            'Sensory Processing': row.get('Flag_Sensory_Processing', 0),
-            'ADHD': row.get('Flag_ADHD', 0),
-            'ODD': row.get('Flag_ODD', 0),
-            'PDA': row.get('Flag_PDA', 0),
-        }
-        for swd_type, flag in swd_flags.items():
-            if flag == 1:
-                return swd_type
-        return 'None'
-    
-    df_processed['SWD Type'] = df_processed.apply(get_swd_type, axis=1)
-    
-    # Map Category of Support
-    def get_category(row):
-        for i in range(1, 10):
-            if row.get(f'Flag_Category_{i}', 0) == 1:
-                return str(i)
-        if row.get('Flag_9plusRAAP', 0) == 1:
-            return '9+ RAAP'
-        return 'Unknown'
-    
-    df_processed['Category of Support'] = df_processed.apply(get_category, axis=1)
-    
-    # Map Attendance
-    def get_attendance(row):
-        if row.get('Flag_Attendance_Fulltime', 0) == 1:
-            return 'Full-time'
-        elif row.get('Flag_Attendance_Parttime', 0) == 1:
-            return 'Part-time'
-        return 'Irregular'
-    
-    df_processed['Attendance'] = df_processed.apply(get_attendance, axis=1)
-    
-    # Map Partnership Area
-    df_processed['Partnership'] = df_processed['Partnership_Area'].fillna('Unknown')
-    
-    return df_processed
-
-# Load default file directly (NO CACHING)
-all_data = None
+# Load Excel file
 default_file = '/mnt/user-data/uploads/CLC_Allocation_Dashboard_2026_WithNames_1.xlsx'
-
 if os.path.exists(default_file):
-    try:
-        all_data = pd.read_excel(default_file)
-        all_data = process_data(all_data)
-    except Exception as e:
-        st.error(f"Error loading default file: {e}")
-
-# Apply filters
-if all_data is not None and len(all_data) > 0:
-    filter_conditions = pd.Series([True] * len(all_data), index=all_data.index)
-    
-    if 'Year' in all_data.columns:
-        filter_conditions &= all_data['Year'].isin(st.session_state.filters['year'])
-    if 'Program' in all_data.columns:
-        filter_conditions &= all_data['Program'].isin(st.session_state.filters['program'])
-    if 'Status' in all_data.columns:
-        filter_conditions &= all_data['Status'].isin(st.session_state.filters['status'])
-    if 'ATSI' in all_data.columns:
-        filter_conditions &= all_data['ATSI'].isin(st.session_state.filters['atsi'])
-    if 'EALD' in all_data.columns:
-        filter_conditions &= all_data['EALD'].isin(st.session_state.filters['eald'])
-    if 'Attendance' in all_data.columns:
-        filter_conditions &= all_data['Attendance'].isin(st.session_state.filters['attendance'])
-    if 'SWD' in all_data.columns:
-        filter_conditions &= all_data['SWD'].isin(st.session_state.filters['swd'])
-    if 'SWD Type' in all_data.columns:
-        filter_conditions &= all_data['SWD Type'].isin(st.session_state.filters['swd_type'])
-    if 'Category of Support' in all_data.columns:
-        filter_conditions &= all_data['Category of Support'].isin(st.session_state.filters['cat_support'])
-    if 'Partnership' in all_data.columns:
-        filter_conditions &= all_data['Partnership'].isin(st.session_state.filters['partnership'])
-    
-    filtered = all_data[filter_conditions]
+    all_data = pd.read_excel(default_file)
 else:
-    filtered = pd.DataFrame()
+    all_data = pd.DataFrame()
+
+# Clean data - convert Yes/No flags to proper format
+if len(all_data) > 0:
+    all_data['ATSI'] = all_data['Flag_ATSI'].fillna('No').astype(str).map({'Yes': 'Yes', 'No': 'No', '1': 'Yes', '0': 'No'})
+    all_data['SWD'] = all_data['Flag_SWD'].fillna('No').astype(str).map({'Yes': 'Yes', 'No': 'No', '1': 'Yes', '0': 'No'})
+    all_data['EALD'] = all_data['Flag_EALD'].fillna('No').astype(str).map({'Yes': 'Yes', 'No': 'No', '1': 'Yes', '0': 'No'})
+    all_data['Allocated'] = all_data['Allocation_Status'].notna() & (all_data['Allocation_Status'] != '')
+    all_data['Term'] = all_data['Term'].fillna(4)
 
 st.markdown("""
 <style>
@@ -136,178 +34,289 @@ body, [data-testid="stAppViewContainer"] { background-color: #0a0e27 !important;
 h1, h2, h3, h4, h5, h6 { color: #ffffff !important; }
 [data-testid="stSidebar"] { background-color: #0a0e27 !important; }
 [data-testid="stSidebar"] * { color: #00e5ff !important; }
-[data-testid="metric-value"] { color: #00ff00 !important; font-size: 2.2rem !important; }
-[data-testid="metric-label"] { color: #00e5ff !important; }
+[data-testid="metric-value"] { color: #00ff00 !important; font-size: 2rem !important; }
+[data-testid="metric-label"] { color: #00e5ff !important; font-size: 0.9rem !important; }
 .stButton > button { background-color: #1a1f3a !important; color: #00e5ff !important; border: 2px solid #00e5ff !important; padding: 0.3rem 0.6rem !important; font-size: 0.75rem !important; }
 .stButton > button:hover { background-color: #00e5ff !important; color: #0a0e27 !important; }
 </style>
 """, unsafe_allow_html=True)
 
 with st.sidebar:
-    st.markdown("### 📤 UPLOAD DATA")
-    uploaded = st.file_uploader("", type=['xlsx', 'xls', 'csv'])
-    if uploaded is not None:
-        try:
-            new_data = pd.read_excel(uploaded) if uploaded.name.endswith(('xlsx', 'xls')) else pd.read_csv(uploaded)
-            all_data = process_data(new_data)
-            filtered = all_data
-            st.success(f"✓ Loaded {len(all_data)} records")
-        except Exception as e:
-            st.error(f"Error: {e}")
-    
-    st.markdown("---")
     st.markdown("### 📊 VIEW")
-    st.session_state.view = st.radio("", ["Dashboard Overview", "All Students"], label_visibility="collapsed")
+    st.session_state.view = st.radio("", ["Current Allocations", "ATSI Analysis", "SWD Analysis", "EALD Analysis", "Comparative", "By Term/Year"], label_visibility="collapsed")
     
     st.markdown("---")
-    st.markdown("### 🎯 QUICK FILTERS")
+    st.markdown("### 🎯 FILTER")
     
-    st.markdown("**Year**")
-    yc1, yc2 = st.columns(2)
-    if yc1.button("All", key="y_all", use_container_width=True): st.session_state.filters['year'] = {'2025', '2026'}
-    if yc2.button("Clear", key="y_clear", use_container_width=True): st.session_state.filters['year'] = set()
-    y1, y2 = st.columns(2)
-    if y1.button("2025", use_container_width=True, key="y1"): st.session_state.filters['year'] ^= {"2025"}
-    if y2.button("2026", use_container_width=True, key="y2"): st.session_state.filters['year'] ^= {"2026"}
-    
-    st.markdown("**Program**")
-    pc1, pc2 = st.columns(2)
-    if pc1.button("All", key="p_all", use_container_width=True): st.session_state.filters['program'] = {'JP', 'PY', 'SY'}
-    if pc2.button("Clear", key="p_clear", use_container_width=True): st.session_state.filters['program'] = set()
-    p1, p2, p3 = st.columns(3)
-    if p1.button("JP", use_container_width=True, key="p1"): st.session_state.filters['program'] ^= {"JP"}
-    if p2.button("PY", use_container_width=True, key="p2"): st.session_state.filters['program'] ^= {"PY"}
-    if p3.button("SY", use_container_width=True, key="p3"): st.session_state.filters['program'] ^= {"SY"}
-    
-    st.markdown("**Status**")
-    sc1, sc2 = st.columns(2)
-    if sc1.button("All", key="s_all", use_container_width=True): st.session_state.filters['status'] = {'Allocated', 'Pending', 'Not Placed', 'On Waitlist'}
-    if sc2.button("Clear", key="s_clear", use_container_width=True): st.session_state.filters['status'] = set()
-    s1, s2 = st.columns(2)
-    if s1.button("Allocated", use_container_width=True, key="s1"): st.session_state.filters['status'] ^= {"Allocated"}
-    if s2.button("Pending", use_container_width=True, key="s2"): st.session_state.filters['status'] ^= {"Pending"}
-    s3, s4 = st.columns(2)
-    if s3.button("Not Placed", use_container_width=True, key="s3"): st.session_state.filters['status'] ^= {"Not Placed"}
-    if s4.button("Waitlist", use_container_width=True, key="s4"): st.session_state.filters['status'] ^= {"On Waitlist"}
-    
-    st.markdown("**ATSI**")
-    ac1, ac2 = st.columns(2)
-    if ac1.button("All", key="a_all", use_container_width=True): st.session_state.filters['atsi'] = {'Yes', 'No'}
-    if ac2.button("Clear", key="a_clear", use_container_width=True): st.session_state.filters['atsi'] = set()
-    a1, a2 = st.columns(2)
-    if a1.button("Yes", use_container_width=True, key="a1"): st.session_state.filters['atsi'] ^= {"Yes"}
-    if a2.button("No", use_container_width=True, key="a2"): st.session_state.filters['atsi'] ^= {"No"}
-    
-    st.markdown("**EALD**")
-    ec1, ec2 = st.columns(2)
-    if ec1.button("All", key="e_all", use_container_width=True): st.session_state.filters['eald'] = {'Yes', 'No'}
-    if ec2.button("Clear", key="e_clear", use_container_width=True): st.session_state.filters['eald'] = set()
-    e1, e2 = st.columns(2)
-    if e1.button("Yes", use_container_width=True, key="e1"): st.session_state.filters['eald'] ^= {"Yes"}
-    if e2.button("No", use_container_width=True, key="e2"): st.session_state.filters['eald'] ^= {"No"}
-    
-    st.markdown("**SWD**")
-    swdc1, swdc2 = st.columns(2)
-    if swdc1.button("All", key="swd_all", use_container_width=True): st.session_state.filters['swd'] = {'Yes', 'No'}
-    if swdc2.button("Clear", key="swd_clear", use_container_width=True): st.session_state.filters['swd'] = set()
-    swd1, swd2 = st.columns(2)
-    if swd1.button("Yes", use_container_width=True, key="swd1"): st.session_state.filters['swd'] ^= {"Yes"}
-    if swd2.button("No", use_container_width=True, key="swd2"): st.session_state.filters['swd'] ^= {"No"}
-    
-    st.markdown("**SWD Type**")
-    swdtc1, swdtc2 = st.columns(2)
-    if swdtc1.button("All", key="swdt_all", use_container_width=True): st.session_state.filters['swd_type'] = {'Speech and Language', 'ASD', 'Intellectual', 'Learning Difficulty', 'Sensory Processing', 'ADHD', 'ODD', 'PDA'}
-    if swdtc2.button("Clear", key="swdt_clear", use_container_width=True): st.session_state.filters['swd_type'] = set()
-    swdt1, swdt2 = st.columns(2)
-    if swdt1.button("Speech & Lang", use_container_width=True, key="swdt1"): st.session_state.filters['swd_type'] ^= {"Speech and Language"}
-    if swdt2.button("ASD", use_container_width=True, key="swdt2"): st.session_state.filters['swd_type'] ^= {"ASD"}
-    swdt3, swdt4 = st.columns(2)
-    if swdt3.button("Intellectual", use_container_width=True, key="swdt3"): st.session_state.filters['swd_type'] ^= {"Intellectual"}
-    if swdt4.button("Learning Diff", use_container_width=True, key="swdt4"): st.session_state.filters['swd_type'] ^= {"Learning Difficulty"}
-    swdt5, swdt6 = st.columns(2)
-    if swdt5.button("Sensory Proc", use_container_width=True, key="swdt5"): st.session_state.filters['swd_type'] ^= {"Sensory Processing"}
-    if swdt6.button("ADHD", use_container_width=True, key="swdt6"): st.session_state.filters['swd_type'] ^= {"ADHD"}
-    swdt7, swdt8 = st.columns(2)
-    if swdt7.button("ODD", use_container_width=True, key="swdt7"): st.session_state.filters['swd_type'] ^= {"ODD"}
-    if swdt8.button("PDA", use_container_width=True, key="swdt8"): st.session_state.filters['swd_type'] ^= {"PDA"}
-    
-    st.markdown("**Attendance**")
-    attc1, attc2 = st.columns(2)
-    if attc1.button("All", key="att_all", use_container_width=True): st.session_state.filters['attendance'] = {'Full-time', 'Part-time', 'Irregular'}
-    if attc2.button("Clear", key="att_clear", use_container_width=True): st.session_state.filters['attendance'] = set()
-    att1, att2, att3 = st.columns(3)
-    if att1.button("Full-time", use_container_width=True, key="att1"): st.session_state.filters['attendance'] ^= {"Full-time"}
-    if att2.button("Part-time", use_container_width=True, key="att2"): st.session_state.filters['attendance'] ^= {"Part-time"}
-    if att3.button("Irregular", use_container_width=True, key="att3"): st.session_state.filters['attendance'] ^= {"Irregular"}
-    
-    st.markdown("**Category of Support**")
-    catc1, catc2 = st.columns(2)
-    if catc1.button("All", key="cat_all", use_container_width=True): st.session_state.filters['cat_support'] = {'1', '2', '3', '4', '5', '6', '7', '8', '9', '9+ RAAP'}
-    if catc2.button("Clear", key="cat_clear", use_container_width=True): st.session_state.filters['cat_support'] = set()
-    cat1, cat2, cat3 = st.columns(3)
-    if cat1.button("1", use_container_width=True, key="cat1"): st.session_state.filters['cat_support'] ^= {"1"}
-    if cat2.button("2", use_container_width=True, key="cat2"): st.session_state.filters['cat_support'] ^= {"2"}
-    if cat3.button("3", use_container_width=True, key="cat3"): st.session_state.filters['cat_support'] ^= {"3"}
-    cat4, cat5, cat6 = st.columns(3)
-    if cat4.button("4", use_container_width=True, key="cat4"): st.session_state.filters['cat_support'] ^= {"4"}
-    if cat5.button("5", use_container_width=True, key="cat5"): st.session_state.filters['cat_support'] ^= {"5"}
-    if cat6.button("6", use_container_width=True, key="cat6"): st.session_state.filters['cat_support'] ^= {"6"}
-    cat7, cat8, cat9 = st.columns(3)
-    if cat7.button("7", use_container_width=True, key="cat7"): st.session_state.filters['cat_support'] ^= {"7"}
-    if cat8.button("8", use_container_width=True, key="cat8"): st.session_state.filters['cat_support'] ^= {"8"}
-    if cat9.button("9", use_container_width=True, key="cat9"): st.session_state.filters['cat_support'] ^= {"9"}
-    cat10 = st.columns(1)
-    if cat10[0].button("9+ RAAP", use_container_width=True, key="cat10"): st.session_state.filters['cat_support'] ^= {"9+ RAAP"}
+    st.markdown("**Term**")
+    terms = sorted(all_data['Term'].dropna().unique())
+    tc1, tc2 = st.columns(2)
+    if tc1.button("Current (4)", use_container_width=True, key="term_cur"): st.session_state.term_filter = 4.0
+    if tc2.button("All Terms", use_container_width=True, key="term_all"): st.session_state.term_filter = None
+    for term in sorted(terms):
+        if st.button(f"Term {int(term)}", use_container_width=True, key=f"term_{int(term)}"): st.session_state.term_filter = term
 
-st.markdown("## Allocation Dashboard")
-
-if len(filtered) > 0:
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric("Total", len(filtered))
-    c2.metric("Allocated", len(filtered[filtered['Status']=='Allocated']))
-    c3.metric("Pending", len(filtered[filtered['Status']=='Pending']))
-    c4.metric("ATSI", len(filtered[filtered['ATSI']=='Yes']))
-    c5.metric("SWD", len(filtered[filtered['SWD']=='Yes']))
-    c6.metric("EALD", len(filtered[filtered['EALD']=='Yes']))
-
-    st.markdown("---")
-
-    if st.session_state.view == "Dashboard Overview":
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            prog = filtered['Program'].value_counts()
-            fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color='#00e5ff')])
-            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Program", height=280, margin=dict(t=30))
-            st.plotly_chart(fig, use_container_width=True)
-        with c2:
-            stat = filtered['Status'].value_counts()
-            fig = go.Figure([go.Bar(x=stat.index, y=stat.values, marker_color='#00ff00')])
-            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Status", height=280, margin=dict(t=30))
-            st.plotly_chart(fig, use_container_width=True)
-        with c3:
-            sup = filtered['Category of Support'].value_counts().sort_index()
-            fig = go.Figure([go.Pie(labels=sup.index, values=sup.values)])
-            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Support", height=280, margin=dict(t=30))
-            st.plotly_chart(fig, use_container_width=True)
-        
-        c1, c2 = st.columns(2)
-        with c1:
-            sup_prog = pd.crosstab(filtered['Program'], filtered['Category of Support']).fillna(0)
-            colors = ['#10b981', '#00e5ff', '#ffd93d', '#ff6b6b', '#ff00ff', '#00ffff', '#ffff00', '#ff8800', '#ff0088', '#00ff88']
-            fig = go.Figure([go.Bar(x=sup_prog.index, y=sup_prog.get(col, 0), name=str(col), marker_color=colors[i%10]) for i, col in enumerate(sorted(sup_prog.columns))])
-            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Support by Program", barmode='stack', height=280, margin=dict(t=30))
-            st.plotly_chart(fig, use_container_width=True)
-        with c2:
-            sup_swd = pd.crosstab(filtered['SWD Type'], filtered['Category of Support']).fillna(0)
-            fig = go.Figure([go.Bar(x=sup_swd.index, y=sup_swd.get(col, 0), name=str(col), marker_color=colors[i%10]) for i, col in enumerate(sorted(sup_swd.columns))])
-            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Support by SWD Type", barmode='stack', height=280, margin=dict(t=30))
-            st.plotly_chart(fig, use_container_width=True)
-
-    elif st.session_state.view == "All Students":
-        cols_to_show = [c for c in ['Student_Name', 'Program', 'Status', 'ATSI', 'SWD', 'SWD Type', 'Category of Support', 'Partnership'] if c in filtered.columns]
-        st.dataframe(filtered[cols_to_show], use_container_width=True, hide_index=True, height=400)
+# Filter to selected term
+if st.session_state.term_filter is not None:
+    filtered = all_data[all_data['Term'] == st.session_state.term_filter].copy()
+    term_label = f"Term {int(st.session_state.term_filter)}"
 else:
-    st.error("❌ No data loaded. File may not exist or be unreadable.")
+    filtered = all_data.copy()
+    term_label = "All Terms"
+
+st.markdown(f"## CLC Allocation Analysis - {term_label}")
+st.markdown(f"**Total Referrals: {len(filtered)}** | **Allocated: {filtered['Allocated'].sum()}** ({filtered['Allocated'].sum()/len(filtered)*100:.1f}%)")
+st.markdown("---")
+
+# CURRENT ALLOCATIONS VIEW
+if st.session_state.view == "Current Allocations":
+    st.markdown("### Current Allocation Status")
+    
+    c1, c2, c3, c4, c5 = st.columns(5)
+    total = len(filtered)
+    allocated = filtered['Allocated'].sum()
+    atsi_count = (filtered['ATSI'] == 'Yes').sum()
+    swd_count = (filtered['SWD'] == 'Yes').sum()
+    eald_count = (filtered['EALD'] == 'Yes').sum()
+    
+    c1.metric("Total", total)
+    c2.metric("Allocated", f"{allocated}\n({allocated/total*100:.0f}%)")
+    c3.metric("ATSI", f"{atsi_count}\n({atsi_count/total*100:.0f}%)")
+    c4.metric("SWD", f"{swd_count}\n({swd_count/total*100:.0f}%)")
+    c5.metric("EALD", f"{eald_count}\n({eald_count/total*100:.0f}%)")
+    
+    st.markdown("---")
+    
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        status = filtered['Allocation_Status'].value_counts()
+        fig = go.Figure([go.Bar(x=status.index, y=status.values, marker_color=['#00ff00', '#ffd93d'])])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="Allocation Status", height=300, showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with c2:
+        atsi_data = pd.DataFrame({
+            'Group': ['ATSI', 'Non-ATSI'],
+            'Allocated': [
+                filtered[filtered['ATSI']=='Yes']['Allocated'].sum(),
+                filtered[filtered['ATSI']=='No']['Allocated'].sum()
+            ],
+            'Total': [
+                (filtered['ATSI']=='Yes').sum(),
+                (filtered['ATSI']=='No').sum()
+            ]
+        })
+        atsi_data['Rate'] = atsi_data['Allocated'] / atsi_data['Total'] * 100
+        fig = go.Figure([go.Bar(x=atsi_data['Group'], y=atsi_data['Rate'], marker_color=['#ff6b6b', '#10b981'])])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="Allocation Rate (%)", height=300, showlegend=False, yaxis_title='% Allocated')
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with c3:
+        swd_data = pd.DataFrame({
+            'Group': ['SWD', 'Non-SWD'],
+            'Allocated': [
+                filtered[filtered['SWD']=='Yes']['Allocated'].sum(),
+                filtered[filtered['SWD']=='No']['Allocated'].sum()
+            ],
+            'Total': [
+                (filtered['SWD']=='Yes').sum(),
+                (filtered['SWD']=='No').sum()
+            ]
+        })
+        swd_data['Rate'] = swd_data['Allocated'] / swd_data['Total'] * 100
+        fig = go.Figure([go.Bar(x=swd_data['Group'], y=swd_data['Rate'], marker_color=['#ff6b6b', '#10b981'])])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="SWD Allocation Rate (%)", height=300, showlegend=False, yaxis_title='% Allocated')
+        st.plotly_chart(fig, use_container_width=True)
+
+# ATSI ANALYSIS VIEW
+elif st.session_state.view == "ATSI Analysis":
+    st.markdown("### ATSI Student Analysis")
+    
+    atsi_total = (filtered['ATSI'] == 'Yes').sum()
+    atsi_allocated = filtered[filtered['ATSI']=='Yes']['Allocated'].sum()
+    non_atsi_total = (filtered['ATSI'] == 'No').sum()
+    non_atsi_allocated = filtered[filtered['ATSI']=='No']['Allocated'].sum()
+    
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("ATSI Students", atsi_total)
+    c2.metric("ATSI Allocated", f"{atsi_allocated}\n({atsi_allocated/atsi_total*100:.0f}%)" if atsi_total > 0 else 0)
+    c3.metric("Non-ATSI Students", non_atsi_total)
+    c4.metric("Non-ATSI Allocated", f"{non_atsi_allocated}\n({non_atsi_allocated/non_atsi_total*100:.0f}%)" if non_atsi_total > 0 else 0)
+    
+    st.markdown("---")
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        comparison = pd.DataFrame({
+            'Group': ['ATSI', 'Non-ATSI'],
+            'Allocated': [atsi_allocated, non_atsi_allocated],
+            'Not Allocated': [atsi_total - atsi_allocated, non_atsi_total - non_atsi_allocated]
+        })
+        fig = go.Figure(data=[
+            go.Bar(x=comparison['Group'], y=comparison['Allocated'], name='Allocated', marker_color='#00ff00'),
+            go.Bar(x=comparison['Group'], y=comparison['Not Allocated'], name='Not Allocated', marker_color='#ff6b6b')
+        ])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="Allocation Comparison", barmode='stack', height=350)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with c2:
+        st.markdown("#### 📊 Key Findings")
+        st.markdown(f"""
+- **ATSI Representation:** {atsi_total/len(filtered)*100:.1f}% of referrals
+- **ATSI Allocation Rate:** {atsi_allocated/atsi_total*100:.1f}%
+- **Non-ATSI Allocation Rate:** {non_atsi_allocated/non_atsi_total*100:.1f}%
+- **Difference:** {abs(atsi_allocated/atsi_total*100 - non_atsi_allocated/non_atsi_total*100):.1f} percentage points
+        """)
+
+# SWD ANALYSIS VIEW
+elif st.session_state.view == "SWD Analysis":
+    st.markdown("### Student with Disabilities (SWD) Analysis")
+    
+    swd_total = (filtered['SWD'] == 'Yes').sum()
+    swd_allocated = filtered[filtered['SWD']=='Yes']['Allocated'].sum()
+    non_swd_total = (filtered['SWD'] == 'No').sum()
+    non_swd_allocated = filtered[filtered['SWD']=='No']['Allocated'].sum()
+    
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("SWD Students", swd_total)
+    c2.metric("SWD Allocated", f"{swd_allocated}\n({swd_allocated/swd_total*100:.0f}%)" if swd_total > 0 else 0)
+    c3.metric("Non-SWD Students", non_swd_total)
+    c4.metric("Non-SWD Allocated", f"{non_swd_allocated}\n({non_swd_allocated/non_swd_total*100:.0f}%)" if non_swd_total > 0 else 0)
+    
+    st.markdown("---")
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        comparison = pd.DataFrame({
+            'Group': ['SWD', 'Non-SWD'],
+            'Allocated': [swd_allocated, non_swd_allocated],
+            'Not Allocated': [swd_total - swd_allocated, non_swd_total - non_swd_allocated]
+        })
+        fig = go.Figure(data=[
+            go.Bar(x=comparison['Group'], y=comparison['Allocated'], name='Allocated', marker_color='#00ff00'),
+            go.Bar(x=comparison['Group'], y=comparison['Not Allocated'], name='Not Allocated', marker_color='#ff6b6b')
+        ])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="Allocation Comparison", barmode='stack', height=350)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with c2:
+        st.markdown("#### 📊 Key Findings")
+        st.markdown(f"""
+- **SWD Representation:** {swd_total/len(filtered)*100:.1f}% of referrals
+- **SWD Allocation Rate:** {swd_allocated/swd_total*100:.1f}%
+- **Non-SWD Allocation Rate:** {non_swd_allocated/non_swd_total*100:.1f}%
+- **Difference:** {abs(swd_allocated/swd_total*100 - non_swd_allocated/non_swd_total*100):.1f} percentage points
+        """)
+
+# EALD ANALYSIS VIEW
+elif st.session_state.view == "EALD Analysis":
+    st.markdown("### EALD Student Analysis")
+    
+    eald_total = (filtered['EALD'] == 'Yes').sum()
+    eald_allocated = filtered[filtered['EALD']=='Yes']['Allocated'].sum()
+    non_eald_total = (filtered['EALD'] == 'No').sum()
+    non_eald_allocated = filtered[filtered['EALD']=='No']['Allocated'].sum()
+    
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("EALD Students", eald_total)
+    c2.metric("EALD Allocated", f"{eald_allocated}\n({eald_allocated/eald_total*100:.0f}%)" if eald_total > 0 else 0)
+    c3.metric("Non-EALD Students", non_eald_total)
+    c4.metric("Non-EALD Allocated", f"{non_eald_allocated}\n({non_eald_allocated/non_eald_total*100:.0f}%)" if non_eald_total > 0 else 0)
+    
+    st.markdown("---")
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        comparison = pd.DataFrame({
+            'Group': ['EALD', 'Non-EALD'],
+            'Allocated': [eald_allocated, non_eald_allocated],
+            'Not Allocated': [eald_total - eald_allocated, non_eald_total - non_eald_allocated]
+        })
+        fig = go.Figure(data=[
+            go.Bar(x=comparison['Group'], y=comparison['Allocated'], name='Allocated', marker_color='#00ff00'),
+            go.Bar(x=comparison['Group'], y=comparison['Not Allocated'], name='Not Allocated', marker_color='#ff6b6b')
+        ])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="Allocation Comparison", barmode='stack', height=350)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with c2:
+        st.markdown("#### 📊 Key Findings")
+        st.markdown(f"""
+- **EALD Representation:** {eald_total/len(filtered)*100:.1f}% of referrals
+- **EALD Allocation Rate:** {eald_allocated/eald_total*100:.1f}%
+- **Non-EALD Allocation Rate:** {non_eald_allocated/non_eald_total*100:.1f}%
+- **Growth Indicator:** {'Rising' if eald_total > 5 else 'Emerging'} need
+        """)
+
+# COMPARATIVE VIEW
+elif st.session_state.view == "Comparative":
+    st.markdown("### Comparative Analysis - All Demographics")
+    
+    c1, c2 = st.columns(2)
+    
+    with c1:
+        comp_data = pd.DataFrame({
+            'Group': ['ATSI', 'SWD', 'EALD'],
+            'Count': [
+                (filtered['ATSI']=='Yes').sum(),
+                (filtered['SWD']=='Yes').sum(),
+                (filtered['EALD']=='Yes').sum()
+            ],
+            'Percentage': [
+                (filtered['ATSI']=='Yes').sum()/len(filtered)*100,
+                (filtered['SWD']=='Yes').sum()/len(filtered)*100,
+                (filtered['EALD']=='Yes').sum()/len(filtered)*100
+            ]
+        })
+        fig = go.Figure([go.Bar(x=comp_data['Group'], y=comp_data['Percentage'], marker_color=['#ff6b6b', '#ff6b6b', '#ffd93d'])])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="Demographic Representation (%)", height=350, showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with c2:
+        alloc_rates = pd.DataFrame({
+            'Group': ['ATSI', 'Non-ATSI', 'SWD', 'Non-SWD', 'EALD', 'Non-EALD'],
+            'Rate': [
+                filtered[filtered['ATSI']=='Yes']['Allocated'].sum() / (filtered['ATSI']=='Yes').sum() * 100 if (filtered['ATSI']=='Yes').sum() > 0 else 0,
+                filtered[filtered['ATSI']=='No']['Allocated'].sum() / (filtered['ATSI']=='No').sum() * 100 if (filtered['ATSI']=='No').sum() > 0 else 0,
+                filtered[filtered['SWD']=='Yes']['Allocated'].sum() / (filtered['SWD']=='Yes').sum() * 100 if (filtered['SWD']=='Yes').sum() > 0 else 0,
+                filtered[filtered['SWD']=='No']['Allocated'].sum() / (filtered['SWD']=='No').sum() * 100 if (filtered['SWD']=='No').sum() > 0 else 0,
+                filtered[filtered['EALD']=='Yes']['Allocated'].sum() / (filtered['EALD']=='Yes').sum() * 100 if (filtered['EALD']=='Yes').sum() > 0 else 0,
+                filtered[filtered['EALD']=='No']['Allocated'].sum() / (filtered['EALD']=='No').sum() * 100 if (filtered['EALD']=='No').sum() > 0 else 0,
+            ]
+        })
+        fig = go.Figure([go.Bar(x=alloc_rates['Group'], y=alloc_rates['Rate'], marker_color=['#ff6b6b', '#10b981', '#ff6b6b', '#10b981', '#ffd93d', '#10b981'])])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="Allocation Rates (%)", height=350, showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+
+# BY TERM/YEAR VIEW
+elif st.session_state.view == "By Term/Year":
+    st.markdown("### Trends Over Terms & Years")
+    
+    by_term = all_data.groupby('Term').agg({
+        'ATSI': lambda x: (x == 'Yes').sum(),
+        'SWD': lambda x: (x == 'Yes').sum(),
+        'EALD': lambda x: (x == 'Yes').sum(),
+        'Allocated': 'sum'
+    }).reset_index()
+    by_term['Total'] = all_data.groupby('Term').size().values
+    by_term['ATSI_Rate'] = by_term['ATSI'] / by_term['Total'] * 100
+    by_term['SWD_Rate'] = by_term['SWD'] / by_term['Total'] * 100
+    by_term['EALD_Rate'] = by_term['EALD'] / by_term['Total'] * 100
+    
+    c1, c2 = st.columns(2)
+    
+    with c1:
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=by_term['Term'], y=by_term['ATSI_Rate'], mode='lines+markers', name='ATSI', line=dict(color='#ff6b6b', width=3)))
+        fig.add_trace(go.Scatter(x=by_term['Term'], y=by_term['SWD_Rate'], mode='lines+markers', name='SWD', line=dict(color='#ff6b6b', width=3)))
+        fig.add_trace(go.Scatter(x=by_term['Term'], y=by_term['EALD_Rate'], mode='lines+markers', name='EALD', line=dict(color='#ffd93d', width=3)))
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="Demographic % by Term", height=350, xaxis_title='Term', yaxis_title='%')
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with c2:
+        fig = go.Figure([go.Bar(x=by_term['Term'], y=by_term['Total'], marker_color='#00e5ff')])
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="Total Referrals by Term", height=350, xaxis_title='Term', yaxis_title='Count', showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
 
 st.markdown("---")
-st.markdown("<p style='text-align: center; color: #00e5ff; font-size: 0.85rem;'>CLC-LBU Allocation Dashboard</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #00e5ff; font-size: 0.85rem;'>CLC-LBU Allocation Dashboard • Demographics & Equity Analysis</p>", unsafe_allow_html=True)
