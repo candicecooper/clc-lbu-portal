@@ -82,6 +82,20 @@ BLANK_RISK = {
     "clc_notes": "", "from_school": False, "from_docs": False,
 }
 
+def normalize_risk(risk: dict) -> dict:
+    """Convert all risk fields to proper types (lists→strings, etc)."""
+    r = {**risk}
+    # Convert list fields to newline-separated strings
+    for field in ["behaviour_descriptors", "proactive", "procedure"]:
+        if isinstance(r.get(field), list):
+            r[field] = "\n".join(str(x) for x in r[field] if x)
+        else:
+            r[field] = str(r.get(field, "")).strip()
+    # Ensure string fields are strings
+    for field in ["issue_title", "issue_detail", "function", "clc_notes"]:
+        r[field] = str(r.get(field, "")).strip()
+    return r
+
 STEPS = ["1 · Student","2 · Documents","3 · AI Synthesis",
          "4 · Build Risks","5 · Review","6 · Generate"]
 
@@ -1892,11 +1906,19 @@ elif st.session_state.step == 6:
         buf = io.BytesIO()
         doc.save(buf); buf.seek(0)
 
+    # ── Normalize all risks before final checks ────────────────────────────────
+    risks_final = [normalize_risk(r) for r in st.session_state.risks]
+    
     # ── Language objectivity check ────────────────────────────────────────────
     all_text = " ".join([
-        r.get("issue_title","") + " " + r.get("issue_detail","") + " " +
-        r.get("behaviour_descriptors","") + " " + r.get("proactive","") + " " + r.get("procedure","")
-        for r in risks
+        " ".join([
+            str(r.get("issue_title","")).strip(),
+            str(r.get("issue_detail","")).strip(),
+            "\n".join(r.get("behaviour_descriptors",[])) if isinstance(r.get("behaviour_descriptors"),[]) else str(r.get("behaviour_descriptors","")),
+            "\n".join(r.get("proactive",[])) if isinstance(r.get("proactive"),[]) else str(r.get("proactive","")),
+            "\n".join(r.get("procedure",[])) if isinstance(r.get("procedure"),[]) else str(r.get("procedure",""))
+        ])
+        for r in risks_final
     ])
     lang_flags = check_language_objectivity(all_text)
     if lang_flags:
