@@ -161,7 +161,8 @@ else:
             if all_data[col].dtype == 'object':
                 all_data[col] = all_data[col].astype(str).str.strip()
         
-        filtered = all_data[(all_data['Current_Status'] == 'Active') | (all_data['Current_Status'] == '2025')].copy()
+        # Show ALL students regardless of status
+        filtered = all_data.copy()
         
         if st.session_state.terms_selected:
             filtered = filtered[filtered['Term'].isin(st.session_state.terms_selected)]
