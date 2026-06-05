@@ -1458,7 +1458,7 @@ elif st.session_state.step == 4:
                 placeholder="Describe the observable behaviour and what it looks like at CLC…")
 
             r["behaviour_descriptors"] = st.text_area(
-                "Specific behaviour descriptors (one per line, start with •)",
+                "Specific behaviour descriptors (one per line, start with •, -, or *)",
                 value="\n".join(r["behaviour_descriptors"]) if isinstance(r["behaviour_descriptors"], list) else r["behaviour_descriptors"],
                 key=f"bd_{idx}", height=90,
                 placeholder="• Running at speed away from supervised areas\n• Climbing boundary fence into carpark\n• Darting across Marion Road without checking for traffic")
@@ -1572,7 +1572,7 @@ elif st.session_state.step == 5:
             st.rerun()
 
     st.session_state.priority_actions = st.text_area(
-        "Priority actions arising from this plan (one per line, start with •)",
+        "Priority actions arising from this plan (one per line, start with •, -, or *)",
         value=st.session_state.priority_actions, height=140,
         placeholder="• Schedule TAC meeting within 5 school days\n• Conduct fence/gate risk audit…")
 
@@ -1622,7 +1622,7 @@ elif st.session_state.step == 6:
     col_pa1, col_pa2 = st.columns([4, 1])
     with col_pa1:
         st.session_state.priority_actions = st.text_area(
-            "Priority actions (one per line, start with •)",
+            "Priority actions (one per line, start with •, -, or *)",
             value=st.session_state.priority_actions,
             height=120,
             key="pa_edit"
@@ -1653,7 +1653,7 @@ elif st.session_state.step == 6:
             col_bd1, col_bd2 = st.columns([4, 1])
             with col_bd1:
                 r["behaviour_descriptors"] = st.text_area(
-                    "What the student does (one per line, start with •)",
+                    "What the student does (one per line, start with •, -, or *)",
                     value="\n".join(r["behaviour_descriptors"]) if isinstance(r["behaviour_descriptors"], list) else r["behaviour_descriptors"],
                     height=80,
                     key=f"enh_bd_{idx}"
@@ -1792,8 +1792,8 @@ elif st.session_state.step == 7:
                 p.paragraph_format.space_before = Pt(5)
                 p.paragraph_format.space_after  = Pt(2)
                 arun(p, line.lstrip("# "), bold=True, color=TEAL.lstrip("#"), size=16)
-            elif line.startswith("•") or line.startswith("-"):
-                cbullet(cell, line.lstrip("•- "))
+            elif line.startswith("•") or line.startswith("-") or line.startswith("*"):
+                cbullet(cell, line.lstrip("•-* "))
             else:
                 p = cell.add_paragraph()
                 p.paragraph_format.space_before = Pt(2)
@@ -2361,8 +2361,8 @@ elif st.session_state.step == 7:
                     p.paragraph_format.space_before = Pt(5)
                     p.paragraph_format.space_after  = Pt(2)
                     arun(p, line.lstrip("# "), bold=True, color=TEAL.lstrip("#"), size=16)
-                elif line.startswith("•") or line.startswith("-"):
-                    cbullet(cell, line.lstrip("•- "))
+                elif line.startswith("•") or line.startswith("-") or line.startswith("*"):
+                    cbullet(cell, line.lstrip("•-* "))
                 else:
                     p = cell.add_paragraph()
                     p.paragraph_format.space_before = Pt(2)
