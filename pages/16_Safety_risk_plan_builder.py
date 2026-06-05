@@ -1458,14 +1458,16 @@ elif st.session_state.step == 4:
 
             r["proactive"] = st.text_area(
                 "Proactive strategies (use ### Subheading and • bullets)",
-                value=r["proactive"], key=f"pr_{idx}", height=180,
+                value="\n".join(r["proactive"]) if isinstance(r["proactive"], list) else r["proactive"],
+                key=f"pr_{idx}", height=180,
                 placeholder="### Environment & supervision\n• Ensure gate is latched at all times\n• Staff maintain line-of-sight\n\n### Relational strategies\n• Daily co-regulation check-in…")
 
             st.markdown('<div class="sec-head">Reactive Procedures</div>', unsafe_allow_html=True)
             st.caption("Use ### Subheadings to structure by scenario (e.g. ### If early warning signs: / ### If left grounds:)")
             r["procedure"] = st.text_area(
                 "Step-by-step reactive procedures",
-                value=r["procedure"], key=f"pc_{idx}", height=220,
+                value="\n".join(r["procedure"]) if isinstance(r["procedure"], list) else r["procedure"],
+                key=f"pc_{idx}", height=220,
                 placeholder="### If early signs of dysregulation:\n• Offer co-regulation…\n\n### If Xavier has left grounds:\n• Staff 1 follow on foot…")
 
             st.markdown("<br>", unsafe_allow_html=True)
@@ -1598,8 +1600,14 @@ elif st.session_state.step == 6:
         p.paragraph_format.space_after  = Pt(1)
         arun(p, text, size=size, color=color)
 
-    def render_content(cell, text: str):
+    def render_content(cell, text):
         """Parse ### subheadings and • bullets into formatted cell content."""
+        # Handle both string and list formats
+        if isinstance(text, list):
+            text = "\n".join(str(t) for t in text)
+        else:
+            text = str(text) if text else ""
+        
         if not text.strip():
             cpara(cell, "(Not completed)", italic=True, color="888888")
             return
@@ -2155,7 +2163,13 @@ elif st.session_state.step == 6:
             p.paragraph_format.space_after  = Pt(1)
             arun(p, text, size=size, color=color)
 
-        def render_content(cell, text: str):
+        def render_content(cell, text):
+            # Handle both string and list formats
+            if isinstance(text, list):
+                text = "\n".join(str(t) for t in text)
+            else:
+                text = str(text) if text else ""
+            
             if not text.strip():
                 cpara(cell, "(Not completed)", italic=True, color="888888"); return
             for line in text.splitlines():
