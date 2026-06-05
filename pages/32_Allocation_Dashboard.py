@@ -1,8 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import folium
-from streamlit_folium import st_folium
+import os
 
 st.set_page_config(page_title="CLC Allocation Dashboard", page_icon="📊", layout="wide")
 
@@ -19,18 +18,9 @@ if 'filters' not in st.session_state:
         'cat_support': {'1', '2', '3', '4', '5', '6', '7', '8', '9', '9+ RAAP'},
         'partnership': {'Inner West', 'Adelaide Prospect', 'Greenhill South', 'Holdfast', 'Mitcham Hills'}
     }
-    st.session_state.data = None
 
 if 'view' not in st.session_state:
     st.session_state.view = "Dashboard Overview"
-
-# Load actual Excel file by default, allow upload override
-@st.cache_data
-def load_default():
-    try:
-        return pd.read_excel('/mnt/user-data/uploads/CLC_Allocation_Dashboard_2026_WithNames_1.xlsx')
-    except:
-        return None
 
 def process_data(df):
     """Transform raw Excel data to dashboard format"""
@@ -44,7 +34,7 @@ def process_data(df):
     # Map program
     df_processed['Program'] = df_processed['Allocated_Program'].fillna('Not Placed')
     
-    # Map year from Year_Level
+    # Map year
     df_processed['Year'] = '2026'
     
     # Map ATSI, EALD, SWD (1 = True, 0/NaN = False)
@@ -52,7 +42,7 @@ def process_data(df):
     df_processed['EALD'] = df_processed['Flag_EALD'].fillna(0).apply(lambda x: 'Yes' if x == 1 else 'No')
     df_processed['SWD'] = df_processed['Flag_SWD'].fillna(0).apply(lambda x: 'Yes' if x == 1 else 'No')
     
-    # Map SWD Type (determine from which flag is set)
+    # Map SWD Type
     def get_swd_type(row):
         swd_flags = {
             'Speech and Language': row.get('Flag_Speech_and_Lang', 0),
@@ -97,17 +87,21 @@ def process_data(df):
     
     return df_processed
 
-all_data = st.session_state.data if st.session_state.data is not None else load_default()
+# Load default file directly (NO CACHING)
+all_data = None
+default_file = '/mnt/user-data/uploads/CLC_Allocation_Dashboard_2026_WithNames_1.xlsx'
 
-if all_data is not None:
-    all_data = process_data(all_data)
-else:
-    all_data = pd.DataFrame()
+if os.path.exists(default_file):
+    try:
+        all_data = pd.read_excel(default_file)
+        all_data = process_data(all_data)
+    except Exception as e:
+        st.error(f"Error loading default file: {e}")
 
-# Build filter conditions
-filter_conditions = pd.Series([True] * len(all_data), index=all_data.index) if len(all_data) > 0 else pd.Series()
-
-if len(all_data) > 0:
+# Apply filters
+if all_data is not None and len(all_data) > 0:
+    filter_conditions = pd.Series([True] * len(all_data), index=all_data.index)
+    
     if 'Year' in all_data.columns:
         filter_conditions &= all_data['Year'].isin(st.session_state.filters['year'])
     if 'Program' in all_data.columns:
@@ -128,8 +122,10 @@ if len(all_data) > 0:
         filter_conditions &= all_data['Category of Support'].isin(st.session_state.filters['cat_support'])
     if 'Partnership' in all_data.columns:
         filter_conditions &= all_data['Partnership'].isin(st.session_state.filters['partnership'])
-
-filtered = all_data[filter_conditions] if len(all_data) > 0 else pd.DataFrame()
+    
+    filtered = all_data[filter_conditions]
+else:
+    filtered = pd.DataFrame()
 
 st.markdown("""
 <style>
@@ -153,22 +149,19 @@ with st.sidebar:
     if uploaded is not None:
         try:
             new_data = pd.read_excel(uploaded) if uploaded.name.endswith(('xlsx', 'xls')) else pd.read_csv(uploaded)
-            new_data = process_data(new_data)
-            st.session_state.data = new_data
-            all_data = new_data
-            st.success(f"✓ Loaded {len(new_data)} records")
+            all_data = process_data(new_data)
+            filtered = all_data
+            st.success(f"✓ Loaded {len(all_data)} records")
         except Exception as e:
             st.error(f"Error: {e}")
     
     st.markdown("---")
-    
     st.markdown("### 📊 VIEW")
     st.session_state.view = st.radio("", ["Dashboard Overview", "All Students"], label_visibility="collapsed")
     
     st.markdown("---")
     st.markdown("### 🎯 QUICK FILTERS")
     
-    # Year
     st.markdown("**Year**")
     yc1, yc2 = st.columns(2)
     if yc1.button("All", key="y_all", use_container_width=True): st.session_state.filters['year'] = {'2025', '2026'}
@@ -177,7 +170,6 @@ with st.sidebar:
     if y1.button("2025", use_container_width=True, key="y1"): st.session_state.filters['year'] ^= {"2025"}
     if y2.button("2026", use_container_width=True, key="y2"): st.session_state.filters['year'] ^= {"2026"}
     
-    # Program
     st.markdown("**Program**")
     pc1, pc2 = st.columns(2)
     if pc1.button("All", key="p_all", use_container_width=True): st.session_state.filters['program'] = {'JP', 'PY', 'SY'}
@@ -187,7 +179,6 @@ with st.sidebar:
     if p2.button("PY", use_container_width=True, key="p2"): st.session_state.filters['program'] ^= {"PY"}
     if p3.button("SY", use_container_width=True, key="p3"): st.session_state.filters['program'] ^= {"SY"}
     
-    # Status
     st.markdown("**Status**")
     sc1, sc2 = st.columns(2)
     if sc1.button("All", key="s_all", use_container_width=True): st.session_state.filters['status'] = {'Allocated', 'Pending', 'Not Placed', 'On Waitlist'}
@@ -199,7 +190,6 @@ with st.sidebar:
     if s3.button("Not Placed", use_container_width=True, key="s3"): st.session_state.filters['status'] ^= {"Not Placed"}
     if s4.button("Waitlist", use_container_width=True, key="s4"): st.session_state.filters['status'] ^= {"On Waitlist"}
     
-    # ATSI
     st.markdown("**ATSI**")
     ac1, ac2 = st.columns(2)
     if ac1.button("All", key="a_all", use_container_width=True): st.session_state.filters['atsi'] = {'Yes', 'No'}
@@ -208,7 +198,6 @@ with st.sidebar:
     if a1.button("Yes", use_container_width=True, key="a1"): st.session_state.filters['atsi'] ^= {"Yes"}
     if a2.button("No", use_container_width=True, key="a2"): st.session_state.filters['atsi'] ^= {"No"}
     
-    # EALD
     st.markdown("**EALD**")
     ec1, ec2 = st.columns(2)
     if ec1.button("All", key="e_all", use_container_width=True): st.session_state.filters['eald'] = {'Yes', 'No'}
@@ -217,7 +206,6 @@ with st.sidebar:
     if e1.button("Yes", use_container_width=True, key="e1"): st.session_state.filters['eald'] ^= {"Yes"}
     if e2.button("No", use_container_width=True, key="e2"): st.session_state.filters['eald'] ^= {"No"}
     
-    # SWD
     st.markdown("**SWD**")
     swdc1, swdc2 = st.columns(2)
     if swdc1.button("All", key="swd_all", use_container_width=True): st.session_state.filters['swd'] = {'Yes', 'No'}
@@ -226,7 +214,6 @@ with st.sidebar:
     if swd1.button("Yes", use_container_width=True, key="swd1"): st.session_state.filters['swd'] ^= {"Yes"}
     if swd2.button("No", use_container_width=True, key="swd2"): st.session_state.filters['swd'] ^= {"No"}
     
-    # SWD Type
     st.markdown("**SWD Type**")
     swdtc1, swdtc2 = st.columns(2)
     if swdtc1.button("All", key="swdt_all", use_container_width=True): st.session_state.filters['swd_type'] = {'Speech and Language', 'ASD', 'Intellectual', 'Learning Difficulty', 'Sensory Processing', 'ADHD', 'ODD', 'PDA'}
@@ -244,7 +231,6 @@ with st.sidebar:
     if swdt7.button("ODD", use_container_width=True, key="swdt7"): st.session_state.filters['swd_type'] ^= {"ODD"}
     if swdt8.button("PDA", use_container_width=True, key="swdt8"): st.session_state.filters['swd_type'] ^= {"PDA"}
     
-    # Attendance
     st.markdown("**Attendance**")
     attc1, attc2 = st.columns(2)
     if attc1.button("All", key="att_all", use_container_width=True): st.session_state.filters['attendance'] = {'Full-time', 'Part-time', 'Irregular'}
@@ -254,7 +240,6 @@ with st.sidebar:
     if att2.button("Part-time", use_container_width=True, key="att2"): st.session_state.filters['attendance'] ^= {"Part-time"}
     if att3.button("Irregular", use_container_width=True, key="att3"): st.session_state.filters['attendance'] ^= {"Irregular"}
     
-    # Category of Support
     st.markdown("**Category of Support**")
     catc1, catc2 = st.columns(2)
     if catc1.button("All", key="cat_all", use_container_width=True): st.session_state.filters['cat_support'] = {'1', '2', '3', '4', '5', '6', '7', '8', '9', '9+ RAAP'}
@@ -290,44 +275,39 @@ if len(filtered) > 0:
     if st.session_state.view == "Dashboard Overview":
         c1, c2, c3 = st.columns(3)
         with c1:
-            if 'Program' in filtered.columns:
-                prog = filtered['Program'].value_counts()
-                fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color='#00e5ff')])
-                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Program", height=280, margin=dict(t=30))
-                st.plotly_chart(fig, use_container_width=True)
+            prog = filtered['Program'].value_counts()
+            fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color='#00e5ff')])
+            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Program", height=280, margin=dict(t=30))
+            st.plotly_chart(fig, use_container_width=True)
         with c2:
-            if 'Status' in filtered.columns:
-                stat = filtered['Status'].value_counts()
-                fig = go.Figure([go.Bar(x=stat.index, y=stat.values, marker_color='#00ff00')])
-                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Status", height=280, margin=dict(t=30))
-                st.plotly_chart(fig, use_container_width=True)
+            stat = filtered['Status'].value_counts()
+            fig = go.Figure([go.Bar(x=stat.index, y=stat.values, marker_color='#00ff00')])
+            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Status", height=280, margin=dict(t=30))
+            st.plotly_chart(fig, use_container_width=True)
         with c3:
-            if 'Category of Support' in filtered.columns:
-                sup = filtered['Category of Support'].value_counts().sort_index()
-                fig = go.Figure([go.Pie(labels=sup.index, values=sup.values)])
-                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Support", height=280, margin=dict(t=30))
-                st.plotly_chart(fig, use_container_width=True)
+            sup = filtered['Category of Support'].value_counts().sort_index()
+            fig = go.Figure([go.Pie(labels=sup.index, values=sup.values)])
+            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Support", height=280, margin=dict(t=30))
+            st.plotly_chart(fig, use_container_width=True)
         
         c1, c2 = st.columns(2)
         with c1:
-            if 'Program' in filtered.columns and 'Category of Support' in filtered.columns:
-                sup_prog = pd.crosstab(filtered['Program'], filtered['Category of Support']).fillna(0)
-                fig = go.Figure([go.Bar(x=sup_prog.index, y=sup_prog.get(col, 0), name=col, marker_color=['#10b981', '#00e5ff', '#ffd93d', '#ff6b6b', '#ff00ff', '#00ffff'][i%6]) for i, col in enumerate(sorted(sup_prog.columns))])
-                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Support by Program", barmode='stack', height=280, margin=dict(t=30))
-                st.plotly_chart(fig, use_container_width=True)
+            sup_prog = pd.crosstab(filtered['Program'], filtered['Category of Support']).fillna(0)
+            colors = ['#10b981', '#00e5ff', '#ffd93d', '#ff6b6b', '#ff00ff', '#00ffff', '#ffff00', '#ff8800', '#ff0088', '#00ff88']
+            fig = go.Figure([go.Bar(x=sup_prog.index, y=sup_prog.get(col, 0), name=str(col), marker_color=colors[i%10]) for i, col in enumerate(sorted(sup_prog.columns))])
+            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Support by Program", barmode='stack', height=280, margin=dict(t=30))
+            st.plotly_chart(fig, use_container_width=True)
         with c2:
-            if 'SWD Type' in filtered.columns and 'Category of Support' in filtered.columns:
-                sup_swd = pd.crosstab(filtered['SWD Type'], filtered['Category of Support']).fillna(0)
-                fig = go.Figure([go.Bar(x=sup_swd.index, y=sup_swd.get(col, 0), name=col, marker_color=['#10b981', '#00e5ff', '#ffd93d', '#ff6b6b', '#ff00ff', '#00ffff'][i%6]) for i, col in enumerate(sorted(sup_swd.columns))])
-                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Support by SWD Type", barmode='stack', height=280, margin=dict(t=30))
-                st.plotly_chart(fig, use_container_width=True)
+            sup_swd = pd.crosstab(filtered['SWD Type'], filtered['Category of Support']).fillna(0)
+            fig = go.Figure([go.Bar(x=sup_swd.index, y=sup_swd.get(col, 0), name=str(col), marker_color=colors[i%10]) for i, col in enumerate(sorted(sup_swd.columns))])
+            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), title="Support by SWD Type", barmode='stack', height=280, margin=dict(t=30))
+            st.plotly_chart(fig, use_container_width=True)
 
     elif st.session_state.view == "All Students":
         cols_to_show = [c for c in ['Student_Name', 'Program', 'Status', 'ATSI', 'SWD', 'SWD Type', 'Category of Support', 'Partnership'] if c in filtered.columns]
-        if cols_to_show:
-            st.dataframe(filtered[cols_to_show], use_container_width=True, hide_index=True, height=400)
+        st.dataframe(filtered[cols_to_show], use_container_width=True, hide_index=True, height=400)
 else:
-    st.warning("No data loaded. Please upload your Excel file.")
+    st.error("❌ No data loaded. File may not exist or be unreadable.")
 
 st.markdown("---")
 st.markdown("<p style='text-align: center; color: #00e5ff; font-size: 0.85rem;'>CLC-LBU Allocation Dashboard</p>", unsafe_allow_html=True)
