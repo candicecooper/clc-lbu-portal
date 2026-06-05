@@ -645,64 +645,63 @@ Keep it practical and direct. Do not repeat school plan content verbatim."""
 
 def ai_generate_strategies(risk: dict, student: dict) -> dict:
     """Generate CLC-specific proactive strategies and reactive procedures."""
-    prompt = f"""You are writing a CLC (Cowandilla Learning Centre) Safety & Risk Management Plan section.
-
-CLC context: program option for students with educational exclusion; small group with externalising peers; playground adjacent to carpark via climbable fence; Jenkins Rd, Marion Rd, Sir Donald Bradman Drive within 100m; South Road nearby; walkie talkies carried; TAC/CARL/DCP/IRMS processes; trauma-informed relational practice; movement = intervention.
-
-CRITICAL: Risk descriptions in this plan focus on what the student DOES — observable behaviour only.
-Triggers go in proactive strategies. Function is noted separately.
-LANGUAGE OBJECTIVITY — MANDATORY:
-Every word in this plan must be observable and measurable. A different staff member reading this plan must interpret it identically.
-NEVER USE subjective terms — replace with observable descriptions:
-  ✗ "high speed / at speed / quickly / rapidly / fast" → ✓ describe what is observed: "running out of the supervised area", "ran onto the road"
-  ✗ "arm's reach / close proximity / nearby" → ✓ "within arm's length" is still vague — use positional descriptions: "positioned between student and fence boundary", "physically proximate during all peer interactions"
-  ✗ "aggressively / violently / severely" → ✓ describe the observable act: "struck staff with open hand", "threw chair across room"
-  ✗ "immediately / straight away / quickly respond" → ✓ specify the trigger for action: "as soon as student moves toward fence", "once verbal engagement ceases"
-  ✗ "challenging behaviour / dysregulated / escalating" → ✓ name the specific behaviour: "climbing fence", "running toward road", "throwing objects"
-  ✗ "de-escalation strategies" → ✓ name the specific strategy: "offer sensory break", "reduce verbal demands", "move to quieter space"
-  ✗ "appropriate supervision / adequate support" → ✓ "staff positioned between student and fence at all times", "one staff member maintains line-of-sight to student"
-  ✗ "respond appropriately / manage the situation" → ✓ "radio leadership immediately", "retrieve vehicle keys from program office"
-  ✗ "low arousal approach" → ✓ "calm tone, no raised voice, no direct commands, offer choice"
-If you use a measurement, define it: not "close proximity" but "within arm's length (approx. 60cm)"
-Every procedure step must be a specific, named action — not a category of action.
+    
+    # Simpler, more reliable prompt
+    prompt = f"""You are writing a Safety & Risk Management Plan for Cowandilla Learning Centre (CLC LBU).
 
 Student: {student.get('name','')}, Age {student.get('age','')}, Program {student.get('program','')}
-Key staff: {student.get('key_staff','')}
 Risk: {risk.get('issue_title','')}
-Behaviour detail: {risk.get('issue_detail','')}
-Descriptors: {risk.get('behaviour_descriptors','')}
-Function: {risk.get('function','')}
-CLC staff notes: {risk.get('clc_notes','')}
-Medical/context: {student.get('medical_notes','')}
+Behaviour: {risk.get('issue_detail','')}
 
-Generate CLC-specific content. Return JSON only (no markdown):
-{{
-  "proactive": "### Category heading\\n• strategy\\n• strategy\\n\\n### Next category\\n• strategy",
-  "procedure": "### If [early warning / specific scenario]:\\n• step\\n• step\\n\\n### If [next scenario]:\\n• step\\n• step"
-}}
+Generate TWO sections:
 
-Proactive section: 6-9 strategies, grouped under 2-3 subheadings (e.g. Environment & supervision / Relational strategies / Skill building)
-Procedure section: 4-6 subheaded scenarios, most critical first (e.g. early signs → on grounds → left grounds → post-incident)"""
+1. Proactive strategies (what we do BEFORE the behaviour happens):
+Write 4-6 strategies with ### subheadings. Use specific, observable actions.
+Format: ### Heading
+• strategy
+• strategy
+
+2. Reactive procedures (what we do IF the behaviour happens):
+Write 3-4 scenarios with ### subheadings. Use specific, observable steps.
+Format: ### If [scenario]
+• step
+• step
+
+Return ONLY valid JSON (no markdown fences):
+{{"proactive": "### Heading\\n• strategy\\n• strategy", "procedure": "### If scenario\\n• step\\n• step"}}"""
+    
     try:
-        raw = groq_call(prompt, 1500)
+        raw = groq_call(prompt, 1000, timeout_seconds=25)
         raw = raw.replace("```json","").replace("```","").strip()
         
-        # Clean up control characters that might be in the JSON
+        # Clean up control characters
         import re
-        # Remove control characters except newline and tab
         raw = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]', '', raw)
         
-        # Try to parse JSON
-        result = json.loads(raw)
-        return result
+        # Try to extract JSON if wrapped in text
+        if not raw.startswith("{"):
+            json_start = raw.find("{")
+            if json_start != -1:
+                raw = raw[json_start:]
         
+        result = json.loads(raw)
+        
+        # Validate we got the expected fields
+        if "proactive" in result and "procedure" in result:
+            return result
+        else:
+            st.warning("⚠️ AI response incomplete. You can enter strategies manually.")
+            return {"proactive": "", "procedure": ""}
+            
     except json.JSONDecodeError as e:
-        # JSON parsing failed - return empty with error info
-        st.warning(f"⚠️ AI generation had formatting issues. You can enter strategies manually or try again.")
+        st.warning(f"⚠️ AI formatting issue. You can enter strategies manually or try again.")
         return {"proactive": "", "procedure": ""}
     except Exception as e:
-        # Other errors
-        st.error(f"⚠️ AI generation failed: {str(e)[:100]}")
+        error_msg = str(e)
+        if "timeout" in error_msg.lower():
+            st.error("⚠️ AI took too long to respond. You can enter strategies manually.")
+        else:
+            st.warning("⚠️ AI generation failed. Please enter strategies manually or try again in a moment.")
         return {"proactive": "", "procedure": ""}
         return {"proactive":"","procedure":""}
 
@@ -839,8 +838,31 @@ Return JSON only (no markdown fences):
 Each risk: 6-8 proactive strategies across 2-3 subheadings; procedures in 3-5 scenario sections."""
 
     try:
-        raw = groq_call(prompt, 4000)
+        # Simpler, shorter prompt to avoid timeouts
+        simple_prompt = f"""You are writing a Safety & Risk Management Plan for CLC LBU.
+
+STUDENT: {student['name']} (Age {student.get('age','—')}, EDSAS {student.get('edsas','—')})
+
+DOCUMENTS PROVIDED:
+{combined_docs[:12000]}
+
+TASK: Extract risks directly mentioned in the documents. Do NOT invent risks.
+
+For each risk found, provide:
+- Title (what the student does)
+- Detail (2-3 sentences from documents)
+- Descriptors (bullet list of specific behaviours)
+- Likelihood (A-E: Rare to Almost certain)
+- Consequence (1-5: Insignificant to Catastrophic)
+- Proactive strategies (4-6 specific actions)
+- Reactive procedures (3-4 specific steps)
+
+Return JSON only (no markdown):
+{{"student_details": {{"name": "{student['name']}", "dob": "", "age": "", "edsas": "", "home_school": ""}}, "risks": [{{"issue_title": "Title", "issue_detail": "Detail", "behaviour_descriptors": "• descriptor", "function": "", "likelihood": "D – Likely/frequently", "consequence": "3 – Moderate", "proactive": "### Heading\\n• strategy", "procedure": "### If scenario\\n• step", "clc_notes": "", "from_school": false, "from_docs": true}}], "priority_actions": "• action", "review_date": "8 weeks"}}"""
+        
+        raw = groq_call(simple_prompt, 3000, timeout_seconds=30)
         raw = raw.replace("```json","").replace("```","").strip()
+        
         # Handle case where model wraps in extra text
         if not raw.startswith("{"):
             start = raw.find("{")
@@ -852,20 +874,34 @@ Each risk: 6-8 proactive strategies across 2-3 subheadings; procedures in 3-5 sc
         raw = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]', '', raw)
         
         result = json.loads(raw)
+        
         # Ensure all risk fields present
         for r in result.get("risks", []):
             for k, v in BLANK_RISK.items():
                 if k not in r:
                     r[k] = v
+        
         # Back-fill any blank student details with what the AI found in the documents
         extracted = result.get("student_details", {})
         for field, key in [("dob","dob"),("age","age"),("edsas","edsas"),("home_school","home_school"),("name","name")]:
             val = extracted.get(field,"").strip()
             if val and val.lower() not in ("blank","not found","—","unknown","") and not student.get(key,"").strip():
                 student[key] = val
+        
         return result
+        
+    except json.JSONDecodeError as e:
+        st.warning("⚠️ AI response format issue. Try uploading clearer documents or use step-by-step builder.")
+        return {"error": "JSON parsing failed", "risks": [], "priority_actions": "", "review_date": ""}
     except Exception as e:
-        return {"error": f"Generation failed: Try uploading richer documents or use the step-by-step builder.", "risks": [], "priority_actions": "", "review_date": ""}
+        error_str = str(e).lower()
+        if "timeout" in error_str:
+            st.error("⚠️ AI took too long. Use the step-by-step builder instead.")
+        elif "rate" in error_str:
+            st.warning("⚠️ AI service busy. Please try again in a moment.")
+        else:
+            st.warning("⚠️ AI generation failed. Use the step-by-step builder instead (add risks manually).")
+        return {"error": f"Generation failed", "risks": [], "priority_actions": "", "review_date": ""}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
