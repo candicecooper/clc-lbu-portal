@@ -1,4 +1,5 @@
 from theme import apply_clc_theme
+from student_initials_check import initials_field, clear_initials_cache
 import streamlit as st
 from supabase import create_client, Client
 from datetime import date, datetime, timedelta
@@ -1005,7 +1006,7 @@ with tab_students:
             with st.form("place_add_form", clear_on_submit=True):
                 pa1, pa2 = st.columns(2)
                 with pa1:
-                    pa_init   = st.text_input("Student initials *", placeholder="e.g. J.S.", key="pa_init")
+                    pa_init   = initials_field("pa_init", supabase_main=supabase, program=st.session_state.get("pa_prog",""), label="Student initials *", placeholder="e.g. J.S.")
                     pa_prog   = st.selectbox("Program *", ["", "JP", "PY", "SY"], key="pa_prog")
                     pa_type   = st.selectbox("Placement type", PLACEMENT_TYPES, key="pa_type")
                     pa_school = st.text_input("School / placement site *", placeholder="e.g. Findon Primary School", key="pa_school")
@@ -1051,6 +1052,7 @@ with tab_students:
                             "contact_person":   contact_combined,
                             "notes":            "\n".join(notes_parts),
                         })
+                        clear_initials_cache(pa_init)
                         st.session_state["_cal_save_ok"] = f"✅ Placement saved for {pa_init.strip()} at {pa_school.strip()}!"
                         st.rerun()
 
@@ -1388,7 +1390,7 @@ with tab_students:
                 mg1, mg2 = st.columns(2)
                 with mg1:
                     mtg_type  = st.selectbox("Meeting type *", STUDENT_MEETING_TYPES)
-                    mtg_init  = st.text_input("Student initials *", placeholder="e.g. J.S.")
+                    mtg_init  = initials_field("mtg_init", supabase_main=supabase, program=st.session_state.get("mtg_prog",""), show_check_btn=True, placeholder="e.g. J.S.")
                     mtg_prog  = st.selectbox("Program *", ["","JP","PY","SY"], key="mtg_prog")
                     mtg_by    = st.text_input("Added by *", value=get_staff_name())
                 with mg2:
