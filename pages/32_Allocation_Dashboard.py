@@ -254,7 +254,7 @@ else:
         fig.update_layout(
             title='Partnership Locations & Allocation Volume',
             geo=dict(
-                scope='australia',
+                scope='oceania',
                 showland=True,
                 landcolor='rgba(100,100,100,0.2)',
                 center=dict(lon=138.5, lat=-34.95),
