@@ -1012,28 +1012,17 @@ with col_load:
                     success, message = load_excel_save(uploaded_save)
                     if success:
                         st.session_state.last_loaded_file = file_id  # Mark as loaded
-                        st.success(message)
-                        st.info("✅ Data loaded! Click Continue below to proceed.")
-                        
-                        # Clear button and continue button
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            if st.button("↓ Continue Working", type="primary", use_container_width=True):
-                                st.session_state.step = 1
-                                st.rerun()
-                        with col2:
-                            if st.button("Upload Different File", use_container_width=True):
-                                st.session_state.last_loaded_file = None
-                                st.rerun()
+                        st.session_state.step = 2  # Jump to Step 2 (documents)
+                        st.success(f"✅ {message}")
+                        st.rerun()
                     else:
                         st.error(message)
                 except Exception as e:
                     st.error(f"Failed to load file: {str(e)}")
-                    st.info("Try re-downloading your save file or contact Candice if the issue persists.")
         else:
             # File already loaded, show confirmation
             student_name = st.session_state.student.get('name', 'Unknown')
-            st.success(f"✅ Currently loaded: {student_name}")
+            st.success(f"✅ Loaded: {student_name}")
             if st.button("Upload Different File", key="clear_upload"):
                 st.session_state.last_loaded_file = None
                 st.rerun()
@@ -1078,6 +1067,22 @@ else:
         bar += f'<div class="step-item {cls}">{tick}{label}</div>'
     bar += "</div>"
 st.markdown(bar, unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP NAVIGATION - SIMPLE RADIO SELECTOR
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown("---")
+st.markdown("### 📍 Navigate Using Buttons Below")
+
+col_steps = st.columns(6)
+for i, step_label in enumerate(STEPS, 1):
+    with col_steps[i-1]:
+        btn_type = "primary" if st.session_state.step == i else "secondary"
+        if st.button(step_label, key=f"step_btn_{i}", use_container_width=True, type=btn_type):
+            st.session_state.step = i
+            st.rerun()
+
+st.markdown("---")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STEP 1 — Student Details
