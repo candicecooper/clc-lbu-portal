@@ -93,13 +93,29 @@ if 'years_selected' not in st.session_state:
     st.session_state.years_selected = set()
 if 'programs_selected' not in st.session_state:
     st.session_state.programs_selected = set()
+if 'uploaded_data' not in st.session_state:
+    st.session_state.uploaded_data = None
+if 'data_loaded' not in st.session_state:
+    st.session_state.data_loaded = False
 
 with st.sidebar:
     st.markdown("### UPLOAD DATA")
+    
+    if st.session_state.data_loaded:
+        st.success("✅ Data loaded in memory")
+        if st.button("Clear Data & Upload New File", use_container_width=True, key="clear_data"):
+            st.session_state.uploaded_data = None
+            st.session_state.data_loaded = False
+            st.rerun()
+    
     uploaded_file = st.file_uploader("Choose Excel file", type=['xlsx', 'xls', 'csv'], key='main_uploader')
     
-    if uploaded_file:
-        st.success(f"✅ {uploaded_file.name}")
+    if uploaded_file is not None:
+        # Load new file and store in session state
+        st.session_state.uploaded_data = pd.read_excel(uploaded_file)
+        st.session_state.data_loaded = True
+        st.success(f"✅ {uploaded_file.name} loaded")
+        st.rerun()
     
     st.markdown("---")
     st.markdown("### FILTERS")
@@ -151,11 +167,9 @@ with st.sidebar:
     if p3.button("SY" + (" ✓" if "SY" in st.session_state.programs_selected else ""), key="p3", use_container_width=True): 
         st.session_state.programs_selected ^= {"SY"}
 
-if uploaded_file is None:
-    st.warning("📤 Upload your Excel file in the sidebar to begin")
-else:
+if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
     try:
-        all_data = pd.read_excel(uploaded_file)
+        all_data = st.session_state.uploaded_data.copy()
         
         for col in all_data.columns:
             if all_data[col].dtype == 'object':
@@ -498,6 +512,9 @@ else:
         st.error(f"❌ Error: {e}")
         import traceback
         st.write(traceback.format_exc())
+
+else:
+    st.warning("Upload your Excel file in the sidebar to begin")
 
 st.markdown("---")
 st.markdown("<p style='text-align: center; color: #00e5ff; font-size: 0.9em;'>CLC-LBU Allocation Dashboard</p>", unsafe_allow_html=True)
