@@ -106,16 +106,14 @@ with st.sidebar:
         if st.button("Clear Data & Upload New File", use_container_width=True, key="clear_data"):
             st.session_state.uploaded_data = None
             st.session_state.data_loaded = False
-            st.rerun()
     
     uploaded_file = st.file_uploader("Choose Excel file", type=['xlsx', 'xls', 'csv'], key='main_uploader')
     
-    if uploaded_file is not None:
+    if uploaded_file is not None and not st.session_state.data_loaded:
         # Load new file and store in session state
         st.session_state.uploaded_data = pd.read_excel(uploaded_file)
         st.session_state.data_loaded = True
         st.success(f"✅ {uploaded_file.name} loaded")
-        st.rerun()
     
     st.markdown("---")
     st.markdown("### FILTERS")
