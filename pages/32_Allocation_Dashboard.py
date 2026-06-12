@@ -1,10 +1,37 @@
-import streamlit as st
-import pandas as pd
-import plotly.graph_objects as go
-import numpy as np
-import folium
-from streamlit_folium import st_folium
-from collections import Counter
+import os
+import pickle
+from datetime import datetime
+
+# Define persistent data file location
+DATA_FILE = "clc_lbu_data.pkl"
+
+def save_data_to_file(data):
+    """Save data to persistent file"""
+    try:
+        with open(DATA_FILE, 'wb') as f:
+            pickle.dump(data, f)
+        return True
+    except:
+        return False
+
+def load_data_from_file():
+    """Load data from persistent file"""
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, 'rb') as f:
+                return pickle.load(f)
+    except:
+        pass
+    return None
+
+def clear_data_file():
+    """Delete the persistent data file"""
+    try:
+        if os.path.exists(DATA_FILE):
+            os.remove(DATA_FILE)
+        return True
+    except:
+        return False
 
 st.set_page_config(page_title="CLC Allocation Dashboard", page_icon="📊", layout="wide")
 
@@ -101,19 +128,35 @@ if 'data_loaded' not in st.session_state:
 with st.sidebar:
     st.markdown("### UPLOAD DATA")
     
-    if st.session_state.data_loaded:
+    # Check if saved data exists on startup
+    saved_data = load_data_from_file()
+    
+    if saved_data is not None and st.session_state.uploaded_data is None:
+        st.session_state.uploaded_data = saved_data
+        st.session_state.data_loaded = True
+    
+    if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
         st.success("✅ Data loaded in memory")
-        if st.button("Clear Data & Upload New File", use_container_width=True, key="clear_data"):
+        st.info("Data saved and will persist between sessions")
+        
+        if st.button("Clear Saved Data & Upload New", use_container_width=True, key="clear_data"):
             st.session_state.uploaded_data = None
             st.session_state.data_loaded = False
+            clear_data_file()
+            st.rerun()
     
     uploaded_file = st.file_uploader("Choose Excel file", type=['xlsx', 'xls', 'csv'], key='main_uploader')
     
     if uploaded_file is not None and not st.session_state.data_loaded:
-        # Load new file and store in session state
+        # Load new file, store in session, and save to disk
         st.session_state.uploaded_data = pd.read_excel(uploaded_file)
         st.session_state.data_loaded = True
-        st.success(f"✅ {uploaded_file.name} loaded")
+        
+        # Save to persistent file
+        if save_data_to_file(st.session_state.uploaded_data):
+            st.success(f"✅ {uploaded_file.name} loaded & saved")
+        else:
+            st.success(f"✅ {uploaded_file.name} loaded")
     
     st.markdown("---")
     st.markdown("### FILTERS")
