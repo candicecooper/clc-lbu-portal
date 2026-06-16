@@ -56,11 +56,11 @@ def get_client() -> Client:
 
 supabase = get_client()
 
-# ── Anthropic ─────────────────────────────────────────────────────────────────
+# ── Groq ──────────────────────────────────────────────────────────────────────
 try:
-    ANTHROPIC_KEY = st.secrets.get("ANTHROPIC_API_KEY", "")
+    GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
 except Exception:
-    ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+    GROQ_KEY = os.environ.get("GROQ_API_KEY", "")
 
 DEFAULT_PRINCIPLES = (
     "Collective responsibility\nLearning system\nEvaluate for impact\n"
@@ -101,11 +101,11 @@ seed_state()
 
 # ── AI alignment ──────────────────────────────────────────────────────────────
 def align_transcript(transcript: str, principles: str) -> dict:
-    import anthropic
-    client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+    from groq import Groq
+    client = Groq(api_key=GROQ_KEY)
     system = (
-        "You are helping a South Australian Department for Education staff member draft THEIR OWN "
-        "Performance and Development Plan (PDP) from a transcript of a development conversation they took part in. "
+        "You are helping a South Australian Department for Education staff member draft a "
+        "Performance and Development Plan (PDP) from a transcript of a development conversation. "
         "Use only what is grounded in the transcript — never invent achievements, goals or quotes. "
         "Where a section is not covered, return a short honest prompt for the person to complete it "
         "(e.g. 'Not discussed — consider what success looks like here'). "
@@ -121,14 +121,18 @@ def align_transcript(transcript: str, principles: str) -> dict:
         '"wellbeing":{"goal":"","actions":""},'
         '"cultural":{"focus":"Knowing|Doing|Being","commitment":""}}'
     )
-    msg = client.messages.create(
-        model="claude-sonnet-4-6",
+    resp = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
         max_tokens=4000,
-        system=system,
-        messages=[{"role": "user",
-                   "content": "Here is the development conversation transcript:\n\n" + transcript}],
+        temperature=0.3,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user",
+             "content": "Here is the development conversation transcript:\n\n" + transcript},
+        ],
     )
-    text = "".join([b.text for b in msg.content if getattr(b, "type", "") == "text"]).strip()
+    text = (resp.choices[0].message.content or "").strip()
     text = text.replace("```json", "").replace("```", "").strip()
     s, e = text.find("{"), text.rfind("}")
     return json.loads(text[s:e + 1])
@@ -283,8 +287,8 @@ if bc2.button("Load sample", use_container_width=True):
 if align_clicked:
     if not st.session_state["transcript"].strip():
         st.warning("Paste a transcript first, then align.")
-    elif not ANTHROPIC_KEY:
-        st.error("No Anthropic API key found in secrets — add ANTHROPIC_API_KEY to enable alignment. "
+    elif not GROQ_KEY:
+        st.error("No Groq API key found in secrets — add GROQ_API_KEY to enable alignment. "
                  "You can still complete the plan manually.")
     else:
         with st.spinner("Reading the conversation and drafting each section…"):
