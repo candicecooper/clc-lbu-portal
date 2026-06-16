@@ -309,63 +309,194 @@ def plan_to_markdown() -> str:
     return "\n".join(md)
 
 def build_docx() -> bytes:
+    """Build a Word document styled to match the DfE PDP proforma."""
     from docx import Document
-    from docx.shared import Pt, RGBColor
+    from docx.shared import Pt, RGBColor, Mm
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+
     g = st.session_state.get
-    teal = RGBColor(0x1A, 0x7A, 0x7A)
-    amber = RGBColor(0xC8, 0x76, 0x0A)
+    TEAL = "1A7A7A"; TEAL_DARK = "13605A"; TEAL_PALE = "E2F0ED"
+    AMBER = "C8760A"; GREY = "5B6B68"; BORDER = "CFE0DC"
+    W_MM = 184.6  # content width on A4 with 12.7mm side margins
+
+    def _shade(cell, hexcolor):
+        tcPr = cell._tc.get_or_add_tcPr()
+        shd = OxmlElement('w:shd')
+        shd.set(qn('w:val'), 'clear'); shd.set(qn('w:color'), 'auto'); shd.set(qn('w:fill'), hexcolor)
+        tcPr.append(shd)
+
+    def _bd(cell, color=BORDER, sz=6):
+        tcPr = cell._tc.get_or_add_tcPr()
+        b = OxmlElement('w:tcBorders')
+        for side in ("top", "bottom", "left", "right"):
+            el = OxmlElement(f'w:{side}')
+            el.set(qn('w:val'), 'single'); el.set(qn('w:sz'), str(sz))
+            el.set(qn('w:space'), '0'); el.set(qn('w:color'), color)
+            b.append(el)
+        tcPr.append(b)
+
+    def _mar(cell, t=80, bo=80, l=140, r=140):
+        tcPr = cell._tc.get_or_add_tcPr()
+        m = OxmlElement('w:tcMar')
+        for side, val in (("top", t), ("bottom", bo), ("left", l), ("right", r)):
+            el = OxmlElement(f'w:{side}'); el.set(qn('w:w'), str(val)); el.set(qn('w:type'), 'dxa')
+            m.append(el)
+        tcPr.append(m)
+
+    def _tw(tbl, width_mm=W_MM):
+        tbl.autofit = False
+        tblPr = tbl._tbl.tblPr
+        for ex in tblPr.findall(qn('w:tblW')):
+            tblPr.remove(ex)
+        tblW = OxmlElement('w:tblW')
+        tblW.set(qn('w:w'), str(int(width_mm * 1440 / 25.4))); tblW.set(qn('w:type'), 'dxa')
+        tblPr.append(tblW)
+
+    def _run(p, text, bold=False, size=10.5, color="222222", italic=False):
+        r = p.add_run(text); r.bold = bold; r.italic = italic
+        r.font.size = Pt(size); r.font.name = "Arial"; r.font.color.rgb = RGBColor.from_string(color)
+        return r
+
     doc = Document()
+    s = doc.sections[0]
+    s.page_width = Mm(210); s.page_height = Mm(297)
+    s.left_margin = s.right_margin = Mm(12.7); s.top_margin = s.bottom_margin = Mm(14)
+    base = doc.styles["Normal"]; base.font.name = "Arial"; base.font.size = Pt(10.5)
 
-    def heading(text):
-        p = doc.add_paragraph()
-        p.paragraph_format.space_before = Pt(10)
-        r = p.add_run(text); r.bold = True; r.font.size = Pt(14); r.font.color.rgb = teal
+    def gap(pt=2):
+        doc.add_paragraph().paragraph_format.space_after = Pt(pt)
 
-    def field(label, wk):
-        if g(wk, ""):
-            p = doc.add_paragraph()
-            lr = p.add_run(label + ": "); lr.bold = True
-            p.add_run(g(wk, ""))
-        add = g(wk + "__add", "")
-        if add:
-            ap = doc.add_paragraph()
-            ar = ap.add_run("Added from the meeting: "); ar.bold = True; ar.font.color.rgb = amber
-            tr = ap.add_run(add); tr.font.color.rgb = amber
+    def band(text, size=15, fill=TEAL):
+        t = doc.add_table(rows=1, cols=1); _tw(t); t.alignment = WD_TABLE_ALIGNMENT.CENTER
+        c = t.cell(0, 0); c.width = Mm(W_MM); _shade(c, fill); _mar(c, 90, 90, 160, 160)
+        _run(c.paragraphs[0], text, bold=True, size=size, color="FFFFFF")
+        gap()
 
-    title = doc.add_paragraph()
-    tr = title.add_run("Performance and Development Plan")
-    tr.bold = True; tr.font.size = Pt(20); tr.font.color.rgb = teal
-    doc.add_paragraph(f"Employee: {g('w_emp','')}      Leader: {g('w_ldr','')}      Date: {g('w_date','')}")
+    def subhead(text):
+        p = doc.add_paragraph(); p.paragraph_format.space_before = Pt(4); p.paragraph_format.space_after = Pt(2)
+        _run(p, text, bold=True, size=11, color=TEAL_DARK)
 
+    def prompts(items):
+        for it in items:
+            p = doc.add_paragraph(style="List Bullet"); p.paragraph_format.space_after = Pt(0)
+            _run(p, it, size=9, color=GREY, italic=True)
+
+    def box(fields, add_pairs=None):
+        t = doc.add_table(rows=1, cols=1); _tw(t); t.alignment = WD_TABLE_ALIGNMENT.CENTER
+        c = t.cell(0, 0); c.width = Mm(W_MM); _bd(c); _mar(c)
+        first = True
+        for label, value in fields:
+            if not value:
+                continue
+            p = c.paragraphs[0] if first else c.add_paragraph(); first = False
+            p.paragraph_format.space_after = Pt(3)
+            if label:
+                _run(p, label + ": ", bold=True, color=TEAL_DARK)
+            _run(p, value)
+        for label, add in (add_pairs or []):
+            if not add:
+                continue
+            p = c.paragraphs[0] if first else c.add_paragraph(); first = False
+            p.paragraph_format.space_after = Pt(1)
+            _run(p, "➕ Added from the meeting", bold=True, size=10, color=AMBER)
+            if label:
+                _run(p, f"  ({label})", size=9, color=AMBER)
+            p2 = c.add_paragraph(); p2.paragraph_format.space_after = Pt(3)
+            _run(p2, add, color=AMBER)
+        if first:
+            _run(c.paragraphs[0], "")
+        gap()
+
+    def reflections(v6, v12):
+        cap = doc.add_paragraph(); cap.paragraph_format.space_after = Pt(2)
+        _run(cap, "Feedback and goal reflections — to what extent has the goal been achieved? "
+                  "What needs adjusting?", italic=True, size=9, color=GREY)
+        t = doc.add_table(rows=2, cols=2); _tw(t); t.alignment = WD_TABLE_ALIGNMENT.CENTER
+        for j, head in enumerate(("AT 6 MONTHS", "AT 12 MONTHS")):
+            hc = t.cell(0, j); hc.width = Mm(W_MM / 2); _shade(hc, TEAL_DARK); _mar(hc, 50, 50, 140, 140)
+            _run(hc.paragraphs[0], head, bold=True, size=9, color="FFFFFF")
+        for j, val in enumerate((v6, v12)):
+            cc = t.cell(1, j); cc.width = Mm(W_MM / 2); _bd(cc); _mar(cc)
+            _run(cc.paragraphs[0], val or "", size=10)
+        gap()
+
+    # Title
+    band("PERFORMANCE AND DEVELOPMENT PLAN", size=17)
+    gov = doc.add_paragraph(); gov.paragraph_format.space_after = Pt(4)
+    _run(gov, "Government of South Australia  ·  Department for Education  ·  "
+              "Cowandilla Learning Centre — LBU", size=8.5, color=GREY)
+    idt = doc.add_table(rows=3, cols=2); _tw(idt); idt.alignment = WD_TABLE_ALIGNMENT.CENTER
+    for i, (lbl, key) in enumerate([("Employee Name", "w_emp"), ("Leader Name", "w_ldr"), ("Date", "w_date")]):
+        lc = idt.cell(i, 0); lc.width = Mm(45); _shade(lc, TEAL_PALE); _bd(lc); _mar(lc)
+        _run(lc.paragraphs[0], lbl, bold=True, size=10, color=TEAL_DARK)
+        vc = idt.cell(i, 1); vc.width = Mm(W_MM - 45); _bd(vc); _mar(vc)
+        _run(vc.paragraphs[0], g(key, ""))
+    sp = doc.add_paragraph(); sp.paragraph_format.space_before = Pt(4); sp.paragraph_format.space_after = Pt(6)
+    _run(sp, "When you are learning and thriving, everyone benefits.", bold=True, color=TEAL)
+
+    GP = ["What's important for my own development as a professional?",
+          "How can I contribute to the guiding principles and 4 areas of impact?",
+          "What will I deliver, what actions will I take, by when and how?"]
+
+    band("GOALS")
+    prompts(GP)
     for n in ("1", "2"):
-        heading(f"Goal {n}")
-        field("Goal & purpose", f"w_goal{n}_goal")
-        field("Strengths to leverage", f"w_goal{n}_strengths")
-        field("Learn / change", f"w_goal{n}_learn")
-        field("Support needed", f"w_goal{n}_support")
-        field("Monitor change", f"w_goal{n}_monitor")
-        field("Evaluate impact", f"w_goal{n}_evaluate")
-        if g(f"w_goal{n}_r6", ""): doc.add_paragraph(f"6 months: {g(f'w_goal{n}_r6','')}")
-        if g(f"w_goal{n}_r12", ""): doc.add_paragraph(f"12 months: {g(f'w_goal{n}_r12','')}")
+        subhead(f"GOAL {n}")
+        box([("Goal & purpose", g(f"w_goal{n}_goal", "")),
+             ("Strengths to leverage", g(f"w_goal{n}_strengths", "")),
+             ("What I need to learn / change", g(f"w_goal{n}_learn", "")),
+             ("Support I need", g(f"w_goal{n}_support", "")),
+             ("How I'll monitor change", g(f"w_goal{n}_monitor", "")),
+             ("How I'll evaluate impact", g(f"w_goal{n}_evaluate", ""))],
+            [("Goal & purpose", g(f"w_goal{n}_goal__add", "")),
+             ("Strengths", g(f"w_goal{n}_strengths__add", "")),
+             ("Learn / change", g(f"w_goal{n}_learn__add", "")),
+             ("Support", g(f"w_goal{n}_support__add", "")),
+             ("Monitor", g(f"w_goal{n}_monitor__add", "")),
+             ("Evaluate", g(f"w_goal{n}_evaluate__add", ""))])
+        reflections(g(f"w_goal{n}_r6", ""), g(f"w_goal{n}_r12", ""))
 
-    heading("Career fulfilment")
-    field("Goal", "w_career_goal"); field("Actions", "w_career_actions")
-    if g("w_career_r6", ""): doc.add_paragraph(f"6 months: {g('w_career_r6','')}")
-    if g("w_career_r12", ""): doc.add_paragraph(f"12 months: {g('w_career_r12','')}")
+    band("CAREER FULFILMENT")
+    prompts(["What does career fulfilment look like for me?",
+             "What aspects of my role do I enjoy and want to do more of?",
+             "What actions will I take, by when and how?"])
+    box([("Goal", g("w_career_goal", "")), ("Actions", g("w_career_actions", ""))],
+        [("Goal", g("w_career_goal__add", "")), ("Actions", g("w_career_actions__add", ""))])
+    reflections(g("w_career_r6", ""), g("w_career_r12", ""))
 
-    heading("My wellbeing")
-    field("Goal", "w_wb_goal"); field("Actions", "w_wb_actions")
-    if g("w_wb_r6", ""): doc.add_paragraph(f"6 months: {g('w_wb_r6','')}")
-    if g("w_wb_r12", ""): doc.add_paragraph(f"12 months: {g('w_wb_r12','')}")
+    band("MY WELLBEING")
+    prompts(["When I'm at my best, what factors exist and how are they enabled?",
+             "What actions will I take, by when and how?"])
+    box([("Goal", g("w_wb_goal", "")), ("Actions", g("w_wb_actions", ""))],
+        [("Goal", g("w_wb_goal__add", "")), ("Actions", g("w_wb_actions__add", ""))])
+    reflections(g("w_wb_r6", ""), g("w_wb_r12", ""))
 
-    heading("Cultural responsiveness journey")
-    doc.add_paragraph(f"Focus: {g('w_cultural_focus','')}")
-    field("Commitment", "w_cultural_commitment")
+    band("MY CULTURAL RESPONSIVENESS JOURNEY")
+    prompts(["Knowing — broaden knowledge of histories, cultures and languages of Aboriginal people.",
+             "Doing — respond to the diverse needs, backgrounds, experiences and knowledge.",
+             "Being — strengthen self-awareness of diverse cultural and linguistic needs."])
+    fp = doc.add_paragraph(); fp.paragraph_format.space_after = Pt(2)
+    _run(fp, "Focus: ", bold=True, color=TEAL_DARK); _run(fp, g("w_cultural_focus", ""))
+    box([(None, g("w_cultural_commitment", ""))], [(None, g("w_cultural_commitment__add", ""))])
 
-    heading("Reflection overview")
-    for lbl, wk in [("Employee — 6 months", "w_ref_emp6"), ("Leader — 6 months", "w_ref_ldr6"),
-                    ("Employee — 12 months", "w_ref_emp12"), ("Leader — 12 months", "w_ref_ldr12")]:
-        if g(wk, ""): doc.add_paragraph(f"{lbl}: {g(wk, '')}")
+    band("REFLECTION OVERVIEW")
+    prompts(["What did you enjoy most? Where were you most successful, and why?",
+             "What did you find challenging? What have you learned?"])
+    refmap = {("6 months", 0): "w_ref_emp6", ("6 months", 1): "w_ref_ldr6",
+              ("12 months", 0): "w_ref_emp12", ("12 months", 1): "w_ref_ldr12"}
+    for period in ("6 months", "12 months"):
+        t = doc.add_table(rows=2, cols=2); _tw(t); t.alignment = WD_TABLE_ALIGNMENT.CENTER
+        for j, who in enumerate(("Employee summary", "Leader summary")):
+            hc = t.cell(0, j); hc.width = Mm(W_MM / 2); _shade(hc, TEAL_DARK); _mar(hc, 50, 50, 140, 140)
+            _run(hc.paragraphs[0], f"{who} — at {period}", bold=True, size=9, color="FFFFFF")
+        for j in range(2):
+            cc = t.cell(1, j); cc.width = Mm(W_MM / 2); _bd(cc); _mar(cc)
+            _run(cc.paragraphs[0], g(refmap[(period, j)], ""), size=10)
+            sig = cc.add_paragraph(); sig.paragraph_format.space_before = Pt(14)
+            _run(sig, "Signature: ______________________   Date: __________", size=8.5, color=GREY)
+        gap()
 
     buf = io.BytesIO(); doc.save(buf); return buf.getvalue()
 
