@@ -1692,10 +1692,10 @@ Format your response as clear sections with bullet points."""
                         }
                         
                         if st.session_state.current_meeting_id:
-                            supabase.table('team_meetings').update(meeting_payload).eq('id', st.session_state.current_meeting_id).execute()
+                            supabase.table('staff_meetings').update(meeting_payload).eq('id', st.session_state.current_meeting_id).execute()
                             st.success(f"✅ Ad-Hoc Meeting Updated")
                         else:
-                            result = supabase.table('team_meetings').insert(meeting_payload).execute()
+                            result = supabase.table('staff_meetings').insert(meeting_payload).execute()
                             st.session_state.current_meeting_id = result.data[0]['id']
                             st.success(f"✅ Ad-Hoc Meeting Saved (ID: {st.session_state.current_meeting_id})")
                         
@@ -1742,7 +1742,7 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
             if st.session_state.current_meeting_id:
                 if st.button("📦 Archive", key=f"archive_adhoc_{program}", use_container_width=True):
                     try:
-                        supabase.table('team_meetings').update({'is_archived': True}).eq('id', st.session_state.current_meeting_id).execute()
+                        supabase.table('staff_meetings').update({'is_archived': True}).eq('id', st.session_state.current_meeting_id).execute()
                         st.success("📦 Meeting archived")
                         st.session_state.current_meeting_id = None
                         time.sleep(1)
@@ -1757,7 +1757,7 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
         
         if st.button("📂 Show Archived Meetings", key=f"show_archived_{program}"):
             try:
-                archived = supabase.table('team_meetings').select("*").eq('program', program).eq('meeting_type', 'ad-hoc').eq('is_archived', True).order('meeting_date', desc=True).execute()
+                archived = supabase.table('staff_meetings').select("*").eq('program', program).eq('meeting_type', 'ad-hoc').eq('is_archived', True).order('meeting_date', desc=True).execute()
                 archived_meetings = archived.data or []
                 
                 if archived_meetings:
