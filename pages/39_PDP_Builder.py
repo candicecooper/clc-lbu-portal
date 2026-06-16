@@ -100,6 +100,19 @@ def seed_state():
 seed_state()
 
 # ── AI alignment ──────────────────────────────────────────────────────────────
+# Groq free tier caps each request at 12,000 tokens/min (input + output combined).
+# Keep the transcript under this budget; with max_tokens=2000 and the system prompt,
+# ~28,000 characters of transcript stays comfortably under the limit.
+MAX_TRANSCRIPT_CHARS = 28000
+
+def trim_transcript(t: str):
+    if len(t) <= MAX_TRANSCRIPT_CHARS:
+        return t, False
+    head = int(MAX_TRANSCRIPT_CHARS * 0.55)
+    tail = MAX_TRANSCRIPT_CHARS - head
+    marker = "\n\n[… middle of the conversation trimmed to fit the free-tier limit …]\n\n"
+    return t[:head] + marker + t[-tail:], True
+
 def align_transcript(transcript: str, principles: str) -> dict:
     from groq import Groq
     client = Groq(api_key=GROQ_KEY)
@@ -123,7 +136,7 @@ def align_transcript(transcript: str, principles: str) -> dict:
     )
     resp = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
-        max_tokens=4000,
+        max_tokens=2000,
         temperature=0.3,
         response_format={"type": "json_object"},
         messages=[
@@ -291,9 +304,13 @@ if align_clicked:
         st.error("No Groq API key found in secrets — add GROQ_API_KEY to enable alignment. "
                  "You can still complete the plan manually.")
     else:
+        text_in, was_trimmed = trim_transcript(st.session_state["transcript"])
+        if was_trimmed:
+            st.info("That transcript is long, so the middle was trimmed to fit Groq's free-tier limit. "
+                    "For full coverage, run it in two halves and merge the drafts, or upgrade your Groq tier.")
         with st.spinner("Reading the conversation and drafting each section…"):
             try:
-                parsed = align_transcript(st.session_state["transcript"], st.session_state["principles"])
+                parsed = align_transcript(text_in, st.session_state["principles"])
                 apply_alignment(parsed)
                 st.success("Drafted. Review and edit every field — it's your plan.")
                 st.rerun()
