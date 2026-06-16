@@ -1527,7 +1527,180 @@ def render_program_meeting(program):
         </div>""", unsafe_allow_html=True)
 
     if is_adhoc:
-        # Keep existing ad-hoc meeting function
+        # ────────────────────────────────────────────────────────────────────────────
+        # AD-HOC MEETING WITH TRANSCRIPT SUPPORT
+        # ────────────────────────────────────────────────────────────────────────────
+        
+        st.markdown("#### 📋 Meeting Details")
+        adhoc_col1, adhoc_col2, adhoc_col3, adhoc_col4 = st.columns(4)
+        
+        default_date = datetime.date.fromisoformat(selected_record['meeting_date']) if selected_record else datetime.date.today()
+        default_facilitator = selected_record.get('facilitator', _safe_staff_name()) if selected_record else _safe_staff_name()
+        default_attendees = selected_record.get('attendees', '') if selected_record else ''
+        
+        with adhoc_col1: adhoc_date = st.date_input("Date", value=default_date, key=f"adhoc_date_{program}")
+        with adhoc_col2: adhoc_facilitator = st.text_input("Facilitator", value=default_facilitator, key=f"adhoc_fac_{program}")
+        with adhoc_col3: adhoc_attendees = st.text_input("Attendees", value=default_attendees, placeholder="Names separated by commas", key=f"adhoc_att_{program}")
+        with adhoc_col4: adhoc_student = st.text_input("Student(s)", placeholder="Name(s)", key=f"adhoc_student_{program}")
+        
+        st.markdown("---")
+        
+        # TRANSCRIPT INPUT
+        st.markdown("#### 🎤 Meeting Transcript / Notes")
+        st.caption("Paste meeting transcript, notes, or discussion summary below")
+        
+        transcript_tab1, transcript_tab2 = st.tabs(["📝 Paste Transcript", "📤 Upload File"])
+        
+        with transcript_tab1:
+            adhoc_transcript = st.text_area(
+                "Transcript / Notes",
+                value=selected_record.get('transcript', '') if selected_record else '',
+                height=200,
+                placeholder="Paste your meeting transcript, discussion notes, or meeting summary here...",
+                key=f"adhoc_transcript_{program}",
+                label_visibility="collapsed"
+            )
+        
+        with transcript_tab2:
+            uploaded_file = st.file_uploader("Upload transcript file (.txt, .docx)", 
+                                             type=['txt', 'docx'],
+                                             key=f"adhoc_upload_{program}")
+            if uploaded_file:
+                if uploaded_file.type == "text/plain":
+                    adhoc_transcript = uploaded_file.read().decode("utf-8")
+                elif uploaded_file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+                    try:
+                        doc = Document(uploaded_file)
+                        adhoc_transcript = "\n".join([p.text for p in doc.paragraphs])
+                    except:
+                        st.error("Could not read Word document")
+                        adhoc_transcript = ""
+                st.success(f"✅ Uploaded: {uploaded_file.name}")
+        
+        st.markdown("---")
+        
+        # AI PROCESSING OPTION
+        st.markdown("#### ✨ AI Processing (Optional)")
+        col_process, col_skip = st.columns([1, 3])
+        
+        if col_process.button("🤖 Extract Key Points", key=f"adhoc_process_{program}", type="primary"):
+            if adhoc_transcript.strip():
+                with st.spinner("Processing transcript..."):
+                    try:
+                        groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
+                        
+                        if groq_client:
+                            response = groq_client.chat.completions.create(
+                                model="llama-3.3-70b-versatile",
+                                messages=[
+                                    {
+                                        "role": "system",
+                                        "content": "You are an expert at analyzing educational team meeting transcripts. Extract key information in a structured format."
+                                    },
+                                    {
+                                        "role": "user",
+                                        "content": f"""Analyze this meeting transcript and extract:
+1. KEY DISCUSSION POINTS (3-5 main topics discussed)
+2. DECISIONS MADE (what was decided)
+3. ACTION ITEMS (who is doing what, by when)
+4. SMARTAR OPPORTUNITIES (student goals or learning targets mentioned)
+
+Meeting transcript:
+{adhoc_transcript}
+
+Format your response as clear sections with bullet points."""
+                                    }
+                                ],
+                                max_tokens=1200
+                            )
+                            
+                            extracted = response.choices[0].message.content
+                            st.session_state[f"adhoc_extracted_{program}"] = extracted
+                            st.success("✅ Extracted!")
+                        else:
+                            st.warning("Groq API not configured - showing transcript as-is")
+                    except Exception as e:
+                        st.error(f"Error processing transcript: {e}")
+        
+        # DISPLAY EXTRACTED CONTENT
+        if f"adhoc_extracted_{program}" in st.session_state:
+            st.markdown("#### 📊 Extracted Content")
+            st.markdown(st.session_state[f"adhoc_extracted_{program}"])
+            st.markdown("---")
+        
+        # MEETING NOTES
+        st.markdown("#### 📝 Meeting Summary & Actions")
+        adhoc_notes = st.text_area(
+            "Summary & Action Items",
+            value=selected_record.get('summary_notes', '') if selected_record else '',
+            height=150,
+            placeholder="Summary of meeting, decisions made, action items, and next steps...",
+            key=f"adhoc_notes_{program}",
+            label_visibility="collapsed"
+        )
+        
+        st.markdown("---")
+        
+        # SMARTAR GOAL LINKING
+        if adhoc_student and adhoc_student.strip():
+            st.markdown("#### 🎯 Link to SMARTAR Goal (Optional)")
+            
+            goal_link = get_smartar_goal_link(
+                adhoc_student.strip(),
+                st.session_state.current_meeting_id or "new",
+                program,
+                "ADHOC",
+                0
+            )
+            
+            if goal_link:
+                st.markdown(f"[✨ Open SMARTAR Goal Builder for {adhoc_student}]({goal_link})")
+                st.caption("Sets up context to create or refine goals for this meeting")
+            
+            st.markdown("---")
+        
+        # SAVE MEETING
+        st.markdown("#### 💾 Save Ad-Hoc Meeting")
+        
+        if st.button("Save Ad-Hoc Meeting", key=f"save_adhoc_{program}", type="primary"):
+            if not adhoc_transcript.strip():
+                st.warning("Please add a transcript or meeting notes")
+            else:
+                try:
+                    term, week = get_current_term_week()
+                    
+                    meeting_payload = {
+                        'program': program,
+                        'meeting_date': str(adhoc_date),
+                        'meeting_type': 'ad-hoc',
+                        'term': term,
+                        'week_number': week,
+                        'facilitator': adhoc_facilitator or _safe_staff_name(),
+                        'attendees': adhoc_attendees or '',
+                        'student_name': adhoc_student or '',
+                        'transcript': adhoc_transcript,
+                        'summary_notes': adhoc_notes,
+                        'checkin_notes': '',
+                        'student_concerns': '[]',
+                        'reports_tac_notes': '',
+                        'goals_discussed': '[]',
+                        'action_items': adhoc_notes,
+                    }
+                    
+                    if st.session_state.current_meeting_id:
+                        supabase.table('meetings').update(meeting_payload).eq('id', st.session_state.current_meeting_id).execute()
+                        st.success(f"✅ Ad-Hoc Meeting Updated")
+                    else:
+                        result = supabase.table('meetings').insert(meeting_payload).execute()
+                        st.session_state.current_meeting_id = result.data[0]['id']
+                        st.success(f"✅ Ad-Hoc Meeting Saved (ID: {st.session_state.current_meeting_id})")
+                    
+                    time.sleep(1)
+                    st.rerun()
+                
+                except Exception as e:
+                    st.error(f"Error saving meeting: {e}")
+        
         return
 
     st.markdown("#### 📋 Meeting Details")
