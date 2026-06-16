@@ -1541,7 +1541,7 @@ def render_program_meeting(program):
         with adhoc_col1: adhoc_date = st.date_input("Date", value=default_date, key=f"adhoc_date_{program}")
         with adhoc_col2: adhoc_facilitator = st.text_input("Facilitator", value=default_facilitator, key=f"adhoc_fac_{program}")
         with adhoc_col3: adhoc_attendees = st.text_input("Attendees", value=default_attendees, placeholder="Names separated by commas", key=f"adhoc_att_{program}")
-        with adhoc_col4: adhoc_student = st.text_input("Student(s)", placeholder="Name(s)", key=f"adhoc_student_{program}")
+        with adhoc_col4: adhoc_student = st.text_input("Student(s)", value=selected_record.get('student_name', '') if selected_record else "", placeholder="Name(s)", key=f"adhoc_student_{program}")
         
         st.markdown("---")
         
@@ -1660,46 +1660,122 @@ Format your response as clear sections with bullet points."""
             st.markdown("---")
         
         # SAVE MEETING
-        st.markdown("#### 💾 Save Ad-Hoc Meeting")
+        st.markdown("#### 💾 Save & Manage Meeting")
         
-        if st.button("Save Ad-Hoc Meeting", key=f"save_adhoc_{program}", type="primary"):
-            if not adhoc_transcript.strip():
-                st.warning("Please add a transcript or meeting notes")
-            else:
-                try:
-                    term, week = get_current_term_week()
+        save_col1, save_col2, save_col3 = st.columns([2, 1, 1])
+        
+        with save_col1:
+            if st.button("💾 Save Ad-Hoc Meeting", key=f"save_adhoc_{program}", type="primary", use_container_width=True):
+                if not adhoc_transcript.strip():
+                    st.warning("Please add a transcript or meeting notes")
+                else:
+                    try:
+                        term, week = get_current_term_week()
+                        
+                        meeting_payload = {
+                            'program': program,
+                            'meeting_date': str(adhoc_date),
+                            'meeting_type': 'ad-hoc',
+                            'term': term,
+                            'week_number': week,
+                            'facilitator': adhoc_facilitator or _safe_staff_name(),
+                            'attendees': adhoc_attendees or '',
+                            'student_name': adhoc_student or '',
+                            'transcript': adhoc_transcript,
+                            'summary_notes': adhoc_notes,
+                            'checkin_notes': '',
+                            'student_concerns': '[]',
+                            'reports_tac_notes': '',
+                            'goals_discussed': '[]',
+                            'action_items': adhoc_notes,
+                            'is_archived': False,
+                        }
+                        
+                        if st.session_state.current_meeting_id:
+                            supabase.table('team_meetings').update(meeting_payload).eq('id', st.session_state.current_meeting_id).execute()
+                            st.success(f"✅ Ad-Hoc Meeting Updated")
+                        else:
+                            result = supabase.table('team_meetings').insert(meeting_payload).execute()
+                            st.session_state.current_meeting_id = result.data[0]['id']
+                            st.success(f"✅ Ad-Hoc Meeting Saved (ID: {st.session_state.current_meeting_id})")
+                        
+                        time.sleep(1)
+                        st.rerun()
                     
-                    meeting_payload = {
-                        'program': program,
-                        'meeting_date': str(adhoc_date),
-                        'meeting_type': 'ad-hoc',
-                        'term': term,
-                        'week_number': week,
-                        'facilitator': adhoc_facilitator or _safe_staff_name(),
-                        'attendees': adhoc_attendees or '',
-                        'student_name': adhoc_student or '',
-                        'transcript': adhoc_transcript,
-                        'summary_notes': adhoc_notes,
-                        'checkin_notes': '',
-                        'student_concerns': '[]',
-                        'reports_tac_notes': '',
-                        'goals_discussed': '[]',
-                        'action_items': adhoc_notes,
-                    }
-                    
-                    if st.session_state.current_meeting_id:
-                        supabase.table('meetings').update(meeting_payload).eq('id', st.session_state.current_meeting_id).execute()
-                        st.success(f"✅ Ad-Hoc Meeting Updated")
-                    else:
-                        result = supabase.table('meetings').insert(meeting_payload).execute()
-                        st.session_state.current_meeting_id = result.data[0]['id']
-                        st.success(f"✅ Ad-Hoc Meeting Saved (ID: {st.session_state.current_meeting_id})")
-                    
-                    time.sleep(1)
-                    st.rerun()
+                    except Exception as e:
+                        st.error(f"Error saving meeting: {e}")
+        
+        # DOWNLOAD MEETING
+        with save_col2:
+            if st.session_state.current_meeting_id:
+                # Create downloadable text file
+                meeting_text = f"""AD-HOC MEETING RECORD
+═══════════════════════════════════════════════════
+
+Date: {adhoc_date}
+Facilitator: {adhoc_facilitator}
+Attendees: {adhoc_attendees}
+Student(s): {adhoc_student}
+Meeting ID: {st.session_state.current_meeting_id}
+
+TRANSCRIPT / NOTES
+───────────────────────────────────────────────────
+{adhoc_transcript}
+
+SUMMARY & ACTION ITEMS
+───────────────────────────────────────────────────
+{adhoc_notes}
+
+═══════════════════════════════════════════════════
+Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
+"""
+                st.download_button(
+                    label="📥 Download",
+                    data=meeting_text,
+                    file_name=f"AdHoc_{adhoc_date}_{adhoc_student}.txt",
+                    mime="text/plain",
+                    key=f"dl_adhoc_{program}"
+                )
+        
+        # ARCHIVE MEETING
+        with save_col3:
+            if st.session_state.current_meeting_id:
+                if st.button("📦 Archive", key=f"archive_adhoc_{program}", use_container_width=True):
+                    try:
+                        supabase.table('team_meetings').update({'is_archived': True}).eq('id', st.session_state.current_meeting_id).execute()
+                        st.success("📦 Meeting archived")
+                        st.session_state.current_meeting_id = None
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error archiving: {e}")
+        
+        st.markdown("---")
+        
+        # VIEW ARCHIVED MEETINGS
+        st.markdown("#### 📦 View & Edit Archived Meetings")
+        
+        if st.button("📂 Show Archived Meetings", key=f"show_archived_{program}"):
+            try:
+                archived = supabase.table('team_meetings').select("*").eq('program', program).eq('meeting_type', 'ad-hoc').eq('is_archived', True).order('meeting_date', desc=True).execute()
+                archived_meetings = archived.data or []
                 
-                except Exception as e:
-                    st.error(f"Error saving meeting: {e}")
+                if archived_meetings:
+                    st.markdown("**Click a meeting to reopen and edit:**")
+                    for mtg in archived_meetings:
+                        mtg_date = mtg.get('meeting_date', '')
+                        mtg_student = mtg.get('student_name', 'No student')
+                        mtg_id = mtg.get('id', '')
+                        
+                        if st.button(f"📦 {mtg_date} — {mtg_student}", key=f"load_archived_{mtg_id}", use_container_width=True):
+                            st.session_state.current_meeting_id = mtg_id
+                            st.rerun()
+                else:
+                    st.info("No archived meetings yet")
+            except Exception as e:
+                st.warning(f"Could not load archived meetings: {e}")
+        
+        st.caption("💡 **Archive:** Hides from active list but keeps in database. **Download:** Share with staff. **Edit:** Reopen archived meetings anytime to make changes.")
         
         return
 
