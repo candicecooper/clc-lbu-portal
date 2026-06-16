@@ -308,6 +308,67 @@ def plan_to_markdown() -> str:
     md.append(f"**Leader — 12 months:** {g('w_ref_ldr12','')}")
     return "\n".join(md)
 
+def build_docx() -> bytes:
+    from docx import Document
+    from docx.shared import Pt, RGBColor
+    g = st.session_state.get
+    teal = RGBColor(0x1A, 0x7A, 0x7A)
+    amber = RGBColor(0xC8, 0x76, 0x0A)
+    doc = Document()
+
+    def heading(text):
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(10)
+        r = p.add_run(text); r.bold = True; r.font.size = Pt(14); r.font.color.rgb = teal
+
+    def field(label, wk):
+        if g(wk, ""):
+            p = doc.add_paragraph()
+            lr = p.add_run(label + ": "); lr.bold = True
+            p.add_run(g(wk, ""))
+        add = g(wk + "__add", "")
+        if add:
+            ap = doc.add_paragraph()
+            ar = ap.add_run("Added from the meeting: "); ar.bold = True; ar.font.color.rgb = amber
+            tr = ap.add_run(add); tr.font.color.rgb = amber
+
+    title = doc.add_paragraph()
+    tr = title.add_run("Performance and Development Plan")
+    tr.bold = True; tr.font.size = Pt(20); tr.font.color.rgb = teal
+    doc.add_paragraph(f"Employee: {g('w_emp','')}      Leader: {g('w_ldr','')}      Date: {g('w_date','')}")
+
+    for n in ("1", "2"):
+        heading(f"Goal {n}")
+        field("Goal & purpose", f"w_goal{n}_goal")
+        field("Strengths to leverage", f"w_goal{n}_strengths")
+        field("Learn / change", f"w_goal{n}_learn")
+        field("Support needed", f"w_goal{n}_support")
+        field("Monitor change", f"w_goal{n}_monitor")
+        field("Evaluate impact", f"w_goal{n}_evaluate")
+        if g(f"w_goal{n}_r6", ""): doc.add_paragraph(f"6 months: {g(f'w_goal{n}_r6','')}")
+        if g(f"w_goal{n}_r12", ""): doc.add_paragraph(f"12 months: {g(f'w_goal{n}_r12','')}")
+
+    heading("Career fulfilment")
+    field("Goal", "w_career_goal"); field("Actions", "w_career_actions")
+    if g("w_career_r6", ""): doc.add_paragraph(f"6 months: {g('w_career_r6','')}")
+    if g("w_career_r12", ""): doc.add_paragraph(f"12 months: {g('w_career_r12','')}")
+
+    heading("My wellbeing")
+    field("Goal", "w_wb_goal"); field("Actions", "w_wb_actions")
+    if g("w_wb_r6", ""): doc.add_paragraph(f"6 months: {g('w_wb_r6','')}")
+    if g("w_wb_r12", ""): doc.add_paragraph(f"12 months: {g('w_wb_r12','')}")
+
+    heading("Cultural responsiveness journey")
+    doc.add_paragraph(f"Focus: {g('w_cultural_focus','')}")
+    field("Commitment", "w_cultural_commitment")
+
+    heading("Reflection overview")
+    for lbl, wk in [("Employee — 6 months", "w_ref_emp6"), ("Leader — 6 months", "w_ref_ldr6"),
+                    ("Employee — 12 months", "w_ref_emp12"), ("Leader — 12 months", "w_ref_ldr12")]:
+        if g(wk, ""): doc.add_paragraph(f"{lbl}: {g(wk, '')}")
+
+    buf = io.BytesIO(); doc.save(buf); return buf.getvalue()
+
 SAMPLE = (
     "Leader: Thanks for making time. What's been going well this term?\n"
     "Staff: The interval support tracking has helped me see patterns earlier. I've gotten better at noticing "
@@ -522,8 +583,17 @@ if plans:
 else:
     sc2.caption("No saved plans yet.")
 
-sc3.download_button("⬇️ Download (.md)", data=plan_to_markdown(),
-                    file_name="pdp.md", mime="text/markdown", use_container_width=True)
+_fname = (st.session_state.get("w_emp", "").strip().replace(" ", "_") or "PDP")
+try:
+    sc3.download_button(
+        "⬇️ Download Word", data=build_docx(),
+        file_name=f"PDP_{_fname}.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        use_container_width=True)
+except Exception as ex:
+    sc3.error(f"Word export error: {ex}")
+sc3.download_button("⬇️ Download Markdown", data=plan_to_markdown(),
+                    file_name=f"PDP_{_fname}.md", mime="text/markdown", use_container_width=True)
 
 st.caption("Plans are stored privately against your staff name. Additions from the meeting are saved and "
            "exported with their amber 'Added from the meeting' label.")
