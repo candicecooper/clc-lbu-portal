@@ -519,7 +519,7 @@ def build_docx() -> bytes:
         tblPr.append(tblW)
 
     def _run(p, text, bold=False, size=10.5, color="222222", italic=False):
-        r = p.add_run(text); r.bold = bold; r.italic = italic
+        r = p.add_run("" if text is None else str(text)); r.bold = bold; r.italic = italic
         r.font.size = Pt(size); r.font.name = "Arial"; r.font.color.rgb = RGBColor.from_string(color)
         return r
 
