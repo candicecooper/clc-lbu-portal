@@ -344,37 +344,52 @@ def apply_import(parsed: dict):
     if parsed.get("cultural_focus") in ("Knowing", "Doing", "Being"):
         st.session_state["w_cultural_focus"] = parsed["cultural_focus"]
 
-# ── Step 2: add only what's new in the meeting, on top of the current plan ────
-def current_baseline() -> str:
-    lines = []
-    for k, wk in KEY_MAP.items():
-        v = st.session_state.get(wk, "")
-        if v:
-            lines.append(f"{k}: {v}")
-    foc = st.session_state.get("w_cultural_focus", "")
-    if foc:
-        lines.append(f"cultural_focus: {foc}")
-    return "\n".join(lines) if lines else "(the plan is currently empty)"
+# ── Step 2: extend each existing section with detail from the meeting ──────────
+# The amber addition sits under the MAIN field of each section.
+SECTION_MAIN = {
+    "goal1": "w_goal1_goal", "goal2": "w_goal2_goal", "career": "w_career_goal",
+    "wellbeing": "w_wb_goal", "cultural": "w_cultural_commitment",
+}
 
-def add_meeting(baseline: str, transcript: str, principles: str) -> dict:
+def section_baseline() -> dict:
+    g = st.session_state.get
+    def sect(main, *extra):
+        parts = [g(main, "")] + [g(e, "") for e in extra]
+        return " ".join(p for p in parts if p).strip()
+    return {
+        "goal1": sect("w_goal1_goal", "w_goal1_strengths", "w_goal1_learn", "w_goal1_support",
+                      "w_goal1_monitor", "w_goal1_evaluate"),
+        "goal2": sect("w_goal2_goal", "w_goal2_strengths", "w_goal2_learn", "w_goal2_support",
+                      "w_goal2_monitor", "w_goal2_evaluate"),
+        "career": sect("w_career_goal", "w_career_actions"),
+        "wellbeing": sect("w_wb_goal", "w_wb_actions"),
+        "cultural": sect("w_cultural_commitment"),
+    }
+
+def add_meeting(baseline: dict, transcript: str, principles: str) -> dict:
     system = (
-        "You are given (A) the CURRENT content of a staff member's PDP, field by field, and (B) a transcript "
-        "of a development conversation. For each field, return ONLY new elements raised in the conversation "
-        "that are NOT already captured in the current content. Never duplicate existing content. Ground "
-        "strictly in the transcript. If a field has nothing new, return an empty string. "
-        "Australian English, first person, 1-3 sentences each. "
+        "You are given (A) a staff member's EXISTING PDP content for each section, and (B) a transcript of a "
+        "development conversation about that plan. For EACH section, write an EXTENSION that builds on and "
+        "deepens the existing content using what was discussed — adding specific detail, examples, actions, "
+        "progress, timeframes, evidence or nuance that enrich and extend the existing goal. This should make "
+        "the goal more detailed and concrete. Do NOT restate the existing content; write the ADDITIONAL "
+        "detail that extends it, so it reads naturally as a continuation. Also fold in any genuinely new "
+        "points the conversation raised for that section. If the conversation adds nothing for a section, "
+        "return an empty string for it. Ground everything in the transcript; never invent. First person, "
+        "Australian English, warm and practical, 1-4 sentences each. "
         f"Where natural, connect to the 4 areas of impact ({AREAS_OF_IMPACT}) and guiding principles: {principles}. "
-        f"Field keys: {FIELD_KEY_LIST}. "
-        'Return ONLY JSON: {"additions":{"<key>":""...}}'
+        "Sections: goal1, goal2, career, wellbeing, cultural. "
+        'Return ONLY JSON: {"additions":{"goal1":"","goal2":"","career":"","wellbeing":"","cultural":""}}'
     )
-    user = "CURRENT PDP CONTENT:\n" + baseline + "\n\nCONVERSATION TRANSCRIPT:\n" + transcript
+    existing = "\n".join(f"[{k}] {v if v else '(empty)'}" for k, v in baseline.items())
+    user = "EXISTING PDP CONTENT BY SECTION:\n" + existing + "\n\nCONVERSATION TRANSCRIPT:\n" + transcript
     return groq_json(system, user)
 
 def apply_additions(parsed: dict):
     additions = parsed.get("additions", {}) or {}
-    for k, wk in KEY_MAP.items():
-        if additions.get(k):
-            st.session_state[wk + "__add"] = additions[k]
+    for sect, wk in SECTION_MAIN.items():
+        if additions.get(sect):
+            st.session_state[wk + "__add"] = additions[sect]
 
 # ── Save / load / export ──────────────────────────────────────────────────────
 def collect_plan() -> dict:
@@ -751,8 +766,8 @@ if add_clicked and _guard():
             st.info("The transcript was long, so it was trimmed to fit Groq's free-tier limit.")
         with st.spinner("Reading the conversation and finding what's new…"):
             try:
-                apply_additions(add_meeting(current_baseline(), t_in, st.session_state["principles"]))
-                st.success("Added. New points from the meeting are flagged in amber under each field below.")
+                apply_additions(add_meeting(section_baseline(), t_in, st.session_state["principles"]))
+                st.success("Added. Each section now has an amber extension drawing detail from the meeting.")
             except Exception as ex:
                 st.error(f"Couldn't add the meeting: {ex}. Try again or shorten the transcript.")
 
