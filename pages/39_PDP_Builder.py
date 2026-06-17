@@ -94,8 +94,17 @@ FIELD_KEYS = [
     "w_ref_emp6", "w_ref_ldr6", "w_ref_emp12", "w_ref_ldr12",
 ]
 ADD_KEYS = [wk + "__add" for wk in KEY_MAP.values()]
+# Every key whose value is part of the plan and must survive reruns
+PLAN_KEYS = FIELD_KEYS + ADD_KEYS + ["w_cultural_focus"]
 
 def seed_state():
+    # Restore any plan values that Streamlit garbage-collected when a widget
+    # wasn't rendered (e.g. after a rerun fired mid-script). The store is the
+    # source of truth and is refreshed at the end of every run.
+    store = st.session_state.setdefault("plan_store", {})
+    for k in PLAN_KEYS:
+        if k not in st.session_state and k in store:
+            st.session_state[k] = store[k]
     for k in FIELD_KEYS:
         if k not in st.session_state:
             st.session_state[k] = ""
@@ -690,8 +699,6 @@ if not has_prior:
 
 # ---- Step 2: transcript → additions ----
 st.markdown("**Step 2 — Add the development conversation**")
-if st.session_state.pop("_load_sample", False):
-    st.session_state["transcript"] = SAMPLE
 st.text_area("Conversation transcript or notes", key="transcript", height=180,
              placeholder="Paste the development conversation transcript or notes here…")
 
@@ -702,9 +709,9 @@ add_clicked = bc1.button("➕ Add meeting to the plan", type="primary", use_cont
 fresh_label = "✨ Draft fresh (replaces plan)" if plan_has_content else "✨ Draft fresh from transcript"
 fresh_disabled = plan_has_content and not st.session_state.get("confirm_replace", False)
 fresh_clicked = bc2.button(fresh_label, use_container_width=True, disabled=fresh_disabled)
-if bc3.button("Load sample transcript", use_container_width=True):
-    st.session_state["_load_sample"] = True
-    st.rerun()
+def _load_sample_cb():
+    st.session_state["transcript"] = SAMPLE
+bc3.button("Load sample transcript", use_container_width=True, on_click=_load_sample_cb)
 
 st.caption("**Add meeting** keeps everything already in the plan and layers the new points from the "
            "conversation on top (flagged in amber). This is the step to use after loading a PDP.")
@@ -731,8 +738,7 @@ if load_clicked and _guard():
     with st.spinner("Reading the uploaded PDP and filling the plan…"):
         try:
             apply_import(import_pdp(p_in))
-            st.success("Loaded. The existing plan content is in each field — review it, then add the meeting.")
-            st.rerun()
+            st.success("Loaded. The existing plan content is in each field below — review it, then add the meeting.")
         except Exception as ex:
             st.error(f"Couldn't read that PDP into the plan: {ex}. Try a .docx, or shorten it.")
 
@@ -746,8 +752,7 @@ if add_clicked and _guard():
         with st.spinner("Reading the conversation and finding what's new…"):
             try:
                 apply_additions(add_meeting(current_baseline(), t_in, st.session_state["principles"]))
-                st.success("Added. New points from the meeting are flagged in amber under each field.")
-                st.rerun()
+                st.success("Added. New points from the meeting are flagged in amber under each field below.")
             except Exception as ex:
                 st.error(f"Couldn't add the meeting: {ex}. Try again or shorten the transcript.")
 
@@ -762,9 +767,10 @@ if fresh_clicked and _guard():
             try:
                 apply_alignment(align_transcript(t_in, st.session_state["principles"]))
                 st.success("Drafted. Review and edit every field — it's your plan.")
-                st.rerun()
             except Exception as ex:
                 st.error(f"Couldn't draft from that transcript: {ex}. Try again or shorten it.")
+
+with st.expander("Strategy hooks (used by the alignment)"):
     st.markdown(f"**4 areas of impact:** {AREAS_OF_IMPACT}")
     st.text_area("Guiding principles — confirm wording against EDi", key="principles", height=120)
 
@@ -890,3 +896,9 @@ sc3.download_button("⬇️ Download Markdown", data=plan_to_markdown(),
 
 st.caption("Plans are stored privately against your staff name. Additions from the meeting are saved and "
            "exported with their amber 'Added from the meeting' label.")
+
+# Keep the persistent store in sync with the current field values (runs after all
+# widgets have rendered, so it captures both AI output and any manual edits).
+_store = st.session_state.setdefault("plan_store", {})
+for _k in PLAN_KEYS:
+    _store[_k] = st.session_state.get(_k, "")
