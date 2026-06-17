@@ -1620,7 +1620,27 @@ Format your response as clear sections with bullet points."""
                         else:
                             st.warning("Groq API not configured - showing transcript as-is")
                     except Exception as e:
-                        st.error(f"Error processing transcript: {e}")
+                        error_msg = str(e)
+                        if "rate_limit" in error_msg.lower() or "429" in error_msg:
+                            st.warning("⚠️ **Rate Limit Reached**")
+                            st.info("""
+The AI extraction service has reached its daily limit. 
+
+**Options:**
+1. **Try again later** - Limit resets in ~1 hour
+2. **Continue without AI** - Meeting tool works perfectly without extraction
+3. **Upgrade Groq tier** - https://console.groq.com/settings/billing
+
+You can still:
+✅ Add transcript
+✅ Write summary & actions
+✅ Download minutes
+✅ Archive meeting
+
+The AI extraction is optional!
+                            """)
+                        else:
+                            st.error(f"Error processing transcript: {e}")
         
         # DISPLAY EXTRACTED CONTENT
         if f"adhoc_extracted_{program}" in st.session_state:
