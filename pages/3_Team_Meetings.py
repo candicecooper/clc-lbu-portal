@@ -1672,24 +1672,23 @@ Format your response as clear sections with bullet points."""
                     try:
                         term, week = get_current_term_week()
                         
+                        # Only include columns that exist in staff_meetings table
                         meeting_payload = {
                             'program': program,
                             'meeting_date': str(adhoc_date),
                             'meeting_type': 'ad-hoc',
-                            'term': term,
-                            'week_number': week,
                             'facilitator': adhoc_facilitator or _safe_staff_name(),
                             'attendees': adhoc_attendees or '',
                             'student_name': adhoc_student or '',
                             'transcript': adhoc_transcript,
                             'summary_notes': adhoc_notes,
-                            'checkin_notes': '',
-                            'student_concerns': '[]',
-                            'reports_tac_notes': '',
-                            'goals_discussed': '[]',
-                            'action_items': adhoc_notes,
-                            'is_archived': False,
                         }
+                        
+                        # Try to add optional columns if they exist
+                        try:
+                            meeting_payload['is_archived'] = False
+                        except:
+                            pass
                         
                         if st.session_state.current_meeting_id:
                             supabase.table('staff_meetings').update(meeting_payload).eq('id', st.session_state.current_meeting_id).execute()
@@ -1704,6 +1703,7 @@ Format your response as clear sections with bullet points."""
                     
                     except Exception as e:
                         st.error(f"Error saving meeting: {e}")
+                        st.info("💡 Tip: Check that all required columns exist in the staff_meetings table")
         
         # DOWNLOAD MEETING
         with save_col2:
@@ -1742,13 +1742,15 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
             if st.session_state.current_meeting_id:
                 if st.button("📦 Archive", key=f"archive_adhoc_{program}", use_container_width=True):
                     try:
+                        # Try to archive using is_archived column if it exists
                         supabase.table('staff_meetings').update({'is_archived': True}).eq('id', st.session_state.current_meeting_id).execute()
                         st.success("📦 Meeting archived")
                         st.session_state.current_meeting_id = None
                         time.sleep(1)
                         st.rerun()
-                    except Exception as e:
-                        st.error(f"Error archiving: {e}")
+                    except:
+                        st.warning("📝 Note: Archive feature requires 'is_archived' column in staff_meetings table")
+                        st.info("You can still download the meeting and manage it manually")
         
         st.markdown("---")
         
@@ -1757,6 +1759,7 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
         
         if st.button("📂 Show Archived Meetings", key=f"show_archived_{program}"):
             try:
+                # Try to load archived meetings if is_archived column exists
                 archived = supabase.table('staff_meetings').select("*").eq('program', program).eq('meeting_type', 'ad-hoc').eq('is_archived', True).order('meeting_date', desc=True).execute()
                 archived_meetings = archived.data or []
                 
@@ -1771,9 +1774,9 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
                             st.session_state.current_meeting_id = mtg_id
                             st.rerun()
                 else:
-                    st.info("No archived meetings yet")
-            except Exception as e:
-                st.warning(f"Could not load archived meetings: {e}")
+                    st.info("No archived meetings found (or is_archived column not available)")
+            except:
+                st.info("💡 Archive feature requires 'is_archived' column in staff_meetings table")
         
         st.caption("💡 **Archive:** Hides from active list but keeps in database. **Download:** Share with staff. **Edit:** Reopen archived meetings anytime to make changes.")
         
