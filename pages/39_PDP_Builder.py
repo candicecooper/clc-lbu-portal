@@ -695,15 +695,25 @@ if st.session_state.pop("_load_sample", False):
 st.text_area("Conversation transcript or notes", key="transcript", height=180,
              placeholder="Paste the development conversation transcript or notes here…")
 
-bc1, bc2, bc3 = st.columns([1.6, 1.6, 2.0])
+plan_has_content = any(str(st.session_state.get(wk, "")).strip() for wk in KEY_MAP.values())
+
+bc1, bc2, bc3 = st.columns([1.7, 1.7, 1.6])
 add_clicked = bc1.button("➕ Add meeting to the plan", type="primary", use_container_width=True)
-fresh_clicked = bc2.button("✨ Draft fresh from transcript", use_container_width=True)
+fresh_label = "✨ Draft fresh (replaces plan)" if plan_has_content else "✨ Draft fresh from transcript"
+fresh_disabled = plan_has_content and not st.session_state.get("confirm_replace", False)
+fresh_clicked = bc2.button(fresh_label, use_container_width=True, disabled=fresh_disabled)
 if bc3.button("Load sample transcript", use_container_width=True):
     st.session_state["_load_sample"] = True
     st.rerun()
-st.caption("**Add meeting** layers new points from the conversation on top of what's already in the plan "
-           "(flagged in amber). **Draft fresh** ignores existing content and drafts every field from the "
-           "transcript alone.")
+
+st.caption("**Add meeting** keeps everything already in the plan and layers the new points from the "
+           "conversation on top (flagged in amber). This is the step to use after loading a PDP.")
+if plan_has_content:
+    st.checkbox("⚠️ Allow ‘Draft fresh’ to replace the loaded plan (this erases the imported content)",
+                key="confirm_replace")
+else:
+    st.caption("**Draft fresh** drafts every field from the transcript alone — use it when starting with "
+               "no prior PDP.")
 
 def _guard():
     if not GROQ_KEY:
