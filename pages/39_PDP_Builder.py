@@ -240,21 +240,33 @@ def trim(text: str, max_chars: int):
     marker = "\n\n[… middle trimmed to fit the free-tier limit …]\n\n"
     return text[:head] + marker + text[-tail:], True
 
+GROQ_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+
 def groq_json(system: str, user: str) -> dict:
     from groq import Groq
     client = Groq(api_key=GROQ_KEY)
-    resp = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        max_tokens=2500,
-        temperature=0.3,
-        response_format={"type": "json_object"},
-        messages=[{"role": "system", "content": system},
-                  {"role": "user", "content": user}],
-    )
-    txt = (resp.choices[0].message.content or "").strip()
-    txt = txt.replace("```json", "").replace("```", "").strip()
-    s, e = txt.find("{"), txt.rfind("}")
-    return json.loads(txt[s:e + 1])
+    last_err = None
+    for model in GROQ_MODELS:
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                max_tokens=2500,
+                temperature=0.3,
+                response_format={"type": "json_object"},
+                messages=[{"role": "system", "content": system},
+                          {"role": "user", "content": user}],
+            )
+            txt = (resp.choices[0].message.content or "").strip()
+            txt = txt.replace("```json", "").replace("```", "").strip()
+            s, e = txt.find("{"), txt.rfind("}")
+            return json.loads(txt[s:e + 1])
+        except Exception as ex:
+            last_err = ex
+            msg = str(ex).lower()
+            if "rate_limit" in msg or "429" in msg or "tokens per" in msg:
+                continue  # daily/minute limit on this model — try the lighter one
+            raise
+    raise last_err
 
 # ── Fresh draft from transcript only ──────────────────────────────────────────
 def align_transcript(transcript: str, principles: str) -> dict:
