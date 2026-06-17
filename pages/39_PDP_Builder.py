@@ -134,19 +134,93 @@ def extract_text(uploaded) -> str:
         return data.decode("utf-8", errors="ignore")
     if name.endswith(".docx"):
         from docx import Document
+        from docx.table import Table
+        from docx.text.paragraph import Paragraph
+        W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+        def wt(tag): return f"{{{W}}}{tag}"
         doc = Document(io.BytesIO(data))
-        parts = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
-        for tbl in doc.tables:
-            for row in tbl.rows:
-                for cell in row.cells:
-                    if cell.text.strip():
-                        parts.append(cell.text.strip())
-        return "\n".join(parts)
+        out, seen = [], set()
+        def add(block):
+            block = block.strip()
+            if block and block not in seen:
+                seen.add(block); out.append(block)
+        # 1) text boxes (where the DfE template stores typed answers)
+        for tx in doc.element.body.iter(wt('txbxContent')):
+            paras = []
+            for p in tx.iter(wt('p')):
+                txt = "".join(n.text for n in p.iter(wt('t')) if n.text).strip()
+                if txt:
+                    paras.append(txt)
+            add("\n".join(paras))
+        # 2) body paragraphs and tables (python-docx text excludes text boxes, so no overlap)
+        for child in doc.element.body.iterchildren():
+            if child.tag == wt('p'):
+                add(Paragraph(child, doc).text)
+            elif child.tag == wt('tbl'):
+                last = None
+                for row in Table(child, doc).rows:
+                    for cell in row.cells:
+                        tc = cell.text.strip()
+                        if tc and tc != last:
+                            add(tc); last = tc
+        return "\n".join(out)
     if name.endswith(".pdf"):
         from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(data))
         return "\n".join((pg.extract_text() or "") for pg in reader.pages)
     return data.decode("utf-8", errors="ignore")
+
+# ── Strip DfE template boilerplate, keep section markers + the person's answers ──
+_PDP_HEADINGS = {"goals", "career fulfilment", "my wellbeing", "my cultural responsiveness journey",
+                 "reflection overview", "goal 1", "goal 2", "knowing", "doing", "being",
+                 "at 6 months", "at 12 months"}
+_PDP_SKIP_EXACT = {"feedback and goal reflections", "areas of impact", "guiding principles",
+                   "preparing your pdp", "reflective practice", "employee summary", "leader summary",
+                   "resources on edi", "employee name", "leader name", "employee signature",
+                   "leader signature", "performance and development plan"}
+_PDP_BOILER = [
+    "the performance and development", "the pdp is", "the pdp framework", "your goals may relate",
+    "this goal provides", "knowing what you need to learn", "we are building a culturally",
+    "the 4 areas of impact", "each site will consider", "as you consider the goals",
+    "our 5 guiding principles", "as you work through", "you may even choose", "it's a deliberate shift",
+    "it is an ongoing cycle", "the 6 and 12 month", "outside of the goals", "use these questions",
+    "refer to page", "to what extent", "what (if anything)", "you can update your goals",
+    "identify goals that are achievable", "this area of the pdp", "being able to identify areas",
+    "it provides an opportunity", "it might help you formulate", "see how you can embed",
+    "when i feel at my best", "what's important for my own", "how can i contribute",
+    "what will i deliver", "what actions will i take", "what does career fulfilment",
+    "what aspects of my role", "how can you broaden", "how can you respond", "how can you strengthen",
+    "this template provides", "please ensure you create", "select 1 way", "how the pdp aligns",
+    "select the links", "what support do i need", "what do i need to learn", "what are my strengths",
+    "how will i monitor", "how will i evaluate", "what people, processes", "what current behaviours",
+    "what constructive feedback", "how will i know", "cultural responsiveness", "aboriginal learner",
+    "what did you", "where do you think", "what other achievements", "what have you learned",
+]
+
+def clean_pdp_text(raw: str) -> str:
+    kept, last_marker, seen = [], None, set()
+    for line in raw.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        low = line.lower().replace("\u2019", "'").rstrip(":")
+        if low in _PDP_HEADINGS:
+            marker = "## " + line.upper().rstrip(":")
+            if marker != last_marker:
+                kept.append(marker); last_marker = marker
+            continue
+        if line.endswith("?"):
+            continue
+        if low in _PDP_SKIP_EXACT:
+            continue
+        if any(low.startswith(s) for s in _PDP_BOILER):
+            continue
+        if len(line) < 12:
+            continue
+        if line in seen:
+            continue
+        seen.add(line); kept.append(line); last_marker = None  # allow a marker to recur after content
+    return "\n".join(kept)
 
 # ── Token-budget trimming (Groq free tier = 12k tokens/min) ───────────────────
 def trim(text: str, max_chars: int):
@@ -220,15 +294,32 @@ FIELD_KEY_LIST = (
     "career_goal, career_actions, wellbeing_goal, wellbeing_actions, cultural_commitment"
 )
 
+REFLECTION_MAP = {
+    "goal1_6m": "w_goal1_r6", "goal1_12m": "w_goal1_r12",
+    "goal2_6m": "w_goal2_r6", "goal2_12m": "w_goal2_r12",
+    "career_6m": "w_career_r6", "career_12m": "w_career_r12",
+    "wellbeing_6m": "w_wb_r6", "wellbeing_12m": "w_wb_r12",
+}
+
 # ── Step 1: load the uploaded PDP into the plan fields ────────────────────────
 def import_pdp(prior_text: str) -> dict:
     system = (
         "You are given the text of a completed Performance and Development Plan (PDP), extracted from a "
-        "Word or PDF template, so the layout may be rough. Map its content into the structured fields. "
-        "Use only what is in the document — if a field isn't present, return an empty string; never invent "
-        "content. Keep the wording close to the original, lightly tidied. Australian English. "
-        f"Field keys: {FIELD_KEY_LIST}. "
-        "Also return cultural_focus as Knowing|Doing|Being if the document indicates one, else empty. "
+        "Word template. Lines beginning with '##' are MARKERS: section markers (GOAL 1, GOAL 2, CAREER "
+        "FULFILMENT, MY WELLBEING, MY CULTURAL RESPONSIVENESS JOURNEY) and reflection markers (AT 6 MONTHS, "
+        "AT 12 MONTHS). Content after a marker belongs to it; an 'AT 6 MONTHS' block belongs to the most "
+        "recent goal/section. Map the staff member's written responses into the structured fields. "
+        "Use only what is in the document; if a section has no response, leave its fields empty; never invent. "
+        "Keep wording close to the original, lightly tidied. "
+        "Mapping hints: content about a teaching/learning program, student outcomes or skills is a goal; "
+        "content about future role, position, uncertainty about next year or career direction is career "
+        "fulfilment; content about feeling supported, lonely, grateful, or what someone enjoys at work is "
+        "wellbeing; content about Aboriginal students, cultural training or responsive practice is cultural. "
+        "Australian English. "
+        f"Goal/section field keys: {FIELD_KEY_LIST}. "
+        "Reflection field keys: goal1_6m, goal1_12m, goal2_6m, goal2_12m, career_6m, career_12m, "
+        "wellbeing_6m, wellbeing_12m. "
+        "Also return cultural_focus as Knowing|Doing|Being if indicated, else empty. "
         'Return ONLY JSON: {"cultural_focus":"","fields":{"<key>":""...}}'
     )
     return groq_json(system, "COMPLETED PDP DOCUMENT:\n\n" + prior_text)
@@ -236,6 +327,9 @@ def import_pdp(prior_text: str) -> dict:
 def apply_import(parsed: dict):
     fields = parsed.get("fields", {}) or {}
     for k, wk in KEY_MAP.items():
+        if fields.get(k):
+            st.session_state[wk] = fields[k]
+    for k, wk in REFLECTION_MAP.items():
         if fields.get(k):
             st.session_state[wk] = fields[k]
     if parsed.get("cultural_focus") in ("Knowing", "Doing", "Being"):
@@ -618,7 +712,10 @@ def _guard():
     return True
 
 if load_clicked and _guard():
-    p_in, p_trim = trim(st.session_state["prior_pdp_text"], 18000)
+    cleaned = clean_pdp_text(st.session_state["prior_pdp_text"])
+    if len(cleaned) < 30:  # cleaning stripped too much — fall back to raw text
+        cleaned = st.session_state["prior_pdp_text"]
+    p_in, p_trim = trim(cleaned, 18000)
     if p_trim:
         st.info("The uploaded PDP was long, so it was trimmed to fit Groq's free-tier limit.")
     with st.spinner("Reading the uploaded PDP and filling the plan…"):
