@@ -214,35 +214,64 @@ def apply_alignment(parsed: dict):
     if cult.get("commitment"):
         st.session_state["w_cultural_commitment"] = cult["commitment"]
 
-# ── Merge: keep prior PDP, add only what's new from the meeting ───────────────
-def merge_pdp(prior_text: str, transcript: str, principles: str) -> dict:
-    system = (
-        "You are given (A) a Performance and Development Plan a staff member drafted BEFORE a development "
-        "conversation, and (B) a transcript of that conversation. For each field, return two strings: "
-        "'existing' = the relevant content from the PRIOR plan, lightly tidied and NOT reworded; and "
-        "'additions' = ONLY new elements raised in the conversation that are not already in the prior plan. "
-        "Never duplicate prior content inside additions. Ground additions strictly in the transcript. "
-        "If a field has no new element, return its addition as an empty string. "
-        "Australian English, first person, each value 1-3 sentences. "
-        f"Where natural, connect to the 4 areas of impact ({AREAS_OF_IMPACT}) and guiding principles: {principles}. "
-        "Field keys: goal1_goal, goal1_strengths, goal1_learn_change, goal1_support, goal1_monitor, "
-        "goal1_evaluate, goal2_goal, goal2_strengths, goal2_learn_change, goal2_support, goal2_monitor, "
-        "goal2_evaluate, career_goal, career_actions, wellbeing_goal, wellbeing_actions, cultural_commitment. "
-        "Also return cultural_focus as one of Knowing|Doing|Being. "
-        'Return ONLY JSON: {"cultural_focus":"","existing":{"<key>":""...},"additions":{"<key>":""...}}'
-    )
-    user = "PRIOR PLAN:\n" + prior_text + "\n\nCONVERSATION TRANSCRIPT:\n" + transcript
-    return groq_json(system, user)
+FIELD_KEY_LIST = (
+    "goal1_goal, goal1_strengths, goal1_learn_change, goal1_support, goal1_monitor, goal1_evaluate, "
+    "goal2_goal, goal2_strengths, goal2_learn_change, goal2_support, goal2_monitor, goal2_evaluate, "
+    "career_goal, career_actions, wellbeing_goal, wellbeing_actions, cultural_commitment"
+)
 
-def apply_merge(parsed: dict):
-    existing = parsed.get("existing", {}) or {}
-    additions = parsed.get("additions", {}) or {}
+# ── Step 1: load the uploaded PDP into the plan fields ────────────────────────
+def import_pdp(prior_text: str) -> dict:
+    system = (
+        "You are given the text of a completed Performance and Development Plan (PDP), extracted from a "
+        "Word or PDF template, so the layout may be rough. Map its content into the structured fields. "
+        "Use only what is in the document — if a field isn't present, return an empty string; never invent "
+        "content. Keep the wording close to the original, lightly tidied. Australian English. "
+        f"Field keys: {FIELD_KEY_LIST}. "
+        "Also return cultural_focus as Knowing|Doing|Being if the document indicates one, else empty. "
+        'Return ONLY JSON: {"cultural_focus":"","fields":{"<key>":""...}}'
+    )
+    return groq_json(system, "COMPLETED PDP DOCUMENT:\n\n" + prior_text)
+
+def apply_import(parsed: dict):
+    fields = parsed.get("fields", {}) or {}
     for k, wk in KEY_MAP.items():
-        if existing.get(k):
-            st.session_state[wk] = existing[k]
-        st.session_state[wk + "__add"] = additions.get(k, "") or ""
+        if fields.get(k):
+            st.session_state[wk] = fields[k]
     if parsed.get("cultural_focus") in ("Knowing", "Doing", "Being"):
         st.session_state["w_cultural_focus"] = parsed["cultural_focus"]
+
+# ── Step 2: add only what's new in the meeting, on top of the current plan ────
+def current_baseline() -> str:
+    lines = []
+    for k, wk in KEY_MAP.items():
+        v = st.session_state.get(wk, "")
+        if v:
+            lines.append(f"{k}: {v}")
+    foc = st.session_state.get("w_cultural_focus", "")
+    if foc:
+        lines.append(f"cultural_focus: {foc}")
+    return "\n".join(lines) if lines else "(the plan is currently empty)"
+
+def add_meeting(baseline: str, transcript: str, principles: str) -> dict:
+    system = (
+        "You are given (A) the CURRENT content of a staff member's PDP, field by field, and (B) a transcript "
+        "of a development conversation. For each field, return ONLY new elements raised in the conversation "
+        "that are NOT already captured in the current content. Never duplicate existing content. Ground "
+        "strictly in the transcript. If a field has nothing new, return an empty string. "
+        "Australian English, first person, 1-3 sentences each. "
+        f"Where natural, connect to the 4 areas of impact ({AREAS_OF_IMPACT}) and guiding principles: {principles}. "
+        f"Field keys: {FIELD_KEY_LIST}. "
+        'Return ONLY JSON: {"additions":{"<key>":""...}}'
+    )
+    user = "CURRENT PDP CONTENT:\n" + baseline + "\n\nCONVERSATION TRANSCRIPT:\n" + transcript
+    return groq_json(system, user)
+
+def apply_additions(parsed: dict):
+    additions = parsed.get("additions", {}) or {}
+    for k, wk in KEY_MAP.items():
+        if additions.get(k):
+            st.session_state[wk + "__add"] = additions[k]
 
 # ── Save / load / export ──────────────────────────────────────────────────────
 def collect_plan() -> dict:
@@ -543,66 +572,92 @@ c2.text_input("Leader name", key="w_ldr")
 c3.text_input("Date", key="w_date")
 
 # ── Engine ────────────────────────────────────────────────────────────────────
-st.markdown("### Build from a conversation")
+st.markdown("### Build the plan")
 
+has_prior = bool(st.session_state["prior_pdp_text"].strip())
+
+# ---- Step 1: prior PDP → fields ----
+st.markdown("**Step 1 — Start from the existing PDP** (optional)")
 up = st.file_uploader(
-    "Optional: upload the PDP drafted before the meeting (Word, PDF or text). "
-    "Leave empty to draft a fresh plan from the transcript.",
+    "Upload the PDP drafted before the meeting (Word, PDF or text). Skip this to draft fresh from the transcript.",
     type=["docx", "pdf", "txt", "md"])
 if up is not None:
     try:
         st.session_state["prior_pdp_text"] = extract_text(up)
-        st.caption(f"✅ Loaded prior PDP — {len(st.session_state['prior_pdp_text'])} characters read.")
+        has_prior = bool(st.session_state["prior_pdp_text"].strip())
+        st.caption(f"✅ File read — {len(st.session_state['prior_pdp_text'])} characters. "
+                   f"Now load it into the plan.")
     except Exception as ex:
         st.error(f"Couldn't read that file: {ex}. A .docx or .txt usually works best.")
 
+load_clicked = st.button("📥 Load prior PDP into the plan", use_container_width=False, disabled=not has_prior)
+if not has_prior:
+    st.caption("Upload a file above to enable this.")
+
+# ---- Step 2: transcript → additions ----
+st.markdown("**Step 2 — Add the development conversation**")
 if st.session_state.pop("_load_sample", False):
     st.session_state["transcript"] = SAMPLE
-
 st.text_area("Conversation transcript or notes", key="transcript", height=180,
              placeholder="Paste the development conversation transcript or notes here…")
 
-bc1, bc2, bc3 = st.columns([1.3, 1.3, 2.4])
-fresh_clicked = bc1.button("✨ Draft fresh from transcript", type="primary", use_container_width=True)
-has_prior = bool(st.session_state["prior_pdp_text"].strip())
-merge_clicked = bc2.button("➕ Merge meeting into prior PDP", use_container_width=True, disabled=not has_prior)
+bc1, bc2, bc3 = st.columns([1.6, 1.6, 2.0])
+add_clicked = bc1.button("➕ Add meeting to the plan", type="primary", use_container_width=True)
+fresh_clicked = bc2.button("✨ Draft fresh from transcript", use_container_width=True)
 if bc3.button("Load sample transcript", use_container_width=True):
     st.session_state["_load_sample"] = True
     st.rerun()
-if not has_prior:
-    bc2.caption("Upload a prior PDP above to enable merge.")
+st.caption("**Add meeting** layers new points from the conversation on top of what's already in the plan "
+           "(flagged in amber). **Draft fresh** ignores existing content and drafts every field from the "
+           "transcript alone.")
 
-def _run(kind):
-    if not st.session_state["transcript"].strip():
-        st.warning("Paste a transcript first.")
-        return
+def _guard():
     if not GROQ_KEY:
         st.error("No Groq API key found in secrets — add GROQ_API_KEY. You can still complete the plan manually.")
-        return
-    tcap = 16000 if kind == "merge" else 28000
-    t_in, t_trim = trim(st.session_state["transcript"], tcap)
-    p_in, p_trim = (trim(st.session_state["prior_pdp_text"], 8000) if kind == "merge" else ("", False))
-    if t_trim or p_trim:
-        st.info("Input was long, so it was trimmed to fit Groq's free-tier limit. For full coverage, run it "
-                "in halves or upgrade your Groq tier.")
-    with st.spinner("Reading the conversation and drafting each section…"):
+        return False
+    return True
+
+if load_clicked and _guard():
+    p_in, p_trim = trim(st.session_state["prior_pdp_text"], 18000)
+    if p_trim:
+        st.info("The uploaded PDP was long, so it was trimmed to fit Groq's free-tier limit.")
+    with st.spinner("Reading the uploaded PDP and filling the plan…"):
         try:
-            if kind == "merge":
-                apply_merge(merge_pdp(p_in, t_in, st.session_state["principles"]))
-                st.success("Merged. New elements from the meeting are flagged in amber under each field.")
-            else:
-                apply_alignment(align_transcript(t_in, st.session_state["principles"]))
-                st.success("Drafted. Review and edit every field — it's your plan.")
+            apply_import(import_pdp(p_in))
+            st.success("Loaded. The existing plan content is in each field — review it, then add the meeting.")
             st.rerun()
         except Exception as ex:
-            st.error(f"Couldn't draft from that input: {ex}. Try again or shorten it.")
+            st.error(f"Couldn't read that PDP into the plan: {ex}. Try a .docx, or shorten it.")
 
-if fresh_clicked:
-    _run("fresh")
-if merge_clicked:
-    _run("merge")
+if add_clicked and _guard():
+    if not st.session_state["transcript"].strip():
+        st.warning("Paste a transcript first.")
+    else:
+        t_in, t_trim = trim(st.session_state["transcript"], 20000)
+        if t_trim:
+            st.info("The transcript was long, so it was trimmed to fit Groq's free-tier limit.")
+        with st.spinner("Reading the conversation and finding what's new…"):
+            try:
+                apply_additions(add_meeting(current_baseline(), t_in, st.session_state["principles"]))
+                st.success("Added. New points from the meeting are flagged in amber under each field.")
+                st.rerun()
+            except Exception as ex:
+                st.error(f"Couldn't add the meeting: {ex}. Try again or shorten the transcript.")
 
-with st.expander("Strategy hooks (used by the alignment)"):
+if fresh_clicked and _guard():
+    if not st.session_state["transcript"].strip():
+        st.warning("Paste a transcript first.")
+    else:
+        t_in, t_trim = trim(st.session_state["transcript"], 28000)
+        if t_trim:
+            st.info("The transcript was long, so it was trimmed to fit Groq's free-tier limit.")
+        with st.spinner("Drafting each section from the transcript…"):
+            try:
+                apply_alignment(align_transcript(t_in, st.session_state["principles"]))
+                st.success("Drafted. Review and edit every field — it's your plan.")
+                st.rerun()
+            except Exception as ex:
+                st.error(f"Couldn't draft from that transcript: {ex}. Try again or shorten it.")
     st.markdown(f"**4 areas of impact:** {AREAS_OF_IMPACT}")
     st.text_area("Guiding principles — confirm wording against EDi", key="principles", height=120)
 
