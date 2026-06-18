@@ -13,8 +13,10 @@ automatically. Nothing else needs to change.
 """
 
 import streamlit as st
-from auth import require_auth
 from io import BytesIO
+
+# NOTE: This page is intentionally open — no login required.
+# (require_auth() is deliberately omitted so staff can reach it without a password.)
 
 # python-docx is used to generate printable Word copies at runtime.
 # If it isn't installed, the page still works — the download button is
@@ -29,7 +31,6 @@ except Exception:
     DOCX_AVAILABLE = False
 
 st.set_page_config(page_title="Staff Reference | CLC-LBU", page_icon="📚", layout="wide")
-require_auth()
 
 # ──────────────────────────────────────────────────────────────────────────
 # Branding / styling
