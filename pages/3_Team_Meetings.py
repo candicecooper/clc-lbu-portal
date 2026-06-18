@@ -1565,6 +1565,17 @@ def render_program_meeting(program):
                         
                         with col3:
                             if st.button("📥 Minutes", key=f"dl_active_{mtg_id}", use_container_width=True):
+                                # Use extracted notes if available, otherwise use summary
+                                extracted = mtg.get('extracted_notes', '')
+                                summary = mtg.get('summary_notes', '')
+                                
+                                if extracted:
+                                    main_content = extracted
+                                    content_label = "EXTRACTED KEY POINTS & DECISIONS"
+                                else:
+                                    main_content = summary
+                                    content_label = "SUMMARY & ACTION ITEMS"
+                                
                                 minutes_text = f"""TEAM MEETING MINUTES
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1576,13 +1587,13 @@ Facilitator:    {mtg_facilitator}
 Attendees:      {mtg.get('attendees', '')}
 Student(s):     {mtg_student}
 
-MEETING TRANSCRIPT / DISCUSSION
+{content_label}
+───────────────────────────────────────────────────────────────────────────────
+{main_content}
+
+FULL DISCUSSION TRANSCRIPT (for reference)
 ───────────────────────────────────────────────────────────────────────────────
 {mtg.get('transcript', '')}
-
-SUMMARY, DECISIONS & ACTION ITEMS
-───────────────────────────────────────────────────────────────────────────────
-{mtg.get('summary_notes', '')}
 
 ═══════════════════════════════════════════════════════════════════════════════
 Minutes Generated: {datetime.datetime.now().strftime('%A, %d %B %Y at %I:%M %p')}
@@ -1645,13 +1656,13 @@ Facilitator:    {mtg_facilitator}
 Attendees:      {mtg.get('attendees', '')}
 Student(s):     {mtg_student}
 
-MEETING TRANSCRIPT / DISCUSSION
+EXTRACTED KEY POINTS & DECISIONS
+───────────────────────────────────────────────────────────────────────────────
+{mtg.get('extracted_notes', '') or mtg.get('summary_notes', '')}
+
+FULL DISCUSSION TRANSCRIPT (for reference)
 ───────────────────────────────────────────────────────────────────────────────
 {mtg.get('transcript', '')}
-
-SUMMARY, DECISIONS & ACTION ITEMS
-───────────────────────────────────────────────────────────────────────────────
-{mtg.get('summary_notes', '')}
 
 ═══════════════════════════════════════════════════════════════════════════════
 Minutes Generated: {datetime.datetime.now().strftime('%A, %d %B %Y at %I:%M %p')}
@@ -1780,7 +1791,16 @@ Format your response as clear sections with bullet points."""
                             
                             extracted = response.choices[0].message.content
                             st.session_state[f"adhoc_extracted_{program}"] = extracted
-                            st.success("✅ Extracted!")
+                            
+                            # Save to database if meeting is loaded
+                            if st.session_state.current_meeting_id:
+                                try:
+                                    supabase.table('team_meetings').update({'extracted_notes': extracted}).eq('id', st.session_state.current_meeting_id).execute()
+                                    st.success("✅ Extracted & Saved to Database!")
+                                except Exception as e:
+                                    st.success("✅ Extracted! (Save meeting to persist to database)")
+                            else:
+                                st.info("💡 Tip: Save your meeting first, then re-run extraction to save it to the database")
                         else:
                             st.warning("Groq API not configured - showing transcript as-is")
                     except Exception as e:
@@ -1942,6 +1962,16 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
                         mtg = mtg_result.data[0]
                         
                         # Create formatted minutes
+                        extracted = mtg.get('extracted_notes', '')
+                        summary = mtg.get('summary_notes', '')
+                        
+                        if extracted:
+                            main_content = extracted
+                            content_label = "EXTRACTED KEY POINTS & DECISIONS"
+                        else:
+                            main_content = summary
+                            content_label = "SUMMARY & ACTION ITEMS"
+                        
                         minutes_text = f"""TEAM MEETING MINUTES
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1953,13 +1983,13 @@ Facilitator:    {mtg.get('facilitator', '')}
 Attendees:      {mtg.get('attendees', '')}
 Student(s):     {mtg.get('student_name', '')}
 
-MEETING TRANSCRIPT / DISCUSSION
+{content_label}
+───────────────────────────────────────────────────────────────────────────────
+{main_content}
+
+FULL DISCUSSION TRANSCRIPT (for reference)
 ───────────────────────────────────────────────────────────────────────────────
 {mtg.get('transcript', '')}
-
-SUMMARY, DECISIONS & ACTION ITEMS
-───────────────────────────────────────────────────────────────────────────────
-{mtg.get('summary_notes', '')}
 
 ═══════════════════════════════════════════════════════════════════════════════
 Minutes Generated: {datetime.datetime.now().strftime('%A, %d %B %Y at %I:%M %p')}
