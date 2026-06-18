@@ -164,10 +164,11 @@ def get_sa_week(d: date) -> int:
 # ══════════════════════════════════════════════════════════════════════════════
 # EDITIONS
 # ══════════════════════════════════════════════════════════════════════════════
-def db_get_or_create_edition():
+def db_get_or_create_edition(monday: date = None):
     try:
         sb     = get_sb()
-        monday = target_monday()
+        if monday is None:
+            monday = target_monday()
         label  = edition_week_label(monday)
         res    = sb.table("weekly_editions").select("*").eq("week_start", monday.isoformat()).execute()
         if res.data:
@@ -241,26 +242,6 @@ def db_get_all_editions():
     try:
         res = get_sb().table("weekly_editions").select("*").order("week_start", desc=True).execute()
         return res.data or []
-    except Exception:
-        return []
-
-def load_upcoming_nit_bookings():
-    """Load NIT bookings for the next 2 weeks"""
-    try:
-        from datetime import timedelta
-        today = adl_today()
-        two_weeks = today + timedelta(weeks=2)
-        sb = get_sb()
-        response = sb.table("nit_bookings").select("*").eq("status", "booked").gte("booking_date", str(today)).lte("booking_date", str(two_weeks)).execute()
-        if response.data:
-            import pandas as pd
-            df = pd.DataFrame(response.data)
-            df['booking_date'] = pd.to_datetime(df['booking_date']).dt.date
-            slot_order = {"Monday 1:45pm": 1, "Tuesday 1:45pm": 2, "Thursday 2:15pm": 3}
-            df['slot_sort'] = df['time_slot'].map(lambda x: slot_order.get(x, 99))
-            df = df.sort_values(['booking_date', 'slot_sort'])
-            return df.to_dict('records')
-        return []
     except Exception:
         return []
 
@@ -689,31 +670,6 @@ def nav_bar(active):
                 nav(view)
     st.write("")
 
-def render_nit_bookings_section():
-    """Render the NIT bookings section in the Staff Bulletin"""
-    try:
-        nit_bookings = load_upcoming_nit_bookings()
-        if not nit_bookings:
-            return
-        st.markdown('<div style="background:linear-gradient(135deg,#1A7A6E,#2d9e7d);border-radius:12px;padding:18px 24px;margin:24px 0;"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:rgba(255,255,255,0.6);margin-bottom:6px;">NIT Time Bookings</div><div style="font-size:20px;font-weight:800;color:white;">📅 Upcoming Additional NIT</div><div style="font-size:13px;color:rgba(255,255,255,0.7);margin-top:4px;">Next 2 weeks · Staff can book via portal</div></div>', unsafe_allow_html=True)
-        from collections import defaultdict
-        by_date = defaultdict(list)
-        for booking in nit_bookings:
-            by_date[booking['booking_date']].append(booking)
-        for booking_date in sorted(by_date.keys()):
-            date_bookings = by_date[booking_date]
-            day_name = booking_date.strftime("%A")
-            date_str = booking_date.strftime("%-d %B")
-            st.markdown(f'<div style="font-size:14px;font-weight:700;color:var(--ink);margin:16px 0 8px 0;padding-bottom:4px;border-bottom:2px solid var(--border);">{day_name}, {date_str}</div>', unsafe_allow_html=True)
-            for booking in date_bookings:
-                time_slot = booking['time_slot']
-                staff_name = booking['staff_name']
-                st.markdown(f'<div style="background:#FFF3E0;border-left:3px solid #C8760A;border-radius:8px;padding:12px 16px;margin-bottom:8px;"><div style="font-weight:700;color:#C8760A;font-size:14px;">🕐 {time_slot}</div><div style="font-size:13px;color:#8c6a4f;margin-top:4px;">{staff_name}</div></div>', unsafe_allow_html=True)
-        st.markdown('<div style="text-align:center;margin-top:16px;padding-top:12px;border-top:1px solid var(--border);"><a href="/NIT_Bookings" target="_self" style="color:#1A7A6E;text-decoration:none;font-weight:600;font-size:13px;">📌 View or Book NIT Time →</a></div>', unsafe_allow_html=True)
-        st.write("")
-    except Exception:
-        pass
-
 def render_bulletin(edition, show_ack=True):
     notices = db_get_notices(edition["id"])
     acked   = has_acked_edition(edition["id"], st.session_state.staff_name)
@@ -768,9 +724,6 @@ def render_bulletin(edition, show_ack=True):
             + body + '</div></div>',
             unsafe_allow_html=True
         )
-
-    st.write("")
-    render_nit_bookings_section()
 
     if show_ack:
         st.write("")
@@ -1013,9 +966,40 @@ def show_compose():
         st.error("Admin access only.")
         return
 
-    edition = db_get_or_create_edition()
+    # ── Week navigator ────────────────────────────────────────────────────────
+    # Default to current/upcoming Monday, but admin can move to any week
+    if "compose_monday" not in st.session_state:
+        st.session_state.compose_monday = target_monday()
+
+    current = st.session_state.compose_monday
+    nav_l, nav_mid, nav_r = st.columns([1, 4, 1])
+    with nav_l:
+        if st.button("◀ Prev week", use_container_width=True):
+            st.session_state.compose_monday = current - timedelta(weeks=1)
+            st.rerun()
+    with nav_mid:
+        st.markdown(
+            f'<div style="text-align:center;font-weight:600;font-size:15px;'
+            f'padding:6px 0;color:var(--teal);">'
+            f'{edition_week_label(current)}</div>',
+            unsafe_allow_html=True
+        )
+    with nav_r:
+        if st.button("Next week ▶", use_container_width=True):
+            st.session_state.compose_monday = current + timedelta(weeks=1)
+            st.rerun()
+    # Jump-to picker
+    with st.expander("📅 Jump to a specific week", expanded=False):
+        picked = st.date_input("Pick any date in that week", value=current, key="week_jump")
+        if st.button("Go to this week", key="week_jump_btn"):
+            # Snap to Monday of picked week
+            st.session_state.compose_monday = picked - timedelta(days=picked.weekday())
+            st.rerun()
+    st.markdown("---")
+
+    edition = db_get_or_create_edition(st.session_state.compose_monday)
     if not edition:
-        st.error("Could not load current edition. Check Supabase connection.")
+        st.error("Could not load edition. Check Supabase connection.")
         return
 
     notices  = db_get_notices(edition["id"])
