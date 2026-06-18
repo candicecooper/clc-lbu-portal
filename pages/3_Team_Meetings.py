@@ -1596,7 +1596,44 @@ def render_program_meeting(program):
         # AD-HOC MEETING WITH TRANSCRIPT SUPPORT
         # ────────────────────────────────────────────────────────────────────────────
         
-        # LOAD EXISTING AD-HOC MEETINGS
+        # DEBUG PANEL - SHOW WHAT'S IN DATABASE
+        st.warning("🔍 **DEBUG MODE** - Checking what's saved in database...")
+        
+        if st.session_state.current_meeting_id:
+            try:
+                debug_result = supabase.table('team_meetings').select("*").eq('id', st.session_state.current_meeting_id).execute()
+                if debug_result.data:
+                    debug_mtg = debug_result.data[0]
+                    
+                    col_d1, col_d2, col_d3 = st.columns(3)
+                    with col_d1:
+                        st.metric("Extracted Notes", "✅ YES" if debug_mtg.get('extracted_notes') and debug_mtg.get('extracted_notes').strip() else "❌ EMPTY")
+                    with col_d2:
+                        st.metric("Summary Notes", "✅ YES" if debug_mtg.get('summary_notes') and debug_mtg.get('summary_notes').strip() else "❌ EMPTY")
+                    with col_d3:
+                        trans_len = len(debug_mtg.get('transcript', ''))
+                        st.metric("Transcript Length", f"{trans_len} chars")
+                    
+                    if not debug_mtg.get('extracted_notes') or not debug_mtg.get('extracted_notes').strip():
+                        st.error("""
+❌ **EXTRACTED NOTES ARE EMPTY**
+
+**Fix:** 
+1. Make sure transcript is in the form above
+2. Click [🤖 Extract Key Points] button
+3. Wait for ✅ Extracted & Saved message
+4. Then download minutes
+
+The Word document will ONLY show the extracted summary if extracted_notes is saved!
+                        """)
+                    else:
+                        st.success(f"✅ **Extracted notes ARE saved!** ({len(debug_mtg.get('extracted_notes'))} chars)")
+            except Exception as e:
+                st.info(f"Debug check: {e}")
+        else:
+            st.info("💡 Load a meeting first to see debug info")
+        
+        st.markdown("---")
         st.markdown("#### 📚 Saved & Archived Ad-Hoc Meetings")
         
         # Tabs for Active vs Archived
