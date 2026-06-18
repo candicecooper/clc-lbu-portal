@@ -502,24 +502,26 @@ def build_docx(data, meta, approved_indices):
 # ---------------------------------------------------------------------------
 # Helpers: Supabase persistence (optional)
 # ---------------------------------------------------------------------------
-def save_meeting(meta, data):
+def save_meeting(meta, data, approved_indices):
     sb = get_supabase()
     if sb is None:
         return False, "Supabase not configured — saved to this session only."
     try:
+        payload = dict(data)
+        payload["_approved_indices"] = sorted(list(approved_indices))
         sb.table(SUPABASE_TABLE).insert({
             "meeting_date": meta.get("date") or None,
             "chair": meta.get("chair") or None,
             "summary": data.get("summary", ""),
-            "payload": data,
+            "payload": payload,
             "created_at": datetime.utcnow().isoformat(),
         }).execute()
-        return True, "Saved to Supabase."
+        return True, "Saved to the archive."
     except Exception as e:
         return False, f"Could not save: {e}"
 
 
-def load_recent_meetings(limit=10):
+def load_recent_meetings(limit=25):
     sb = get_supabase()
     if sb is None:
         return []
@@ -531,6 +533,30 @@ def load_recent_meetings(limit=10):
         return res.data or []
     except Exception:
         return []
+
+
+def load_meeting_full(meeting_id):
+    """Return the full saved row (incl. payload) for one archived meeting."""
+    sb = get_supabase()
+    if sb is None:
+        return None
+    try:
+        res = (sb.table(SUPABASE_TABLE)
+               .select("*")
+               .eq("id", meeting_id)
+               .limit(1).execute())
+        rows = res.data or []
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Archive password gate
+# ---------------------------------------------------------------------------
+def get_archive_password():
+    """Password for viewing archived meetings. Set ARCHIVE_PASSWORD in secrets."""
+    return get_secret("ARCHIVE_PASSWORD") or "change-me"
 
 
 # ---------------------------------------------------------------------------
@@ -723,14 +749,107 @@ if data:
         else:
             st.caption("Add `python-docx` to requirements.txt to enable Word export.")
     with e2:
-        if st.button("💾 Save to portal"):
-            ok, msg = save_meeting(meta, data)
+        if st.button("💾 Save to archive"):
+            ok, msg = save_meeting(meta, data, approved_indices)
             (st.success if ok else st.info)(msg)
 
-recent = load_recent_meetings()
-if recent:
-    st.divider()
-    st.subheader("Recent saved meetings")
-    for m in recent:
-        when = m.get("meeting_date") or (m.get("created_at", "")[:10])
-        st.markdown(f"**{when}** — {(m.get('summary','') or '')[:140]}…")
+# ---------------------------------------------------------------------------
+# Archived meetings — password protected
+# ---------------------------------------------------------------------------
+st.divider()
+st.header("🔒 Archived meetings")
+
+if get_supabase() is None:
+    st.caption("Saving/archiving is off — add your Supabase keys to enable it.")
+else:
+    if "archive_unlocked" not in st.session_state:
+        st.session_state.archive_unlocked = False
+
+    if not st.session_state.archive_unlocked:
+        st.caption("These records can include confidential, manager-only notes. "
+                   "Enter the access code to view them.")
+        pw = st.text_input("Access code", type="password", key="archive_pw")
+        cols = st.columns([1, 5])
+        with cols[0]:
+            if st.button("Unlock"):
+                if pw and pw == get_archive_password():
+                    st.session_state.archive_unlocked = True
+                    st.rerun()
+                else:
+                    st.error("Incorrect access code.")
+        if get_archive_password() == "change-me":
+            st.warning("No archive password set. Add **ARCHIVE_PASSWORD** to your "
+                       "app secrets — until then the code is `change-me`.")
+    else:
+        top = st.columns([1, 5])
+        with top[0]:
+            if st.button("🔒 Lock"):
+                st.session_state.archive_unlocked = False
+                st.rerun()
+
+        meetings = load_recent_meetings()
+        if not meetings:
+            st.caption("No saved meetings yet.")
+        else:
+            def label_for(m):
+                when = m.get("meeting_date") or (m.get("created_at", "")[:10])
+                snip = (m.get("summary", "") or "")[:60]
+                return f"{when} — {snip}…"
+
+            options = {label_for(m): m["id"] for m in meetings}
+            choice = st.selectbox("Select a meeting", list(options.keys()))
+            row = load_meeting_full(options[choice]) if choice else None
+
+            if row:
+                payload = row.get("payload", {}) or {}
+                approved = set(payload.get("_approved_indices", []))
+                a_meta = {
+                    "date": (payload.get("meeting_meta", {}) or {}).get("date", ""),
+                    "chair": (payload.get("meeting_meta", {}) or {}).get("chair", "Susan Furga"),
+                    "attendees": (payload.get("meeting_meta", {}) or {}).get("attendees", ""),
+                    "apologies": (payload.get("meeting_meta", {}) or {}).get("apologies", ""),
+                }
+
+                st.subheader("Summary")
+                st.write(payload.get("summary", ""))
+
+                a_actions = payload.get("actions", []) or []
+                if a_actions:
+                    st.subheader("Actions")
+                    st.table([
+                        {"Owner": a.get("owner", ""),
+                         "Action": a.get("action", ""),
+                         "Due": a.get("due", "TBC")}
+                        for a in a_actions
+                    ])
+
+                a_share = payload.get("share_with_staff", []) or []
+                shared = [s for i, s in enumerate(a_share) if i in approved]
+                held = [s for i, s in enumerate(a_share) if i not in approved]
+                if shared:
+                    st.subheader("📣 Shared with staff")
+                    for s in shared:
+                        st.markdown(f"- **{s.get('item','')}** — "
+                                    f"{s.get('staff_safe_wording') or s.get('item','')}")
+                if held:
+                    st.subheader("🔒 Confidential — not shared")
+                    for s in held:
+                        st.markdown(
+                            f"""<div style="background:#FBEAEA;border-left:5px solid #C0392B;
+                            padding:8px 12px;border-radius:6px;margin:5px 0;">
+                            <strong>{s.get('item','')}</strong><br>
+                            {s.get('raw_note') or ''}<br>
+                            <em style="font-size:0.85em;color:#555;">Why held: {s.get('reason','')}</em>
+                            </div>""",
+                            unsafe_allow_html=True,
+                        )
+
+                if DOCX_LIB:
+                    buf2 = build_docx(payload, a_meta, approved)
+                    stamp2 = (a_meta["date"] or row.get("created_at", "")[:10] or
+                              date.today().isoformat()).replace(".", "-").replace("/", "-")
+                    st.download_button(
+                        "⬇ Re-download Word summary", data=buf2,
+                        file_name=f"LC_meeting_summary_{stamp2}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key="archive_download")
