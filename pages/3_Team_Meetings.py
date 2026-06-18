@@ -842,6 +842,71 @@ def build_minutes_docx(md, program):
     return buf
 
 # ─────────────────────────────────────────────────────────────────────────────
+# WORD DOCUMENT GENERATION FOR MEETING MINUTES
+# ─────────────────────────────────────────────────────────────────────────────
+
+def generate_minutes_docx(program, meeting_date, facilitator, attendees, extracted_notes, summary_notes, transcript):
+    """Generate professional Word document for meeting minutes"""
+    doc = Document()
+    
+    # Title
+    title = doc.add_heading('TEAM MEETING MINUTES', 0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    
+    # Meeting Details Section
+    details_heading = doc.add_heading('Meeting Details', level=1)
+    details_heading.style.font.color.rgb = RGBColor(0, 51, 102)
+    
+    details_table = doc.add_table(rows=4, cols=2)
+    details_table.style = 'Light Grid Accent 1'
+    
+    details_table.rows[0].cells[0].text = 'Program:'
+    details_table.rows[0].cells[1].text = program or ''
+    details_table.rows[1].cells[0].text = 'Date:'
+    details_table.rows[1].cells[1].text = str(meeting_date)
+    details_table.rows[2].cells[0].text = 'Facilitator:'
+    details_table.rows[2].cells[1].text = facilitator or ''
+    details_table.rows[3].cells[0].text = 'Attendees:'
+    details_table.rows[3].cells[1].text = attendees or ''
+    
+    for row in details_table.rows:
+        row.cells[0].paragraphs[0].runs[0].bold = True
+    
+    doc.add_paragraph()
+    
+    # Main Content
+    if extracted_notes and extracted_notes.strip():
+        content_heading = doc.add_heading('Key Points & Decisions', level=1)
+        content_heading.style.font.color.rgb = RGBColor(0, 51, 102)
+        doc.add_paragraph(extracted_notes)
+    elif summary_notes and summary_notes.strip():
+        content_heading = doc.add_heading('Summary & Action Items', level=1)
+        content_heading.style.font.color.rgb = RGBColor(0, 51, 102)
+        doc.add_paragraph(summary_notes)
+    else:
+        no_content = doc.add_paragraph('No summary or extracted content available')
+        no_content.runs[0].italic = True
+    
+    doc.add_paragraph()
+    
+    if transcript and transcript.strip():
+        transcript_heading = doc.add_heading('Full Discussion Transcript', level=2)
+        transcript_heading.style.font.color.rgb = RGBColor(102, 102, 102)
+        transcript_para = doc.add_paragraph(transcript)
+        transcript_para.runs[0].font.size = Pt(10)
+        transcript_para.runs[0].italic = True
+    
+    doc.add_paragraph()
+    
+    footer = doc.add_paragraph()
+    footer.paragraph_format.space_before = Pt(12)
+    footer_text = f"Minutes Generated: {datetime.datetime.now().strftime('%A, %d %B %Y at %I:%M %p')}"
+    footer.add_run(footer_text).italic = True
+    footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    
+    return doc
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SPECIALIST PROGRAM MEETING (single template - not Week A/B)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1572,47 +1637,27 @@ def render_program_meeting(program):
                                 except:
                                     pass
                                 
-                                # Use extracted notes if available, otherwise use summary
-                                extracted = mtg.get('extracted_notes', '')
-                                summary = mtg.get('summary_notes', '')
+                                # Generate Word document
+                                doc = generate_minutes_docx(
+                                    program=program,
+                                    meeting_date=mtg_date,
+                                    facilitator=mtg_facilitator,
+                                    attendees=mtg.get('attendees', ''),
+                                    extracted_notes=mtg.get('extracted_notes', ''),
+                                    summary_notes=mtg.get('summary_notes', ''),
+                                    transcript=mtg.get('transcript', '')
+                                )
                                 
-                                if extracted and extracted.strip():
-                                    main_content = extracted
-                                    content_label = "EXTRACTED KEY POINTS & DECISIONS"
-                                elif summary and summary.strip():
-                                    main_content = summary
-                                    content_label = "SUMMARY & ACTION ITEMS"
-                                else:
-                                    main_content = "No summary or extraction yet"
-                                    content_label = "NOTES"
+                                # Save to bytes for download
+                                doc_bytes = io.BytesIO()
+                                doc.save(doc_bytes)
+                                doc_bytes.seek(0)
                                 
-                                minutes_text = f"""TEAM MEETING MINUTES
-═══════════════════════════════════════════════════════════════════════════════
-
-MEETING DETAILS
-───────────────────────────────────────────────────────────────────────────────
-Program:        {program}
-Date:           {mtg_date}
-Facilitator:    {mtg_facilitator}
-Attendees:      {mtg.get('attendees', '')}
-
-{content_label}
-───────────────────────────────────────────────────────────────────────────────
-{main_content}
-
-FULL DISCUSSION TRANSCRIPT (for reference)
-───────────────────────────────────────────────────────────────────────────────
-{mtg.get('transcript', '')}
-
-═══════════════════════════════════════════════════════════════════════════════
-Minutes Generated: {datetime.datetime.now().strftime('%A, %d %B %Y at %I:%M %p')}
-Meeting ID: {mtg_id}
-"""
                                 st.download_button(
-                                    label="📥 Download",
-                                    data=minutes_text,
-                                    file_name=f"Minutes_{mtg_date}_{mtg_facilitator}_{program}.txt",
-                                    mime="text/plain",
+                                    label="📥 Download (.docx)",
+                                    data=doc_bytes,
+                                    file_name=f"Minutes_{mtg_date}_{mtg_facilitator}_{program}.docx",
+                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                                     key=f"dl_minutes_active_{mtg_id}",
                                     use_container_width=True
                                 )
@@ -1668,33 +1713,27 @@ Meeting ID: {mtg_id}
                         
                         with col2:
                             if st.button("📄 Minutes", key=f"minutes_archived_{mtg_id}", use_container_width=True):
-                                minutes_text = f"""TEAM MEETING MINUTES
-═══════════════════════════════════════════════════════════════════════════════
-
-MEETING DETAILS
-───────────────────────────────────────────────────────────────────────────────
-Program:        {program}
-Date:           {mtg_date}
-Facilitator:    {mtg_facilitator}
-Attendees:      {mtg.get('attendees', '')}
-
-EXTRACTED KEY POINTS & DECISIONS
-───────────────────────────────────────────────────────────────────────────────
-{mtg.get('extracted_notes', '') or mtg.get('summary_notes', '')}
-
-FULL DISCUSSION TRANSCRIPT (for reference)
-───────────────────────────────────────────────────────────────────────────────
-{mtg.get('transcript', '')}
-
-═══════════════════════════════════════════════════════════════════════════════
-Minutes Generated: {datetime.datetime.now().strftime('%A, %d %B %Y at %I:%M %p')}
-Meeting ID: {mtg_id}
-"""
+                                # Generate Word document
+                                doc = generate_minutes_docx(
+                                    program=program,
+                                    meeting_date=mtg_date,
+                                    facilitator=mtg_facilitator,
+                                    attendees=mtg.get('attendees', ''),
+                                    extracted_notes=mtg.get('extracted_notes', ''),
+                                    summary_notes=mtg.get('summary_notes', ''),
+                                    transcript=mtg.get('transcript', '')
+                                )
+                                
+                                # Save to bytes for download
+                                doc_bytes = io.BytesIO()
+                                doc.save(doc_bytes)
+                                doc_bytes.seek(0)
+                                
                                 st.download_button(
-                                    label="📥 Download",
-                                    data=minutes_text,
-                                    file_name=f"Minutes_{mtg_date}_{mtg_facilitator}_{program}.txt",
-                                    mime="text/plain",
+                                    label="📥 Download (.docx)",
+                                    data=doc_bytes,
+                                    file_name=f"Minutes_{mtg_date}_{mtg_facilitator}_{program}.docx",
+                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                                     key=f"dl_minutes_arch_{mtg_id}",
                                     use_container_width=True
                                 )
@@ -1964,54 +2003,33 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
                     if mtg_result.data:
                         mtg = mtg_result.data[0]
                         
-                        # Create formatted minutes
-                        extracted = mtg.get('extracted_notes', '')
-                        summary = mtg.get('summary_notes', '')
+                        # Create Word document with professional formatting
+                        doc = generate_minutes_docx(
+                            program=mtg.get('program', program),
+                            meeting_date=mtg.get('meeting_date', ''),
+                            facilitator=mtg.get('facilitator', ''),
+                            attendees=mtg.get('attendees', ''),
+                            extracted_notes=mtg.get('extracted_notes', ''),
+                            summary_notes=mtg.get('summary_notes', ''),
+                            transcript=mtg.get('transcript', '')
+                        )
                         
-                        if extracted and extracted.strip():
-                            main_content = extracted
-                            content_label = "EXTRACTED KEY POINTS & DECISIONS"
-                        elif summary and summary.strip():
-                            main_content = summary
-                            content_label = "SUMMARY & ACTION ITEMS"
-                        else:
-                            main_content = "No summary or extraction yet"
-                            content_label = "NOTES"
-                        
-                        minutes_text = f"""TEAM MEETING MINUTES
-═══════════════════════════════════════════════════════════════════════════════
-
-MEETING DETAILS
-───────────────────────────────────────────────────────────────────────────────
-Program:        {mtg.get('program', program)}
-Date:           {mtg.get('meeting_date', '')}
-Facilitator:    {mtg.get('facilitator', '')}
-Attendees:      {mtg.get('attendees', '')}
-
-{content_label}
-───────────────────────────────────────────────────────────────────────────────
-{main_content}
-
-FULL DISCUSSION TRANSCRIPT (for reference)
-───────────────────────────────────────────────────────────────────────────────
-{mtg.get('transcript', '')}
-
-═══════════════════════════════════════════════════════════════════════════════
-Minutes Generated: {datetime.datetime.now().strftime('%A, %d %B %Y at %I:%M %p')}
-Meeting ID: {st.session_state.current_meeting_id}
-"""
+                        # Save to bytes for download
+                        doc_bytes = io.BytesIO()
+                        doc.save(doc_bytes)
+                        doc_bytes.seek(0)
                         
                         st.download_button(
-                            label="📥 Download Minutes (.txt) — Ready to Email",
-                            data=minutes_text,
-                            file_name=f"Minutes_{mtg.get('meeting_date', 'Meeting')}_{program}.txt",
-                            mime="text/plain",
+                            label="📥 Download Minutes (.docx) — Ready to Email",
+                            data=doc_bytes,
+                            file_name=f"Minutes_{mtg.get('meeting_date', 'Meeting')}_{program}.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                             key=f"dl_final_minutes_{program}",
                             type="primary",
                             use_container_width=True
                         )
                         
-                        st.caption("✅ Professional format - ready to send to staff immediately")
+                        st.caption("✅ Professional Word document - ready to send to staff immediately")
                 except Exception as e:
                     st.error(f"Error generating minutes: {e}")
         
