@@ -1988,7 +1988,27 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
                         st.error(f"Error archiving: {e}")
         
         st.markdown("---")
-        st.caption("💡 **Active:** Current meetings ready to edit. **Archived:** Completed meetings preserved with minutes download & restore option.")
+        
+        # DEBUG PANEL
+        if st.session_state.current_meeting_id:
+            if st.checkbox("🔍 Debug: Show meeting data in database", value=False, key=f"debug_data_{program}"):
+                try:
+                    debug_result = supabase.table('team_meetings').select("*").eq('id', st.session_state.current_meeting_id).execute()
+                    if debug_result.data:
+                        debug_mtg = debug_result.data[0]
+                        st.info("**Meeting Data in Database:**")
+                        st.json({
+                            'extracted_notes': debug_mtg.get('extracted_notes', '[EMPTY]'),
+                            'summary_notes': debug_mtg.get('summary_notes', '[EMPTY]'),
+                            'transcript_length': len(debug_mtg.get('transcript', '')) if debug_mtg.get('transcript') else 0,
+                        })
+                        
+                        if not debug_mtg.get('extracted_notes'):
+                            st.warning("⚠️ **extracted_notes is EMPTY**\n\nYou need to:\n1. Write your transcript/notes\n2. Click [🤖 Extract Key Points]\n3. Wait for it to save\n4. Then download minutes")
+                except Exception as e:
+                    st.error(f"Debug error: {e}")
+        
+        st.markdown("---")
         
         st.markdown("---")
         
