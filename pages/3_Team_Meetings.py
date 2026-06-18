@@ -1926,6 +1926,33 @@ The AI extraction is optional!
         if f"adhoc_extracted_{program}" in st.session_state:
             st.markdown("#### 📊 Extracted Content")
             st.markdown(st.session_state[f"adhoc_extracted_{program}"])
+            
+            # INSTANT DOWNLOAD BUTTON
+            if st.button("📥 Download as Word (Right Now!)", key=f"instant_download_{program}", type="primary", use_container_width=True):
+                # Create Word document with extracted content
+                doc = generate_minutes_docx(
+                    program=program,
+                    meeting_date=adhoc_date,
+                    facilitator=adhoc_facilitator,
+                    attendees=adhoc_attendees,
+                    extracted_notes=st.session_state[f"adhoc_extracted_{program}"],
+                    summary_notes="",
+                    transcript=adhoc_transcript
+                )
+                
+                # Save to bytes
+                doc_bytes = io.BytesIO()
+                doc.save(doc_bytes)
+                doc_bytes.seek(0)
+                
+                st.download_button(
+                    label="💾 Click Here to Download",
+                    data=doc_bytes,
+                    file_name=f"Minutes_{adhoc_date}_{adhoc_facilitator}_{program}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key=f"instant_dl_button_{program}"
+                )
+            
             st.markdown("---")
         
         # MEETING NOTES
