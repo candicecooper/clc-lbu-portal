@@ -1531,7 +1531,116 @@ def render_program_meeting(program):
         # AD-HOC MEETING WITH TRANSCRIPT SUPPORT
         # ────────────────────────────────────────────────────────────────────────────
         
-        st.markdown("#### 📋 Meeting Details")
+        # LOAD EXISTING AD-HOC MEETINGS
+        st.markdown("#### 📚 Saved & Archived Ad-Hoc Meetings")
+        
+        # Tabs for Active vs Archived
+        active_tab, archive_tab = st.tabs(["📝 Active Meetings", "📦 Archived"])
+        
+        with active_tab:
+            try:
+                # Load active ad-hoc meetings
+                active_meetings = supabase.table('team_meetings').select("*").eq('program', program).eq('meeting_type', 'ad-hoc').eq('is_archived', False).order('meeting_date', desc=True).execute()
+                active_adhoc = active_meetings.data or []
+                
+                if active_adhoc:
+                    st.markdown("**Click a meeting to open and continue editing:**")
+                    for mtg in active_adhoc:
+                        mtg_date = mtg.get('meeting_date', '')
+                        mtg_student = mtg.get('student_name', 'No student')
+                        mtg_facilitator = mtg.get('facilitator', '')
+                        mtg_id = mtg.get('id', '')
+                        
+                        col1, col2, col3 = st.columns([3, 1, 1])
+                        
+                        with col1:
+                            if st.button(f"📝 {mtg_date} — {mtg_student} ({mtg_facilitator})", key=f"load_active_{mtg_id}", use_container_width=True):
+                                st.session_state.current_meeting_id = mtg_id
+                                st.rerun()
+                        
+                        with col2:
+                            if st.button("📄 View", key=f"view_active_{mtg_id}", use_container_width=True):
+                                st.info(f"**Student:** {mtg_student}\n\n**Transcript:**\n{mtg.get('transcript', '')}\n\n**Summary:**\n{mtg.get('summary_notes', '')}")
+                        
+                        with col3:
+                            if st.button("⏱", key=f"quick_load_{mtg_id}", help="Load for editing", use_container_width=True):
+                                st.session_state.current_meeting_id = mtg_id
+                                st.rerun()
+                else:
+                    st.info("No active ad-hoc meetings. Create a new one below!")
+            except Exception as e:
+                st.warning(f"Could not load active meetings: {e}")
+        
+        with archive_tab:
+            try:
+                # Load archived ad-hoc meetings
+                archived_meetings = supabase.table('team_meetings').select("*").eq('program', program).eq('meeting_type', 'ad-hoc').eq('is_archived', True).order('meeting_date', desc=True).execute()
+                archived_adhoc = archived_meetings.data or []
+                
+                if archived_adhoc:
+                    st.markdown("**Click to reopen archived meeting:**")
+                    for mtg in archived_adhoc:
+                        mtg_date = mtg.get('meeting_date', '')
+                        mtg_student = mtg.get('student_name', 'No student')
+                        mtg_facilitator = mtg.get('facilitator', '')
+                        mtg_id = mtg.get('id', '')
+                        
+                        col1, col2, col3 = st.columns([3, 1, 1])
+                        
+                        with col1:
+                            if st.button(f"📦 {mtg_date} — {mtg_student} ({mtg_facilitator})", key=f"load_archived_{mtg_id}", use_container_width=True):
+                                st.session_state.current_meeting_id = mtg_id
+                                st.rerun()
+                        
+                        with col2:
+                            if st.button("📄 Minutes", key=f"minutes_archived_{mtg_id}", use_container_width=True):
+                                minutes_text = f"""TEAM MEETING MINUTES
+═══════════════════════════════════════════════════════════════════════════════
+
+MEETING DETAILS
+───────────────────────────────────────────────────────────────────────────────
+Program:        {program}
+Date:           {mtg_date}
+Facilitator:    {mtg_facilitator}
+Attendees:      {mtg.get('attendees', '')}
+Student(s):     {mtg_student}
+
+MEETING TRANSCRIPT / DISCUSSION
+───────────────────────────────────────────────────────────────────────────────
+{mtg.get('transcript', '')}
+
+SUMMARY, DECISIONS & ACTION ITEMS
+───────────────────────────────────────────────────────────────────────────────
+{mtg.get('summary_notes', '')}
+
+═══════════════════════════════════════════════════════════════════════════════
+Minutes Generated: {datetime.datetime.now().strftime('%A, %d %B %Y at %I:%M %p')}
+Meeting ID: {mtg_id}
+"""
+                                st.download_button(
+                                    label="📥 Download",
+                                    data=minutes_text,
+                                    file_name=f"Minutes_{mtg_date}_{mtg_student}_{program}.txt",
+                                    mime="text/plain",
+                                    key=f"dl_minutes_arch_{mtg_id}",
+                                    use_container_width=True
+                                )
+                        
+                        with col3:
+                            if st.button("🔄 Restore", key=f"restore_archived_{mtg_id}", use_container_width=True):
+                                try:
+                                    supabase.table('team_meetings').update({'is_archived': False}).eq('id', mtg_id).execute()
+                                    st.success(f"♻️ {mtg_student} restored")
+                                    time.sleep(1)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error restoring: {e}")
+                else:
+                    st.info("No archived ad-hoc meetings yet")
+            except Exception as e:
+                st.warning(f"Could not load archived meetings: {e}")
+        
+        st.markdown("---")
         adhoc_col1, adhoc_col2, adhoc_col3, adhoc_col4 = st.columns(4)
         
         default_date = datetime.date.fromisoformat(selected_record['meeting_date']) if selected_record else datetime.date.today()
@@ -1762,85 +1871,15 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
                         st.error(f"Error archiving: {e}")
         
         st.markdown("---")
-        
-        # VIEW ARCHIVED MEETINGS
-        st.markdown("#### 📦 View & Edit Archived Meetings")
-        
-        # Toggle to show/hide archived section
-        show_archived = st.checkbox("📂 Show Archived Meetings", value=False, key=f"show_archived_toggle_{program}")
-        
-        if show_archived:
-            try:
-                archived = supabase.table('team_meetings').select("*").eq('program', program).eq('meeting_type', 'ad-hoc').eq('is_archived', True).order('meeting_date', desc=True).execute()
-                archived_meetings = archived.data or []
-                
-                if archived_meetings:
-                    st.markdown("**📚 Archived Meetings - Click to reopen and edit:**")
-                    for mtg in archived_meetings:
-                        mtg_date = mtg.get('meeting_date', '')
-                        mtg_student = mtg.get('student_name', 'No student')
-                        mtg_id = mtg.get('id', '')
-                        mtg_facilitator = mtg.get('facilitator', '')
-                        
-                        arch_col1, arch_col2, arch_col3 = st.columns([2, 1, 1])
-                        
-                        with arch_col1:
-                            if st.button(f"📦 {mtg_date} — {mtg_student} ({mtg_facilitator})", key=f"load_archived_{mtg_id}", use_container_width=True):
-                                st.session_state.current_meeting_id = mtg_id
-                                st.rerun()
-                        
-                        with arch_col2:
-                            if st.button("📄 Minutes", key=f"minutes_archived_{mtg_id}", use_container_width=True):
-                                # Generate minutes
-                                minutes_text = f"""TEAM MEETING MINUTES
-═══════════════════════════════════════════════════
-
-Program: {program}
-Date: {mtg_date}
-Facilitator: {mtg_facilitator}
-Attendees: {mtg.get('attendees', '')}
-Student(s): {mtg_student}
-
-MEETING TRANSCRIPT
-───────────────────────────────────────────────────
-{mtg.get('transcript', '')}
-
-SUMMARY & ACTIONS
-───────────────────────────────────────────────────
-{mtg.get('summary_notes', '')}
-
-═══════════════════════════════════════════════════
-Minutes Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
-"""
-                                st.download_button(
-                                    label="📥 Download",
-                                    data=minutes_text,
-                                    file_name=f"Minutes_{mtg_date}_{mtg_student}_{program}.txt",
-                                    mime="text/plain",
-                                    key=f"dl_minutes_{mtg_id}"
-                                )
-                        
-                        with arch_col3:
-                            if st.button("🔄 Restore", key=f"restore_archived_{mtg_id}", use_container_width=True):
-                                try:
-                                    supabase.table('team_meetings').update({'is_archived': False}).eq('id', mtg_id).execute()
-                                    st.success(f"♻️ {mtg_student} restored to active")
-                                    time.sleep(1)
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Error restoring: {e}")
-                else:
-                    st.info("No archived meetings found")
-            except Exception as e:
-                st.warning(f"Could not load archived meetings: {e}")
+        st.caption("💡 **Active:** Current meetings ready to edit. **Archived:** Completed meetings preserved with minutes download & restore option.")
         
         st.markdown("---")
         
-        # MINUTES & DOWNLOAD SECTION
+        # MINUTES DOWNLOAD FOR CURRENT MEETING
         if st.session_state.current_meeting_id:
-            st.markdown("#### 📄 Generate & Download Minutes")
+            st.markdown("#### 📄 Download Minutes for This Meeting")
             
-            if st.button("📄 Generate Minutes for Email", key=f"gen_minutes_{program}", type="primary", use_container_width=True):
+            if st.button("📄 Generate & Download Minutes", key=f"gen_minutes_{program}", type="primary", use_container_width=True):
                 # Fetch the meeting record
                 try:
                     mtg_result = supabase.table('team_meetings').select("*").eq('id', st.session_state.current_meeting_id).execute()
@@ -1854,18 +1893,18 @@ Minutes Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
 MEETING DETAILS
 ───────────────────────────────────────────────────────────────────────────────
 Program:        {mtg.get('program', program)}
-Date:           {mtg.get('meeting_date', adhoc_date)}
-Facilitator:    {mtg.get('facilitator', adhoc_facilitator)}
-Attendees:      {mtg.get('attendees', adhoc_attendees)}
-Student(s):     {mtg.get('student_name', adhoc_student)}
+Date:           {mtg.get('meeting_date', '')}
+Facilitator:    {mtg.get('facilitator', '')}
+Attendees:      {mtg.get('attendees', '')}
+Student(s):     {mtg.get('student_name', '')}
 
 MEETING TRANSCRIPT / DISCUSSION
 ───────────────────────────────────────────────────────────────────────────────
-{mtg.get('transcript', adhoc_transcript)}
+{mtg.get('transcript', '')}
 
 SUMMARY, DECISIONS & ACTION ITEMS
 ───────────────────────────────────────────────────────────────────────────────
-{mtg.get('summary_notes', adhoc_notes)}
+{mtg.get('summary_notes', '')}
 
 ═══════════════════════════════════════════════════════════════════════════════
 Minutes Generated: {datetime.datetime.now().strftime('%A, %d %B %Y at %I:%M %p')}
@@ -1873,20 +1912,18 @@ Meeting ID: {st.session_state.current_meeting_id}
 """
                         
                         st.download_button(
-                            label="📥 Download Minutes (.txt)",
+                            label="📥 Download Minutes (.txt) — Ready to Email",
                             data=minutes_text,
-                            file_name=f"Minutes_{mtg.get('meeting_date', adhoc_date)}_{mtg.get('student_name', 'Meeting')}_{program}.txt",
+                            file_name=f"Minutes_{mtg.get('meeting_date', 'Meeting')}_{mtg.get('student_name', 'AdHoc')}_{program}.txt",
                             mime="text/plain",
                             key=f"dl_final_minutes_{program}",
                             type="primary",
                             use_container_width=True
                         )
                         
-                        st.caption("✅ Ready to email to staff - contains full transcript, summary, and action items")
+                        st.caption("✅ Professional format - ready to send to staff immediately")
                 except Exception as e:
                     st.error(f"Error generating minutes: {e}")
-        
-        st.caption("💡 **Archive:** Hides meeting but keeps in database. **Minutes:** Professional format for emailing staff. **Restore:** Bring archived meetings back to active.")
         
         return
 
