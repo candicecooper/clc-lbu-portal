@@ -1547,14 +1547,13 @@ def render_program_meeting(program):
                     st.markdown("**Click a meeting to open and continue editing:**")
                     for mtg in active_adhoc:
                         mtg_date = mtg.get('meeting_date', '')
-                        mtg_student = mtg.get('student_name', 'No student')
                         mtg_facilitator = mtg.get('facilitator', '')
                         mtg_id = mtg.get('id', '')
                         
-                        col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+                        col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
                         
                         with col1:
-                            if st.button(f"📝 {mtg_date} — {mtg_student} ({mtg_facilitator})", key=f"load_active_{mtg_id}", use_container_width=True):
+                            if st.button(f"📝 {mtg_date} — {mtg_facilitator}", key=f"load_active_{mtg_id}", use_container_width=True):
                                 st.session_state.current_meeting_id = mtg_id
                                 st.rerun()
                         
@@ -1565,16 +1564,27 @@ def render_program_meeting(program):
                         
                         with col3:
                             if st.button("📥 Minutes", key=f"dl_active_{mtg_id}", use_container_width=True):
+                                # Fetch fresh data from database
+                                try:
+                                    fresh_mtg = supabase.table('team_meetings').select("*").eq('id', mtg_id).execute()
+                                    if fresh_mtg.data:
+                                        mtg = fresh_mtg.data[0]
+                                except:
+                                    pass
+                                
                                 # Use extracted notes if available, otherwise use summary
                                 extracted = mtg.get('extracted_notes', '')
                                 summary = mtg.get('summary_notes', '')
                                 
-                                if extracted:
+                                if extracted and extracted.strip():
                                     main_content = extracted
                                     content_label = "EXTRACTED KEY POINTS & DECISIONS"
-                                else:
+                                elif summary and summary.strip():
                                     main_content = summary
                                     content_label = "SUMMARY & ACTION ITEMS"
+                                else:
+                                    main_content = "No summary or extraction yet"
+                                    content_label = "NOTES"
                                 
                                 minutes_text = f"""TEAM MEETING MINUTES
 ═══════════════════════════════════════════════════════════════════════════════
@@ -1585,7 +1595,6 @@ Program:        {program}
 Date:           {mtg_date}
 Facilitator:    {mtg_facilitator}
 Attendees:      {mtg.get('attendees', '')}
-Student(s):     {mtg_student}
 
 {content_label}
 ───────────────────────────────────────────────────────────────────────────────
@@ -1602,7 +1611,7 @@ Meeting ID: {mtg_id}
                                 st.download_button(
                                     label="📥 Download",
                                     data=minutes_text,
-                                    file_name=f"Minutes_{mtg_date}_{mtg_student}_{program}.txt",
+                                    file_name=f"Minutes_{mtg_date}_{mtg_facilitator}_{program}.txt",
                                     mime="text/plain",
                                     key=f"dl_minutes_active_{mtg_id}",
                                     use_container_width=True
@@ -1612,11 +1621,26 @@ Meeting ID: {mtg_id}
                             if st.button("📦 Archive", key=f"archive_active_{mtg_id}", use_container_width=True):
                                 try:
                                     supabase.table('team_meetings').update({'is_archived': True}).eq('id', mtg_id).execute()
-                                    st.success(f"📦 {mtg_student} archived")
+                                    st.success(f"📦 {mtg_facilitator} archived")
                                     time.sleep(1)
                                     st.rerun()
                                 except Exception as e:
                                     st.error(f"Error archiving: {e}")
+                        
+                        with col5:
+                            if st.button("🗑️ Delete", key=f"delete_active_{mtg_id}", use_container_width=True):
+                                if st.session_state.get(f"confirm_delete_{mtg_id}", False):
+                                    try:
+                                        supabase.table('team_meetings').delete().eq('id', mtg_id).execute()
+                                        st.success(f"🗑️ {mtg_facilitator} deleted")
+                                        time.sleep(1)
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Error deleting: {e}")
+                                else:
+                                    st.session_state[f"confirm_delete_{mtg_id}"] = True
+                                    st.warning(f"⚠️ Click again to confirm delete")
+                                    st.rerun()
                 else:
                     st.info("No active ad-hoc meetings. Create a new one below!")
             except Exception as e:
@@ -1632,14 +1656,13 @@ Meeting ID: {mtg_id}
                     st.markdown("**Click to reopen archived meeting:**")
                     for mtg in archived_adhoc:
                         mtg_date = mtg.get('meeting_date', '')
-                        mtg_student = mtg.get('student_name', 'No student')
                         mtg_facilitator = mtg.get('facilitator', '')
                         mtg_id = mtg.get('id', '')
                         
                         col1, col2, col3 = st.columns([3, 1, 1])
                         
                         with col1:
-                            if st.button(f"📦 {mtg_date} — {mtg_student} ({mtg_facilitator})", key=f"load_archived_{mtg_id}", use_container_width=True):
+                            if st.button(f"📦 {mtg_date} — {mtg_facilitator}", key=f"load_archived_{mtg_id}", use_container_width=True):
                                 st.session_state.current_meeting_id = mtg_id
                                 st.rerun()
                         
@@ -1654,7 +1677,6 @@ Program:        {program}
 Date:           {mtg_date}
 Facilitator:    {mtg_facilitator}
 Attendees:      {mtg.get('attendees', '')}
-Student(s):     {mtg_student}
 
 EXTRACTED KEY POINTS & DECISIONS
 ───────────────────────────────────────────────────────────────────────────────
@@ -1671,7 +1693,7 @@ Meeting ID: {mtg_id}
                                 st.download_button(
                                     label="📥 Download",
                                     data=minutes_text,
-                                    file_name=f"Minutes_{mtg_date}_{mtg_student}_{program}.txt",
+                                    file_name=f"Minutes_{mtg_date}_{mtg_facilitator}_{program}.txt",
                                     mime="text/plain",
                                     key=f"dl_minutes_arch_{mtg_id}",
                                     use_container_width=True
@@ -1702,21 +1724,19 @@ Meeting ID: {mtg_id}
                 result = supabase.table('team_meetings').select("*").eq('id', st.session_state.current_meeting_id).execute()
                 if result.data:
                     meeting_data = result.data[0]
-                    st.info(f"✅ Editing: {meeting_data.get('student_name', 'Meeting')} — {meeting_data.get('meeting_date', '')}", icon="✅")
+                    st.info(f"✅ Editing: {meeting_data.get('meeting_date', '')} — {meeting_data.get('facilitator', '')}", icon="✅")
             except Exception as e:
                 st.error(f"Error loading meeting: {e}")
         
-        adhoc_col1, adhoc_col2, adhoc_col3, adhoc_col4 = st.columns(4)
+        adhoc_col1, adhoc_col2, adhoc_col3 = st.columns(3)
         
         default_date = datetime.date.fromisoformat(meeting_data['meeting_date']) if meeting_data and meeting_data.get('meeting_date') else datetime.date.today()
         default_facilitator = meeting_data.get('facilitator', '') if meeting_data else _safe_staff_name()
         default_attendees = meeting_data.get('attendees', '') if meeting_data else ''
-        default_student = meeting_data.get('student_name', '') if meeting_data else ''
         
         with adhoc_col1: adhoc_date = st.date_input("Date", value=default_date, key=f"adhoc_date_{program}")
         with adhoc_col2: adhoc_facilitator = st.text_input("Facilitator", value=default_facilitator, key=f"adhoc_fac_{program}")
         with adhoc_col3: adhoc_attendees = st.text_input("Attendees", value=default_attendees, placeholder="Names separated by commas", key=f"adhoc_att_{program}")
-        with adhoc_col4: adhoc_student = st.text_input("Student(s)", value=default_student, placeholder="Name(s)", key=f"adhoc_student_{program}")
         
         st.markdown("---")
         
@@ -1845,23 +1865,7 @@ The AI extraction is optional!
         
         st.markdown("---")
         
-        # SMARTAR GOAL LINKING
-        if adhoc_student and adhoc_student.strip():
-            st.markdown("#### 🎯 Link to SMARTAR Goal (Optional)")
-            
-            goal_link = get_smartar_goal_link(
-                adhoc_student.strip(),
-                st.session_state.current_meeting_id or "new",
-                program,
-                "ADHOC",
-                0
-            )
-            
-            if goal_link:
-                st.markdown(f"[✨ Open SMARTAR Goal Builder for {adhoc_student}]({goal_link})")
-                st.caption("Sets up context to create or refine goals for this meeting")
-            
-            st.markdown("---")
+        st.markdown("---")
         
         # SAVE MEETING
         st.markdown("#### 💾 Save & Manage Meeting")
@@ -1880,7 +1884,6 @@ The AI extraction is optional!
                             'meeting_type': 'ad-hoc',
                             'facilitator': adhoc_facilitator or _safe_staff_name(),
                             'attendees': adhoc_attendees or '',
-                            'student_name': adhoc_student or '',
                             'transcript': adhoc_transcript,
                             'summary_notes': adhoc_notes,
                         }
@@ -1965,12 +1968,15 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
                         extracted = mtg.get('extracted_notes', '')
                         summary = mtg.get('summary_notes', '')
                         
-                        if extracted:
+                        if extracted and extracted.strip():
                             main_content = extracted
                             content_label = "EXTRACTED KEY POINTS & DECISIONS"
-                        else:
+                        elif summary and summary.strip():
                             main_content = summary
                             content_label = "SUMMARY & ACTION ITEMS"
+                        else:
+                            main_content = "No summary or extraction yet"
+                            content_label = "NOTES"
                         
                         minutes_text = f"""TEAM MEETING MINUTES
 ═══════════════════════════════════════════════════════════════════════════════
@@ -1981,7 +1987,6 @@ Program:        {mtg.get('program', program)}
 Date:           {mtg.get('meeting_date', '')}
 Facilitator:    {mtg.get('facilitator', '')}
 Attendees:      {mtg.get('attendees', '')}
-Student(s):     {mtg.get('student_name', '')}
 
 {content_label}
 ───────────────────────────────────────────────────────────────────────────────
@@ -1999,7 +2004,7 @@ Meeting ID: {st.session_state.current_meeting_id}
                         st.download_button(
                             label="📥 Download Minutes (.txt) — Ready to Email",
                             data=minutes_text,
-                            file_name=f"Minutes_{mtg.get('meeting_date', 'Meeting')}_{mtg.get('student_name', 'AdHoc')}_{program}.txt",
+                            file_name=f"Minutes_{mtg.get('meeting_date', 'Meeting')}_{program}.txt",
                             mime="text/plain",
                             key=f"dl_final_minutes_{program}",
                             type="primary",
