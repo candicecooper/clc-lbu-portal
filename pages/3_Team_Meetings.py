@@ -1551,7 +1551,7 @@ def render_program_meeting(program):
                         mtg_facilitator = mtg.get('facilitator', '')
                         mtg_id = mtg.get('id', '')
                         
-                        col1, col2, col3 = st.columns([3, 1, 1])
+                        col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
                         
                         with col1:
                             if st.button(f"📝 {mtg_date} — {mtg_student} ({mtg_facilitator})", key=f"load_active_{mtg_id}", use_container_width=True):
@@ -1559,13 +1559,53 @@ def render_program_meeting(program):
                                 st.rerun()
                         
                         with col2:
-                            if st.button("📄 View", key=f"view_active_{mtg_id}", use_container_width=True):
-                                st.info(f"**Student:** {mtg_student}\n\n**Transcript:**\n{mtg.get('transcript', '')}\n\n**Summary:**\n{mtg.get('summary_notes', '')}")
-                        
-                        with col3:
-                            if st.button("⏱", key=f"quick_load_{mtg_id}", help="Load for editing", use_container_width=True):
+                            if st.button("📄 View", key=f"view_active_{mtg_id}", use_container_width=True, help="Load for editing"):
                                 st.session_state.current_meeting_id = mtg_id
                                 st.rerun()
+                        
+                        with col3:
+                            if st.button("📥 Minutes", key=f"dl_active_{mtg_id}", use_container_width=True):
+                                minutes_text = f"""TEAM MEETING MINUTES
+═══════════════════════════════════════════════════════════════════════════════
+
+MEETING DETAILS
+───────────────────────────────────────────────────────────────────────────────
+Program:        {program}
+Date:           {mtg_date}
+Facilitator:    {mtg_facilitator}
+Attendees:      {mtg.get('attendees', '')}
+Student(s):     {mtg_student}
+
+MEETING TRANSCRIPT / DISCUSSION
+───────────────────────────────────────────────────────────────────────────────
+{mtg.get('transcript', '')}
+
+SUMMARY, DECISIONS & ACTION ITEMS
+───────────────────────────────────────────────────────────────────────────────
+{mtg.get('summary_notes', '')}
+
+═══════════════════════════════════════════════════════════════════════════════
+Minutes Generated: {datetime.datetime.now().strftime('%A, %d %B %Y at %I:%M %p')}
+Meeting ID: {mtg_id}
+"""
+                                st.download_button(
+                                    label="📥 Download",
+                                    data=minutes_text,
+                                    file_name=f"Minutes_{mtg_date}_{mtg_student}_{program}.txt",
+                                    mime="text/plain",
+                                    key=f"dl_minutes_active_{mtg_id}",
+                                    use_container_width=True
+                                )
+                        
+                        with col4:
+                            if st.button("📦 Archive", key=f"archive_active_{mtg_id}", use_container_width=True):
+                                try:
+                                    supabase.table('team_meetings').update({'is_archived': True}).eq('id', mtg_id).execute()
+                                    st.success(f"📦 {mtg_student} archived")
+                                    time.sleep(1)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error archiving: {e}")
                 else:
                     st.info("No active ad-hoc meetings. Create a new one below!")
             except Exception as e:
@@ -1641,16 +1681,31 @@ Meeting ID: {mtg_id}
                 st.warning(f"Could not load archived meetings: {e}")
         
         st.markdown("---")
+        
+        st.markdown("#### 📋 Meeting Details")
+        
+        # Load meeting data if one is selected
+        meeting_data = None
+        if st.session_state.current_meeting_id:
+            try:
+                result = supabase.table('team_meetings').select("*").eq('id', st.session_state.current_meeting_id).execute()
+                if result.data:
+                    meeting_data = result.data[0]
+                    st.info(f"✅ Editing: {meeting_data.get('student_name', 'Meeting')} — {meeting_data.get('meeting_date', '')}", icon="✅")
+            except Exception as e:
+                st.error(f"Error loading meeting: {e}")
+        
         adhoc_col1, adhoc_col2, adhoc_col3, adhoc_col4 = st.columns(4)
         
-        default_date = datetime.date.fromisoformat(selected_record['meeting_date']) if selected_record else datetime.date.today()
-        default_facilitator = selected_record.get('facilitator', _safe_staff_name()) if selected_record else _safe_staff_name()
-        default_attendees = selected_record.get('attendees', '') if selected_record else ''
+        default_date = datetime.date.fromisoformat(meeting_data['meeting_date']) if meeting_data and meeting_data.get('meeting_date') else datetime.date.today()
+        default_facilitator = meeting_data.get('facilitator', '') if meeting_data else _safe_staff_name()
+        default_attendees = meeting_data.get('attendees', '') if meeting_data else ''
+        default_student = meeting_data.get('student_name', '') if meeting_data else ''
         
         with adhoc_col1: adhoc_date = st.date_input("Date", value=default_date, key=f"adhoc_date_{program}")
         with adhoc_col2: adhoc_facilitator = st.text_input("Facilitator", value=default_facilitator, key=f"adhoc_fac_{program}")
         with adhoc_col3: adhoc_attendees = st.text_input("Attendees", value=default_attendees, placeholder="Names separated by commas", key=f"adhoc_att_{program}")
-        with adhoc_col4: adhoc_student = st.text_input("Student(s)", value=selected_record.get('student_name', '') if selected_record else "", placeholder="Name(s)", key=f"adhoc_student_{program}")
+        with adhoc_col4: adhoc_student = st.text_input("Student(s)", value=default_student, placeholder="Name(s)", key=f"adhoc_student_{program}")
         
         st.markdown("---")
         
@@ -1663,7 +1718,7 @@ Meeting ID: {mtg_id}
         with transcript_tab1:
             adhoc_transcript = st.text_area(
                 "Transcript / Notes",
-                value=selected_record.get('transcript', '') if selected_record else '',
+                value=meeting_data.get('transcript', '') if meeting_data else '',
                 height=200,
                 placeholder="Paste your meeting transcript, discussion notes, or meeting summary here...",
                 key=f"adhoc_transcript_{program}",
@@ -1761,7 +1816,7 @@ The AI extraction is optional!
         st.markdown("#### 📝 Meeting Summary & Actions")
         adhoc_notes = st.text_area(
             "Summary & Action Items",
-            value=selected_record.get('summary_notes', '') if selected_record else '',
+            value=meeting_data.get('summary_notes', '') if meeting_data else '',
             height=150,
             placeholder="Summary of meeting, decisions made, action items, and next steps...",
             key=f"adhoc_notes_{program}",
