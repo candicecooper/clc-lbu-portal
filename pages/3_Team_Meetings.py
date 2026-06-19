@@ -929,19 +929,7 @@ def generate_minutes_docx(program, meeting_date, facilitator, attendees, extract
         p = doc.add_paragraph("No meeting summary recorded")
         p.runs[0].italic = True
     
-    # ── Full Transcript (if exists) ──
-    if transcript and transcript.strip():
-        doc.add_paragraph()
-        
-        transcript_heading = doc.add_heading("Discussion Transcript", level=2)
-        transcript_heading_run = transcript_heading.runs[0]
-        transcript_heading_run.font.color.rgb = RGBColor(107, 114, 128)  # Gray
-        
-        transcript_para = doc.add_paragraph(transcript)
-        for run in transcript_para.runs:
-            run.font.size = Pt(9.5)
-            run.italic = True
-            run.font.color.rgb = RGBColor(107, 114, 128)
+    # ── Full Transcript (removed - not needed in final minutes) ──
     
     # ── Footer ──
     doc.add_paragraph()
