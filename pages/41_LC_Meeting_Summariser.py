@@ -26,6 +26,7 @@ Stack: Streamlit + Claude (claude-sonnet-4-6) + python-docx + Supabase (optional
 import streamlit as st
 import json
 import io
+import os
 import re
 from datetime import datetime, date
 
@@ -102,10 +103,14 @@ except Exception:
 # Helpers: secrets / clients
 # ---------------------------------------------------------------------------
 def get_secret(name):
+    # Check Streamlit secrets (secrets.toml) first, then OS environment
+    # variables (e.g. Render's Environment tab) so either location works.
     try:
-        return st.secrets[name]
+        if name in st.secrets:
+            return st.secrets[name]
     except Exception:
-        return None
+        pass
+    return os.environ.get(name)
 
 
 def get_anthropic_client():
@@ -548,15 +553,17 @@ def build_docx(data, meta, approved_indices):
 # ---------------------------------------------------------------------------
 # Helpers: Supabase persistence (optional)
 # ---------------------------------------------------------------------------
-def save_meeting(meta, data, approved_indices):
+def save_meeting(meta, data, approved_indices, week_label=None):
     sb = get_supabase()
     if sb is None:
         return False, "Supabase not configured — saved to this session only."
     try:
         payload = dict(data)
         payload["_approved_indices"] = sorted(list(approved_indices))
+        payload["_week_label"] = week_label or ""
         sb.table(SUPABASE_TABLE).insert({
             "meeting_date": meta.get("date") or None,
+            "week_label": week_label or None,
             "chair": meta.get("chair") or None,
             "summary": data.get("summary", ""),
             "payload": payload,
@@ -573,7 +580,7 @@ def load_recent_meetings(limit=25):
         return []
     try:
         res = (sb.table(SUPABASE_TABLE)
-               .select("id, meeting_date, summary, created_at")
+               .select("id, meeting_date, week_label, summary, created_at")
                .order("created_at", desc=True)
                .limit(limit).execute())
         return res.data or []
@@ -603,6 +610,31 @@ def load_meeting_full(meeting_id):
 def get_archive_password():
     """Password for viewing archived meetings. Set ARCHIVE_PASSWORD in secrets."""
     return get_secret("ARCHIVE_PASSWORD") or "change-me"
+
+
+def parse_meeting_date(s):
+    """Parse a meeting-date string (various formats) into a date; fall back to today."""
+    if s:
+        for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d %B %Y", "%d %b %Y"):
+            try:
+                return datetime.strptime(str(s).strip(), fmt).date()
+            except Exception:
+                continue
+    return date.today()
+
+
+def suggest_week():
+    """Default the term week to the last saved week + 2 (meetings are fortnightly)."""
+    try:
+        recent = load_recent_meetings(limit=1)
+        if recent:
+            label = recent[0].get("week_label") or ""
+            m = re.search(r"\d+", label)
+            if m:
+                return min(int(m.group()) + 2, 11)
+    except Exception:
+        pass
+    return 8
 
 
 # ---------------------------------------------------------------------------
@@ -775,13 +807,27 @@ if data:
                 render_item(i, s, False, "#C0392B", "#FBEAEA")
 
     st.divider()
-    e1, e2 = st.columns([1, 1])
     meta = {
         "date": (data.get("meeting_meta", {}) or {}).get("date", ""),
         "chair": (data.get("meeting_meta", {}) or {}).get("chair", "Susan Furga"),
         "attendees": (data.get("meeting_meta", {}) or {}).get("attendees", ""),
         "apologies": (data.get("meeting_meta", {}) or {}).get("apologies", ""),
     }
+
+    st.markdown("**Meeting details for the archive**")
+    st.caption("Meetings are fortnightly — the week defaults to the last saved week + 2.")
+    d1, d2 = st.columns(2)
+    with d1:
+        week_num = st.number_input("Term week", min_value=1, max_value=11,
+                                   value=suggest_week(), step=1)
+    with d2:
+        meeting_dt = st.date_input("Meeting date",
+                                   value=parse_meeting_date(meta["date"]),
+                                   format="DD.MM.YYYY")
+    week_label = f"Week {int(week_num)}"
+    meta["date"] = meeting_dt.strftime("%d.%m.%Y")
+
+    e1, e2 = st.columns([1, 1])
     # current approval set, read from checkbox state
     approved_indices = {
         i for i in range(len(share))
@@ -791,7 +837,7 @@ if data:
     with e1:
         if DOCX_LIB:
             buf = build_docx(data, meta, approved_indices)
-            stamp = (meta["date"] or date.today().isoformat()).replace(".", "-").replace("/", "-")
+            stamp = f"{week_label.replace(' ', '')}_{meta['date'].replace('.', '-')}"
             st.download_button(
                 "⬇ Download Word summary", data=buf,
                 file_name=f"LC_meeting_summary_{stamp}.docx",
@@ -801,7 +847,7 @@ if data:
             st.caption("Add `python-docx` to requirements.txt to enable Word export.")
     with e2:
         if st.button("💾 Save to archive"):
-            ok, msg = save_meeting(meta, data, approved_indices)
+            ok, msg = save_meeting(meta, data, approved_indices, week_label)
             (st.success if ok else st.info)(msg)
 
 # ---------------------------------------------------------------------------
@@ -844,8 +890,10 @@ else:
         else:
             def label_for(m):
                 when = m.get("meeting_date") or (m.get("created_at", "")[:10])
-                snip = (m.get("summary", "") or "")[:60]
-                return f"{when} — {snip}…"
+                wk = m.get("week_label")
+                prefix = f"{wk} · {when}" if wk else when
+                snip = (m.get("summary", "") or "")[:55]
+                return f"{prefix} — {snip}…"
 
             options = {label_for(m): m["id"] for m in meetings}
             choice = st.selectbox("Select a meeting", list(options.keys()))
@@ -854,13 +902,18 @@ else:
             if row:
                 payload = row.get("payload", {}) or {}
                 approved = set(payload.get("_approved_indices", []))
+                stored_date = row.get("meeting_date") or (payload.get("meeting_meta", {}) or {}).get("date", "")
+                wk = row.get("week_label") or payload.get("_week_label", "")
                 a_meta = {
-                    "date": (payload.get("meeting_meta", {}) or {}).get("date", ""),
+                    "date": stored_date,
                     "chair": (payload.get("meeting_meta", {}) or {}).get("chair", "Susan Furga"),
                     "attendees": (payload.get("meeting_meta", {}) or {}).get("attendees", ""),
                     "apologies": (payload.get("meeting_meta", {}) or {}).get("apologies", ""),
                 }
 
+                header = " · ".join(x for x in [wk, stored_date] if x)
+                if header:
+                    st.markdown(f"### {header}")
                 st.subheader("Summary")
                 st.write(payload.get("summary", ""))
 
