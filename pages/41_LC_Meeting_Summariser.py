@@ -1,959 +1,917 @@
-"""
-LC Meeting Summariser
-=====================
-Drop in your LC leader meeting agenda (optional) and the meeting transcript,
-and get back: a summary, agenda-item breakdown, actions, and a classified
-"share with staff" section that you approve before anything is exported.
-Exports to a Word document that mirrors the DfE LBu LC leader proforma.
-
-Share-with-staff handling:
-  - Every candidate item is classified Share / Hold / Your call, each with a reason.
-  - A named guardrail list keeps confidential matters (named staff
-    performance/conduct/health, IR, role-security before official comms,
-    pre-decisional or OFFICIAL: Sensitive material) on Hold by default.
-  - A "staff-safe wording" is offered so you can relay the gist without the
-    confidential detail.
-  - You tick what actually goes out. Only ticked items reach the staff section
-    of the Word doc; held items go to a separate "Confidential — manager record
-    only" section marked OFFICIAL: Sensitive.
-
-Designed for the CLC-LBU portal. Single page, single AI call, graceful
-fallbacks if Supabase / Claude secrets aren't configured.
-
-Stack: Streamlit + Claude (claude-sonnet-4-6) + python-docx + Supabase (optional)
-"""
-
+from theme import apply_clc_theme
+from auth import require_auth, logout_button, get_staff_name
+from confidential_auth import require_confidential_auth
 import streamlit as st
+from supabase import create_client, Client
+from datetime import datetime, date
 import json
 import io
 import os
-import re
-from datetime import datetime, date
 
-# ---------------------------------------------------------------------------
-# Optional dependencies — handled gracefully so the page never hard-crashes
-# ---------------------------------------------------------------------------
+# ── Page config ───────────────────────────────────────────────────────────────
+st.set_page_config(page_title="CLC PDP Builder", page_icon="🎯", layout="wide",
+                   initial_sidebar_state="collapsed")
+apply_clc_theme()
+require_auth("PDP Builder", "🎯")
+logout_button("sidebar")
+require_confidential_auth("PDP Builder", "🎯")
+
+TEAL = "#1A7A7A"
+AMBER = "#C8760A"
+PORTAL_URL = "https://16cefb77.clc-portal.pages.dev/"
+
+st.sidebar.markdown(
+    f'<a href="{PORTAL_URL}" target="_self" style="display:block;text-align:center;'
+    f'background:{TEAL};color:white;font-weight:600;font-size:0.85rem;'
+    f'padding:0.5rem;border-radius:8px;text-decoration:none;margin-bottom:0.5rem;">'
+    f'🏠 Back to Staff Portal</a>',
+    unsafe_allow_html=True
+)
+
+# ── Supabase ──────────────────────────────────────────────────────────────────
+@st.cache_resource
+def get_client() -> Client:
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
+
+supabase = get_client()
+
+# ── Groq ──────────────────────────────────────────────────────────────────────
 try:
-    from anthropic import Anthropic
-    ANTHROPIC_LIB = True
+    GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
 except Exception:
-    ANTHROPIC_LIB = False
+    GROQ_KEY = os.environ.get("GROQ_API_KEY", "")
 
-try:
+DEFAULT_PRINCIPLES = (
+    "Collective responsibility\nLearning system\nEvaluate for impact\n"
+    "Tight and flexible\nTrust and verify\nImprovement and responsibility"
+)
+AREAS_OF_IMPACT = "Wellbeing, Equity and excellence, Learner agency, Effective learners"
+
+# Maps the AI's flat keys → the page's widget keys
+KEY_MAP = {
+    "goal1_goal": "w_goal1_goal", "goal1_strengths": "w_goal1_strengths",
+    "goal1_learn_change": "w_goal1_learn", "goal1_support": "w_goal1_support",
+    "goal1_monitor": "w_goal1_monitor", "goal1_evaluate": "w_goal1_evaluate",
+    "goal2_goal": "w_goal2_goal", "goal2_strengths": "w_goal2_strengths",
+    "goal2_learn_change": "w_goal2_learn", "goal2_support": "w_goal2_support",
+    "goal2_monitor": "w_goal2_monitor", "goal2_evaluate": "w_goal2_evaluate",
+    "career_goal": "w_career_goal", "career_actions": "w_career_actions",
+    "wellbeing_goal": "w_wb_goal", "wellbeing_actions": "w_wb_actions",
+    "cultural_commitment": "w_cultural_commitment",
+}
+
+# ── Field definitions ─────────────────────────────────────────────────────────
+FIELD_KEYS = [
+    "w_emp", "w_ldr", "w_date",
+    "w_goal1_goal", "w_goal1_strengths", "w_goal1_learn", "w_goal1_support",
+    "w_goal1_monitor", "w_goal1_evaluate", "w_goal1_r6", "w_goal1_r12",
+    "w_goal2_goal", "w_goal2_strengths", "w_goal2_learn", "w_goal2_support",
+    "w_goal2_monitor", "w_goal2_evaluate", "w_goal2_r6", "w_goal2_r12",
+    "w_career_goal", "w_career_actions", "w_career_r6", "w_career_r12",
+    "w_wb_goal", "w_wb_actions", "w_wb_r6", "w_wb_r12",
+    "w_cultural_commitment",
+    "w_ref_emp6", "w_ref_ldr6", "w_ref_emp12", "w_ref_ldr12",
+]
+ADD_KEYS = [wk + "__add" for wk in KEY_MAP.values()]
+# Every key whose value is part of the plan and must survive reruns
+PLAN_KEYS = FIELD_KEYS + ADD_KEYS + ["w_cultural_focus"]
+
+def seed_state():
+    # Restore any plan values that Streamlit garbage-collected when a widget
+    # wasn't rendered (e.g. after a rerun fired mid-script). The store is the
+    # source of truth and is refreshed at the end of every run.
+    store = st.session_state.setdefault("plan_store", {})
+    for k in PLAN_KEYS:
+        if k not in st.session_state and k in store:
+            st.session_state[k] = store[k]
+    for k in FIELD_KEYS:
+        if k not in st.session_state:
+            st.session_state[k] = ""
+    for k in ADD_KEYS:
+        if k not in st.session_state:
+            st.session_state[k] = ""
+    if "w_cultural_focus" not in st.session_state:
+        st.session_state["w_cultural_focus"] = "Knowing"
+    if "w_emp" in st.session_state and not st.session_state["w_emp"]:
+        st.session_state["w_emp"] = get_staff_name() or ""
+    if "w_date" in st.session_state and not st.session_state["w_date"]:
+        st.session_state["w_date"] = date.today().strftime("%d/%m/%Y")
+    if "transcript" not in st.session_state:
+        st.session_state["transcript"] = ""
+    if "principles" not in st.session_state:
+        st.session_state["principles"] = DEFAULT_PRINCIPLES
+    if "prior_pdp_text" not in st.session_state:
+        st.session_state["prior_pdp_text"] = ""
+    # Apply a pending saved-plan load before any widgets are instantiated
+    pid = st.session_state.pop("_load_plan_id", None)
+    if pid:
+        try:
+            res = supabase.table("pdp_plans").select("data").eq("id", pid).single().execute()
+            for k, v in ((res.data or {}).get("data", {}) or {}).items():
+                st.session_state[k] = v
+        except Exception:
+            pass
+
+seed_state()
+
+# ── Prior PDP extraction ──────────────────────────────────────────────────────
+def extract_text(uploaded) -> str:
+    name = uploaded.name.lower()
+    data = uploaded.read()
+    if name.endswith((".txt", ".md")):
+        return data.decode("utf-8", errors="ignore")
+    if name.endswith(".docx"):
+        from docx import Document
+        from docx.table import Table
+        from docx.text.paragraph import Paragraph
+        W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+        def wt(tag): return f"{{{W}}}{tag}"
+        doc = Document(io.BytesIO(data))
+        out, seen = [], set()
+        def add(block):
+            block = block.strip()
+            if block and block not in seen:
+                seen.add(block); out.append(block)
+        # 1) text boxes (where the DfE template stores typed answers)
+        for tx in doc.element.body.iter(wt('txbxContent')):
+            paras = []
+            for p in tx.iter(wt('p')):
+                txt = "".join(n.text for n in p.iter(wt('t')) if n.text).strip()
+                if txt:
+                    paras.append(txt)
+            add("\n".join(paras))
+        # 2) body paragraphs and tables (python-docx text excludes text boxes, so no overlap)
+        for child in doc.element.body.iterchildren():
+            if child.tag == wt('p'):
+                add(Paragraph(child, doc).text)
+            elif child.tag == wt('tbl'):
+                last = None
+                for row in Table(child, doc).rows:
+                    for cell in row.cells:
+                        tc = cell.text.strip()
+                        if tc and tc != last:
+                            add(tc); last = tc
+        return "\n".join(out)
+    if name.endswith(".pdf"):
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(data))
+        return "\n".join((pg.extract_text() or "") for pg in reader.pages)
+    return data.decode("utf-8", errors="ignore")
+
+# ── Strip DfE template boilerplate, keep section markers + the person's answers ──
+_PDP_HEADINGS = {"goals", "career fulfilment", "my wellbeing", "my cultural responsiveness journey",
+                 "reflection overview", "goal 1", "goal 2", "knowing", "doing", "being",
+                 "at 6 months", "at 12 months"}
+_PDP_SKIP_EXACT = {"feedback and goal reflections", "areas of impact", "guiding principles",
+                   "preparing your pdp", "reflective practice", "employee summary", "leader summary",
+                   "resources on edi", "employee name", "leader name", "employee signature",
+                   "leader signature", "performance and development plan"}
+_PDP_BOILER = [
+    "the performance and development", "the pdp is", "the pdp framework", "your goals may relate",
+    "this goal provides", "knowing what you need to learn", "we are building a culturally",
+    "the 4 areas of impact", "each site will consider", "as you consider the goals",
+    "our 5 guiding principles", "as you work through", "you may even choose", "it's a deliberate shift",
+    "it is an ongoing cycle", "the 6 and 12 month", "outside of the goals", "use these questions",
+    "refer to page", "to what extent", "what (if anything)", "you can update your goals",
+    "identify goals that are achievable", "this area of the pdp", "being able to identify areas",
+    "it provides an opportunity", "it might help you formulate", "see how you can embed",
+    "when i feel at my best", "what's important for my own", "how can i contribute",
+    "what will i deliver", "what actions will i take", "what does career fulfilment",
+    "what aspects of my role", "how can you broaden", "how can you respond", "how can you strengthen",
+    "this template provides", "please ensure you create", "select 1 way", "how the pdp aligns",
+    "select the links", "what support do i need", "what do i need to learn", "what are my strengths",
+    "how will i monitor", "how will i evaluate", "what people, processes", "what current behaviours",
+    "what constructive feedback", "how will i know", "cultural responsiveness", "aboriginal learner",
+    "what did you", "where do you think", "what other achievements", "what have you learned",
+]
+
+def clean_pdp_text(raw: str) -> str:
+    kept, last_marker, seen = [], None, set()
+    for line in raw.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        low = line.lower().replace("\u2019", "'").rstrip(":")
+        if low in _PDP_HEADINGS:
+            marker = "## " + line.upper().rstrip(":")
+            if marker != last_marker:
+                kept.append(marker); last_marker = marker
+            continue
+        if line.endswith("?"):
+            continue
+        if low in _PDP_SKIP_EXACT:
+            continue
+        if any(low.startswith(s) for s in _PDP_BOILER):
+            continue
+        if len(line) < 12:
+            continue
+        if line in seen:
+            continue
+        seen.add(line); kept.append(line); last_marker = None  # allow a marker to recur after content
+    return "\n".join(kept)
+
+# ── Token-budget trimming (Groq free tier = 12k tokens/min) ───────────────────
+def trim(text: str, max_chars: int):
+    if len(text) <= max_chars:
+        return text, False
+    head = int(max_chars * 0.55)
+    tail = max_chars - head
+    marker = "\n\n[… middle trimmed to fit the free-tier limit …]\n\n"
+    return text[:head] + marker + text[-tail:], True
+
+# (model, max_output_tokens, input_char_budget) — 8B has a smaller per-minute window
+GROQ_MODELS = [
+    ("llama-3.3-70b-versatile", 2500, 26000),
+    ("llama-3.1-8b-instant", 1400, 11000),
+]
+
+def groq_json(system: str, user: str) -> dict:
+    from groq import Groq
+    client = Groq(api_key=GROQ_KEY)
+    last_err = None
+    for model, max_tok, char_budget in GROQ_MODELS:
+        u, _ = trim(user, char_budget)
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                max_tokens=max_tok,
+                temperature=0.3,
+                response_format={"type": "json_object"},
+                messages=[{"role": "system", "content": system},
+                          {"role": "user", "content": u}],
+            )
+            txt = (resp.choices[0].message.content or "").strip()
+            txt = txt.replace("```json", "").replace("```", "").strip()
+            s, e = txt.find("{"), txt.rfind("}")
+            return json.loads(txt[s:e + 1])
+        except Exception as ex:
+            last_err = ex
+            msg = str(ex).lower()
+            if any(t in msg for t in ("rate_limit", "429", "413", "request too large", "tokens per")):
+                continue  # limit hit on this model — try the next (smaller) one
+            raise
+    raise last_err
+
+# ── Fresh draft from transcript only ──────────────────────────────────────────
+def align_transcript(transcript: str, principles: str) -> dict:
+    system = (
+        "You are helping a South Australian Department for Education staff member draft a "
+        "Performance and Development Plan (PDP) from a transcript of a development conversation. "
+        "Use only what is grounded in the transcript — never invent achievements, goals or quotes. "
+        "Where a section is not covered, return a short honest prompt to complete it "
+        "(e.g. 'Not discussed — consider what success looks like here'). "
+        "Write in Australian English, first person, in a warm, practical, coaching-aligned voice. "
+        "Frame goals to be specific and measurable with a timeframe (SMARTAR-friendly) where supported. "
+        f"Where natural, connect goals to the 4 areas of impact ({AREAS_OF_IMPACT}) and these guiding principles: {principles}. "
+        "Keep each field to 1-4 sentences. Return ONLY a JSON object with this shape: "
+        '{"employee_name":"","leader_name":"",'
+        '"goal1":{"goal":"","strengths":"","learn_change":"","support":"","monitor":"","evaluate":""},'
+        '"goal2":{"goal":"","strengths":"","learn_change":"","support":"","monitor":"","evaluate":""},'
+        '"career":{"goal":"","actions":""},'
+        '"wellbeing":{"goal":"","actions":""},'
+        '"cultural":{"focus":"Knowing|Doing|Being","commitment":""}}'
+    )
+    return groq_json(system, "Development conversation transcript:\n\n" + transcript)
+
+def apply_alignment(parsed: dict):
+    m = {
+        "goal1": {"goal": "w_goal1_goal", "strengths": "w_goal1_strengths", "learn_change": "w_goal1_learn",
+                  "support": "w_goal1_support", "monitor": "w_goal1_monitor", "evaluate": "w_goal1_evaluate"},
+        "goal2": {"goal": "w_goal2_goal", "strengths": "w_goal2_strengths", "learn_change": "w_goal2_learn",
+                  "support": "w_goal2_support", "monitor": "w_goal2_monitor", "evaluate": "w_goal2_evaluate"},
+        "career": {"goal": "w_career_goal", "actions": "w_career_actions"},
+        "wellbeing": {"goal": "w_wb_goal", "actions": "w_wb_actions"},
+    }
+    for sect, mapping in m.items():
+        obj = parsed.get(sect, {}) or {}
+        for src, key in mapping.items():
+            if obj.get(src):
+                st.session_state[key] = obj[src]
+    cult = parsed.get("cultural", {}) or {}
+    if cult.get("focus") in ("Knowing", "Doing", "Being"):
+        st.session_state["w_cultural_focus"] = cult["focus"]
+    if cult.get("commitment"):
+        st.session_state["w_cultural_commitment"] = cult["commitment"]
+
+FIELD_KEY_LIST = (
+    "goal1_goal, goal1_strengths, goal1_learn_change, goal1_support, goal1_monitor, goal1_evaluate, "
+    "goal2_goal, goal2_strengths, goal2_learn_change, goal2_support, goal2_monitor, goal2_evaluate, "
+    "career_goal, career_actions, wellbeing_goal, wellbeing_actions, cultural_commitment"
+)
+
+REFLECTION_MAP = {
+    "goal1_6m": "w_goal1_r6", "goal1_12m": "w_goal1_r12",
+    "goal2_6m": "w_goal2_r6", "goal2_12m": "w_goal2_r12",
+    "career_6m": "w_career_r6", "career_12m": "w_career_r12",
+    "wellbeing_6m": "w_wb_r6", "wellbeing_12m": "w_wb_r12",
+}
+
+# ── Step 1: load the uploaded PDP into the plan fields ────────────────────────
+def import_pdp(prior_text: str) -> dict:
+    system = (
+        "You are given the text of a completed Performance and Development Plan (PDP), extracted from a "
+        "Word template. Lines beginning with '##' are MARKERS: section markers (GOAL 1, GOAL 2, CAREER "
+        "FULFILMENT, MY WELLBEING, MY CULTURAL RESPONSIVENESS JOURNEY) and reflection markers (AT 6 MONTHS, "
+        "AT 12 MONTHS). Content after a marker belongs to it; an 'AT 6 MONTHS' block belongs to the most "
+        "recent goal/section. Map the staff member's written responses into the structured fields. "
+        "Use only what is in the document; if a section has no response, leave its fields empty; never invent. "
+        "Keep wording close to the original, lightly tidied. "
+        "Mapping hints: content about a teaching/learning program, student outcomes or skills is a goal; "
+        "content about future role, position, uncertainty about next year or career direction is career "
+        "fulfilment; content about feeling supported, lonely, grateful, or what someone enjoys at work is "
+        "wellbeing; content about Aboriginal students, cultural training or responsive practice is cultural. "
+        "Australian English. "
+        f"Goal/section field keys: {FIELD_KEY_LIST}. "
+        "Reflection field keys: goal1_6m, goal1_12m, goal2_6m, goal2_12m, career_6m, career_12m, "
+        "wellbeing_6m, wellbeing_12m. "
+        "Also return cultural_focus as Knowing|Doing|Being if indicated, else empty. "
+        'Return ONLY JSON: {"cultural_focus":"","fields":{"<key>":""...}}'
+    )
+    return groq_json(system, "COMPLETED PDP DOCUMENT:\n\n" + prior_text)
+
+def apply_import(parsed: dict):
+    fields = parsed.get("fields", {}) or {}
+    for k, wk in KEY_MAP.items():
+        if fields.get(k):
+            st.session_state[wk] = fields[k]
+    for k, wk in REFLECTION_MAP.items():
+        if fields.get(k):
+            st.session_state[wk] = fields[k]
+    if parsed.get("cultural_focus") in ("Knowing", "Doing", "Being"):
+        st.session_state["w_cultural_focus"] = parsed["cultural_focus"]
+
+# ── Step 2: extend each existing section with detail from the meeting ──────────
+# The amber addition sits under the MAIN field of each section.
+SECTION_MAIN = {
+    "goal1": "w_goal1_goal", "goal2": "w_goal2_goal", "career": "w_career_goal",
+    "wellbeing": "w_wb_goal", "cultural": "w_cultural_commitment",
+}
+
+def section_baseline() -> dict:
+    g = st.session_state.get
+    def sect(main, *extra):
+        parts = [g(main, "")] + [g(e, "") for e in extra]
+        return " ".join(p for p in parts if p).strip()
+    return {
+        "goal1": sect("w_goal1_goal", "w_goal1_strengths", "w_goal1_learn", "w_goal1_support",
+                      "w_goal1_monitor", "w_goal1_evaluate"),
+        "goal2": sect("w_goal2_goal", "w_goal2_strengths", "w_goal2_learn", "w_goal2_support",
+                      "w_goal2_monitor", "w_goal2_evaluate"),
+        "career": sect("w_career_goal", "w_career_actions"),
+        "wellbeing": sect("w_wb_goal", "w_wb_actions"),
+        "cultural": sect("w_cultural_commitment"),
+    }
+
+def add_meeting(baseline: dict, transcript: str, principles: str) -> dict:
+    system = (
+        "You are given (A) a staff member's EXISTING PDP content for each section, and (B) a transcript of a "
+        "development conversation about that plan. For EACH section, write an EXTENSION that builds on and "
+        "deepens the existing content using what was discussed — adding specific detail, examples, actions, "
+        "progress, timeframes, evidence or nuance that enrich and extend the existing goal. This should make "
+        "the goal more detailed and concrete. Do NOT restate the existing content; write the ADDITIONAL "
+        "detail that extends it, so it reads naturally as a continuation. Also fold in any genuinely new "
+        "points the conversation raised for that section. If the conversation adds nothing for a section, "
+        "return an empty string for it. Ground everything in the transcript; never invent. First person, "
+        "Australian English, warm and practical, 1-4 sentences each. "
+        f"Where natural, connect to the 4 areas of impact ({AREAS_OF_IMPACT}) and guiding principles: {principles}. "
+        "Sections: goal1, goal2, career, wellbeing, cultural. "
+        'Return ONLY JSON: {"additions":{"goal1":"","goal2":"","career":"","wellbeing":"","cultural":""}}'
+    )
+    existing = "\n".join(f"[{k}] {v if v else '(empty)'}" for k, v in baseline.items())
+    user = "EXISTING PDP CONTENT BY SECTION:\n" + existing + "\n\nCONVERSATION TRANSCRIPT:\n" + transcript
+    return groq_json(system, user)
+
+def apply_additions(parsed: dict):
+    additions = parsed.get("additions", {}) or {}
+    for sect, wk in SECTION_MAIN.items():
+        if additions.get(sect):
+            st.session_state[wk + "__add"] = additions[sect]
+
+# ── Save / load / export ──────────────────────────────────────────────────────
+def collect_plan() -> dict:
+    keys = FIELD_KEYS + ["w_cultural_focus"] + ADD_KEYS
+    return {k: st.session_state.get(k, "") for k in keys}
+
+def save_plan():
+    payload = {
+        "staff_name": get_staff_name() or "",
+        "employee_name": st.session_state.get("w_emp", ""),
+        "leader_name": st.session_state.get("w_ldr", ""),
+        "plan_date": st.session_state.get("w_date", ""),
+        "data": collect_plan(),
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    supabase.table("pdp_plans").insert(payload).execute()
+
+def load_my_plans() -> list:
+    name = get_staff_name() or ""
+    res = (supabase.table("pdp_plans")
+           .select("id, employee_name, plan_date, updated_at")
+           .eq("staff_name", name).order("updated_at", desc=True).execute())
+    return res.data or []
+
+def load_plan(plan_id: str):
+    res = supabase.table("pdp_plans").select("data").eq("id", plan_id).single().execute()
+    for k, v in ((res.data or {}).get("data", {}) or {}).items():
+        st.session_state[k] = v
+
+def delete_plan(plan_id: str):
+    supabase.table("pdp_plans").delete().eq("id", plan_id).execute()
+
+def plan_to_markdown() -> str:
+    g = st.session_state.get
+    def block(wk):
+        out = g(wk, "")
+        add = g(wk + "__add", "")
+        if add:
+            out += f"\n\n> ➕ **Added from the meeting:** {add}"
+        return out
+    md = ["# Performance and Development Plan\n",
+          f"**Employee:** {g('w_emp','')}  ", f"**Leader:** {g('w_ldr','')}  ",
+          f"**Date:** {g('w_date','')}\n"]
+    for n in ("1", "2"):
+        md.append(f"\n## Goal {n}\n")
+        md.append(f"**Goal & purpose:** {block(f'w_goal{n}_goal')}\n")
+        md.append(f"- **Strengths to leverage:** {block(f'w_goal{n}_strengths')}")
+        md.append(f"- **Learn / change:** {block(f'w_goal{n}_learn')}")
+        md.append(f"- **Support needed:** {block(f'w_goal{n}_support')}")
+        md.append(f"- **Monitor change:** {block(f'w_goal{n}_monitor')}")
+        md.append(f"- **Evaluate impact:** {block(f'w_goal{n}_evaluate')}")
+        md.append(f"\n*6 months:* {g(f'w_goal{n}_r6','')}")
+        md.append(f"\n*12 months:* {g(f'w_goal{n}_r12','')}")
+    md.append(f"\n## Career fulfilment\n{block('w_career_goal')}\n")
+    md.append(f"**Actions:** {block('w_career_actions')}")
+    md.append(f"\n## My wellbeing\n{block('w_wb_goal')}\n")
+    md.append(f"**Actions:** {block('w_wb_actions')}")
+    md.append(f"\n## Cultural responsiveness journey\n**Focus:** {g('w_cultural_focus','')}\n\n{block('w_cultural_commitment')}")
+    md.append(f"\n## Reflection overview\n")
+    md.append(f"**Employee — 6 months:** {g('w_ref_emp6','')}")
+    md.append(f"**Leader — 6 months:** {g('w_ref_ldr6','')}")
+    md.append(f"**Employee — 12 months:** {g('w_ref_emp12','')}")
+    md.append(f"**Leader — 12 months:** {g('w_ref_ldr12','')}")
+    return "\n".join(md)
+
+def build_docx() -> bytes:
+    """Build a Word document styled to match the DfE PDP proforma."""
     from docx import Document
-    from docx.shared import Pt, RGBColor, Inches
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.enum.table import WD_ALIGN_VERTICAL
+    from docx.shared import Pt, RGBColor, Mm
+    from docx.enum.table import WD_TABLE_ALIGNMENT
     from docx.oxml.ns import qn
     from docx.oxml import OxmlElement
-    DOCX_LIB = True
-except Exception:
-    DOCX_LIB = False
 
-try:
-    from supabase import create_client
-    SUPABASE_LIB = True
-except Exception:
-    SUPABASE_LIB = False
+    g = st.session_state.get
+    TEAL = "1A7A7A"; TEAL_DARK = "13605A"; TEAL_PALE = "E2F0ED"
+    AMBER = "C8760A"; GREY = "5B6B68"; BORDER = "CFE0DC"
+    W_MM = 184.6  # content width on A4 with 12.7mm side margins
 
-try:
-    import docx as _docx_read  # python-docx, reused for reading uploads
-    READ_DOCX = True
-except Exception:
-    READ_DOCX = False
+    def _shade(cell, hexcolor):
+        tcPr = cell._tc.get_or_add_tcPr()
+        shd = OxmlElement('w:shd')
+        shd.set(qn('w:val'), 'clear'); shd.set(qn('w:color'), 'auto'); shd.set(qn('w:fill'), hexcolor)
+        tcPr.append(shd)
 
+    def _bd(cell, color=BORDER, sz=6):
+        tcPr = cell._tc.get_or_add_tcPr()
+        b = OxmlElement('w:tcBorders')
+        for side in ("top", "bottom", "left", "right"):
+            el = OxmlElement(f'w:{side}')
+            el.set(qn('w:val'), 'single'); el.set(qn('w:sz'), str(sz))
+            el.set(qn('w:space'), '0'); el.set(qn('w:color'), color)
+            b.append(el)
+        tcPr.append(b)
 
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-MODEL = "claude-sonnet-4-6"
-MAX_TRANSCRIPT_CHARS = 400000  # Claude handles ~200k tokens; this is a safety net only
-SUPABASE_TABLE = "lc_meetings"
+    def _mar(cell, t=80, bo=80, l=140, r=140):
+        tcPr = cell._tc.get_or_add_tcPr()
+        m = OxmlElement('w:tcMar')
+        for side, val in (("top", t), ("bottom", bo), ("left", l), ("right", r)):
+            el = OxmlElement(f'w:{side}'); el.set(qn('w:w'), str(val)); el.set(qn('w:type'), 'dxa')
+            m.append(el)
+        tcPr.append(m)
 
-# This week's agenda, captured from your 19.06.2026 proforma, so you can
-# load it with one click and test the tool straight away.
-SAMPLE_AGENDA = """LBu LC leader Agenda
-Office: Schools and Preschools | Date of meeting: 19.06.2026
-Directorate: Priority Learners | Unit: LBu
-Time: 8.00am | Location: Microsoft Teams
-Chair: Susan Furga
-Attendees: Beck; Candice, Sarah; Andrew
+    def _tw(tbl, width_mm=W_MM):
+        tbl.autofit = False
+        tblPr = tbl._tbl.tblPr
+        for ex in tblPr.findall(qn('w:tblW')):
+            tblPr.remove(ex)
+        tblW = OxmlElement('w:tblW')
+        tblW.set(qn('w:w'), str(int(width_mm * 1440 / 25.4))); tblW.set(qn('w:type'), 'dxa')
+        tblPr.append(tblW)
 
-Actions from previous meetings:
-(none recorded)
+    def _run(p, text, bold=False, size=10.5, color="222222", italic=False):
+        r = p.add_run("" if text is None else str(text)); r.bold = bold; r.italic = italic
+        r.font.size = Pt(size); r.font.name = "Arial"; r.font.color.rgb = RGBColor.from_string(color)
+        return r
 
-Agenda items:
-- Susan: Reform - injury report
-- Susan: Managing transitions re reform discussion and reflection
-- Everyone: Elephant ED
-- Susan: Partial freeze impacts and changes in corporate
-- Susan: Bus Driver role update
-- EMS - no updates
-- Resource plans for new financial year
-- AoB
-"""
-
-try:
-    st.set_page_config(page_title="LC Meeting Summariser", page_icon="🗒️", layout="wide")
-except Exception:
-    pass
-
-
-# ---------------------------------------------------------------------------
-# Helpers: secrets / clients
-# ---------------------------------------------------------------------------
-def get_secret(name):
-    # Check Streamlit secrets (secrets.toml) first, then OS environment
-    # variables (e.g. Render's Environment tab) so either location works.
-    try:
-        if name in st.secrets:
-            return st.secrets[name]
-    except Exception:
-        pass
-    return os.environ.get(name)
-
-
-def get_anthropic_client():
-    key = get_secret("ANTHROPIC_API_KEY")
-    if not (ANTHROPIC_LIB and key):
-        return None
-    try:
-        return Anthropic(api_key=key)
-    except Exception:
-        return None
-
-
-@st.cache_resource(show_spinner=False)
-def get_supabase():
-    url = get_secret("SUPABASE_URL")
-    key = get_secret("SUPABASE_KEY") or get_secret("SUPABASE_ANON_KEY")
-    if not (SUPABASE_LIB and url and key):
-        return None
-    try:
-        return create_client(url, key)
-    except Exception:
-        return None
-
-
-# ---------------------------------------------------------------------------
-# Helpers: reading uploads
-# ---------------------------------------------------------------------------
-def read_upload(uploaded_file):
-    """Return plain text from an uploaded .docx / .txt / .vtt / .md file."""
-    if uploaded_file is None:
-        return ""
-    name = (uploaded_file.name or "").lower()
-    data = uploaded_file.getvalue()
-
-    if name.endswith(".docx") and READ_DOCX:
-        try:
-            doc = _docx_read.Document(io.BytesIO(data))
-            parts = [p.text for p in doc.paragraphs if p.text.strip()]
-            for tbl in doc.tables:
-                for row in tbl.rows:
-                    cells = [c.text.strip() for c in row.cells if c.text.strip()]
-                    if cells:
-                        parts.append(" | ".join(cells))
-            return "\n".join(parts)
-        except Exception as e:
-            return f"[Could not read .docx: {e}]"
-
-    try:
-        text = data.decode("utf-8", errors="ignore")
-    except Exception:
-        text = str(data)
-    return clean_vtt(text)
-
-
-def clean_vtt(text):
-    """Strip WEBVTT timestamps/cue numbers so Teams .vtt transcripts read cleanly."""
-    if "WEBVTT" not in text and "-->" not in text:
-        return text
-    out = []
-    for line in text.splitlines():
-        s = line.strip()
-        if not s:
-            continue
-        if s == "WEBVTT":
-            continue
-        if "-->" in s:
-            continue
-        if re.fullmatch(r"\d+", s):
-            continue
-        out.append(s)
-    return "\n".join(out)
-
-
-# ---------------------------------------------------------------------------
-# Helpers: AI analysis
-# ---------------------------------------------------------------------------
-CONFIDENTIAL_CATEGORIES = """- A named individual's performance, conduct, capability, discipline or PDP issues
-- Health, medical, wellbeing or personal circumstances of named staff or students
-- Industrial relations, union, grievance or complaint matters
-- Restructure, redeployment, role security or freeze specifics affecting named roles, BEFORE official communication
-- Anything pre-decisional / not yet endorsed or announced
-- Anything that reads as OFFICIAL: Sensitive, legal, or privacy-bound"""
-
-
-def build_prompt(agenda_text, transcript_text):
-    has_agenda = bool(agenda_text.strip())
-    agenda_block = (
-        f"AGENDA (use this to structure the discussion breakdown):\n{agenda_text}\n\n"
-        if has_agenda else
-        "AGENDA: none supplied — derive the topics from the transcript.\n\n"
-    )
-
-    schema = """{
-  "meeting_meta": {"date": "", "chair": "", "attendees": "", "apologies": ""},
-  "summary": "3-6 sentence plain-English overview of the meeting",
-  "agenda_items": [
-    {"lead": "who led it", "topic": "topic name", "discussion": "what was discussed", "outcome": "decision/result or 'noted'"}
-  ],
-  "decisions": ["clear decisions made"],
-  "actions": [
-    {"owner": "person responsible", "action": "what to do", "due": "date/timeframe or 'TBC'"}
-  ],
-  "share_with_staff": [
-    {
-      "item": "short headline",
-      "raw_note": "what was actually said (for the manager's eyes)",
-      "staff_safe_wording": "a version with personal/confidential detail removed, ready to relay; or null if nothing can be safely shared",
-      "classification": "share | hold | your_call",
-      "reason": "one line explaining the classification",
-      "audience": "all_staff | leadership | individual"
-    }
-  ]
-}"""
-
-    instructions = f"""You are an executive assistant for the Manager of an alternative education unit (LBu / Cowandilla Learning Centre) in the South Australian Department for Education. You are summarising her line-management ("LC leader") meeting.
-
-{agenda_block}TRANSCRIPT:
-{transcript_text}
-
-Produce a faithful, concise summary. Rules:
-- If an agenda was supplied, create one entry in "agenda_items" for EACH agenda topic, in order. If a topic wasn't actually discussed, set outcome to "not discussed". Add any extra topics raised (AoB) at the end.
-- If no agenda was supplied, group the transcript into the natural topics discussed.
-- "actions" = anything someone committed to do, or that was assigned. Capture the owner and any timeframe. Do not invent owners — use "TBC" if unclear.
-- "decisions" = clear decisions made.
-- "do not fabricate". If something is uncertain, keep it tentative.
-
-SHARE-WITH-STAFF — classify, do not decide for her:
-- List every item that *could* be relevant to communicate to her team. For EACH, set "classification":
-  * "share"   = operationally useful to the team and clears all the confidential categories below.
-  * "hold"    = touches ANY confidential category below. Default to hold when unsure.
-  * "your_call" = genuinely depends on timing or whether it has been officially announced yet — flag for her judgment.
-- Treat these categories as HOLD-by-default:
-{CONFIDENTIAL_CATEGORIES}
-- Always provide "staff_safe_wording": a version that strips names and confidential detail and conveys only what the team needs. If nothing can be safely shared, set it to null.
-- "raw_note" is for the manager's record only and may contain the sensitive detail.
-- Err on the side of caution: it is far better to mark something "hold" or "your_call" than to leak a personnel matter.
-
-Return ONLY valid JSON matching this exact schema, with no prose, no markdown, no code fences:
-{schema}"""
-    return instructions
-
-
-def _repair_truncated_json(t):
-    """Best-effort recovery when the model's JSON was cut off mid-output."""
-    s = t[t.find("{"):] if "{" in t else t
-    stack, in_str, esc = [], False, False
-    for ch in s:
-        if in_str:
-            if esc:
-                esc = False
-            elif ch == "\\":
-                esc = True
-            elif ch == '"':
-                in_str = False
-        else:
-            if ch == '"':
-                in_str = True
-            elif ch in "{[":
-                stack.append("}" if ch == "{" else "]")
-            elif ch in "}]":
-                if stack:
-                    stack.pop()
-    repaired = s
-    if in_str:                       # close an open string
-        repaired += '"'
-    repaired = re.sub(r"[,\s]+$", "", repaired)   # drop trailing comma/space
-    repaired += "".join(reversed(stack))          # close open braces/brackets
-    try:
-        return json.loads(repaired)
-    except Exception:
-        return None
-
-
-def parse_json_response(text):
-    if not text:
-        return None
-    t = text.strip()
-    t = re.sub(r"^```(?:json)?", "", t).strip()
-    t = re.sub(r"```$", "", t).strip()
-    start, end = t.find("{"), t.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        candidate = t[start:end + 1]
-    else:
-        candidate = t
-    try:
-        return json.loads(candidate)
-    except Exception:
-        pass
-    # fall back to repairing a truncated / partial object
-    return _repair_truncated_json(t)
-
-
-def analyse_meeting(agenda_text, transcript_text):
-    client = get_anthropic_client()
-    if client is None:
-        return None, "Claude is not configured. Add ANTHROPIC_API_KEY to your app secrets."
-
-    transcript_text = transcript_text.strip()
-    truncated = False
-    if len(transcript_text) > MAX_TRANSCRIPT_CHARS:
-        transcript_text = transcript_text[:MAX_TRANSCRIPT_CHARS]
-        truncated = True
-
-    prompt = build_prompt(agenda_text, transcript_text)
-    try:
-        resp = client.messages.create(
-            model=MODEL,
-            max_tokens=8192,
-            temperature=0.2,
-            system="You return only valid JSON. No commentary, no markdown, no code fences.",
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = "".join(
-            block.text for block in resp.content if getattr(block, "type", "") == "text"
-        )
-        stop_reason = getattr(resp, "stop_reason", None)
-    except Exception as e:
-        return None, f"AI request failed: {e}"
-
-    if not raw.strip():
-        return None, "Claude returned an empty response. Please try again."
-
-    data = parse_json_response(raw)
-    if data is None:
-        # keep the raw reply so the page can show it for troubleshooting
-        st.session_state["last_raw_response"] = raw
-        if stop_reason == "max_tokens":
-            return None, ("The response was cut off because the meeting produced more "
-                          "output than the limit allowed. Try splitting a very long "
-                          "transcript, or trimming obvious chit-chat, then run it again.")
-        return None, ("Could not read Claude's response as structured data. It's saved "
-                      "below so you can see what came back — usually re-running fixes it.")
-
-    data.setdefault("meeting_meta", {})
-    data.setdefault("summary", "")
-    data.setdefault("agenda_items", [])
-    data.setdefault("decisions", [])
-    data.setdefault("actions", [])
-    data.setdefault("share_with_staff", [])
-    # normalise classification values
-    for s in data["share_with_staff"]:
-        c = str(s.get("classification", "your_call")).lower().strip()
-        if c not in ("share", "hold", "your_call"):
-            c = "your_call"
-        s["classification"] = c
-    note = "Transcript was long and was trimmed for analysis." if truncated else ""
-    return data, note
-
-
-# ---------------------------------------------------------------------------
-# Helpers: Word export (mirrors the LBu LC leader proforma)
-# ---------------------------------------------------------------------------
-TEAL = RGBColor(0x00, 0x86, 0x7D) if DOCX_LIB else None
-
-
-def _shade_cell(cell, hex_fill):
-    shd = OxmlElement("w:shd")
-    shd.set(qn("w:val"), "clear")
-    shd.set(qn("w:color"), "auto")
-    shd.set(qn("w:fill"), hex_fill)
-    cell._tc.get_or_add_tcPr().append(shd)
-
-
-def _set_cell_text(cell, text, bold=False, size=10, color=None):
-    cell.text = ""
-    p = cell.paragraphs[0]
-    run = p.add_run(str(text) if text is not None else "")
-    run.bold = bold
-    run.font.size = Pt(size)
-    run.font.name = "Arial"
-    if color is not None:
-        run.font.color.rgb = color
-    cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-
-
-def _heading(doc, text, color=None, size=14):
-    h = doc.add_paragraph()
-    hr = h.add_run(text)
-    hr.bold = True
-    hr.font.size = Pt(size)
-    if color is not None:
-        hr.font.color.rgb = color
-    return h
-
-
-def build_docx(data, meta, approved_indices):
-    """approved_indices: set of share_with_staff indices the manager ticked to share."""
     doc = Document()
-    style = doc.styles["Normal"]
-    style.font.name = "Arial"
-    style.font.size = Pt(10)
+    s = doc.sections[0]
+    s.page_width = Mm(210); s.page_height = Mm(297)
+    s.left_margin = s.right_margin = Mm(12.7); s.top_margin = s.bottom_margin = Mm(14)
+    base = doc.styles["Normal"]; base.font.name = "Arial"; base.font.size = Pt(10.5)
 
-    # OFFICIAL banner
-    p = doc.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r = p.add_run("OFFICIAL")
-    r.bold = True
-    r.font.color.rgb = RGBColor(0xC0, 0x00, 0x00)
-    r.font.size = Pt(9)
+    def gap(pt=2):
+        doc.add_paragraph().paragraph_format.space_after = Pt(pt)
+
+    def band(text, size=15, fill=TEAL):
+        t = doc.add_table(rows=1, cols=1); _tw(t); t.alignment = WD_TABLE_ALIGNMENT.CENTER
+        c = t.cell(0, 0); c.width = Mm(W_MM); _shade(c, fill); _mar(c, 90, 90, 160, 160)
+        _run(c.paragraphs[0], text, bold=True, size=size, color="FFFFFF")
+        gap()
+
+    def subhead(text):
+        p = doc.add_paragraph(); p.paragraph_format.space_before = Pt(4); p.paragraph_format.space_after = Pt(2)
+        _run(p, text, bold=True, size=11, color=TEAL_DARK)
+
+    def prompts(items):
+        for it in items:
+            p = doc.add_paragraph(style="List Bullet"); p.paragraph_format.space_after = Pt(0)
+            _run(p, it, size=9, color=GREY, italic=True)
+
+    def box(fields, add_pairs=None):
+        t = doc.add_table(rows=1, cols=1); _tw(t); t.alignment = WD_TABLE_ALIGNMENT.CENTER
+        c = t.cell(0, 0); c.width = Mm(W_MM); _bd(c); _mar(c)
+        first = True
+        for label, value in fields:
+            if not value:
+                continue
+            p = c.paragraphs[0] if first else c.add_paragraph(); first = False
+            p.paragraph_format.space_after = Pt(3)
+            if label:
+                _run(p, label + ": ", bold=True, color=TEAL_DARK)
+            _run(p, value)
+        for label, add in (add_pairs or []):
+            if not add:
+                continue
+            p = c.paragraphs[0] if first else c.add_paragraph(); first = False
+            p.paragraph_format.space_after = Pt(1)
+            _run(p, "➕ Added from the meeting", bold=True, size=10, color=AMBER)
+            if label:
+                _run(p, f"  ({label})", size=9, color=AMBER)
+            p2 = c.add_paragraph(); p2.paragraph_format.space_after = Pt(3)
+            _run(p2, add, color=AMBER)
+        if first:
+            _run(c.paragraphs[0], "")
+        gap()
+
+    def reflections(v6, v12):
+        cap = doc.add_paragraph(); cap.paragraph_format.space_after = Pt(2)
+        _run(cap, "Feedback and goal reflections — to what extent has the goal been achieved? "
+                  "What needs adjusting?", italic=True, size=9, color=GREY)
+        t = doc.add_table(rows=2, cols=2); _tw(t); t.alignment = WD_TABLE_ALIGNMENT.CENTER
+        for j, head in enumerate(("AT 6 MONTHS", "AT 12 MONTHS")):
+            hc = t.cell(0, j); hc.width = Mm(W_MM / 2); _shade(hc, TEAL_DARK); _mar(hc, 50, 50, 140, 140)
+            _run(hc.paragraphs[0], head, bold=True, size=9, color="FFFFFF")
+        for j, val in enumerate((v6, v12)):
+            cc = t.cell(1, j); cc.width = Mm(W_MM / 2); _bd(cc); _mar(cc)
+            _run(cc.paragraphs[0], val or "", size=10)
+        gap()
 
     # Title
-    title = doc.add_paragraph()
-    tr = title.add_run("LBu LC leader — Meeting Summary")
-    tr.bold = True
-    tr.font.size = Pt(22)
-    tr.font.color.rgb = TEAL
+    band("PERFORMANCE AND DEVELOPMENT PLAN", size=17)
+    gov = doc.add_paragraph(); gov.paragraph_format.space_after = Pt(4)
+    _run(gov, "Government of South Australia  ·  Department for Education  ·  "
+              "Cowandilla Learning Centre — LBU", size=8.5, color=GREY)
+    idt = doc.add_table(rows=3, cols=2); _tw(idt); idt.alignment = WD_TABLE_ALIGNMENT.CENTER
+    for i, (lbl, key) in enumerate([("Employee Name", "w_emp"), ("Leader Name", "w_ldr"), ("Date", "w_date")]):
+        lc = idt.cell(i, 0); lc.width = Mm(45); _shade(lc, TEAL_PALE); _bd(lc); _mar(lc)
+        _run(lc.paragraphs[0], lbl, bold=True, size=10, color=TEAL_DARK)
+        vc = idt.cell(i, 1); vc.width = Mm(W_MM - 45); _bd(vc); _mar(vc)
+        _run(vc.paragraphs[0], g(key, ""))
+    sp = doc.add_paragraph(); sp.paragraph_format.space_before = Pt(4); sp.paragraph_format.space_after = Pt(6)
+    _run(sp, "When you are learning and thriving, everyone benefits.", bold=True, color=TEAL)
 
-    mm = data.get("meeting_meta", {}) or {}
-    mdate = meta.get("date") or mm.get("date") or ""
-    chair = meta.get("chair") or mm.get("chair") or "Susan Furga"
-    attendees = meta.get("attendees") or mm.get("attendees") or ""
-    apologies = meta.get("apologies") or mm.get("apologies") or ""
+    GP = ["What's important for my own development as a professional?",
+          "How can I contribute to the guiding principles and 4 areas of impact?",
+          "What will I deliver, what actions will I take, by when and how?"]
 
-    # Header info table
-    info = doc.add_table(rows=3, cols=4)
-    info.style = "Table Grid"
-    rows = [
-        ("Office", "Schools and Preschools", "Date of meeting", mdate),
-        ("Directorate", "Priority Learners", "Unit", "LBu"),
-        ("Chair", chair, "Location", "Microsoft Teams"),
-    ]
-    for i, (a, b, c, d) in enumerate(rows):
-        _set_cell_text(info.rows[i].cells[0], a, bold=True)
-        _set_cell_text(info.rows[i].cells[1], b)
-        _set_cell_text(info.rows[i].cells[2], c, bold=True)
-        _set_cell_text(info.rows[i].cells[3], d)
+    band("GOALS")
+    prompts(GP)
+    for n in ("1", "2"):
+        subhead(f"GOAL {n}")
+        box([("Goal & purpose", g(f"w_goal{n}_goal", "")),
+             ("Strengths to leverage", g(f"w_goal{n}_strengths", "")),
+             ("What I need to learn / change", g(f"w_goal{n}_learn", "")),
+             ("Support I need", g(f"w_goal{n}_support", "")),
+             ("How I'll monitor change", g(f"w_goal{n}_monitor", "")),
+             ("How I'll evaluate impact", g(f"w_goal{n}_evaluate", ""))],
+            [("Goal & purpose", g(f"w_goal{n}_goal__add", "")),
+             ("Strengths", g(f"w_goal{n}_strengths__add", "")),
+             ("Learn / change", g(f"w_goal{n}_learn__add", "")),
+             ("Support", g(f"w_goal{n}_support__add", "")),
+             ("Monitor", g(f"w_goal{n}_monitor__add", "")),
+             ("Evaluate", g(f"w_goal{n}_evaluate__add", ""))])
+        reflections(g(f"w_goal{n}_r6", ""), g(f"w_goal{n}_r12", ""))
 
-    doc.add_paragraph("")
+    band("CAREER FULFILMENT")
+    prompts(["What does career fulfilment look like for me?",
+             "What aspects of my role do I enjoy and want to do more of?",
+             "What actions will I take, by when and how?"])
+    box([("Goal", g("w_career_goal", "")), ("Actions", g("w_career_actions", ""))],
+        [("Goal", g("w_career_goal__add", "")), ("Actions", g("w_career_actions__add", ""))])
+    reflections(g("w_career_r6", ""), g("w_career_r12", ""))
 
-    att = doc.add_table(rows=2, cols=2)
-    att.style = "Table Grid"
-    _set_cell_text(att.rows[0].cells[0], "Attendees", bold=True)
-    _set_cell_text(att.rows[0].cells[1], attendees)
-    _set_cell_text(att.rows[1].cells[0], "Apologies", bold=True)
-    _set_cell_text(att.rows[1].cells[1], apologies)
+    band("MY WELLBEING")
+    prompts(["When I'm at my best, what factors exist and how are they enabled?",
+             "What actions will I take, by when and how?"])
+    box([("Goal", g("w_wb_goal", "")), ("Actions", g("w_wb_actions", ""))],
+        [("Goal", g("w_wb_goal__add", "")), ("Actions", g("w_wb_actions__add", ""))])
+    reflections(g("w_wb_r6", ""), g("w_wb_r12", ""))
 
-    # Summary
-    _heading(doc, "Summary", TEAL)
-    doc.add_paragraph(data.get("summary", ""))
+    band("MY CULTURAL RESPONSIVENESS JOURNEY")
+    prompts(["Knowing — broaden knowledge of histories, cultures and languages of Aboriginal people.",
+             "Doing — respond to the diverse needs, backgrounds, experiences and knowledge.",
+             "Being — strengthen self-awareness of diverse cultural and linguistic needs."])
+    fp = doc.add_paragraph(); fp.paragraph_format.space_after = Pt(2)
+    _run(fp, "Focus: ", bold=True, color=TEAL_DARK); _run(fp, g("w_cultural_focus", ""))
+    box([(None, g("w_cultural_commitment", ""))], [(None, g("w_cultural_commitment__add", ""))])
 
-    # Discussion by item
-    items = data.get("agenda_items", []) or []
-    if items:
-        _heading(doc, "Discussion by item", TEAL)
-        t = doc.add_table(rows=1, cols=3)
-        t.style = "Table Grid"
-        for c, label in zip(t.rows[0].cells, ["Lead", "Topic", "Discussion & outcome"]):
-            _set_cell_text(c, label, bold=True, color=RGBColor(0xFF, 0xFF, 0xFF))
-            _shade_cell(c, "00867D")
-        for it in items:
-            row = t.add_row().cells
-            _set_cell_text(row[0], it.get("lead", ""))
-            _set_cell_text(row[1], it.get("topic", ""), bold=True)
-            disc = it.get("discussion", "")
-            outc = it.get("outcome", "")
-            _set_cell_text(row[2], disc + (f"\nOutcome: {outc}" if outc else ""))
+    band("REFLECTION OVERVIEW")
+    prompts(["What did you enjoy most? Where were you most successful, and why?",
+             "What did you find challenging? What have you learned?"])
+    refmap = {("6 months", 0): "w_ref_emp6", ("6 months", 1): "w_ref_ldr6",
+              ("12 months", 0): "w_ref_emp12", ("12 months", 1): "w_ref_ldr12"}
+    for period in ("6 months", "12 months"):
+        t = doc.add_table(rows=2, cols=2); _tw(t); t.alignment = WD_TABLE_ALIGNMENT.CENTER
+        for j, who in enumerate(("Employee summary", "Leader summary")):
+            hc = t.cell(0, j); hc.width = Mm(W_MM / 2); _shade(hc, TEAL_DARK); _mar(hc, 50, 50, 140, 140)
+            _run(hc.paragraphs[0], f"{who} — at {period}", bold=True, size=9, color="FFFFFF")
+        for j in range(2):
+            cc = t.cell(1, j); cc.width = Mm(W_MM / 2); _bd(cc); _mar(cc)
+            _run(cc.paragraphs[0], g(refmap[(period, j)], ""), size=10)
+            sig = cc.add_paragraph(); sig.paragraph_format.space_before = Pt(14)
+            _run(sig, "Signature: ______________________   Date: __________", size=8.5, color=GREY)
+        gap()
 
-    # Decisions
-    decisions = data.get("decisions", []) or []
-    if decisions:
-        _heading(doc, "Decisions", TEAL)
-        for d in decisions:
-            doc.add_paragraph(d, style="List Bullet")
+    buf = io.BytesIO(); doc.save(buf); return buf.getvalue()
 
-    # Actions
-    actions = data.get("actions", []) or []
-    _heading(doc, "Actions", TEAL)
-    if actions:
-        t = doc.add_table(rows=1, cols=3)
-        t.style = "Table Grid"
-        for c, label in zip(t.rows[0].cells, ["Owner", "Action", "Due"]):
-            _set_cell_text(c, label, bold=True, color=RGBColor(0xFF, 0xFF, 0xFF))
-            _shade_cell(c, "00867D")
-        for a in actions:
-            row = t.add_row().cells
-            _set_cell_text(row[0], a.get("owner", ""))
-            _set_cell_text(row[1], a.get("action", ""))
-            _set_cell_text(row[2], a.get("due", "TBC"))
-    else:
-        doc.add_paragraph("No actions recorded.")
+SAMPLE = (
+    "Leader: Thanks for making time. What's been going well this term?\n"
+    "Staff: The interval support tracking has helped me see patterns earlier. I've gotten better at noticing "
+    "when a student is moving out of their window of tolerance and stepping in before things escalate.\n"
+    "Leader: Where do you want to grow?\n"
+    "Staff: I'd like to build confidence leading restorative conversations after incidents. I'd like to be "
+    "running structured restorative debriefs with students myself by the end of term 3, and supporting one "
+    "colleague to do the same.\n"
+    "Leader: What would help?\n"
+    "Staff: Coaching from you, observing a couple of debriefs, and time carved out in the week. I'd know it's "
+    "working if incident re-escalation drops and students re-engage faster afterwards.\n"
+    "Leader: And wellbeing?\n"
+    "Staff: The back-to-back days wear me down. I'm at my best when I get a proper reset at lunch and I've "
+    "prepped the morning before. I want to protect that more deliberately.\n"
+    "Leader: Career-wise?\n"
+    "Staff: Longer term I'm interested in a coordinator role — leading practice across the centre.\n"
+    "Leader: Cultural responsiveness?\n"
+    "Staff: I want to deepen how I respond to our Aboriginal students — not just knowledge, but the doing, "
+    "embedding more responsive practice into how I plan and run sessions."
+)
 
-    # Split share items into approved (to share) vs withheld (manager record)
-    share = data.get("share_with_staff", []) or []
-    approved = [(i, s) for i, s in enumerate(share) if i in approved_indices]
-    withheld = [(i, s) for i, s in enumerate(share) if i not in approved_indices]
+# ── Header ────────────────────────────────────────────────────────────────────
+st.markdown(f"""
+<div style="background:linear-gradient(135deg,{TEAL},#0f5f5f);color:white;border-radius:12px;
+            padding:1.25rem 1.5rem;margin-bottom:1rem;">
+  <div style="font-size:1.5rem;font-weight:800;">🎯 PDP Builder</div>
+  <div style="opacity:0.85;font-size:0.9rem;margin-top:0.2rem;">
+    Draft a Performance and Development Plan from a development conversation, or layer a meeting onto a
+    plan already drafted — every field editable.</div>
+</div>
+""", unsafe_allow_html=True)
 
-    # To share with staff (approved only)
-    _heading(doc, "To share with staff", TEAL)
-    if approved:
-        t = doc.add_table(rows=1, cols=2)
-        t.style = "Table Grid"
-        for c, label in zip(t.rows[0].cells, ["Item", "What to tell the team"]):
-            _set_cell_text(c, label, bold=True)
-            _shade_cell(c, "FFE08A")
-        for _, s in approved:
-            row = t.add_row().cells
-            _set_cell_text(row[0], s.get("item", ""), bold=True)
-            wording = s.get("staff_safe_wording") or s.get("item", "")
-            _set_cell_text(row[1], wording)
-            _shade_cell(row[0], "FFF6D6")
-            _shade_cell(row[1], "FFF6D6")
-    else:
-        doc.add_paragraph("Nothing approved to share with staff.")
+st.info(
+    "This supports the collaborative employee-and-leader PDP process. Drafts are a starting point — review and "
+    "edit every field.", icon="💬")
 
-    # Confidential — manager record only
-    if withheld:
-        doc.add_paragraph("")
-        sp = doc.add_paragraph()
-        spr = sp.add_run("OFFICIAL: Sensitive — manager record only · do not circulate")
-        spr.bold = True
-        spr.font.size = Pt(9)
-        spr.font.color.rgb = RGBColor(0xC0, 0x00, 0x00)
-        _heading(doc, "Confidential — not shared", RGBColor(0x80, 0x80, 0x80), size=13)
-        t = doc.add_table(rows=1, cols=3)
-        t.style = "Table Grid"
-        for c, label in zip(t.rows[0].cells, ["Item", "Note", "Why held"]):
-            _set_cell_text(c, label, bold=True)
-            _shade_cell(c, "EDEDED")
-        for _, s in withheld:
-            row = t.add_row().cells
-            _set_cell_text(row[0], s.get("item", ""), bold=True)
-            _set_cell_text(row[1], s.get("raw_note") or "")
-            tag = s.get("classification", "")
-            _set_cell_text(row[2], f"[{tag}] {s.get('reason','')}")
+# ── Identity ──────────────────────────────────────────────────────────────────
+c1, c2, c3 = st.columns([2, 2, 1])
+c1.text_input("Employee name", key="w_emp")
+c2.text_input("Leader name", key="w_ldr")
+c3.text_input("Date", key="w_date")
 
-    # Footer
-    fp = doc.add_paragraph()
-    fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    fr = fp.add_run("OFFICIAL")
-    fr.bold = True
-    fr.font.color.rgb = RGBColor(0xC0, 0x00, 0x00)
-    fr.font.size = Pt(9)
+# ── Engine ────────────────────────────────────────────────────────────────────
+st.markdown("### Build the plan")
 
-    buf = io.BytesIO()
-    doc.save(buf)
-    buf.seek(0)
-    return buf
+has_prior = bool(st.session_state["prior_pdp_text"].strip())
 
-
-# ---------------------------------------------------------------------------
-# Helpers: Supabase persistence (optional)
-# ---------------------------------------------------------------------------
-def save_meeting(meta, data, approved_indices, week_label=None):
-    sb = get_supabase()
-    if sb is None:
-        return False, "Supabase not configured — saved to this session only."
+# ---- Step 1: prior PDP → fields ----
+st.markdown("**Step 1 — Start from the existing PDP** (optional)")
+up = st.file_uploader(
+    "Upload the PDP drafted before the meeting (Word, PDF or text). Skip this to draft fresh from the transcript.",
+    type=["docx", "pdf", "txt", "md"])
+if up is not None:
     try:
-        payload = dict(data)
-        payload["_approved_indices"] = sorted(list(approved_indices))
-        payload["_week_label"] = week_label or ""
-        sb.table(SUPABASE_TABLE).insert({
-            "meeting_date": meta.get("date") or None,
-            "week_label": week_label or None,
-            "chair": meta.get("chair") or None,
-            "summary": data.get("summary", ""),
-            "payload": payload,
-            "created_at": datetime.utcnow().isoformat(),
-        }).execute()
-        return True, "Saved to the archive."
-    except Exception as e:
-        return False, f"Could not save: {e}"
+        st.session_state["prior_pdp_text"] = extract_text(up)
+        has_prior = bool(st.session_state["prior_pdp_text"].strip())
+        st.caption(f"✅ File read — {len(st.session_state['prior_pdp_text'])} characters. "
+                   f"Now load it into the plan.")
+    except Exception as ex:
+        st.error(f"Couldn't read that file: {ex}. A .docx or .txt usually works best.")
 
+load_clicked = st.button("📥 Load prior PDP into the plan", use_container_width=False, disabled=not has_prior)
+if not has_prior:
+    st.caption("Upload a file above to enable this.")
 
-def load_recent_meetings(limit=25):
-    sb = get_supabase()
-    if sb is None:
-        return []
-    try:
-        res = (sb.table(SUPABASE_TABLE)
-               .select("id, meeting_date, week_label, summary, created_at")
-               .order("created_at", desc=True)
-               .limit(limit).execute())
-        return res.data or []
-    except Exception:
-        return []
+# ---- Step 2: transcript → additions ----
+st.markdown("**Step 2 — Add the development conversation**")
+st.text_area("Conversation transcript or notes", key="transcript", height=180,
+             placeholder="Paste the development conversation transcript or notes here…")
 
+plan_has_content = any(str(st.session_state.get(wk, "")).strip() for wk in KEY_MAP.values())
 
-def load_meeting_full(meeting_id):
-    """Return the full saved row (incl. payload) for one archived meeting."""
-    sb = get_supabase()
-    if sb is None:
-        return None
-    try:
-        res = (sb.table(SUPABASE_TABLE)
-               .select("*")
-               .eq("id", meeting_id)
-               .limit(1).execute())
-        rows = res.data or []
-        return rows[0] if rows else None
-    except Exception:
-        return None
+bc1, bc2, bc3 = st.columns([1.7, 1.7, 1.6])
+add_clicked = bc1.button("➕ Add meeting to the plan", type="primary", use_container_width=True)
+fresh_label = "✨ Draft fresh (replaces plan)" if plan_has_content else "✨ Draft fresh from transcript"
+fresh_disabled = plan_has_content and not st.session_state.get("confirm_replace", False)
+fresh_clicked = bc2.button(fresh_label, use_container_width=True, disabled=fresh_disabled)
+def _load_sample_cb():
+    st.session_state["transcript"] = SAMPLE
+bc3.button("Load sample transcript", use_container_width=True, on_click=_load_sample_cb)
 
-
-# ---------------------------------------------------------------------------
-# Archive password gate
-# ---------------------------------------------------------------------------
-def get_archive_password():
-    """Password for viewing archived meetings. Set ARCHIVE_PASSWORD in secrets."""
-    return get_secret("ARCHIVE_PASSWORD") or "change-me"
-
-
-def parse_meeting_date(s):
-    """Parse a meeting-date string (various formats) into a date; fall back to today."""
-    if s:
-        for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d %B %Y", "%d %b %Y"):
-            try:
-                return datetime.strptime(str(s).strip(), fmt).date()
-            except Exception:
-                continue
-    return date.today()
-
-
-def suggest_week():
-    """Default the term week to the last saved week + 2 (meetings are fortnightly)."""
-    try:
-        recent = load_recent_meetings(limit=1)
-        if recent:
-            label = recent[0].get("week_label") or ""
-            m = re.search(r"\d+", label)
-            if m:
-                return min(int(m.group()) + 2, 11)
-    except Exception:
-        pass
-    return 8
-
-
-# ---------------------------------------------------------------------------
-# UI
-# ---------------------------------------------------------------------------
-st.title("🗒️ LC Meeting Summariser")
-st.caption("Drop in your agenda (optional) and the transcript. Get a summary, "
-           "actions, and a classified share-with-staff list you approve before export.")
-
-missing = []
-if get_anthropic_client() is None:
-    missing.append("Claude (AI) — add **ANTHROPIC_API_KEY** to secrets")
-if not DOCX_LIB:
-    missing.append("python-docx — add `python-docx` to requirements.txt")
-if missing:
-    st.warning("Some features need setup:\n\n- " + "\n- ".join(missing))
-
-# Session seeds (set BEFORE widgets are instantiated)
-if "seed_agenda" not in st.session_state:
-    st.session_state.seed_agenda = ""
-if "result" not in st.session_state:
-    st.session_state.result = None
-if "result_note" not in st.session_state:
-    st.session_state.result_note = ""
-
-left, right = st.columns(2)
-
-with left:
-    st.subheader("1 · Agenda (optional)")
-    a_up = st.file_uploader("Upload agenda (.docx / .txt)", type=["docx", "txt", "md"],
-                            key="agenda_upload")
-    if st.button("↩ Load this week's agenda (19.06.2026)"):
-        st.session_state.seed_agenda = SAMPLE_AGENDA
-        st.rerun()
-    agenda_text_pasted = st.text_area(
-        "…or paste the agenda here",
-        value=st.session_state.seed_agenda, height=220, key="agenda_paste",
-        placeholder="Leave blank if you don't have an agenda — the transcript is enough.")
-
-with right:
-    st.subheader("2 · Transcript (required)")
-    t_up = st.file_uploader("Upload transcript (.docx / .txt / .vtt)",
-                            type=["docx", "txt", "vtt", "md"], key="transcript_upload")
-    transcript_text_pasted = st.text_area(
-        "…or paste the transcript here", height=220, key="transcript_paste",
-        placeholder="Paste the Teams transcript or your notes.")
-
-agenda_text = read_upload(a_up) if a_up else agenda_text_pasted
-transcript_text = read_upload(t_up) if t_up else transcript_text_pasted
-
-c1, c2, _ = st.columns([1, 1, 4])
-with c1:
-    go = st.button("✨ Summarise meeting", type="primary")
-with c2:
-    if st.button("🗑 Clear"):
-        for k in list(st.session_state.keys()):
-            if k.startswith("share_ok_"):
-                del st.session_state[k]
-        st.session_state.seed_agenda = ""
-        st.session_state.result = None
-        st.session_state.result_note = ""
-        st.rerun()
-
-if go:
-    if not transcript_text.strip():
-        st.error("Please add a transcript (upload or paste) before summarising.")
-    else:
-        # clear any stale approval state from a previous run
-        for k in list(st.session_state.keys()):
-            if k.startswith("share_ok_"):
-                del st.session_state[k]
-        with st.spinner("Reading the meeting and pulling out actions…"):
-            data, note = analyse_meeting(agenda_text, transcript_text)
-        if data is None:
-            st.error(note)
-            raw_dbg = st.session_state.get("last_raw_response")
-            if raw_dbg:
-                with st.expander("See what Claude returned (for troubleshooting)"):
-                    st.code(raw_dbg)
-        else:
-            st.session_state.pop("last_raw_response", None)
-            st.session_state.result = data
-            st.session_state.result_note = note
-
-# ---------------------------------------------------------------------------
-# Results
-# ---------------------------------------------------------------------------
-data = st.session_state.result
-if data:
-    if st.session_state.result_note:
-        st.info(st.session_state.result_note)
-
-    st.divider()
-    st.header("Summary")
-    st.write(data.get("summary", ""))
-
-    items = data.get("agenda_items", []) or []
-    if items:
-        st.header("Discussion by item")
-        for it in items:
-            label = f"📌 {it.get('topic','(untitled)')}  ·  {it.get('lead','')}".strip(" ·")
-            with st.expander(label):
-                st.markdown(f"**Discussion:** {it.get('discussion','')}")
-                if it.get("outcome"):
-                    st.markdown(f"**Outcome:** {it.get('outcome')}")
-
-    decisions = data.get("decisions", []) or []
-    if decisions:
-        st.header("Decisions")
-        for d in decisions:
-            st.markdown(f"- {d}")
-
-    st.header("✅ Actions")
-    actions = data.get("actions", []) or []
-    if actions:
-        st.table([
-            {"Owner": a.get("owner", ""),
-             "Action": a.get("action", ""),
-             "Due": a.get("due", "TBC")}
-            for a in actions
-        ])
-    else:
-        st.caption("No actions recorded.")
-
-    # ---- Share with staff: classified + approve before export ----
-    st.header("📣 To share with staff")
-    st.caption("Nothing leaves this tool until you tick it. Held items stay in a "
-               "confidential, manager-only section of the export.")
-    share = data.get("share_with_staff", []) or []
-
-    if not share:
-        st.caption("Nothing flagged as potentially shareable.")
-    else:
-        buckets = {"share": [], "your_call": [], "hold": []}
-        for i, s in enumerate(share):
-            buckets.get(s.get("classification", "your_call"), buckets["your_call"]).append((i, s))
-
-        def render_item(i, s, default_tick, accent, bg):
-            wording = s.get("staff_safe_wording")
-            st.markdown(
-                f"""<div style="background:{bg};border-left:5px solid {accent};
-                padding:10px 14px;border-radius:6px;margin:6px 0;">
-                <strong>{s.get('item','')}</strong>
-                <span style="float:right;font-size:0.8em;color:#555;">
-                {s.get('classification','').replace('_',' ')} · {s.get('audience','')}</span>
-                <br><span style="font-size:0.9em;color:#444;">{s.get('reason','')}</span>
-                {f"<br><em>Staff-safe wording:</em> {wording}" if wording else
-                 "<br><em>No safe wording available — relay verbally if appropriate.</em>"}
-                </div>""",
-                unsafe_allow_html=True,
-            )
-            return st.checkbox("Include in staff section", value=default_tick,
-                               key=f"share_ok_{i}")
-
-        if buckets["share"]:
-            st.subheader("✅ Recommended to share")
-            for i, s in buckets["share"]:
-                render_item(i, s, True, "#2E9E5B", "#E9F8EF")
-
-        if buckets["your_call"]:
-            st.subheader("🟡 Your call")
-            for i, s in buckets["your_call"]:
-                render_item(i, s, False, "#E0A500", "#FFF6D6")
-
-        if buckets["hold"]:
-            st.subheader("🔒 Hold — confidential")
-            st.caption("Default off. These touch personnel/confidential categories. "
-                       "Only override if you're certain it's appropriate.")
-            for i, s in buckets["hold"]:
-                render_item(i, s, False, "#C0392B", "#FBEAEA")
-
-    st.divider()
-    meta = {
-        "date": (data.get("meeting_meta", {}) or {}).get("date", ""),
-        "chair": (data.get("meeting_meta", {}) or {}).get("chair", "Susan Furga"),
-        "attendees": (data.get("meeting_meta", {}) or {}).get("attendees", ""),
-        "apologies": (data.get("meeting_meta", {}) or {}).get("apologies", ""),
-    }
-
-    st.markdown("**Meeting details for the archive**")
-    st.caption("Meetings are fortnightly — the week defaults to the last saved week + 2.")
-    d1, d2 = st.columns(2)
-    with d1:
-        week_num = st.number_input("Term week", min_value=1, max_value=11,
-                                   value=suggest_week(), step=1)
-    with d2:
-        meeting_dt = st.date_input("Meeting date",
-                                   value=parse_meeting_date(meta["date"]),
-                                   format="DD.MM.YYYY")
-    week_label = f"Week {int(week_num)}"
-    meta["date"] = meeting_dt.strftime("%d.%m.%Y")
-
-    e1, e2 = st.columns([1, 1])
-    # current approval set, read from checkbox state
-    approved_indices = {
-        i for i in range(len(share))
-        if st.session_state.get(f"share_ok_{i}", False)
-    }
-
-    with e1:
-        if DOCX_LIB:
-            buf = build_docx(data, meta, approved_indices)
-            stamp = f"{week_label.replace(' ', '')}_{meta['date'].replace('.', '-')}"
-            st.download_button(
-                "⬇ Download Word summary", data=buf,
-                file_name=f"LC_meeting_summary_{stamp}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-            st.caption(f"{len(approved_indices)} item(s) will appear in the staff section.")
-        else:
-            st.caption("Add `python-docx` to requirements.txt to enable Word export.")
-    with e2:
-        if st.button("💾 Save to archive"):
-            ok, msg = save_meeting(meta, data, approved_indices, week_label)
-            (st.success if ok else st.info)(msg)
-
-# ---------------------------------------------------------------------------
-# Archived meetings — password protected
-# ---------------------------------------------------------------------------
-st.divider()
-st.header("🔒 Archived meetings")
-
-if get_supabase() is None:
-    st.caption("Saving/archiving is off — add your Supabase keys to enable it.")
+st.caption("**Add meeting** keeps everything already in the plan and layers the new points from the "
+           "conversation on top (flagged in amber). This is the step to use after loading a PDP.")
+if plan_has_content:
+    st.checkbox("⚠️ Allow ‘Draft fresh’ to replace the loaded plan (this erases the imported content)",
+                key="confirm_replace")
 else:
-    if "archive_unlocked" not in st.session_state:
-        st.session_state.archive_unlocked = False
+    st.caption("**Draft fresh** drafts every field from the transcript alone — use it when starting with "
+               "no prior PDP.")
 
-    if not st.session_state.archive_unlocked:
-        st.caption("These records can include confidential, manager-only notes. "
-                   "Enter the access code to view them.")
-        pw = st.text_input("Access code", type="password", key="archive_pw")
-        cols = st.columns([1, 5])
-        with cols[0]:
-            if st.button("Unlock"):
-                if pw and pw == get_archive_password():
-                    st.session_state.archive_unlocked = True
-                    st.rerun()
-                else:
-                    st.error("Incorrect access code.")
-        if get_archive_password() == "change-me":
-            st.warning("No archive password set. Add **ARCHIVE_PASSWORD** to your "
-                       "app secrets — until then the code is `change-me`.")
+def _guard():
+    if not GROQ_KEY:
+        st.error("No Groq API key found in secrets — add GROQ_API_KEY. You can still complete the plan manually.")
+        return False
+    return True
+
+if load_clicked and _guard():
+    cleaned = clean_pdp_text(st.session_state["prior_pdp_text"])
+    if len(cleaned) < 30:  # cleaning stripped too much — fall back to raw text
+        cleaned = st.session_state["prior_pdp_text"]
+    p_in, p_trim = trim(cleaned, 18000)
+    if p_trim:
+        st.info("The uploaded PDP was long, so it was trimmed to fit Groq's free-tier limit.")
+    with st.spinner("Reading the uploaded PDP and filling the plan…"):
+        try:
+            apply_import(import_pdp(p_in))
+            st.success("Loaded. The existing plan content is in each field below — review it, then add the meeting.")
+        except Exception as ex:
+            st.error(f"Couldn't read that PDP into the plan: {ex}. Try a .docx, or shorten it.")
+
+if add_clicked and _guard():
+    if not st.session_state["transcript"].strip():
+        st.warning("Paste a transcript first.")
     else:
-        top = st.columns([1, 5])
-        with top[0]:
-            if st.button("🔒 Lock"):
-                st.session_state.archive_unlocked = False
-                st.rerun()
+        t_in, t_trim = trim(st.session_state["transcript"], 20000)
+        if t_trim:
+            st.info("The transcript was long, so it was trimmed to fit Groq's free-tier limit.")
+        with st.spinner("Reading the conversation and finding what's new…"):
+            try:
+                apply_additions(add_meeting(section_baseline(), t_in, st.session_state["principles"]))
+                st.success("Added. Each section now has an amber extension drawing detail from the meeting.")
+            except Exception as ex:
+                st.error(f"Couldn't add the meeting: {ex}. Try again or shorten the transcript.")
 
-        meetings = load_recent_meetings()
-        if not meetings:
-            st.caption("No saved meetings yet.")
-        else:
-            def label_for(m):
-                when = m.get("meeting_date") or (m.get("created_at", "")[:10])
-                wk = m.get("week_label")
-                prefix = f"{wk} · {when}" if wk else when
-                snip = (m.get("summary", "") or "")[:55]
-                return f"{prefix} — {snip}…"
+if fresh_clicked and _guard():
+    if not st.session_state["transcript"].strip():
+        st.warning("Paste a transcript first.")
+    else:
+        t_in, t_trim = trim(st.session_state["transcript"], 28000)
+        if t_trim:
+            st.info("The transcript was long, so it was trimmed to fit Groq's free-tier limit.")
+        with st.spinner("Drafting each section from the transcript…"):
+            try:
+                apply_alignment(align_transcript(t_in, st.session_state["principles"]))
+                st.success("Drafted. Review and edit every field — it's your plan.")
+            except Exception as ex:
+                st.error(f"Couldn't draft from that transcript: {ex}. Try again or shorten it.")
 
-            options = {label_for(m): m["id"] for m in meetings}
-            choice = st.selectbox("Select a meeting", list(options.keys()))
-            row = load_meeting_full(options[choice]) if choice else None
+with st.expander("Strategy hooks (used by the alignment)"):
+    st.markdown(f"**4 areas of impact:** {AREAS_OF_IMPACT}")
+    st.text_area("Guiding principles — confirm wording against EDi", key="principles", height=120)
 
-            if row:
-                payload = row.get("payload", {}) or {}
-                approved = set(payload.get("_approved_indices", []))
-                stored_date = row.get("meeting_date") or (payload.get("meeting_meta", {}) or {}).get("date", "")
-                wk = row.get("week_label") or payload.get("_week_label", "")
-                a_meta = {
-                    "date": stored_date,
-                    "chair": (payload.get("meeting_meta", {}) or {}).get("chair", "Susan Furga"),
-                    "attendees": (payload.get("meeting_meta", {}) or {}).get("attendees", ""),
-                    "apologies": (payload.get("meeting_meta", {}) or {}).get("apologies", ""),
-                }
+st.divider()
 
-                header = " · ".join(x for x in [wk, stored_date] if x)
-                if header:
-                    st.markdown(f"### {header}")
-                st.subheader("Summary")
-                st.write(payload.get("summary", ""))
+# ── Addition box helper ───────────────────────────────────────────────────────
+def addition_box(widget_key: str):
+    add_key = widget_key + "__add"
+    if st.session_state.get(add_key):
+        st.markdown(
+            f"<div style='color:{AMBER};font-weight:600;font-size:0.8rem;margin:-0.4rem 0 0.1rem;'>"
+            f"➕ Added from the meeting</div>", unsafe_allow_html=True)
+        st.text_area("Added from the meeting", key=add_key, height=70, label_visibility="collapsed")
 
-                a_actions = payload.get("actions", []) or []
-                if a_actions:
-                    st.subheader("Actions")
-                    st.table([
-                        {"Owner": a.get("owner", ""),
-                         "Action": a.get("action", ""),
-                         "Due": a.get("due", "TBC")}
-                        for a in a_actions
-                    ])
+# ── GOALS ─────────────────────────────────────────────────────────────────────
+def goal_block(n: str):
+    st.subheader(f"Goal {n}")
+    st.text_area("Goal & purpose — what I'll deliver, by when and how", key=f"w_goal{n}_goal", height=90)
+    addition_box(f"w_goal{n}_goal")
+    with st.expander("Coaching scaffold"):
+        for label, suffix in [("My strengths to leverage", "strengths"),
+                              ("What I need to learn / change", "learn"),
+                              ("Support I need (people, processes, resources, tools)", "support"),
+                              ("How I'll monitor change (feedback I'll seek)", "monitor"),
+                              ("How I'll evaluate impact (how I'll know it worked)", "evaluate")]:
+            st.text_area(label, key=f"w_goal{n}_{suffix}", height=70)
+            addition_box(f"w_goal{n}_{suffix}")
+    rc1, rc2 = st.columns(2)
+    rc1.text_area("At 6 months", key=f"w_goal{n}_r6", height=90)
+    rc2.text_area("At 12 months", key=f"w_goal{n}_r12", height=90)
 
-                a_share = payload.get("share_with_staff", []) or []
-                shared = [s for i, s in enumerate(a_share) if i in approved]
-                held = [s for i, s in enumerate(a_share) if i not in approved]
-                if shared:
-                    st.subheader("📣 Shared with staff")
-                    for s in shared:
-                        st.markdown(f"- **{s.get('item','')}** — "
-                                    f"{s.get('staff_safe_wording') or s.get('item','')}")
-                if held:
-                    st.subheader("🔒 Confidential — not shared")
-                    for s in held:
-                        st.markdown(
-                            f"""<div style="background:#FBEAEA;border-left:5px solid #C0392B;
-                            padding:8px 12px;border-radius:6px;margin:5px 0;">
-                            <strong>{s.get('item','')}</strong><br>
-                            {s.get('raw_note') or ''}<br>
-                            <em style="font-size:0.85em;color:#555;">Why held: {s.get('reason','')}</em>
-                            </div>""",
-                            unsafe_allow_html=True,
-                        )
+st.markdown("## 🎯 Goals")
+st.caption("Achievable within 6–12 months · tied to practice, standards or site priorities")
+goal_block("1")
+st.markdown("---")
+goal_block("2")
 
-                if DOCX_LIB:
-                    buf2 = build_docx(payload, a_meta, approved)
-                    stamp2 = (a_meta["date"] or row.get("created_at", "")[:10] or
-                              date.today().isoformat()).replace(".", "-").replace("/", "-")
-                    st.download_button(
-                        "⬇ Re-download Word summary", data=buf2,
-                        file_name=f"LC_meeting_summary_{stamp2}.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        key="archive_download")
+# ── CAREER FULFILMENT ─────────────────────────────────────────────────────────
+st.markdown("## 🏅 Career fulfilment")
+st.caption("An area of focus or future aspiration · may take up to 2 years")
+st.text_area("My career fulfilment goal", key="w_career_goal", height=90)
+addition_box("w_career_goal")
+st.text_area("Actions — what I'll do, by when and how", key="w_career_actions", height=70)
+addition_box("w_career_actions")
+cc1, cc2 = st.columns(2)
+cc1.text_area("At 6 months", key="w_career_r6", height=80)
+cc2.text_area("At 12 months", key="w_career_r12", height=80)
+
+# ── WELLBEING ─────────────────────────────────────────────────────────────────
+st.markdown("## 🌱 My wellbeing")
+st.caption("What helps me learn and thrive at work")
+st.text_area("My wellbeing goal", key="w_wb_goal", height=90)
+addition_box("w_wb_goal")
+st.text_area("Actions", key="w_wb_actions", height=70)
+addition_box("w_wb_actions")
+wc1, wc2 = st.columns(2)
+wc1.text_area("At 6 months", key="w_wb_r6", height=80)
+wc2.text_area("At 12 months", key="w_wb_r12", height=80)
+
+# ── CULTURAL RESPONSIVENESS ───────────────────────────────────────────────────
+st.markdown("## 🧭 My cultural responsiveness journey")
+st.caption("Choose one way to build your commitment over 12 months")
+st.radio("Focus", ["Knowing", "Doing", "Being"], key="w_cultural_focus", horizontal=True,
+         help="Knowing: broaden knowledge of histories, cultures and languages. "
+              "Doing: respond to diverse needs and knowledge. "
+              "Being: strengthen self-awareness of cultural and linguistic needs.")
+st.text_area("My commitment — what I'll learn or do over the next 12 months",
+             key="w_cultural_commitment", height=90)
+addition_box("w_cultural_commitment")
+
+# ── REFLECTION OVERVIEW ───────────────────────────────────────────────────────
+st.markdown("## 📝 Reflection overview")
+st.caption("Completed together at the 6 and 12 month review")
+r1, r2 = st.columns(2)
+r1.text_area("Employee summary — 6 months", key="w_ref_emp6", height=90)
+r2.text_area("Leader summary — 6 months", key="w_ref_ldr6", height=90)
+r3, r4 = st.columns(2)
+r3.text_area("Employee summary — 12 months", key="w_ref_emp12", height=90)
+r4.text_area("Leader summary — 12 months", key="w_ref_ldr12", height=90)
+
+st.divider()
+
+# ── Save / load / export ──────────────────────────────────────────────────────
+st.markdown("### Save & export")
+sc1, sc2, sc3 = st.columns([1, 2, 1])
+
+if sc1.button("💾 Save to my plans", type="primary", use_container_width=True):
+    try:
+        save_plan()
+        st.success("Saved.")
+    except Exception as ex:
+        st.error(f"Save failed: {ex}")
+
+try:
+    plans = load_my_plans()
+except Exception:
+    plans = []
+
+if plans:
+    opts = {f"{p.get('employee_name','(no name)')} · {p.get('plan_date','')} "
+            f"· saved {str(p.get('updated_at',''))[:16]}": p["id"] for p in plans}
+    chosen = sc2.selectbox("My saved plans", list(opts.keys()), index=None,
+                           placeholder="Choose a saved plan…")
+    lc1, lc2 = sc2.columns(2)
+    if lc1.button("Load", use_container_width=True, disabled=chosen is None):
+        st.session_state["_load_plan_id"] = opts[chosen]; st.rerun()
+    if lc2.button("Delete", use_container_width=True, disabled=chosen is None):
+        delete_plan(opts[chosen]); st.rerun()
+else:
+    sc2.caption("No saved plans yet.")
+
+_fname = (st.session_state.get("w_emp", "").strip().replace(" ", "_") or "PDP")
+try:
+    sc3.download_button(
+        "⬇️ Download Word", data=build_docx(),
+        file_name=f"PDP_{_fname}.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        use_container_width=True)
+except Exception as ex:
+    sc3.error(f"Word export error: {ex}")
+sc3.download_button("⬇️ Download Markdown", data=plan_to_markdown(),
+                    file_name=f"PDP_{_fname}.md", mime="text/markdown", use_container_width=True)
+
+st.caption("Plans are stored privately against your staff name. Additions from the meeting are saved and "
+           "exported with their amber 'Added from the meeting' label.")
+
+# Keep the persistent store in sync with the current field values (runs after all
+# widgets have rendered, so it captures both AI output and any manual edits).
+_store = st.session_state.setdefault("plan_store", {})
+for _k in PLAN_KEYS:
+    _store[_k] = st.session_state.get(_k, "")
