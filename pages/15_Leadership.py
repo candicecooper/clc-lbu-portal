@@ -1,5 +1,6 @@
 from theme import apply_clc_theme
 from auth import require_auth, logout_button, get_staff_name
+from confidential_auth import require_confidential_auth, confidential_logout_button
 import streamlit as st
 from supabase import create_client, Client
 from datetime import datetime
@@ -8,6 +9,7 @@ import os
 
 st.set_page_config(page_title="CLC Leadership", page_icon="👔", layout="wide", initial_sidebar_state="collapsed")
 apply_clc_theme()
+require_confidential_auth("CLC Leadership", "👔")
 
 PORTAL_URL = "https://16cefb77.clc-portal.pages.dev/"
 st.sidebar.markdown(
@@ -78,10 +80,6 @@ FOLDERS = {
         "desc":  "Partnership agreements, contacts and collaboration documents",
     },
 }
-
-# ── AUTH ───────────────────────────────────────────────────────────────────────
-def check_leadership_access():
-    return st.session_state.get("leadership_access", False)
 
 # ── DB HELPERS ─────────────────────────────────────────────────────────────────
 def load_docs(folder_key):
@@ -238,36 +236,7 @@ def render_folder(folder_key, folder_cfg):
                             st.rerun()
     st.markdown("---")
 
-# ── LOGIN WALL ─────────────────────────────────────────────────────────────────
-def render_login_wall():
-    st.markdown("""
-    <div style="max-width:420px;margin:4rem auto;text-align:center;">
-      <div style="background:linear-gradient(135deg,#1A7A7A,#0f5f5f);color:white;border-radius:12px;padding:1.5rem;margin-bottom:1.5rem;">
-        <div style="font-size:2.5rem;">👔</div>
-        <h2 style="margin:0.5rem 0 0;font-size:1.3rem;font-weight:700;">CLC Leadership</h2>
-        <p style="margin:0.4rem 0 0;opacity:0.7;font-size:0.85rem;">Cowandilla Learning Centre — LBU Staff Portal</p>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-    col_l, col_m, col_r = st.columns([1, 2, 1])
-    with col_m:
-        pwd = st.text_input("Enter leadership password", type="password", key="leadership_pwd")
-        if st.button("🔓 Enter", key="leadership_login_btn", type="primary", use_container_width=True):
-            try:
-                admin_pass = st.secrets.get("ADMIN_PASSWORD", "") or os.environ.get("ADMIN_PASSWORD", "clcstaff2026")
-            except Exception:
-                admin_pass = "clcstaff2026"
-            if pwd == admin_pass:
-                st.session_state.leadership_access = True
-                st.rerun()
-            else:
-                st.error("🚫 Incorrect password. This area is for CLC Leadership only.")
-
 # ── MAIN ───────────────────────────────────────────────────────────────────────
-if not check_leadership_access():
-    render_login_wall()
-    st.stop()
-
 st.markdown("""
 <div style="background:linear-gradient(135deg,#1A7A7A,#0f5f5f);color:white;border-radius:12px;padding:1.25rem 1.5rem;margin-bottom:1.5rem;">
   <h1 style="margin:0;font-size:1.4rem;font-weight:700;">👔 CLC Leadership</h1>
@@ -275,9 +244,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-if st.sidebar.button("🚪 Logout", key="leadership_logout"):
-    st.session_state.leadership_access = False
-    st.rerun()
+confidential_logout_button("sidebar")
 
 for folder_key, folder_cfg in FOLDERS.items():
     render_folder(folder_key, folder_cfg)
