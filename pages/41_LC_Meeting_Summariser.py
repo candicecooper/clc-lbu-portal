@@ -18,9 +18,9 @@ Share-with-staff handling:
     only" section marked OFFICIAL: Sensitive.
 
 Designed for the CLC-LBU portal. Single page, single AI call, graceful
-fallbacks if Supabase / Groq secrets aren't configured.
+fallbacks if Supabase / Claude secrets aren't configured.
 
-Stack: Streamlit + Groq (llama-3.3-70b-versatile) + python-docx + Supabase (optional)
+Stack: Streamlit + Claude (claude-sonnet-4-6) + python-docx + Supabase (optional)
 """
 
 import streamlit as st
@@ -33,10 +33,10 @@ from datetime import datetime, date
 # Optional dependencies — handled gracefully so the page never hard-crashes
 # ---------------------------------------------------------------------------
 try:
-    from groq import Groq
-    GROQ_LIB = True
+    from anthropic import Anthropic
+    ANTHROPIC_LIB = True
 except Exception:
-    GROQ_LIB = False
+    ANTHROPIC_LIB = False
 
 try:
     from docx import Document
@@ -65,8 +65,8 @@ except Exception:
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-MODEL = "llama-3.3-70b-versatile"
-MAX_TRANSCRIPT_CHARS = 60000  # ~15k tokens; warn + trim beyond this
+MODEL = "claude-sonnet-4-6"
+MAX_TRANSCRIPT_CHARS = 400000  # Claude handles ~200k tokens; this is a safety net only
 SUPABASE_TABLE = "lc_meetings"
 
 # This week's agenda, captured from your 19.06.2026 proforma, so you can
@@ -108,12 +108,12 @@ def get_secret(name):
         return None
 
 
-def get_groq_client():
-    key = get_secret("GROQ_API_KEY")
-    if not (GROQ_LIB and key):
+def get_anthropic_client():
+    key = get_secret("ANTHROPIC_API_KEY")
+    if not (ANTHROPIC_LIB and key):
         return None
     try:
-        return Groq(api_key=key)
+        return Anthropic(api_key=key)
     except Exception:
         return None
 
@@ -264,9 +264,9 @@ def parse_json_response(text):
 
 
 def analyse_meeting(agenda_text, transcript_text):
-    client = get_groq_client()
+    client = get_anthropic_client()
     if client is None:
-        return None, "Groq is not configured. Add GROQ_API_KEY to your app secrets."
+        return None, "Claude is not configured. Add ANTHROPIC_API_KEY to your app secrets."
 
     transcript_text = transcript_text.strip()
     truncated = False
@@ -276,16 +276,16 @@ def analyse_meeting(agenda_text, transcript_text):
 
     prompt = build_prompt(agenda_text, transcript_text)
     try:
-        resp = client.chat.completions.create(
+        resp = client.messages.create(
             model=MODEL,
-            messages=[
-                {"role": "system", "content": "You return only valid JSON. No commentary."},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.2,
             max_tokens=4000,
+            temperature=0.2,
+            system="You return only valid JSON. No commentary, no markdown, no code fences.",
+            messages=[{"role": "user", "content": prompt}],
         )
-        raw = resp.choices[0].message.content
+        raw = "".join(
+            block.text for block in resp.content if getattr(block, "type", "") == "text"
+        )
     except Exception as e:
         return None, f"AI request failed: {e}"
 
@@ -567,8 +567,8 @@ st.caption("Drop in your agenda (optional) and the transcript. Get a summary, "
            "actions, and a classified share-with-staff list you approve before export.")
 
 missing = []
-if get_groq_client() is None:
-    missing.append("Groq (AI) — add **GROQ_API_KEY** to secrets")
+if get_anthropic_client() is None:
+    missing.append("Claude (AI) — add **ANTHROPIC_API_KEY** to secrets")
 if not DOCX_LIB:
     missing.append("python-docx — add `python-docx` to requirements.txt")
 if missing:
