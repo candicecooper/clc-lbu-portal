@@ -1,6 +1,6 @@
 from theme import apply_clc_theme
-from auth import require_auth, logout_button, get_staff_name
-from confidential_auth import require_confidential_auth
+from auth import get_staff_name
+from confidential_auth import require_confidential_auth, confidential_logout_button
 import streamlit as st
 from supabase import create_client, Client
 from datetime import datetime, date
@@ -12,9 +12,8 @@ import os
 st.set_page_config(page_title="CLC PDP Builder", page_icon="🎯", layout="wide",
                    initial_sidebar_state="collapsed")
 apply_clc_theme()
-require_auth("PDP Builder", "🎯")
-logout_button("sidebar")
 require_confidential_auth("PDP Builder", "🎯")
+confidential_logout_button("sidebar")
 
 TEAL = "#1A7A7A"
 AMBER = "#C8760A"
