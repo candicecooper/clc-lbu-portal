@@ -846,62 +846,112 @@ def build_minutes_docx(md, program):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def generate_minutes_docx(program, meeting_date, facilitator, attendees, extracted_notes, summary_notes, transcript):
-    """Generate professional Word document for meeting minutes"""
+    """Generate professional Word document matching CLC LBU minutes format"""
     doc = Document()
     
-    # Title
-    title = doc.add_heading('TEAM MEETING MINUTES', 0)
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    # ── Base style ──
+    normal = doc.styles["Normal"]
+    normal.font.name = "Calibri"
+    normal.font.size = Pt(10.5)
+    normal.font.color.rgb = RGBColor(31, 41, 55)  # Dark gray
     
-    # Meeting Details Section
-    details_heading = doc.add_heading('Meeting Details', level=1)
-    details_heading.style.font.color.rgb = RGBColor(0, 51, 102)
+    for section in doc.sections:
+        section.top_margin = Cm(1.8)
+        section.bottom_margin = Cm(1.8)
+        section.left_margin = Cm(2.0)
+        section.right_margin = Cm(2.0)
     
-    details_table = doc.add_table(rows=4, cols=2)
-    details_table.style = 'Light Grid Accent 1'
+    # ── Title band (matching CLC LBU format) ──
+    title = doc.add_heading("Cowandilla Learning Centre", 0)
+    title.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    title_run = title.runs[0]
+    title_run.font.color.rgb = RGBColor(0, 128, 128)  # Teal
+    title_run.font.size = Pt(18)
     
-    details_table.rows[0].cells[0].text = 'Program:'
-    details_table.rows[0].cells[1].text = program or ''
-    details_table.rows[1].cells[0].text = 'Date:'
-    details_table.rows[1].cells[1].text = str(meeting_date)
-    details_table.rows[2].cells[0].text = 'Facilitator:'
-    details_table.rows[2].cells[1].text = facilitator or ''
-    details_table.rows[3].cells[0].text = 'Attendees:'
-    details_table.rows[3].cells[1].text = attendees or ''
+    sub = doc.add_paragraph("Learning & Behaviour Unit")
+    sub_run = sub.runs[0]
+    sub_run.font.size = Pt(10.5)
+    sub_run.font.color.rgb = RGBColor(107, 114, 128)  # Gray
     
-    for row in details_table.rows:
-        row.cells[0].paragraphs[0].runs[0].bold = True
+    prog_label = PROGRAMS.get(program, {}).get("label", program)
+    meeting_type = doc.add_paragraph(f"{prog_label}  ·  Ad-Hoc Meeting")
+    meeting_type_run = meeting_type.runs[0]
+    meeting_type_run.bold = True
+    meeting_type_run.font.size = Pt(12)
+    meeting_type_run.font.color.rgb = RGBColor(217, 119, 6)  # Amber/Gold
+    
+    # Horizontal rule
+    doc.add_paragraph("_" * 80).paragraph_format.space_after = Pt(6)
+    
+    # ── Meeting Details Table ──
+    details = [
+        ("Date", str(meeting_date)),
+        ("Facilitator", facilitator or ""),
+        ("Attendees", attendees or "Not recorded"),
+    ]
+    
+    tbl = doc.add_table(rows=len(details), cols=2)
+    tbl.style = 'Light Grid Accent 1'
+    
+    for i, (label, value) in enumerate(details):
+        c0, c1 = tbl.rows[i].cells
+        c0.width = Cm(3.5)
+        c1.width = Cm(13.0)
+        
+        # Style left column
+        p0 = c0.paragraphs[0]
+        p0.paragraph_format.space_after = Pt(1)
+        run0 = p0.add_run(label)
+        run0.bold = True
+        run0.font.size = Pt(9.5)
+        run0.font.color.rgb = RGBColor(0, 128, 128)
+        
+        # Style right column
+        p1 = c1.paragraphs[0]
+        p1.paragraph_format.space_after = Pt(1)
+        run1 = p1.add_run(str(value))
+        run1.font.size = Pt(10)
+        run1.font.color.rgb = RGBColor(31, 41, 55)
     
     doc.add_paragraph()
+    doc.add_paragraph()
     
-    # Main Content
+    # ── Meeting Minutes / Key Points ──
+    heading = doc.add_heading("Meeting Minutes", level=1)
+    heading_run = heading.runs[0]
+    heading_run.font.color.rgb = RGBColor(0, 128, 128)
+    
     if extracted_notes and extracted_notes.strip():
-        content_heading = doc.add_heading('Key Points & Decisions', level=1)
-        content_heading.style.font.color.rgb = RGBColor(0, 51, 102)
         doc.add_paragraph(extracted_notes)
     elif summary_notes and summary_notes.strip():
-        content_heading = doc.add_heading('Summary & Action Items', level=1)
-        content_heading.style.font.color.rgb = RGBColor(0, 51, 102)
         doc.add_paragraph(summary_notes)
     else:
-        no_content = doc.add_paragraph('No summary or extracted content available')
-        no_content.runs[0].italic = True
+        p = doc.add_paragraph("No meeting summary recorded")
+        p.runs[0].italic = True
     
-    doc.add_paragraph()
-    
+    # ── Full Transcript (if exists) ──
     if transcript and transcript.strip():
-        transcript_heading = doc.add_heading('Full Discussion Transcript', level=2)
-        transcript_heading.style.font.color.rgb = RGBColor(102, 102, 102)
+        doc.add_paragraph()
+        
+        transcript_heading = doc.add_heading("Discussion Transcript", level=2)
+        transcript_heading_run = transcript_heading.runs[0]
+        transcript_heading_run.font.color.rgb = RGBColor(107, 114, 128)  # Gray
+        
         transcript_para = doc.add_paragraph(transcript)
-        transcript_para.runs[0].font.size = Pt(10)
-        transcript_para.runs[0].italic = True
+        for run in transcript_para.runs:
+            run.font.size = Pt(9.5)
+            run.italic = True
+            run.font.color.rgb = RGBColor(107, 114, 128)
     
+    # ── Footer ──
     doc.add_paragraph()
-    
     footer = doc.add_paragraph()
     footer.paragraph_format.space_before = Pt(12)
-    footer_text = f"Minutes Generated: {datetime.datetime.now().strftime('%A, %d %B %Y at %I:%M %p')}"
-    footer.add_run(footer_text).italic = True
+    
+    footer_run = footer.add_run(f"Minutes generated from the CLC LBU Portal · {datetime.datetime.now().strftime('%A, %d %B %Y')}")
+    footer_run.italic = True
+    footer_run.font.size = Pt(9)
+    footer_run.font.color.rgb = RGBColor(107, 114, 128)
     footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
     return doc
