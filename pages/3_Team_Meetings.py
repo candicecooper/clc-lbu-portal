@@ -3004,7 +3004,75 @@ def render_meeting_archive(program):
     st.markdown("### 📚 Meeting Archive")
     st.caption(f"Browse and edit past {PROGRAMS[program]['label']} meetings")
 
-    all_meetings = fetch("tm_program_meetings", {"program": program}, "meeting_date")
+    # ── AD-HOC MEETINGS SECTION ──
+    st.markdown("#### 📝 Ad-Hoc Meetings")
+    try:
+        adhoc_result = supabase.table('team_meetings').select("*").eq('program', program).eq('meeting_type', 'ad-hoc').order('meeting_date', desc=True).execute()
+        adhoc_meetings = adhoc_result.data or []
+        
+        if adhoc_meetings:
+            st.markdown(f"**Ad-Hoc meetings recorded:** {len(adhoc_meetings)}")
+            
+            for mtg in adhoc_meetings:
+                mtg_date = mtg.get('meeting_date', 'Unknown')
+                facilitator = mtg.get('facilitator', '')
+                attendees = mtg.get('attendees', 'Not recorded')
+                mtg_id = mtg.get('id', '')
+                is_archived = mtg.get('is_archived', False)
+                
+                archive_badge = "📦 Archived" if is_archived else "📝 Active"
+                header = f"{archive_badge} | {mtg_date} | {facilitator}"
+                
+                with st.expander(header, expanded=False):
+                    st.markdown(f"**Facilitator:** {facilitator} &nbsp;|&nbsp; **Attendees:** {attendees}")
+                    st.markdown(f"<small style='color:#888;'>Meeting ID: {mtg_id}</small>", unsafe_allow_html=True)
+                    st.markdown("")
+                    
+                    # Meeting Minutes
+                    if mtg.get('extracted_notes') or mtg.get('summary_notes'):
+                        st.markdown("**📋 Minutes:**")
+                        if mtg.get('extracted_notes'):
+                            st.markdown(mtg.get('extracted_notes'))
+                        else:
+                            st.markdown(mtg.get('summary_notes'))
+                    
+                    # Full Transcript
+                    if mtg.get('transcript'):
+                        with st.expander("📄 Full Transcript", expanded=False):
+                            st.markdown(mtg.get('transcript'))
+                    
+                    # Download Button
+                    doc = generate_minutes_docx(
+                        program=program,
+                        meeting_date=mtg_date,
+                        facilitator=facilitator,
+                        attendees=attendees,
+                        extracted_notes=mtg.get('extracted_notes', ''),
+                        summary_notes=mtg.get('summary_notes', ''),
+                        transcript=mtg.get('transcript', '')
+                    )
+                    
+                    doc_bytes = io.BytesIO()
+                    doc.save(doc_bytes)
+                    doc_bytes.seek(0)
+                    
+                    st.download_button(
+                        label="📥 Download Minutes",
+                        data=doc_bytes,
+                        file_name=f"Minutes_{mtg_date}_{facilitator}_{program}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key=f"archive_adhoc_download_{mtg_id}"
+                    )
+        else:
+            st.info("No ad-hoc meetings recorded yet.")
+    except Exception as e:
+        st.warning(f"Could not load ad-hoc meetings: {e}")
+    
+    st.markdown("---")
+
+    # ── WEEK A / WEEK B MEETINGS SECTION ──
+    st.markdown("#### 📅 Scheduled Meetings (Week A & B)")
+    
 
     if not all_meetings:
         st.info("No past meetings found. Start recording meetings in the Program Meeting tab!")
