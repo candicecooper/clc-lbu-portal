@@ -248,6 +248,37 @@ Return ONLY valid JSON matching this exact schema, with no prose, no markdown, n
     return instructions
 
 
+def _repair_truncated_json(t):
+    """Best-effort recovery when the model's JSON was cut off mid-output."""
+    s = t[t.find("{"):] if "{" in t else t
+    stack, in_str, esc = [], False, False
+    for ch in s:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        else:
+            if ch == '"':
+                in_str = True
+            elif ch in "{[":
+                stack.append("}" if ch == "{" else "]")
+            elif ch in "}]":
+                if stack:
+                    stack.pop()
+    repaired = s
+    if in_str:                       # close an open string
+        repaired += '"'
+    repaired = re.sub(r"[,\s]+$", "", repaired)   # drop trailing comma/space
+    repaired += "".join(reversed(stack))          # close open braces/brackets
+    try:
+        return json.loads(repaired)
+    except Exception:
+        return None
+
+
 def parse_json_response(text):
     if not text:
         return None
@@ -256,11 +287,15 @@ def parse_json_response(text):
     t = re.sub(r"```$", "", t).strip()
     start, end = t.find("{"), t.rfind("}")
     if start != -1 and end != -1 and end > start:
-        t = t[start:end + 1]
+        candidate = t[start:end + 1]
+    else:
+        candidate = t
     try:
-        return json.loads(t)
+        return json.loads(candidate)
     except Exception:
-        return None
+        pass
+    # fall back to repairing a truncated / partial object
+    return _repair_truncated_json(t)
 
 
 def analyse_meeting(agenda_text, transcript_text):
@@ -278,7 +313,7 @@ def analyse_meeting(agenda_text, transcript_text):
     try:
         resp = client.messages.create(
             model=MODEL,
-            max_tokens=4000,
+            max_tokens=8192,
             temperature=0.2,
             system="You return only valid JSON. No commentary, no markdown, no code fences.",
             messages=[{"role": "user", "content": prompt}],
@@ -286,12 +321,23 @@ def analyse_meeting(agenda_text, transcript_text):
         raw = "".join(
             block.text for block in resp.content if getattr(block, "type", "") == "text"
         )
+        stop_reason = getattr(resp, "stop_reason", None)
     except Exception as e:
         return None, f"AI request failed: {e}"
 
+    if not raw.strip():
+        return None, "Claude returned an empty response. Please try again."
+
     data = parse_json_response(raw)
     if data is None:
-        return None, "Could not parse the AI response. Try again, or shorten the transcript."
+        # keep the raw reply so the page can show it for troubleshooting
+        st.session_state["last_raw_response"] = raw
+        if stop_reason == "max_tokens":
+            return None, ("The response was cut off because the meeting produced more "
+                          "output than the limit allowed. Try splitting a very long "
+                          "transcript, or trimming obvious chit-chat, then run it again.")
+        return None, ("Could not read Claude's response as structured data. It's saved "
+                      "below so you can see what came back — usually re-running fixes it.")
 
     data.setdefault("meeting_meta", {})
     data.setdefault("summary", "")
@@ -632,7 +678,12 @@ if go:
             data, note = analyse_meeting(agenda_text, transcript_text)
         if data is None:
             st.error(note)
+            raw_dbg = st.session_state.get("last_raw_response")
+            if raw_dbg:
+                with st.expander("See what Claude returned (for troubleshooting)"):
+                    st.code(raw_dbg)
         else:
+            st.session_state.pop("last_raw_response", None)
             st.session_state.result = data
             st.session_state.result_note = note
 
