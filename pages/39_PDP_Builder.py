@@ -1,5 +1,6 @@
 from theme import apply_clc_theme
 from auth import require_auth, logout_button, get_staff_name
+from confidential_auth import require_confidential_auth
 import streamlit as st
 from supabase import create_client, Client
 from datetime import datetime, date
@@ -13,6 +14,7 @@ st.set_page_config(page_title="CLC PDP Builder", page_icon="🎯", layout="wide"
 apply_clc_theme()
 require_auth("PDP Builder", "🎯")
 logout_button("sidebar")
+require_confidential_auth("PDP Builder", "🎯")
 
 TEAL = "#1A7A7A"
 AMBER = "#C8760A"
@@ -25,27 +27,6 @@ st.sidebar.markdown(
     f'🏠 Back to Staff Portal</a>',
     unsafe_allow_html=True
 )
-
-# ── Admin gate (matches auth.py is_portal_admin pattern) ──────────────────────
-def require_portal_admin(message="The PDP Builder is in the leadership area."):
-    try:
-        admin_pw = st.secrets.get("ADMIN_PASSWORD", "")
-    except Exception:
-        admin_pw = os.environ.get("ADMIN_PASSWORD", "")
-    if st.session_state.get("is_portal_admin"):
-        return True
-    st.warning(f"🔒 {message}")
-    entered = st.text_input("Admin password", type="password", key="pdp_admin_pw")
-    if st.button("Unlock", type="primary", key="pdp_admin_btn"):
-        if entered and entered == admin_pw:
-            st.session_state.is_portal_admin = True
-            st.rerun()
-        else:
-            st.error("Incorrect admin password.")
-    st.stop()
-    return False
-
-require_portal_admin()
 
 # ── Supabase ──────────────────────────────────────────────────────────────────
 @st.cache_resource
