@@ -148,11 +148,11 @@ input:focus, button:focus, select:focus {
 if 'drill_down_view' not in st.session_state:
     st.session_state.drill_down_view = None
 if 'terms_selected' not in st.session_state:
-    st.session_state.terms_selected = {2.0}
+    st.session_state.terms_selected = set()  # Empty = show all terms
 if 'years_selected' not in st.session_state:
-    st.session_state.years_selected = set()
+    st.session_state.years_selected = set()  # Empty = show all years
 if 'programs_selected' not in st.session_state:
-    st.session_state.programs_selected = set()
+    st.session_state.programs_selected = set()  # Empty = show all programs
 if 'uploaded_data' not in st.session_state:
     st.session_state.uploaded_data = None
 if 'data_loaded' not in st.session_state:
@@ -190,6 +190,15 @@ with st.sidebar:
             st.success(f"✅ {uploaded_file.name} loaded & saved")
         else:
             st.success(f"✅ {uploaded_file.name} loaded")
+    
+    st.markdown("---")
+    
+    # Add Show All Data button
+    if st.button("SHOW ALL DATA (Clear All Filters)", use_container_width=True, key="show_all"):
+        st.session_state.terms_selected = set()
+        st.session_state.years_selected = set()
+        st.session_state.programs_selected = set()
+        st.rerun()
     
     st.markdown("---")
     
