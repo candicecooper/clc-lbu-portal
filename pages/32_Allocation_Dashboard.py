@@ -359,7 +359,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                 st.session_state.drill_down_view = None
                 st.rerun()
             
-            tabs = st.tabs(["Overview", "By Program", "By Partnership", "Disability Profile", "Trends"])
+            tabs = st.tabs(["Overview", "By Program", "By Partnership", "By School", "Disability Profile", "Trends"])
             
             if st.session_state.drill_down_view == "atsi":
                 drill_data = filtered[filtered['Flag_ATSI'] == 'Yes']
@@ -376,7 +376,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                     prog = drill_data['Allocated_Program'].value_counts().sort_index()
                     if len(prog) > 0:
                         fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color='#ff6b6b', text=prog.values.astype(int), textposition='outside')])
-                        fig.update_yaxes(dtick=1)
+                        fig.update_yaxes(dtick=1, showgrid=False)
                         fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
                         st.plotly_chart(fig, use_container_width=True)
                 
@@ -384,11 +384,20 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                     part = drill_data['Partnership_Area'].value_counts()
                     if len(part) > 0:
                         fig = go.Figure([go.Bar(y=part.index, x=part.values, orientation='h', marker_color='#ff6b6b', text=part.values.astype(int), textposition='outside')])
-                        fig.update_xaxes(dtick=1)
+                        fig.update_xaxes(dtick=1, showgrid=False)
                         fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
                         st.plotly_chart(fig, use_container_width=True)
                 
                 with tabs[3]:
+                    if 'Referring_School' in drill_data.columns:
+                        schools = drill_data['Referring_School'].value_counts().head(15)
+                        if len(schools) > 0:
+                            fig = go.Figure([go.Bar(y=schools.index, x=schools.values, orientation='h', marker_color='#ff6b6b', text=schools.values.astype(int), textposition='outside')])
+                            fig.update_xaxes(dtick=1, showgrid=False)
+                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
+                            st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[4]:
                     disability_cols = ['Flag_ASD', 'Flag_ADHD', 'Flag_Speech_and_Lang', 'Flag_Intellectual', 'Flag_Learning_Difficulty', 'Flag_Sensory_Processing', 'Flag_ODD', 'Flag_PDA']
                     disability_labels = ['ASD', 'ADHD', 'Speech', 'Intellectual', 'Learning', 'Sensory', 'ODD', 'PDA']
                     dis_counts = []
@@ -399,15 +408,15 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                             dis_counts.append(0)
                     if sum(dis_counts) > 0:
                         fig = go.Figure([go.Bar(x=disability_labels, y=dis_counts, marker_color='#ff6b6b', text=dis_counts, textposition='outside')])
-                        fig.update_yaxes(dtick=1)
+                        fig.update_yaxes(dtick=1, showgrid=False)
                         fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
                         st.plotly_chart(fig, use_container_width=True)
                 
-                with tabs[4]:
+                with tabs[5]:
                     if 'Term' in drill_data.columns:
                         term_trend = drill_data['Term'].value_counts().sort_index()
                         fig = go.Figure([go.Scatter(x=term_trend.index, y=term_trend.values, mode='lines+markers', marker_color='#ff6b6b', line=dict(width=3), marker_size=10)])
-                        fig.update_yaxes(dtick=1)
+                        fig.update_yaxes(dtick=1, showgrid=False)
                         fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, xaxis_title='Term', yaxis_title='Students')
                         st.plotly_chart(fig, use_container_width=True)
             
@@ -426,7 +435,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                     prog = drill_data['Allocated_Program'].value_counts().sort_index()
                     if len(prog) > 0:
                         fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color='#00e5ff', text=prog.values.astype(int), textposition='outside')])
-                        fig.update_yaxes(dtick=1)
+                        fig.update_yaxes(dtick=1, showgrid=False)
                         fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
                         st.plotly_chart(fig, use_container_width=True)
                 
@@ -434,11 +443,20 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                     part = drill_data['Partnership_Area'].value_counts()
                     if len(part) > 0:
                         fig = go.Figure([go.Bar(y=part.index, x=part.values, orientation='h', marker_color='#00e5ff', text=part.values.astype(int), textposition='outside')])
-                        fig.update_xaxes(dtick=1)
+                        fig.update_xaxes(dtick=1, showgrid=False)
                         fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
                         st.plotly_chart(fig, use_container_width=True)
                 
                 with tabs[3]:
+                    if 'Referring_School' in drill_data.columns:
+                        schools = drill_data['Referring_School'].value_counts().head(15)
+                        if len(schools) > 0:
+                            fig = go.Figure([go.Bar(y=schools.index, x=schools.values, orientation='h', marker_color='#00e5ff', text=schools.values.astype(int), textposition='outside')])
+                            fig.update_xaxes(dtick=1, showgrid=False)
+                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
+                            st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[5]:
                     disability_cols = ['Flag_ASD', 'Flag_ADHD', 'Flag_Speech_and_Lang', 'Flag_Intellectual', 'Flag_Learning_Difficulty', 'Flag_Sensory_Processing', 'Flag_ODD', 'Flag_PDA']
                     disability_labels = ['ASD', 'ADHD', 'Speech', 'Intellectual', 'Learning', 'Sensory', 'ODD', 'PDA']
                     dis_counts = []
@@ -449,7 +467,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                             dis_counts.append(0)
                     if sum(dis_counts) > 0:
                         fig = go.Figure([go.Bar(x=disability_labels, y=dis_counts, marker_color='#00e5ff', text=dis_counts, textposition='outside')])
-                        fig.update_yaxes(dtick=1)
+                        fig.update_yaxes(dtick=1, showgrid=False)
                         fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
                         st.plotly_chart(fig, use_container_width=True)
             
@@ -468,7 +486,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                     prog = drill_data['Allocated_Program'].value_counts().sort_index()
                     if len(prog) > 0:
                         fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color='#ffd93d', text=prog.values.astype(int), textposition='outside')])
-                        fig.update_yaxes(dtick=1)
+                        fig.update_yaxes(dtick=1, showgrid=False)
                         fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
                         st.plotly_chart(fig, use_container_width=True)
                 
@@ -476,11 +494,20 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                     part = drill_data['Partnership_Area'].value_counts()
                     if len(part) > 0:
                         fig = go.Figure([go.Bar(y=part.index, x=part.values, orientation='h', marker_color='#ffd93d', text=part.values.astype(int), textposition='outside')])
-                        fig.update_xaxes(dtick=1)
+                        fig.update_xaxes(dtick=1, showgrid=False)
                         fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
                         st.plotly_chart(fig, use_container_width=True)
                 
                 with tabs[3]:
+                    if 'Referring_School' in drill_data.columns:
+                        schools = drill_data['Referring_School'].value_counts().head(15)
+                        if len(schools) > 0:
+                            fig = go.Figure([go.Bar(y=schools.index, x=schools.values, orientation='h', marker_color='#ffd93d', text=schools.values.astype(int), textposition='outside')])
+                            fig.update_xaxes(dtick=1, showgrid=False)
+                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
+                            st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[5]:
                     disability_cols = ['Flag_ASD', 'Flag_ADHD', 'Flag_Speech_and_Lang', 'Flag_Intellectual', 'Flag_Learning_Difficulty', 'Flag_Sensory_Processing', 'Flag_ODD', 'Flag_PDA']
                     disability_labels = ['ASD', 'ADHD', 'Speech', 'Intellectual', 'Learning', 'Sensory', 'ODD', 'PDA']
                     dis_counts = []
@@ -491,7 +518,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                             dis_counts.append(0)
                     if sum(dis_counts) > 0:
                         fig = go.Figure([go.Bar(x=disability_labels, y=dis_counts, marker_color='#ffd93d', text=dis_counts, textposition='outside')])
-                        fig.update_yaxes(dtick=1)
+                        fig.update_yaxes(dtick=1, showgrid=False)
                         fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
                         st.plotly_chart(fig, use_container_width=True)
             
@@ -508,9 +535,32 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                         c2.metric("Repeating Students", int(len(repeating)))
                         c3.metric("Total Repeat Enrollments", int(repeating.sum()))
                         
-                        st.markdown("**Top Repeating Students**")
-                        for student_name, count in repeating.head(15).items():
-                            st.write(f"**{student_name}**: {int(count)} enrollments")
+                        st.markdown("**Students with Multiple Enrollments - Enrollment History**")
+                        st.markdown("*Student names withheld for privacy - showing enrollment patterns instead*")
+                        
+                        # Build table of repeating student enrollments
+                        repeating_details = []
+                        for student_name in repeating.index[:20]:  # Top 20 repeating
+                            student_recs = filtered[filtered[student_col] == student_name]
+                            for _, rec in student_recs.iterrows():
+                                school = rec.get('Referring_School', 'Unknown')
+                                program = rec.get('Allocated_Program', '-')
+                                term = rec.get('Term', '-')
+                                year = rec.get('Referral_Year', '-')
+                                age = rec.get('Age', '-') if 'Age' in rec.index else 'N/A'
+                                
+                                repeating_details.append({
+                                    'School': school,
+                                    'Program': program,
+                                    'Term': f"T{int(term)}" if term != '-' else '-',
+                                    'Year': int(year) if year != '-' else '-',
+                                    'Age': age,
+                                    'Enrollments for This Student': int(repeating[student_name])
+                                })
+                        
+                        if repeating_details:
+                            repeating_df = pd.DataFrame(repeating_details)
+                            st.dataframe(repeating_df, use_container_width=True, hide_index=True)
                     
                     with tabs[1]:
                         st.markdown("**Repeating Students by Program**")
@@ -518,7 +568,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                         prog = repeating_filtered['Allocated_Program'].value_counts().sort_index()
                         if len(prog) > 0:
                             fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color='#00e5ff', text=prog.values.astype(int), textposition='outside')])
-                            fig.update_yaxes(dtick=1)
+                            fig.update_yaxes(dtick=1, showgrid=False)
                             fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
                             st.plotly_chart(fig, use_container_width=True)
                     
@@ -527,20 +577,30 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                         part = repeating_filtered['Partnership_Area'].value_counts()
                         if len(part) > 0:
                             fig = go.Figure([go.Bar(y=part.index, x=part.values, orientation='h', marker_color='#00e5ff', text=part.values.astype(int), textposition='outside')])
-                            fig.update_xaxes(dtick=1)
+                            fig.update_xaxes(dtick=1, showgrid=False)
                             fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
                             st.plotly_chart(fig, use_container_width=True)
                     
                     with tabs[3]:
+                        st.markdown("**Repeating Students by School**")
+                        if 'Referring_School' in repeating_filtered.columns:
+                            schools = repeating_filtered['Referring_School'].value_counts().head(15)
+                            if len(schools) > 0:
+                                fig = go.Figure([go.Bar(y=schools.index, x=schools.values, orientation='h', marker_color='#00e5ff', text=schools.values.astype(int), textposition='outside')])
+                                fig.update_xaxes(dtick=1, showgrid=False)
+                                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
+                                st.plotly_chart(fig, use_container_width=True)
+                    
+                    with tabs[5]:
                         st.markdown("**Repeating Students: Terms Enrolled**")
                         if 'Term' in repeating_filtered.columns:
                             terms = repeating_filtered['Term'].value_counts().sort_index()
                             fig = go.Figure([go.Bar(x=['T' + str(int(t)) for t in terms.index], y=terms.values, marker_color='#00e5ff', text=terms.values.astype(int), textposition='outside')])
-                            fig.update_yaxes(dtick=1)
+                            fig.update_yaxes(dtick=1, showgrid=False)
                             fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
                             st.plotly_chart(fig, use_container_width=True)
                     
-                    with tabs[4]:
+                    with tabs[5]:
                         st.markdown("**Why Students Are Repeating**")
                         st.markdown("Students appear multiple times due to:")
                         st.markdown("- **Different Terms**: Enrolled in T1, then T2, then T3, etc.")
@@ -556,7 +616,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
             prog = filtered['Allocated_Program'].value_counts().sort_index()
             if len(prog) > 0:
                 fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color=['#00e5ff', '#ffd93d', '#ff6b6b'][:len(prog)], text=prog.values.astype(int), textposition='outside')])
-                fig.update_yaxes(dtick=1)
+                fig.update_yaxes(dtick=1, showgrid=False)
                 fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=350, showlegend=False)
                 st.plotly_chart(fig, use_container_width=True)
             
@@ -600,23 +660,70 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                 
                 if school_data:
                     school_df = pd.DataFrame(school_data).sort_values('Total', ascending=False).head(15)
-                    st.dataframe(school_df, use_container_width=True, hide_index=True)
                     
-                    # Highlight over-represented schools
-                    st.markdown("### Schools with Over-Representation")
-                    st.markdown(f"*Overall rates: SWD {int(overall_swd_rate)}% | ATSI {int(overall_atsi_rate)}% | EALD {int(overall_eald_rate)}%*")
+                    # Create variance columns for visualization
+                    school_df['SWD_Variance'] = school_df['SWD %'] - int(overall_swd_rate)
+                    school_df['ATSI_Variance'] = school_df['ATSI %'] - int(overall_atsi_rate)
+                    school_df['EALD_Variance'] = school_df['EALD %'] - int(overall_eald_rate)
                     
-                    for _, row in school_df.iterrows():
-                        over_rep = []
-                        if int(row['SWD %']) > int(overall_swd_rate):
-                            over_rep.append(f"SWD ({row['SWD %']}% vs {int(overall_swd_rate)}%)")
-                        if int(row['ATSI %']) > int(overall_atsi_rate):
-                            over_rep.append(f"ATSI ({row['ATSI %']}% vs {int(overall_atsi_rate)}%)")
-                        if int(row['EALD %']) > int(overall_eald_rate):
-                            over_rep.append(f"EALD ({row['EALD %']}% vs {int(overall_eald_rate)}%)")
-                        
-                        if over_rep:
-                            st.write(f"**{row['School']}** ({int(row['Total'])} students): Over-represented in {', '.join(over_rep)}")
+                    st.markdown(f"**Overall Rates**: SWD {int(overall_swd_rate)}% | ATSI {int(overall_atsi_rate)}% | EALD {int(overall_eald_rate)}%")
+                    
+                    # Create three side-by-side diverging bar charts
+                    c1, c2, c3 = st.columns(3)
+                    
+                    with c1:
+                        st.markdown("### SWD Over-Representation")
+                        swd_data = school_df.sort_values('SWD_Variance', ascending=True)
+                        colors_swd = ['#ff6b6b' if x > 0 else '#00e5ff' for x in swd_data['SWD_Variance']]
+                        fig = go.Figure([go.Bar(
+                            y=swd_data['School'],
+                            x=swd_data['SWD_Variance'],
+                            orientation='h',
+                            marker_color=colors_swd,
+                            text=swd_data['SWD_Variance'].astype(int),
+                            textposition='outside'
+                        )])
+                        fig.add_vline(x=0, line_dash="dash", line_color="#ffffff", opacity=0.3)
+                        fig.update_xaxes(showgrid=False)
+                        fig.update_yaxes(showgrid=False)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False, xaxis_title="Variance from Overall %")
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    with c2:
+                        st.markdown("### ATSI Over-Representation")
+                        atsi_data = school_df.sort_values('ATSI_Variance', ascending=True)
+                        colors_atsi = ['#ff6b6b' if x > 0 else '#00e5ff' for x in atsi_data['ATSI_Variance']]
+                        fig = go.Figure([go.Bar(
+                            y=atsi_data['School'],
+                            x=atsi_data['ATSI_Variance'],
+                            orientation='h',
+                            marker_color=colors_atsi,
+                            text=atsi_data['ATSI_Variance'].astype(int),
+                            textposition='outside'
+                        )])
+                        fig.add_vline(x=0, line_dash="dash", line_color="#ffffff", opacity=0.3)
+                        fig.update_xaxes(showgrid=False)
+                        fig.update_yaxes(showgrid=False)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False, xaxis_title="Variance from Overall %")
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    with c3:
+                        st.markdown("### EALD Over-Representation")
+                        eald_data = school_df.sort_values('EALD_Variance', ascending=True)
+                        colors_eald = ['#ff6b6b' if x > 0 else '#00e5ff' for x in eald_data['EALD_Variance']]
+                        fig = go.Figure([go.Bar(
+                            y=eald_data['School'],
+                            x=eald_data['EALD_Variance'],
+                            orientation='h',
+                            marker_color=colors_eald,
+                            text=eald_data['EALD_Variance'].astype(int),
+                            textposition='outside'
+                        )])
+                        fig.add_vline(x=0, line_dash="dash", line_color="#ffffff", opacity=0.3)
+                        fig.update_xaxes(showgrid=False)
+                        fig.update_yaxes(showgrid=False)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False, xaxis_title="Variance from Overall %")
+                        st.plotly_chart(fig, use_container_width=True)
             
             st.markdown("---")
             st.markdown("## EALD Trend Analysis - Increase Over Time")
@@ -711,7 +818,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                 text=dist_values,
                 textposition='outside'
             )])
-            fig.update_yaxes(dtick=1)
+            fig.update_yaxes(dtick=1, showgrid=False)
             fig.update_layout(
                 paper_bgcolor='rgba(0,0,0,0)',
                 plot_bgcolor='rgba(0,0,0,0)',
@@ -752,7 +859,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                             text=combo_values,
                             textposition='outside'
                         )])
-                        fig.update_xaxes(dtick=1)
+                        fig.update_xaxes(dtick=1, showgrid=False)
                         fig.update_layout(
                             paper_bgcolor='rgba(0,0,0,0)',
                             plot_bgcolor='rgba(0,0,0,0)',
