@@ -513,7 +513,7 @@ else:
                             school = most_disadvantaged.iloc[0]
                             st.write(f"⚠️ **{school['School']}** (SEIFA {int(school['SEIFA_IRSAD'])}): **Very High disadvantage**\n{int(school['Total_Referrals'])} CLC referrals | {int(school['Year12_Completion'])}% Yr12 completion")
         else:
-            st.info("📋 **School Socioeconomic Data Not Loaded**\n\nTo enable school equity analysis:\n1. Download template: `school_socioeconomic_data_TEMPLATE.csv` from outputs\n2. Update with your SA school data (populate all fields)\n3. Save as `school_socioeconomic_data.csv` in outputs folder\n4. Reload dashboard\n\nThis enables analysis of school disadvantage, Indigenous%, EALD% correlations with CLC referrals.")
+            st.info("📋 **School Socioeconomic Data Not Loaded**\n\nTo enable school equity analysis:\n1. Download template: `school_socioeconomic_data_TEMPLATE.csv` from outputs\n2. Update with your SA school data (populate all fields)\n3. Save as `school_socioeconomic_data.csv` in data folder in GitHub\n4. Reload dashboard\n\nThis enables analysis of school disadvantage, Indigenous%, EALD% correlations with CLC referrals.")
         
         # ====================================================================
         # EQUITY ANALYSIS: SCHOOL REPRESENTATION
@@ -688,139 +688,139 @@ else:
                 ).add_to(m)
         
         st_folium(m, width=1200, height=400)
-
-# ============================================================================
-# DRILL-DOWN VIEWS
-# ============================================================================
-
-else:  # Drill-down view active
     
-    # Back button
-    if st.button("← Back to Overview"):
-        st.session_state.drill_down_view = None
-        st.rerun()
+    # ========================================================================
+    # DRILL-DOWN VIEWS
+    # ========================================================================
     
-    view = st.session_state.drill_down_view
-    
-    # Filter data based on drill-down view
-    if view == 'total':
-        drill_data = filtered
-        title = "📍 Total Students"
-    elif view == 'allocated':
-        drill_data = filtered[filtered['Allocation_Status'] == 'Allocated']
-        title = "✅ Allocated Students"
-    elif view == 'atsi':
-        drill_data = filtered[filtered['Flag_ATSI'] == 'Yes']
-        title = "🔴 ATSI Students"
-    elif view == 'swd':
-        drill_data = filtered[filtered['Flag_SWD'] == 'Yes']
-        title = "🟠 SWD Students"
-    elif view == 'eald':
-        drill_data = filtered[filtered['Flag_EALD'] == 'Yes']
-        title = "🟡 EALD Students"
-    elif view == 'repeating':
-        # Find repeating students
-        student_col = None
-        for col in ['Student_Name', 'student_name', 'Student', 'Name', 'Full_Name']:
-            if col in filtered.columns:
-                student_col = col
-                break
+    else:
         
-        if student_col:
-            student_counts = filtered[student_col].value_counts()
-            repeating_students = student_counts[student_counts > 1].index
-            drill_data = filtered[filtered[student_col].isin(repeating_students)]
-        else:
+        # Back button
+        if st.button("← Back to Overview"):
+            st.session_state.drill_down_view = None
+            st.rerun()
+        
+        view = st.session_state.drill_down_view
+        
+        # Filter data based on drill-down view
+        if view == 'total':
             drill_data = filtered
-        
-        title = "🔄 Repeating Students"
-    
-    st.markdown(f"# {title}")
-    st.markdown(f"*{len(drill_data)} students*")
-    
-    # Tabs for drill-down
-    tabs = st.tabs(["Overview", "By Program", "By Partnership", "By School", "Disability Profile", "Trends"])
-    
-    with tabs[0]:  # Overview
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Total", len(drill_data))
-        c2.metric("ATSI", len(drill_data[drill_data['Flag_ATSI'] == 'Yes']))
-        c3.metric("SWD", len(drill_data[drill_data['Flag_SWD'] == 'Yes']))
-        c4.metric("EALD", len(drill_data[drill_data['Flag_EALD'] == 'Yes']))
-        
-        # Program distribution
-        prog_dist = drill_data['Allocated_Program'].value_counts()
-        fig = go.Figure([go.Pie(labels=prog_dist.index, values=prog_dist.values)])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'))
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with tabs[1]:  # By Program
-        for prog in ['JP', 'PY', 'SY']:
-            prog_data = drill_data[drill_data['Allocated_Program'] == prog]
-            if len(prog_data) > 0:
-                st.markdown(f"### {prog} Program ({len(prog_data)} students)")
-                st.write(f"**ATSI**: {len(prog_data[prog_data['Flag_ATSI'] == 'Yes'])} | **SWD**: {len(prog_data[prog_data['Flag_SWD'] == 'Yes'])} | **EALD**: {len(prog_data[prog_data['Flag_EALD'] == 'Yes'])}")
-    
-    with tabs[2]:  # By Partnership
-        partnership_dist = drill_data['Partnership_Area'].value_counts().head(12)
-        fig = go.Figure([go.Bar(
-            y=partnership_dist.index,
-            x=partnership_dist.values,
-            orientation='h',
-            marker_color='#00e5ff'
-        )])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, margin=dict(l=200, r=80, t=0, b=0))
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with tabs[3]:  # By School
-        school_dist = drill_data['Referring_School'].value_counts().head(12)
-        fig = go.Figure([go.Bar(
-            y=school_dist.index,
-            x=school_dist.values,
-            orientation='h',
-            marker_color='#00ff00'
-        )])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, margin=dict(l=200, r=80, t=0, b=0))
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with tabs[4]:  # Disability Profile
-        st.markdown("### Disability Distribution in this Cohort")
-        disability_cols = ['Flag_ASD', 'Flag_ADHD', 'Flag_Speech_and_Lang', 'Flag_Intellectual', 'Flag_Learning_Difficulty', 'Flag_Sensory_Processing', 'Flag_ODD', 'Flag_PDA']
-        disability_counts = {}
-        for col in disability_cols:
-            if col in drill_data.columns:
-                count = len(drill_data[drill_data[col] == 'Yes'])
-                disability_name = col.replace('Flag_', '').replace('_', ' ')
-                disability_counts[disability_name] = count
-        
-        if disability_counts:
-            dis_df = pd.DataFrame(list(disability_counts.items()), columns=['Disability', 'Count']).sort_values('Count', ascending=True)
-            fig = go.Figure([go.Bar(
-                y=dis_df['Disability'],
-                x=dis_df['Count'],
-                orientation='h',
-                marker_color='#ffd93d'
-            )])
-            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=350, margin=dict(l=150, r=80, t=0, b=0))
-            st.plotly_chart(fig, use_container_width=True)
-    
-    with tabs[5]:  # Trends
-        st.markdown("### Allocation Trends by Term")
-        valid_terms = sorted([t for t in drill_data['Term'].unique() if pd.notna(t)])
-        
-        if len(valid_terms) > 1:
-            trend_data = []
-            for term in valid_terms:
-                term_count = len(drill_data[drill_data['Term'] == term])
-                trend_data.append({'Term': f"T{int(term)}", 'Count': term_count})
+            title = "📍 Total Students"
+        elif view == 'allocated':
+            drill_data = filtered[filtered['Allocation_Status'] == 'Allocated']
+            title = "✅ Allocated Students"
+        elif view == 'atsi':
+            drill_data = filtered[filtered['Flag_ATSI'] == 'Yes']
+            title = "🔴 ATSI Students"
+        elif view == 'swd':
+            drill_data = filtered[filtered['Flag_SWD'] == 'Yes']
+            title = "🟠 SWD Students"
+        elif view == 'eald':
+            drill_data = filtered[filtered['Flag_EALD'] == 'Yes']
+            title = "🟡 EALD Students"
+        elif view == 'repeating':
+            # Find repeating students
+            student_col = None
+            for col in ['Student_Name', 'student_name', 'Student', 'Name', 'Full_Name']:
+                if col in filtered.columns:
+                    student_col = col
+                    break
             
-            trend_df = pd.DataFrame(trend_data)
-            fig = go.Figure([go.Scatter(
-                x=trend_df['Term'],
-                y=trend_df['Count'],
-                mode='lines+markers',
-                marker=dict(size=10, color='#00e5ff'),
-                line=dict(color='#00e5ff', width=2)
-            )])
-            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=350)
+            if student_col:
+                student_counts = filtered[student_col].value_counts()
+                repeating_students = student_counts[student_counts > 1].index
+                drill_data = filtered[filtered[student_col].isin(repeating_students)]
+            else:
+                drill_data = filtered
+            
+            title = "🔄 Repeating Students"
+        
+        st.markdown(f"# {title}")
+        st.markdown(f"*{len(drill_data)} students*")
+        
+        # Tabs for drill-down
+        tabs = st.tabs(["Overview", "By Program", "By Partnership", "By School", "Disability Profile", "Trends"])
+        
+        with tabs[0]:  # Overview
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Total", len(drill_data))
+            c2.metric("ATSI", len(drill_data[drill_data['Flag_ATSI'] == 'Yes']))
+            c3.metric("SWD", len(drill_data[drill_data['Flag_SWD'] == 'Yes']))
+            c4.metric("EALD", len(drill_data[drill_data['Flag_EALD'] == 'Yes']))
+            
+            # Program distribution
+            prog_dist = drill_data['Allocated_Program'].value_counts()
+            fig = go.Figure([go.Pie(labels=prog_dist.index, values=prog_dist.values)])
+            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'))
             st.plotly_chart(fig, use_container_width=True)
+        
+        with tabs[1]:  # By Program
+            for prog in ['JP', 'PY', 'SY']:
+                prog_data = drill_data[drill_data['Allocated_Program'] == prog]
+                if len(prog_data) > 0:
+                    st.markdown(f"### {prog} Program ({len(prog_data)} students)")
+                    st.write(f"**ATSI**: {len(prog_data[prog_data['Flag_ATSI'] == 'Yes'])} | **SWD**: {len(prog_data[prog_data['Flag_SWD'] == 'Yes'])} | **EALD**: {len(prog_data[prog_data['Flag_EALD'] == 'Yes'])}")
+        
+        with tabs[2]:  # By Partnership
+            partnership_dist = drill_data['Partnership_Area'].value_counts().head(12)
+            fig = go.Figure([go.Bar(
+                y=partnership_dist.index,
+                x=partnership_dist.values,
+                orientation='h',
+                marker_color='#00e5ff'
+            )])
+            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, margin=dict(l=200, r=80, t=0, b=0))
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with tabs[3]:  # By School
+            school_dist = drill_data['Referring_School'].value_counts().head(12)
+            fig = go.Figure([go.Bar(
+                y=school_dist.index,
+                x=school_dist.values,
+                orientation='h',
+                marker_color='#00ff00'
+            )])
+            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, margin=dict(l=200, r=80, t=0, b=0))
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with tabs[4]:  # Disability Profile
+            st.markdown("### Disability Distribution in this Cohort")
+            disability_cols = ['Flag_ASD', 'Flag_ADHD', 'Flag_Speech_and_Lang', 'Flag_Intellectual', 'Flag_Learning_Difficulty', 'Flag_Sensory_Processing', 'Flag_ODD', 'Flag_PDA']
+            disability_counts = {}
+            for col in disability_cols:
+                if col in drill_data.columns:
+                    count = len(drill_data[drill_data[col] == 'Yes'])
+                    disability_name = col.replace('Flag_', '').replace('_', ' ')
+                    disability_counts[disability_name] = count
+            
+            if disability_counts:
+                dis_df = pd.DataFrame(list(disability_counts.items()), columns=['Disability', 'Count']).sort_values('Count', ascending=True)
+                fig = go.Figure([go.Bar(
+                    y=dis_df['Disability'],
+                    x=dis_df['Count'],
+                    orientation='h',
+                    marker_color='#ffd93d'
+                )])
+                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=350, margin=dict(l=150, r=80, t=0, b=0))
+                st.plotly_chart(fig, use_container_width=True)
+        
+        with tabs[5]:  # Trends
+            st.markdown("### Allocation Trends by Term")
+            valid_terms = sorted([t for t in drill_data['Term'].unique() if pd.notna(t)])
+            
+            if len(valid_terms) > 1:
+                trend_data = []
+                for term in valid_terms:
+                    term_count = len(drill_data[drill_data['Term'] == term])
+                    trend_data.append({'Term': f"T{int(term)}", 'Count': term_count})
+                
+                trend_df = pd.DataFrame(trend_data)
+                fig = go.Figure([go.Scatter(
+                    x=trend_df['Term'],
+                    y=trend_df['Count'],
+                    mode='lines+markers',
+                    marker=dict(size=10, color='#00e5ff'),
+                    line=dict(color='#00e5ff', width=2)
+                )])
+                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=350)
+                st.plotly_chart(fig, use_container_width=True)
