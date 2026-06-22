@@ -740,7 +740,9 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                     if len(eald_by_term) > 0:
                         eald_rates = []
                         term_labels = []
-                        for term in sorted(filtered['Term'].unique()):
+                        # Filter out NaN values from Term column
+                        valid_terms = sorted([t for t in filtered['Term'].unique() if pd.notna(t)])
+                        for term in valid_terms:
                             eald_count = len(filtered[(filtered['Term'] == term) & (filtered['Flag_EALD'] == 'Yes')])
                             term_count = len(filtered[filtered['Term'] == term])
                             rate = int(eald_count / term_count * 100) if term_count > 0 else 0
@@ -759,7 +761,9 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                     if len(sy_data) > 0:
                         eald_sy_rates = []
                         term_labels_sy = []
-                        for term in sorted(sy_data['Term'].unique()):
+                        # Filter out NaN values from Term column
+                        valid_terms_sy = sorted([t for t in sy_data['Term'].unique() if pd.notna(t)])
+                        for term in valid_terms_sy:
                             eald_count = len(sy_data[(sy_data['Term'] == term) & (sy_data['Flag_EALD'] == 'Yes')])
                             term_count = len(sy_data[sy_data['Term'] == term])
                             rate = int(eald_count / term_count * 100) if term_count > 0 else 0
