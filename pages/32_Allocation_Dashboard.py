@@ -486,7 +486,7 @@ else:
                             fig_ind.add_vline(x=0, line_dash="dash", line_color="#ffffff", opacity=0.3)
                             fig_ind.update_xaxes(showgrid=False, color='#ffffff')
                             fig_ind.update_yaxes(showgrid=False, color='#ffffff')
-                            fig_ind.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), height=400, showlegend=False, xaxis_title="% Over-representation", margin=dict(l=180, r=120, t=0, b=0), automargin=True)
+                            fig_ind.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), height=400, showlegend=False, xaxis_title="% Over-representation", margin=dict(l=180, r=120, t=0, b=0))
                             st.plotly_chart(fig_ind, use_container_width=True)
                     
                     # School profile table
@@ -538,7 +538,7 @@ else:
             )])
             fig_atsi.update_xaxes(showgrid=False, color='#ffffff')
             fig_atsi.update_yaxes(showgrid=False, color='#ffffff')
-            fig_atsi.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=10), height=350, showlegend=False, margin=dict(l=150, r=80, t=0, b=0), automargin=True)
+            fig_atsi.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=10), height=350, showlegend=False, margin=dict(l=150, r=80, t=0, b=0))
             st.plotly_chart(fig_atsi, use_container_width=True)
         
         with c2:
@@ -554,7 +554,7 @@ else:
             )])
             fig_swd.update_xaxes(showgrid=False, color='#ffffff')
             fig_swd.update_yaxes(showgrid=False, color='#ffffff')
-            fig_swd.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=10), height=350, showlegend=False, margin=dict(l=150, r=80, t=0, b=0), automargin=True)
+            fig_swd.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=10), height=350, showlegend=False, margin=dict(l=150, r=80, t=0, b=0))
             st.plotly_chart(fig_swd, use_container_width=True)
         
         with c3:
@@ -570,7 +570,7 @@ else:
             )])
             fig_eald.update_xaxes(showgrid=False, color='#ffffff')
             fig_eald.update_yaxes(showgrid=False, color='#ffffff')
-            fig_eald.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=10), height=350, showlegend=False, margin=dict(l=150, r=80, t=0, b=0), automargin=True)
+            fig_eald.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=10), height=350, showlegend=False, margin=dict(l=150, r=80, t=0, b=0))
             st.plotly_chart(fig_eald, use_container_width=True)
         
         # ====================================================================
@@ -641,7 +641,7 @@ else:
             )])
             fig_dis.update_xaxes(showgrid=False, color='#ffffff')
             fig_dis.update_yaxes(showgrid=False, color='#ffffff')
-            fig_dis.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False, margin=dict(l=150, r=80, t=0, b=0), automargin=True)
+            fig_dis.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False, margin=dict(l=150, r=80, t=0, b=0))
             st.plotly_chart(fig_dis, use_container_width=True)
         
         # ====================================================================
