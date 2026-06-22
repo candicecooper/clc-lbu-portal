@@ -112,6 +112,39 @@ input:focus, button:focus, select:focus {
     box-shadow: none !important;
 }
 
+/* Remove blue outline from Plotly chart buttons (zoom, pan, autoscale, etc) */
+.plotly-container button {
+    outline: none !important;
+    box-shadow: none !important;
+    border: none !important;
+}
+
+.plotly-container button:hover {
+    outline: none !important;
+    box-shadow: none !important;
+}
+
+.plotly-container button:focus {
+    outline: none !important;
+    box-shadow: none !important;
+}
+
+/* Remove glow from Plotly modebar buttons */
+.modebar-btn {
+    outline: none !important;
+    box-shadow: none !important;
+}
+
+.modebar-btn:hover {
+    outline: none !important;
+    box-shadow: none !important;
+}
+
+.modebar-btn:focus {
+    outline: none !important;
+    box-shadow: none !important;
+}
+
 .dashboard-title {
     background: linear-gradient(135deg, rgba(0, 229, 255, 0.15) 0%, rgba(0, 229, 255, 0.05) 100%);
     border: 2px solid rgba(0, 229, 255, 0.4);
@@ -276,9 +309,21 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
         eald = int(len(filtered[filtered['Flag_EALD'] == 'Yes']))
         swd = int(len(filtered[filtered['Flag_SWD'] == 'Yes']))
         
+        # Calculate repeating students
+        student_col = None
+        for col in ['Student_Name', 'student_name', 'Student', 'Name', 'Full_Name']:
+            if col in filtered.columns:
+                student_col = col
+                break
+        
+        repeating_students = 0
+        if student_col:
+            student_counts = filtered[student_col].value_counts()
+            repeating_students = int(len(student_counts[student_counts > 1]))
+        
         st.markdown("## Metrics & Drill Down")
         
-        col1, col2, col3, col4, col5 = st.columns(5)
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
         
         with col1:
             if st.button(f"Total\n{total}", key="metric_total", use_container_width=True, help="Click to drill down"):
@@ -299,6 +344,10 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
         with col5:
             if st.button(f"EALD\n{eald}", key="metric_eald", use_container_width=True, help="Click to drill down"):
                 st.session_state.drill_down_view = "eald"
+        
+        with col6:
+            if st.button(f"Repeating\n{repeating_students}", key="metric_repeating", use_container_width=True, help="Click to drill down"):
+                st.session_state.drill_down_view = "repeating"
         
         st.markdown("---")
         
@@ -445,6 +494,61 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                         fig.update_yaxes(dtick=1)
                         fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
                         st.plotly_chart(fig, use_container_width=True)
+            
+            elif st.session_state.drill_down_view == "repeating":
+                if student_col:
+                    st.markdown("### Students Appearing Multiple Times")
+                    
+                    student_counts = filtered[student_col].value_counts()
+                    repeating = student_counts[student_counts > 1].sort_values(ascending=False)
+                    
+                    with tabs[0]:
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric("Unique Students", int(len(student_counts)))
+                        c2.metric("Repeating Students", int(len(repeating)))
+                        c3.metric("Total Repeat Enrollments", int(repeating.sum()))
+                        
+                        st.markdown("**Top Repeating Students**")
+                        for student_name, count in repeating.head(15).items():
+                            st.write(f"**{student_name}**: {int(count)} enrollments")
+                    
+                    with tabs[1]:
+                        st.markdown("**Repeating Students by Program**")
+                        repeating_filtered = filtered[filtered[student_col].isin(repeating.index)]
+                        prog = repeating_filtered['Allocated_Program'].value_counts().sort_index()
+                        if len(prog) > 0:
+                            fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color='#00e5ff', text=prog.values.astype(int), textposition='outside')])
+                            fig.update_yaxes(dtick=1)
+                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
+                            st.plotly_chart(fig, use_container_width=True)
+                    
+                    with tabs[2]:
+                        st.markdown("**Repeating Students by Partnership**")
+                        part = repeating_filtered['Partnership_Area'].value_counts()
+                        if len(part) > 0:
+                            fig = go.Figure([go.Bar(y=part.index, x=part.values, orientation='h', marker_color='#00e5ff', text=part.values.astype(int), textposition='outside')])
+                            fig.update_xaxes(dtick=1)
+                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
+                            st.plotly_chart(fig, use_container_width=True)
+                    
+                    with tabs[3]:
+                        st.markdown("**Repeating Students: Terms Enrolled**")
+                        if 'Term' in repeating_filtered.columns:
+                            terms = repeating_filtered['Term'].value_counts().sort_index()
+                            fig = go.Figure([go.Bar(x=['T' + str(int(t)) for t in terms.index], y=terms.values, marker_color='#00e5ff', text=terms.values.astype(int), textposition='outside')])
+                            fig.update_yaxes(dtick=1)
+                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
+                            st.plotly_chart(fig, use_container_width=True)
+                    
+                    with tabs[4]:
+                        st.markdown("**Why Students Are Repeating**")
+                        st.markdown("Students appear multiple times due to:")
+                        st.markdown("- **Different Terms**: Enrolled in T1, then T2, then T3, etc.")
+                        st.markdown("- **Different Programs**: Started in JP, moved to PY")
+                        st.markdown("- **Different Years**: Re-enrolled in different school year")
+                        st.markdown("- **Status Changes**: Status changed from pending to allocated")
+                else:
+                    st.warning("Student name column not found in data")
         
         else:
             # MAIN OVERVIEW
@@ -457,7 +561,120 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                 st.plotly_chart(fig, use_container_width=True)
             
             st.markdown("---")
-            st.markdown("## Students with Multiple Disabilities")
+            st.markdown("## School Equity Analysis - Over/Under Representation")
+            st.markdown("*Shows which schools refer students with SWD, ATSI, EALD at higher rates than overall*")
+            
+            # Calculate overall rates
+            overall_swd_rate = (int(len(filtered[filtered['Flag_SWD'] == 'Yes'])) / total * 100) if total > 0 else 0
+            overall_atsi_rate = (int(len(filtered[filtered['Flag_ATSI'] == 'Yes'])) / total * 100) if total > 0 else 0
+            overall_eald_rate = (int(len(filtered[filtered['Flag_EALD'] == 'Yes'])) / total * 100) if total > 0 else 0
+            
+            # Analyze by school
+            if 'Referring_School' in filtered.columns:
+                schools = filtered['Referring_School'].unique()
+                school_data = []
+                
+                for school in schools:
+                    school_students = filtered[filtered['Referring_School'] == school]
+                    school_total = len(school_students)
+                    
+                    if school_total > 0:
+                        swd_count = len(school_students[school_students['Flag_SWD'] == 'Yes'])
+                        atsi_count = len(school_students[school_students['Flag_ATSI'] == 'Yes'])
+                        eald_count = len(school_students[school_students['Flag_EALD'] == 'Yes'])
+                        
+                        swd_rate = int(swd_count / school_total * 100)
+                        atsi_rate = int(atsi_count / school_total * 100)
+                        eald_rate = int(eald_count / school_total * 100)
+                        
+                        school_data.append({
+                            'School': school,
+                            'Total': school_total,
+                            'SWD %': swd_rate,
+                            'SWD vs Overall': f"{swd_rate - int(overall_swd_rate):+d}%",
+                            'ATSI %': atsi_rate,
+                            'ATSI vs Overall': f"{atsi_rate - int(overall_atsi_rate):+d}%",
+                            'EALD %': eald_rate,
+                            'EALD vs Overall': f"{eald_rate - int(overall_eald_rate):+d}%"
+                        })
+                
+                if school_data:
+                    school_df = pd.DataFrame(school_data).sort_values('Total', ascending=False).head(15)
+                    st.dataframe(school_df, use_container_width=True, hide_index=True)
+                    
+                    # Highlight over-represented schools
+                    st.markdown("### Schools with Over-Representation")
+                    st.markdown(f"*Overall rates: SWD {int(overall_swd_rate)}% | ATSI {int(overall_atsi_rate)}% | EALD {int(overall_eald_rate)}%*")
+                    
+                    for _, row in school_df.iterrows():
+                        over_rep = []
+                        if int(row['SWD %']) > int(overall_swd_rate):
+                            over_rep.append(f"SWD ({row['SWD %']}% vs {int(overall_swd_rate)}%)")
+                        if int(row['ATSI %']) > int(overall_atsi_rate):
+                            over_rep.append(f"ATSI ({row['ATSI %']}% vs {int(overall_atsi_rate)}%)")
+                        if int(row['EALD %']) > int(overall_eald_rate):
+                            over_rep.append(f"EALD ({row['EALD %']}% vs {int(overall_eald_rate)}%)")
+                        
+                        if over_rep:
+                            st.write(f"**{row['School']}** ({int(row['Total'])} students): Over-represented in {', '.join(over_rep)}")
+            
+            st.markdown("---")
+            st.markdown("## EALD Trend Analysis - Increase Over Time")
+            st.markdown("*Shows if EALD students are increasing and particularly in SY program*")
+            
+            if 'Term' in filtered.columns:
+                c1, c2 = st.columns(2)
+                
+                with c1:
+                    st.markdown("### EALD Students by Term (All Programs)")
+                    eald_by_term = filtered[filtered['Flag_EALD'] == 'Yes'].groupby('Term').size().sort_index()
+                    total_by_term = filtered.groupby('Term').size().sort_index()
+                    
+                    if len(eald_by_term) > 0:
+                        eald_rates = []
+                        term_labels = []
+                        for term in sorted(filtered['Term'].unique()):
+                            eald_count = len(filtered[(filtered['Term'] == term) & (filtered['Flag_EALD'] == 'Yes')])
+                            term_count = len(filtered[filtered['Term'] == term])
+                            rate = int(eald_count / term_count * 100) if term_count > 0 else 0
+                            eald_rates.append(rate)
+                            term_labels.append(f"T{int(term)}")
+                        
+                        fig = go.Figure([go.Scatter(x=term_labels, y=eald_rates, mode='lines+markers', marker=dict(size=10, color='#ffd93d'), line=dict(width=3, color='#ffd93d'))])
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="EALD Percentage Trend", height=300, yaxis_title="% EALD")
+                        fig.update_yaxes(dtick=5)
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                with c2:
+                    st.markdown("### EALD Students in SY Program by Term")
+                    sy_data = filtered[filtered['Allocated_Program'] == 'SY']
+                    
+                    if len(sy_data) > 0:
+                        eald_sy_rates = []
+                        term_labels_sy = []
+                        for term in sorted(sy_data['Term'].unique()):
+                            eald_count = len(sy_data[(sy_data['Term'] == term) & (sy_data['Flag_EALD'] == 'Yes')])
+                            term_count = len(sy_data[sy_data['Term'] == term])
+                            rate = int(eald_count / term_count * 100) if term_count > 0 else 0
+                            eald_sy_rates.append(rate)
+                            term_labels_sy.append(f"T{int(term)}")
+                        
+                        fig = go.Figure([go.Scatter(x=term_labels_sy, y=eald_sy_rates, mode='lines+markers', marker=dict(size=10, color='#ff6b6b'), line=dict(width=3, color='#ff6b6b'))])
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="SY Program: EALD Percentage Trend", height=300, yaxis_title="% EALD")
+                        fig.update_yaxes(dtick=5)
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                st.markdown("### EALD Allocation Status by Program")
+                for prog in ['JP', 'PY', 'SY']:
+                    prog_data = filtered[filtered['Allocated_Program'] == prog]
+                    if len(prog_data) > 0:
+                        eald_allocated = len(prog_data[(prog_data['Flag_EALD'] == 'Yes') & (prog_data['Allocation_Status'] == 'Allocated')])
+                        eald_waiting = len(prog_data[(prog_data['Flag_EALD'] == 'Yes') & (prog_data['Allocation_Status'] == 'On Waiting List')])
+                        eald_total = len(prog_data[prog_data['Flag_EALD'] == 'Yes'])
+                        
+                        if eald_total > 0:
+                            alloc_rate = int(eald_allocated / eald_total * 100)
+                            st.write(f"**{prog} Program**: {eald_total} EALD students → {eald_allocated} Allocated ({alloc_rate}%) | {eald_waiting} Waiting List")
             st.markdown("*Important: Students with 2+ identified disabilities are represented in multiple disability categories below - these are the SAME students, not duplicates*")
             
             disability_cols = ['Flag_ASD', 'Flag_ADHD', 'Flag_Speech_and_Lang', 'Flag_Intellectual', 'Flag_Learning_Difficulty', 'Flag_Sensory_Processing', 'Flag_ODD', 'Flag_PDA']
