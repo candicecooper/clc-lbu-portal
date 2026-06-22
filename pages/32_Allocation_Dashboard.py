@@ -86,6 +86,32 @@ button, [role="button"], input[type="button"] {
 }
 p { color: #ffffff !important; }
 
+/* Remove glow from file uploader and other icons */
+[data-testid="fileUploadDropzone"] {
+    border: 1px solid #00e5ff !important;
+    box-shadow: none !important;
+}
+
+[data-testid="stFileUploadDropzone"] {
+    box-shadow: none !important;
+}
+
+/* Remove focus glow from all inputs and interactive elements */
+input:focus, button:focus, select:focus {
+    outline: none !important;
+    box-shadow: none !important;
+}
+
+/* Remove glow from file upload icon area */
+.stFileUploadDropzone:focus-within {
+    box-shadow: none !important;
+}
+
+/* Reduce glow on hover for file upload */
+[data-testid="stFileUploadDropzone"]:hover {
+    box-shadow: none !important;
+}
+
 .dashboard-title {
     background: linear-gradient(135deg, rgba(0, 229, 255, 0.15) 0%, rgba(0, 229, 255, 0.05) 100%);
     border: 2px solid rgba(0, 229, 255, 0.4);
@@ -166,54 +192,54 @@ with st.sidebar:
             st.success(f"✅ {uploaded_file.name} loaded")
     
     st.markdown("---")
-    st.markdown("### FILTERS")
     
-    st.markdown("**Term**")
-    tc1, tc2, tc3 = st.columns(3)
-    if tc1.button("All", key="t_all", use_container_width=True): 
-        st.session_state.terms_selected = {1.0, 2.0, 3.0, 4.0}
-    if tc2.button("None", key="t_none", use_container_width=True): 
-        st.session_state.terms_selected = set()
-    if tc3.button("T2 Now", key="t_current", use_container_width=True): 
-        st.session_state.terms_selected = {2.0}
-    
-    t1, t2, t3, t4 = st.columns(4)
-    if t1.button("T1" + (" ✓" if 1.0 in st.session_state.terms_selected else ""), key="t1", use_container_width=True): 
-        st.session_state.terms_selected ^= {1.0}
-    if t2.button("T2" + (" ✓" if 2.0 in st.session_state.terms_selected else ""), key="t2", use_container_width=True): 
-        st.session_state.terms_selected ^= {2.0}
-    if t3.button("T3" + (" ✓" if 3.0 in st.session_state.terms_selected else ""), key="t3", use_container_width=True): 
-        st.session_state.terms_selected ^= {3.0}
-    if t4.button("T4" + (" ✓" if 4.0 in st.session_state.terms_selected else ""), key="t4", use_container_width=True): 
-        st.session_state.terms_selected ^= {4.0}
-    
-    st.markdown("**Year**")
-    yc1, yc2 = st.columns(2)
-    if yc1.button("All", key="y_all", use_container_width=True): 
-        st.session_state.years_selected = {2025.0, 2026.0}
-    if yc2.button("None", key="y_none", use_container_width=True): 
-        st.session_state.years_selected = set()
-    
-    y1, y2 = st.columns(2)
-    if y1.button("2025" + (" ✓" if 2025.0 in st.session_state.years_selected else ""), key="y1", use_container_width=True): 
-        st.session_state.years_selected ^= {2025.0}
-    if y2.button("2026" + (" ✓" if 2026.0 in st.session_state.years_selected else ""), key="y2", use_container_width=True): 
-        st.session_state.years_selected ^= {2026.0}
-    
-    st.markdown("**Program**")
-    pc1, pc2 = st.columns(2)
-    if pc1.button("All", key="p_all", use_container_width=True): 
-        st.session_state.programs_selected = {"JP", "PY", "SY"}
-    if pc2.button("None", key="p_none", use_container_width=True): 
-        st.session_state.programs_selected = set()
-    
-    p1, p2, p3 = st.columns(3)
-    if p1.button("JP" + (" ✓" if "JP" in st.session_state.programs_selected else ""), key="p1", use_container_width=True): 
-        st.session_state.programs_selected ^= {"JP"}
-    if p2.button("PY" + (" ✓" if "PY" in st.session_state.programs_selected else ""), key="p2", use_container_width=True): 
-        st.session_state.programs_selected ^= {"PY"}
-    if p3.button("SY" + (" ✓" if "SY" in st.session_state.programs_selected else ""), key="p3", use_container_width=True): 
-        st.session_state.programs_selected ^= {"SY"}
+    with st.expander("FILTERS (Click to expand/collapse)", expanded=True):
+        st.markdown("**Term**")
+        tc1, tc2, tc3 = st.columns(3)
+        if tc1.button("All", key="t_all", use_container_width=True): 
+            st.session_state.terms_selected = {1.0, 2.0, 3.0, 4.0}
+        if tc2.button("None", key="t_none", use_container_width=True): 
+            st.session_state.terms_selected = set()
+        if tc3.button("T2 Now", key="t_current", use_container_width=True): 
+            st.session_state.terms_selected = {2.0}
+        
+        t1, t2, t3, t4 = st.columns(4)
+        if t1.button("T1" + (" ✓" if 1.0 in st.session_state.terms_selected else ""), key="t1", use_container_width=True): 
+            st.session_state.terms_selected ^= {1.0}
+        if t2.button("T2" + (" ✓" if 2.0 in st.session_state.terms_selected else ""), key="t2", use_container_width=True): 
+            st.session_state.terms_selected ^= {2.0}
+        if t3.button("T3" + (" ✓" if 3.0 in st.session_state.terms_selected else ""), key="t3", use_container_width=True): 
+            st.session_state.terms_selected ^= {3.0}
+        if t4.button("T4" + (" ✓" if 4.0 in st.session_state.terms_selected else ""), key="t4", use_container_width=True): 
+            st.session_state.terms_selected ^= {4.0}
+        
+        st.markdown("**Year**")
+        yc1, yc2 = st.columns(2)
+        if yc1.button("All", key="y_all", use_container_width=True): 
+            st.session_state.years_selected = {2025.0, 2026.0}
+        if yc2.button("None", key="y_none", use_container_width=True): 
+            st.session_state.years_selected = set()
+        
+        y1, y2 = st.columns(2)
+        if y1.button("2025" + (" ✓" if 2025.0 in st.session_state.years_selected else ""), key="y1", use_container_width=True): 
+            st.session_state.years_selected ^= {2025.0}
+        if y2.button("2026" + (" ✓" if 2026.0 in st.session_state.years_selected else ""), key="y2", use_container_width=True): 
+            st.session_state.years_selected ^= {2026.0}
+        
+        st.markdown("**Program**")
+        pc1, pc2 = st.columns(2)
+        if pc1.button("All", key="p_all", use_container_width=True): 
+            st.session_state.programs_selected = {"JP", "PY", "SY"}
+        if pc2.button("None", key="p_none", use_container_width=True): 
+            st.session_state.programs_selected = set()
+        
+        p1, p2, p3 = st.columns(3)
+        if p1.button("JP" + (" ✓" if "JP" in st.session_state.programs_selected else ""), key="p1", use_container_width=True): 
+            st.session_state.programs_selected ^= {"JP"}
+        if p2.button("PY" + (" ✓" if "PY" in st.session_state.programs_selected else ""), key="p2", use_container_width=True): 
+            st.session_state.programs_selected ^= {"PY"}
+        if p3.button("SY" + (" ✓" if "SY" in st.session_state.programs_selected else ""), key="p3", use_container_width=True): 
+            st.session_state.programs_selected ^= {"SY"}
 
 if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
     try:
