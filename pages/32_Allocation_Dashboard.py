@@ -51,6 +51,42 @@ body, [data-testid="stAppViewContainer"] { background-color: #0a0e27 !important;
 h1, h2, h3, h4, h5, h6 { color: #ffffff !important; font-family: 'Inter', sans-serif !important; }
 [data-testid="stSidebar"] { background-color: #0a0e27 !important; border-right: 2px solid #00e5ff !important; }
 [data-testid="stSidebar"] * { color: #00e5ff !important; }
+
+/* Sidebar text sizing and overflow fixes */
+[data-testid="stSidebar"] h3 {
+    font-size: 16px !important;
+    line-height: 1.2 !important;
+    margin: 15px 0 10px 0 !important;
+    word-wrap: break-word !important;
+    overflow-wrap: break-word !important;
+}
+
+[data-testid="stSidebar"] h4 {
+    font-size: 14px !important;
+    line-height: 1.2 !important;
+    margin: 10px 0 8px 0 !important;
+}
+
+[data-testid="stSidebar"] p {
+    font-size: 13px !important;
+    line-height: 1.3 !important;
+    word-wrap: break-word !important;
+}
+
+[data-testid="stSidebar"] .stMarkdown {
+    font-size: 13px !important;
+}
+
+[data-testid="stSidebar"] .stButton > button {
+    font-size: 13px !important;
+    padding: 12px 8px !important;
+    min-height: auto !important;
+    height: auto !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stFileUploadDropzone"] {
+    font-size: 12px !important;
+}
 [data-testid="metric-value"] { color: #00ff00 !important; font-size: 2.5rem !important; }
 [data-testid="metric-label"] { color: #00e5ff !important; }
 .stButton > button { 
@@ -129,7 +165,44 @@ input:focus, button:focus, select:focus {
     box-shadow: none !important;
 }
 
-/* Remove glow from Plotly modebar buttons */
+
+/* Hide/clean up Streamlit menu and toolbar */
+[data-testid="stToolbar"] {
+    visibility: hidden !important;
+    height: 0 !important;
+}
+
+/* Hide "Made with Streamlit" footer */
+footer {
+    visibility: hidden !important;
+    height: 0 !important;
+}
+
+footer::before {
+    visibility: hidden !important;
+}
+
+/* Clean up menu button styling - reduce text size */
+button[kind="header"] {
+    font-size: 11px !important;
+}
+
+[role="menu"] {
+    font-size: 11px !important;
+}
+
+[role="menuitem"] {
+    font-size: 11px !important;
+    padding: 6px 10px !important;
+    line-height: 1.2 !important;
+}
+
+/* Reduce header area padding */
+[data-testid="stHeader"] {
+    padding: 6px 12px !important;
+}
+
+/* Remove Glow from Plotly modebar buttons */
 .modebar-btn {
     outline: none !important;
     box-shadow: none !important;
