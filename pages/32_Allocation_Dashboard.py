@@ -133,16 +133,44 @@ input:focus, button:focus, select:focus {
 .modebar-btn {
     outline: none !important;
     box-shadow: none !important;
+    background: transparent !important;
+    border: none !important;
+    background-color: transparent !important;
 }
 
 .modebar-btn:hover {
     outline: none !important;
     box-shadow: none !important;
+    background: transparent !important;
+    background-color: transparent !important;
 }
 
 .modebar-btn:focus {
     outline: none !important;
     box-shadow: none !important;
+    background: transparent !important;
+    background-color: transparent !important;
+}
+
+.modebar-btn.active {
+    outline: none !important;
+    box-shadow: none !important;
+    background: transparent !important;
+    background-color: transparent !important;
+}
+
+/* Remove background from entire modebar */
+.modebar {
+    background: transparent !important;
+}
+
+/* Remove any SVG styling */
+.modebar-btn svg {
+    opacity: 0.6 !important;
+}
+
+.modebar-btn svg:hover {
+    opacity: 0.9 !important;
 }
 
 .dashboard-title {
@@ -361,7 +389,124 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
             
             tabs = st.tabs(["Overview", "By Program", "By Partnership", "By School", "Disability Profile", "Trends"])
             
-            if st.session_state.drill_down_view == "atsi":
+            if st.session_state.drill_down_view == "total":
+                drill_data = filtered
+                
+                with tabs[0]:
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Total Students", int(len(drill_data)))
+                    c2.metric("Allocated", int(len(drill_data[drill_data['Allocation_Status'] == 'Allocated'])))
+                    allocated_pct = int(len(drill_data[drill_data['Allocation_Status'] == 'Allocated']) / len(drill_data) * 100) if len(drill_data) > 0 else 0
+                    c3.metric("Allocation %", f"{allocated_pct}%")
+                    c4.metric("Waiting List", int(len(drill_data[drill_data['Allocation_Status'] == 'On Waiting List'])))
+                
+                with tabs[1]:
+                    prog = drill_data['Allocated_Program'].value_counts().sort_index()
+                    if len(prog) > 0:
+                        fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color=['#00e5ff', '#ffd93d', '#ff6b6b'][:len(prog)], text=prog.values.astype(int), textposition='outside')])
+                        fig.update_yaxes(dtick=1, showgrid=False)
+                        fig.update_xaxes(showgrid=False)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[2]:
+                    part = drill_data['Partnership_Area'].value_counts()
+                    if len(part) > 0:
+                        fig = go.Figure([go.Bar(y=part.index, x=part.values, orientation='h', marker_color='#00e5ff', text=part.values.astype(int), textposition='outside')])
+                        fig.update_xaxes(dtick=1, showgrid=False)
+                        fig.update_yaxes(showgrid=False)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[3]:
+                    if 'Referring_School' in drill_data.columns:
+                        schools = drill_data['Referring_School'].value_counts().head(15)
+                        if len(schools) > 0:
+                            fig = go.Figure([go.Bar(y=schools.index, x=schools.values, orientation='h', marker_color='#00e5ff', text=schools.values.astype(int), textposition='outside')])
+                            fig.update_xaxes(dtick=1, showgrid=False)
+                            fig.update_yaxes(showgrid=False)
+                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
+                            st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[4]:
+                    if 'Term' in drill_data.columns and 'Referral_Year' in drill_data.columns:
+                        valid_data = drill_data.dropna(subset=['Term', 'Referral_Year'])
+                        valid_data['Term_Year'] = valid_data['Term'].astype(int).astype(str) + '-' + valid_data['Referral_Year'].astype(int).astype(str)
+                        trend_data = valid_data['Term_Year'].value_counts().sort_index()
+                        if len(trend_data) > 0:
+                            fig = go.Figure([go.Scatter(x=trend_data.index, y=trend_data.values, mode='lines+markers', marker=dict(size=10, color='#00e5ff'), line=dict(width=3, color='#00e5ff'))])
+                            fig.update_yaxes(dtick=1, showgrid=False)
+                            fig.update_xaxes(showgrid=False)
+                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, xaxis_title='Term-Year', yaxis_title='Students')
+                            st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[5]:
+                    st.markdown("**Total Student Overview**")
+                    st.write(f"Total students: {int(len(drill_data))}")
+                    st.write(f"Allocated: {int(len(drill_data[drill_data['Allocation_Status'] == 'Allocated']))} ({allocated_pct}%)")
+                    st.write(f"On Waiting List: {int(len(drill_data[drill_data['Allocation_Status'] == 'On Waiting List']))}")
+            
+            elif st.session_state.drill_down_view == "allocated":
+                drill_data = filtered[filtered['Allocation_Status'] == 'Allocated']
+                
+                with tabs[0]:
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Total Allocated", int(len(drill_data)))
+                    swd_allocated = int(len(drill_data[drill_data['Flag_SWD'] == 'Yes']))
+                    c2.metric("SWD", swd_allocated)
+                    atsi_allocated = int(len(drill_data[drill_data['Flag_ATSI'] == 'Yes']))
+                    c3.metric("ATSI", atsi_allocated)
+                    eald_allocated = int(len(drill_data[drill_data['Flag_EALD'] == 'Yes']))
+                    c4.metric("EALD", eald_allocated)
+                
+                with tabs[1]:
+                    prog = drill_data['Allocated_Program'].value_counts().sort_index()
+                    if len(prog) > 0:
+                        fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color=['#00e5ff', '#ffd93d', '#ff6b6b'][:len(prog)], text=prog.values.astype(int), textposition='outside')])
+                        fig.update_yaxes(dtick=1, showgrid=False)
+                        fig.update_xaxes(showgrid=False)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[2]:
+                    part = drill_data['Partnership_Area'].value_counts()
+                    if len(part) > 0:
+                        fig = go.Figure([go.Bar(y=part.index, x=part.values, orientation='h', marker_color='#10b981', text=part.values.astype(int), textposition='outside')])
+                        fig.update_xaxes(dtick=1, showgrid=False)
+                        fig.update_yaxes(showgrid=False)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[3]:
+                    if 'Referring_School' in drill_data.columns:
+                        schools = drill_data['Referring_School'].value_counts().head(15)
+                        if len(schools) > 0:
+                            fig = go.Figure([go.Bar(y=schools.index, x=schools.values, orientation='h', marker_color='#10b981', text=schools.values.astype(int), textposition='outside')])
+                            fig.update_xaxes(dtick=1, showgrid=False)
+                            fig.update_yaxes(showgrid=False)
+                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
+                            st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[4]:
+                    if 'Term' in drill_data.columns and 'Referral_Year' in drill_data.columns:
+                        valid_data = drill_data.dropna(subset=['Term', 'Referral_Year'])
+                        valid_data['Term_Year'] = valid_data['Term'].astype(int).astype(str) + '-' + valid_data['Referral_Year'].astype(int).astype(str)
+                        trend_data = valid_data['Term_Year'].value_counts().sort_index()
+                        if len(trend_data) > 0:
+                            fig = go.Figure([go.Scatter(x=trend_data.index, y=trend_data.values, mode='lines+markers', marker=dict(size=10, color='#10b981'), line=dict(width=3, color='#10b981'))])
+                            fig.update_yaxes(dtick=1, showgrid=False)
+                            fig.update_xaxes(showgrid=False)
+                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, xaxis_title='Term-Year', yaxis_title='Students')
+                            st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[5]:
+                    st.markdown("**Allocated Students Overview**")
+                    st.write(f"Total allocated: {int(len(drill_data))}")
+                    st.write(f"SWD: {swd_allocated}")
+                    st.write(f"ATSI: {atsi_allocated}")
+                    st.write(f"EALD: {eald_allocated}")
+            
+            elif st.session_state.drill_down_view == "atsi":
                 drill_data = filtered[filtered['Flag_ATSI'] == 'Yes']
                 
                 with tabs[0]:
@@ -413,12 +558,16 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                         st.plotly_chart(fig, use_container_width=True)
                 
                 with tabs[5]:
-                    if 'Term' in drill_data.columns:
-                        term_trend = drill_data['Term'].value_counts().sort_index()
-                        fig = go.Figure([go.Scatter(x=term_trend.index, y=term_trend.values, mode='lines+markers', marker_color='#ff6b6b', line=dict(width=3), marker_size=10)])
-                        fig.update_yaxes(dtick=1, showgrid=False)
-                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, xaxis_title='Term', yaxis_title='Students')
-                        st.plotly_chart(fig, use_container_width=True)
+                    if 'Term' in drill_data.columns and 'Referral_Year' in drill_data.columns:
+                        valid_data = drill_data.dropna(subset=['Term', 'Referral_Year'])
+                        valid_data['Term_Year'] = valid_data['Term'].astype(int).astype(str) + '-' + valid_data['Referral_Year'].astype(int).astype(str)
+                        term_trend = valid_data['Term_Year'].value_counts().sort_index()
+                        if len(term_trend) > 0:
+                            fig = go.Figure([go.Scatter(x=term_trend.index, y=term_trend.values, mode='lines+markers', marker_color='#ff6b6b', line=dict(width=3), marker_size=10)])
+                            fig.update_yaxes(dtick=1, showgrid=False)
+                            fig.update_xaxes(showgrid=False)
+                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, xaxis_title='Term-Year', yaxis_title='Students')
+                            st.plotly_chart(fig, use_container_width=True)
             
             elif st.session_state.drill_down_view == "swd":
                 drill_data = filtered[filtered['Flag_SWD'] == 'Yes']
