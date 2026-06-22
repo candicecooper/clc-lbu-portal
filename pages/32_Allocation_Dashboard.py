@@ -406,7 +406,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                         fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color=['#00e5ff', '#ffd93d', '#ff6b6b'][:len(prog)], text=prog.values.astype(int), textposition='outside')])
                         fig.update_yaxes(dtick=1, showgrid=False)
                         fig.update_xaxes(showgrid=False)
-                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False, margin=dict(l=0, r=120, t=0, b=0))
                         st.plotly_chart(fig, use_container_width=True)
                 
                 with tabs[2]:
@@ -415,7 +415,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                         fig = go.Figure([go.Bar(y=part.index, x=part.values, orientation='h', marker_color='#00e5ff', text=part.values.astype(int), textposition='outside')])
                         fig.update_xaxes(dtick=1, showgrid=False)
                         fig.update_yaxes(showgrid=False)
-                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False, margin=dict(l=0, r=120, t=0, b=0))
                         st.plotly_chart(fig, use_container_width=True)
                 
                 with tabs[3]:
@@ -425,7 +425,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                             fig = go.Figure([go.Bar(y=schools.index, x=schools.values, orientation='h', marker_color='#00e5ff', text=schools.values.astype(int), textposition='outside')])
                             fig.update_xaxes(dtick=1, showgrid=False)
                             fig.update_yaxes(showgrid=False)
-                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
+                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False, margin=dict(l=0, r=120, t=0, b=0))
                             st.plotly_chart(fig, use_container_width=True)
                 
                 with tabs[4]:
@@ -465,7 +465,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                         fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color=['#00e5ff', '#ffd93d', '#ff6b6b'][:len(prog)], text=prog.values.astype(int), textposition='outside')])
                         fig.update_yaxes(dtick=1, showgrid=False)
                         fig.update_xaxes(showgrid=False)
-                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False, margin=dict(l=0, r=120, t=0, b=0))
                         st.plotly_chart(fig, use_container_width=True)
                 
                 with tabs[2]:
@@ -474,7 +474,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                         fig = go.Figure([go.Bar(y=part.index, x=part.values, orientation='h', marker_color='#10b981', text=part.values.astype(int), textposition='outside')])
                         fig.update_xaxes(dtick=1, showgrid=False)
                         fig.update_yaxes(showgrid=False)
-                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False, margin=dict(l=0, r=120, t=0, b=0))
                         st.plotly_chart(fig, use_container_width=True)
                 
                 with tabs[3]:
@@ -484,7 +484,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                             fig = go.Figure([go.Bar(y=schools.index, x=schools.values, orientation='h', marker_color='#10b981', text=schools.values.astype(int), textposition='outside')])
                             fig.update_xaxes(dtick=1, showgrid=False)
                             fig.update_yaxes(showgrid=False)
-                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
+                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False, margin=dict(l=0, r=120, t=0, b=0))
                             st.plotly_chart(fig, use_container_width=True)
                 
                 with tabs[4]:
@@ -522,7 +522,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                     if len(prog) > 0:
                         fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color='#ff6b6b', text=prog.values.astype(int), textposition='outside')])
                         fig.update_yaxes(dtick=1, showgrid=False)
-                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False, margin=dict(l=0, r=120, t=0, b=0))
                         st.plotly_chart(fig, use_container_width=True)
                 
                 with tabs[2]:
@@ -530,7 +530,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                     if len(part) > 0:
                         fig = go.Figure([go.Bar(y=part.index, x=part.values, orientation='h', marker_color='#ff6b6b', text=part.values.astype(int), textposition='outside')])
                         fig.update_xaxes(dtick=1, showgrid=False)
-                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False, margin=dict(l=0, r=120, t=0, b=0))
                         st.plotly_chart(fig, use_container_width=True)
                 
                 with tabs[3]:
@@ -539,7 +539,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                         if len(schools) > 0:
                             fig = go.Figure([go.Bar(y=schools.index, x=schools.values, orientation='h', marker_color='#ff6b6b', text=schools.values.astype(int), textposition='outside')])
                             fig.update_xaxes(dtick=1, showgrid=False)
-                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
+                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False, margin=dict(l=0, r=120, t=0, b=0))
                             st.plotly_chart(fig, use_container_width=True)
                 
                 with tabs[4]:
@@ -554,7 +554,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                     if sum(dis_counts) > 0:
                         fig = go.Figure([go.Bar(x=disability_labels, y=dis_counts, marker_color='#ff6b6b', text=dis_counts, textposition='outside')])
                         fig.update_yaxes(dtick=1, showgrid=False)
-                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False, margin=dict(l=0, r=120, t=0, b=0))
                         st.plotly_chart(fig, use_container_width=True)
                 
                 with tabs[5]:
@@ -585,7 +585,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                     if len(prog) > 0:
                         fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color='#00e5ff', text=prog.values.astype(int), textposition='outside')])
                         fig.update_yaxes(dtick=1, showgrid=False)
-                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False, margin=dict(l=0, r=120, t=0, b=0))
                         st.plotly_chart(fig, use_container_width=True)
                 
                 with tabs[2]:
@@ -593,7 +593,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                     if len(part) > 0:
                         fig = go.Figure([go.Bar(y=part.index, x=part.values, orientation='h', marker_color='#00e5ff', text=part.values.astype(int), textposition='outside')])
                         fig.update_xaxes(dtick=1, showgrid=False)
-                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False, margin=dict(l=0, r=120, t=0, b=0))
                         st.plotly_chart(fig, use_container_width=True)
                 
                 with tabs[3]:
@@ -602,7 +602,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                         if len(schools) > 0:
                             fig = go.Figure([go.Bar(y=schools.index, x=schools.values, orientation='h', marker_color='#00e5ff', text=schools.values.astype(int), textposition='outside')])
                             fig.update_xaxes(dtick=1, showgrid=False)
-                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
+                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False, margin=dict(l=0, r=120, t=0, b=0))
                             st.plotly_chart(fig, use_container_width=True)
                 
                 with tabs[5]:
@@ -617,7 +617,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                     if sum(dis_counts) > 0:
                         fig = go.Figure([go.Bar(x=disability_labels, y=dis_counts, marker_color='#00e5ff', text=dis_counts, textposition='outside')])
                         fig.update_yaxes(dtick=1, showgrid=False)
-                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False, margin=dict(l=0, r=120, t=0, b=0))
                         st.plotly_chart(fig, use_container_width=True)
             
             elif st.session_state.drill_down_view == "eald":
@@ -636,7 +636,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                     if len(prog) > 0:
                         fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color='#ffd93d', text=prog.values.astype(int), textposition='outside')])
                         fig.update_yaxes(dtick=1, showgrid=False)
-                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False, margin=dict(l=0, r=120, t=0, b=0))
                         st.plotly_chart(fig, use_container_width=True)
                 
                 with tabs[2]:
@@ -644,7 +644,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                     if len(part) > 0:
                         fig = go.Figure([go.Bar(y=part.index, x=part.values, orientation='h', marker_color='#ffd93d', text=part.values.astype(int), textposition='outside')])
                         fig.update_xaxes(dtick=1, showgrid=False)
-                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False, margin=dict(l=0, r=120, t=0, b=0))
                         st.plotly_chart(fig, use_container_width=True)
                 
                 with tabs[3]:
@@ -653,7 +653,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                         if len(schools) > 0:
                             fig = go.Figure([go.Bar(y=schools.index, x=schools.values, orientation='h', marker_color='#ffd93d', text=schools.values.astype(int), textposition='outside')])
                             fig.update_xaxes(dtick=1, showgrid=False)
-                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
+                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False, margin=dict(l=0, r=120, t=0, b=0))
                             st.plotly_chart(fig, use_container_width=True)
                 
                 with tabs[5]:
@@ -668,7 +668,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                     if sum(dis_counts) > 0:
                         fig = go.Figure([go.Bar(x=disability_labels, y=dis_counts, marker_color='#ffd93d', text=dis_counts, textposition='outside')])
                         fig.update_yaxes(dtick=1, showgrid=False)
-                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
+                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False, margin=dict(l=0, r=120, t=0, b=0))
                         st.plotly_chart(fig, use_container_width=True)
             
             elif st.session_state.drill_down_view == "repeating":
@@ -698,11 +698,26 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                                 year = rec.get('Referral_Year', '-')
                                 age = rec.get('Age', '-') if 'Age' in rec.index else 'N/A'
                                 
+                                # Handle NaN values safely
+                                term_str = '-'
+                                if pd.notna(term) and term != '-':
+                                    try:
+                                        term_str = f"T{int(term)}"
+                                    except:
+                                        term_str = '-'
+                                
+                                year_str = '-'
+                                if pd.notna(year) and year != '-':
+                                    try:
+                                        year_str = int(year)
+                                    except:
+                                        year_str = '-'
+                                
                                 repeating_details.append({
                                     'School': school,
                                     'Program': program,
-                                    'Term': f"T{int(term)}" if term != '-' else '-',
-                                    'Year': int(year) if year != '-' else '-',
+                                    'Term': term_str,
+                                    'Year': year_str,
                                     'Age': age,
                                     'Enrollments for This Student': int(repeating[student_name])
                                 })
@@ -718,7 +733,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                         if len(prog) > 0:
                             fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color='#00e5ff', text=prog.values.astype(int), textposition='outside')])
                             fig.update_yaxes(dtick=1, showgrid=False)
-                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
+                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False, margin=dict(l=0, r=120, t=0, b=0))
                             st.plotly_chart(fig, use_container_width=True)
                     
                     with tabs[2]:
@@ -727,7 +742,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                         if len(part) > 0:
                             fig = go.Figure([go.Bar(y=part.index, x=part.values, orientation='h', marker_color='#00e5ff', text=part.values.astype(int), textposition='outside')])
                             fig.update_xaxes(dtick=1, showgrid=False)
-                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
+                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False, margin=dict(l=0, r=120, t=0, b=0))
                             st.plotly_chart(fig, use_container_width=True)
                     
                     with tabs[3]:
@@ -737,7 +752,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                             if len(schools) > 0:
                                 fig = go.Figure([go.Bar(y=schools.index, x=schools.values, orientation='h', marker_color='#00e5ff', text=schools.values.astype(int), textposition='outside')])
                                 fig.update_xaxes(dtick=1, showgrid=False)
-                                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False)
+                                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, showlegend=False, margin=dict(l=0, r=120, t=0, b=0))
                                 st.plotly_chart(fig, use_container_width=True)
                     
                     with tabs[5]:
@@ -746,7 +761,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                             terms = repeating_filtered['Term'].value_counts().sort_index()
                             fig = go.Figure([go.Bar(x=['T' + str(int(t)) for t in terms.index], y=terms.values, marker_color='#00e5ff', text=terms.values.astype(int), textposition='outside')])
                             fig.update_yaxes(dtick=1, showgrid=False)
-                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False)
+                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=300, showlegend=False, margin=dict(l=0, r=120, t=0, b=0))
                             st.plotly_chart(fig, use_container_width=True)
                     
                     with tabs[5]:
@@ -766,7 +781,7 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
             if len(prog) > 0:
                 fig = go.Figure([go.Bar(x=prog.index, y=prog.values, marker_color=['#00e5ff', '#ffd93d', '#ff6b6b'][:len(prog)], text=prog.values.astype(int), textposition='outside')])
                 fig.update_yaxes(dtick=1, showgrid=False)
-                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=350, showlegend=False)
+                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=350, showlegend=False, margin=dict(l=0, r=120, t=0, b=0))
                 st.plotly_chart(fig, use_container_width=True)
             
             st.markdown("---")
@@ -892,11 +907,15 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                         # Filter out NaN values from Term column
                         valid_terms = sorted([t for t in filtered['Term'].unique() if pd.notna(t)])
                         for term in valid_terms:
-                            eald_count = len(filtered[(filtered['Term'] == term) & (filtered['Flag_EALD'] == 'Yes')])
-                            term_count = len(filtered[filtered['Term'] == term])
-                            rate = int(eald_count / term_count * 100) if term_count > 0 else 0
-                            eald_rates.append(rate)
-                            term_labels.append(f"T{int(term)}")
+                            try:
+                                eald_count = len(filtered[(filtered['Term'] == term) & (filtered['Flag_EALD'] == 'Yes')])
+                                term_count = len(filtered[filtered['Term'] == term])
+                                rate = int(eald_count / term_count * 100) if term_count > 0 else 0
+                                eald_rates.append(rate)
+                                term_label = f"T{int(term)}"
+                                term_labels.append(term_label)
+                            except:
+                                continue
                         
                         fig = go.Figure([go.Scatter(x=term_labels, y=eald_rates, mode='lines+markers', marker=dict(size=10, color='#ffd93d'), line=dict(width=3, color='#ffd93d'))])
                         fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="EALD Percentage Trend", height=300, yaxis_title="% EALD")
@@ -913,11 +932,15 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                         # Filter out NaN values from Term column
                         valid_terms_sy = sorted([t for t in sy_data['Term'].unique() if pd.notna(t)])
                         for term in valid_terms_sy:
-                            eald_count = len(sy_data[(sy_data['Term'] == term) & (sy_data['Flag_EALD'] == 'Yes')])
-                            term_count = len(sy_data[sy_data['Term'] == term])
-                            rate = int(eald_count / term_count * 100) if term_count > 0 else 0
-                            eald_sy_rates.append(rate)
-                            term_labels_sy.append(f"T{int(term)}")
+                            try:
+                                eald_count = len(sy_data[(sy_data['Term'] == term) & (sy_data['Flag_EALD'] == 'Yes')])
+                                term_count = len(sy_data[sy_data['Term'] == term])
+                                rate = int(eald_count / term_count * 100) if term_count > 0 else 0
+                                eald_sy_rates.append(rate)
+                                term_label = f"T{int(term)}"
+                                term_labels_sy.append(term_label)
+                            except:
+                                continue
                         
                         fig = go.Figure([go.Scatter(x=term_labels_sy, y=eald_sy_rates, mode='lines+markers', marker=dict(size=10, color='#ff6b6b'), line=dict(width=3, color='#ff6b6b'))])
                         fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="SY Program: EALD Percentage Trend", height=300, yaxis_title="% EALD")
