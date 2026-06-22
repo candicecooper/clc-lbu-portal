@@ -246,6 +246,19 @@ button[kind="header"] {
     opacity: 0.9 !important;
 }
 
+/* Fix chart axis labels for readability */
+.plotly .xtick text,
+.plotly .ytick text {
+    font-size: 12px !important;
+    font-family: 'Poppins', sans-serif !important;
+}
+
+/* Ensure axis titles are readable */
+.plotly .axis-title {
+    font-size: 13px !important;
+    color: #ffffff !important;
+}
+
 .dashboard-title {
     background: linear-gradient(135deg, rgba(0, 229, 255, 0.15) 0%, rgba(0, 229, 255, 0.05) 100%);
     border: 2px solid rgba(0, 229, 255, 0.4);
@@ -981,19 +994,26 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                         valid_terms = sorted([t for t in filtered['Term'].unique() if pd.notna(t)])
                         for term in valid_terms:
                             try:
-                                eald_count = len(filtered[(filtered['Term'] == term) & (filtered['Flag_EALD'] == 'Yes')])
-                                term_count = len(filtered[filtered['Term'] == term])
-                                rate = int(eald_count / term_count * 100) if term_count > 0 else 0
-                                eald_rates.append(rate)
-                                term_label = f"T{int(term)}"
-                                term_labels.append(term_label)
+                                term_data = filtered[filtered['Term'] == term]
+                                # Get years for this term
+                                years_for_term = sorted([int(y) for y in term_data['Referral_Year'].unique() if pd.notna(y)])
+                                
+                                for year in years_for_term:
+                                    eald_count = len(filtered[(filtered['Term'] == term) & (filtered['Referral_Year'] == year) & (filtered['Flag_EALD'] == 'Yes')])
+                                    term_count = len(filtered[(filtered['Term'] == term) & (filtered['Referral_Year'] == year)])
+                                    rate = int(eald_count / term_count * 100) if term_count > 0 else 0
+                                    eald_rates.append(rate)
+                                    term_label = f"T{int(term)}-{int(year)}"
+                                    term_labels.append(term_label)
                             except:
                                 continue
                         
-                        fig = go.Figure([go.Scatter(x=term_labels, y=eald_rates, mode='lines+markers', marker=dict(size=10, color='#ffd93d'), line=dict(width=3, color='#ffd93d'))])
-                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="EALD Percentage Trend", height=300, yaxis_title="% EALD")
-                        fig.update_yaxes(dtick=5)
-                        st.plotly_chart(fig, use_container_width=True)
+                        if term_labels and eald_rates:
+                            fig = go.Figure([go.Scatter(x=term_labels, y=eald_rates, mode='lines+markers', marker=dict(size=12, color='#ffd93d'), line=dict(width=3, color='#ffd93d'))])
+                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=12), title="EALD Percentage Trend", height=350, yaxis_title="% EALD", margin=dict(l=60, r=60, t=60, b=80))
+                            fig.update_yaxes(dtick=5, showgrid=False)
+                            fig.update_xaxes(showgrid=False)
+                            st.plotly_chart(fig, use_container_width=True)
                 
                 with c2:
                     st.markdown("### EALD Students in SY Program by Term")
@@ -1006,19 +1026,26 @@ if st.session_state.data_loaded and st.session_state.uploaded_data is not None:
                         valid_terms_sy = sorted([t for t in sy_data['Term'].unique() if pd.notna(t)])
                         for term in valid_terms_sy:
                             try:
-                                eald_count = len(sy_data[(sy_data['Term'] == term) & (sy_data['Flag_EALD'] == 'Yes')])
-                                term_count = len(sy_data[sy_data['Term'] == term])
-                                rate = int(eald_count / term_count * 100) if term_count > 0 else 0
-                                eald_sy_rates.append(rate)
-                                term_label = f"T{int(term)}"
-                                term_labels_sy.append(term_label)
+                                term_data = sy_data[sy_data['Term'] == term]
+                                # Get years for this term
+                                years_for_term = sorted([int(y) for y in term_data['Referral_Year'].unique() if pd.notna(y)])
+                                
+                                for year in years_for_term:
+                                    eald_count = len(sy_data[(sy_data['Term'] == term) & (sy_data['Referral_Year'] == year) & (sy_data['Flag_EALD'] == 'Yes')])
+                                    term_count = len(sy_data[(sy_data['Term'] == term) & (sy_data['Referral_Year'] == year)])
+                                    rate = int(eald_count / term_count * 100) if term_count > 0 else 0
+                                    eald_sy_rates.append(rate)
+                                    term_label = f"T{int(term)}-{int(year)}"
+                                    term_labels_sy.append(term_label)
                             except:
                                 continue
                         
-                        fig = go.Figure([go.Scatter(x=term_labels_sy, y=eald_sy_rates, mode='lines+markers', marker=dict(size=10, color='#ff6b6b'), line=dict(width=3, color='#ff6b6b'))])
-                        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), title="SY Program: EALD Percentage Trend", height=300, yaxis_title="% EALD")
-                        fig.update_yaxes(dtick=5)
-                        st.plotly_chart(fig, use_container_width=True)
+                        if term_labels_sy and eald_sy_rates:
+                            fig = go.Figure([go.Scatter(x=term_labels_sy, y=eald_sy_rates, mode='lines+markers', marker=dict(size=12, color='#ff6b6b'), line=dict(width=3, color='#ff6b6b'))])
+                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=12), title="SY Program: EALD Percentage Trend", height=350, yaxis_title="% EALD", margin=dict(l=60, r=60, t=60, b=80))
+                            fig.update_yaxes(dtick=5, showgrid=False)
+                            fig.update_xaxes(showgrid=False)
+                            st.plotly_chart(fig, use_container_width=True)
                 
                 st.markdown("### EALD Allocation Status by Program")
                 for prog in ['JP', 'PY', 'SY']:
