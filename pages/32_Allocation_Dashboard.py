@@ -87,6 +87,9 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Define disability columns globally (used throughout the app)
+disability_cols = ['Flag_ASD', 'Flag_ADHD', 'Flag_Speech_and_Lang', 'Flag_Intellectual', 'Flag_Learning_Difficulty', 'Flag_Sensory_Processing', 'Flag_ODD', 'Flag_PDA']
+
 # Dark neon theme
 st.markdown("""
 <style>
@@ -349,7 +352,6 @@ else:
         eald_count = safe_flag_count(filtered, 'Flag_EALD')
         asd_count = safe_flag_count(filtered, 'Flag_ASD')
         
-        disability_cols = ['Flag_ASD', 'Flag_ADHD', 'Flag_Speech_and_Lang', 'Flag_Intellectual', 'Flag_Learning_Difficulty', 'Flag_Sensory_Processing', 'Flag_ODD', 'Flag_PDA']
         filtered_copy = filtered.copy()
         filtered_copy['disability_count'] = 0
         for col in disability_cols:
