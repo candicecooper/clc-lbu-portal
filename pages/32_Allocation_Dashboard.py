@@ -24,6 +24,22 @@ from datetime import datetime
 # CONFIG & STYLING
 # ============================================================================
 
+
+
+# Helper function to safely access flag columns
+def safe_flag_count(df, column, value='Yes'):
+    """Safely count rows where a flag column equals a value."""
+    if column in df.columns:
+        return len(df[df[column] == value])
+    return 0
+
+def safe_flag_filter(df, column, value='Yes'):
+    """Safely filter by a flag column."""
+    if column in df.columns:
+        return df[df[column] == value]
+    return pd.DataFrame()
+
+
 st.set_page_config(
     page_title="Allocation Dashboard",
     layout="wide",
@@ -279,9 +295,9 @@ else:
         
         total_count = len(filtered)
         allocated_count = len(filtered[filtered['Allocation_Status'] == 'Allocated'])
-        atsi_count = len(filtered[filtered['Flag_ATSI'] == 'Yes'])
-        swd_count = len(filtered[filtered['Flag_SWD'] == 'Yes'])
-        eald_count = len(filtered[filtered['Flag_EALD'] == 'Yes'])
+        atsi_count = safe_flag_count(filtered, 'Flag_ATSI')
+        swd_count = safe_flag_count(filtered, 'Flag_SWD')
+        eald_count = safe_flag_count(filtered, 'Flag_EALD')
         
         # Count repeating students
         student_col = None
@@ -536,7 +552,7 @@ else:
         
         with c1:
             st.markdown("### 🔴 Top Schools - ATSI Referrals")
-            atsi_schools = filtered[filtered['Flag_ATSI'] == 'Yes']['Referring_School'].value_counts().head(8)
+            atsi_schools = safe_flag_filter(filtered, 'Flag_ATSI')['Referring_School'].value_counts().head(8) if 'Referring_School' in filtered.columns else pd.Series()
             fig_atsi = go.Figure([go.Bar(
                 y=atsi_schools.index,
                 x=atsi_schools.values,
@@ -552,7 +568,7 @@ else:
         
         with c2:
             st.markdown("### 🟠 Top Schools - SWD Referrals")
-            swd_schools = filtered[filtered['Flag_SWD'] == 'Yes']['Referring_School'].value_counts().head(8)
+            swd_schools = safe_flag_filter(filtered, 'Flag_SWD')['Referring_School'].value_counts().head(8) if 'Referring_School' in filtered.columns else pd.Series()
             fig_swd = go.Figure([go.Bar(
                 y=swd_schools.index,
                 x=swd_schools.values,
@@ -568,7 +584,7 @@ else:
         
         with c3:
             st.markdown("### 🟡 Top Schools - EALD Referrals")
-            eald_schools = filtered[filtered['Flag_EALD'] == 'Yes']['Referring_School'].value_counts().head(8)
+            eald_schools = safe_flag_filter(filtered, 'Flag_EALD')['Referring_School'].value_counts().head(8) if 'Referring_School' in filtered.columns else pd.Series()
             fig_eald = go.Figure([go.Bar(
                 y=eald_schools.index,
                 x=eald_schools.values,
@@ -593,9 +609,9 @@ else:
         for prog in ['JP', 'PY', 'SY']:
             prog_data = filtered[filtered['Allocated_Program'] == prog]
             if len(prog_data) > 0:
-                eald_allocated = len(prog_data[(prog_data['Flag_EALD'] == 'Yes') & (prog_data['Allocation_Status'] == 'Allocated')])
-                eald_waiting = len(prog_data[(prog_data['Flag_EALD'] == 'Yes') & (prog_data['Allocation_Status'] == 'On Waiting List')])
-                eald_total = len(prog_data[prog_data['Flag_EALD'] == 'Yes'])
+                eald_allocated = len(prog_data[(prog_data['Flag_EALD'] == 'Yes') & (prog_data['Allocation_Status'] == 'Allocated')]) if 'Flag_EALD' in prog_data.columns and 'Allocation_Status' in prog_data.columns else 0
+                eald_waiting = len(prog_data[(prog_data['Flag_EALD'] == 'Yes') & (prog_data['Allocation_Status'] == 'On Waiting List')]) if 'Flag_EALD' in prog_data.columns and 'Allocation_Status' in prog_data.columns else 0
+                eald_total = safe_flag_count(prog_data, 'Flag_EALD')
                 
                 if eald_total > 0:
                     alloc_rate = int(eald_allocated / eald_total * 100)
@@ -719,13 +735,13 @@ else:
             drill_data = filtered[filtered['Allocation_Status'] == 'Allocated']
             title = "✅ Allocated Students"
         elif view == 'atsi':
-            drill_data = filtered[filtered['Flag_ATSI'] == 'Yes']
+            drill_data = safe_flag_filter(filtered, 'Flag_ATSI')
             title = "🔴 ATSI Students"
         elif view == 'swd':
-            drill_data = filtered[filtered['Flag_SWD'] == 'Yes']
+            drill_data = safe_flag_filter(filtered, 'Flag_SWD')
             title = "🟠 SWD Students"
         elif view == 'eald':
-            drill_data = filtered[filtered['Flag_EALD'] == 'Yes']
+            drill_data = safe_flag_filter(filtered, 'Flag_EALD')
             title = "🟡 EALD Students"
         elif view == 'repeating':
             # Find repeating students
@@ -753,9 +769,9 @@ else:
         with tabs[0]:  # Overview
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Total", len(drill_data))
-            c2.metric("ATSI", len(drill_data[drill_data['Flag_ATSI'] == 'Yes']))
-            c3.metric("SWD", len(drill_data[drill_data['Flag_SWD'] == 'Yes']))
-            c4.metric("EALD", len(drill_data[drill_data['Flag_EALD'] == 'Yes']))
+            c2.metric("ATSI", safe_flag_count(drill_data, 'Flag_ATSI'))
+            c3.metric("SWD", safe_flag_count(drill_data, 'Flag_SWD'))
+            c4.metric("EALD", safe_flag_count(drill_data, 'Flag_EALD'))
             
             # Program distribution
             prog_dist = drill_data['Allocated_Program'].value_counts()
@@ -768,7 +784,7 @@ else:
                 prog_data = drill_data[drill_data['Allocated_Program'] == prog]
                 if len(prog_data) > 0:
                     st.markdown(f"### {prog} Program ({len(prog_data)} students)")
-                    st.write(f"**ATSI**: {len(prog_data[prog_data['Flag_ATSI'] == 'Yes'])} | **SWD**: {len(prog_data[prog_data['Flag_SWD'] == 'Yes'])} | **EALD**: {len(prog_data[prog_data['Flag_EALD'] == 'Yes'])}")
+                    st.write(f"**ATSI**: {safe_flag_count(prog_data, 'Flag_ATSI')} | **SWD**: {safe_flag_count(prog_data, 'Flag_SWD')} | **EALD**: {safe_flag_count(prog_data, 'Flag_EALD')}")
         
         with tabs[2]:  # By Partnership
             partnership_dist = drill_data['Partnership_Area'].value_counts().head(12)
