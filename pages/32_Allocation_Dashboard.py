@@ -697,6 +697,127 @@ else:
                     st.write(f"**{prog} Program**: {eald_total} EALD students → {eald_allocated} Allocated ({alloc_rate}%) | {eald_waiting} Waiting List")
         
         # ====================================================================
+        # 📈 EALD ENROLLMENT TRENDS BY PROGRAM & TERM
+        # ====================================================================
+        
+        st.markdown("---")
+        st.markdown("## 📈 EALD Enrollment Trends by Program & Term")
+        
+        def analyze_eald_trends(df):
+            """Analyze EALD enrollment trends by term and program"""
+            if 'Flag_EALD' not in df.columns or 'Term' not in df.columns or 'Allocated_Program' not in df.columns:
+                return None
+            eald_data = df[df['Flag_EALD'] == 'Yes'].copy()
+            if eald_data.empty:
+                return None
+            eald_data['Term'] = pd.to_numeric(eald_data['Term'], errors='coerce')
+            eald_data = eald_data.dropna(subset=['Term'])
+            programs = sorted([p for p in eald_data['Allocated_Program'].unique() if pd.notna(p)])
+            if not programs:
+                return None
+            trend_data = {}
+            for program in programs:
+                prog_data = eald_data[eald_data['Allocated_Program'] == program]
+                term_counts = prog_data.groupby('Term').size().sort_index()
+                trend_data[program] = term_counts
+            return trend_data, programs, eald_data
+        
+        if 'Flag_EALD' in filtered.columns:
+            trend_results = analyze_eald_trends(filtered)
+            if trend_results and filtered[filtered['Flag_EALD'] == 'Yes'].shape[0] > 0:
+                trend_data, programs, eald_students = trend_results
+                
+                # LINE CHART - TRENDS VISUALIZATION
+                fig_trends = go.Figure()
+                colors = ['#00e5ff', '#00ff00', '#ff6b6b', '#ffd93d']
+                for idx, program in enumerate(programs):
+                    if program in trend_data:
+                        term_counts = trend_data[program]
+                        fig_trends.add_trace(go.Scatter(
+                            x=term_counts.index.astype(int),
+                            y=term_counts.values,
+                            mode='lines+markers',
+                            name=f'{program} Program',
+                            line=dict(color=colors[idx % len(colors)], width=3),
+                            marker=dict(size=10),
+                            hovertemplate='<b>%{fullData.name}</b><br>Term: %{x}<br>Students: %{y}<extra></extra>'
+                        ))
+                
+                fig_trends.update_layout(
+                    title='EALD Student Enrollment Trends',
+                    xaxis_title='Term',
+                    yaxis_title='Number of EALD Students',
+                    hovermode='x unified',
+                    height=450,
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    font=dict(color='#ffffff'),
+                    xaxis=dict(showgrid=False, tickmode='linear', tick0=1),
+                    yaxis=dict(showgrid=False),
+                    legend=dict(orientation='v', yanchor='top', y=0.99, xanchor='left', x=0.01, bgcolor='rgba(0,0,0,0.5)', bordercolor='#00e5ff', borderwidth=1)
+                )
+                st.plotly_chart(fig_trends, use_container_width=True)
+                
+                # CURRENT ENROLLMENTS BY PROGRAM (METRICS)
+                st.markdown("### 📊 Current Enrollments by Program")
+                cols = st.columns(min(3, len(programs)))
+                for idx, program in enumerate(programs):
+                    if program in trend_data:
+                        term_counts = trend_data[program]
+                        current_term = term_counts.index.max()
+                        current_count = term_counts.iloc[-1]
+                        if len(term_counts) > 1:
+                            previous_count = term_counts.iloc[-2]
+                            change = current_count - previous_count
+                            change_pct = (change / previous_count * 100) if previous_count > 0 else 0
+                        else:
+                            change = 0
+                            change_pct = 0
+                        total_eald = len(eald_students[eald_students['Allocated_Program'] == program])
+                        with cols[idx % 3]:
+                            st.metric(f"{program} Program", f"{current_count}", delta=f"{change:+d} ({change_pct:+.0f}%)", delta_color="off")
+                            st.caption(f"Term {int(current_term)} | Total: {total_eald}")
+                
+                # DETAILED TERM-BY-PROGRAM TABLE
+                st.markdown("### 📋 Detailed Term-by-Program Breakdown")
+                detail_data = []
+                for program in programs:
+                    if program in trend_data:
+                        term_counts = trend_data[program]
+                        for term, count in term_counts.items():
+                            detail_data.append({'Program': program, 'Term': int(term), 'EALD Students': count})
+                
+                if detail_data:
+                    detail_df = pd.DataFrame(detail_data).sort_values(['Program', 'Term'])
+                    st.dataframe(detail_df, use_container_width=True, hide_index=True)
+                    
+                    # KEY INSIGHTS
+                    st.markdown("### 📌 Key Insights")
+                    col1, col2, col3, col4 = st.columns(4)
+                    total_eald = len(eald_students)
+                    allocated_eald = len(eald_students[eald_students['Allocation_Status'] == 'Allocated']) if 'Allocation_Status' in eald_students.columns else 0
+                    waiting_eald = len(eald_students[eald_students['Allocation_Status'] == 'On Waiting List']) if 'Allocation_Status' in eald_students.columns else 0
+                    allocation_rate = (allocated_eald / total_eald * 100) if total_eald > 0 else 0
+                    
+                    with col1:
+                        st.info(f"**Total EALD**\n{total_eald}")
+                    with col2:
+                        st.success(f"**Allocated**\n{allocated_eald}")
+                    with col3:
+                        st.warning(f"**Waiting**\n{waiting_eald}")
+                    with col4:
+                        st.metric("Allocation %", f"{allocation_rate:.0f}%")
+                    
+                    if len(programs) > 0:
+                        max_program = max(programs, key=lambda p: trend_data[p].sum() if p in trend_data else 0)
+                        max_count = trend_data[max_program].sum() if max_program in trend_data else 0
+                        st.info(f"📈 **{max_program} Program** has the highest EALD enrollments ({max_count} students)")
+            else:
+                st.info("No EALD student data available for trend analysis")
+        else:
+            st.info("EALD flag column not available in dataset")
+        
+        # ====================================================================
         # MULTIPLE DISABILITIES
         # ====================================================================
         
