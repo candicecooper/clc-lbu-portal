@@ -509,12 +509,14 @@ else:
             )
             st.plotly_chart(fig_alloc, use_container_width=True)
         
+
+        
         # ====================================================================
-        # SCHOOL EQUITY CONTEXT
+        # SCHOOL EQUITY CONTEXT - INDIGENOUS REFERRAL ANALYSIS
         # ====================================================================
         
         st.markdown("---")
-        st.markdown("## 🏫 School Equity Context - Socioeconomic & Demographic Analysis")
+        st.markdown("## 🏫 School Equity Context - Indigenous Referral Analysis")
         
         school_ses_data = load_school_socioeconomic_data()
         
@@ -539,103 +541,179 @@ else:
                         continue
                     
                     school_students = filtered[filtered['Referring_School'] == school_name]
-                    total_from_school = len(school_students)
+                    total_referrals_from_school = len(school_students)
+                    
                     school_info = school_ses_data[school_ses_data['School_Name'] == school_name]
                     
-                    if len(school_info) > 0 and total_from_school > 0:
+                    if len(school_info) > 0 and total_referrals_from_school > 0:
                         school_info = school_info.iloc[0]
                         
                         indigenous_referrals = len(school_students[school_students['Flag_ATSI'] == 'Yes'])
+                        pct_referrals_indigenous = (indigenous_referrals / total_referrals_from_school * 100) if total_referrals_from_school > 0 else 0
+                        
+                        school_indigenous_pct = int(school_info['Indigenous_Percent'])
+                        
+                        if school_indigenous_pct > 0:
+                            referral_ratio = pct_referrals_indigenous / school_indigenous_pct
+                        else:
+                            referral_ratio = 0
+                        
                         swd_referrals = len(school_students[school_students['Flag_SWD'] == 'Yes'])
                         eald_referrals = len(school_students[school_students['Flag_EALD'] == 'Yes'])
+                        asd_referrals = len(school_students[school_students['Flag_ASD'] == 'Yes'])
                         
-                        indigenous_pct = int(indigenous_referrals / total_from_school * 100) if total_from_school > 0 else 0
-                        swd_pct = int(swd_referrals / total_from_school * 100) if total_from_school > 0 else 0
-                        eald_pct = int(eald_referrals / total_from_school * 100) if total_from_school > 0 else 0
+                        swd_pct = (swd_referrals / total_referrals_from_school * 100) if total_referrals_from_school > 0 else 0
+                        eald_pct = (eald_referrals / total_referrals_from_school * 100) if total_referrals_from_school > 0 else 0
+                        asd_pct = (asd_referrals / total_referrals_from_school * 100) if total_referrals_from_school > 0 else 0
                         
-                        indigenous_variance = indigenous_pct - int(school_info['Indigenous_Percent'])
-                        eald_variance = eald_pct - int(school_info['EALD_Percent'])
+                        allocated = len(school_students[school_students['Allocation_Status'] == 'Allocated']) if 'Allocation_Status' in school_students.columns else 0
+                        allocation_rate = (allocated / total_referrals_from_school * 100) if total_referrals_from_school > 0 else 0
                         
                         school_analysis.append({
                             'School': school_name,
-                            'Total_Referrals': total_from_school,
+                            'Total_Referrals': total_referrals_from_school,
+                            'School_Indigenous_%': school_indigenous_pct,
+                            'Referral_Indigenous_%': int(pct_referrals_indigenous),
+                            'Referral_Ratio': round(referral_ratio, 2),
+                            'School_EALD_%': int(school_info['EALD_Percent']),
+                            'Referral_EALD_%': int(eald_pct),
+                            'Referral_SWD_%': int(swd_pct),
+                            'Referral_ASD_%': int(asd_pct),
+                            'Allocation_%': int(allocation_rate),
                             'SEIFA_IRSAD': school_info['SEIFA_IRSAD'],
                             'Disadvantage': school_info['Disadvantage_Level'],
-                            'School_Indigenous_%': int(school_info['Indigenous_Percent']),
-                            'Referred_Indigenous_%': indigenous_pct,
-                            'Indigenous_Variance': indigenous_variance,
-                            'School_EALD_%': int(school_info['EALD_Percent']),
-                            'Referred_EALD_%': eald_pct,
-                            'EALD_Variance': eald_variance,
-                            'SWD_%': swd_pct,
                             'Year12_Completion': int(school_info['Year12_Completion_Rate'])
                         })
                 
                 if school_analysis:
-                    school_analysis_df = pd.DataFrame(school_analysis).sort_values('Total_Referrals', ascending=False).head(15)
+                    school_analysis_df = pd.DataFrame(school_analysis).sort_values('Total_Referrals', ascending=False)
+                    
+                    st.markdown("### 📊 Indigenous Referral Analysis")
+                    st.markdown("""
+**What this shows:**
+- **School_Indigenous_%**: % of Indigenous students enrolled at the school
+- **Referral_Indigenous_%**: % of CLC referrals FROM that school that are Indigenous  
+- **Referral_Ratio**: 
+  - **1.0** = Proportional (Indigenous referral % matches enrollment %)
+  - **>1.0** = Over-referring (more Indigenous students referred than enrollment would suggest)
+  - **<1.0** = Under-referring (fewer Indigenous students referred than enrollment would suggest)
+
+**Example:** School with 15% Indigenous enrollment but 30% of referrals are Indigenous = Ratio of 2.0 (double the rate)
+                    """)
+                    
+                    top_schools = school_analysis_df.head(12)
                     
                     c1, c2 = st.columns(2)
                     
                     with c1:
-                        st.markdown("### School Disadvantage vs CLC Referrals")
-                        fig_ses = go.Figure([go.Scatter(
-                            x=school_analysis_df['SEIFA_IRSAD'],
-                            y=school_analysis_df['Total_Referrals'],
+                        st.markdown("### School Indigenous Enrollment vs CLC Referral Rate")
+                        
+                        fig = go.Figure()
+                        
+                        fig.add_shape(type="line", x0=0, y0=0, x1=50, y1=50,
+                            line=dict(color="#ffffff", width=2, dash="dash")
+                        )
+                        
+                        colors = []
+                        for ratio in top_schools['Referral_Ratio']:
+                            if ratio > 1.5:
+                                colors.append('#ff6b6b')
+                            elif ratio > 1.0:
+                                colors.append('#ffd93d')
+                            elif ratio > 0.5:
+                                colors.append('#00e5ff')
+                            else:
+                                colors.append('#00ff00')
+                        
+                        fig.add_trace(go.Scatter(
+                            x=top_schools['School_Indigenous_%'],
+                            y=top_schools['Referral_Indigenous_%'],
                             mode='markers+text',
                             marker=dict(
                                 size=12,
-                                color=school_analysis_df['Total_Referrals'],
-                                colorscale='Reds',
-                                showscale=True,
-                                colorbar=dict(title="Referrals")
+                                color=colors,
+                                line=dict(color='#ffffff', width=1)
                             ),
-                            text=school_analysis_df['School'],
+                            text=top_schools['School'],
                             textposition='top center',
-                            textfont=dict(size=8, color='#ffffff')
-                        )])
-                        fig_ses.update_xaxes(title="SEIFA IRSAD (lower = more disadvantaged)", showgrid=False, color='#ffffff')
-                        fig_ses.update_yaxes(title="# CLC Referrals", dtick=1, showgrid=False, color='#ffffff')
-                        fig_ses.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), height=400, showlegend=False)
-                        st.plotly_chart(fig_ses, use_container_width=True)
+                            textfont=dict(size=8, color='#ffffff'),
+                            hovertemplate='<b>%{text}</b><br>School Enrollment: %{x}% Indigenous<br>CLC Referral: %{y}% Indigenous<extra></extra>'
+                        ))
+                        
+                        max_val = max(top_schools['School_Indigenous_%'].max(), top_schools['Referral_Indigenous_%'].max()) + 5
+                        fig.update_xaxes(title="School Indigenous Enrollment (%)", showgrid=False, range=[0, max_val])
+                        fig.update_yaxes(title="CLC Referral Indigenous (%)", showgrid=False, range=[0, max_val])
+                        fig.update_layout(
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            font=dict(color='#ffffff', size=11),
+                            height=500,
+                            showlegend=False
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        st.markdown("**Legend:** 🔴 Over-ref (>1.5x) | 🟡 Over-ref (1.0-1.5x) | 🔵 Under-ref | 🟢 Sig under-ref")
                     
                     with c2:
-                        st.markdown("### Indigenous Over-Representation")
-                        top_indigenous = school_analysis_df[school_analysis_df['Indigenous_Variance'] > 0].sort_values('Indigenous_Variance', ascending=True).tail(10)
-                        if len(top_indigenous) > 0:
-                            colors_ind = ['#ff6b6b' if x > 0 else '#00e5ff' for x in top_indigenous['Indigenous_Variance']]
-                            fig_ind = go.Figure([go.Bar(
-                                y=top_indigenous['School'],
-                                x=top_indigenous['Indigenous_Variance'],
-                                orientation='h',
-                                marker_color=colors_ind,
-                                text=top_indigenous['Indigenous_Variance'].astype(int),
-                                textposition='outside'
-                            )])
-                            fig_ind.add_vline(x=0, line_dash="dash", line_color="#ffffff", opacity=0.3)
-                            fig_ind.update_xaxes(showgrid=False, color='#ffffff')
-                            fig_ind.update_yaxes(showgrid=False, color='#ffffff')
-                            fig_ind.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), height=400, showlegend=False, xaxis_title="% Over-representation", margin=dict(l=180, r=120, t=0, b=0))
-                            st.plotly_chart(fig_ind, use_container_width=True)
+                        st.markdown("### Referral Ratio by School (Top 12)")
+                        st.markdown("**Ratio >1.0 = Over-referring Indigenous students**")
+                        
+                        top_sorted = top_schools.sort_values('Referral_Ratio', ascending=True)
+                        
+                        colors_ratio = ['#ff6b6b' if x > 1.5 else '#ffd93d' if x > 1.0 else '#00e5ff' for x in top_sorted['Referral_Ratio']]
+                        
+                        fig_ratio = go.Figure([go.Bar(
+                            y=top_sorted['School'],
+                            x=top_sorted['Referral_Ratio'],
+                            orientation='h',
+                            marker_color=colors_ratio,
+                            text=top_sorted['Referral_Ratio'],
+                            textposition='outside'
+                        )])
+                        
+                        fig_ratio.add_vline(x=1.0, line_dash="dash", line_color="#ffffff", opacity=0.5)
+                        fig_ratio.update_xaxes(showgrid=False, title="Referral Ratio (1.0 = proportional)")
+                        fig_ratio.update_yaxes(showgrid=False)
+                        fig_ratio.update_layout(
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            font=dict(color='#ffffff', size=10),
+                            height=500,
+                            showlegend=False,
+                            margin=dict(l=200, r=120, t=0, b=0)
+                        )
+                        st.plotly_chart(fig_ratio, use_container_width=True)
                     
-                    st.markdown("### School Equity Profiles")
-                    st.markdown("*School characteristics vs CLC referral patterns (top 15 referring schools)*")
-                    display_cols = ['School', 'Disadvantage', 'Total_Referrals', 'School_Indigenous_%', 'Referred_Indigenous_%', 'Indigenous_Variance', 'School_EALD_%', 'Referred_EALD_%', 'EALD_Variance', 'SWD_%']
-                    st.dataframe(school_analysis_df[display_cols], use_container_width=True, hide_index=True)
+                    st.markdown("### Detailed School Breakdown (Top 12 Referring Schools)")
                     
-                    st.markdown("### 🔍 Key Insights")
-                    insight_cols = st.columns(2)
+                    display_cols = ['School', 'Total_Referrals', 'School_Indigenous_%', 'Referral_Indigenous_%', 'Referral_Ratio', 'Referral_EALD_%', 'Referral_SWD_%', 'Referral_ASD_%', 'Allocation_%']
                     
-                    with insight_cols[0]:
-                        highest_indigenous = school_analysis_df.nlargest(1, 'Indigenous_Variance')
-                        if len(highest_indigenous) > 0:
-                            school = highest_indigenous.iloc[0]
-                            st.write(f"🔴 **{school['School']}**: Indigenous students **over-represented by +{int(school['Indigenous_Variance'])}%**\n({int(school['School_Indigenous_%'])}% in school → {int(school['Referred_Indigenous_%'])}% of CLC referrals)")
+                    st.dataframe(
+                        school_analysis_df[display_cols].head(12),
+                        use_container_width=True,
+                        hide_index=True
+                    )
                     
-                    with insight_cols[1]:
-                        most_disadvantaged = school_analysis_df[school_analysis_df['Disadvantage'] == 'Very High'].sort_values('Total_Referrals', ascending=False).head(1)
-                        if len(most_disadvantaged) > 0:
-                            school = most_disadvantaged.iloc[0]
-                            st.write(f"⚠️ **{school['School']}** (SEIFA {int(school['SEIFA_IRSAD'])}): **Very High disadvantage**\n{int(school['Total_Referrals'])} CLC referrals | {int(school['Year12_Completion'])}% Yr12 completion")
+                    st.markdown("### 🔍 Key Findings")
+                    
+                    over_referring = school_analysis_df[school_analysis_df['Referral_Ratio'] > 1.5]
+                    under_referring = school_analysis_df[school_analysis_df['Referral_Ratio'] < 0.7]
+                    
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        if len(over_referring) > 0:
+                            st.warning(f"⚠️ **{len(over_referring)} schools** refer Indigenous at **>1.5x** enrollment rate")
+                            for _, school in over_referring.head(3).iterrows():
+                                st.write(f"• **{school['School']}**: {school['School_Indigenous_%']}% → {school['Referral_Indigenous_%']}% (ratio: {school['Referral_Ratio']:.2f}x)")
+                    
+                    with col2:
+                        proportional = school_analysis_df[(school_analysis_df['Referral_Ratio'] >= 0.8) & (school_analysis_df['Referral_Ratio'] <= 1.2)]
+                        st.info(f"✅ **{len(proportional)} schools** at **proportional rates**")
+                    
+                    with col3:
+                        if len(under_referring) > 0:
+                            st.success(f"🟢 **{len(under_referring)} schools** refer Indigenous at **<0.7x** rate")
         else:
             st.info("📋 **School Socioeconomic Data Not Loaded**")
         
