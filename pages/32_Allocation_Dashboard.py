@@ -589,6 +589,18 @@ else:
                     school_analysis_df = pd.DataFrame(school_analysis).sort_values('Total_Referrals', ascending=False)
                     
                     st.markdown("### 📊 Indigenous Referral Analysis")
+                    
+                    # Sample size warning
+                    small_sample = school_analysis_df[school_analysis_df['Total_Referrals'] < 5]
+                    if len(small_sample) > 0:
+                        st.warning(f"""
+🟡 **SAMPLE SIZE ALERT**: {len(small_sample)} schools have <5 referrals. 
+Percentages based on small numbers (n<5) are **statistically unreliable** and should be ignored.
+- School with 1 student = 100% or 0% with no meaning
+- School with 2 students = 50% can swing to 0% or 100% with one change
+- Only trust patterns with **n≥10 referrals**
+                        """)
+                    
                     st.markdown("""
 **What this shows:**
 - **School_Indigenous_%**: % of Indigenous students enrolled at the school
@@ -599,6 +611,8 @@ else:
   - **<1.0** = Under-referring (fewer Indigenous students referred than enrollment would suggest)
 
 **Example:** School with 15% Indigenous enrollment but 30% of referrals are Indigenous = Ratio of 2.0 (double the rate)
+
+⚠️ **IMPORTANT**: Only meaningful patterns come from schools with **10+ referrals**. Smaller schools show noise, not trends.
                     """)
                     
                     top_schools = school_analysis_df.head(12)
@@ -685,35 +699,71 @@ else:
                         st.plotly_chart(fig_ratio, use_container_width=True)
                     
                     st.markdown("### Detailed School Breakdown (Top 12 Referring Schools)")
+                    st.markdown("""
+**🟡 Schools with <5 referrals: unreliable percentages (noise, not patterns)**  
+**🟢 Schools with ≥10 referrals: trustworthy patterns**
+                    """)
                     
                     display_cols = ['School', 'Total_Referrals', 'School_Indigenous_%', 'Referral_Indigenous_%', 'Referral_Ratio', 'Referral_EALD_%', 'Referral_SWD_%', 'Referral_ASD_%', 'Allocation_%']
                     
+                    # Highlight small samples
+                    display_df = school_analysis_df[display_cols].head(12).copy()
+                    display_df['Sample_Size_Note'] = display_df['Total_Referrals'].apply(
+                        lambda x: '🟡 UNRELIABLE' if x < 5 else '⚠️ CAUTION' if x < 10 else '✅ RELIABLE'
+                    )
+                    
                     st.dataframe(
-                        school_analysis_df[display_cols].head(12),
+                        display_df,
                         use_container_width=True,
                         hide_index=True
                     )
                     
-                    st.markdown("### 🔍 Key Findings")
+                    st.info("""
+**Reading the table:**
+- 🟡 **<5 referrals** = Unreliable (one student = 100% or 0%)
+- ⚠️ **5-9 referrals** = Use caution (small variation = big % change)
+- ✅ **≥10 referrals** = Reliable patterns
+
+**Example (Warradale):** 1 student total → 100% Indigenous = MEANINGLESS
+A different student from Warradale would flip it to 0%. This isn't a pattern, it's luck.
+                    """)
                     
-                    over_referring = school_analysis_df[school_analysis_df['Referral_Ratio'] > 1.5]
-                    under_referring = school_analysis_df[school_analysis_df['Referral_Ratio'] < 0.7]
+                    st.markdown("### 🔍 Key Findings (Schools with ≥10 referrals only)")
+                    st.markdown("*Note: Excluding schools with <10 referrals to avoid statistical noise*")
                     
-                    col1, col2, col3 = st.columns(3)
+                    # Only analyze schools with 10+ referrals for meaningful patterns
+                    reliable_schools = school_analysis_df[school_analysis_df['Total_Referrals'] >= 10]
                     
-                    with col1:
-                        if len(over_referring) > 0:
-                            st.warning(f"⚠️ **{len(over_referring)} schools** refer Indigenous at **>1.5x** enrollment rate")
-                            for _, school in over_referring.head(3).iterrows():
-                                st.write(f"• **{school['School']}**: {school['School_Indigenous_%']}% → {school['Referral_Indigenous_%']}% (ratio: {school['Referral_Ratio']:.2f}x)")
-                    
-                    with col2:
-                        proportional = school_analysis_df[(school_analysis_df['Referral_Ratio'] >= 0.8) & (school_analysis_df['Referral_Ratio'] <= 1.2)]
-                        st.info(f"✅ **{len(proportional)} schools** at **proportional rates**")
-                    
-                    with col3:
-                        if len(under_referring) > 0:
-                            st.success(f"🟢 **{len(under_referring)} schools** refer Indigenous at **<0.7x** rate")
+                    if len(reliable_schools) > 0:
+                        over_referring = reliable_schools[reliable_schools['Referral_Ratio'] > 1.5]
+                        under_referring = reliable_schools[reliable_schools['Referral_Ratio'] < 0.7]
+                        
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            if len(over_referring) > 0:
+                                st.warning(f"⚠️ **{len(over_referring)} schools** refer Indigenous at **>1.5x** enrollment rate\n\n*Based on ≥10 referrals*")
+                                for _, school in over_referring.head(3).iterrows():
+                                    st.write(f"• **{school['School']}** (n={int(school['Total_Referrals'])}): {int(school['School_Indigenous_%'])}% → {int(school['Referral_Indigenous_%'])}% (ratio: {school['Referral_Ratio']:.2f}x)")
+                            else:
+                                st.success("✅ No schools with meaningful over-referral of Indigenous students")
+                        
+                        with col2:
+                            proportional = reliable_schools[(reliable_schools['Referral_Ratio'] >= 0.8) & (reliable_schools['Referral_Ratio'] <= 1.2)]
+                            st.info(f"✅ **{len(proportional)} schools** refer Indigenous at **proportional rates**\n\n*Based on ≥10 referrals*")
+                        
+                        with col3:
+                            if len(under_referring) > 0:
+                                st.success(f"🟢 **{len(under_referring)} schools** refer Indigenous at **<0.7x** rate\n\n*Based on ≥10 referrals*")
+                            else:
+                                st.info("No schools with significant under-referral pattern")
+                    else:
+                        st.warning("""
+🟡 **No schools with ≥10 referrals**. 
+All findings are based on small sample sizes (<10) and should NOT be used for decision-making.
+
+This is expected for a new/small program. Once you have 20+ schools with 10+ referrals each, patterns will become meaningful.
+                        """)
         else:
             st.info("📋 **School Socioeconomic Data Not Loaded**")
         
