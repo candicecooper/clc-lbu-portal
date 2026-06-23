@@ -3073,6 +3073,7 @@ def render_meeting_archive(program):
     # ── WEEK A / WEEK B MEETINGS SECTION ──
     st.markdown("#### 📅 Scheduled Meetings (Week A & B)")
     
+    all_meetings = fetch("tm_program_meetings", {"program": program}, "meeting_date")
 
     if not all_meetings:
         st.info("No past meetings found. Start recording meetings in the Program Meeting tab!")
