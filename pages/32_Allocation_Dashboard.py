@@ -242,16 +242,16 @@ else:
     data = st.session_state.data.copy()
     filtered = data.copy()
     
-    # Filter by Term
-    if st.session_state.term_filter:
+    # Filter by Term (if column exists)
+    if 'Term' in filtered.columns and st.session_state.term_filter:
         filtered = filtered[~filtered['Term'].isin(st.session_state.term_filter)]
     
-    # Filter by Year
-    if st.session_state.year_filter:
+    # Filter by Year (if column exists)
+    if 'Referral_Year' in filtered.columns and st.session_state.year_filter:
         filtered = filtered[~filtered['Referral_Year'].isin(st.session_state.year_filter)]
     
-    # Filter by Program
-    if st.session_state.program_filter:
+    # Filter by Program (if column exists)
+    if 'Allocated_Program' in filtered.columns and st.session_state.program_filter:
         filtered = filtered[~filtered['Allocated_Program'].isin(st.session_state.program_filter)]
     
     # ========================================================================
@@ -261,7 +261,15 @@ else:
     if st.session_state.drill_down_view is None:
         
         st.markdown("# 📊 CLC-LBU ALLOCATION DASHBOARD")
-        st.markdown(f"*Data: {len(filtered):,} students | Terms: {sorted([int(t) for t in filtered['Term'].dropna().unique()])} | Years: {sorted([int(y) for y in filtered['Referral_Year'].dropna().unique()])}*")
+        # Build info string with proper error handling for missing columns
+        info_parts = [f"Data: {len(filtered):,} students"]
+        if 'Term' in filtered.columns and len(filtered['Term'].dropna()) > 0:
+            terms = sorted([int(t) for t in filtered['Term'].dropna().unique()])
+            info_parts.append(f"Terms: {terms}")
+        if 'Referral_Year' in filtered.columns and len(filtered['Referral_Year'].dropna()) > 0:
+            years = sorted([int(y) for y in filtered['Referral_Year'].dropna().unique()])
+            info_parts.append(f"Years: {years}")
+        st.markdown(f"*{' | '.join(info_parts)}*")
         
         # ====================================================================
         # METRICS & DRILL-DOWN BUTTONS
@@ -329,17 +337,18 @@ else:
         c1, c2 = st.columns(2)
         
         with c1:
-            program_dist = filtered['Allocated_Program'].value_counts()
-            fig_prog = go.Figure([go.Bar(
-                x=program_dist.index,
-                y=program_dist.values,
-                marker_color=['#00e5ff', '#00ff00', '#ff6b6b'],
-                text=program_dist.values,
-                textposition='outside'
-            )])
-            fig_prog.update_xaxes(showgrid=False)
-            fig_prog.update_yaxes(showgrid=False, dtick=5)
-            fig_prog.update_layout(
+            if 'Allocated_Program' in filtered.columns and len(filtered) > 0:
+                program_dist = filtered['Allocated_Program'].value_counts()
+                fig_prog = go.Figure([go.Bar(
+                    x=program_dist.index,
+                    y=program_dist.values,
+                    marker_color=['#00e5ff', '#00ff00', '#ff6b6b'],
+                    text=program_dist.values,
+                    textposition='outside'
+                )])
+                fig_prog.update_xaxes(showgrid=False)
+                fig_prog.update_yaxes(showgrid=False, dtick=5)
+                fig_prog.update_layout(
                 title="Program Distribution",
                 paper_bgcolor='rgba(0,0,0,0)',
                 plot_bgcolor='rgba(0,0,0,0)',
