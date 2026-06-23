@@ -29,15 +29,60 @@ from datetime import datetime
 # Helper function to safely access flag columns
 def safe_flag_count(df, column, value='Yes'):
     """Safely count rows where a flag column equals a value."""
-    if column in df.columns:
+    if df is None or df.empty or column not in df.columns:
+        return 0
+    try:
         return len(df[df[column] == value])
-    return 0
+    except:
+        return 0
 
 def safe_flag_filter(df, column, value='Yes'):
     """Safely filter by a flag column."""
-    if column in df.columns:
+    if df is None or df.empty or column not in df.columns:
+        return pd.DataFrame()
+    try:
         return df[df[column] == value]
-    return pd.DataFrame()
+    except:
+        return pd.DataFrame()
+
+def safe_school_count(df, flag_col, value='Yes'):
+    """Safely get school value counts for a flag column."""
+    if df is None or df.empty or flag_col not in df.columns or 'Referring_School' not in df.columns:
+        return pd.Series()
+    try:
+        filtered_data = df[df[flag_col] == value]
+        if filtered_data.empty:
+            return pd.Series()
+        return filtered_data['Referring_School'].value_counts().head(8)
+    except:
+        return pd.Series()
+def safe_allocation_status_count(df, status='Allocated'):
+    """Safely count allocation status."""
+    if df is None or df.empty or 'Allocation_Status' not in df.columns:
+        return 0
+    try:
+        return len(df[df['Allocation_Status'] == status])
+    except:
+        return 0
+
+def safe_program_distribution(df):
+    """Safely get program distribution."""
+    if df is None or df.empty or 'Allocated_Program' not in df.columns:
+        return pd.Series()
+    try:
+        return df['Allocated_Program'].value_counts()
+    except:
+        return pd.Series()
+
+def safe_allocation_distribution(df):
+    """Safely get allocation status distribution."""
+    if df is None or df.empty or 'Allocation_Status' not in df.columns:
+        return pd.Series()
+    try:
+        return df['Allocation_Status'].value_counts()
+    except:
+        return pd.Series()
+
 
 
 st.set_page_config(
@@ -268,7 +313,10 @@ else:
     
     # Filter by Program (if column exists)
     if 'Allocated_Program' in filtered.columns and st.session_state.program_filter:
-        filtered = filtered[~filtered['Allocated_Program'].isin(st.session_state.program_filter)]
+        try:
+            filtered = filtered[~filtered['Allocated_Program'].isin(st.session_state.program_filter)]
+        except:
+            pass  # If filtering fails, keep original data
     
     # ========================================================================
     # MAIN OVERVIEW (No drill-down)
@@ -294,7 +342,7 @@ else:
         st.markdown("## 📈 Key Metrics")
         
         total_count = len(filtered)
-        allocated_count = len(filtered[filtered['Allocation_Status'] == 'Allocated'])
+        allocated_count = safe_allocation_status_count(filtered, 'Allocated')
         atsi_count = safe_flag_count(filtered, 'Flag_ATSI')
         swd_count = safe_flag_count(filtered, 'Flag_SWD')
         eald_count = safe_flag_count(filtered, 'Flag_EALD')
@@ -354,7 +402,7 @@ else:
         
         with c1:
             if 'Allocated_Program' in filtered.columns and len(filtered) > 0:
-                program_dist = filtered['Allocated_Program'].value_counts()
+                program_dist = safe_program_distribution(filtered)
                 fig_prog = go.Figure([go.Bar(
                     x=program_dist.index,
                     y=program_dist.values,
@@ -377,7 +425,7 @@ else:
         
         with c2:
             # Allocation status
-            alloc_status = filtered['Allocation_Status'].value_counts()
+            alloc_status = safe_allocation_distribution(filtered)
             colors_alloc = ['#00ff00' if x == 'Allocated' else '#ff6b6b' for x in alloc_status.index]
             fig_alloc = go.Figure([go.Bar(
                 x=alloc_status.index,
@@ -552,7 +600,7 @@ else:
         
         with c1:
             st.markdown("### 🔴 Top Schools - ATSI Referrals")
-            atsi_schools = safe_flag_filter(filtered, 'Flag_ATSI')['Referring_School'].value_counts().head(8) if 'Referring_School' in filtered.columns else pd.Series()
+            atsi_schools = safe_school_count(filtered, 'Flag_ATSI')
             fig_atsi = go.Figure([go.Bar(
                 y=atsi_schools.index,
                 x=atsi_schools.values,
@@ -568,7 +616,7 @@ else:
         
         with c2:
             st.markdown("### 🟠 Top Schools - SWD Referrals")
-            swd_schools = safe_flag_filter(filtered, 'Flag_SWD')['Referring_School'].value_counts().head(8) if 'Referring_School' in filtered.columns else pd.Series()
+            swd_schools = safe_school_count(filtered, 'Flag_SWD')
             fig_swd = go.Figure([go.Bar(
                 y=swd_schools.index,
                 x=swd_schools.values,
@@ -584,7 +632,7 @@ else:
         
         with c3:
             st.markdown("### 🟡 Top Schools - EALD Referrals")
-            eald_schools = safe_flag_filter(filtered, 'Flag_EALD')['Referring_School'].value_counts().head(8) if 'Referring_School' in filtered.columns else pd.Series()
+            eald_schools = safe_school_count(filtered, 'Flag_EALD')
             fig_eald = go.Figure([go.Bar(
                 y=eald_schools.index,
                 x=eald_schools.values,
@@ -607,7 +655,7 @@ else:
         
         st.markdown("### EALD Allocation Status by Program")
         for prog in ['JP', 'PY', 'SY']:
-            prog_data = filtered[filtered['Allocated_Program'] == prog]
+            prog_data = filtered[filtered['Allocated_Program'] == prog] if 'Allocated_Program' in filtered.columns else pd.DataFrame()
             if len(prog_data) > 0:
                 eald_allocated = len(prog_data[(prog_data['Flag_EALD'] == 'Yes') & (prog_data['Allocation_Status'] == 'Allocated')]) if 'Flag_EALD' in prog_data.columns and 'Allocation_Status' in prog_data.columns else 0
                 eald_waiting = len(prog_data[(prog_data['Flag_EALD'] == 'Yes') & (prog_data['Allocation_Status'] == 'On Waiting List')]) if 'Flag_EALD' in prog_data.columns and 'Allocation_Status' in prog_data.columns else 0
@@ -732,7 +780,7 @@ else:
             drill_data = filtered
             title = "📍 Total Students"
         elif view == 'allocated':
-            drill_data = filtered[filtered['Allocation_Status'] == 'Allocated']
+            drill_data = filtered[filtered['Allocation_Status'] == 'Allocated'] if 'Allocation_Status' in filtered.columns else pd.DataFrame()
             title = "✅ Allocated Students"
         elif view == 'atsi':
             drill_data = safe_flag_filter(filtered, 'Flag_ATSI')
@@ -774,14 +822,14 @@ else:
             c4.metric("EALD", safe_flag_count(drill_data, 'Flag_EALD'))
             
             # Program distribution
-            prog_dist = drill_data['Allocated_Program'].value_counts()
+            prog_dist = safe_program_distribution(drill_data)
             fig = go.Figure([go.Pie(labels=prog_dist.index, values=prog_dist.values)])
             fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'))
             st.plotly_chart(fig, use_container_width=True)
         
         with tabs[1]:  # By Program
             for prog in ['JP', 'PY', 'SY']:
-                prog_data = drill_data[drill_data['Allocated_Program'] == prog]
+                prog_data = drill_data[drill_data['Allocated_Program'] == prog] if 'Allocated_Program' in drill_data.columns else pd.DataFrame()
                 if len(prog_data) > 0:
                     st.markdown(f"### {prog} Program ({len(prog_data)} students)")
                     st.write(f"**ATSI**: {safe_flag_count(prog_data, 'Flag_ATSI')} | **SWD**: {safe_flag_count(prog_data, 'Flag_SWD')} | **EALD**: {safe_flag_count(prog_data, 'Flag_EALD')}")
