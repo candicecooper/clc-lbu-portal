@@ -1,12 +1,27 @@
-# ====================================================================
-# COMPLETE DRILL-DOWN ANALYSIS - ATSI, SWD, AND ASD
-# Insert this entire file after EALD Enrollment Trends section
-# Before "Multiple Disabilities" section in 32_Allocation_Dashboard.py
-# ====================================================================
+# ================================================================================
+# COMPLETE ATSI, SWD, ASD ANALYSIS CODE
+# READY TO PASTE INTO YOUR DASHBOARD
+# ================================================================================
+#
+# INSTRUCTIONS:
+# 1. Make sure the TOP of your file has these imports:
+#    import streamlit as st
+#    import pandas as pd
+#    import plotly.graph_objects as go
+#
+# 2. Find the location: "# MULTIPLE DISABILITIES" in your dashboard
+# 3. Paste ALL code below BEFORE that line
+# 4. Commit and deploy
+#
+# ================================================================================
 
-# ====================================================================
+import streamlit as st
+import pandas as pd
+import plotly.graph_objects as go
+
+# ================================================================================
 # 🔴 ATSI ENROLLMENT TRENDS BY PROGRAM & TERM
-# ====================================================================
+# ================================================================================
 
 st.markdown("---")
 st.markdown("## 🔴 ATSI Enrollment Trends by Program & Term")
@@ -114,9 +129,9 @@ if 'Flag_ATSI' in filtered.columns:
             with col4:
                 st.metric("Allocation %", f"{allocation_rate:.0f}%")
 
-# ====================================================================
+# ================================================================================
 # 🟠 SWD ENROLLMENT TRENDS BY PROGRAM & TERM
-# ====================================================================
+# ================================================================================
 
 st.markdown("---")
 st.markdown("## 🟠 SWD Enrollment Trends by Program & Term")
@@ -224,9 +239,9 @@ if 'Flag_SWD' in filtered.columns:
             with col4:
                 st.metric("Allocation %", f"{allocation_rate:.0f}%")
 
-# ====================================================================
+# ================================================================================
 # 🧠 ASD OVERREPRESENTATION - DEEP ANALYSIS
-# ====================================================================
+# ================================================================================
 
 st.markdown("---")
 st.markdown("## 🧠 ASD Overrepresentation Analysis")
@@ -407,8 +422,8 @@ if 'Flag_ASD' in filtered.columns:
         if non_asd_with_multi > 0:
             st.warning(f"⚠️ **Only {non_asd_with_multi} non-ASD students** ({100-asd_percentage:.1f}% of referrals)\n\n**Question**: Are other conditions being underidentified or are they less likely to be referred to CLC?")
 
-# ====================================================================
+# ================================================================================
 # END OF ATSI, SWD, ASD ANALYSIS
-# Everything below this point should be your existing code
-# (Multiple Disabilities section, etc.)
-# ====================================================================
+# EVERYTHING BELOW THIS POINT SHOULD BE YOUR EXISTING CODE
+# (Multiple Disabilities section, Partnership Map, etc.)
+# ================================================================================
