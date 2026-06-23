@@ -1695,7 +1695,8 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
                         with col1:
                             if st.button(f"📝 {mtg_date} — {mtg_facilitator}", key=f"load_active_{mtg_id}", use_container_width=True):
                                 st.session_state.current_meeting_id = mtg_id
-                                st.rerun()
+                                st.session_state.meeting_loaded = True
+                                # Don't rerun - let form load naturally below
                         
                         with col2:
                             if st.button("📄 View", key=f"view_active_{mtg_id}", use_container_width=True, help="Load for editing"):
@@ -1741,9 +1742,7 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
                             if st.button("📦 Archive", key=f"archive_active_{mtg_id}", use_container_width=True):
                                 try:
                                     supabase.table('team_meetings').update({'is_archived': True}).eq('id', mtg_id).execute()
-                                    st.success(f"📦 {mtg_facilitator} archived")
-                                    time.sleep(1)
-                                    st.rerun()
+                                    st.success(f"📦 {mtg_facilitator} archived - refresh to see changes")
                                 except Exception as e:
                                     st.error(f"Error archiving: {e}")
                         
@@ -1752,15 +1751,12 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
                                 if st.session_state.get(f"confirm_delete_{mtg_id}", False):
                                     try:
                                         supabase.table('team_meetings').delete().eq('id', mtg_id).execute()
-                                        st.success(f"🗑️ {mtg_facilitator} deleted")
-                                        time.sleep(1)
-                                        st.rerun()
+                                        st.success(f"🗑️ {mtg_facilitator} deleted - refresh to see changes")
                                     except Exception as e:
                                         st.error(f"Error deleting: {e}")
                                 else:
                                     st.session_state[f"confirm_delete_{mtg_id}"] = True
                                     st.warning(f"⚠️ Click again to confirm delete")
-                                    st.rerun()
                 else:
                     st.info("No active ad-hoc meetings. Create a new one below!")
             except Exception as e:
@@ -1817,9 +1813,7 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
                             if st.button("🔄 Restore", key=f"restore_archived_{mtg_id}", use_container_width=True):
                                 try:
                                     supabase.table('team_meetings').update({'is_archived': False}).eq('id', mtg_id).execute()
-                                    st.success(f"♻️ {mtg_student} restored")
-                                    time.sleep(1)
-                                    st.rerun()
+                                    st.success(f"♻️ {mtg_facilitator} restored - refresh to see changes")
                                 except Exception as e:
                                     st.error(f"Error restoring: {e}")
                 else:
@@ -2037,8 +2031,7 @@ The AI extraction is optional!
                             st.session_state.current_meeting_id = result.data[0]['id']
                             st.success(f"✅ Ad-Hoc Meeting Saved (ID: {st.session_state.current_meeting_id})")
                         
-                        time.sleep(1)
-                        st.rerun()
+                        st.info("💡 Your data is saved. Continue editing or download minutes below.")
                     
                     except Exception as e:
                         st.error(f"Error saving meeting: {e}")
