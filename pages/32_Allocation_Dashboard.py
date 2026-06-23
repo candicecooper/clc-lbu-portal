@@ -1,12 +1,12 @@
 """
-CLC-LBU ALLOCATION DASHBOARD (Page 32)
-Enhanced with School Socioeconomic Data & Equity Analysis
+CLC-LBU ALLOCATION DASHBOARD (Page 32) - COMPLETE & ENHANCED
+Enhanced with School Socioeconomic Data & Comprehensive Equity Analysis
+16 Drill-Down Metrics | 7-Tab EALD Analysis | ATSI/SWD/ASD Deep-Dive
 Dark Neon Theme | Folium Adelaide Map | Multi-Select Filters
-Real Excel Data Integration | Equity Analysis (ATSI/SWD/EALD/ASD)
-Persistent Data Storage | School Profile Drill-Down
+Real Excel Data Integration | Persistent Data Storage
 
 DEPLOYMENT: Render (clc-lbu-portal)
-DATA: File upload → Persistent pickle storage
+FEATURES: Enhanced metrics, comprehensive EALD, allocation bottleneck analysis
 """
 
 import streamlit as st
@@ -24,9 +24,6 @@ from datetime import datetime
 # CONFIG & STYLING
 # ============================================================================
 
-
-
-# Helper function to safely access flag columns
 def safe_flag_count(df, column, value='Yes'):
     """Safely count rows where a flag column equals a value."""
     if df is None or df.empty or column not in df.columns:
@@ -56,6 +53,7 @@ def safe_school_count(df, flag_col, value='Yes'):
         return filtered_data['Referring_School'].value_counts().head(8)
     except:
         return pd.Series()
+
 def safe_allocation_status_count(df, status='Allocated'):
     """Safely count allocation status."""
     if df is None or df.empty or 'Allocation_Status' not in df.columns:
@@ -82,8 +80,6 @@ def safe_allocation_distribution(df):
         return df['Allocation_Status'].value_counts()
     except:
         return pd.Series()
-
-
 
 st.set_page_config(
     page_title="Allocation Dashboard",
@@ -143,7 +139,6 @@ st.markdown("""
     .stExpander { border: 1px solid #00e5ff; border-radius: 4px; }
     [data-testid="stExpander"] button { color: #00e5ff; }
     
-    /* ========== PLOTLY DARK ZOOM/HOVER FIXES ========== */
     .plotly .paper { background-color: #0a0e27 !important; }
     .hovertext { background: #0f1434 !important; color: #ffffff !important; border: 1px solid #00e5ff !important; border-radius: 4px !important; box-shadow: 0 0 10px rgba(0, 229, 255, 0.3) !important; }
     .plotly-graph-div { background: #0a0e27 !important; }
@@ -165,12 +160,10 @@ st.markdown("""
 DATA_FILE = "clc_lbu_data.pkl"
 
 def save_data_to_file(data):
-    """Save dataframe to pickle file"""
     with open(DATA_FILE, 'wb') as f:
         pickle.dump(data, f)
 
 def load_data_from_file():
-    """Load dataframe from pickle file"""
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, 'rb') as f:
@@ -180,21 +173,14 @@ def load_data_from_file():
     return None
 
 def clear_data_file():
-    """Clear saved data file"""
     if os.path.exists(DATA_FILE):
         os.remove(DATA_FILE)
 
 def load_school_socioeconomic_data():
-    """Load school socioeconomic data from CSV"""
     import os
-    
-    # Try multiple locations in order of preference
     possible_paths = [
-        # GitHub data folder (production on Render)
         os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'school_socioeconomic_data.csv'),
-        # Relative path from app root
         'data/school_socioeconomic_data.csv',
-        # Absolute paths for local development
         '/mnt/user-data/outputs/school_socioeconomic_data.csv',
         '/mnt/user-data/uploads/school_socioeconomic_data.csv',
     ]
@@ -211,7 +197,6 @@ def load_school_socioeconomic_data():
     if school_data is None:
         return None
     
-    # Convert Last_Updated to datetime
     if 'Last_Updated' in school_data.columns:
         try:
             school_data['Last_Updated'] = pd.to_datetime(school_data['Last_Updated'], errors='coerce')
@@ -236,7 +221,6 @@ if 'drill_down_view' not in st.session_state:
 
 st.sidebar.markdown("## 📊 ALLOCATION DASHBOARD")
 
-# Upload section
 st.sidebar.markdown("### 📤 Upload Data")
 uploaded_file = st.sidebar.file_uploader("Choose CLC Allocation Excel file", type=['xlsx'])
 
@@ -256,17 +240,14 @@ if st.session_state.data is not None:
         st.session_state.data = None
         st.rerun()
 
-# Clear filters button
 if st.sidebar.button("🔓 Show All Data (Clear All Filters)"):
     st.session_state.term_filter = set()
     st.session_state.year_filter = set()
     st.session_state.program_filter = set()
 
-# Filters
 if st.session_state.data is not None:
     with st.sidebar.expander("🔍 FILTERS", expanded=True):
         
-        # Initialize filter session state
         if 'term_filter' not in st.session_state:
             st.session_state.term_filter = set()
         if 'year_filter' not in st.session_state:
@@ -274,7 +255,6 @@ if st.session_state.data is not None:
         if 'program_filter' not in st.session_state:
             st.session_state.program_filter = set()
         
-        # Term filter
         st.markdown("**Term**")
         c1, c2 = st.columns([1, 3])
         with c1:
@@ -289,7 +269,6 @@ if st.session_state.data is not None:
                 else:
                     st.session_state.term_filter.add(term)
         
-        # Year filter
         st.markdown("**Year**")
         c1, c2 = st.columns([1, 2])
         with c1:
@@ -307,7 +286,6 @@ if st.session_state.data is not None:
             else:
                 st.session_state.year_filter.add(2026.0)
         
-        # Program filter
         st.markdown("**Program**")
         c1, c2 = st.columns([1, 3])
         with c1:
@@ -330,33 +308,24 @@ if st.session_state.data is None:
     st.error("❌ No data loaded. Please upload allocation file.")
 else:
     
-    # Apply filters
     data = st.session_state.data.copy()
     filtered = data.copy()
     
-    # Filter by Term (if column exists)
     if 'Term' in filtered.columns and st.session_state.term_filter:
         filtered = filtered[~filtered['Term'].isin(st.session_state.term_filter)]
     
-    # Filter by Year (if column exists)
     if 'Referral_Year' in filtered.columns and st.session_state.year_filter:
         filtered = filtered[~filtered['Referral_Year'].isin(st.session_state.year_filter)]
     
-    # Filter by Program (if column exists)
     if 'Allocated_Program' in filtered.columns and st.session_state.program_filter:
         try:
             filtered = filtered[~filtered['Allocated_Program'].isin(st.session_state.program_filter)]
         except:
-            pass  # If filtering fails, keep original data
-    
-    # ========================================================================
-    # MAIN OVERVIEW (No drill-down)
-    # ========================================================================
+            pass
     
     if st.session_state.drill_down_view is None:
         
         st.markdown("# 📊 CLC-LBU ALLOCATION DASHBOARD")
-        # Build info string with proper error handling for missing columns
         info_parts = [f"Data: {len(filtered):,} students"]
         if 'Term' in filtered.columns and len(filtered['Term'].dropna()) > 0:
             terms = sorted([int(t) for t in filtered['Term'].dropna().unique()])
@@ -367,18 +336,27 @@ else:
         st.markdown(f"*{' | '.join(info_parts)}*")
         
         # ====================================================================
-        # METRICS & DRILL-DOWN BUTTONS
+        # ENHANCED KEY METRICS (16 DRILL-DOWNS)
         # ====================================================================
         
-        st.markdown("## 📈 Key Metrics")
+        st.markdown("## 📈 Key Metrics - Comprehensive Analysis")
         
         total_count = len(filtered)
         allocated_count = safe_allocation_status_count(filtered, 'Allocated')
+        waiting_count = safe_allocation_status_count(filtered, 'On Waiting List')
         atsi_count = safe_flag_count(filtered, 'Flag_ATSI')
         swd_count = safe_flag_count(filtered, 'Flag_SWD')
         eald_count = safe_flag_count(filtered, 'Flag_EALD')
+        asd_count = safe_flag_count(filtered, 'Flag_ASD')
         
-        # Count repeating students
+        disability_cols = ['Flag_ASD', 'Flag_ADHD', 'Flag_Speech_and_Lang', 'Flag_Intellectual', 'Flag_Learning_Difficulty', 'Flag_Sensory_Processing', 'Flag_ODD', 'Flag_PDA']
+        filtered_copy = filtered.copy()
+        filtered_copy['disability_count'] = 0
+        for col in disability_cols:
+            if col in filtered_copy.columns:
+                filtered_copy['disability_count'] += (filtered_copy[col] == 'Yes').astype(int)
+        multi_disability_count = len(filtered_copy[filtered_copy['disability_count'] >= 2])
+        
         student_col = None
         for col in ['Student_Name', 'student_name', 'Student', 'Name', 'Full_Name']:
             if col in filtered.columns:
@@ -390,36 +368,88 @@ else:
             student_counts = filtered[student_col].value_counts()
             repeating_count = len(student_counts[student_counts > 1])
         
-        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        partnership_count = filtered['Partnership_Area'].nunique() if 'Partnership_Area' in filtered.columns else 0
+        school_count = filtered['Referring_School'].nunique() if 'Referring_School' in filtered.columns else 0
+        year_2025_count = len(filtered[filtered['Referral_Year'] == 2025.0]) if 'Referral_Year' in filtered.columns else 0
+        year_2026_count = len(filtered[filtered['Referral_Year'] == 2026.0]) if 'Referral_Year' in filtered.columns else 0
+        early_referral_count = len(filtered[filtered['Term'] == 1.0]) if 'Term' in filtered.columns else 0
         
-        with c1:
-            if st.button(f"📍 **TOTAL**\n{total_count}", use_container_width=True):
+        st.markdown("### Primary Cohorts")
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
+        
+        with col1:
+            if st.button(f"📍 **TOTAL**\n{total_count}", use_container_width=True, key="metric_total"):
                 st.session_state.drill_down_view = 'total'
                 st.rerun()
-        
-        with c2:
-            if st.button(f"✅ **ALLOCATED**\n{allocated_count}", use_container_width=True):
+        with col2:
+            if st.button(f"✅ **ALLOCATED**\n{allocated_count}", use_container_width=True, key="metric_allocated"):
                 st.session_state.drill_down_view = 'allocated'
                 st.rerun()
-        
-        with c3:
-            if st.button(f"🔴 **ATSI**\n{atsi_count}", use_container_width=True):
+        with col3:
+            if st.button(f"⏳ **WAITING**\n{waiting_count}", use_container_width=True, key="metric_waiting"):
+                st.session_state.drill_down_view = 'waiting'
+                st.rerun()
+        with col4:
+            if st.button(f"🔴 **ATSI**\n{atsi_count}", use_container_width=True, key="metric_atsi"):
                 st.session_state.drill_down_view = 'atsi'
                 st.rerun()
-        
-        with c4:
-            if st.button(f"🟠 **SWD**\n{swd_count}", use_container_width=True):
+        with col5:
+            if st.button(f"🟠 **SWD**\n{swd_count}", use_container_width=True, key="metric_swd"):
                 st.session_state.drill_down_view = 'swd'
                 st.rerun()
-        
-        with c5:
-            if st.button(f"🟡 **EALD**\n{eald_count}", use_container_width=True):
+        with col6:
+            if st.button(f"🟡 **EALD**\n{eald_count}", use_container_width=True, key="metric_eald"):
                 st.session_state.drill_down_view = 'eald'
                 st.rerun()
         
-        with c6:
-            if st.button(f"🔄 **REPEATING**\n{repeating_count}", use_container_width=True):
+        st.markdown("### Disability & Cohort Profiles")
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
+        
+        with col1:
+            if st.button(f"🧠 **ASD**\n{asd_count}", use_container_width=True, key="metric_asd"):
+                st.session_state.drill_down_view = 'asd'
+                st.rerun()
+        with col2:
+            if st.button(f"🔀 **MULTI-\nDISABILITY**\n{multi_disability_count}", use_container_width=True, key="metric_multi"):
+                st.session_state.drill_down_view = 'multi_disability'
+                st.rerun()
+        with col3:
+            if st.button(f"🔄 **REPEATING**\n{repeating_count}", use_container_width=True, key="metric_repeating"):
                 st.session_state.drill_down_view = 'repeating'
+                st.rerun()
+        with col4:
+            if st.button(f"📅 **2025\nCOHORT**\n{year_2025_count}", use_container_width=True, key="metric_2025"):
+                st.session_state.drill_down_view = 'cohort_2025'
+                st.rerun()
+        with col5:
+            if st.button(f"📅 **2026\nCOHORT**\n{year_2026_count}", use_container_width=True, key="metric_2026"):
+                st.session_state.drill_down_view = 'cohort_2026'
+                st.rerun()
+        with col6:
+            if st.button(f"🌍 **EARLY\nREFERRALS**\n{early_referral_count}", use_container_width=True, key="metric_early"):
+                st.session_state.drill_down_view = 'early_referrals'
+                st.rerun()
+        
+        st.markdown("### Referral Sources & Patterns")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            if st.button(f"🏛️ **PARTNER\nAREAS**\n{partnership_count}", use_container_width=True, key="metric_partnership"):
+                st.session_state.drill_down_view = 'partnership_breakdown'
+                st.rerun()
+        with col2:
+            if st.button(f"🏫 **REFERRING\nSCHOOLS**\n{school_count}", use_container_width=True, key="metric_schools"):
+                st.session_state.drill_down_view = 'school_breakdown'
+                st.rerun()
+        with col3:
+            atsi_and_swd = len(filtered[(filtered['Flag_ATSI'] == 'Yes') & (filtered['Flag_SWD'] == 'Yes')])
+            if st.button(f"🔗 **ATSI +\nSWD**\n{atsi_and_swd}", use_container_width=True, key="metric_atsi_swd"):
+                st.session_state.drill_down_view = 'atsi_swd_overlap'
+                st.rerun()
+        with col4:
+            eald_and_asd = len(filtered[(filtered['Flag_EALD'] == 'Yes') & (filtered['Flag_ASD'] == 'Yes')])
+            if st.button(f"🔗 **EALD +\nASD**\n{eald_and_asd}", use_container_width=True, key="metric_eald_asd"):
+                st.session_state.drill_down_view = 'eald_asd_overlap'
                 st.rerun()
         
         # ====================================================================
@@ -444,18 +474,17 @@ else:
                 fig_prog.update_xaxes(showgrid=False)
                 fig_prog.update_yaxes(showgrid=False, dtick=5)
                 fig_prog.update_layout(
-                title="Program Distribution",
-                paper_bgcolor='rgba(0,0,0,0)',
-                plot_bgcolor='rgba(0,0,0,0)',
-                font=dict(color='#ffffff'),
-                height=350,
-                showlegend=False,
-                margin=dict(l=0, r=120, t=40, b=0)
-            )
-            st.plotly_chart(fig_prog, use_container_width=True)
+                    title="Program Distribution",
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    font=dict(color='#ffffff'),
+                    height=350,
+                    showlegend=False,
+                    margin=dict(l=0, r=120, t=40, b=0)
+                )
+                st.plotly_chart(fig_prog, use_container_width=True)
         
         with c2:
-            # Allocation status
             alloc_status = safe_allocation_distribution(filtered)
             colors_alloc = ['#00ff00' if x == 'Allocated' else '#ff6b6b' for x in alloc_status.index]
             fig_alloc = go.Figure([go.Bar(
@@ -479,7 +508,7 @@ else:
             st.plotly_chart(fig_alloc, use_container_width=True)
         
         # ====================================================================
-        # SCHOOL EQUITY CONTEXT - SOCIOECONOMIC ANALYSIS
+        # SCHOOL EQUITY CONTEXT
         # ====================================================================
         
         st.markdown("---")
@@ -488,7 +517,6 @@ else:
         school_ses_data = load_school_socioeconomic_data()
         
         if school_ses_data is not None:
-            # Check data freshness
             latest_update = school_ses_data['Last_Updated'].max()
             days_old = (pd.Timestamp.now() - latest_update).days
             
@@ -501,7 +529,6 @@ else:
             
             st.caption(f"**Last Updated**: {latest_update.strftime('%Y-%m-%d')}")
             
-            # Merge school data with CLC referrals
             if 'Referring_School' in filtered.columns:
                 school_analysis = []
                 
@@ -511,14 +538,11 @@ else:
                     
                     school_students = filtered[filtered['Referring_School'] == school_name]
                     total_from_school = len(school_students)
-                    
-                    # Find school in SES data
                     school_info = school_ses_data[school_ses_data['School_Name'] == school_name]
                     
                     if len(school_info) > 0 and total_from_school > 0:
                         school_info = school_info.iloc[0]
                         
-                        # Calculate percentages
                         indigenous_referrals = len(school_students[school_students['Flag_ATSI'] == 'Yes'])
                         swd_referrals = len(school_students[school_students['Flag_SWD'] == 'Yes'])
                         eald_referrals = len(school_students[school_students['Flag_EALD'] == 'Yes'])
@@ -527,7 +551,6 @@ else:
                         swd_pct = int(swd_referrals / total_from_school * 100) if total_from_school > 0 else 0
                         eald_pct = int(eald_referrals / total_from_school * 100) if total_from_school > 0 else 0
                         
-                        # Calculate over-representation
                         indigenous_variance = indigenous_pct - int(school_info['Indigenous_Percent'])
                         eald_variance = eald_pct - int(school_info['EALD_Percent'])
                         
@@ -549,7 +572,6 @@ else:
                 if school_analysis:
                     school_analysis_df = pd.DataFrame(school_analysis).sort_values('Total_Referrals', ascending=False).head(15)
                     
-                    # Visualizations
                     c1, c2 = st.columns(2)
                     
                     with c1:
@@ -593,16 +615,12 @@ else:
                             fig_ind.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff', size=11), height=400, showlegend=False, xaxis_title="% Over-representation", margin=dict(l=180, r=120, t=0, b=0))
                             st.plotly_chart(fig_ind, use_container_width=True)
                     
-                    # School profile table
                     st.markdown("### School Equity Profiles")
                     st.markdown("*School characteristics vs CLC referral patterns (top 15 referring schools)*")
-                    
                     display_cols = ['School', 'Disadvantage', 'Total_Referrals', 'School_Indigenous_%', 'Referred_Indigenous_%', 'Indigenous_Variance', 'School_EALD_%', 'Referred_EALD_%', 'EALD_Variance', 'SWD_%']
                     st.dataframe(school_analysis_df[display_cols], use_container_width=True, hide_index=True)
                     
-                    # Key insights
                     st.markdown("### 🔍 Key Insights")
-                    
                     insight_cols = st.columns(2)
                     
                     with insight_cols[0]:
@@ -617,7 +635,7 @@ else:
                             school = most_disadvantaged.iloc[0]
                             st.write(f"⚠️ **{school['School']}** (SEIFA {int(school['SEIFA_IRSAD'])}): **Very High disadvantage**\n{int(school['Total_Referrals'])} CLC referrals | {int(school['Year12_Completion'])}% Yr12 completion")
         else:
-            st.info("📋 **School Socioeconomic Data Not Loaded**\n\nTo enable school equity analysis:\n1. Download template: `school_socioeconomic_data_TEMPLATE.csv` from outputs\n2. Update with your SA school data (populate all fields)\n3. Save as `school_socioeconomic_data.csv` in data folder in GitHub\n4. Reload dashboard\n\nThis enables analysis of school disadvantage, Indigenous%, EALD% correlations with CLC referrals.")
+            st.info("📋 **School Socioeconomic Data Not Loaded**")
         
         # ====================================================================
         # EQUITY ANALYSIS: SCHOOL REPRESENTATION
@@ -626,7 +644,6 @@ else:
         st.markdown("---")
         st.markdown("## 📊 School Referral Patterns by Equity Group")
         
-        # Top schools by equity groups
         c1, c2, c3 = st.columns(3)
         
         with c1:
@@ -678,33 +695,416 @@ else:
             st.plotly_chart(fig_eald, use_container_width=True)
         
         # ====================================================================
-        # EALD ANALYSIS
+        # COMPREHENSIVE EALD ANALYSIS (7 TABS)
         # ====================================================================
         
         st.markdown("---")
-        st.markdown("## 🌐 EALD Allocation Analysis")
+        st.markdown("## 🌐 COMPREHENSIVE EALD ANALYSIS")
         
-        st.markdown("### EALD Allocation Status by Program")
-        for prog in ['JP', 'PY', 'SY']:
-            prog_data = filtered[filtered['Allocated_Program'] == prog] if 'Allocated_Program' in filtered.columns else pd.DataFrame()
-            if len(prog_data) > 0:
-                eald_allocated = len(prog_data[(prog_data['Flag_EALD'] == 'Yes') & (prog_data['Allocation_Status'] == 'Allocated')]) if 'Flag_EALD' in prog_data.columns and 'Allocation_Status' in prog_data.columns else 0
-                eald_waiting = len(prog_data[(prog_data['Flag_EALD'] == 'Yes') & (prog_data['Allocation_Status'] == 'On Waiting List')]) if 'Flag_EALD' in prog_data.columns and 'Allocation_Status' in prog_data.columns else 0
-                eald_total = safe_flag_count(prog_data, 'Flag_EALD')
+        if 'Flag_EALD' in filtered.columns:
+            
+            eald_students = safe_flag_filter(filtered, 'Flag_EALD')
+            eald_total = len(eald_students)
+            
+            if eald_total > 0:
                 
-                if eald_total > 0:
-                    alloc_rate = int(eald_allocated / eald_total * 100)
-                    st.write(f"**{prog} Program**: {eald_total} EALD students → {eald_allocated} Allocated ({alloc_rate}%) | {eald_waiting} Waiting List")
-
+                eald_pct = (eald_total / len(filtered) * 100) if len(filtered) > 0 else 0
+                
+                st.markdown(f"### EALD Representation: **{eald_pct:.1f}%** ({eald_total}/{len(filtered)} students)")
+                
+                if eald_pct >= 20:
+                    st.warning(f"⚠️ **HIGH EALD REPRESENTATION**: {eald_pct:.1f}% of referrals")
+                elif eald_pct >= 15:
+                    st.info(f"📊 **SIGNIFICANT EALD COHORT**: {eald_pct:.1f}% of referrals")
+                
+                # EALD TABS
+                eald_tabs = st.tabs(["Overview", "By Program", "By School", "Allocation", "Comorbidity", "Trends", "Partnership"])
+                
+                # TAB 1: OVERVIEW
+                with eald_tabs[0]:
+                    st.markdown("### EALD Student Profile")
+                    
+                    col1, col2, col3, col4, col5 = st.columns(5)
+                    
+                    eald_allocated = safe_allocation_status_count(eald_students, 'Allocated')
+                    eald_waiting = safe_allocation_status_count(eald_students, 'On Waiting List')
+                    eald_allocation_rate = (eald_allocated / eald_total * 100) if eald_total > 0 else 0
+                    eald_atsi = safe_flag_count(eald_students, 'Flag_ATSI')
+                    eald_swd = safe_flag_count(eald_students, 'Flag_SWD')
+                    
+                    with col1:
+                        st.metric("Total EALD", eald_total)
+                    with col2:
+                        st.metric("Allocated", eald_allocated, delta=f"{eald_allocation_rate:.0f}%")
+                    with col3:
+                        st.metric("Waiting", eald_waiting)
+                    with col4:
+                        st.metric("Also ATSI", eald_atsi)
+                    with col5:
+                        st.metric("Also SWD", eald_swd)
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        allocation_dist = pd.Series({
+                            'Allocated': eald_allocated,
+                            'Waiting': eald_waiting,
+                            'Other': eald_total - eald_allocated - eald_waiting
+                        })
+                        allocation_dist = allocation_dist[allocation_dist > 0]
+                        
+                        fig_pie = go.Figure(data=[go.Pie(
+                            labels=allocation_dist.index,
+                            values=allocation_dist.values,
+                            marker=dict(colors=['#00ff00', '#ff6b6b', '#ffd93d'])
+                        )])
+                        fig_pie.update_layout(
+                            title='EALD Allocation Status',
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            font=dict(color='#ffffff'),
+                            height=350
+                        )
+                        st.plotly_chart(fig_pie, use_container_width=True)
+                    
+                    with col2:
+                        prog_dist = eald_students['Allocated_Program'].value_counts() if 'Allocated_Program' in eald_students.columns else pd.Series()
+                        
+                        if len(prog_dist) > 0:
+                            fig_prog = go.Figure([go.Bar(
+                                x=prog_dist.index,
+                                y=prog_dist.values,
+                                marker_color=['#00e5ff', '#00ff00', '#ff6b6b'],
+                                text=prog_dist.values,
+                                textposition='outside'
+                            )])
+                            fig_prog.update_layout(
+                                title='EALD by Program',
+                                paper_bgcolor='rgba(0,0,0,0)',
+                                plot_bgcolor='rgba(0,0,0,0)',
+                                font=dict(color='#ffffff'),
+                                height=350,
+                                showlegend=False
+                            )
+                            st.plotly_chart(fig_prog, use_container_width=True)
+                
+                # TAB 2: BY PROGRAM
+                with eald_tabs[1]:
+                    st.markdown("### EALD Analysis by Program")
+                    
+                    program_analysis = []
+                    for prog in ['JP', 'PY', 'SY']:
+                        prog_eald = eald_students[eald_students['Allocated_Program'] == prog] if 'Allocated_Program' in eald_students.columns else pd.DataFrame()
+                        
+                        if len(prog_eald) > 0:
+                            allocated = safe_allocation_status_count(prog_eald, 'Allocated')
+                            waiting = safe_allocation_status_count(prog_eald, 'On Waiting List')
+                            total = len(prog_eald)
+                            alloc_rate = (allocated / total * 100) if total > 0 else 0
+                            
+                            atsi = safe_flag_count(prog_eald, 'Flag_ATSI')
+                            swd = safe_flag_count(prog_eald, 'Flag_SWD')
+                            asd = safe_flag_count(prog_eald, 'Flag_ASD')
+                            adhd = safe_flag_count(prog_eald, 'Flag_ADHD')
+                            
+                            program_analysis.append({
+                                'Program': prog,
+                                'Total': total,
+                                'Allocated': allocated,
+                                'Waiting': waiting,
+                                'Allocation %': f"{alloc_rate:.0f}%",
+                                'Also ATSI': atsi,
+                                'Also SWD': swd,
+                                'Also ASD': asd,
+                                'Also ADHD': adhd
+                            })
+                    
+                    if program_analysis:
+                        prog_df = pd.DataFrame(program_analysis)
+                        st.dataframe(prog_df, use_container_width=True, hide_index=True)
+                        
+                        fig = go.Figure()
+                        prog_df_numeric = prog_df.copy()
+                        prog_df_numeric['Allocated'] = pd.to_numeric(prog_df_numeric['Allocated'])
+                        prog_df_numeric['Waiting'] = pd.to_numeric(prog_df_numeric['Waiting'])
+                        
+                        fig.add_trace(go.Bar(x=prog_df_numeric['Program'], y=prog_df_numeric['Allocated'], name='Allocated', marker_color='#00ff00'))
+                        fig.add_trace(go.Bar(x=prog_df_numeric['Program'], y=prog_df_numeric['Waiting'], name='Waiting', marker_color='#ff6b6b'))
+                        
+                        fig.update_layout(
+                            title='EALD: Allocated vs Waiting by Program',
+                            barmode='stack',
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            font=dict(color='#ffffff'),
+                            height=350,
+                            xaxis=dict(showgrid=False),
+                            yaxis=dict(showgrid=False)
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                # TAB 3: BY SCHOOL
+                with eald_tabs[2]:
+                    st.markdown("### Top EALD Referring Schools")
+                    
+                    if 'Referring_School' in eald_students.columns:
+                        school_eald = eald_students['Referring_School'].value_counts().head(12)
+                        
+                        fig = go.Figure([go.Bar(
+                            y=school_eald.index,
+                            x=school_eald.values,
+                            orientation='h',
+                            marker_color='#00e5ff',
+                            text=school_eald.values,
+                            textposition='outside'
+                        )])
+                        fig.update_layout(
+                            title='Schools with Most EALD Referrals',
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            font=dict(color='#ffffff'),
+                            height=400,
+                            margin=dict(l=200, r=80, t=0, b=0),
+                            xaxis=dict(showgrid=False),
+                            yaxis=dict(showgrid=False)
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        st.markdown("### School Breakdown")
+                        school_detail = []
+                        for school in school_eald.index:
+                            school_eald_data = eald_students[eald_students['Referring_School'] == school]
+                            total = len(school_eald_data)
+                            allocated = safe_allocation_status_count(school_eald_data, 'Allocated')
+                            waiting = safe_allocation_status_count(school_eald_data, 'On Waiting List')
+                            alloc_rate = (allocated / total * 100) if total > 0 else 0
+                            
+                            school_detail.append({
+                                'School': school,
+                                'EALD Students': total,
+                                'Allocated': allocated,
+                                'Waiting': waiting,
+                                'Allocation %': f"{alloc_rate:.0f}%"
+                            })
+                        
+                        if school_detail:
+                            detail_df = pd.DataFrame(school_detail)
+                            st.dataframe(detail_df, use_container_width=True, hide_index=True)
+                
+                # TAB 4: ALLOCATION
+                with eald_tabs[3]:
+                    st.markdown("### EALD Allocation Deep-Dive")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.markdown("### Allocation Bottlenecks by Program")
+                        
+                        bottleneck_data = []
+                        for prog in ['JP', 'PY', 'SY']:
+                            prog_eald = eald_students[eald_students['Allocated_Program'] == prog] if 'Allocated_Program' in eald_students.columns else pd.DataFrame()
+                            if len(prog_eald) > 0:
+                                waiting = safe_allocation_status_count(prog_eald, 'On Waiting List')
+                                total = len(prog_eald)
+                                waiting_pct = (waiting / total * 100) if total > 0 else 0
+                                bottleneck_data.append({'Program': prog, 'Waiting %': waiting_pct, 'Waiting Count': waiting})
+                        
+                        if bottleneck_data:
+                            bottleneck_df = pd.DataFrame(bottleneck_data)
+                            fig = go.Figure([go.Bar(
+                                x=bottleneck_df['Program'],
+                                y=bottleneck_df['Waiting %'],
+                                marker_color=['#ff6b6b' if x > 30 else '#ffd93d' if x > 15 else '#00ff00' for x in bottleneck_df['Waiting %']],
+                                text=[f"{int(x)}% ({int(bottleneck_df.loc[idx, 'Waiting Count'])})" for idx, x in enumerate(bottleneck_df['Waiting %'])],
+                                textposition='outside'
+                            )])
+                            fig.update_layout(
+                                title='EALD Waiting List % by Program',
+                                paper_bgcolor='rgba(0,0,0,0)',
+                                plot_bgcolor='rgba(0,0,0,0)',
+                                font=dict(color='#ffffff'),
+                                height=350,
+                                showlegend=False
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                    
+                    with col2:
+                        st.markdown("### EALD Time in System")
+                        
+                        if 'Term' in eald_students.columns:
+                            term_allocation = []
+                            for term in sorted([t for t in eald_students['Term'].unique() if pd.notna(t)]):
+                                term_eald = eald_students[eald_students['Term'] == term]
+                                allocated = safe_allocation_status_count(term_eald, 'Allocated')
+                                total = len(term_eald)
+                                alloc_rate = (allocated / total * 100) if total > 0 else 0
+                                term_allocation.append({'Term': f"T{int(term)}", 'Allocation %': alloc_rate})
+                            
+                            if term_allocation:
+                                term_df = pd.DataFrame(term_allocation)
+                                fig = go.Figure([go.Scatter(
+                                    x=term_df['Term'],
+                                    y=term_df['Allocation %'],
+                                    mode='lines+markers',
+                                    marker=dict(size=12, color='#00e5ff'),
+                                    line=dict(color='#00e5ff', width=3),
+                                    fill='tozeroy'
+                                )])
+                                fig.update_layout(
+                                    title='EALD Allocation Rate by Term',
+                                    paper_bgcolor='rgba(0,0,0,0)',
+                                    plot_bgcolor='rgba(0,0,0,0)',
+                                    font=dict(color='#ffffff'),
+                                    height=350,
+                                    xaxis=dict(showgrid=False),
+                                    yaxis=dict(showgrid=False)
+                                )
+                                st.plotly_chart(fig, use_container_width=True)
+                
+                # TAB 5: COMORBIDITY
+                with eald_tabs[4]:
+                    st.markdown("### EALD Students: Co-occurring Disabilities")
+                    
+                    disability_cols_full = ['Flag_ATSI', 'Flag_ASD', 'Flag_ADHD', 'Flag_SWD', 'Flag_Speech_and_Lang', 'Flag_Intellectual', 'Flag_Learning_Difficulty', 'Flag_Sensory_Processing', 'Flag_ODD', 'Flag_PDA']
+                    
+                    comorbidity_data = {}
+                    for col in disability_cols_full:
+                        if col in eald_students.columns:
+                            count = safe_flag_count(eald_students, col)
+                            pct = (count / eald_total * 100) if eald_total > 0 else 0
+                            disability_name = col.replace('Flag_', '').replace('_', ' ')
+                            comorbidity_data[disability_name] = {'Count': count, 'Percentage': pct}
+                    
+                    if comorbidity_data:
+                        comorbid_df = pd.DataFrame(comorbidity_data).T.sort_values('Percentage', ascending=True)
+                        
+                        fig = go.Figure([go.Bar(
+                            y=comorbid_df.index,
+                            x=comorbid_df['Percentage'],
+                            orientation='h',
+                            marker_color='#ffd93d',
+                            text=[f"{int(comorbid_df.loc[idx, 'Count'])}" for idx in comorbid_df.index],
+                            textposition='outside'
+                        )])
+                        fig.update_layout(
+                            title='Disabilities in EALD Students',
+                            xaxis_title='Percentage of EALD Students (%)',
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            font=dict(color='#ffffff'),
+                            height=400,
+                            margin=dict(l=180, r=80, t=40, b=0),
+                            xaxis=dict(showgrid=False),
+                            yaxis=dict(showgrid=False)
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        st.dataframe(comorbid_df, use_container_width=True)
+                
+                # TAB 6: TRENDS
+                with eald_tabs[5]:
+                    st.markdown("### EALD Trends Over Time")
+                    
+                    if 'Term' in eald_students.columns and 'Referral_Year' in eald_students.columns:
+                        
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.markdown("#### Referrals by Term")
+                            term_counts = eald_students['Term'].value_counts().sort_index()
+                            
+                            fig = go.Figure([go.Bar(
+                                x=[f"T{int(t)}" for t in term_counts.index],
+                                y=term_counts.values,
+                                marker_color='#00e5ff',
+                                text=term_counts.values,
+                                textposition='outside'
+                            )])
+                            fig.update_layout(
+                                paper_bgcolor='rgba(0,0,0,0)',
+                                plot_bgcolor='rgba(0,0,0,0)',
+                                font=dict(color='#ffffff'),
+                                height=350,
+                                showlegend=False
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                        
+                        with col2:
+                            st.markdown("#### Referrals by Year")
+                            year_counts = eald_students['Referral_Year'].value_counts().sort_index()
+                            
+                            fig = go.Figure([go.Bar(
+                                x=[f"{int(y)}" for y in year_counts.index],
+                                y=year_counts.values,
+                                marker_color='#00ff00',
+                                text=year_counts.values,
+                                textposition='outside'
+                            )])
+                            fig.update_layout(
+                                paper_bgcolor='rgba(0,0,0,0)',
+                                plot_bgcolor='rgba(0,0,0,0)',
+                                font=dict(color='#ffffff'),
+                                height=350,
+                                showlegend=False
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                
+                # TAB 7: PARTNERSHIP
+                with eald_tabs[6]:
+                    st.markdown("### EALD by Partnership Area")
+                    
+                    if 'Partnership_Area' in eald_students.columns:
+                        partnership_eald = eald_students['Partnership_Area'].value_counts()
+                        
+                        fig = go.Figure([go.Bar(
+                            y=partnership_eald.index,
+                            x=partnership_eald.values,
+                            orientation='h',
+                            marker_color='#ff6b6b',
+                            text=partnership_eald.values,
+                            textposition='outside'
+                        )])
+                        fig.update_layout(
+                            title='EALD Students by Partnership Area',
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            font=dict(color='#ffffff'),
+                            height=400,
+                            margin=dict(l=150, r=80, t=0, b=0),
+                            xaxis=dict(showgrid=False),
+                            yaxis=dict(showgrid=False)
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        st.markdown("### Partnership Detail")
+                        partnership_detail = []
+                        for area in partnership_eald.index:
+                            area_eald = eald_students[eald_students['Partnership_Area'] == area]
+                            total = len(area_eald)
+                            allocated = safe_allocation_status_count(area_eald, 'Allocated')
+                            waiting = safe_allocation_status_count(area_eald, 'On Waiting List')
+                            alloc_rate = (allocated / total * 100) if total > 0 else 0
+                            
+                            partnership_detail.append({
+                                'Partnership Area': area,
+                                'EALD Students': total,
+                                'Allocated': allocated,
+                                'Waiting': waiting,
+                                'Allocation %': f"{alloc_rate:.0f}%"
+                            })
+                        
+                        if partnership_detail:
+                            detail_df = pd.DataFrame(partnership_detail)
+                            st.dataframe(detail_df, use_container_width=True, hide_index=True)
+        
         # ====================================================================
-        # 🔴 ATSI ENROLLMENT TRENDS BY PROGRAM & TERM
+        # ATSI, SWD, ASD ANALYSIS SECTIONS
         # ====================================================================
-
+        
         st.markdown("---")
         st.markdown("## 🔴 ATSI Enrollment Trends by Program & Term")
-
+        
         def analyze_atsi_trends(df):
-            """Analyze ATSI enrollment trends by term and program"""
             if 'Flag_ATSI' not in df.columns or 'Term' not in df.columns or 'Allocated_Program' not in df.columns:
                 return None
             atsi_data = df[df['Flag_ATSI'] == 'Yes'].copy()
@@ -721,13 +1121,12 @@ else:
                 term_counts = prog_data.groupby('Term').size().sort_index()
                 trend_data[program] = term_counts
             return trend_data, programs, atsi_data
-
+        
         if 'Flag_ATSI' in filtered.columns:
             trend_results = analyze_atsi_trends(filtered)
             if trend_results and filtered[filtered['Flag_ATSI'] == 'Yes'].shape[0] > 0:
                 trend_data, programs, atsi_students = trend_results
                 
-                # LINE CHART
                 fig_atsi = go.Figure()
                 colors = ['#00e5ff', '#00ff00', '#ff6b6b', '#ffd93d']
                 for idx, program in enumerate(programs):
@@ -758,7 +1157,6 @@ else:
                 )
                 st.plotly_chart(fig_atsi, use_container_width=True)
                 
-                # METRICS
                 st.markdown("### 📊 Current Enrollments by Program")
                 cols = st.columns(min(3, len(programs)))
                 for idx, program in enumerate(programs):
@@ -778,7 +1176,6 @@ else:
                             st.metric(f"{program} Program", f"{current_count}", delta=f"{change:+d} ({change_pct:+.0f}%)", delta_color="off")
                             st.caption(f"Term {int(current_term)} | Total: {total_atsi}")
                 
-                # DATA TABLE
                 st.markdown("### 📋 Detailed Breakdown")
                 detail_data = []
                 for program in programs:
@@ -805,16 +1202,11 @@ else:
                         st.warning(f"**Waiting**\n{waiting_atsi}")
                     with col4:
                         st.metric("Allocation %", f"{allocation_rate:.0f}%")
-
-        # ====================================================================
-        # 🟠 SWD ENROLLMENT TRENDS BY PROGRAM & TERM
-        # ====================================================================
-
+        
         st.markdown("---")
         st.markdown("## 🟠 SWD Enrollment Trends by Program & Term")
-
+        
         def analyze_swd_trends(df):
-            """Analyze SWD enrollment trends by term and program"""
             if 'Flag_SWD' not in df.columns or 'Term' not in df.columns or 'Allocated_Program' not in df.columns:
                 return None
             swd_data = df[df['Flag_SWD'] == 'Yes'].copy()
@@ -831,13 +1223,12 @@ else:
                 term_counts = prog_data.groupby('Term').size().sort_index()
                 trend_data[program] = term_counts
             return trend_data, programs, swd_data
-
+        
         if 'Flag_SWD' in filtered.columns:
             trend_results = analyze_swd_trends(filtered)
             if trend_results and filtered[filtered['Flag_SWD'] == 'Yes'].shape[0] > 0:
                 trend_data, programs, swd_students = trend_results
                 
-                # LINE CHART
                 fig_swd = go.Figure()
                 colors = ['#00e5ff', '#00ff00', '#ff6b6b', '#ffd93d']
                 for idx, program in enumerate(programs):
@@ -868,7 +1259,6 @@ else:
                 )
                 st.plotly_chart(fig_swd, use_container_width=True)
                 
-                # METRICS
                 st.markdown("### 📊 Current Enrollments by Program")
                 cols = st.columns(min(3, len(programs)))
                 for idx, program in enumerate(programs):
@@ -888,7 +1278,6 @@ else:
                             st.metric(f"{program} Program", f"{current_count}", delta=f"{change:+d} ({change_pct:+.0f}%)", delta_color="off")
                             st.caption(f"Term {int(current_term)} | Total: {total_swd}")
                 
-                # DATA TABLE
                 st.markdown("### 📋 Detailed Breakdown")
                 detail_data = []
                 for program in programs:
@@ -915,14 +1304,10 @@ else:
                         st.warning(f"**Waiting**\n{waiting_swd}")
                     with col4:
                         st.metric("Allocation %", f"{allocation_rate:.0f}%")
-
-        # ====================================================================
-        # 🧠 ASD OVERREPRESENTATION - DEEP ANALYSIS
-        # ====================================================================
-
+        
         st.markdown("---")
         st.markdown("## 🧠 ASD Overrepresentation Analysis")
-
+        
         if 'Flag_ASD' in filtered.columns:
             total_students = len(filtered)
             asd_count = len(filtered[filtered['Flag_ASD'] == 'Yes'])
@@ -930,7 +1315,6 @@ else:
             
             st.markdown(f"### Overall ASD Representation: **{asd_percentage:.1f}%** ({asd_count}/{total_students} students)")
             
-            # LARGE HEADLINE IF ASD > 90%
             if asd_percentage >= 90:
                 st.error(f"⚠️ **CRITICAL OVERREPRESENTATION**: {asd_percentage:.1f}% of all CLC referrals are identified with ASD")
             elif asd_percentage >= 80:
@@ -938,13 +1322,10 @@ else:
             else:
                 st.info(f"📊 ASD Representation: {asd_percentage:.1f}%")
             
-            # ASD vs ALL OTHER DIAGNOSES
             st.markdown("### ASD vs All Other Students")
-            
             col1, col2 = st.columns(2)
             
             with col1:
-                # Pie chart: ASD vs Non-ASD
                 asd_vs_other = pd.Series({'ASD': asd_count, 'Non-ASD': total_students - asd_count})
                 fig_pie = go.Figure(data=[go.Pie(
                     labels=asd_vs_other.index,
@@ -961,7 +1342,6 @@ else:
                 st.plotly_chart(fig_pie, use_container_width=True)
             
             with col2:
-                # ASD breakdown by program
                 st.markdown("### ASD Distribution by Program")
                 prog_data = []
                 for prog in ['JP', 'PY', 'SY']:
@@ -990,7 +1370,6 @@ else:
                     )
                     st.plotly_chart(fig_prog, use_container_width=True)
             
-            # ASD TRENDS BY TERM
             st.markdown("### ASD Enrollment Trends by Term")
             
             asd_filtered = filtered[filtered['Flag_ASD'] == 'Yes'].copy()
@@ -1028,14 +1407,13 @@ else:
                     )
                     st.plotly_chart(fig_trend, use_container_width=True)
             
-            # ASD WITH OTHER DISABILITIES (COMORBIDITIES)
             st.markdown("### ASD Comorbidity Analysis")
             st.markdown("*Students with ASD who ALSO have other identified disabilities*")
             
-            disability_cols = ['Flag_ADHD', 'Flag_Speech_and_Lang', 'Flag_Intellectual', 'Flag_Learning_Difficulty', 'Flag_Sensory_Processing', 'Flag_ODD', 'Flag_PDA']
+            disability_cols_asd = ['Flag_ADHD', 'Flag_Speech_and_Lang', 'Flag_Intellectual', 'Flag_Learning_Difficulty', 'Flag_Sensory_Processing', 'Flag_ODD', 'Flag_PDA']
             
             asd_with_other = {}
-            for col in disability_cols:
+            for col in disability_cols_asd:
                 if col in asd_filtered.columns:
                     count = len(asd_filtered[asd_filtered[col] == 'Yes'])
                     pct = (count / asd_count * 100) if asd_count > 0 else 0
@@ -1068,7 +1446,6 @@ else:
                 
                 st.dataframe(comorbid_df, use_container_width=True)
             
-            # ASD KEY STATISTICS
             st.markdown("### 📌 ASD Key Statistics")
             
             col1, col2, col3, col4 = st.columns(4)
@@ -1086,7 +1463,6 @@ else:
             with col4:
                 st.metric("Allocation %", f"{asd_allocation_rate:.0f}%")
             
-            # ASD INSIGHTS
             st.markdown("### 🔍 Critical Findings")
             
             col1, col2 = st.columns(2)
@@ -1097,7 +1473,7 @@ else:
             with col2:
                 non_asd_with_multi = len(filtered[(filtered['Flag_ASD'] != 'Yes')])
                 if non_asd_with_multi > 0:
-                    st.warning(f"⚠️ **Only {non_asd_with_multi} non-ASD students** ({100-asd_percentage:.1f}% of referrals)\n\n**Question**: Are other conditions being underidentified or are they less likely to be referred to CLC?")
+                    st.warning(f"⚠️ **Only {non_asd_with_multi} non-ASD students** ({100-asd_percentage:.1f}% of referrals)\n\n**Question**: Are other conditions being underidentified?")
         
         # ====================================================================
         # MULTIPLE DISABILITIES
@@ -1105,27 +1481,22 @@ else:
         
         st.markdown("---")
         st.markdown("## Students with Multiple Disabilities")
-        st.markdown("*Students with 2+ identified disabilities are shown in multiple categories below - these are the SAME students, not duplicates*")
+        st.markdown("*Students with 2+ identified disabilities*")
         
-        disability_cols = ['Flag_ASD', 'Flag_ADHD', 'Flag_Speech_and_Lang', 'Flag_Intellectual', 'Flag_Learning_Difficulty', 'Flag_Sensory_Processing', 'Flag_ODD', 'Flag_PDA']
-        
-        # Count disabilities per student
         filtered_copy = filtered.copy()
         filtered_copy['disability_count'] = 0
         for col in disability_cols:
             if col in filtered_copy.columns:
                 filtered_copy['disability_count'] += (filtered_copy[col] == 'Yes').astype(int)
         
-        # Distribution of students by number of disabilities
         disability_dist = filtered_copy['disability_count'].value_counts().sort_index()
         
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("No Identified Disabilities", int(disability_dist.get(0, 0)))
+        c1.metric("No Disabilities", int(disability_dist.get(0, 0)))
         c2.metric("1 Disability", int(disability_dist.get(1, 0)))
         c3.metric("2 Disabilities", int(disability_dist.get(2, 0)))
         c4.metric("3+ Disabilities", int(disability_dist.get(3, 0)) + int(disability_dist.get(4, 0)) + int(disability_dist.get(5, 0)))
         
-        # Disability breakdown
         st.markdown("### Disability Type Distribution")
         
         disability_counts = {}
@@ -1158,7 +1529,6 @@ else:
         st.markdown("---")
         st.markdown("## 🗺️ Adelaide Partnership Map")
         
-        # Partnership coordinates (Adelaide)
         partnership_coords = {
             'Inner West': (-34.8500, 139.0000),
             'Le Fevre Peninsula': (-34.8200, 138.9500),
@@ -1202,20 +1572,21 @@ else:
     
     else:
         
-        # Back button
         if st.button("← Back to Overview"):
             st.session_state.drill_down_view = None
             st.rerun()
         
         view = st.session_state.drill_down_view
         
-        # Filter data based on drill-down view
         if view == 'total':
             drill_data = filtered
             title = "📍 Total Students"
         elif view == 'allocated':
             drill_data = filtered[filtered['Allocation_Status'] == 'Allocated'] if 'Allocation_Status' in filtered.columns else pd.DataFrame()
             title = "✅ Allocated Students"
+        elif view == 'waiting':
+            drill_data = filtered[filtered['Allocation_Status'] == 'On Waiting List'] if 'Allocation_Status' in filtered.columns else pd.DataFrame()
+            title = "⏳ Waiting List Students"
         elif view == 'atsi':
             drill_data = safe_flag_filter(filtered, 'Flag_ATSI')
             title = "🔴 ATSI Students"
@@ -1225,8 +1596,18 @@ else:
         elif view == 'eald':
             drill_data = safe_flag_filter(filtered, 'Flag_EALD')
             title = "🟡 EALD Students"
+        elif view == 'asd':
+            drill_data = safe_flag_filter(filtered, 'Flag_ASD')
+            title = "🧠 ASD Students"
+        elif view == 'multi_disability':
+            filtered_copy = filtered.copy()
+            filtered_copy['disability_count'] = 0
+            for col in disability_cols:
+                if col in filtered_copy.columns:
+                    filtered_copy['disability_count'] += (filtered_copy[col] == 'Yes').astype(int)
+            drill_data = filtered_copy[filtered_copy['disability_count'] >= 2]
+            title = "🔀 Multi-Disability Students"
         elif view == 'repeating':
-            # Find repeating students
             student_col = None
             for col in ['Student_Name', 'student_name', 'Student', 'Name', 'Full_Name']:
                 if col in filtered.columns:
@@ -1241,34 +1622,56 @@ else:
                 drill_data = filtered
             
             title = "🔄 Repeating Students"
+        elif view == 'cohort_2025':
+            drill_data = filtered[filtered['Referral_Year'] == 2025.0] if 'Referral_Year' in filtered.columns else pd.DataFrame()
+            title = "📅 2025 Cohort"
+        elif view == 'cohort_2026':
+            drill_data = filtered[filtered['Referral_Year'] == 2026.0] if 'Referral_Year' in filtered.columns else pd.DataFrame()
+            title = "📅 2026 Cohort"
+        elif view == 'early_referrals':
+            drill_data = filtered[filtered['Term'] == 1.0] if 'Term' in filtered.columns else pd.DataFrame()
+            title = "🌍 Early Referrals (Term 1)"
+        elif view == 'partnership_breakdown':
+            drill_data = filtered
+            title = "🏛️ Partnership Areas"
+        elif view == 'school_breakdown':
+            drill_data = filtered
+            title = "🏫 Referring Schools"
+        elif view == 'atsi_swd_overlap':
+            drill_data = filtered[(filtered['Flag_ATSI'] == 'Yes') & (filtered['Flag_SWD'] == 'Yes')]
+            title = "🔗 ATSI + SWD (Both)"
+        elif view == 'eald_asd_overlap':
+            drill_data = filtered[(filtered['Flag_EALD'] == 'Yes') & (filtered['Flag_ASD'] == 'Yes')]
+            title = "🔗 EALD + ASD (Both)"
+        else:
+            drill_data = filtered
+            title = "Drill-Down View"
         
         st.markdown(f"# {title}")
         st.markdown(f"*{len(drill_data)} students*")
         
-        # Tabs for drill-down
         tabs = st.tabs(["Overview", "By Program", "By Partnership", "By School", "Disability Profile", "Trends"])
         
-        with tabs[0]:  # Overview
+        with tabs[0]:
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Total", len(drill_data))
             c2.metric("ATSI", safe_flag_count(drill_data, 'Flag_ATSI'))
             c3.metric("SWD", safe_flag_count(drill_data, 'Flag_SWD'))
             c4.metric("EALD", safe_flag_count(drill_data, 'Flag_EALD'))
             
-            # Program distribution
             prog_dist = safe_program_distribution(drill_data)
             fig = go.Figure([go.Pie(labels=prog_dist.index, values=prog_dist.values)])
             fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'))
             st.plotly_chart(fig, use_container_width=True)
         
-        with tabs[1]:  # By Program
+        with tabs[1]:
             for prog in ['JP', 'PY', 'SY']:
                 prog_data = drill_data[drill_data['Allocated_Program'] == prog] if 'Allocated_Program' in drill_data.columns else pd.DataFrame()
                 if len(prog_data) > 0:
                     st.markdown(f"### {prog} Program ({len(prog_data)} students)")
                     st.write(f"**ATSI**: {safe_flag_count(prog_data, 'Flag_ATSI')} | **SWD**: {safe_flag_count(prog_data, 'Flag_SWD')} | **EALD**: {safe_flag_count(prog_data, 'Flag_EALD')}")
         
-        with tabs[2]:  # By Partnership
+        with tabs[2]:
             partnership_dist = drill_data['Partnership_Area'].value_counts().head(12)
             fig = go.Figure([go.Bar(
                 y=partnership_dist.index,
@@ -1279,7 +1682,7 @@ else:
             fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, margin=dict(l=200, r=80, t=0, b=0))
             st.plotly_chart(fig, use_container_width=True)
         
-        with tabs[3]:  # By School
+        with tabs[3]:
             school_dist = drill_data['Referring_School'].value_counts().head(12)
             fig = go.Figure([go.Bar(
                 y=school_dist.index,
@@ -1290,13 +1693,13 @@ else:
             fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400, margin=dict(l=200, r=80, t=0, b=0))
             st.plotly_chart(fig, use_container_width=True)
         
-        with tabs[4]:  # Disability Profile
-            st.markdown("### Disability Distribution in this Cohort")
-            disability_cols = ['Flag_ASD', 'Flag_ADHD', 'Flag_Speech_and_Lang', 'Flag_Intellectual', 'Flag_Learning_Difficulty', 'Flag_Sensory_Processing', 'Flag_ODD', 'Flag_PDA']
+        with tabs[4]:
+            st.markdown("### Disability Distribution")
+            disability_cols_drill = ['Flag_ASD', 'Flag_ADHD', 'Flag_Speech_and_Lang', 'Flag_Intellectual', 'Flag_Learning_Difficulty', 'Flag_Sensory_Processing', 'Flag_ODD', 'Flag_PDA']
             disability_counts = {}
-            for col in disability_cols:
+            for col in disability_cols_drill:
                 if col in drill_data.columns:
-                    count = len(drill_data[drill_data[col] == 'Yes'])
+                    count = safe_flag_count(drill_data, col)
                     disability_name = col.replace('Flag_', '').replace('_', ' ')
                     disability_counts[disability_name] = count
             
@@ -1311,8 +1714,8 @@ else:
                 fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=350, margin=dict(l=150, r=80, t=0, b=0))
                 st.plotly_chart(fig, use_container_width=True)
         
-        with tabs[5]:  # Trends
-            st.markdown("### Allocation Trends by Term")
+        with tabs[5]:
+            st.markdown("### Trends by Term")
             valid_terms = sorted([t for t in drill_data['Term'].unique() if pd.notna(t)])
             
             if len(valid_terms) > 1:
