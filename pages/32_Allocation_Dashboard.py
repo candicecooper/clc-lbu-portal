@@ -173,19 +173,37 @@ def clear_data_file():
 
 def load_school_socioeconomic_data():
     """Load school socioeconomic data from CSV"""
-    try:
-        # Try outputs folder first (user-maintained data)
-        school_data = pd.read_csv('/mnt/user-data/outputs/school_socioeconomic_data.csv')
-    except:
+    import os
+    
+    # Try multiple locations in order of preference
+    possible_paths = [
+        # GitHub data folder (production on Render)
+        os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'school_socioeconomic_data.csv'),
+        # Relative path from app root
+        'data/school_socioeconomic_data.csv',
+        # Absolute paths for local development
+        '/mnt/user-data/outputs/school_socioeconomic_data.csv',
+        '/mnt/user-data/uploads/school_socioeconomic_data.csv',
+    ]
+    
+    school_data = None
+    for path in possible_paths:
         try:
-            # Try uploads folder
-            school_data = pd.read_csv('/mnt/user-data/uploads/school_socioeconomic_data.csv')
-        except:
-            return None
+            if os.path.exists(path):
+                school_data = pd.read_csv(path)
+                break
+        except Exception as e:
+            continue
+    
+    if school_data is None:
+        return None
     
     # Convert Last_Updated to datetime
     if 'Last_Updated' in school_data.columns:
-        school_data['Last_Updated'] = pd.to_datetime(school_data['Last_Updated'], errors='coerce')
+        try:
+            school_data['Last_Updated'] = pd.to_datetime(school_data['Last_Updated'], errors='coerce')
+        except:
+            pass
     
     return school_data
 
