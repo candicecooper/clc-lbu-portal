@@ -1,6 +1,8 @@
 """
-CLC-LBU ALLOCATION DASHBOARD - THEME VIA CONFIG.TOML ONLY
-No theme parameter in set_page_config (all theming via .streamlit/config.toml)
+CLC-LBU ALLOCATION DASHBOARD - FINAL VERSION
+- No theme parameter (uses config.toml)
+- Dark theme CSS fallback in Python
+- Fixed float/int conversion
 """
 
 import streamlit as st
@@ -10,7 +12,7 @@ import os
 import random
 
 # ============================================================================
-# PAGE CONFIG - NO THEME PARAMETER
+# PAGE CONFIG
 # ============================================================================
 
 st.set_page_config(
@@ -18,8 +20,109 @@ st.set_page_config(
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
-    # NOTE: theme parameter removed - using .streamlit/config.toml instead
 )
+
+# ============================================================================
+# DARK THEME CSS (BACKUP - in case config.toml doesn't load)
+# ============================================================================
+
+st.markdown("""
+<style>
+    /* Main background */
+    html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+        background-color: #0a0e27 !important;
+        color: #ffffff !important;
+    }
+    
+    /* Sidebar */
+    [data-testid="stSidebar"] {
+        background-color: #0a0e27 !important;
+        border-right: 3px solid #1A7A7A !important;
+    }
+    
+    /* Headers */
+    h1, h2, h3, h4, h5, h6 {
+        color: #00e5ff !important;
+        font-weight: bold !important;
+    }
+    
+    /* Buttons */
+    .stButton > button {
+        background-color: #1A7A7A !important;
+        color: #ffffff !important;
+        border: 2px solid #00e5ff !important;
+        font-weight: bold !important;
+    }
+    
+    .stButton > button:hover {
+        background-color: #00e5ff !important;
+        color: #0a0e27 !important;
+    }
+    
+    /* Selectbox & Input */
+    .stSelectbox [data-testid="stSelectboxContainer"] {
+        background-color: #1a1a3e !important;
+    }
+    
+    .stSelectbox > div > div {
+        background-color: #1a1a3e !important;
+        color: #ffffff !important;
+        border: 1px solid #1A7A7A !important;
+    }
+    
+    /* File uploader */
+    [data-testid="stFileUploadDropzone"] {
+        background-color: rgba(26, 122, 122, 0.2) !important;
+        border: 2px dashed #1A7A7A !important;
+    }
+    
+    /* Metrics */
+    [data-testid="metric-container"] {
+        background-color: rgba(26, 122, 122, 0.15) !important;
+        border-left: 4px solid #1A7A7A !important;
+        border-radius: 8px !important;
+        padding: 10px !important;
+    }
+    
+    /* Tabs */
+    [data-testid="stTabs"] [role="tablist"] {
+        background-color: #0a0e27 !important;
+        border-bottom: 2px solid #1A7A7A !important;
+    }
+    
+    [data-testid="stTabs"] [role="tab"] {
+        background-color: rgba(26, 122, 122, 0.3) !important;
+        color: #ffffff !important;
+    }
+    
+    [data-testid="stTabs"] [role="tab"][aria-selected="true"] {
+        background-color: #1A7A7A !important;
+        color: #00e5ff !important;
+        border-bottom: 3px solid #00e5ff !important;
+    }
+    
+    /* Tables */
+    [data-testid="stDataFrame"] {
+        background-color: #0a0e27 !important;
+    }
+    
+    /* Info/Warning boxes */
+    .stInfo, .stWarning, .stSuccess {
+        background-color: rgba(26, 122, 122, 0.2) !important;
+        border-left: 4px solid #1A7A7A !important;
+    }
+    
+    /* Text */
+    p, span, label {
+        color: #ffffff !important;
+    }
+    
+    /* Divider */
+    hr {
+        border-color: #1A7A7A !important;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # ============================================================================
 # COLORS
@@ -61,7 +164,13 @@ def load_data():
              '/mnt/user-data/outputs/CLC_Allocation_Dashboard_2026_CLEANED.xlsx']
     for path in paths:
         if os.path.exists(path):
-            return pd.read_excel(path)
+            df = pd.read_excel(path)
+            # Convert Term and Referral_Year to int (handle floats like 2.0)
+            if 'Term' in df.columns:
+                df['Term'] = df['Term'].astype(float).astype(int)
+            if 'Referral_Year' in df.columns:
+                df['Referral_Year'] = df['Referral_Year'].astype(float).astype(int)
+            return df
     return None
 
 def create_sample():
@@ -71,7 +180,7 @@ def create_sample():
     programs = ['JP', 'PY', 'SY']
     statuses = ['Allocated', 'On Waiting List', 'Current']
     
-    return pd.DataFrame({
+    df = pd.DataFrame({
         'Student_Name': [random.choice(students) for _ in range(80)],
         'Referring_School': [random.choice(schools) for _ in range(80)],
         'Allocated_Program': [random.choice(programs) for _ in range(80)],
@@ -83,9 +192,14 @@ def create_sample():
         'Referral_Year': [random.choice([2025, 2026]) for _ in range(80)],
         'Term': [random.choice([1, 2, 3, 4]) for _ in range(80)],
     })
+    
+    # Ensure types are correct
+    df['Term'] = df['Term'].astype(int)
+    df['Referral_Year'] = df['Referral_Year'].astype(int)
+    return df
 
 # ============================================================================
-# FILTERS
+# FILTERS - FIXED INT CONVERSION
 # ============================================================================
 
 def apply_filters(df, filters):
@@ -94,12 +208,24 @@ def apply_filters(df, filters):
     
     filtered = df.copy()
     
+    # FIX: Handle float to int conversion properly
     if filters['term'] != 'All':
-        filtered = filtered[filtered['Term'] == int(filters['term'])]
+        try:
+            term_val = int(float(filters['term']))
+            filtered = filtered[filtered['Term'] == term_val]
+        except (ValueError, TypeError):
+            pass
+    
     if filters['year'] != 'All':
-        filtered = filtered[filtered['Referral_Year'] == int(filters['year'])]
+        try:
+            year_val = int(float(filters['year']))
+            filtered = filtered[filtered['Referral_Year'] == year_val]
+        except (ValueError, TypeError):
+            pass
+    
     if filters['program'] != 'All':
         filtered = filtered[filtered['Allocated_Program'] == filters['program']]
+    
     if filters['school'] != 'All':
         filtered = filtered[filtered['Referring_School'] == filters['school']]
     
@@ -248,7 +374,13 @@ def page_home(df):
         st.markdown("### 📁 **Data Management**")
         uploaded = st.file_uploader("📤 Upload Excel (.xlsx)", type=['xlsx', 'xls'])
         if uploaded:
-            st.session_state['df'] = pd.read_excel(uploaded)
+            df_new = pd.read_excel(uploaded)
+            # Convert numeric columns
+            if 'Term' in df_new.columns:
+                df_new['Term'] = df_new['Term'].astype(float).astype(int)
+            if 'Referral_Year' in df_new.columns:
+                df_new['Referral_Year'] = df_new['Referral_Year'].astype(float).astype(int)
+            st.session_state['df'] = df_new
             st.session_state['data_loaded'] = True
             st.success(f"✅ Loaded: {uploaded.name}")
     
@@ -276,19 +408,23 @@ def page_home(df):
     cols = st.columns(6)
     
     with cols[0]:
-        term = st.selectbox("📅 Term", ['All'] + list(map(str, sorted(df['Term'].unique()))))
+        terms = sorted([str(int(t)) for t in df['Term'].unique()])
+        term = st.selectbox("📅 Term", ['All'] + terms)
         st.session_state['filters']['term'] = term
     
     with cols[1]:
-        year = st.selectbox("📆 Year", ['All'] + list(map(str, sorted(df['Referral_Year'].unique()))))
+        years = sorted([str(int(y)) for y in df['Referral_Year'].unique()])
+        year = st.selectbox("📆 Year", ['All'] + years)
         st.session_state['filters']['year'] = year
     
     with cols[2]:
-        prog = st.selectbox("🎓 Program", ['All'] + list(df['Allocated_Program'].unique()))
+        progs = sorted(df['Allocated_Program'].unique())
+        prog = st.selectbox("🎓 Program", ['All'] + list(progs))
         st.session_state['filters']['program'] = prog
     
     with cols[3]:
-        school = st.selectbox("🏫 School", ['All'] + list(df['Referring_School'].unique()))
+        schools = sorted(df['Referring_School'].unique())
+        school = st.selectbox("🏫 School", ['All'] + list(schools))
         st.session_state['filters']['school'] = school
     
     with cols[4]:
