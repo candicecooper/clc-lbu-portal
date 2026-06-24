@@ -1,6 +1,6 @@
 """
-CLC-LBU ALLOCATION DASHBOARD - DARK THEME FIXED
-Complete working dark background theme
+CLC-LBU ALLOCATION DASHBOARD - CONFIG.TOML ONLY
+Dark theme via config.toml (no theme parameter)
 """
 
 import streamlit as st
@@ -11,273 +11,15 @@ import os
 import numpy as np
 
 # ============================================================================
-# PAGE CONFIGURATION WITH DARK THEME
+# PAGE CONFIGURATION (WITHOUT theme parameter)
 # ============================================================================
 
 st.set_page_config(
     page_title="📊 CLC-LBU Allocation Dashboard",
     page_icon="📊",
     layout="wide",
-    initial_sidebar_state="expanded",
-    theme={
-        "primaryColor": "#00e5ff",      # Cyan
-        "backgroundColor": "#0a0e27",   # Dark navy
-        "secondaryBackgroundColor": "#1a1a3e",  # Slightly lighter
-        "textColor": "#ffffff",         # White
-        "font": "sans serif"
-    }
+    initial_sidebar_state="expanded"
 )
-
-# ============================================================================
-# AGGRESSIVE DARK THEME CSS (WORKS!)
-# ============================================================================
-
-st.markdown("""
-<style>
-    /* Force dark background on entire page */
-    html, body, [data-testid="stAppViewContainer"] {
-        background-color: #0a0e27 !important;
-        color: #ffffff !important;
-    }
-    
-    /* Main content area */
-    [data-testid="stAppViewContainer"] > section {
-        background-color: #0a0e27 !important;
-    }
-    
-    [data-testid="stAppViewContainer"] > section > div {
-        background-color: #0a0e27 !important;
-    }
-    
-    /* Top bar */
-    [data-testid="stDecoration"] {
-        background-color: #0a0e27 !important;
-    }
-    
-    /* Main content container */
-    .main {
-        background-color: #0a0e27 !important;
-        color: #ffffff !important;
-    }
-    
-    /* Sidebar */
-    [data-testid="stSidebar"] {
-        background-color: #0a0e27 !important;
-        border-right: 3px solid #1A7A7A;
-    }
-    
-    [data-testid="stSidebar"] > div {
-        background-color: #0a0e27 !important;
-    }
-    
-    /* Headers - BRIGHT CYAN */
-    h1, h2, h3, h4, h5, h6 {
-        color: #00e5ff !important;
-        font-weight: bold !important;
-    }
-    
-    /* All text */
-    p, label, span, div {
-        color: #ffffff !important;
-    }
-    
-    /* Buttons - TEAL with CYAN hover */
-    .stButton > button {
-        background-color: #1A7A7A !important;
-        color: #ffffff !important;
-        border: 2px solid #00e5ff !important;
-        border-radius: 6px !important;
-        padding: 10px 20px !important;
-        font-weight: bold !important;
-        transition: all 0.3s !important;
-    }
-    
-    .stButton > button:hover {
-        background-color: #00e5ff !important;
-        color: #0a0e27 !important;
-        border-color: #ffffff !important;
-    }
-    
-    /* Metrics with TEAL border */
-    [data-testid="metric-container"] {
-        background-color: rgba(26, 122, 122, 0.15) !important;
-        border-left: 4px solid #1A7A7A !important;
-        border-radius: 8px !important;
-        padding: 15px !important;
-    }
-    
-    /* Metric text */
-    [data-testid="metric-container"] > div {
-        color: #ffffff !important;
-    }
-    
-    /* Input fields */
-    [data-testid="stSelectbox"] {
-        background-color: #1a1a3e !important;
-    }
-    
-    .stSelectbox [data-testid="stBaseButton"] {
-        background-color: #1a1a3e !important;
-        border: 1px solid #1A7A7A !important;
-        color: #ffffff !important;
-    }
-    
-    /* Text input */
-    .stTextInput input {
-        background-color: #1a1a3e !important;
-        color: #ffffff !important;
-        border: 1px solid #1A7A7A !important;
-    }
-    
-    /* File uploader */
-    [data-testid="stFileUploader"] {
-        background-color: #1a1a3e !important;
-        border: 2px dashed #1A7A7A !important;
-    }
-    
-    /* Tabs */
-    [role="tablist"] {
-        border-bottom: 2px solid #1A7A7A !important;
-    }
-    
-    [role="tab"] {
-        color: #ffffff !important;
-    }
-    
-    [role="tab"][aria-selected="true"] {
-        color: #00e5ff !important;
-        border-bottom-color: #00e5ff !important;
-    }
-    
-    [role="tab"][aria-selected="false"]:hover {
-        color: #00e5ff !important;
-    }
-    
-    /* Tables/DataFrames */
-    [data-testid="stDataFrame"] {
-        background-color: #1a1a3e !important;
-        color: #ffffff !important;
-    }
-    
-    .stDataFrame {
-        background-color: #1a1a3e !important;
-    }
-    
-    /* Table text */
-    .dataframe {
-        background-color: #1a1a3e !important;
-        color: #ffffff !important;
-    }
-    
-    th {
-        background-color: #1A7A7A !important;
-        color: #00e5ff !important;
-    }
-    
-    td {
-        color: #ffffff !important;
-    }
-    
-    /* Dividers - TEAL */
-    hr {
-        border-color: #1A7A7A !important;
-        background-color: #1A7A7A !important;
-    }
-    
-    /* Alerts */
-    .stAlert {
-        background-color: rgba(26, 122, 122, 0.1) !important;
-        border-left: 4px solid #1A7A7A !important;
-    }
-    
-    .stAlert > div {
-        color: #ffffff !important;
-    }
-    
-    /* Error alerts */
-    [data-testid="stAlert"] {
-        background-color: rgba(255, 107, 107, 0.15) !important;
-        border-left: 4px solid #ff6b6b !important;
-    }
-    
-    /* Success alerts */
-    .stSuccess {
-        background-color: rgba(0, 255, 0, 0.15) !important;
-        border-left: 4px solid #00ff00 !important;
-    }
-    
-    /* Info alerts */
-    .stInfo {
-        background-color: rgba(0, 229, 255, 0.15) !important;
-        border-left: 4px solid #00e5ff !important;
-    }
-    
-    /* Warning alerts */
-    .stWarning {
-        background-color: rgba(255, 221, 61, 0.15) !important;
-        border-left: 4px solid #ffd93d !important;
-    }
-    
-    /* Expandable sections */
-    [data-testid="stExpander"] {
-        background-color: #1a1a3e !important;
-        border: 1px solid #1A7A7A !important;
-    }
-    
-    /* Column backgrounds */
-    [data-testid="column"] {
-        background-color: transparent !important;
-    }
-    
-    /* Code blocks */
-    code {
-        background-color: #1a1a3e !important;
-        color: #00ff00 !important;
-        padding: 2px 6px !important;
-        border-radius: 3px !important;
-    }
-    
-    pre {
-        background-color: #1a1a3e !important;
-        border: 1px solid #1A7A7A !important;
-        color: #00ff00 !important;
-    }
-    
-    /* Markdown */
-    .markdown-text-container {
-        color: #ffffff !important;
-    }
-    
-    /* Remove white background from any remaining elements */
-    [data-testid="stBaseButton-secondary"] {
-        background-color: #1A7A7A !important;
-        color: #ffffff !important;
-    }
-    
-    /* Session state and interactive elements */
-    label {
-        color: #ffffff !important;
-    }
-    
-    /* Scrollbar styling */
-    ::-webkit-scrollbar {
-        background-color: #0a0e27 !important;
-    }
-    
-    ::-webkit-scrollbar-track {
-        background-color: #1a1a3e !important;
-    }
-    
-    ::-webkit-scrollbar-thumb {
-        background-color: #1A7A7A !important;
-        border-radius: 5px !important;
-    }
-    
-    ::-webkit-scrollbar-thumb:hover {
-        background-color: #00e5ff !important;
-    }
-</style>
-""", unsafe_allow_html=True)
 
 # ============================================================================
 # COLOR PALETTE
@@ -726,14 +468,7 @@ def page_more(df):
         update_filter('current_page', 'home')
         st.rerun()
     st.markdown("---")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("📈 Cohort Tracker"):
-            st.info("Cohort tracking features coming soon!")
-    with col2:
-        if st.button("🧩 Flag Analysis"):
-            st.info("Flag analysis features coming soon!")
+    st.info("📈 Additional analysis pages coming soon!")
 
 # ============================================================================
 # MAIN
