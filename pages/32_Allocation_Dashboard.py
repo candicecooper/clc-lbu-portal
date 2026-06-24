@@ -1,8 +1,9 @@
 """
-CLC-LBU ALLOCATION DASHBOARD - FINAL VERSION
-- No theme parameter (uses config.toml)
-- Dark theme CSS fallback in Python
-- Fixed float/int conversion
+CLC-LBU ALLOCATION DASHBOARD - FULL THEME + NaN FIX
+- Dark background (black)
+- Cyan/teal boxes and accents
+- Enhanced headings with lines
+- Proper NaN handling
 """
 
 import streamlit as st
@@ -23,43 +24,89 @@ st.set_page_config(
 )
 
 # ============================================================================
-# DARK THEME CSS (BACKUP - in case config.toml doesn't load)
+# ENHANCED DARK THEME CSS WITH COLORS
 # ============================================================================
 
 st.markdown("""
 <style>
-    /* Main background */
+    /* MAIN BACKGROUND */
     html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
         background-color: #0a0e27 !important;
         color: #ffffff !important;
     }
     
-    /* Sidebar */
+    /* SIDEBAR */
     [data-testid="stSidebar"] {
         background-color: #0a0e27 !important;
         border-right: 3px solid #1A7A7A !important;
     }
     
-    /* Headers */
-    h1, h2, h3, h4, h5, h6 {
+    /* HEADERS - Enhanced styling */
+    h1 {
+        color: #00e5ff !important;
+        font-weight: bold !important;
+        font-size: 2.5em !important;
+        text-shadow: 0 0 10px rgba(0, 229, 255, 0.3) !important;
+        border-bottom: 3px solid #1A7A7A !important;
+        padding-bottom: 15px !important;
+        margin-bottom: 20px !important;
+    }
+    
+    h2 {
+        color: #00e5ff !important;
+        font-weight: bold !important;
+        font-size: 1.8em !important;
+        border-left: 5px solid #1A7A7A !important;
+        padding-left: 12px !important;
+        margin-top: 20px !important;
+    }
+    
+    h3 {
+        color: #00e5ff !important;
+        font-weight: bold !important;
+        font-size: 1.4em !important;
+        border-left: 4px solid #C8760A !important;
+        padding-left: 10px !important;
+    }
+    
+    h4, h5, h6 {
         color: #00e5ff !important;
         font-weight: bold !important;
     }
     
-    /* Buttons */
+    /* BUTTONS */
     .stButton > button {
-        background-color: #1A7A7A !important;
-        color: #ffffff !important;
+        background: linear-gradient(135deg, #1A7A7A 0%, #00e5ff 100%) !important;
+        color: #0a0e27 !important;
         border: 2px solid #00e5ff !important;
         font-weight: bold !important;
+        border-radius: 8px !important;
+        box-shadow: 0 0 10px rgba(0, 229, 255, 0.3) !important;
     }
     
     .stButton > button:hover {
-        background-color: #00e5ff !important;
+        background: linear-gradient(135deg, #00e5ff 0%, #1A7A7A 100%) !important;
         color: #0a0e27 !important;
+        box-shadow: 0 0 20px rgba(0, 229, 255, 0.6) !important;
     }
     
-    /* Selectbox & Input */
+    /* METRICS - Cyan glow boxes */
+    [data-testid="metric-container"] {
+        background: linear-gradient(135deg, rgba(26, 122, 122, 0.3) 0%, rgba(0, 229, 255, 0.1) 100%) !important;
+        border: 2px solid #1A7A7A !important;
+        border-left: 5px solid #00e5ff !important;
+        border-radius: 12px !important;
+        padding: 15px !important;
+        box-shadow: 0 0 15px rgba(0, 229, 255, 0.2) !important;
+    }
+    
+    [data-testid="metric-container"] > div:first-child {
+        color: #00e5ff !important;
+        font-weight: bold !important;
+        font-size: 1.1em !important;
+    }
+    
+    /* SELECTBOX */
     .stSelectbox [data-testid="stSelectboxContainer"] {
         background-color: #1a1a3e !important;
     }
@@ -67,59 +114,112 @@ st.markdown("""
     .stSelectbox > div > div {
         background-color: #1a1a3e !important;
         color: #ffffff !important;
-        border: 1px solid #1A7A7A !important;
+        border: 2px solid #1A7A7A !important;
+        border-radius: 8px !important;
+        box-shadow: 0 0 8px rgba(0, 229, 255, 0.15) !important;
     }
     
-    /* File uploader */
+    /* FILE UPLOADER */
     [data-testid="stFileUploadDropzone"] {
         background-color: rgba(26, 122, 122, 0.2) !important;
-        border: 2px dashed #1A7A7A !important;
-    }
-    
-    /* Metrics */
-    [data-testid="metric-container"] {
-        background-color: rgba(26, 122, 122, 0.15) !important;
-        border-left: 4px solid #1A7A7A !important;
+        border: 3px dashed #1A7A7A !important;
         border-radius: 8px !important;
-        padding: 10px !important;
     }
     
-    /* Tabs */
+    /* TABS */
     [data-testid="stTabs"] [role="tablist"] {
         background-color: #0a0e27 !important;
-        border-bottom: 2px solid #1A7A7A !important;
+        border-bottom: 3px solid #1A7A7A !important;
     }
     
     [data-testid="stTabs"] [role="tab"] {
-        background-color: rgba(26, 122, 122, 0.3) !important;
+        background-color: rgba(26, 122, 122, 0.2) !important;
         color: #ffffff !important;
+        border-radius: 8px 8px 0 0 !important;
     }
     
     [data-testid="stTabs"] [role="tab"][aria-selected="true"] {
-        background-color: #1A7A7A !important;
-        color: #00e5ff !important;
-        border-bottom: 3px solid #00e5ff !important;
+        background: linear-gradient(135deg, #1A7A7A 0%, #00e5ff 100%) !important;
+        color: #0a0e27 !important;
+        border-bottom: 3px solid #C8760A !important;
+        font-weight: bold !important;
     }
     
-    /* Tables */
+    /* TABLES */
     [data-testid="stDataFrame"] {
         background-color: #0a0e27 !important;
     }
     
-    /* Info/Warning boxes */
-    .stInfo, .stWarning, .stSuccess {
+    [data-testid="stDataFrame"] tbody tr:hover {
         background-color: rgba(26, 122, 122, 0.2) !important;
-        border-left: 4px solid #1A7A7A !important;
     }
     
-    /* Text */
+    /* INFO/WARNING/SUCCESS BOXES */
+    .stInfo {
+        background-color: rgba(26, 122, 122, 0.25) !important;
+        border-left: 5px solid #00e5ff !important;
+        border-radius: 8px !important;
+        box-shadow: 0 0 10px rgba(0, 229, 255, 0.2) !important;
+    }
+    
+    .stWarning {
+        background-color: rgba(200, 118, 10, 0.25) !important;
+        border-left: 5px solid #C8760A !important;
+        border-radius: 8px !important;
+        box-shadow: 0 0 10px rgba(200, 118, 10, 0.2) !important;
+    }
+    
+    .stSuccess {
+        background-color: rgba(0, 255, 0, 0.15) !important;
+        border-left: 5px solid #00ff00 !important;
+        border-radius: 8px !important;
+        box-shadow: 0 0 10px rgba(0, 255, 0, 0.2) !important;
+    }
+    
+    /* TEXT */
     p, span, label {
         color: #ffffff !important;
     }
     
-    /* Divider */
+    /* DIVIDER */
     hr {
-        border-color: #1A7A7A !important;
+        border: 2px solid #1A7A7A !important;
+        margin: 20px 0 !important;
+    }
+    
+    /* MARKDOWN TEXT */
+    .stMarkdown {
+        color: #ffffff !important;
+    }
+    
+    /* EXPANDER */
+    .streamlit-expanderHeader {
+        background-color: rgba(26, 122, 122, 0.2) !important;
+        border: 1px solid #1A7A7A !important;
+        border-radius: 8px !important;
+    }
+    
+    .streamlit-expanderHeader:hover {
+        background-color: rgba(0, 229, 255, 0.1) !important;
+    }
+    
+    /* SCROLLBAR */
+    ::-webkit-scrollbar {
+        width: 12px !important;
+        height: 12px !important;
+    }
+    
+    ::-webkit-scrollbar-track {
+        background: #0a0e27 !important;
+    }
+    
+    ::-webkit-scrollbar-thumb {
+        background: #1A7A7A !important;
+        border-radius: 6px !important;
+    }
+    
+    ::-webkit-scrollbar-thumb:hover {
+        background: #00e5ff !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -135,7 +235,8 @@ COLORS = {
     'red': '#ff6b6b',
     'yellow': '#ffd93d',
     'dark_bg': '#0a0e27',
-    'white': '#ffffff'
+    'white': '#ffffff',
+    'amber': '#C8760A'
 }
 
 # ============================================================================
@@ -156,8 +257,18 @@ def init_session():
 init_session()
 
 # ============================================================================
-# DATA
+# DATA - FIXED NaN HANDLING
 # ============================================================================
+
+def convert_to_safe_int(series):
+    """Convert series to int, handling NaN values"""
+    if series is None or len(series) == 0:
+        return series
+    try:
+        # Fill NaN with -1 or 0, convert to int
+        return series.fillna(0).astype('int64')
+    except:
+        return series
 
 def load_data():
     paths = ['data/CLC_Allocation_Dashboard_2026_CLEANED.xlsx',
@@ -165,11 +276,11 @@ def load_data():
     for path in paths:
         if os.path.exists(path):
             df = pd.read_excel(path)
-            # Convert Term and Referral_Year to int (handle floats like 2.0)
+            # Convert columns safely
             if 'Term' in df.columns:
-                df['Term'] = df['Term'].astype(float).astype(int)
+                df['Term'] = convert_to_safe_int(df['Term'])
             if 'Referral_Year' in df.columns:
-                df['Referral_Year'] = df['Referral_Year'].astype(float).astype(int)
+                df['Referral_Year'] = convert_to_safe_int(df['Referral_Year'])
             return df
     return None
 
@@ -193,13 +304,12 @@ def create_sample():
         'Term': [random.choice([1, 2, 3, 4]) for _ in range(80)],
     })
     
-    # Ensure types are correct
-    df['Term'] = df['Term'].astype(int)
-    df['Referral_Year'] = df['Referral_Year'].astype(int)
+    df['Term'] = df['Term'].astype('int64')
+    df['Referral_Year'] = df['Referral_Year'].astype('int64')
     return df
 
 # ============================================================================
-# FILTERS - FIXED INT CONVERSION
+# FILTERS
 # ============================================================================
 
 def apply_filters(df, filters):
@@ -208,19 +318,18 @@ def apply_filters(df, filters):
     
     filtered = df.copy()
     
-    # FIX: Handle float to int conversion properly
     if filters['term'] != 'All':
         try:
-            term_val = int(float(filters['term']))
+            term_val = int(filters['term'])
             filtered = filtered[filtered['Term'] == term_val]
-        except (ValueError, TypeError):
+        except:
             pass
     
     if filters['year'] != 'All':
         try:
-            year_val = int(float(filters['year']))
+            year_val = int(filters['year'])
             filtered = filtered[filtered['Referral_Year'] == year_val]
-        except (ValueError, TypeError):
+        except:
             pass
     
     if filters['program'] != 'All':
@@ -265,7 +374,7 @@ def chart_funnel(df):
         title='📊 Allocation Funnel',
         paper_bgcolor=COLORS['dark_bg'],
         plot_bgcolor='rgba(0,0,0,0)',
-        font=dict(color=COLORS['white']),
+        font=dict(color=COLORS['white'], size=12),
         height=400
     )
     return fig
@@ -292,7 +401,7 @@ def chart_waiting(df):
             title='📈 Waiting List Trend',
             paper_bgcolor=COLORS['dark_bg'],
             plot_bgcolor='rgba(0,0,0,0)',
-            font=dict(color=COLORS['white']),
+            font=dict(color=COLORS['white'], size=12),
             height=400
         )
         return fig
@@ -325,7 +434,7 @@ def chart_equity(df):
         title='⚖️ Equity Outcomes',
         paper_bgcolor=COLORS['dark_bg'],
         plot_bgcolor='rgba(0,0,0,0)',
-        font=dict(color=COLORS['white']),
+        font=dict(color=COLORS['white'], size=12),
         height=400,
         yaxis=dict(range=[0, 100])
     )
@@ -354,7 +463,7 @@ def chart_program(df):
         barmode='stack',
         paper_bgcolor=COLORS['dark_bg'],
         plot_bgcolor='rgba(0,0,0,0)',
-        font=dict(color=COLORS['white']),
+        font=dict(color=COLORS['white'], size=12),
         height=400
     )
     return fig
@@ -371,26 +480,25 @@ def page_home(df):
     col1, col2, col3 = st.columns([2, 1, 1])
     
     with col1:
-        st.markdown("### 📁 **Data Management**")
+        st.markdown("### 📁 Data Management")
         uploaded = st.file_uploader("📤 Upload Excel (.xlsx)", type=['xlsx', 'xls'])
         if uploaded:
             df_new = pd.read_excel(uploaded)
-            # Convert numeric columns
             if 'Term' in df_new.columns:
-                df_new['Term'] = df_new['Term'].astype(float).astype(int)
+                df_new['Term'] = convert_to_safe_int(df_new['Term'])
             if 'Referral_Year' in df_new.columns:
-                df_new['Referral_Year'] = df_new['Referral_Year'].astype(float).astype(int)
+                df_new['Referral_Year'] = convert_to_safe_int(df_new['Referral_Year'])
             st.session_state['df'] = df_new
             st.session_state['data_loaded'] = True
             st.success(f"✅ Loaded: {uploaded.name}")
     
     with col2:
-        st.markdown("### 📊 **Status**")
+        st.markdown("### 📊 Status")
         if st.session_state['data_loaded'] and st.session_state['df'] is not None:
             st.metric("📋 Records", len(st.session_state['df']))
     
     with col3:
-        st.markdown("### 🔄 **Demo**")
+        st.markdown("### 🔄 Demo")
         if st.button("📥 Load Demo"):
             st.session_state['df'] = create_sample()
             st.session_state['data_loaded'] = True
@@ -404,16 +512,16 @@ def page_home(df):
     
     df = st.session_state['df']
     
-    st.markdown("### 🔽 **Filters**")
+    st.markdown("### 🔽 Filters")
     cols = st.columns(6)
     
     with cols[0]:
-        terms = sorted([str(int(t)) for t in df['Term'].unique()])
+        terms = sorted([str(int(t)) for t in df['Term'].unique() if t > 0])
         term = st.selectbox("📅 Term", ['All'] + terms)
         st.session_state['filters']['term'] = term
     
     with cols[1]:
-        years = sorted([str(int(y)) for y in df['Referral_Year'].unique()])
+        years = sorted([str(int(y)) for y in df['Referral_Year'].unique() if y > 0])
         year = st.selectbox("📆 Year", ['All'] + years)
         st.session_state['filters']['year'] = year
     
@@ -443,7 +551,7 @@ def page_home(df):
     filtered = apply_filters(df, st.session_state['filters'])
     metrics = get_metrics(filtered)
     
-    st.markdown("### 📈 **Metrics**")
+    st.markdown("### 📈 Key Metrics")
     mcols = st.columns(4)
     mcols[0].metric("📋 Referred", metrics['total'])
     mcols[1].metric("✅ Allocated", metrics['allocated'], f"{metrics['rate']:.0f}%")
@@ -451,7 +559,7 @@ def page_home(df):
     mcols[3].metric("🎓 Current", metrics['current'])
     
     st.markdown("---")
-    st.markdown("### 📊 **Charts**")
+    st.markdown("### 📊 Analysis")
     
     ccols = st.columns(2)
     ccols[0].plotly_chart(chart_funnel(filtered), use_container_width=True)
@@ -463,7 +571,7 @@ def page_home(df):
     
     st.markdown("---")
     
-    st.markdown("### 🔍 **Pages**")
+    st.markdown("### 🔍 Pages")
     nav = st.columns(4)
     if nav[0].button("📋 Waiting List"):
         st.session_state['filters']['current_page'] = 'waiting'
@@ -476,7 +584,7 @@ def page_home(df):
         st.rerun()
 
 def page_waiting(df):
-    st.markdown("# 📋 WAITING LIST")
+    st.markdown("# 📋 Waiting List")
     if st.button("⬅️ Back"):
         st.session_state['filters']['current_page'] = 'home'
         st.rerun()
@@ -489,13 +597,13 @@ def page_waiting(df):
     filtered = apply_filters(df, st.session_state['filters'])
     waiting = filtered[filtered['Allocation_Status'] == 'On Waiting List']
     
-    st.markdown(f"### 👥 **{len(waiting)} Students Waiting**")
+    st.markdown(f"### 👥 {len(waiting)} Students Waiting")
     if len(waiting) > 0:
         cols_show = [c for c in ['Student_Name', 'Referring_School', 'Allocated_Program'] if c in waiting.columns]
         st.dataframe(waiting[cols_show], use_container_width=True, hide_index=True)
 
 def page_equity(df):
-    st.markdown("# 👥 EQUITY DEEP-DIVE")
+    st.markdown("# 👥 Equity Deep-Dive")
     if st.button("⬅️ Back"):
         st.session_state['filters']['current_page'] = 'home'
         st.rerun()
@@ -542,7 +650,7 @@ def page_equity(df):
             st.info("No data")
 
 def page_school(df):
-    st.markdown("# 🏫 SCHOOL PERFORMANCE")
+    st.markdown("# 🏫 School Performance")
     if st.button("⬅️ Back"):
         st.session_state['filters']['current_page'] = 'home'
         st.rerun()
@@ -554,7 +662,7 @@ def page_school(df):
     
     filtered = apply_filters(df, st.session_state['filters'])
     
-    st.markdown("### 📊 **Schools**")
+    st.markdown("### 📊 Schools")
     for school in sorted(filtered['Referring_School'].unique()):
         school_data = filtered[filtered['Referring_School'] == school]
         allocated = len(school_data[school_data['Allocation_Status'] == 'Allocated'])
