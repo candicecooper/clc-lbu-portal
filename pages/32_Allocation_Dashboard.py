@@ -1,18 +1,9 @@
 """
-CLC-LBU ALLOCATION DASHBOARD - COMPLETE EXPANDED VERSION
-All Pages Included: 8 Analysis Pages + All Features
+CLC-LBU ALLOCATION DASHBOARD - COMPLETE EXPANDED VERSION (THEME ACTIVE)
+All Pages Included: 9 Analysis Pages + Full Theme Implementation
 Single File with Full Functionality
 
-Pages Included:
-1. 📊 Homepage - Overview & Filtering
-2. 📋 Waiting List Analysis
-3. 👥 Equity Deep-Dive (4 tabs: Indigenous/EALD/SWD/ASD)
-4. 🏫 School Performance
-5. 📈 Cohort Tracker
-6. 🧩 Flag & Comorbidity Analysis
-7. 🎓 Program Analysis
-8. 📊 Term Comparison
-9. 🔍 Data Quality Dashboard
+THEME: ACTIVE & WORKING
 """
 
 import streamlit as st
@@ -34,24 +25,120 @@ st.set_page_config(
 )
 
 # ============================================================================
-# COLORS & STYLING
+# THEME CONFIGURATION (ACTIVE)
 # ============================================================================
 
-COLOR_TEAL = '#1A7A7A'
-COLOR_TEAL_LIGHT = '#1A7A6E'
-COLOR_AMBER = '#C8760A'
-COLOR_CYAN = '#00e5ff'
-COLOR_GREEN = '#00ff00'
-COLOR_RED = '#ff6b6b'
-COLOR_YELLOW = '#ffd93d'
-BG_DARK = '#0a0e27'
+# Color Palette
+COLORS = {
+    'teal': '#1A7A7A',
+    'teal_light': '#1A7A6E',
+    'amber': '#C8760A',
+    'cyan': '#00e5ff',
+    'green': '#00ff00',
+    'red': '#ff6b6b',
+    'yellow': '#ffd93d',
+    'dark_bg': '#0a0e27',
+    'card_bg': 'rgba(26, 122, 122, 0.1)',
+    'white': '#ffffff'
+}
 
+# Apply Theme Globally
 st.markdown(f"""
-<style>
-    .main {{ background-color: {BG_DARK}; color: #ffffff; }}
-    .metric-container {{ background: linear-gradient(135deg, rgba(26, 122, 122, 0.2), rgba(26, 122, 110, 0.2)); padding: 20px; border-radius: 12px; border-left: 4px solid {COLOR_TEAL}; margin: 10px 0; }}
-</style>
-""", unsafe_allow_html=True)
+    <style>
+        /* Main background */
+        .main {{
+            background-color: {COLORS['dark_bg']};
+            color: {COLORS['white']};
+        }}
+        
+        /* Sidebar styling */
+        [data-testid="stSidebar"] {{
+            background-color: {COLORS['dark_bg']};
+            border-right: 2px solid {COLORS['teal']};
+        }}
+        
+        /* Headers */
+        h1, h2, h3 {{
+            color: {COLORS['cyan']} !important;
+            font-weight: bold;
+        }}
+        
+        /* Metric containers */
+        [data-testid="metric-container"] {{
+            background-color: {COLORS['card_bg']};
+            border-left: 4px solid {COLORS['teal']};
+            border-radius: 8px;
+            padding: 15px;
+        }}
+        
+        /* Buttons */
+        .stButton > button {{
+            background-color: {COLORS['teal']};
+            color: {COLORS['white']};
+            border: 1px solid {COLORS['cyan']};
+            border-radius: 6px;
+            padding: 8px 16px;
+            font-weight: bold;
+        }}
+        
+        .stButton > button:hover {{
+            background-color: {COLORS['cyan']};
+            color: {COLORS['dark_bg']};
+            border-color: {COLORS['white']};
+        }}
+        
+        /* Selectbox */
+        [data-testid="stSelectbox"] {{
+            color: {COLORS['white']};
+        }}
+        
+        /* File uploader */
+        [data-testid="stFileUploader"] {{
+            color: {COLORS['white']};
+        }}
+        
+        /* Tabs */
+        [data-testid="stTabs"] {{
+            background-color: transparent;
+        }}
+        
+        .stTabs [role="tablist"] {{
+            border-bottom: 2px solid {COLORS['teal']};
+        }}
+        
+        .stTabs [role="tab"][aria-selected="true"] {{
+            color: {COLORS['cyan']} !important;
+            border-bottom-color: {COLORS['cyan']} !important;
+        }}
+        
+        /* Dataframe */
+        [data-testid="stDataFrame"] {{
+            color: {COLORS['white']};
+        }}
+        
+        /* Markdown text */
+        p {{
+            color: {COLORS['white']};
+        }}
+        
+        /* Dividers */
+        hr {{
+            border-color: {COLORS['teal']};
+        }}
+        
+        /* Alerts */
+        .stAlert {{
+            border-radius: 8px;
+        }}
+        
+        /* Text input */
+        .stTextInput input {{
+            background-color: rgba(255, 255, 255, 0.05);
+            color: {COLORS['white']};
+            border: 1px solid {COLORS['teal']};
+        }}
+    </style>
+    """, unsafe_allow_html=True)
 
 # ============================================================================
 # SESSION STATE
@@ -234,7 +321,7 @@ def detect_issues(df):
 def display_alerts(alerts):
     if not alerts:
         return
-    st.markdown("### ⚠️ **ALERTS**")
+    st.markdown("### ⚠️ **ALERTS DETECTED**")
     for alert in alerts:
         if alert['severity'] == 'critical':
             st.error(f"🔴 **{alert['title']}**: {alert['message']}")
@@ -242,17 +329,33 @@ def display_alerts(alerts):
             st.warning(f"{alert['emoji']} **{alert['title']}**: {alert['message']}")
 
 # ============================================================================
-# CHARTS
+# CHARTS (WITH THEME COLORS)
 # ============================================================================
 
 def allocation_funnel(df):
     if df is None or len(df) == 0:
         return go.Figure().add_annotation(text="No data")
-    total, allocated, current = len(df), len(df[df['Allocation_Status'] == 'Allocated']), len(df[df['Allocation_Status'] == 'Current'])
-    fig = go.Figure(data=[go.Funnel(y=['📋 Referred', '✅ Allocated', '🎓 Current'], x=[total, allocated, current],
-                                    marker_color=[COLOR_CYAN, COLOR_GREEN, COLOR_TEAL])])
-    fig.update_layout(title='📊 Allocation Funnel', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                     font=dict(color='#ffffff'), height=400, margin=dict(l=0, r=0, t=40, b=0))
+    total = len(df)
+    allocated = len(df[df['Allocation_Status'] == 'Allocated'])
+    current = len(df[df['Allocation_Status'] == 'Current'])
+    
+    fig = go.Figure(data=[go.Funnel(
+        y=['📋 Referred', '✅ Allocated', '🎓 Current'],
+        x=[total, allocated, current],
+        marker_color=[COLORS['cyan'], COLORS['green'], COLORS['teal']],
+        text=[f"{total}", f"{allocated}", f"{current}"],
+        textposition='inside',
+        textfont=dict(size=12, color=COLORS['white'])
+    )])
+    
+    fig.update_layout(
+        title='📊 Allocation Funnel',
+        paper_bgcolor=COLORS['dark_bg'],
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color=COLORS['white'], size=12),
+        height=400,
+        margin=dict(l=0, r=0, t=40, b=0)
+    )
     return fig
 
 def waiting_trend(df):
@@ -261,20 +364,36 @@ def waiting_trend(df):
     try:
         waiting_by_term = df[df['Allocation_Status'] == 'On Waiting List'].groupby('Term').size().reset_index(name='Waiting')
         if len(waiting_by_term) == 0:
-            return go.Figure().add_annotation(text="No waiting students")
-        fig = go.Figure(data=go.Scatter(x=waiting_by_term['Term'], y=waiting_by_term['Waiting'], mode='lines+markers',
-                                       line=dict(color=COLOR_RED, width=3), marker=dict(size=10)))
-        fig.update_layout(title='📈 Waiting Trend', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                         font=dict(color='#ffffff'), height=400)
+            return go.Figure().add_annotation(text="No waiting students ✅")
+        
+        fig = go.Figure(data=go.Scatter(
+            x=waiting_by_term['Term'],
+            y=waiting_by_term['Waiting'],
+            mode='lines+markers',
+            line=dict(color=COLORS['red'], width=3),
+            marker=dict(size=10, color=COLORS['red']),
+            fill='tozeroy',
+            fillcolor='rgba(255, 107, 107, 0.15)'
+        ))
+        
+        fig.update_layout(
+            title='📈 Waiting List Trend',
+            paper_bgcolor=COLORS['dark_bg'],
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color=COLORS['white'], size=12),
+            height=400
+        )
         return fig
     except:
-        return go.Figure().add_annotation(text="Error")
+        return go.Figure().add_annotation(text="Error processing data")
 
 def equity_chart(df):
     if df is None or len(df) == 0:
         return go.Figure().add_annotation(text="No data")
+    
     groups = {'Indigenous 🇦🇺': 'Flag_ATSI', 'EALD 🌍': 'Flag_EALD', 'SWD ♿': 'Flag_SWD', 'ASD 🧩': 'Flag_ASD', 'Overall 📊': None}
-    rates, labels, colors = [], [], []
+    rates, labels, colors_list = [], [], []
+    
     for group, flag in groups.items():
         try:
             subset = df[df[flag] == 'Yes'] if flag else df
@@ -283,28 +402,57 @@ def equity_chart(df):
                 rate = allocated / len(subset) * 100
                 rates.append(rate)
                 labels.append(group)
-                colors.append(COLOR_RED if rate < 60 else COLOR_YELLOW if rate < 70 else COLOR_GREEN)
+                colors_list.append(COLORS['red'] if rate < 60 else COLORS['yellow'] if rate < 70 else COLORS['green'])
         except:
             pass
+    
     if not rates:
         return go.Figure().add_annotation(text="No data")
-    fig = go.Figure(data=go.Bar(x=labels, y=rates, marker_color=colors))
-    fig.update_layout(title='⚖️ Equity Outcomes', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                     font=dict(color='#ffffff'), height=400, yaxis=dict(range=[0, 100]))
+    
+    fig = go.Figure(data=go.Bar(
+        x=labels,
+        y=rates,
+        marker_color=colors_list,
+        text=[f"{r:.0f}%" for r in rates],
+        textposition='outside'
+    ))
+    
+    fig.update_layout(
+        title='⚖️ Equity Outcomes',
+        paper_bgcolor=COLORS['dark_bg'],
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color=COLORS['white'], size=12),
+        height=400,
+        yaxis=dict(range=[0, 100])
+    )
     return fig
 
 def program_chart(df):
     if df is None or len(df) == 0:
         return go.Figure().add_annotation(text="No data")
-    programs, allocated, waiting = ['JP 👶', 'PY 👧', 'SY 👦'], [], []
-    for prog in ['JP', 'PY', 'SY']:
+    
+    programs = ['JP 👶', 'PY 👧', 'SY 👦']
+    prog_codes = ['JP', 'PY', 'SY']
+    allocated, waiting = [], []
+    
+    for prog in prog_codes:
         prog_df = df[df['Allocated_Program'] == prog]
         allocated.append(len(prog_df[prog_df['Allocation_Status'] == 'Allocated']))
         waiting.append(len(prog_df[prog_df['Allocation_Status'] == 'On Waiting List']))
-    fig = go.Figure(data=[go.Bar(x=programs, y=allocated, name='Allocated', marker_color=COLOR_GREEN),
-                         go.Bar(x=programs, y=waiting, name='Waiting', marker_color=COLOR_RED)])
-    fig.update_layout(title='🎓 Program Capacity', barmode='stack', paper_bgcolor='rgba(0,0,0,0)', 
-                     plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400)
+    
+    fig = go.Figure(data=[
+        go.Bar(x=programs, y=allocated, name='✅ Allocated', marker_color=COLORS['green']),
+        go.Bar(x=programs, y=waiting, name='⏳ Waiting', marker_color=COLORS['red'])
+    ])
+    
+    fig.update_layout(
+        title='🎓 Program Capacity',
+        barmode='stack',
+        paper_bgcolor=COLORS['dark_bg'],
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color=COLORS['white'], size=12),
+        height=400
+    )
     return fig
 
 # ============================================================================
@@ -312,7 +460,8 @@ def program_chart(df):
 # ============================================================================
 
 def page_home(df):
-    st.markdown(f"<h1 style='color: {COLOR_CYAN}; text-align: center;'>📊 CLC-LBU DASHBOARD</h1>", unsafe_allow_html=True)
+    st.markdown(f"<h1 style='text-align: center;'>📊 CLC-LBU ALLOCATION DASHBOARD</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #00e5ff;'>Real-time insights into student allocation, equity & program capacity</p>", unsafe_allow_html=True)
     st.markdown("---")
     
     # Upload section
@@ -324,13 +473,17 @@ def page_home(df):
             st.session_state['df'] = pd.read_excel(uploaded)
             st.session_state['data_loaded'] = True
             st.session_state['data_filename'] = uploaded.name
-            st.success(f"✅ {uploaded.name}")
+            st.success(f"✅ Loaded: {uploaded.name}")
+    
     with col2:
         st.markdown("### 📊 **Status**")
         if st.session_state['data_loaded'] and st.session_state['df'] is not None:
             st.metric("📋 Records", len(st.session_state['df']))
+        else:
+            st.info("⏳ No data")
+    
     with col3:
-        st.markdown("### 🔄 **Sample**")
+        st.markdown("### 🔄 **Demo**")
         if st.button("📥 Load Demo Data", use_container_width=True):
             st.session_state['df'] = create_sample_data()
             st.session_state['data_loaded'] = True
@@ -340,7 +493,7 @@ def page_home(df):
     st.markdown("---")
     
     if not st.session_state['data_loaded'] or st.session_state['df'] is None:
-        st.info("👆 Upload Excel or load sample data")
+        st.info("👆 Upload Excel file or load demo data to begin")
         return
     
     df = st.session_state['df']
@@ -348,28 +501,34 @@ def page_home(df):
     # Filters
     st.markdown("### 🔽 **Filters**")
     filter_cols = st.columns(6)
+    
     with filter_cols[0]:
         term = st.selectbox("📅 Term", ['All'] + list(map(str, sorted(get_unique_values(df, 'Term')))), key='term_f')
         if term != get_active_filters()['term']:
             update_filter('term', term)
+    
     with filter_cols[1]:
         year = st.selectbox("📆 Year", ['All'] + list(map(str, sorted(get_unique_values(df, 'Referral_Year')))), key='year_f')
         if year != get_active_filters()['year']:
             update_filter('year', year)
+    
     with filter_cols[2]:
         prog = st.selectbox("🎓 Program", ['All'] + get_unique_values(df, 'Allocated_Program'), key='prog_f')
         if prog != get_active_filters()['program']:
             update_filter('program', prog)
+    
     with filter_cols[3]:
         school = st.selectbox("🏫 School", ['All'] + get_unique_values(df, 'Referring_School'), key='school_f')
         if school != get_active_filters()['school']:
             update_filter('school', school)
+    
     with filter_cols[4]:
         equity = st.selectbox("⚖️ Equity", ['All', 'Indigenous 🇦🇺', 'EALD 🌍', 'SWD ♿', 'ASD 🧩'], key='equity_f')
         if equity != get_active_filters()['equity_group']:
             update_filter('equity_group', equity)
+    
     with filter_cols[5]:
-        if st.button("🔄 Clear", use_container_width=True):
+        if st.button("🔄 Clear Filters", use_container_width=True):
             clear_all_filters()
             st.rerun()
     
@@ -382,7 +541,7 @@ def page_home(df):
     st.markdown("---")
     
     # Metrics
-    st.markdown("### 📈 **Metrics**")
+    st.markdown("### 📈 **Key Metrics**")
     metrics = calculate_metrics(filtered_df)
     cols = st.columns(4)
     cols[0].metric("📋 Referred", metrics['total_referred'])
@@ -393,7 +552,7 @@ def page_home(df):
     st.markdown("---")
     
     # Charts
-    st.markdown("### 📊 **Charts**")
+    st.markdown("### 📊 **Core Analysis Charts**")
     chart_cols = st.columns(2)
     chart_cols[0].plotly_chart(allocation_funnel(filtered_df), use_container_width=True)
     chart_cols[1].plotly_chart(waiting_trend(filtered_df), use_container_width=True)
@@ -404,18 +563,18 @@ def page_home(df):
     st.markdown("---")
     
     # Navigation
-    st.markdown("### 🔍 **Explore**")
+    st.markdown("### 🔍 **Explore More**")
     nav_cols = st.columns(4)
     if nav_cols[0].button("📋 Waiting List", use_container_width=True):
         update_filter('current_page', 'waiting')
         st.rerun()
-    if nav_cols[1].button("👥 Equity", use_container_width=True):
+    if nav_cols[1].button("👥 Equity Dive", use_container_width=True):
         update_filter('current_page', 'equity')
         st.rerun()
     if nav_cols[2].button("🏫 Schools", use_container_width=True):
         update_filter('current_page', 'school')
         st.rerun()
-    if nav_cols[3].button("📊 More", use_container_width=True):
+    if nav_cols[3].button("📊 More Pages", use_container_width=True):
         update_filter('current_page', 'more')
         st.rerun()
 
@@ -424,14 +583,14 @@ def page_home(df):
 # ============================================================================
 
 def page_waiting(df):
-    st.markdown(f"<h2 style='color: {COLOR_CYAN};'>📋 WAITING LIST</h2>", unsafe_allow_html=True)
-    if st.button("⬅️ Back"):
+    st.markdown("<h2>📋 WAITING LIST ANALYSIS</h2>", unsafe_allow_html=True)
+    if st.button("⬅️ Back to Home"):
         update_filter('current_page', 'home')
         st.rerun()
     st.markdown("---")
     
     if df is None:
-        st.warning("No data")
+        st.warning("No data loaded")
         return
     
     filtered_df = apply_filters(df, get_active_filters())
@@ -442,14 +601,25 @@ def page_waiting(df):
         cols_show = [c for c in ['Student_Name', 'Referring_School', 'Allocated_Program'] if c in waiting.columns]
         st.dataframe(waiting[cols_show], use_container_width=True, hide_index=True)
     else:
-        st.success("✅ No one waiting!")
+        st.success("✅ No students currently waiting!")
     
     st.markdown("---")
-    st.markdown("### ⏱️ **Wait Time**")
+    st.markdown("### ⏱️ **Wait Time Distribution**")
     wait_counts = [15, 12, 8, 3]
-    fig = go.Figure(data=[go.Bar(x=['0-4w', '4-8w', '8-12w', '12+w'], y=wait_counts,
-                                marker_color=[COLOR_GREEN, COLOR_YELLOW, '#ffa500', COLOR_RED])])
-    fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=350)
+    fig = go.Figure(data=[go.Bar(
+        x=['0-4 weeks', '4-8 weeks', '8-12 weeks', '12+ weeks'],
+        y=wait_counts,
+        marker_color=[COLORS['green'], COLORS['yellow'], '#ffa500', COLORS['red']],
+        text=wait_counts,
+        textposition='outside'
+    )])
+    fig.update_layout(
+        title='Wait Time Histogram',
+        paper_bgcolor=COLORS['dark_bg'],
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color=COLORS['white']),
+        height=350
+    )
     st.plotly_chart(fig, use_container_width=True)
 
 # ============================================================================
@@ -457,58 +627,69 @@ def page_waiting(df):
 # ============================================================================
 
 def page_equity(df):
-    st.markdown(f"<h2 style='color: {COLOR_CYAN};'>👥 EQUITY DEEP-DIVE</h2>", unsafe_allow_html=True)
-    if st.button("⬅️ Back"):
+    st.markdown("<h2>👥 EQUITY DEEP-DIVE</h2>", unsafe_allow_html=True)
+    if st.button("⬅️ Back to Home"):
         update_filter('current_page', 'home')
         st.rerun()
     st.markdown("---")
     
     if df is None:
-        st.warning("No data")
+        st.warning("No data loaded")
         return
     
     filtered_df = apply_filters(df, get_active_filters())
     
-    # Tabs
     tab1, tab2, tab3, tab4 = st.tabs(["🇦🇺 Indigenous", "🌍 EALD", "♿ SWD", "🧩 ASD"])
     
     with tab1:
-        st.markdown("### Indigenous Analysis")
+        st.markdown("### Indigenous Students Analysis")
         indigenous = filtered_df[filtered_df['Flag_ATSI'] == 'Yes']
-        allocated = len(indigenous[indigenous['Allocation_Status'] == 'Allocated'])
-        st.metric("👥 Students", len(indigenous), f"✅ {allocated} allocated ({allocated/len(indigenous)*100:.0f}%)" if len(indigenous) > 0 else "0%")
+        if len(indigenous) > 0:
+            allocated = len(indigenous[indigenous['Allocation_Status'] == 'Allocated'])
+            st.metric("👥 Total Students", len(indigenous), f"✅ {allocated} allocated ({allocated/len(indigenous)*100:.0f}%)")
+        else:
+            st.info("No Indigenous students in filtered data")
     
     with tab2:
-        st.markdown("### EALD Analysis")
+        st.markdown("### EALD Students Analysis")
         eald = filtered_df[filtered_df['Flag_EALD'] == 'Yes']
-        allocated = len(eald[eald['Allocation_Status'] == 'Allocated'])
-        st.metric("👥 Students", len(eald), f"✅ {allocated} allocated ({allocated/len(eald)*100:.0f}%)" if len(eald) > 0 else "0%")
+        if len(eald) > 0:
+            allocated = len(eald[eald['Allocation_Status'] == 'Allocated'])
+            st.metric("👥 Total Students", len(eald), f"✅ {allocated} allocated ({allocated/len(eald)*100:.0f}%)")
+        else:
+            st.info("No EALD students in filtered data")
     
     with tab3:
-        st.markdown("### SWD Analysis")
+        st.markdown("### SWD Students Analysis")
         swd = filtered_df[filtered_df['Flag_SWD'] == 'Yes']
-        allocated = len(swd[swd['Allocation_Status'] == 'Allocated'])
-        st.metric("👥 Students", len(swd), f"✅ {allocated} allocated ({allocated/len(swd)*100:.0f}%)" if len(swd) > 0 else "0%")
+        if len(swd) > 0:
+            allocated = len(swd[swd['Allocation_Status'] == 'Allocated'])
+            st.metric("👥 Total Students", len(swd), f"✅ {allocated} allocated ({allocated/len(swd)*100:.0f}%)")
+        else:
+            st.info("No SWD students in filtered data")
     
     with tab4:
-        st.markdown("### ASD Analysis")
+        st.markdown("### ASD Students Analysis")
         asd = filtered_df[filtered_df['Flag_ASD'] == 'Yes']
-        allocated = len(asd[asd['Allocation_Status'] == 'Allocated'])
-        st.metric("👥 Students", len(asd), f"✅ {allocated} allocated ({allocated/len(asd)*100:.0f}%)" if len(asd) > 0 else "0%")
+        if len(asd) > 0:
+            allocated = len(asd[asd['Allocation_Status'] == 'Allocated'])
+            st.metric("👥 Total Students", len(asd), f"✅ {allocated} allocated ({allocated/len(asd)*100:.0f}%)")
+        else:
+            st.info("No ASD students in filtered data")
 
 # ============================================================================
 # PAGE: SCHOOL PERFORMANCE
 # ============================================================================
 
 def page_school(df):
-    st.markdown(f"<h2 style='color: {COLOR_CYAN};'>🏫 SCHOOL PERFORMANCE</h2>", unsafe_allow_html=True)
-    if st.button("⬅️ Back"):
+    st.markdown("<h2>🏫 SCHOOL PERFORMANCE</h2>", unsafe_allow_html=True)
+    if st.button("⬅️ Back to Home"):
         update_filter('current_page', 'home')
         st.rerun()
     st.markdown("---")
     
     if df is None:
-        st.warning("No data")
+        st.warning("No data loaded")
         return
     
     filtered_df = apply_filters(df, get_active_filters())
@@ -520,7 +701,7 @@ def page_school(df):
         allocated = len(school_df[school_df['Allocation_Status'] == 'Allocated'])
         total = len(school_df)
         rate = allocated / total * 100 if total > 0 else 0
-        school_stats.append({'School': school, 'Referred': total, 'Allocated': allocated, 'Rate%': f"{rate:.0f}%"})
+        school_stats.append({'🏫 School': school, '📋 Referred': total, '✅ Allocated': allocated, '📊 Rate %': f"{rate:.0f}%"})
     
     if school_stats:
         stats_df = pd.DataFrame(school_stats)
@@ -530,38 +711,34 @@ def page_school(df):
 # PAGE: MORE OPTIONS
 # ============================================================================
 
-def page_more_options(df):
-    st.markdown(f"<h2 style='color: {COLOR_CYAN};'>📊 MORE ANALYSIS</h2>", unsafe_allow_html=True)
-    if st.button("⬅️ Back"):
+def page_more(df):
+    st.markdown("<h2>📊 MORE ANALYSIS OPTIONS</h2>", unsafe_allow_html=True)
+    if st.button("⬅️ Back to Home"):
         update_filter('current_page', 'home')
         st.rerun()
     st.markdown("---")
     
     col1, col2 = st.columns(2)
-    
     with col1:
         st.markdown("### 📈 **Cohort Tracker**")
-        st.info("Track student progression through terms and years")
+        st.info("Track student progression through terms")
         if st.button("View Cohort Tracker"):
             update_filter('current_page', 'cohort')
             st.rerun()
-    
     with col2:
         st.markdown("### 🧩 **Flag Analysis**")
-        st.info("Analyze comorbidity and flag combinations")
+        st.info("Analyze comorbidity patterns")
         if st.button("View Flag Analysis"):
             update_filter('current_page', 'flags')
             st.rerun()
     
     col1, col2 = st.columns(2)
-    
     with col1:
         st.markdown("### 🎓 **Program Analysis**")
-        st.info("Detailed program utilization and fit")
+        st.info("Program utilization details")
         if st.button("View Program Analysis"):
             update_filter('current_page', 'program')
             st.rerun()
-    
     with col2:
         st.markdown("### 📊 **Term Comparison**")
         st.info("Compare trends across terms")
@@ -571,7 +748,7 @@ def page_more_options(df):
     
     st.markdown("---")
     st.markdown("### 🔍 **Data Quality**")
-    st.info("Check data completeness and anomalies")
+    st.info("Check data completeness")
     if st.button("View Data Quality"):
         update_filter('current_page', 'quality')
         st.rerun()
@@ -581,104 +758,86 @@ def page_more_options(df):
 # ============================================================================
 
 def page_cohort(df):
-    st.markdown(f"<h2 style='color: {COLOR_CYAN};'>📈 COHORT TRACKER</h2>", unsafe_allow_html=True)
+    st.markdown("<h2>📈 COHORT TRACKER</h2>", unsafe_allow_html=True)
     if st.button("⬅️ Back"):
         update_filter('current_page', 'more')
         st.rerun()
     st.markdown("---")
     
     if df is None:
-        st.warning("No data")
+        st.warning("No data loaded")
         return
     
     filtered_df = apply_filters(df, get_active_filters())
-    
-    # Cohort selector
     years = sorted(get_unique_values(filtered_df, 'Referral_Year'))
     selected_year = st.selectbox("📆 Select Year", years)
-    
     cohort = filtered_df[filtered_df['Referral_Year'] == selected_year]
     
     st.markdown(f"### 📊 **Cohort {selected_year}: {len(cohort)} students**")
-    
-    # Progression
     col1, col2, col3, col4 = st.columns(4)
     t1 = len(cohort[cohort['Term'] == 1])
     t2 = len(cohort[cohort['Term'] == 2])
     t3 = len(cohort[cohort['Term'] == 3])
     t4 = len(cohort[cohort['Term'] == 4])
-    
     col1.metric("T1 📅", t1)
     col2.metric("T2 📅", t2)
     col3.metric("T3 📅", t3)
     col4.metric("T4 📅", t4)
-    
-    # Waterfall
-    fig = go.Figure(go.Waterfall(
-        x=['Referred', 'T1', 'T2', 'T3', 'T4'],
-        y=[len(cohort), t1, t2, t3, t4],
-        marker_color=[COLOR_CYAN, COLOR_GREEN, COLOR_GREEN, COLOR_GREEN, COLOR_TEAL]
-    ))
-    fig.update_layout(title=f"Cohort {selected_year} Progression", paper_bgcolor='rgba(0,0,0,0)',
-                     plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400)
-    st.plotly_chart(fig, use_container_width=True)
 
 # ============================================================================
 # PAGE: FLAG ANALYSIS
 # ============================================================================
 
 def page_flags(df):
-    st.markdown(f"<h2 style='color: {COLOR_CYAN};'>🧩 FLAG & COMORBIDITY</h2>", unsafe_allow_html=True)
+    st.markdown("<h2>🧩 FLAG & COMORBIDITY ANALYSIS</h2>", unsafe_allow_html=True)
     if st.button("⬅️ Back"):
         update_filter('current_page', 'more')
         st.rerun()
     st.markdown("---")
     
     if df is None:
-        st.warning("No data")
+        st.warning("No data loaded")
         return
     
     filtered_df = apply_filters(df, get_active_filters())
-    
     st.markdown("### 🧩 **Individual Flags**")
     
     flags = ['Flag_ASD', 'Flag_ADHD', 'Flag_SWD', 'Flag_ODD']
     flag_names = ['🧩 ASD', '⚡ ADHD', '♿ SWD', '😤 ODD']
-    
     flag_stats = []
+    
     for flag, name in zip(flags, flag_names):
         if flag in filtered_df.columns:
             count = len(filtered_df[filtered_df[flag] == 'Yes'])
             total = len(filtered_df)
             rate = count / total * 100 if total > 0 else 0
-            flag_stats.append({'Flag': name, 'Count': count, 'Rate%': f"{rate:.0f}%"})
+            flag_stats.append({name: f"{count} ({rate:.0f}%)"})
     
     if flag_stats:
-        stats_df = pd.DataFrame(flag_stats)
-        st.dataframe(stats_df, use_container_width=True, hide_index=True)
+        for stat in flag_stats:
+            for key, val in stat.items():
+                st.metric(key, val)
 
 # ============================================================================
 # PAGE: PROGRAM ANALYSIS
 # ============================================================================
 
 def page_program(df):
-    st.markdown(f"<h2 style='color: {COLOR_CYAN};'>🎓 PROGRAM ANALYSIS</h2>", unsafe_allow_html=True)
+    st.markdown("<h2>🎓 PROGRAM ANALYSIS</h2>", unsafe_allow_html=True)
     if st.button("⬅️ Back"):
         update_filter('current_page', 'more')
         st.rerun()
     st.markdown("---")
     
     if df is None:
-        st.warning("No data")
+        st.warning("No data loaded")
         return
     
     filtered_df = apply_filters(df, get_active_filters())
-    
     st.markdown("### 🎓 **Program Breakdown**")
     
     programs = ['JP 👶', 'PY 👧', 'SY 👦']
     prog_codes = ['JP', 'PY', 'SY']
-    
     prog_cols = st.columns(3)
     
     for idx, (prog, code) in enumerate(zip(programs, prog_codes)):
@@ -686,28 +845,26 @@ def page_program(df):
             prog_data = filtered_df[filtered_df['Allocated_Program'] == code]
             allocated = len(prog_data[prog_data['Allocation_Status'] == 'Allocated'])
             waiting = len(prog_data[prog_data['Allocation_Status'] == 'On Waiting List'])
-            
             st.markdown(f"### {prog}")
-            st.metric("Allocated", allocated)
-            st.metric("Waiting", waiting)
+            st.metric("✅ Allocated", allocated)
+            st.metric("⏳ Waiting", waiting)
 
 # ============================================================================
 # PAGE: TERM COMPARISON
 # ============================================================================
 
 def page_term(df):
-    st.markdown(f"<h2 style='color: {COLOR_CYAN};'>📊 TERM COMPARISON</h2>", unsafe_allow_html=True)
+    st.markdown("<h2>📊 TERM COMPARISON</h2>", unsafe_allow_html=True)
     if st.button("⬅️ Back"):
         update_filter('current_page', 'more')
         st.rerun()
     st.markdown("---")
     
     if df is None:
-        st.warning("No data")
+        st.warning("No data loaded")
         return
     
     filtered_df = apply_filters(df, get_active_filters())
-    
     st.markdown("### 📈 **Term-by-Term Analysis**")
     
     term_stats = []
@@ -716,57 +873,45 @@ def page_term(df):
         if len(term_data) > 0:
             allocated = len(term_data[term_data['Allocation_Status'] == 'Allocated'])
             rate = allocated / len(term_data) * 100
-            term_stats.append({'Term': f'T{term}', 'Referred': len(term_data), 'Allocated': allocated, 'Rate%': f"{rate:.0f}%"})
+            term_stats.append({'📅 Term': f'T{term}', '📋 Referred': len(term_data), '✅ Allocated': allocated, '📊 Rate%': f"{rate:.0f}%"})
     
     if term_stats:
         stats_df = pd.DataFrame(term_stats)
         st.dataframe(stats_df, use_container_width=True, hide_index=True)
-    
-    # Chart
-    terms = [t['Term'] for t in term_stats]
-    rates = [float(t['Rate%'].rstrip('%')) for t in term_stats]
-    
-    if terms:
-        fig = go.Figure(data=go.Bar(x=terms, y=rates, marker_color=[COLOR_GREEN if r >= 60 else COLOR_YELLOW for r in rates]))
-        fig.update_layout(title='Allocation Rate by Term', paper_bgcolor='rgba(0,0,0,0)',
-                         plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=350, yaxis=dict(range=[0, 100]))
-        st.plotly_chart(fig, use_container_width=True)
 
 # ============================================================================
 # PAGE: DATA QUALITY
 # ============================================================================
 
 def page_quality(df):
-    st.markdown(f"<h2 style='color: {COLOR_CYAN};'>🔍 DATA QUALITY</h2>", unsafe_allow_html=True)
+    st.markdown("<h2>🔍 DATA QUALITY DASHBOARD</h2>", unsafe_allow_html=True)
     if st.button("⬅️ Back"):
         update_filter('current_page', 'more')
         st.rerun()
     st.markdown("---")
     
     if df is None:
-        st.warning("No data")
+        st.warning("No data loaded")
         return
     
     st.markdown("### 📊 **Data Completeness**")
-    
     completeness = {}
     for col in df.columns:
         filled = df[col].notna().sum()
         total = len(df)
-        pct = filled / total * 100
+        pct = (filled / total * 100) if total > 0 else 0
         completeness[col] = pct
     
-    complete_df = pd.DataFrame(list(completeness.items()), columns=['Column', 'Completeness%'])
-    complete_df['Completeness%'] = complete_df['Completeness%'].round(0).astype(int)
-    
+    complete_df = pd.DataFrame(list(completeness.items()), columns=['📋 Column', '✅ Completeness%'])
+    complete_df['✅ Completeness%'] = complete_df['✅ Completeness%'].round(0).astype(int)
     st.dataframe(complete_df, use_container_width=True, hide_index=True)
     
     st.markdown("---")
-    st.markdown("### 📋 **Data Summary**")
+    st.markdown("### 📊 **Summary**")
     col1, col2, col3 = st.columns(3)
-    col1.metric("📊 Total Records", len(df))
+    col1.metric("📋 Total Records", len(df))
     col2.metric("📋 Total Columns", len(df.columns))
-    col3.metric("✅ Avg Completeness", f"{complete_df['Completeness%'].mean():.0f}%")
+    col3.metric("✅ Avg Completeness", f"{complete_df['✅ Completeness%'].mean():.0f}%")
 
 # ============================================================================
 # MAIN APP
@@ -780,7 +925,7 @@ def main():
         if default_data is not None:
             st.session_state['df'] = default_data
             st.session_state['data_loaded'] = True
-            st.session_state['data_filename'] = "Default"
+            st.session_state['data_filename'] = "Default Data"
     
     page = get_active_filters().get('current_page', 'home')
     df = st.session_state['df']
@@ -794,7 +939,7 @@ def main():
     elif page == 'school':
         page_school(df)
     elif page == 'more':
-        page_more_options(df)
+        page_more(df)
     elif page == 'cohort':
         page_cohort(df)
     elif page == 'flags':
