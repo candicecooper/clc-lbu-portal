@@ -181,10 +181,10 @@ st.markdown("""
         color: #ffffff !important;
     }
     
-    /* DIVIDER */
+    /* DIVIDER - Subtle light border */
     hr {
-        border: 2px solid #1A7A7A !important;
-        margin: 20px 0 !important;
+        border: 1px solid rgba(26, 122, 122, 0.2) !important;
+        margin: 15px 0 !important;
     }
     
     /* MARKDOWN TEXT */
@@ -475,7 +475,6 @@ def chart_program(df):
 def page_home(df):
     st.markdown("# 📊 CLC-LBU ALLOCATION DASHBOARD")
     st.markdown("_Real-time insights into student allocation, equity & program capacity_")
-    st.markdown("---")
     
     col1, col2, col3 = st.columns([2, 1, 1])
     
@@ -504,8 +503,6 @@ def page_home(df):
             st.session_state['data_loaded'] = True
             st.rerun()
     
-    st.markdown("---")
-    
     if not st.session_state['data_loaded'] or st.session_state['df'] is None:
         st.info("👆 Upload Excel or load demo data")
         return
@@ -516,22 +513,22 @@ def page_home(df):
     cols = st.columns(6)
     
     with cols[0]:
-        terms = sorted([str(int(t)) for t in df['Term'].unique() if t > 0])
+        terms = sorted([str(int(t)) for t in df["Term"].unique() if pd.notna(t) and t > 0])
         term = st.selectbox("📅 Term", ['All'] + terms)
         st.session_state['filters']['term'] = term
     
     with cols[1]:
-        years = sorted([str(int(y)) for y in df['Referral_Year'].unique() if y > 0])
+        years = sorted([str(int(y)) for y in df["Referral_Year"].unique() if pd.notna(y) and y > 0])
         year = st.selectbox("📆 Year", ['All'] + years)
         st.session_state['filters']['year'] = year
     
     with cols[2]:
-        progs = sorted(df['Allocated_Program'].unique())
+        progs = sorted([str(p) for p in df['Allocated_Program'].unique() if pd.notna(p)])
         prog = st.selectbox("🎓 Program", ['All'] + list(progs))
         st.session_state['filters']['program'] = prog
     
     with cols[3]:
-        schools = sorted(df['Referring_School'].unique())
+        schools = sorted([str(s) for s in df['Referring_School'].unique() if pd.notna(s)])
         school = st.selectbox("🏫 School", ['All'] + list(schools))
         st.session_state['filters']['school'] = school
     
@@ -546,8 +543,6 @@ def page_home(df):
             }
             st.rerun()
     
-    st.markdown("---")
-    
     filtered = apply_filters(df, st.session_state['filters'])
     metrics = get_metrics(filtered)
     
@@ -558,7 +553,6 @@ def page_home(df):
     mcols[2].metric("⏳ Waiting", metrics['waiting'])
     mcols[3].metric("🎓 Current", metrics['current'])
     
-    st.markdown("---")
     st.markdown("### 📊 Analysis")
     
     ccols = st.columns(2)
@@ -568,8 +562,6 @@ def page_home(df):
     ccols = st.columns(2)
     ccols[0].plotly_chart(chart_equity(filtered), use_container_width=True)
     ccols[1].plotly_chart(chart_program(filtered), use_container_width=True)
-    
-    st.markdown("---")
     
     st.markdown("### 🔍 Pages")
     nav = st.columns(4)
