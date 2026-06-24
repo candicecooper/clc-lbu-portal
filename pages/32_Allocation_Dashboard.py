@@ -591,8 +591,11 @@ def page_waiting(df):
     
     st.markdown(f"### 👥 {len(waiting)} Students Waiting")
     if len(waiting) > 0:
-        cols_show = [c for c in ['Student_Name', 'Referring_School', 'Allocated_Program'] if c in waiting.columns]
+        # Show only de-identified data - NO student names
+        cols_show = [c for c in ['Referring_School', 'Allocated_Program', 'Term', 'Referral_Year'] if c in waiting.columns]
         st.dataframe(waiting[cols_show], use_container_width=True, hide_index=True)
+    else:
+        st.success("✅ No students waiting")
 
 def page_equity(df):
     st.markdown("# 👥 Equity Deep-Dive")
