@@ -1,6 +1,6 @@
 """
-CLC-LBU ALLOCATION DASHBOARD - FINAL WORKING VERSION
-Uses config.toml + streamlit>=1.35.0 theme parameter
+CLC-LBU ALLOCATION DASHBOARD - THEME VIA CONFIG.TOML ONLY
+No theme parameter in set_page_config (all theming via .streamlit/config.toml)
 """
 
 import streamlit as st
@@ -10,21 +10,15 @@ import os
 import random
 
 # ============================================================================
-# PAGE CONFIG WITH THEME (streamlit 1.35.0+ supports this)
+# PAGE CONFIG - NO THEME PARAMETER
 # ============================================================================
 
 st.set_page_config(
     page_title="📊 CLC-LBU Allocation Dashboard",
     page_icon="📊",
     layout="wide",
-    initial_sidebar_state="expanded",
-    theme={
-        "primaryColor": "#00e5ff",
-        "backgroundColor": "#0a0e27",
-        "secondaryBackgroundColor": "#1a1a3e",
-        "textColor": "#ffffff",
-        "font": "sans serif"
-    }
+    initial_sidebar_state="expanded"
+    # NOTE: theme parameter removed - using .streamlit/config.toml instead
 )
 
 # ============================================================================
@@ -150,6 +144,35 @@ def chart_funnel(df):
     )
     return fig
 
+def chart_waiting(df):
+    if df is None or len(df) == 0:
+        return go.Figure()
+    
+    try:
+        waiting_by_term = df[df['Allocation_Status'] == 'On Waiting List'].groupby('Term').size().reset_index(name='Waiting')
+        
+        if len(waiting_by_term) == 0:
+            return go.Figure()
+        
+        fig = go.Figure(data=go.Scatter(
+            x=waiting_by_term['Term'],
+            y=waiting_by_term['Waiting'],
+            mode='lines+markers',
+            line=dict(color=COLORS['red'], width=3),
+            marker=dict(size=10, color=COLORS['red'])
+        ))
+        
+        fig.update_layout(
+            title='📈 Waiting List Trend',
+            paper_bgcolor=COLORS['dark_bg'],
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color=COLORS['white']),
+            height=400
+        )
+        return fig
+    except:
+        return go.Figure()
+
 def chart_equity(df):
     if df is None or len(df) == 0:
         return go.Figure()
@@ -166,7 +189,10 @@ def chart_equity(df):
             rate = allocated / len(subset) * 100
             rates.append(rate)
             labels.append(name)
-            colors.append(COLORS['green'] if rate >= 70 else COLORS['red'])
+            colors.append(COLORS['green'] if rate >= 70 else COLORS['yellow'] if rate >= 60 else COLORS['red'])
+    
+    if not rates:
+        return go.Figure()
     
     fig = go.Figure(data=go.Bar(x=labels, y=rates, marker_color=colors))
     fig.update_layout(
@@ -176,6 +202,34 @@ def chart_equity(df):
         font=dict(color=COLORS['white']),
         height=400,
         yaxis=dict(range=[0, 100])
+    )
+    return fig
+
+def chart_program(df):
+    if df is None or len(df) == 0:
+        return go.Figure()
+    
+    programs = ['JP 👶', 'PY 👧', 'SY 👦']
+    prog_codes = ['JP', 'PY', 'SY']
+    allocated, waiting = [], []
+    
+    for prog in prog_codes:
+        prog_df = df[df['Allocated_Program'] == prog]
+        allocated.append(len(prog_df[prog_df['Allocation_Status'] == 'Allocated']))
+        waiting.append(len(prog_df[prog_df['Allocation_Status'] == 'On Waiting List']))
+    
+    fig = go.Figure(data=[
+        go.Bar(x=programs, y=allocated, name='✅ Allocated', marker_color=COLORS['green']),
+        go.Bar(x=programs, y=waiting, name='⏳ Waiting', marker_color=COLORS['red'])
+    ])
+    
+    fig.update_layout(
+        title='🎓 Program Capacity',
+        barmode='stack',
+        paper_bgcolor=COLORS['dark_bg'],
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color=COLORS['white']),
+        height=400
     )
     return fig
 
@@ -265,7 +319,11 @@ def page_home(df):
     
     ccols = st.columns(2)
     ccols[0].plotly_chart(chart_funnel(filtered), use_container_width=True)
-    ccols[1].plotly_chart(chart_equity(filtered), use_container_width=True)
+    ccols[1].plotly_chart(chart_waiting(filtered), use_container_width=True)
+    
+    ccols = st.columns(2)
+    ccols[0].plotly_chart(chart_equity(filtered), use_container_width=True)
+    ccols[1].plotly_chart(chart_program(filtered), use_container_width=True)
     
     st.markdown("---")
     
@@ -295,10 +353,10 @@ def page_waiting(df):
     filtered = apply_filters(df, st.session_state['filters'])
     waiting = filtered[filtered['Allocation_Status'] == 'On Waiting List']
     
-    st.markdown(f"### {len(waiting)} Students Waiting")
+    st.markdown(f"### 👥 **{len(waiting)} Students Waiting**")
     if len(waiting) > 0:
-        st.dataframe(waiting[['Student_Name', 'Referring_School', 'Allocated_Program']], 
-                    use_container_width=True, hide_index=True)
+        cols_show = [c for c in ['Student_Name', 'Referring_School', 'Allocated_Program'] if c in waiting.columns]
+        st.dataframe(waiting[cols_show], use_container_width=True, hide_index=True)
 
 def page_equity(df):
     st.markdown("# 👥 EQUITY DEEP-DIVE")
@@ -320,6 +378,32 @@ def page_equity(df):
         if len(indigen) > 0:
             allocated = len(indigen[indigen['Allocation_Status'] == 'Allocated'])
             st.metric("Students", len(indigen), f"{allocated/len(indigen)*100:.0f}% allocated")
+        else:
+            st.info("No data")
+    
+    with t2:
+        eald = filtered[filtered['Flag_EALD'] == 'Yes']
+        if len(eald) > 0:
+            allocated = len(eald[eald['Allocation_Status'] == 'Allocated'])
+            st.metric("Students", len(eald), f"{allocated/len(eald)*100:.0f}% allocated")
+        else:
+            st.info("No data")
+    
+    with t3:
+        swd = filtered[filtered['Flag_SWD'] == 'Yes']
+        if len(swd) > 0:
+            allocated = len(swd[swd['Allocation_Status'] == 'Allocated'])
+            st.metric("Students", len(swd), f"{allocated/len(swd)*100:.0f}% allocated")
+        else:
+            st.info("No data")
+    
+    with t4:
+        asd = filtered[filtered['Flag_ASD'] == 'Yes']
+        if len(asd) > 0:
+            allocated = len(asd[asd['Allocation_Status'] == 'Allocated'])
+            st.metric("Students", len(asd), f"{allocated/len(asd)*100:.0f}% allocated")
+        else:
+            st.info("No data")
 
 def page_school(df):
     st.markdown("# 🏫 SCHOOL PERFORMANCE")
@@ -334,8 +418,8 @@ def page_school(df):
     
     filtered = apply_filters(df, st.session_state['filters'])
     
-    st.markdown("### Schools")
-    for school in filtered['Referring_School'].unique():
+    st.markdown("### 📊 **Schools**")
+    for school in sorted(filtered['Referring_School'].unique()):
         school_data = filtered[filtered['Referring_School'] == school]
         allocated = len(school_data[school_data['Allocation_Status'] == 'Allocated'])
         st.metric(school, f"{allocated}/{len(school_data)}")
