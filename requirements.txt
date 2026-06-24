@@ -1,25 +1,38 @@
-# updated 2026-03-14c
+# CLC-LBU Portal Requirements - Combined & Deduplicated
+# Updated 2026-03-14
+
+# Core Streamlit & UI
 streamlit>=1.35.0
-supabase>=2.4.0
+streamlit-folium
+
+# Data Processing
 pandas>=2.0.0
 numpy>=1.26.0
+openpyxl>=3.1.0
+
+# Visualization
 plotly>=5.20.0
+matplotlib>=3.7.0
+folium
+
+# Document Generation
 python-docx>=1.1.0
 reportlab>=4.1.0
-groq>=0.9.0
-python-dateutil>=2.9.0
-matplotlib>=3.7.0
-pillow>=10.0.0
-bcrypt>=4.0.1
-openpyxl
 PyMuPDF==1.24.14
-python-docx
-reportlab
-psycopg2-binary 
-streamlit-folium
-folium
+
+# Image Processing
+pillow>=10.0.0
+
+# Backend & Database
+supabase>=2.4.0
+psycopg2-binary
+
+# AI & APIs
 anthropic
-streamlit==1.28.0
-pandas>=2.0.0
-plotly>=5.17.0
-openpyxl>=3.1.0
+groq>=0.9.0
+
+# Security
+bcrypt>=4.0.1
+
+# Utilities
+python-dateutil>=2.9.0
