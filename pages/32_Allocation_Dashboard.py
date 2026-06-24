@@ -1,29 +1,18 @@
 """
-CLC-LBU ALLOCATION DASHBOARD - COMPLETE EXPANDED VERSION
-All Pages Included: 8 Analysis Pages + All Features
-Single File with Full Functionality
-
-Pages Included:
-1. 📊 Homepage - Overview & Filtering
-2. 📋 Waiting List Analysis
-3. 👥 Equity Deep-Dive (4 tabs: Indigenous/EALD/SWD/ASD)
-4. 🏫 School Performance
-5. 📈 Cohort Tracker
-6. 🧩 Flag & Comorbidity Analysis
-7. 🎓 Program Analysis
-8. 📊 Term Comparison
-9. 🔍 Data Quality Dashboard
+CLC-LBU ALLOCATION DASHBOARD - INTERACTIVE OVERHAUL
+Complete drill-down analytics with 4+ levels of analysis
+Modern glowing theme with interactive charts and breadcrumb navigation
 """
 
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from io import BytesIO
+import plotly.express as px
 import os
-import numpy as np
+import random
 
 # ============================================================================
-# PAGE CONFIGURATION
+# PAGE CONFIG
 # ============================================================================
 
 st.set_page_config(
@@ -34,900 +23,540 @@ st.set_page_config(
 )
 
 # ============================================================================
-# COLORS & STYLING
+# MODERN GLOWING THEME CSS
 # ============================================================================
 
-COLOR_TEAL = '#1A7A7A'
-COLOR_TEAL_LIGHT = '#1A7A6E'
-COLOR_AMBER = '#C8760A'
-COLOR_CYAN = '#00e5ff'
-COLOR_GREEN = '#00ff00'
-COLOR_RED = '#ff6b6b'
-COLOR_YELLOW = '#ffd93d'
-BG_DARK = '#0a0e27'
-
-st.markdown(f"""
+st.markdown("""
 <style>
-    /* MAIN BACKGROUND */
-    html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"] {{
-        background-color: {BG_DARK} !important;
+    /* DARK BACKGROUND */
+    html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+        background-color: #0a0e27 !important;
         color: #ffffff !important;
-    }}
+    }
     
-    /* SIDEBAR */
-    [data-testid="stSidebar"] {{
-        background-color: {BG_DARK} !important;
-        border-right: 3px solid {COLOR_TEAL} !important;
-    }}
+    [data-testid="stSidebar"] {
+        background-color: #0a0e27 !important;
+        border-right: 2px solid rgba(26, 122, 122, 0.5) !important;
+    }
     
-    /* HEADERS */
-    h1 {{
-        color: {COLOR_CYAN} !important;
-        font-weight: bold !important;
-        font-size: 2.5em !important;
-        text-shadow: 0 0 10px rgba(0, 229, 255, 0.3) !important;
-        border-bottom: 3px solid {COLOR_TEAL} !important;
+    /* GLOWING HEADERS */
+    h1 {
+        color: #00e5ff !important;
+        text-shadow: 0 0 20px rgba(0, 229, 255, 0.5) !important;
+        border-bottom: 2px solid rgba(26, 122, 122, 0.3) !important;
         padding-bottom: 15px !important;
-        margin-bottom: 20px !important;
-    }}
-    
-    h2 {{
-        color: {COLOR_CYAN} !important;
         font-weight: bold !important;
-        border-left: 5px solid {COLOR_TEAL} !important;
-        padding-left: 12px !important;
-    }}
+    }
     
-    h3 {{
-        color: {COLOR_CYAN} !important;
-        font-weight: bold !important;
-        border-left: 4px solid {COLOR_AMBER} !important;
+    h2 {
+        color: #00e5ff !important;
+        text-shadow: 0 0 15px rgba(0, 229, 255, 0.3) !important;
+        border-left: 3px solid rgba(0, 229, 255, 0.5) !important;
         padding-left: 10px !important;
-    }}
+    }
     
-    h4, h5, h6 {{
-        color: {COLOR_CYAN} !important;
-        font-weight: bold !important;
-    }}
+    h3 {
+        color: #00e5ff !important;
+        border-left: 2px solid rgba(200, 118, 10, 0.6) !important;
+        padding-left: 8px !important;
+    }
     
-    /* BUTTONS */
-    .stButton > button {{
-        background: linear-gradient(135deg, {COLOR_TEAL} 0%, {COLOR_CYAN} 100%) !important;
-        color: {BG_DARK} !important;
-        border: 2px solid {COLOR_CYAN} !important;
-        font-weight: bold !important;
-        border-radius: 8px !important;
-        box-shadow: 0 0 10px rgba(0, 229, 255, 0.3) !important;
-    }}
-    
-    .stButton > button:hover {{
-        background: linear-gradient(135deg, {COLOR_CYAN} 0%, {COLOR_TEAL} 100%) !important;
-        box-shadow: 0 0 20px rgba(0, 229, 255, 0.6) !important;
-    }}
-    
-    /* METRICS */
-    [data-testid="metric-container"] {{
-        background: linear-gradient(135deg, rgba(26, 122, 122, 0.3) 0%, rgba(0, 229, 255, 0.1) 100%) !important;
-        border: 2px solid {COLOR_TEAL} !important;
-        border-left: 5px solid {COLOR_CYAN} !important;
-        border-radius: 12px !important;
+    /* GLOWING METRIC BOXES */
+    [data-testid="metric-container"] {
+        background: linear-gradient(135deg, rgba(26, 122, 122, 0.25) 0%, rgba(0, 229, 255, 0.05) 100%) !important;
+        border: 1px solid rgba(0, 229, 255, 0.3) !important;
+        border-left: 4px solid rgba(0, 229, 255, 0.8) !important;
+        border-radius: 10px !important;
+        box-shadow: 0 0 20px rgba(0, 229, 255, 0.15), inset 0 0 20px rgba(0, 229, 255, 0.05) !important;
         padding: 15px !important;
+    }
+    
+    [data-testid="metric-container"] > div:first-child {
+        color: #00e5ff !important;
+        font-weight: bold !important;
+    }
+    
+    /* GLOWING BUTTONS */
+    .stButton > button {
+        background: linear-gradient(135deg, rgba(26, 122, 122, 0.4) 0%, rgba(0, 229, 255, 0.2) 100%) !important;
+        color: #00e5ff !important;
+        border: 2px solid rgba(0, 229, 255, 0.5) !important;
+        border-radius: 8px !important;
         box-shadow: 0 0 15px rgba(0, 229, 255, 0.2) !important;
-    }}
-    
-    [data-testid="metric-container"] > div:first-child {{
-        color: {COLOR_CYAN} !important;
         font-weight: bold !important;
-        font-size: 1.1em !important;
-    }}
+        transition: all 0.3s !important;
+    }
     
-    /* SELECTBOX */
-    .stSelectbox > div > div {{
-        background-color: #1a1a3e !important;
+    .stButton > button:hover {
+        background: linear-gradient(135deg, rgba(0, 229, 255, 0.3) 0%, rgba(26, 122, 122, 0.3) 100%) !important;
+        box-shadow: 0 0 25px rgba(0, 229, 255, 0.4) !important;
+        border-color: #00e5ff !important;
+    }
+    
+    /* GLOWING INFO BOXES */
+    .stInfo {
+        background: linear-gradient(135deg, rgba(26, 122, 122, 0.2) 0%, rgba(0, 229, 255, 0.1) 100%) !important;
+        border-left: 4px solid #00e5ff !important;
+        border-radius: 8px !important;
+        box-shadow: 0 0 15px rgba(0, 229, 255, 0.15) !important;
+    }
+    
+    .stWarning {
+        background: linear-gradient(135deg, rgba(200, 118, 10, 0.2) 0%, rgba(200, 118, 10, 0.1) 100%) !important;
+        border-left: 4px solid #C8760A !important;
+        border-radius: 8px !important;
+        box-shadow: 0 0 15px rgba(200, 118, 10, 0.15) !important;
+    }
+    
+    .stSuccess {
+        background: linear-gradient(135deg, rgba(0, 255, 0, 0.15) 0%, rgba(0, 255, 0, 0.05) 100%) !important;
+        border-left: 4px solid #00ff00 !important;
+        border-radius: 8px !important;
+        box-shadow: 0 0 15px rgba(0, 255, 0, 0.15) !important;
+    }
+    
+    /* SELECTBOX GLOW */
+    .stSelectbox > div > div {
+        background-color: rgba(26, 122, 122, 0.15) !important;
         color: #ffffff !important;
-        border: 2px solid {COLOR_TEAL} !important;
-        border-radius: 8px !important;
-        box-shadow: 0 0 8px rgba(0, 229, 255, 0.15) !important;
-    }}
+        border: 1px solid rgba(0, 229, 255, 0.3) !important;
+        border-radius: 6px !important;
+        box-shadow: inset 0 0 10px rgba(0, 229, 255, 0.1) !important;
+    }
     
-    /* FILE UPLOADER */
-    [data-testid="stFileUploadDropzone"] {{
-        background-color: rgba(26, 122, 122, 0.2) !important;
-        border: 3px dashed {COLOR_TEAL} !important;
-        border-radius: 8px !important;
-    }}
+    /* TABS GLOW */
+    [data-testid="stTabs"] [role="tab"][aria-selected="true"] {
+        background: linear-gradient(135deg, rgba(26, 122, 122, 0.3), rgba(0, 229, 255, 0.1)) !important;
+        border-bottom: 3px solid #00e5ff !important;
+        color: #00e5ff !important;
+    }
     
-    /* TABS */
-    [data-testid="stTabs"] [role="tablist"] {{
-        background-color: {BG_DARK} !important;
-        border-bottom: 3px solid {COLOR_TEAL} !important;
-    }}
-    
-    [data-testid="stTabs"] [role="tab"] {{
-        background-color: rgba(26, 122, 122, 0.2) !important;
-        color: #ffffff !important;
-        border-radius: 8px 8px 0 0 !important;
-    }}
-    
-    [data-testid="stTabs"] [role="tab"][aria-selected="true"] {{
-        background: linear-gradient(135deg, {COLOR_TEAL} 0%, {COLOR_CYAN} 100%) !important;
-        color: {BG_DARK} !important;
-        border-bottom: 3px solid {COLOR_AMBER} !important;
-        font-weight: bold !important;
-    }}
-    
-    /* INFO/WARNING/SUCCESS BOXES */
-    .stInfo {{
-        background-color: rgba(26, 122, 122, 0.25) !important;
-        border-left: 5px solid {COLOR_CYAN} !important;
-        border-radius: 8px !important;
-        box-shadow: 0 0 10px rgba(0, 229, 255, 0.2) !important;
-    }}
-    
-    .stWarning {{
-        background-color: rgba(200, 118, 10, 0.25) !important;
-        border-left: 5px solid {COLOR_AMBER} !important;
-        border-radius: 8px !important;
-        box-shadow: 0 0 10px rgba(200, 118, 10, 0.2) !important;
-    }}
-    
-    .stSuccess {{
-        background-color: rgba(0, 255, 0, 0.15) !important;
-        border-left: 5px solid {COLOR_GREEN} !important;
-        border-radius: 8px !important;
-        box-shadow: 0 0 10px rgba(0, 255, 0, 0.2) !important;
-    }}
+    /* SUBTLE DIVIDER */
+    hr {
+        border: 1px solid rgba(0, 229, 255, 0.15) !important;
+        margin: 20px 0 !important;
+    }
     
     /* TEXT */
-    p, span, label {{
+    p, span, label {
         color: #ffffff !important;
-    }}
-    
-    /* DIVIDER - Subtle */
-    hr {{
-        border: 1px solid rgba(26, 122, 122, 0.2) !important;
-        margin: 15px 0 !important;
-    }}
+    }
 </style>
 """, unsafe_allow_html=True)
+
+# ============================================================================
+# COLORS
+# ============================================================================
+
+COLORS = {
+    'teal': '#1A7A7A',
+    'cyan': '#00e5ff',
+    'green': '#00ff00',
+    'red': '#ff6b6b',
+    'yellow': '#ffd93d',
+    'dark_bg': '#0a0e27',
+    'white': '#ffffff'
+}
 
 # ============================================================================
 # SESSION STATE
 # ============================================================================
 
-def initialize_session():
-    """Initialize all session state"""
+def init_session():
     if 'df' not in st.session_state:
         st.session_state['df'] = None
-    if 'filters' not in st.session_state:
-        st.session_state['filters'] = {
-            'term': 'All', 'year': 'All', 'program': 'All', 'school': 'All',
-            'equity_group': 'All', 'flag': 'All', 'current_page': 'home'
-        }
     if 'data_loaded' not in st.session_state:
         st.session_state['data_loaded'] = False
-    if 'data_filename' not in st.session_state:
-        st.session_state['data_filename'] = None
+    if 'drill_path' not in st.session_state:
+        st.session_state['drill_path'] = []
+    if 'drill_filters' not in st.session_state:
+        st.session_state['drill_filters'] = {}
 
-initialize_session()
+init_session()
 
 # ============================================================================
 # DATA LOADING
 # ============================================================================
 
-def load_default_data():
-    """Load default data"""
+def load_data():
     paths = ['data/CLC_Allocation_Dashboard_2026_CLEANED.xlsx',
              '/mnt/user-data/outputs/CLC_Allocation_Dashboard_2026_CLEANED.xlsx']
     for path in paths:
         if os.path.exists(path):
-            return pd.read_excel(path)
+            df = pd.read_excel(path)
+            # Safe int conversion
+            for col in ['Term', 'Referral_Year']:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
+            return df
     return None
 
-def create_sample_data():
-    """Create sample data"""
-    import random
-    students = ['Ethan Evans', 'Sarah Johnson', 'Michael Brown', 'Jessica White', 'David Lee', 
-                'Emma Davis', 'James Wilson', 'Olivia Martinez', 'Noah Rodriguez', 'Ava Taylor']
-    schools = ['Le Fevre HS', 'Warradale Primary', 'Woodville HS', 'Brighton Secondary', 
-               'Hendon PS', 'Clovelly Park PS', 'Findon HS', 'West Lakes PS']
+def create_sample():
+    schools = ['Le Fevre HS', 'Warradale Primary', 'Woodville HS', 'Brighton Secondary']
     programs = ['JP', 'PY', 'SY']
     statuses = ['Allocated', 'On Waiting List', 'Current']
     
-    data = {
-        'Student_Name': [random.choice(students) for _ in range(80)],
-        'Referring_School': [random.choice(schools) for _ in range(80)],
-        'Allocated_Program': [random.choice(programs) for _ in range(80)],
-        'Allocation_Status': [random.choice(statuses) for _ in range(80)],
-        'Flag_ATSI': [random.choice(['Yes', 'No']) for _ in range(80)],
-        'Flag_EALD': [random.choice(['Yes', 'No']) for _ in range(80)],
-        'Flag_SWD': [random.choice(['Yes', 'No']) for _ in range(80)],
-        'Flag_ASD': [random.choice(['Yes', 'No']) for _ in range(80)],
-        'Flag_ADHD': [random.choice(['Yes', 'No']) for _ in range(80)],
-        'Flag_ODD': [random.choice(['Yes', 'No']) for _ in range(80)],
-        'Referral_Year': [random.choice([2025, 2026]) for _ in range(80)],
-        'Term': [random.choice([1, 2, 3, 4]) for _ in range(80)],
-    }
-    return pd.DataFrame(data)
+    df = pd.DataFrame({
+        'Referring_School': [random.choice(schools) for _ in range(120)],
+        'Allocated_Program': [random.choice(programs) for _ in range(120)],
+        'Allocation_Status': [random.choice(statuses) for _ in range(120)],
+        'Flag_ATSI': [random.choice(['Yes', 'No']) for _ in range(120)],
+        'Flag_EALD': [random.choice(['Yes', 'No']) for _ in range(120)],
+        'Flag_SWD': [random.choice(['Yes', 'No']) for _ in range(120)],
+        'Flag_ASD': [random.choice(['Yes', 'No']) for _ in range(120)],
+        'Referral_Year': [random.choice([2025, 2026]) for _ in range(120)],
+        'Term': [random.choice([1, 2, 3, 4]) for _ in range(120)],
+    })
+    return df
 
 # ============================================================================
-# FILTER MANAGEMENT
+# FILTERING & METRICS
 # ============================================================================
 
-def update_filter(name, value):
-    st.session_state['filters'][name] = value
-
-def get_active_filters():
-    return st.session_state['filters']
-
-def clear_all_filters():
-    st.session_state['filters'] = {
-        'term': 'All', 'year': 'All', 'program': 'All', 'school': 'All',
-        'equity_group': 'All', 'flag': 'All', 'current_page': st.session_state['filters']['current_page']
-    }
-
-def get_filter_summary():
-    filters = get_active_filters()
-    active = [f"{k}: {v}" for k, v in filters.items() if v != 'All' and k != 'current_page']
-    return " | ".join(active) if active else "No filters applied ✓"
-
-# ============================================================================
-# DATA FILTERING
-# ============================================================================
-
-def apply_filters(df, filters_dict):
-    """Apply all filters"""
-    if df is None or len(df) == 0:
-        return df
+def apply_drill_filters(df):
+    """Apply current drill filters"""
     filtered = df.copy()
-    
-    if filters_dict.get('term') != 'All':
-        try:
-            filtered = filtered[filtered['Term'] == int(filters_dict['term'])]
-        except:
-            pass
-    if filters_dict.get('year') != 'All':
-        try:
-            filtered = filtered[filtered['Referral_Year'] == int(filters_dict['year'])]
-        except:
-            pass
-    if filters_dict.get('program') != 'All':
-        filtered = filtered[filtered['Allocated_Program'] == filters_dict['program']]
-    if filters_dict.get('school') != 'All':
-        filtered = filtered[filtered['Referring_School'] == filters_dict['school']]
-    
-    equity = filters_dict.get('equity_group', 'All')
-    if equity == 'Indigenous 🇦🇺':
-        filtered = filtered[filtered['Flag_ATSI'] == 'Yes']
-    elif equity == 'EALD 🌍':
-        filtered = filtered[filtered['Flag_EALD'] == 'Yes']
-    elif equity == 'SWD ♿':
-        filtered = filtered[filtered['Flag_SWD'] == 'Yes']
-    elif equity == 'ASD 🧩':
-        filtered = filtered[filtered['Flag_ASD'] == 'Yes']
-    
+    for key, value in st.session_state['drill_filters'].items():
+        if value and value != 'All':
+            filtered = filtered[filtered[key] == value]
     return filtered
 
-def calculate_metrics(df):
-    """Calculate metrics"""
+def get_metrics(df):
+    """Calculate key metrics"""
     if df is None or len(df) == 0:
-        return {'total_referred': 0, 'allocated': 0, 'waiting': 0, 'current': 0, 'allocation_rate': 0}
+        return {'total': 0, 'allocated': 0, 'waiting': 0, 'rate': 0}
     
     total = len(df)
     allocated = len(df[df['Allocation_Status'] == 'Allocated'])
     waiting = len(df[df['Allocation_Status'] == 'On Waiting List'])
-    current = len(df[df['Allocation_Status'] == 'Current'])
     rate = (allocated / total * 100) if total > 0 else 0
     
-    return {'total_referred': total, 'allocated': allocated, 'waiting': waiting, 'current': current, 'allocation_rate': rate}
-
-def get_unique_values(df, column):
-    if df is None or column not in df.columns:
-        return []
-    return sorted([v for v in df[column].unique() if pd.notna(v)])
-
-def get_waiting_by_equity(df):
-    if df is None or len(df) == 0:
-        return {}
-    result = {}
-    groups = {
-        'Indigenous 🇦🇺': 'Flag_ATSI',
-        'EALD 🌍': 'Flag_EALD',
-        'SWD ♿': 'Flag_SWD',
-        'ASD 🧩': 'Flag_ASD',
-        'Overall 📊': None
-    }
-    for group_name, flag_col in groups.items():
-        try:
-            subset = df[df[flag_col] == 'Yes'] if flag_col else df
-            if len(subset) > 0:
-                waiting = len(subset[subset['Allocation_Status'] == 'On Waiting List'])
-                rate = (waiting / len(subset) * 100)
-                result[group_name] = {'count': waiting, 'rate': rate, 'total': len(subset)}
-        except:
-            pass
-    return result
+    return {'total': total, 'allocated': allocated, 'waiting': waiting, 'rate': rate}
 
 # ============================================================================
-# ALERTS
+# DRILL-DOWN NAVIGATION
 # ============================================================================
 
-def detect_issues(df):
-    """Detect issues"""
-    alerts = []
-    if df is None or len(df) == 0:
-        return alerts
-    metrics = calculate_metrics(df)
-    if metrics['waiting'] >= 15:
-        alerts.append({'severity': 'warning', 'emoji': '⚠️', 'title': 'Large Waiting List',
-                      'message': f"{metrics['waiting']} students waiting"})
-    if metrics['allocation_rate'] < 50:
-        alerts.append({'severity': 'critical', 'emoji': '🔴', 'title': 'Low Allocation Rate',
-                      'message': f"Only {metrics['allocation_rate']:.0f}% allocated (goal: 65%+)"})
-    elif metrics['allocation_rate'] < 60:
-        alerts.append({'severity': 'warning', 'emoji': '🟡', 'title': 'Below Target',
-                      'message': f"Allocation rate {metrics['allocation_rate']:.0f}%"})
-    return alerts
-
-def display_alerts(alerts):
-    if not alerts:
-        return
-    st.markdown("### ⚠️ **ALERTS**")
-    for alert in alerts:
-        if alert['severity'] == 'critical':
-            st.error(f"🔴 **{alert['title']}**: {alert['message']}")
-        else:
-            st.warning(f"{alert['emoji']} **{alert['title']}**: {alert['message']}")
-
-# ============================================================================
-# CHARTS
-# ============================================================================
-
-def allocation_funnel(df):
-    if df is None or len(df) == 0:
-        return go.Figure().add_annotation(text="No data")
-    total, allocated, current = len(df), len(df[df['Allocation_Status'] == 'Allocated']), len(df[df['Allocation_Status'] == 'Current'])
-    fig = go.Figure(data=[go.Funnel(y=['📋 Referred', '✅ Allocated', '🎓 Current'], x=[total, allocated, current],
-                                    marker_color=[COLOR_CYAN, COLOR_GREEN, COLOR_TEAL])])
-    fig.update_layout(title='📊 Allocation Funnel', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                     font=dict(color='#ffffff'), height=400, margin=dict(l=0, r=0, t=40, b=0))
-    return fig
-
-def waiting_trend(df):
-    if df is None or len(df) == 0:
-        return go.Figure().add_annotation(text="No data")
-    try:
-        waiting_by_term = df[df['Allocation_Status'] == 'On Waiting List'].groupby('Term').size().reset_index(name='Waiting')
-        if len(waiting_by_term) == 0:
-            return go.Figure().add_annotation(text="No waiting students")
-        fig = go.Figure(data=go.Scatter(x=waiting_by_term['Term'], y=waiting_by_term['Waiting'], mode='lines+markers',
-                                       line=dict(color=COLOR_RED, width=3), marker=dict(size=10)))
-        fig.update_layout(title='📈 Waiting Trend', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                         font=dict(color='#ffffff'), height=400)
-        return fig
-    except:
-        return go.Figure().add_annotation(text="Error")
-
-def equity_chart(df):
-    if df is None or len(df) == 0:
-        return go.Figure().add_annotation(text="No data")
-    groups = {'Indigenous 🇦🇺': 'Flag_ATSI', 'EALD 🌍': 'Flag_EALD', 'SWD ♿': 'Flag_SWD', 'ASD 🧩': 'Flag_ASD', 'Overall 📊': None}
-    rates, labels, colors = [], [], []
-    for group, flag in groups.items():
-        try:
-            subset = df[df[flag] == 'Yes'] if flag else df
-            if len(subset) > 0:
-                allocated = len(subset[subset['Allocation_Status'] == 'Allocated'])
-                rate = allocated / len(subset) * 100
-                rates.append(rate)
-                labels.append(group)
-                colors.append(COLOR_RED if rate < 60 else COLOR_YELLOW if rate < 70 else COLOR_GREEN)
-        except:
-            pass
-    if not rates:
-        return go.Figure().add_annotation(text="No data")
-    fig = go.Figure(data=go.Bar(x=labels, y=rates, marker_color=colors))
-    fig.update_layout(title='⚖️ Equity Outcomes', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                     font=dict(color='#ffffff'), height=400, yaxis=dict(range=[0, 100]))
-    return fig
-
-def program_chart(df):
-    if df is None or len(df) == 0:
-        return go.Figure().add_annotation(text="No data")
-    programs, allocated, waiting = ['JP 👶', 'PY 👧', 'SY 👦'], [], []
-    for prog in ['JP', 'PY', 'SY']:
-        prog_df = df[df['Allocated_Program'] == prog]
-        allocated.append(len(prog_df[prog_df['Allocation_Status'] == 'Allocated']))
-        waiting.append(len(prog_df[prog_df['Allocation_Status'] == 'On Waiting List']))
-    fig = go.Figure(data=[go.Bar(x=programs, y=allocated, name='Allocated', marker_color=COLOR_GREEN),
-                         go.Bar(x=programs, y=waiting, name='Waiting', marker_color=COLOR_RED)])
-    fig.update_layout(title='🎓 Program Capacity', barmode='stack', paper_bgcolor='rgba(0,0,0,0)', 
-                     plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400)
-    return fig
-
-# ============================================================================
-# PAGE: HOMEPAGE
-# ============================================================================
-
-def page_home(df):
-    st.markdown(f"<h1 style='color: {COLOR_CYAN}; text-align: center;'>📊 CLC-LBU DASHBOARD</h1>", unsafe_allow_html=True)
-    
-    # Upload section
-    col1, col2, col3 = st.columns([2, 1, 1])
-    with col1:
-        st.markdown("### 📁 **Data Management**")
-        uploaded = st.file_uploader("📤 Upload Excel (.xlsx)", type=['xlsx', 'xls'])
-        if uploaded:
-            st.session_state['df'] = pd.read_excel(uploaded)
-            st.session_state['data_loaded'] = True
-            st.session_state['data_filename'] = uploaded.name
-            st.success(f"✅ {uploaded.name}")
-    with col2:
-        st.markdown("### 📊 **Status**")
-        if st.session_state['data_loaded'] and st.session_state['df'] is not None:
-            st.metric("📋 Records", len(st.session_state['df']))
-    with col3:
-        st.markdown("### 🔄 **Sample**")
-        if st.button("📥 Load Demo Data", use_container_width=True):
-            st.session_state['df'] = create_sample_data()
-            st.session_state['data_loaded'] = True
-            st.session_state['data_filename'] = "Demo Data"
-            st.rerun()
-    
-    
-    if not st.session_state['data_loaded'] or st.session_state['df'] is None:
-        st.info("👆 Upload Excel or load sample data")
+def show_breadcrumb():
+    """Show navigation breadcrumb"""
+    if not st.session_state['drill_path']:
         return
     
-    df = st.session_state['df']
+    breadcrumb = " → ".join(st.session_state['drill_path'])
+    st.markdown(f"📍 **Path:** {breadcrumb}")
     
-    # Filters
-    st.markdown("### 🔽 **Filters**")
-    filter_cols = st.columns(6)
-    with filter_cols[0]:
-        term = st.selectbox("📅 Term", ['All'] + list(map(str, sorted(get_unique_values(df, 'Term')))), key='term_f')
-        if term != get_active_filters()['term']:
-            update_filter('term', term)
-    with filter_cols[1]:
-        year = st.selectbox("📆 Year", ['All'] + list(map(str, sorted(get_unique_values(df, 'Referral_Year')))), key='year_f')
-        if year != get_active_filters()['year']:
-            update_filter('year', year)
-    with filter_cols[2]:
-        prog = st.selectbox("🎓 Program", ['All'] + get_unique_values(df, 'Allocated_Program'), key='prog_f')
-        if prog != get_active_filters()['program']:
-            update_filter('program', prog)
-    with filter_cols[3]:
-        school = st.selectbox("🏫 School", ['All'] + get_unique_values(df, 'Referring_School'), key='school_f')
-        if school != get_active_filters()['school']:
-            update_filter('school', school)
-    with filter_cols[4]:
-        equity = st.selectbox("⚖️ Equity", ['All', 'Indigenous 🇦🇺', 'EALD 🌍', 'SWD ♿', 'ASD 🧩'], key='equity_f')
-        if equity != get_active_filters()['equity_group']:
-            update_filter('equity_group', equity)
-    with filter_cols[5]:
-        if st.button("🔄 Clear", use_container_width=True):
-            clear_all_filters()
-            st.rerun()
-    
-    
-    filtered_df = apply_filters(df, get_active_filters())
-    
-    # Alerts
-    display_alerts(detect_issues(filtered_df))
-    
-    # Metrics
-    st.markdown("### 📈 **Metrics**")
-    metrics = calculate_metrics(filtered_df)
-    cols = st.columns(4)
-    cols[0].metric("📋 Referred", metrics['total_referred'])
-    cols[1].metric("✅ Allocated", metrics['allocated'], f"{metrics['allocation_rate']:.0f}%")
-    cols[2].metric("⏳ Waiting", metrics['waiting'])
-    cols[3].metric("🎓 Current", metrics['current'])
-    
-    
-    # Charts
-    st.markdown("### 📊 **Charts**")
-    chart_cols = st.columns(2)
-    chart_cols[0].plotly_chart(allocation_funnel(filtered_df), use_container_width=True)
-    chart_cols[1].plotly_chart(waiting_trend(filtered_df), use_container_width=True)
-    chart_cols = st.columns(2)
-    chart_cols[0].plotly_chart(equity_chart(filtered_df), use_container_width=True)
-    chart_cols[1].plotly_chart(program_chart(filtered_df), use_container_width=True)
-    
-    
-    # Navigation
-    st.markdown("### 🔍 **Explore**")
-    nav_cols = st.columns(4)
-    if nav_cols[0].button("📋 Waiting List", use_container_width=True):
-        update_filter('current_page', 'waiting')
-        st.rerun()
-    if nav_cols[1].button("👥 Equity", use_container_width=True):
-        update_filter('current_page', 'equity')
-        st.rerun()
-    if nav_cols[2].button("🏫 Schools", use_container_width=True):
-        update_filter('current_page', 'school')
-        st.rerun()
-    if nav_cols[3].button("📊 More", use_container_width=True):
-        update_filter('current_page', 'more')
+    if st.button("🏠 Back to Overview"):
+        st.session_state['drill_path'] = []
+        st.session_state['drill_filters'] = {}
         st.rerun()
 
-# ============================================================================
-# PAGE: WAITING LIST
-# ============================================================================
-
-def page_waiting(df):
-    st.markdown(f"<h2 style='color: {COLOR_CYAN};'>📋 WAITING LIST</h2>", unsafe_allow_html=True)
-    if st.button("⬅️ Back"):
-        update_filter('current_page', 'home')
-        st.rerun()
-    
-    if df is None:
-        st.warning("No data")
-        return
-    
-    filtered_df = apply_filters(df, get_active_filters())
-    waiting = filtered_df[filtered_df['Allocation_Status'] == 'On Waiting List']
-    
-    st.markdown(f"### 👥 **{len(waiting)} Students Waiting**")
-    if len(waiting) > 0:
-        # Show only de-identified data - NO student names
-        cols_show = [c for c in ['Referring_School', 'Allocated_Program', 'Term', 'Referral_Year'] if c in waiting.columns]
-        st.dataframe(waiting[cols_show], use_container_width=True, hide_index=True)
-    else:
-        st.success("✅ No one waiting!")
-    
-    st.markdown("### ⏱️ **Wait Time**")
-    wait_counts = [15, 12, 8, 3]
-    fig = go.Figure(data=[go.Bar(x=['0-4w', '4-8w', '8-12w', '12+w'], y=wait_counts,
-                                marker_color=[COLOR_GREEN, COLOR_YELLOW, '#ffa500', COLOR_RED])])
-    fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=350)
-    st.plotly_chart(fig, use_container_width=True)
+def drill_to(level_name, filter_key, filter_value):
+    """Drill down to next level"""
+    st.session_state['drill_path'].append(f"{level_name}: {filter_value}")
+    st.session_state['drill_filters'][filter_key] = filter_value
+    st.rerun()
 
 # ============================================================================
-# PAGE: EQUITY DEEP-DIVE
+# CHARTS WITH DRILL-DOWN
 # ============================================================================
 
-def page_equity(df):
-    st.markdown(f"<h2 style='color: {COLOR_CYAN};'>👥 EQUITY DEEP-DIVE</h2>", unsafe_allow_html=True)
-    if st.button("⬅️ Back"):
-        update_filter('current_page', 'home')
-        st.rerun()
+def program_distribution_chart(df):
+    """Program distribution - clickable"""
+    if df is None or len(df) == 0:
+        return go.Figure()
     
-    if df is None:
-        st.warning("No data")
-        return
+    prog_counts = df['Allocated_Program'].value_counts().reset_index()
+    prog_counts.columns = ['Program', 'Count']
     
-    filtered_df = apply_filters(df, get_active_filters())
+    fig = go.Figure(data=[
+        go.Bar(
+            x=prog_counts['Program'],
+            y=prog_counts['Count'],
+            marker_color=[COLORS['cyan'], COLORS['green'], COLORS['teal']],
+            text=prog_counts['Count'],
+            textposition='outside',
+            hovertemplate='<b>%{x}</b><br>Students: %{y}<br><i>Click to drill down</i><extra></extra>',
+            customdata=prog_counts['Program']
+        )
+    ])
     
-    # Tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["🇦🇺 Indigenous", "🌍 EALD", "♿ SWD", "🧩 ASD"])
+    fig.update_layout(
+        title='🎓 Program Distribution',
+        xaxis_title='Program',
+        yaxis_title='Number of Students',
+        paper_bgcolor=COLORS['dark_bg'],
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color=COLORS['white']),
+        height=400,
+        hovermode='closest'
+    )
     
-    with tab1:
-        st.markdown("### Indigenous Analysis")
-        indigenous = filtered_df[filtered_df['Flag_ATSI'] == 'Yes']
-        allocated = len(indigenous[indigenous['Allocation_Status'] == 'Allocated'])
-        st.metric("👥 Students", len(indigenous), f"✅ {allocated} allocated ({allocated/len(indigenous)*100:.0f}%)" if len(indigenous) > 0 else "0%")
-    
-    with tab2:
-        st.markdown("### EALD Analysis")
-        eald = filtered_df[filtered_df['Flag_EALD'] == 'Yes']
-        allocated = len(eald[eald['Allocation_Status'] == 'Allocated'])
-        st.metric("👥 Students", len(eald), f"✅ {allocated} allocated ({allocated/len(eald)*100:.0f}%)" if len(eald) > 0 else "0%")
-    
-    with tab3:
-        st.markdown("### SWD Analysis")
-        swd = filtered_df[filtered_df['Flag_SWD'] == 'Yes']
-        allocated = len(swd[swd['Allocation_Status'] == 'Allocated'])
-        st.metric("👥 Students", len(swd), f"✅ {allocated} allocated ({allocated/len(swd)*100:.0f}%)" if len(swd) > 0 else "0%")
-    
-    with tab4:
-        st.markdown("### ASD Analysis")
-        asd = filtered_df[filtered_df['Flag_ASD'] == 'Yes']
-        allocated = len(asd[asd['Allocation_Status'] == 'Allocated'])
-        st.metric("👥 Students", len(asd), f"✅ {allocated} allocated ({allocated/len(asd)*100:.0f}%)" if len(asd) > 0 else "0%")
+    return fig, prog_counts
 
-# ============================================================================
-# PAGE: SCHOOL PERFORMANCE
-# ============================================================================
-
-def page_school(df):
-    st.markdown(f"<h2 style='color: {COLOR_CYAN};'>🏫 SCHOOL PERFORMANCE</h2>", unsafe_allow_html=True)
-    if st.button("⬅️ Back"):
-        update_filter('current_page', 'home')
-        st.rerun()
+def school_performance_chart(df):
+    """School performance - clickable"""
+    if df is None or len(df) == 0:
+        return go.Figure()
     
-    if df is None:
-        st.warning("No data")
-        return
-    
-    filtered_df = apply_filters(df, get_active_filters())
-    
-    st.markdown("### 📊 **School Comparison**")
     school_stats = []
-    for school in get_unique_values(filtered_df, 'Referring_School'):
-        school_df = filtered_df[filtered_df['Referring_School'] == school]
+    for school in df['Referring_School'].unique():
+        school_df = df[df['Referring_School'] == school]
         allocated = len(school_df[school_df['Allocation_Status'] == 'Allocated'])
         total = len(school_df)
-        rate = allocated / total * 100 if total > 0 else 0
-        school_stats.append({'School': school, 'Referred': total, 'Allocated': allocated, 'Rate%': f"{rate:.0f}%"})
+        rate = (allocated / total * 100) if total > 0 else 0
+        school_stats.append({'School': school, 'Rate': rate, 'Total': total})
     
-    if school_stats:
-        stats_df = pd.DataFrame(school_stats)
-        st.dataframe(stats_df, use_container_width=True, hide_index=True)
+    stats_df = pd.DataFrame(school_stats).sort_values('Rate', ascending=False)
+    
+    colors_list = [COLORS['green'] if r >= 70 else COLORS['yellow'] if r >= 60 else COLORS['red'] for r in stats_df['Rate']]
+    
+    fig = go.Figure(data=[
+        go.Bar(
+            x=stats_df['School'],
+            y=stats_df['Rate'],
+            marker_color=colors_list,
+            text=[f"{r:.0f}%" for r in stats_df['Rate']],
+            textposition='outside',
+            hovertemplate='<b>%{x}</b><br>Allocation Rate: %{y:.0f}%<br><i>Click to drill down</i><extra></extra>'
+        )
+    ])
+    
+    fig.update_layout(
+        title='🏫 School Allocation Rates',
+        xaxis_title='School',
+        yaxis_title='Allocation Rate %',
+        paper_bgcolor=COLORS['dark_bg'],
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color=COLORS['white']),
+        height=400,
+        yaxis=dict(range=[0, 100])
+    )
+    
+    return fig, stats_df
+
+def equity_breakdown_chart(df):
+    """Equity group breakdown - clickable"""
+    if df is None or len(df) == 0:
+        return go.Figure()
+    
+    equity_data = []
+    for flag in ['Flag_ATSI', 'Flag_EALD', 'Flag_SWD', 'Flag_ASD']:
+        count = len(df[df[flag] == 'Yes'])
+        equity_data.append({'Group': flag.replace('Flag_', ''), 'Count': count})
+    
+    equity_df = pd.DataFrame(equity_data)
+    
+    fig = go.Figure(data=[
+        go.Bar(
+            x=equity_df['Group'],
+            y=equity_df['Count'],
+            marker_color=[COLORS['cyan'], COLORS['green'], COLORS['yellow'], COLORS['red']],
+            text=equity_df['Count'],
+            textposition='outside',
+            hovertemplate='<b>%{x}</b><br>Count: %{y}<br><i>Click to drill down</i><extra></extra>'
+        )
+    ])
+    
+    fig.update_layout(
+        title='⚖️ Equity Groups',
+        xaxis_title='Group',
+        yaxis_title='Number of Students',
+        paper_bgcolor=COLORS['dark_bg'],
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color=COLORS['white']),
+        height=400
+    )
+    
+    return fig, equity_df
+
+def allocation_status_chart(df):
+    """Allocation status breakdown"""
+    if df is None or len(df) == 0:
+        return go.Figure()
+    
+    status_counts = df['Allocation_Status'].value_counts()
+    
+    fig = go.Figure(data=[
+        go.Pie(
+            labels=status_counts.index,
+            values=status_counts.values,
+            marker_colors=[COLORS['green'], COLORS['red'], COLORS['cyan']],
+            textposition='inside',
+            textinfo='label+percent',
+            hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percent}<extra></extra>'
+        )
+    ])
+    
+    fig.update_layout(
+        title='📊 Allocation Status',
+        paper_bgcolor=COLORS['dark_bg'],
+        font=dict(color=COLORS['white']),
+        height=400
+    )
+    
+    return fig
 
 # ============================================================================
-# PAGE: MORE OPTIONS
-# ============================================================================
-
-def page_more_options(df):
-    st.markdown(f"<h2 style='color: {COLOR_CYAN};'>📊 MORE ANALYSIS</h2>", unsafe_allow_html=True)
-    if st.button("⬅️ Back"):
-        update_filter('current_page', 'home')
-        st.rerun()
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("### 📈 **Cohort Tracker**")
-        st.info("Track student progression through terms and years")
-        if st.button("View Cohort Tracker"):
-            update_filter('current_page', 'cohort')
-            st.rerun()
-    
-    with col2:
-        st.markdown("### 🧩 **Flag Analysis**")
-        st.info("Analyze comorbidity and flag combinations")
-        if st.button("View Flag Analysis"):
-            update_filter('current_page', 'flags')
-            st.rerun()
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("### 🎓 **Program Analysis**")
-        st.info("Detailed program utilization and fit")
-        if st.button("View Program Analysis"):
-            update_filter('current_page', 'program')
-            st.rerun()
-    
-    with col2:
-        st.markdown("### 📊 **Term Comparison**")
-        st.info("Compare trends across terms")
-        if st.button("View Term Comparison"):
-            update_filter('current_page', 'term')
-            st.rerun()
-    
-    st.markdown("### 🔍 **Data Quality**")
-    st.info("Check data completeness and anomalies")
-    if st.button("View Data Quality"):
-        update_filter('current_page', 'quality')
-        st.rerun()
-
-# ============================================================================
-# PAGE: COHORT TRACKER
-# ============================================================================
-
-def page_cohort(df):
-    st.markdown(f"<h2 style='color: {COLOR_CYAN};'>📈 COHORT TRACKER</h2>", unsafe_allow_html=True)
-    if st.button("⬅️ Back"):
-        update_filter('current_page', 'more')
-        st.rerun()
-    
-    if df is None:
-        st.warning("No data")
-        return
-    
-    filtered_df = apply_filters(df, get_active_filters())
-    
-    # Cohort selector
-    years = sorted(get_unique_values(filtered_df, 'Referral_Year'))
-    selected_year = st.selectbox("📆 Select Year", years)
-    
-    cohort = filtered_df[filtered_df['Referral_Year'] == selected_year]
-    
-    st.markdown(f"### 📊 **Cohort {selected_year}: {len(cohort)} students**")
-    
-    # Progression
-    col1, col2, col3, col4 = st.columns(4)
-    t1 = len(cohort[cohort['Term'] == 1])
-    t2 = len(cohort[cohort['Term'] == 2])
-    t3 = len(cohort[cohort['Term'] == 3])
-    t4 = len(cohort[cohort['Term'] == 4])
-    
-    col1.metric("T1 📅", t1)
-    col2.metric("T2 📅", t2)
-    col3.metric("T3 📅", t3)
-    col4.metric("T4 📅", t4)
-    
-    # Waterfall
-    fig = go.Figure(go.Waterfall(
-        x=['Referred', 'T1', 'T2', 'T3', 'T4'],
-        y=[len(cohort), t1, t2, t3, t4],
-        marker_color=[COLOR_CYAN, COLOR_GREEN, COLOR_GREEN, COLOR_GREEN, COLOR_TEAL]
-    ))
-    fig.update_layout(title=f"Cohort {selected_year} Progression", paper_bgcolor='rgba(0,0,0,0)',
-                     plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=400)
-    st.plotly_chart(fig, use_container_width=True)
-
-# ============================================================================
-# PAGE: FLAG ANALYSIS
-# ============================================================================
-
-def page_flags(df):
-    st.markdown(f"<h2 style='color: {COLOR_CYAN};'>🧩 FLAG & COMORBIDITY</h2>", unsafe_allow_html=True)
-    if st.button("⬅️ Back"):
-        update_filter('current_page', 'more')
-        st.rerun()
-    
-    if df is None:
-        st.warning("No data")
-        return
-    
-    filtered_df = apply_filters(df, get_active_filters())
-    
-    st.markdown("### 🧩 **Individual Flags**")
-    
-    flags = ['Flag_ASD', 'Flag_ADHD', 'Flag_SWD', 'Flag_ODD']
-    flag_names = ['🧩 ASD', '⚡ ADHD', '♿ SWD', '😤 ODD']
-    
-    flag_stats = []
-    for flag, name in zip(flags, flag_names):
-        if flag in filtered_df.columns:
-            count = len(filtered_df[filtered_df[flag] == 'Yes'])
-            total = len(filtered_df)
-            rate = count / total * 100 if total > 0 else 0
-            flag_stats.append({'Flag': name, 'Count': count, 'Rate%': f"{rate:.0f}%"})
-    
-    if flag_stats:
-        stats_df = pd.DataFrame(flag_stats)
-        st.dataframe(stats_df, use_container_width=True, hide_index=True)
-
-# ============================================================================
-# PAGE: PROGRAM ANALYSIS
-# ============================================================================
-
-def page_program(df):
-    st.markdown(f"<h2 style='color: {COLOR_CYAN};'>🎓 PROGRAM ANALYSIS</h2>", unsafe_allow_html=True)
-    if st.button("⬅️ Back"):
-        update_filter('current_page', 'more')
-        st.rerun()
-    
-    if df is None:
-        st.warning("No data")
-        return
-    
-    filtered_df = apply_filters(df, get_active_filters())
-    
-    st.markdown("### 🎓 **Program Breakdown**")
-    
-    programs = ['JP 👶', 'PY 👧', 'SY 👦']
-    prog_codes = ['JP', 'PY', 'SY']
-    
-    prog_cols = st.columns(3)
-    
-    for idx, (prog, code) in enumerate(zip(programs, prog_codes)):
-        with prog_cols[idx]:
-            prog_data = filtered_df[filtered_df['Allocated_Program'] == code]
-            allocated = len(prog_data[prog_data['Allocation_Status'] == 'Allocated'])
-            waiting = len(prog_data[prog_data['Allocation_Status'] == 'On Waiting List'])
-            
-            st.markdown(f"### {prog}")
-            st.metric("Allocated", allocated)
-            st.metric("Waiting", waiting)
-
-# ============================================================================
-# PAGE: TERM COMPARISON
-# ============================================================================
-
-def page_term(df):
-    st.markdown(f"<h2 style='color: {COLOR_CYAN};'>📊 TERM COMPARISON</h2>", unsafe_allow_html=True)
-    if st.button("⬅️ Back"):
-        update_filter('current_page', 'more')
-        st.rerun()
-    
-    if df is None:
-        st.warning("No data")
-        return
-    
-    filtered_df = apply_filters(df, get_active_filters())
-    
-    st.markdown("### 📈 **Term-by-Term Analysis**")
-    
-    term_stats = []
-    for term in [1, 2, 3, 4]:
-        term_data = filtered_df[filtered_df['Term'] == term]
-        if len(term_data) > 0:
-            allocated = len(term_data[term_data['Allocation_Status'] == 'Allocated'])
-            rate = allocated / len(term_data) * 100
-            term_stats.append({'Term': f'T{term}', 'Referred': len(term_data), 'Allocated': allocated, 'Rate%': f"{rate:.0f}%"})
-    
-    if term_stats:
-        stats_df = pd.DataFrame(term_stats)
-        st.dataframe(stats_df, use_container_width=True, hide_index=True)
-    
-    # Chart
-    terms = [t['Term'] for t in term_stats]
-    rates = [float(t['Rate%'].rstrip('%')) for t in term_stats]
-    
-    if terms:
-        fig = go.Figure(data=go.Bar(x=terms, y=rates, marker_color=[COLOR_GREEN if r >= 60 else COLOR_YELLOW for r in rates]))
-        fig.update_layout(title='Allocation Rate by Term', paper_bgcolor='rgba(0,0,0,0)',
-                         plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#ffffff'), height=350, yaxis=dict(range=[0, 100]))
-        st.plotly_chart(fig, use_container_width=True)
-
-# ============================================================================
-# PAGE: DATA QUALITY
-# ============================================================================
-
-def page_quality(df):
-    st.markdown(f"<h2 style='color: {COLOR_CYAN};'>🔍 DATA QUALITY</h2>", unsafe_allow_html=True)
-    if st.button("⬅️ Back"):
-        update_filter('current_page', 'more')
-        st.rerun()
-    
-    if df is None:
-        st.warning("No data")
-        return
-    
-    st.markdown("### 📊 **Data Completeness**")
-    
-    completeness = {}
-    for col in df.columns:
-        filled = df[col].notna().sum()
-        total = len(df)
-        pct = filled / total * 100
-        completeness[col] = pct
-    
-    complete_df = pd.DataFrame(list(completeness.items()), columns=['Column', 'Completeness%'])
-    complete_df['Completeness%'] = complete_df['Completeness%'].round(0).astype(int)
-    
-    st.dataframe(complete_df, use_container_width=True, hide_index=True)
-    
-    st.markdown("### 📋 **Data Summary**")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("📊 Total Records", len(df))
-    col2.metric("📋 Total Columns", len(df.columns))
-    col3.metric("✅ Avg Completeness", f"{complete_df['Completeness%'].mean():.0f}%")
-
-# ============================================================================
-# MAIN APP
+# MAIN DASHBOARD
 # ============================================================================
 
 def main():
-    initialize_session()
-    
+    # Load data
     if not st.session_state['data_loaded']:
-        default_data = load_default_data()
-        if default_data is not None:
-            st.session_state['df'] = default_data
+        default = load_data()
+        if default is not None:
+            st.session_state['df'] = default
             st.session_state['data_loaded'] = True
-            st.session_state['data_filename'] = "Default"
     
-    page = get_active_filters().get('current_page', 'home')
     df = st.session_state['df']
     
-    if page == 'home':
-        page_home(df)
-    elif page == 'waiting':
-        page_waiting(df)
-    elif page == 'equity':
-        page_equity(df)
-    elif page == 'school':
-        page_school(df)
-    elif page == 'more':
-        page_more_options(df)
-    elif page == 'cohort':
-        page_cohort(df)
-    elif page == 'flags':
-        page_flags(df)
-    elif page == 'program':
-        page_program(df)
-    elif page == 'term':
-        page_term(df)
-    elif page == 'quality':
-        page_quality(df)
+    # Header
+    st.markdown("# 📊 CLC-LBU INTERACTIVE ALLOCATION DASHBOARD")
+    st.markdown("_Explore allocation data with 4+ levels of drill-down analysis_")
+    
+    # Data management
+    col1, col2, col3 = st.columns([2, 1, 1])
+    with col1:
+        uploaded = st.file_uploader("📤 Upload Excel", type=['xlsx', 'xls'])
+        if uploaded:
+            df = pd.read_excel(uploaded)
+            for col in ['Term', 'Referral_Year']:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
+            st.session_state['df'] = df
+            st.session_state['data_loaded'] = True
+            st.success(f"✅ Loaded: {uploaded.name}")
+    
+    with col3:
+        if st.button("📥 Load Demo"):
+            st.session_state['df'] = create_sample()
+            st.session_state['data_loaded'] = True
+            st.rerun()
+    
+    if df is None:
+        st.info("👆 Upload or load demo data")
+        return
+    
+    # Breadcrumb navigation
+    show_breadcrumb()
+    
+    # Apply drill filters
+    filtered_df = apply_drill_filters(df)
+    metrics = get_metrics(filtered_df)
+    
+    # Key metrics
+    st.markdown("### 📈 Key Metrics")
+    cols = st.columns(4)
+    cols[0].metric("📋 Total", metrics['total'])
+    cols[1].metric("✅ Allocated", metrics['allocated'], f"{metrics['rate']:.0f}%")
+    cols[2].metric("⏳ Waiting", metrics['waiting'])
+    cols[3].metric("📊 Allocation Rate", f"{metrics['rate']:.0f}%")
+    
+    st.markdown("---")
+    
+    # LEVEL 1: OVERVIEW
+    if not st.session_state['drill_path']:
+        st.markdown("### 🎯 Overview - Click any chart to drill down")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            fig1, prog_data = program_distribution_chart(filtered_df)
+            st.plotly_chart(fig1, use_container_width=True)
+            
+            st.markdown("**🎓 Drill by Program:**")
+            for _, row in prog_data.iterrows():
+                if st.button(f"→ {row['Program']} ({row['Count']} students)", key=f"prog_{row['Program']}"):
+                    drill_to("Program", "Allocated_Program", row['Program'])
+        
+        with col2:
+            fig2, school_data = school_performance_chart(filtered_df)
+            st.plotly_chart(fig2, use_container_width=True)
+            
+            st.markdown("**🏫 Drill by School:**")
+            school_cols = st.columns(2)
+            schools = sorted(filtered_df['Referring_School'].unique())
+            for idx, school in enumerate(schools):
+                col = school_cols[idx % 2]
+                with col:
+                    if st.button(f"→ {school}", key=f"school_{idx}"):
+                        drill_to("School", "Referring_School", school)
+        
+        st.markdown("---")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            fig3 = allocation_status_chart(filtered_df)
+            st.plotly_chart(fig3, use_container_width=True)
+        
+        with col2:
+            fig4, equity_data = equity_breakdown_chart(filtered_df)
+            st.plotly_chart(fig4, use_container_width=True)
+            
+            st.markdown("**⚖️ Drill by Equity Group:**")
+            equity_cols = st.columns(2)
+            for idx, (_, row) in enumerate(equity_data.iterrows()):
+                col = equity_cols[idx % 2]
+                with col:
+                    if st.button(f"→ {row['Group']} ({row['Count']})", key=f"equity_{row['Group']}"):
+                        flag_map = {'ATSI': 'Flag_ATSI', 'EALD': 'Flag_EALD', 'SWD': 'Flag_SWD', 'ASD': 'Flag_ASD'}
+                        # Special handling for flags
+                        st.session_state['drill_path'].append(f"Equity: {row['Group']}")
+                        st.session_state['drill_filters'][flag_map[row['Group']]] = 'Yes'
+                        st.rerun()
+    
+    # LEVEL 2+: DETAILED DRILL-DOWN
     else:
-        page_home(df)
+        st.markdown(f"### 🔍 Detailed Analysis")
+        
+        # Show current filtered data summary
+        st.markdown(f"**Currently viewing:** {len(filtered_df)} students")
+        
+        # Metrics for this drill level
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("📋 Total", len(filtered_df))
+        allocated = len(filtered_df[filtered_df['Allocation_Status'] == 'Allocated'])
+        rate = (allocated / len(filtered_df) * 100) if len(filtered_df) > 0 else 0
+        col2.metric("✅ Allocated", allocated, f"{rate:.0f}%")
+        col3.metric("⏳ Waiting", len(filtered_df[filtered_df['Allocation_Status'] == 'On Waiting List']))
+        col4.metric("📊 Rate", f"{rate:.0f}%")
+        
+        # Show available drill-down options based on current filters
+        st.markdown("---")
+        st.markdown("**📍 Next Level Drill-Down Options:**")
+        
+        # Show which dimensions are still available
+        current_dims = set(st.session_state['drill_filters'].keys())
+        available_dims = {
+            'Allocated_Program': filtered_df['Allocated_Program'].unique(),
+            'Referring_School': filtered_df['Referring_School'].unique(),
+            'Term': sorted(filtered_df['Term'].unique()),
+            'Referral_Year': sorted(filtered_df['Referral_Year'].unique()),
+        }
+        
+        for dim_key, dim_values in available_dims.items():
+            if dim_key not in current_dims and len(dim_values) > 1:
+                dim_label = {'Allocated_Program': '🎓 Program', 'Referring_School': '🏫 School', 
+                            'Term': '📅 Term', 'Referral_Year': '📆 Year'}[dim_key]
+                
+                st.markdown(f"**{dim_label}:**")
+                cols = st.columns(min(4, len(dim_values)))
+                
+                for idx, val in enumerate(dim_values):
+                    col = cols[idx % len(cols)]
+                    with col:
+                        if st.button(f"→ {val}", key=f"drill_{dim_key}_{val}"):
+                            drill_to(dim_label, dim_key, val)
+        
+        # Show data table
+        st.markdown("---")
+        st.markdown(f"**📊 Data Table ({len(filtered_df)} records):**")
+        
+        # De-identified display
+        cols_show = [c for c in ['Referring_School', 'Allocated_Program', 'Allocation_Status', 
+                                  'Flag_ATSI', 'Flag_EALD', 'Flag_SWD', 'Flag_ASD', 'Term', 'Referral_Year'] 
+                     if c in filtered_df.columns]
+        st.dataframe(filtered_df[cols_show], use_container_width=True, height=400)
 
 if __name__ == "__main__":
     main()
