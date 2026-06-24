@@ -209,10 +209,11 @@ def show_programs(df):
     st.markdown("Click a program to see schools and equity breakdown")
     
     cols = st.columns(3)
-    programs = sorted(df['Allocated_Program'].unique())
+    # Filter out NaN values before sorting
+    programs = sorted([p for p in df['Allocated_Program'].unique() if pd.notna(p)])
     
     for idx, prog in enumerate(programs):
-        with cols[idx]:
+        with cols[idx % 3]:
             prog_df = df[df['Allocated_Program'] == prog]
             count = len(prog_df)
             allocated = len(prog_df[prog_df['Allocation_Status'] == 'Allocated'])
@@ -238,7 +239,7 @@ def show_program_detail(df):
     # SCHOOLS
     st.markdown("### 🏫 Schools in this Program")
     
-    schools = sorted(prog_df['Referring_School'].unique())
+    schools = sorted([s for s in prog_df['Referring_School'].unique() if pd.notna(s)])
     cols = st.columns(min(3, len(schools)))
     
     for idx, school in enumerate(schools):
