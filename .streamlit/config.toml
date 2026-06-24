@@ -1,2 +1,18 @@
 [client]
 showSidebarNavigation = false
+[theme]
+primaryColor = "#00e5ff"
+backgroundColor = "#0a0e27"
+secondaryBackgroundColor = "#1a1a3e"
+textColor = "#ffffff"
+font = "sans serif"
+
+[client]
+showErrorDetails = true
+
+[logger]
+level = "info"
+
+[server]
+headless = true
+runOnSave = true
