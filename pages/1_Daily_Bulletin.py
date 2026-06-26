@@ -102,7 +102,7 @@ def init_state():
             st.session_state[k] = v
 
 init_state()
-ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "clcstaff2026")
+ADMIN_PASSWORD = "clcstaff2026"  # staff password, matches the staff PIN
 
 TRANSPORT_OPTIONS = ["Taxi","Parent/Carer","Other"]
 CHANGE_TYPE_OPTIONS = ["Early Departure","Late Arrival","No Show","Alternative Pickup","Alternative Drop-off","Absent - not attending","Other"]
