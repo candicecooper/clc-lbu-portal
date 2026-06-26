@@ -400,8 +400,193 @@ def intersectionality(df):
     return fig
 
 # ============================================================================
-# MAIN
+# COMPARISON ANALYSIS
 # ============================================================================
+
+def show_comparison(df):
+    """Compare programs and terms flexibly"""
+    
+    st.markdown("### 🔄 Program & Term Comparison")
+    st.info("💡 Select what to compare: multiple programs, multiple terms, or same term across years")
+    
+    # Control panel
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        comparison_type = st.radio("Compare by:", ["Programs", "Terms", "Years (same term)"])
+    
+    with col2:
+        st.write("")  # Spacing
+    
+    # Get comparison data based on selection
+    compare_data = []
+    
+    if comparison_type == "Programs":
+        programs = sorted([p for p in df['Allocated_Program'].unique() if pd.notna(p)])
+        selected_progs = st.multiselect("Select programs to compare", programs, default=programs)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            selected_year = st.selectbox("Year", ['All'] + sorted([str(y) for y in df['Referral_Year'].unique() if y > 0]))
+        with col2:
+            selected_term = st.selectbox("Term", ['All'] + sorted([str(t) for t in df['Term'].unique() if t > 0]))
+        
+        for prog in selected_progs:
+            subset = df[df['Allocated_Program'] == prog]
+            if selected_year != 'All':
+                subset = subset[subset['Referral_Year'] == int(selected_year)]
+            if selected_term != 'All':
+                subset = subset[subset['Term'] == int(selected_term)]
+            
+            compare_data.append({
+                'Group': prog,
+                'Total': len(subset),
+                'Allocated': len(subset[subset['Allocation_Status'] == 'Allocated']),
+                'Active': len(subset[subset['Allocation_Status'] == 'Active']),
+                'ATSI': len(subset[subset['Flag_ATSI'] == 'Yes']),
+                'EALD': len(subset[subset['Flag_EALD'] == 'Yes']),
+                'SWD': len(subset[subset['Flag_SWD'] == 'Yes'])
+            })
+    
+    elif comparison_type == "Terms":
+        terms = sorted([t for t in df['Term'].unique() if t > 0])
+        selected_terms = st.multiselect("Select terms to compare", [str(t) for t in terms], default=[str(t) for t in terms])
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            selected_prog = st.selectbox("Program", ['All'] + sorted([p for p in df['Allocated_Program'].unique() if pd.notna(p)]))
+        with col2:
+            selected_year = st.selectbox("Year", ['All'] + sorted([str(y) for y in df['Referral_Year'].unique() if y > 0]))
+        
+        for term_str in selected_terms:
+            term = int(term_str)
+            subset = df[df['Term'] == term]
+            if selected_prog != 'All':
+                subset = subset[subset['Allocated_Program'] == selected_prog]
+            if selected_year != 'All':
+                subset = subset[subset['Referral_Year'] == int(selected_year)]
+            
+            compare_data.append({
+                'Group': f'Term {term}',
+                'Total': len(subset),
+                'Allocated': len(subset[subset['Allocation_Status'] == 'Allocated']),
+                'Active': len(subset[subset['Allocation_Status'] == 'Active']),
+                'ATSI': len(subset[subset['Flag_ATSI'] == 'Yes']),
+                'EALD': len(subset[subset['Flag_EALD'] == 'Yes']),
+                'SWD': len(subset[subset['Flag_SWD'] == 'Yes'])
+            })
+    
+    else:  # Years (same term)
+        years = sorted([y for y in df['Referral_Year'].unique() if y > 0])
+        selected_years = st.multiselect("Select years to compare", [str(y) for y in years], default=[str(y) for y in years])
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            selected_term = st.selectbox("Term", sorted([str(t) for t in df['Term'].unique() if t > 0]))
+        with col2:
+            selected_prog = st.selectbox("Program", ['All'] + sorted([p for p in df['Allocated_Program'].unique() if pd.notna(p)]))
+        
+        for year_str in selected_years:
+            year = int(year_str)
+            subset = df[(df['Referral_Year'] == year) & (df['Term'] == int(selected_term))]
+            if selected_prog != 'All':
+                subset = subset[subset['Allocated_Program'] == selected_prog]
+            
+            compare_data.append({
+                'Group': str(year),
+                'Total': len(subset),
+                'Allocated': len(subset[subset['Allocation_Status'] == 'Allocated']),
+                'Active': len(subset[subset['Allocation_Status'] == 'Active']),
+                'ATSI': len(subset[subset['Flag_ATSI'] == 'Yes']),
+                'EALD': len(subset[subset['Flag_EALD'] == 'Yes']),
+                'SWD': len(subset[subset['Flag_SWD'] == 'Yes'])
+            })
+    
+    # Display comparison
+    if compare_data:
+        compare_df = pd.DataFrame(compare_data)
+        
+        st.markdown("---")
+        st.markdown("### 📊 Comparison Results")
+        
+        # Metrics comparison
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            fig = go.Figure(data=[
+                go.Bar(x=compare_df['Group'], y=compare_df['Total'], marker_color=COLORS['cyan'],
+                       text=compare_df['Total'], textposition='outside')
+            ])
+            fig.update_layout(title='Total Students', paper_bgcolor=COLORS['dark_bg'], 
+                            plot_bgcolor='rgba(0,0,0,0)', font=dict(color=COLORS['white']), height=300)
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            fig = go.Figure(data=[
+                go.Bar(x=compare_df['Group'], y=compare_df['Allocated'], marker_color=COLORS['green'],
+                       text=compare_df['Allocated'], textposition='outside')
+            ])
+            fig.update_layout(title='Allocated Students', paper_bgcolor=COLORS['dark_bg'],
+                            plot_bgcolor='rgba(0,0,0,0)', font=dict(color=COLORS['white']), height=300)
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col3:
+            fig = go.Figure(data=[
+                go.Bar(x=compare_df['Group'], y=compare_df['Active'], marker_color=COLORS['amber'],
+                       text=compare_df['Active'], textposition='outside')
+            ])
+            fig.update_layout(title='Active Students', paper_bgcolor=COLORS['dark_bg'],
+                            plot_bgcolor='rgba(0,0,0,0)', font=dict(color=COLORS['white']), height=300)
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col4:
+            allocation_rate = (compare_df['Allocated'] / compare_df['Total'] * 100).round(0).astype(int)
+            fig = go.Figure(data=[
+                go.Bar(x=compare_df['Group'], y=allocation_rate, marker_color=COLORS['yellow'],
+                       text=[f"{rate}%" for rate in allocation_rate], textposition='outside')
+            ])
+            fig.update_layout(title='Allocation Rate %', paper_bgcolor=COLORS['dark_bg'],
+                            plot_bgcolor='rgba(0,0,0,0)', font=dict(color=COLORS['white']), 
+                            yaxis=dict(range=[0, 100]), height=300)
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # Equity comparison
+        st.markdown("---")
+        st.markdown("### ⚖️ Equity Distribution")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            fig = go.Figure(data=[
+                go.Bar(x=compare_df['Group'], y=compare_df['ATSI'], marker_color=COLORS['atsi'],
+                       text=compare_df['ATSI'], textposition='outside')
+            ])
+            fig.update_layout(title='🇦🇺 ATSI Students', paper_bgcolor=COLORS['dark_bg'],
+                            plot_bgcolor='rgba(0,0,0,0)', font=dict(color=COLORS['white']), height=300)
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            fig = go.Figure(data=[
+                go.Bar(x=compare_df['Group'], y=compare_df['EALD'], marker_color=COLORS['eald'],
+                       text=compare_df['EALD'], textposition='outside')
+            ])
+            fig.update_layout(title='🌍 EALD Students', paper_bgcolor=COLORS['dark_bg'],
+                            plot_bgcolor='rgba(0,0,0,0)', font=dict(color=COLORS['white']), height=300)
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col3:
+            fig = go.Figure(data=[
+                go.Bar(x=compare_df['Group'], y=compare_df['SWD'], marker_color=COLORS['swd'],
+                       text=compare_df['SWD'], textposition='outside')
+            ])
+            fig.update_layout(title='♿ SWD Students', paper_bgcolor=COLORS['dark_bg'],
+                            plot_bgcolor='rgba(0,0,0,0)', font=dict(color=COLORS['white']), height=300)
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # Data table
+        st.markdown("---")
+        st.markdown("### 📋 Comparison Table")
+        st.dataframe(compare_df, use_container_width=True)
 
 def main():
     if not st.session_state['data_loaded']:
@@ -485,12 +670,13 @@ def main():
     # ALL TABS
     st.markdown("## 📊 Analysis")
     
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
         "⚖️ Equity by Program",
         "📈 Trends",
         "🧩 SWD Types",
         "📊 Complexity",
         "🔀 Intersectionality",
+        "🔄 Compare Programs/Terms",
         "📋 Raw Data",
         "ℹ️ Key Insights"
     ])
