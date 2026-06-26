@@ -334,7 +334,32 @@ def get_equity_count(df, flag):
 
 def show_current_cohort(df):
     """Show students currently at CLC-LBU"""
-    current = df[df['Allocation_Status'] == 'Current']
+    
+    # DEBUG: Show available statuses
+    with st.expander("🔍 Debug: Available Status Values"):
+        st.write("Unique Allocation_Status values in data:")
+        statuses = df['Allocation_Status'].unique()
+        st.write(statuses)
+    
+    # Filter for current - match case-insensitive
+    current = df[df['Allocation_Status'].str.lower() == 'current']
+    
+    # If no "Current", try "In Progress" or other common values
+    if len(current) == 0:
+        possible_statuses = [s for s in df['Allocation_Status'].unique() if pd.notna(s)]
+        st.warning(f"⚠️ No students with status 'Current'. Found statuses: {possible_statuses}")
+        
+        # Try alternative names
+        for alt_status in ['In Progress', 'Active', 'Enrolled', 'current']:
+            alt_current = df[df['Allocation_Status'].str.lower() == alt_status.lower()]
+            if len(alt_current) > 0:
+                st.info(f"✅ Using status: '{alt_status}' ({len(alt_current)} students)")
+                current = alt_current
+                break
+    
+    if len(current) == 0:
+        st.error("❌ No current students found. Please check your data's Allocation_Status values.")
+        return
     
     st.markdown("### 👥 Current Students at CLC-LBU")
     
