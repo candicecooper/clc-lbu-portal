@@ -1,6 +1,5 @@
 from theme import apply_clc_theme
-from auth import get_staff_name
-from confidential_auth import require_confidential_auth, confidential_logout_button
+from auth import require_auth, logout_button, get_staff_name
 import streamlit as st
 from supabase import create_client, Client
 from datetime import datetime, date
@@ -12,8 +11,8 @@ import os
 st.set_page_config(page_title="CLC PDP Builder", page_icon="🎯", layout="wide",
                    initial_sidebar_state="collapsed")
 apply_clc_theme()
-require_confidential_auth("PDP Builder", "🎯")
-confidential_logout_button("sidebar")
+require_auth("PDP Builder", "🎯")
+logout_button("sidebar")
 
 TEAL = "#1A7A7A"
 AMBER = "#C8760A"
@@ -26,6 +25,27 @@ st.sidebar.markdown(
     f'🏠 Back to Staff Portal</a>',
     unsafe_allow_html=True
 )
+
+# ── Admin gate (matches auth.py is_portal_admin pattern) ──────────────────────
+def require_portal_admin(message="The PDP Builder is in the leadership area."):
+    try:
+        admin_pw = st.secrets.get("ADMIN_PASSWORD", "")
+    except Exception:
+        admin_pw = os.environ.get("ADMIN_PASSWORD", "")
+    if st.session_state.get("is_portal_admin"):
+        return True
+    st.warning(f"🔒 {message}")
+    entered = st.text_input("Admin password", type="password", key="pdp_admin_pw")
+    if st.button("Unlock", type="primary", key="pdp_admin_btn"):
+        if entered and entered == admin_pw:
+            st.session_state.is_portal_admin = True
+            st.rerun()
+        else:
+            st.error("Incorrect admin password.")
+    st.stop()
+    return False
+
+require_portal_admin()
 
 # ── Supabase ──────────────────────────────────────────────────────────────────
 @st.cache_resource
@@ -405,10 +425,11 @@ def save_plan():
     supabase.table("pdp_plans").insert(payload).execute()
 
 def load_my_plans() -> list:
-    name = get_staff_name() or ""
+    # Admin-only page: show every saved plan, labelled by employee, not just ones
+    # whose stored staff_name matches the current login (which hid earlier saves).
     res = (supabase.table("pdp_plans")
-           .select("id, employee_name, plan_date, updated_at")
-           .eq("staff_name", name).order("updated_at", desc=True).execute())
+           .select("id, employee_name, staff_name, plan_date, updated_at")
+           .order("updated_at", desc=True).limit(200).execute())
     return res.data or []
 
 def load_plan(plan_id: str):
@@ -882,9 +903,11 @@ except Exception:
     plans = []
 
 if plans:
-    opts = {f"{p.get('employee_name','(no name)')} · {p.get('plan_date','')} "
-            f"· saved {str(p.get('updated_at',''))[:16]}": p["id"] for p in plans}
-    chosen = sc2.selectbox("My saved plans", list(opts.keys()), index=None,
+    def _label(p):
+        who = (p.get("employee_name") or "").strip() or (p.get("staff_name") or "").strip() or "(no name)"
+        return f"{who} · {p.get('plan_date','')} · saved {str(p.get('updated_at',''))[:10]}"
+    opts = {_label(p): p["id"] for p in plans}
+    chosen = sc2.selectbox("Saved plans (all staff)", list(opts.keys()), index=None,
                            placeholder="Choose a saved plan…")
     lc1, lc2 = sc2.columns(2)
     if lc1.button("Load", use_container_width=True, disabled=chosen is None):
