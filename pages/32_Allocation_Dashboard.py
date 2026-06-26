@@ -1,6 +1,7 @@
 """
-CLC-LBU INTERACTIVE ANALYTICS - ENHANCED
-Added: Current Cohort view + Modern styling + Better text contrast
+CLC-LBU STRATEGIC ANALYTICS - COMPREHENSIVE INSIGHTS
+Comorbidity, Intersectionality, Complexity, Retention, School Concentration
+Raw data hidden in separate tab
 """
 
 import streamlit as st
@@ -9,22 +10,21 @@ import plotly.graph_objects as go
 import plotly.express as px
 import os
 import random
-from datetime import datetime, timedelta
+from datetime import datetime
 
 st.set_page_config(
-    page_title="📊 CLC-LBU Interactive Analytics",
+    page_title="📊 CLC-LBU Strategic Analytics",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # ============================================================================
-# ENHANCED MODERN THEME CSS
+# ENHANCED CSS
 # ============================================================================
 
 st.markdown("""
 <style>
-    /* DARK BACKGROUND */
     html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
         background-color: #0a0e27 !important;
         color: #ffffff !important;
@@ -35,7 +35,6 @@ st.markdown("""
         border-right: 2px solid rgba(26, 122, 122, 0.5) !important;
     }
     
-    /* BRIGHT HEADERS */
     h1 {
         color: #00e5ff !important;
         text-shadow: 0 0 20px rgba(0, 229, 255, 0.5) !important;
@@ -57,14 +56,8 @@ st.markdown("""
         padding-left: 8px !important;
     }
     
-    /* BRIGHT TEXT - GREY IS GONE */
-    p, span, label, .stText, [data-testid="stMarkdownContainer"] {
+    p, span, label, .stText {
         color: #e8e8e8 !important;
-    }
-    
-    /* MODERN FILTER BOXES - SIMPLIFIED */
-    .stSelectbox > div {
-        background-color: transparent !important;
     }
     
     .stSelectbox > div > div {
@@ -80,31 +73,18 @@ st.markdown("""
         font-weight: bold !important;
     }
     
-    .stSelectbox input {
-        color: #00e5ff !important;
-        font-weight: bold !important;
-    }
-    
-    .stSelectbox label {
-        color: #00e5ff !important;
-        font-weight: bold !important;
-        font-size: 0.95em !important;
-    }
-    
-    /* GLOWING METRICS */
     [data-testid="metric-container"] {
         background: linear-gradient(135deg, rgba(26, 122, 122, 0.3) 0%, rgba(0, 229, 255, 0.08) 100%) !important;
         border: 1px solid rgba(0, 229, 255, 0.4) !important;
         border-left: 5px solid rgba(0, 229, 255, 0.9) !important;
         border-radius: 12px !important;
-        box-shadow: 0 0 25px rgba(0, 229, 255, 0.2), inset 0 0 15px rgba(0, 229, 255, 0.05) !important;
+        box-shadow: 0 0 25px rgba(0, 229, 255, 0.2) !important;
         padding: 18px !important;
     }
     
     [data-testid="metric-container"] > div:first-child {
         color: #00e5ff !important;
         font-weight: bold !important;
-        font-size: 1.1em !important;
     }
     
     [data-testid="metric-container"] > div:last-child {
@@ -113,7 +93,6 @@ st.markdown("""
         font-size: 1.8em !important;
     }
     
-    /* MODERN GLOWING BUTTONS */
     .stButton > button {
         background: linear-gradient(135deg, rgba(26, 122, 122, 0.5) 0%, rgba(0, 229, 255, 0.25) 100%) !important;
         color: #00e5ff !important;
@@ -121,17 +100,8 @@ st.markdown("""
         border-radius: 10px !important;
         box-shadow: 0 0 20px rgba(0, 229, 255, 0.25) !important;
         font-weight: bold !important;
-        padding: 10px 20px !important;
-        font-size: 0.95em !important;
     }
     
-    .stButton > button:hover {
-        background: linear-gradient(135deg, rgba(0, 229, 255, 0.4) 0%, rgba(26, 122, 122, 0.4) 100%) !important;
-        box-shadow: 0 0 30px rgba(0, 229, 255, 0.5), inset 0 0 10px rgba(0, 229, 255, 0.1) !important;
-        border-color: #00e5ff !important;
-    }
-    
-    /* INFO BOXES */
     .stInfo {
         background: linear-gradient(135deg, rgba(26, 122, 122, 0.25) 0%, rgba(0, 229, 255, 0.1) 100%) !important;
         border-left: 5px solid #00e5ff !important;
@@ -139,52 +109,8 @@ st.markdown("""
         box-shadow: 0 0 20px rgba(0, 229, 255, 0.15) !important;
     }
     
-    .stInfo > div {
-        color: #e8e8e8 !important;
-    }
-    
-    .stWarning {
-        background: linear-gradient(135deg, rgba(200, 118, 10, 0.2) 0%, rgba(200, 118, 10, 0.1) 100%) !important;
-        border-left: 5px solid #ffd93d !important;
-        border-radius: 10px !important;
-    }
-    
-    .stSuccess {
-        background: linear-gradient(135deg, rgba(0, 255, 0, 0.15) 0%, rgba(0, 255, 0, 0.05) 100%) !important;
-        border-left: 5px solid #00ff00 !important;
-        border-radius: 10px !important;
-    }
-    
-    /* TABS */
-    [data-testid="stTabs"] [role="tablist"] {
-        border-bottom: 2px solid rgba(0, 229, 255, 0.2) !important;
-    }
-    
-    [data-testid="stTabs"] [role="tab"] {
-        color: #a8a8a8 !important;
-        border-radius: 8px 8px 0 0 !important;
-        font-weight: 500 !important;
-    }
-    
-    [data-testid="stTabs"] [role="tab"][aria-selected="true"] {
-        background: linear-gradient(135deg, rgba(26, 122, 122, 0.3), rgba(0, 229, 255, 0.1)) !important;
-        border-bottom: 3px solid #00e5ff !important;
-        color: #00e5ff !important;
-        font-weight: bold !important;
-    }
-    
-    /* DIVIDER */
     hr {
         border: 1px solid rgba(0, 229, 255, 0.15) !important;
-    }
-    
-    /* DATAFRAME */
-    [data-testid="stDataFrame"] {
-        background-color: #0a0e27 !important;
-    }
-    
-    [data-testid="stDataFrame"] > div > div {
-        color: #e8e8e8 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -226,8 +152,6 @@ def init_session():
         st.session_state['selected_term'] = 'All'
     if 'selected_program' not in st.session_state:
         st.session_state['selected_program'] = 'All'
-    if 'selected_school' not in st.session_state:
-        st.session_state['selected_school'] = None
 
 init_session()
 
@@ -247,21 +171,19 @@ def load_data():
             return df
     return None
 
-def create_strategic_sample():
+def create_demo_data():
     schools = ['Le Fevre HS', 'Warradale Primary', 'Woodville HS', 'Brighton Secondary', 'Hendon PS', 'Cowandilla PS']
     programs = ['JP', 'PY', 'SY']
     years = [2024, 2025, 2026]
     
     data = []
-    # Create 250 total records
     for i in range(250):
-        # Distribute statuses: 40% Current, 40% Allocated, 20% Waiting
         if i < 100:
-            status = 'Current'  # 100 current students
+            status = 'Active'
         elif i < 200:
-            status = 'Allocated'  # 100 allocated
+            status = 'Allocated'
         else:
-            status = 'On Waiting List'  # 50 waiting
+            status = 'On Waiting List'
         
         data.append({
             'Referring_School': random.choice(schools),
@@ -293,334 +215,219 @@ def apply_filters(df):
     if st.session_state['selected_program'] != 'All':
         filtered = filtered[filtered['Allocated_Program'] == st.session_state['selected_program']]
     
-    if st.session_state['selected_school']:
-        filtered = filtered[filtered['Referring_School'] == st.session_state['selected_school']]
-    
     return filtered
 
-def get_equity_count(df, flag):
-    count = len(df[df[f'Flag_{flag}'] == 'Yes'])
-    total = len(df)
-    pct = (count / total * 100) if total > 0 else 0
-    return count, pct
-
 # ============================================================================
-# CURRENT COHORT VIEW
+# ADVANCED ANALYTICS
 # ============================================================================
 
-def show_current_cohort(df):
-    """Show students currently at CLC-LBU"""
+def add_complexity_score(df):
+    """Calculate complexity: number of diagnoses per student"""
+    flags = ['Flag_ATSI', 'Flag_EALD', 'Flag_SWD', 'Flag_ASD']
+    df['Complexity_Score'] = df[flags].apply(
+        lambda row: sum([1 for f in flags if row[f] == 'Yes']), 
+        axis=1
+    )
+    return df
+
+def comorbidity_analysis(df):
+    """Analyze students with multiple diagnoses"""
+    df = add_complexity_score(df)
     
-    # Get all unique statuses
-    all_statuses = df['Allocation_Status'].unique()
-    all_statuses = [s for s in all_statuses if pd.notna(s)]
+    # Count by complexity
+    complexity_counts = df['Complexity_Score'].value_counts().sort_index()
     
-    st.markdown("### 👥 Current Students at CLC-LBU")
-    
-    # Check if "Active" exists, if so use it by default
-    if "Active" in all_statuses:
-        default_status = "Active"
-        current = df[df['Allocation_Status'] == default_status]
-        st.success(f"✅ Showing {len(current)} students with status 'Active'")
-    else:
-        # Otherwise let user select
-        st.info("💡 **Select which status represents your 'current' students:**")
-        default_status = st.selectbox("📌 Current Status", all_statuses, index=0 if len(all_statuses) > 0 else None)
-        current = df[df['Allocation_Status'] == default_status]
-        
-        if len(current) == 0:
-            st.error(f"❌ No students found with status '{default_status}'")
-            st.write(f"Available statuses: {all_statuses}")
-            return
-        
-        st.success(f"✅ Found {len(current)} students with status '{default_status}'")
-    
-    # Allow changing status if needed
-    with st.expander("🔄 Change Current Status"):
-        new_status = st.selectbox("📌 Select a different status", all_statuses, index=list(all_statuses).index(default_status) if default_status in all_statuses else 0)
-        if new_status != default_status:
-            current = df[df['Allocation_Status'] == new_status]
-            st.info(f"Changed to: '{new_status}' ({len(current)} students)")
-    
-    st.markdown("---")
-    
-    # Key metrics for current cohort
-    col1, col2, col3, col4, col5 = st.columns(5)
-    
-    col1.metric("📍 Currently Enrolled", len(current))
-    
-    atsi_curr = len(current[current['Flag_ATSI'] == 'Yes'])
-    atsi_pct = (atsi_curr/len(current)*100) if len(current) > 0 else 0
-    col2.metric("🇦🇺 ATSI", f"{atsi_curr}", f"{atsi_pct:.0f}%")
-    
-    eald_curr = len(current[current['Flag_EALD'] == 'Yes'])
-    eald_pct = (eald_curr/len(current)*100) if len(current) > 0 else 0
-    col3.metric("🌍 EALD", f"{eald_curr}", f"{eald_pct:.0f}%")
-    
-    swd_curr = len(current[current['Flag_SWD'] == 'Yes'])
-    swd_pct = (swd_curr/len(current)*100) if len(current) > 0 else 0
-    col4.metric("♿ SWD", f"{swd_curr}", f"{swd_pct:.0f}%")
-    
-    asd_curr = len(current[current['Flag_ASD'] == 'Yes'])
-    asd_pct = (asd_curr/len(current)*100) if len(current) > 0 else 0
-    col5.metric("🧩 ASD", f"{asd_curr}", f"{asd_pct:.0f}%")
-    
-    st.markdown("---")
-    
-    # Program distribution
-    st.markdown("### 🎓 Current Students by Program")
-    prog_data = []
-    for prog in sorted([p for p in current['Allocated_Program'].unique() if pd.notna(p)]):
-        prog_count = len(current[current['Allocated_Program'] == prog])
-        prog_data.append({'Program': prog, 'Count': prog_count})
-    
-    if prog_data:
-        prog_df = pd.DataFrame(prog_data)
-        
-        fig1 = go.Figure(data=[
-            go.Bar(
-                x=prog_df['Program'],
-                y=prog_df['Count'],
-                marker_color=[COLORS['cyan'], COLORS['green'], COLORS['amber']][:len(prog_df)],
-                text=prog_df['Count'],
-                textposition='outside'
-            )
-        ])
-        
-        fig1.update_layout(
-            title='Current Students by Program',
-            paper_bgcolor=COLORS['dark_bg'],
-            plot_bgcolor='rgba(0,0,0,0)',
-            font=dict(color=COLORS['white']),
-            height=400,
-            xaxis_title='Program',
-            yaxis_title='Number of Students'
+    fig = go.Figure(data=[
+        go.Bar(
+            x=['No Flags', '1 Diagnosis', '2 Diagnoses', '3 Diagnoses', '4 Diagnoses'],
+            y=[complexity_counts.get(i, 0) for i in range(5)],
+            marker_color=['#00e5ff', '#ffd93d', '#ff9500', '#ff6b6b', '#ff4444'],
+            text=[complexity_counts.get(i, 0) for i in range(5)],
+            textposition='outside',
+            hovertemplate='<b>%{x}</b><br>Students: %{y}<extra></extra>'
         )
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.plotly_chart(fig1, use_container_width=True)
-        
-        with col2:
-            # Equity breakdown
-            st.markdown("### ⚖️ Equity Representation (Current)")
-            equity_data = []
-            for equity in ['ATSI', 'EALD', 'SWD', 'ASD']:
-                count = len(current[current[f'Flag_{equity}'] == 'Yes'])
-                pct = (count / len(current) * 100) if len(current) > 0 else 0
-                equity_data.append({'Group': equity, 'Count': count, 'Percentage': pct})
-            
-            equity_df = pd.DataFrame(equity_data)
-            
-            fig2 = go.Figure(data=[
-                go.Bar(
-                    x=equity_df['Group'],
-                    y=equity_df['Count'],
-                    marker_color=[EQUITY_COLORS.get(g, '#00e5ff') for g in equity_df['Group']],
-                    text=equity_df['Count'],
-                    textposition='outside'
-                )
-            ])
-            
-            fig2.update_layout(
-                title='Current Students by Equity Group',
-                paper_bgcolor=COLORS['dark_bg'],
-                plot_bgcolor='rgba(0,0,0,0)',
-                font=dict(color=COLORS['white']),
-                height=400,
-                xaxis_title='Equity Group',
-                yaxis_title='Number of Students'
-            )
-            
-            st.plotly_chart(fig2, use_container_width=True)
-        
-        st.markdown("---")
-        
-        # School distribution
-        st.markdown("### 🏫 Where Current Students Came From")
-        school_data = current['Referring_School'].value_counts().reset_index()
-        school_data.columns = ['School', 'Count']
-        school_data = school_data.sort_values('Count', ascending=True)
-        
-        fig3 = go.Figure(data=[
-            go.Bar(
-                y=school_data['School'],
-                x=school_data['Count'],
-                orientation='h',
-                marker_color=COLORS['cyan'],
-                text=school_data['Count'],
-                textposition='outside'
-            )
-        ])
-        
-        fig3.update_layout(
-            title='Current Students by Referring School',
-            paper_bgcolor=COLORS['dark_bg'],
-            plot_bgcolor='rgba(0,0,0,0)',
-            font=dict(color=COLORS['white']),
-            height=400,
-            xaxis_title='Number of Students',
-            yaxis_title='School'
-        )
-        
-        st.plotly_chart(fig3, use_container_width=True)
-        
-        st.markdown("---")
-        
-        # Data table
-        st.markdown("### 📊 Current Student Details")
-        cols_show = [c for c in ['Referring_School', 'Allocated_Program', 'Flag_ATSI', 'Flag_EALD', 'Flag_SWD', 'Flag_ASD', 'Referral_Year', 'Term'] if c in current.columns]
-        st.dataframe(current[cols_show], use_container_width=True, height=400)
-    else:
-        st.warning("⚠️ No programs found in current students")
-
-# ============================================================================
-# INTERACTIVE CHARTS
-# ============================================================================
-
-def equity_distribution_by_program(df):
-    programs = sorted([p for p in df['Allocated_Program'].unique() if pd.notna(p)])
-    equity_groups = ['ATSI', 'EALD', 'SWD', 'ASD']
-    
-    data = []
-    for prog in programs:
-        prog_df = df[df['Allocated_Program'] == prog]
-        for equity in equity_groups:
-            count = len(prog_df[prog_df[f'Flag_{equity}'] == 'Yes'])
-            total = len(prog_df)
-            pct = (count / total * 100) if total > 0 else 0
-            data.append({'Program': prog, 'Group': equity, 'Percentage': pct, 'Count': count})
-    
-    data_df = pd.DataFrame(data)
-    
-    fig = go.Figure()
-    for equity in equity_groups:
-        equity_data = data_df[data_df['Group'] == equity]
-        fig.add_trace(go.Bar(
-            x=equity_data['Program'],
-            y=equity_data['Percentage'],
-            name=equity,
-            marker_color=EQUITY_COLORS.get(equity, '#00e5ff'),
-            customdata=equity_data['Count'],
-            hovertemplate='<b>%{x}</b><br>%{fullData.name}: %{y:.1f}%<br>Count: %{customdata}<extra></extra>'
-        ))
+    ])
     
     fig.update_layout(
-        title='⚖️ Equity by Program',
-        barmode='group',
-        xaxis_title='Program',
-        yaxis_title='Percentage',
+        title='📊 Student Complexity: Multiple Diagnoses',
+        xaxis_title='Number of Diagnoses',
+        yaxis_title='Number of Students',
         paper_bgcolor=COLORS['dark_bg'],
         plot_bgcolor='rgba(0,0,0,0)',
         font=dict(color=COLORS['white']),
-        height=450,
-        hovermode='x unified'
+        height=400
     )
-    return fig
+    
+    return fig, df
 
-def equity_trend_by_year(df):
-    years = sorted([y for y in df['Referral_Year'].unique() if y > 0])
-    equity_groups = ['ATSI', 'EALD']
+def intersectionality_analysis(df):
+    """Analyze intersecting identities (ATSI + ASD, EALD + SWD, etc.)"""
+    
+    intersections = [
+        ('ATSI + ASD', ('Flag_ATSI', 'Flag_ASD')),
+        ('ATSI + SWD', ('Flag_ATSI', 'Flag_SWD')),
+        ('ATSI + EALD', ('Flag_ATSI', 'Flag_EALD')),
+        ('EALD + SWD', ('Flag_EALD', 'Flag_SWD')),
+        ('EALD + ASD', ('Flag_EALD', 'Flag_ASD')),
+        ('SWD + ASD', ('Flag_SWD', 'Flag_ASD')),
+    ]
     
     data = []
-    for year in years:
-        year_df = df[df['Referral_Year'] == year]
-        for equity in equity_groups:
-            count = len(year_df[year_df[f'Flag_{equity}'] == 'Yes'])
-            total = len(year_df)
-            pct = (count / total * 100) if total > 0 else 0
-            data.append({'Year': year, 'Group': equity, 'Percentage': pct, 'Count': count})
+    for label, (flag1, flag2) in intersections:
+        count = len(df[(df[flag1] == 'Yes') & (df[flag2] == 'Yes')])
+        total = len(df)
+        pct = (count / total * 100) if total > 0 else 0
+        data.append({'Intersection': label, 'Count': count, 'Percentage': pct})
     
     data_df = pd.DataFrame(data)
     
-    fig = go.Figure()
-    for equity in equity_groups:
-        equity_data = data_df[data_df['Group'] == equity].sort_values('Year')
-        fig.add_trace(go.Scatter(
-            x=equity_data['Year'],
-            y=equity_data['Percentage'],
-            name=equity,
-            mode='lines+markers',
-            line=dict(color=EQUITY_COLORS.get(equity, '#00e5ff'), width=4),
-            marker=dict(size=12),
-            customdata=equity_data['Count'],
-            hovertemplate='<b>%{x}</b><br>%{fullData.name}: %{y:.1f}%<br>Count: %{customdata}<extra></extra>'
-        ))
+    fig = go.Figure(data=[
+        go.Bar(
+            y=data_df['Intersection'],
+            x=data_df['Count'],
+            orientation='h',
+            marker_color=COLORS['amber'],
+            text=data_df['Count'],
+            textposition='outside',
+            hovertemplate='<b>%{y}</b><br>Students: %{x}<extra></extra>'
+        )
+    ])
     
     fig.update_layout(
-        title='📈 ATSI & EALD Trends',
-        xaxis_title='Year',
-        yaxis_title='Percentage of Referrals',
+        title='🔀 Intersectionality: Students with Multiple Identities',
+        xaxis_title='Number of Students',
+        yaxis_title='Identity Intersections',
         paper_bgcolor=COLORS['dark_bg'],
         plot_bgcolor='rgba(0,0,0,0)',
         font=dict(color=COLORS['white']),
-        height=450,
-        hovermode='x unified'
+        height=400
     )
+    
     return fig
 
-def school_referral_heatmap(df):
-    schools = sorted([s for s in df['Referring_School'].unique() if pd.notna(s)])
-    equity_groups = ['ATSI', 'EALD', 'SWD', 'ASD']
+def school_needs_concentration(df):
+    """Which schools have students with highest complexity"""
+    df = add_complexity_score(df)
     
-    data = []
-    for school in schools:
+    school_stats = []
+    for school in df['Referring_School'].unique():
         school_df = df[df['Referring_School'] == school]
-        for equity in equity_groups:
-            count = len(school_df[school_df[f'Flag_{equity}'] == 'Yes'])
-            total = len(school_df)
-            pct = (count / total * 100) if total > 0 else 0
-            data.append({'School': school, 'Group': equity, 'Percentage': pct})
+        avg_complexity = school_df['Complexity_Score'].mean()
+        total_students = len(school_df)
+        multi_diagnosis = len(school_df[school_df['Complexity_Score'] > 1])
+        
+        school_stats.append({
+            'School': school,
+            'Avg_Complexity': avg_complexity,
+            'Total_Students': total_students,
+            'Multi_Diagnosis': multi_diagnosis
+        })
     
-    data_df = pd.DataFrame(data)
-    pivot = data_df.pivot(index='School', columns='Group', values='Percentage')
+    school_df = pd.DataFrame(school_stats).sort_values('Avg_Complexity', ascending=True)
     
-    fig = go.Figure(data=go.Heatmap(
-        z=pivot.values,
-        x=pivot.columns,
-        y=pivot.index,
-        colorscale='RdYlGn_r',
-        text=[[f"{v:.0f}%" for v in row] for row in pivot.values],
-        texttemplate='%{text}',
-        textfont={"size": 10},
-        colorbar=dict(title="% of School"),
-        hovertemplate='<b>%{y}</b><br>%{x}: %{z:.1f}%<extra></extra>'
-    ))
+    fig = go.Figure(data=[
+        go.Bar(
+            y=school_df['School'],
+            x=school_df['Avg_Complexity'],
+            orientation='h',
+            marker_color=COLORS['red'],
+            text=[f"{c:.2f}" for c in school_df['Avg_Complexity']],
+            textposition='outside',
+            customdata=school_df['Multi_Diagnosis'],
+            hovertemplate='<b>%{y}</b><br>Avg Complexity: %{x:.2f}<br>Multi-Diagnosis: %{customdata}<extra></extra>'
+        )
+    ])
     
     fig.update_layout(
-        title='🔥 School Equity Heatmap',
+        title='🏥 School Needs Concentration: Average Student Complexity',
+        xaxis_title='Average Complexity Score',
+        yaxis_title='School',
         paper_bgcolor=COLORS['dark_bg'],
+        plot_bgcolor='rgba(0,0,0,0)',
         font=dict(color=COLORS['white']),
-        height=450
+        height=400
     )
+    
     return fig
 
-def program_performance(df):
+def retention_analysis(df):
+    """Students returning/staying vs leaving"""
+    df = add_complexity_score(df)
+    
+    # Count by status and complexity
+    status_complexity = []
+    for status in df['Allocation_Status'].unique():
+        status_df = df[df['Allocation_Status'] == status]
+        avg_complexity = status_df['Complexity_Score'].mean()
+        count = len(status_df)
+        status_complexity.append({'Status': status, 'Complexity': avg_complexity, 'Count': count})
+    
+    status_df = pd.DataFrame(status_complexity)
+    
+    fig = go.Figure(data=[
+        go.Bar(
+            x=status_df['Status'],
+            y=status_df['Complexity'],
+            marker_color=[COLORS['green'], COLORS['red'], COLORS['cyan']],
+            text=[f"{c:.2f}" for c in status_df['Complexity']],
+            textposition='outside',
+            customdata=status_df['Count'],
+            hovertemplate='<b>%{x}</b><br>Avg Complexity: %{y:.2f}<br>Count: %{customdata}<extra></extra>'
+        )
+    ])
+    
+    fig.update_layout(
+        title='🔄 Allocation Status by Student Complexity',
+        xaxis_title='Allocation Status',
+        yaxis_title='Average Complexity Score',
+        paper_bgcolor=COLORS['dark_bg'],
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color=COLORS['white']),
+        height=400
+    )
+    
+    return fig
+
+def program_complexity_distribution(df):
+    """How programs distribute complex students"""
+    df = add_complexity_score(df)
+    
     programs = sorted([p for p in df['Allocated_Program'].unique() if pd.notna(p)])
     
     data = []
     for prog in programs:
         prog_df = df[df['Allocated_Program'] == prog]
-        allocated = len(prog_df[prog_df['Allocation_Status'] == 'Allocated'])
-        waiting = len(prog_df[prog_df['Allocation_Status'] == 'On Waiting List'])
-        data.append({'Program': prog, 'Allocated': allocated, 'Waiting': waiting, 'Total': len(prog_df)})
+        for complexity in range(5):
+            count = len(prog_df[prog_df['Complexity_Score'] == complexity])
+            if count > 0:
+                data.append({
+                    'Program': prog,
+                    'Complexity': f"{complexity} Diagnoses",
+                    'Count': count
+                })
     
     data_df = pd.DataFrame(data)
     
-    fig = go.Figure()
-    fig.add_trace(go.Bar(x=data_df['Program'], y=data_df['Allocated'], name='✅ Allocated', marker_color=COLORS['green']))
-    fig.add_trace(go.Bar(x=data_df['Program'], y=data_df['Waiting'], name='⏳ Waiting', marker_color=COLORS['red']))
+    fig = px.bar(
+        data_df,
+        x='Program',
+        y='Count',
+        color='Complexity',
+        barmode='stack',
+        color_discrete_sequence=['#00e5ff', '#ffd93d', '#ff9500', '#ff6b6b', '#ff4444']
+    )
     
     fig.update_layout(
-        title='🎓 Program Allocation',
-        barmode='stack',
+        title='📚 Program Distribution: Student Complexity Levels',
+        xaxis_title='Program',
+        yaxis_title='Number of Students',
         paper_bgcolor=COLORS['dark_bg'],
         plot_bgcolor='rgba(0,0,0,0)',
         font=dict(color=COLORS['white']),
-        height=450,
+        height=400,
         hovermode='x unified'
     )
+    
     return fig
 
 # ============================================================================
@@ -636,8 +443,8 @@ def main():
     
     df = st.session_state['df']
     
-    st.markdown("# 📊 CLC-LBU INTERACTIVE ANALYTICS")
-    st.markdown("_Explore equity, programs & outcomes with dynamic filtering_")
+    st.markdown("# 📊 CLC-LBU COMPREHENSIVE INSIGHTS")
+    st.markdown("_Comorbidity, Intersectionality, Complexity & Concentration_")
     
     col1, col2 = st.columns([3, 1])
     with col1:
@@ -653,7 +460,7 @@ def main():
     
     with col2:
         if st.button("📥 Load Demo"):
-            st.session_state['df'] = create_strategic_sample()
+            st.session_state['df'] = create_demo_data()
             st.session_state['data_loaded'] = True
             st.rerun()
     
@@ -664,34 +471,25 @@ def main():
     # FILTERS
     st.markdown("## 🔍 Filters")
     
-    filter_cols = st.columns(5)
+    filter_cols = st.columns(4)
     
     with filter_cols[0]:
         years = sorted([y for y in df['Referral_Year'].unique() if y > 0])
-        selected_year = st.selectbox("📆 Year", ['All'] + [str(y) for y in years], index=0)
-        st.session_state['selected_year'] = selected_year
+        st.session_state['selected_year'] = st.selectbox("📆 Year", ['All'] + [str(y) for y in years], index=0)
     
     with filter_cols[1]:
         terms = sorted([t for t in df['Term'].unique() if t > 0])
-        selected_term = st.selectbox("📅 Term", ['All'] + [str(t) for t in terms], index=0)
-        st.session_state['selected_term'] = selected_term
+        st.session_state['selected_term'] = st.selectbox("📅 Term", ['All'] + [str(t) for t in terms], index=0)
     
     with filter_cols[2]:
         programs = sorted([p for p in df['Allocated_Program'].unique() if pd.notna(p)])
-        selected_program = st.selectbox("🎓 Program", ['All'] + programs, index=0)
-        st.session_state['selected_program'] = selected_program
+        st.session_state['selected_program'] = st.selectbox("🎓 Program", ['All'] + programs, index=0)
     
     with filter_cols[3]:
-        schools = sorted([s for s in df['Referring_School'].unique() if pd.notna(s)])
-        selected_school = st.selectbox("🏫 School", ['All'] + schools, index=0)
-        st.session_state['selected_school'] = None if selected_school == 'All' else selected_school
-    
-    with filter_cols[4]:
-        if st.button("🔄 Reset Filters"):
+        if st.button("🔄 Reset"):
             st.session_state['selected_year'] = 'All'
             st.session_state['selected_term'] = 'All'
             st.session_state['selected_program'] = 'All'
-            st.session_state['selected_school'] = None
             st.rerun()
     
     filtered_df = apply_filters(df)
@@ -699,25 +497,20 @@ def main():
     st.markdown("---")
     
     # KEY METRICS
-    st.markdown("## 📈 Filtered Overview")
+    st.markdown("## 📈 Overview")
     
     col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("📋 Total Students", len(filtered_df))
+    col2.metric("✅ Active", len(filtered_df[filtered_df['Allocation_Status'] == 'Active']))
     
-    total = len(filtered_df)
-    col1.metric("📋 Total", total)
+    atsi_count = len(filtered_df[filtered_df['Flag_ATSI'] == 'Yes'])
+    col3.metric("🇦🇺 ATSI", f"{atsi_count} ({atsi_count/len(filtered_df)*100 if len(filtered_df) > 0 else 0:.0f}%)")
     
-    allocated = len(filtered_df[filtered_df['Allocation_Status'] == 'Allocated'])
-    rate = (allocated / total * 100) if total > 0 else 0
-    col2.metric("✅ Allocated", f"{allocated} ({rate:.0f}%)")
+    multi_flag_count = len(filtered_df[filtered_df[[c for c in filtered_df.columns if c.startswith('Flag_')]].apply(lambda row: (row == 'Yes').sum() > 1, axis=1)])
+    col4.metric("🔀 Multi-Diagnosis", f"{multi_flag_count} ({multi_flag_count/len(filtered_df)*100 if len(filtered_df) > 0 else 0:.0f}%)")
     
-    atsi_count, atsi_pct = get_equity_count(filtered_df, 'ATSI')
-    col3.metric("🇦🇺 ATSI", f"{atsi_count} ({atsi_pct:.0f}%)")
-    
-    eald_count, eald_pct = get_equity_count(filtered_df, 'EALD')
-    col4.metric("🌍 EALD", f"{eald_count} ({eald_pct:.0f}%)")
-    
-    asd_count, asd_pct = get_equity_count(filtered_df, 'ASD')
-    col5.metric("🧩 ASD", f"{asd_count} ({asd_pct:.0f}%)")
+    high_complexity = len(filtered_df[filtered_df[[c for c in filtered_df.columns if c.startswith('Flag_')]].apply(lambda row: (row == 'Yes').sum() >= 3, axis=1)])
+    col5.metric("⚠️ High Complexity", f"{high_complexity}")
     
     st.markdown("---")
     
@@ -725,35 +518,46 @@ def main():
     st.markdown("## 📊 Analysis")
     
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "👥 Current Cohort",
-        "⚖️ Equity by Program",
-        "📈 Year Trends",
-        "🔥 School Heatmap",
-        "🎓 Program Performance",
+        "📊 Complexity",
+        "🔀 Intersectionality",
+        "🏥 School Concentration",
+        "🔄 Status & Complexity",
+        "📚 Program Distribution",
         "📋 Raw Data"
     ])
     
     with tab1:
-        show_current_cohort(filtered_df)
+        st.markdown("### Student Complexity: Multiple Diagnoses")
+        st.info("💡 How many diagnoses/flags does each student have? More = higher support needs")
+        fig, _ = comorbidity_analysis(filtered_df)
+        st.plotly_chart(fig, use_container_width=True)
     
     with tab2:
-        fig1 = equity_distribution_by_program(filtered_df)
-        st.plotly_chart(fig1, use_container_width=True)
+        st.markdown("### Intersecting Identities")
+        st.info("💡 Students who belong to multiple equity groups - understanding layered needs")
+        fig = intersectionality_analysis(filtered_df)
+        st.plotly_chart(fig, use_container_width=True)
     
     with tab3:
-        fig2 = equity_trend_by_year(filtered_df)
-        st.plotly_chart(fig2, use_container_width=True)
+        st.markdown("### Which Schools Refer Students with Greatest Complexity?")
+        st.info("💡 Socioeconomic & need concentration - which schools need most support")
+        fig = school_needs_concentration(filtered_df)
+        st.plotly_chart(fig, use_container_width=True)
     
     with tab4:
-        fig3 = school_referral_heatmap(filtered_df)
-        st.plotly_chart(fig3, use_container_width=True)
+        st.markdown("### Student Complexity by Allocation Status")
+        st.info("💡 Are more complex students allocated? Retained? Waiting?")
+        fig = retention_analysis(filtered_df)
+        st.plotly_chart(fig, use_container_width=True)
     
     with tab5:
-        fig4 = program_performance(filtered_df)
-        st.plotly_chart(fig4, use_container_width=True)
+        st.markdown("### How Programs Handle Different Complexity Levels")
+        st.info("💡 Which program serves students with highest complexity? Is it spread evenly?")
+        fig = program_complexity_distribution(filtered_df)
+        st.plotly_chart(fig, use_container_width=True)
     
     with tab6:
-        st.markdown("### De-identified Data")
+        st.markdown("### De-identified Raw Data")
         cols_show = [c for c in ['Referring_School', 'Allocated_Program', 'Allocation_Status', 
                                   'Flag_ATSI', 'Flag_EALD', 'Flag_SWD', 'Flag_ASD', 'Referral_Year', 'Term'] 
                      if c in filtered_df.columns]
