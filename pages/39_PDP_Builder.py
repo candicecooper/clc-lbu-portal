@@ -32,12 +32,17 @@ def require_portal_admin(message="The PDP Builder is in the leadership area."):
         admin_pw = st.secrets.get("ADMIN_PASSWORD", "")
     except Exception:
         admin_pw = os.environ.get("ADMIN_PASSWORD", "")
+    admin_pw = (admin_pw or "").strip()
     if st.session_state.get("is_portal_admin"):
         return True
     st.warning(f"🔒 {message}")
+    if not admin_pw:
+        st.error("No ADMIN_PASSWORD is set in this app's secrets, so the page can't be unlocked. "
+                 "Add ADMIN_PASSWORD in the Render service's Environment settings, then redeploy.")
+        st.stop()
     entered = st.text_input("Admin password", type="password", key="pdp_admin_pw")
     if st.button("Unlock", type="primary", key="pdp_admin_btn"):
-        if entered and entered == admin_pw:
+        if entered.strip() == admin_pw:
             st.session_state.is_portal_admin = True
             st.rerun()
         else:
