@@ -317,19 +317,30 @@ def show_current_cohort(df):
     
     st.markdown("### 👥 Current Students at CLC-LBU")
     
-    # Let user select which status = "current"
-    st.info("💡 **Which status represents your 'current' students?** Select from the dropdown:")
-    selected_status = st.selectbox("📌 Select Current Status", all_statuses, index=0 if len(all_statuses) > 0 else None)
+    # Check if "Active" exists, if so use it by default
+    if "Active" in all_statuses:
+        default_status = "Active"
+        current = df[df['Allocation_Status'] == default_status]
+        st.success(f"✅ Showing {len(current)} students with status 'Active'")
+    else:
+        # Otherwise let user select
+        st.info("💡 **Select which status represents your 'current' students:**")
+        default_status = st.selectbox("📌 Current Status", all_statuses, index=0 if len(all_statuses) > 0 else None)
+        current = df[df['Allocation_Status'] == default_status]
+        
+        if len(current) == 0:
+            st.error(f"❌ No students found with status '{default_status}'")
+            st.write(f"Available statuses: {all_statuses}")
+            return
+        
+        st.success(f"✅ Found {len(current)} students with status '{default_status}'")
     
-    # Filter for selected status
-    current = df[df['Allocation_Status'] == selected_status]
-    
-    if len(current) == 0:
-        st.error(f"❌ No students found with status '{selected_status}'")
-        st.write(f"Available statuses: {all_statuses}")
-        return
-    
-    st.success(f"✅ Found {len(current)} students with status '{selected_status}'")
+    # Allow changing status if needed
+    with st.expander("🔄 Change Current Status"):
+        new_status = st.selectbox("📌 Select a different status", all_statuses, index=list(all_statuses).index(default_status) if default_status in all_statuses else 0)
+        if new_status != default_status:
+            current = df[df['Allocation_Status'] == new_status]
+            st.info(f"Changed to: '{new_status}' ({len(current)} students)")
     
     st.markdown("---")
     
