@@ -73,6 +73,43 @@ st.markdown("""
         font-weight: 500 !important;
     }
     
+    /* Bright text in selectbox input */
+    .stSelectbox input {
+        color: #00e5ff !important;
+        background-color: transparent !important;
+    }
+    
+    .stSelectbox input::placeholder {
+        color: rgba(0, 229, 255, 0.6) !important;
+    }
+    
+    /* Dropdown content */
+    [data-baseweb="select"] {
+        color: #00e5ff !important;
+    }
+    
+    [data-baseweb="select"] input {
+        color: #00e5ff !important;
+    }
+    
+    [data-baseweb="popover"] {
+        background-color: rgba(10, 14, 39, 0.95) !important;
+    }
+    
+    [data-baseweb="menu"] {
+        background-color: rgba(10, 14, 39, 0.95) !important;
+    }
+    
+    [data-baseweb="menu"] li {
+        color: #e8e8e8 !important;
+        background-color: transparent !important;
+    }
+    
+    [data-baseweb="menu"] li:hover {
+        background-color: rgba(0, 229, 255, 0.25) !important;
+        color: #00e5ff !important;
+    }
+    
     .stSelectbox label {
         color: #00e5ff !important;
         font-weight: bold !important;
@@ -237,15 +274,23 @@ def load_data():
 def create_strategic_sample():
     schools = ['Le Fevre HS', 'Warradale Primary', 'Woodville HS', 'Brighton Secondary', 'Hendon PS', 'Cowandilla PS']
     programs = ['JP', 'PY', 'SY']
-    statuses = ['Allocated', 'On Waiting List', 'Current']
     years = [2024, 2025, 2026]
     
     data = []
-    for _ in range(250):
+    # Create 250 total records
+    for i in range(250):
+        # Distribute statuses: 40% Current, 40% Allocated, 20% Waiting
+        if i < 100:
+            status = 'Current'  # 100 current students
+        elif i < 200:
+            status = 'Allocated'  # 100 allocated
+        else:
+            status = 'On Waiting List'  # 50 waiting
+        
         data.append({
             'Referring_School': random.choice(schools),
             'Allocated_Program': random.choice(programs),
-            'Allocation_Status': random.choice(statuses),
+            'Allocation_Status': status,
             'Flag_ATSI': 'Yes' if random.random() < 0.35 else 'No',
             'Flag_EALD': 'Yes' if random.random() < 0.22 else 'No',
             'Flag_SWD': 'Yes' if random.random() < 0.20 else 'No',
