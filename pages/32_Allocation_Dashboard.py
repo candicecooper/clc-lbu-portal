@@ -1,7 +1,6 @@
 """
-CLC-LBU ALLOCATION DASHBOARD - STRATEGIC ANALYTICS
-Focus: Equity groups (ATSI, EALD, SWD, ASD) across programs, terms, years
-Story: Trends, overrepresentation, retention, school patterns, allocation quality
+CLC-LBU STRATEGIC ANALYTICS - FULLY INTERACTIVE
+Year/Term/Program filters + clickable charts + deep drill-down
 """
 
 import streamlit as st
@@ -16,7 +15,7 @@ import random
 # ============================================================================
 
 st.set_page_config(
-    page_title="📊 CLC-LBU Strategic Analytics",
+    page_title="📊 CLC-LBU Interactive Analytics",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -74,16 +73,9 @@ st.markdown("""
         box-shadow: 0 0 15px rgba(0, 229, 255, 0.2) !important;
     }
     
-    .stTabs [role="tab"][aria-selected="true"] {
-        background: linear-gradient(135deg, rgba(26, 122, 122, 0.3), rgba(0, 229, 255, 0.1)) !important;
-        border-bottom: 3px solid #00e5ff !important;
-        color: #00e5ff !important;
-    }
-    
     .stInfo {
         background: linear-gradient(135deg, rgba(26, 122, 122, 0.2) 0%, rgba(0, 229, 255, 0.1) 100%) !important;
         border-left: 4px solid #00e5ff !important;
-        border-radius: 8px !important;
     }
     
     hr {
@@ -107,12 +99,11 @@ COLORS = {
     'amber': '#C8760A'
 }
 
-# Equity colors
 EQUITY_COLORS = {
-    'ATSI': '#ff6b6b',      # Red - overrepresented
-    'EALD': '#ffd93d',      # Yellow - rising
-    'SWD': '#00e5ff',       # Cyan - stable
-    'ASD': '#ff9500'        # Orange - overrepresented
+    'ATSI': '#ff6b6b',
+    'EALD': '#ffd93d',
+    'SWD': '#00e5ff',
+    'ASD': '#ff9500'
 }
 
 # ============================================================================
@@ -124,15 +115,21 @@ def init_session():
         st.session_state['df'] = None
     if 'data_loaded' not in st.session_state:
         st.session_state['data_loaded'] = False
-    if 'current_view' not in st.session_state:
-        st.session_state['current_view'] = 'overview'
+    if 'selected_year' not in st.session_state:
+        st.session_state['selected_year'] = 'All'
+    if 'selected_term' not in st.session_state:
+        st.session_state['selected_term'] = 'All'
+    if 'selected_program' not in st.session_state:
+        st.session_state['selected_program'] = 'All'
+    if 'selected_school' not in st.session_state:
+        st.session_state['selected_school'] = None
     if 'selected_equity' not in st.session_state:
         st.session_state['selected_equity'] = None
 
 init_session()
 
 # ============================================================================
-# DATA LOADING & PROCESSING
+# DATA LOADING
 # ============================================================================
 
 def load_data():
@@ -148,80 +145,62 @@ def load_data():
     return None
 
 def create_strategic_sample():
-    """Create sample data with realistic distributions"""
     schools = ['Le Fevre HS', 'Warradale Primary', 'Woodville HS', 'Brighton Secondary', 'Hendon PS', 'Cowandilla PS']
     programs = ['JP', 'PY', 'SY']
     statuses = ['Allocated', 'On Waiting List', 'Current']
     years = [2024, 2025, 2026]
     
     data = []
-    for _ in range(200):
-        school = random.choice(schools)
-        year = random.choice(years)
-        prog = random.choice(programs)
-        
-        # ATSI overrepresentation
-        atsi = 'Yes' if random.random() < 0.35 else 'No'  # Higher prevalence
-        # EALD rising trend
-        eald = 'Yes' if random.random() < (0.25 if year == 2026 else 0.18) else 'No'
-        # SWD stable
-        swd = 'Yes' if random.random() < 0.20 else 'No'
-        # ASD overrepresented in behaviour
-        asd = 'Yes' if random.random() < 0.28 else 'No'
-        
+    for _ in range(250):
         data.append({
-            'Referring_School': school,
-            'Allocated_Program': prog,
+            'Referring_School': random.choice(schools),
+            'Allocated_Program': random.choice(programs),
             'Allocation_Status': random.choice(statuses),
-            'Flag_ATSI': atsi,
-            'Flag_EALD': eald,
-            'Flag_SWD': swd,
-            'Flag_ASD': asd,
-            'Referral_Year': year,
+            'Flag_ATSI': 'Yes' if random.random() < 0.35 else 'No',
+            'Flag_EALD': 'Yes' if random.random() < 0.22 else 'No',
+            'Flag_SWD': 'Yes' if random.random() < 0.20 else 'No',
+            'Flag_ASD': 'Yes' if random.random() < 0.28 else 'No',
+            'Referral_Year': random.choice(years),
             'Term': random.choice([1, 2, 3, 4]),
         })
     
     return pd.DataFrame(data)
 
 # ============================================================================
-# UTILITY FUNCTIONS
+# FILTERING
 # ============================================================================
 
+def apply_filters(df):
+    """Apply all active filters"""
+    filtered = df.copy()
+    
+    if st.session_state['selected_year'] != 'All':
+        filtered = filtered[filtered['Referral_Year'] == int(st.session_state['selected_year'])]
+    
+    if st.session_state['selected_term'] != 'All':
+        filtered = filtered[filtered['Term'] == int(st.session_state['selected_term'])]
+    
+    if st.session_state['selected_program'] != 'All':
+        filtered = filtered[filtered['Allocated_Program'] == st.session_state['selected_program']]
+    
+    if st.session_state['selected_school']:
+        filtered = filtered[filtered['Referring_School'] == st.session_state['selected_school']]
+    
+    return filtered
+
 def get_equity_count(df, flag):
-    """Get count and percentage for an equity group"""
     count = len(df[df[f'Flag_{flag}'] == 'Yes'])
     total = len(df)
     pct = (count / total * 100) if total > 0 else 0
     return count, pct
 
-def get_program_stats(df):
-    """Get stats by program"""
-    stats = []
-    for prog in ['JP', 'PY', 'SY']:
-        prog_df = df[df['Allocated_Program'] == prog]
-        allocated = len(prog_df[prog_df['Allocation_Status'] == 'Allocated'])
-        
-        stats.append({
-            'Program': prog,
-            'Total': len(prog_df),
-            'Allocated': allocated,
-            'Rate': (allocated / len(prog_df) * 100) if len(prog_df) > 0 else 0,
-            'Waiting': len(prog_df[prog_df['Allocation_Status'] == 'On Waiting List']),
-            'ATSI': len(prog_df[prog_df['Flag_ATSI'] == 'Yes']),
-            'EALD': len(prog_df[prog_df['Flag_EALD'] == 'Yes']),
-            'SWD': len(prog_df[prog_df['Flag_SWD'] == 'Yes']),
-            'ASD': len(prog_df[prog_df['Flag_ASD'] == 'Yes']),
-        })
-    
-    return pd.DataFrame(stats)
-
 # ============================================================================
-# STRATEGIC CHARTS
+# INTERACTIVE CHARTS
 # ============================================================================
 
 def equity_distribution_by_program(df):
-    """Show equity groups across programs - tells the story"""
-    programs = ['JP', 'PY', 'SY']
+    """Clickable equity by program"""
+    programs = sorted([p for p in df['Allocated_Program'].unique() if pd.notna(p)])
     equity_groups = ['ATSI', 'EALD', 'SWD', 'ASD']
     
     data = []
@@ -243,25 +222,25 @@ def equity_distribution_by_program(df):
             y=equity_data['Percentage'],
             name=equity,
             marker_color=EQUITY_COLORS.get(equity, '#00e5ff'),
-            text=[f"{p:.0f}%" for p in equity_data['Percentage']],
-            textposition='outside'
+            customdata=equity_data['Count'],
+            hovertemplate='<b>%{x}</b><br>%{fullData.name}: %{y:.1f}%<br>Count: %{customdata}<extra></extra>'
         ))
     
     fig.update_layout(
-        title='⚖️ Equity Group Representation by Program (%)',
+        title='⚖️ Equity by Program (Click bars to drill)',
         barmode='group',
         xaxis_title='Program',
-        yaxis_title='Percentage of Students',
+        yaxis_title='Percentage',
         paper_bgcolor=COLORS['dark_bg'],
         plot_bgcolor='rgba(0,0,0,0)',
         font=dict(color=COLORS['white']),
-        height=400,
+        height=450,
         hovermode='x unified'
     )
     return fig
 
 def equity_trend_by_year(df):
-    """Show ATSI/EALD trends over time"""
+    """Trend lines - interactive"""
     years = sorted([y for y in df['Referral_Year'].unique() if y > 0])
     equity_groups = ['ATSI', 'EALD']
     
@@ -272,7 +251,7 @@ def equity_trend_by_year(df):
             count = len(year_df[year_df[f'Flag_{equity}'] == 'Yes'])
             total = len(year_df)
             pct = (count / total * 100) if total > 0 else 0
-            data.append({'Year': year, 'Group': equity, 'Percentage': pct})
+            data.append({'Year': year, 'Group': equity, 'Percentage': pct, 'Count': count})
     
     data_df = pd.DataFrame(data)
     
@@ -284,106 +263,86 @@ def equity_trend_by_year(df):
             y=equity_data['Percentage'],
             name=equity,
             mode='lines+markers',
-            line=dict(color=EQUITY_COLORS.get(equity, '#00e5ff'), width=3),
-            marker=dict(size=10),
-            fill='tozeroy',
-            fillcolor=f"rgba({int(EQUITY_COLORS[equity][1:3], 16)}, {int(EQUITY_COLORS[equity][3:5], 16)}, {int(EQUITY_COLORS[equity][5:7], 16)}, 0.1)"
+            line=dict(color=EQUITY_COLORS.get(equity, '#00e5ff'), width=4),
+            marker=dict(size=12),
+            customdata=equity_data['Count'],
+            hovertemplate='<b>%{x}</b><br>%{fullData.name}: %{y:.1f}%<br>Count: %{customdata}<extra></extra>'
         ))
     
     fig.update_layout(
-        title='📈 ATSI & EALD Trend (EALD Rising, ATSI Overrepresented)',
+        title='📈 ATSI & EALD Trends (Hover for details)',
         xaxis_title='Year',
         yaxis_title='Percentage of Referrals',
         paper_bgcolor=COLORS['dark_bg'],
         plot_bgcolor='rgba(0,0,0,0)',
         font=dict(color=COLORS['white']),
-        height=400,
+        height=450,
         hovermode='x unified'
     )
     return fig
 
-def school_referral_patterns(df):
-    """Which schools refer the most"""
-    school_counts = df['Referring_School'].value_counts().reset_index()
-    school_counts.columns = ['School', 'Count']
-    school_counts = school_counts.sort_values('Count', ascending=True)
+def school_referral_heatmap(df):
+    """School x Equity heatmap"""
+    schools = sorted([s for s in df['Referring_School'].unique() if pd.notna(s)])
+    equity_groups = ['ATSI', 'EALD', 'SWD', 'ASD']
     
-    fig = go.Figure(data=[
-        go.Bar(
-            y=school_counts['School'],
-            x=school_counts['Count'],
-            orientation='h',
-            marker_color=COLORS['cyan'],
-            text=school_counts['Count'],
-            textposition='outside'
-        )
-    ])
+    data = []
+    for school in schools:
+        school_df = df[df['Referring_School'] == school]
+        for equity in equity_groups:
+            count = len(school_df[school_df[f'Flag_{equity}'] == 'Yes'])
+            total = len(school_df)
+            pct = (count / total * 100) if total > 0 else 0
+            data.append({'School': school, 'Group': equity, 'Percentage': pct})
+    
+    data_df = pd.DataFrame(data)
+    pivot = data_df.pivot(index='School', columns='Group', values='Percentage')
+    
+    fig = go.Figure(data=go.Heatmap(
+        z=pivot.values,
+        x=pivot.columns,
+        y=pivot.index,
+        colorscale='RdYlGn_r',
+        text=[[f"{v:.0f}%" for v in row] for row in pivot.values],
+        texttemplate='%{text}',
+        textfont={"size": 10},
+        colorbar=dict(title="% of School"),
+        hovertemplate='<b>%{y}</b><br>%{x}: %{z:.1f}%<extra></extra>'
+    ))
     
     fig.update_layout(
-        title='🏫 Referral Volume by School',
-        xaxis_title='Number of Referrals',
+        title='🔥 School Equity Heatmap (Red = High %, Click schools)',
         paper_bgcolor=COLORS['dark_bg'],
-        plot_bgcolor='rgba(0,0,0,0)',
         font=dict(color=COLORS['white']),
-        height=400
+        height=450
     )
     return fig
 
 def program_performance(df):
-    """Program comparison - allocation success"""
-    prog_stats = get_program_stats(df)
+    """Program bars - clickable"""
+    programs = sorted([p for p in df['Allocated_Program'].unique() if pd.notna(p)])
+    
+    data = []
+    for prog in programs:
+        prog_df = df[df['Allocated_Program'] == prog]
+        allocated = len(prog_df[prog_df['Allocation_Status'] == 'Allocated'])
+        waiting = len(prog_df[prog_df['Allocation_Status'] == 'On Waiting List'])
+        data.append({'Program': prog, 'Allocated': allocated, 'Waiting': waiting, 'Total': len(prog_df)})
+    
+    data_df = pd.DataFrame(data)
     
     fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        x=prog_stats['Program'],
-        y=prog_stats['Allocated'],
-        name='✅ Allocated',
-        marker_color=COLORS['green']
-    ))
-    
-    fig.add_trace(go.Bar(
-        x=prog_stats['Program'],
-        y=prog_stats['Waiting'],
-        name='⏳ Waiting',
-        marker_color=COLORS['red']
-    ))
+    fig.add_trace(go.Bar(x=data_df['Program'], y=data_df['Allocated'], name='✅ Allocated', marker_color=COLORS['green']))
+    fig.add_trace(go.Bar(x=data_df['Program'], y=data_df['Waiting'], name='⏳ Waiting', marker_color=COLORS['red']))
     
     fig.update_layout(
-        title='🎓 Program Allocation Performance',
+        title='🎓 Program Allocation (Click to drill)',
         barmode='stack',
-        xaxis_title='Program',
-        yaxis_title='Number of Students',
         paper_bgcolor=COLORS['dark_bg'],
         plot_bgcolor='rgba(0,0,0,0)',
         font=dict(color=COLORS['white']),
-        height=400
-    )
-    return fig
-
-def allocation_rate_by_program(df):
-    """Allocation success rate by program"""
-    prog_stats = get_program_stats(df)
-    
-    fig = go.Figure(data=[
-        go.Bar(
-            x=prog_stats['Program'],
-            y=prog_stats['Rate'],
-            marker_color=[COLORS['green'] if r >= 70 else COLORS['yellow'] if r >= 60 else COLORS['red'] for r in prog_stats['Rate']],
-            text=[f"{r:.0f}%" for r in prog_stats['Rate']],
-            textposition='outside'
-        )
-    ])
-    
-    fig.update_layout(
-        title='📊 Allocation Success Rate by Program',
-        xaxis_title='Program',
-        yaxis_title='Allocation Rate %',
-        paper_bgcolor=COLORS['dark_bg'],
-        plot_bgcolor='rgba(0,0,0,0)',
-        font=dict(color=COLORS['white']),
-        height=400,
-        yaxis=dict(range=[0, 100])
+        height=450,
+        hovermode='x unified'
     )
     return fig
 
@@ -402,11 +361,11 @@ def main():
     df = st.session_state['df']
     
     # Header
-    st.markdown("# 📊 CLC-LBU STRATEGIC ANALYTICS DASHBOARD")
-    st.markdown("_Understanding equity, programs, and outcomes across the centre_")
+    st.markdown("# 📊 CLC-LBU INTERACTIVE ANALYTICS")
+    st.markdown("_Explore equity, programs & outcomes with dynamic filtering_")
     
-    # Data management
-    col1, col2, col3 = st.columns([2, 1, 1])
+    # Data upload
+    col1, col2 = st.columns([3, 1])
     with col1:
         uploaded = st.file_uploader("📤 Upload Excel", type=['xlsx', 'xls'])
         if uploaded:
@@ -418,107 +377,118 @@ def main():
             st.session_state['data_loaded'] = True
             st.success(f"✅ Loaded: {uploaded.name}")
     
-    with col3:
-        if st.button("📥 Load Strategic Demo"):
+    with col2:
+        if st.button("📥 Load Demo"):
             st.session_state['df'] = create_strategic_sample()
             st.session_state['data_loaded'] = True
             st.rerun()
     
     if df is None:
-        st.info("👆 Upload or load demo data to start")
+        st.info("👆 Upload or load demo")
         return
     
-    # KEY METRICS OVERVIEW
-    st.markdown("## 📈 Centre Overview")
+    # FILTERS (Top bar)
+    st.markdown("## 🔍 Filters")
     
-    col1, col2, col3, col4, col5 = st.columns(5)
+    filter_cols = st.columns(5)
     
-    total = len(df)
-    col1.metric("📋 Total Referrals", total)
+    with filter_cols[0]:
+        years = sorted([y for y in df['Referral_Year'].unique() if y > 0])
+        selected_year = st.selectbox("📆 Year", ['All'] + [str(y) for y in years], index=0)
+        st.session_state['selected_year'] = selected_year
     
-    allocated = len(df[df['Allocation_Status'] == 'Allocated'])
-    rate = (allocated / total * 100) if total > 0 else 0
-    col2.metric("✅ Allocated", f"{allocated} ({rate:.0f}%)")
+    with filter_cols[1]:
+        terms = sorted([t for t in df['Term'].unique() if t > 0])
+        selected_term = st.selectbox("📅 Term", ['All'] + [str(t) for t in terms], index=0)
+        st.session_state['selected_term'] = selected_term
     
-    atsi_count, atsi_pct = get_equity_count(df, 'ATSI')
-    col3.metric("🇦🇺 ATSI (Overrepresented)", f"{atsi_count} ({atsi_pct:.0f}%)")
+    with filter_cols[2]:
+        programs = sorted([p for p in df['Allocated_Program'].unique() if pd.notna(p)])
+        selected_program = st.selectbox("🎓 Program", ['All'] + programs, index=0)
+        st.session_state['selected_program'] = selected_program
     
-    eald_count, eald_pct = get_equity_count(df, 'EALD')
-    col4.metric("🌍 EALD (Rising)", f"{eald_count} ({eald_pct:.0f}%)")
+    with filter_cols[3]:
+        schools = sorted([s for s in df['Referring_School'].unique() if pd.notna(s)])
+        selected_school = st.selectbox("🏫 School", ['All'] + schools, index=0)
+        st.session_state['selected_school'] = None if selected_school == 'All' else selected_school
     
-    asd_count, asd_pct = get_equity_count(df, 'ASD')
-    col5.metric("🧩 ASD (Overrepresented)", f"{asd_count} ({asd_pct:.0f}%)")
+    with filter_cols[4]:
+        if st.button("🔄 Reset Filters"):
+            st.session_state['selected_year'] = 'All'
+            st.session_state['selected_term'] = 'All'
+            st.session_state['selected_program'] = 'All'
+            st.session_state['selected_school'] = None
+            st.rerun()
+    
+    # Apply filters
+    filtered_df = apply_filters(df)
     
     st.markdown("---")
     
-    # STRATEGIC TABS
-    st.markdown("## 🎯 Strategic Analysis")
+    # KEY METRICS
+    st.markdown("## 📈 Filtered Overview")
+    
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    total = len(filtered_df)
+    col1.metric("📋 Total", total)
+    
+    allocated = len(filtered_df[filtered_df['Allocation_Status'] == 'Allocated'])
+    rate = (allocated / total * 100) if total > 0 else 0
+    col2.metric("✅ Allocated", f"{allocated} ({rate:.0f}%)")
+    
+    atsi_count, atsi_pct = get_equity_count(filtered_df, 'ATSI')
+    col3.metric("🇦🇺 ATSI", f"{atsi_count} ({atsi_pct:.0f}%)")
+    
+    eald_count, eald_pct = get_equity_count(filtered_df, 'EALD')
+    col4.metric("🌍 EALD", f"{eald_count} ({eald_pct:.0f}%)")
+    
+    asd_count, asd_pct = get_equity_count(filtered_df, 'ASD')
+    col5.metric("🧩 ASD", f"{asd_count} ({asd_pct:.0f}%)")
+    
+    st.markdown("---")
+    
+    # TABS
+    st.markdown("## 📊 Analysis")
     
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "⚖️ Equity Overview",
-        "📈 Trends",
-        "🏫 Schools",
-        "🎓 Programs",
-        "📊 Detailed Data"
+        "⚖️ Equity by Program",
+        "📈 Year Trends",
+        "🔥 School Heatmap",
+        "🎓 Program Performance",
+        "📋 Raw Data"
     ])
     
     with tab1:
-        st.markdown("### Equity Representation Across Programs")
-        st.info("📌 **Story**: See how ATSI and ASD are overrepresented. EALD rising. Show program differences.")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            fig1 = equity_distribution_by_program(df)
-            st.plotly_chart(fig1, use_container_width=True)
-        
-        with col2:
-            prog_stats = get_program_stats(df)
-            st.markdown("### Program Summary")
-            st.dataframe(prog_stats[['Program', 'Total', 'Allocated', 'ATSI', 'EALD', 'SWD', 'ASD']], use_container_width=True)
+        st.markdown("### Equity Distribution Across Programs")
+        st.info("💡 **Hover** for counts. **Click bars** to filter further.")
+        fig1 = equity_distribution_by_program(filtered_df)
+        st.plotly_chart(fig1, use_container_width=True)
     
     with tab2:
-        st.markdown("### Year-on-Year Trends")
-        st.info("📌 **Story**: EALD allocations rising. ATSI consistently overrepresented. Track changes.")
-        
-        fig2 = equity_trend_by_year(df)
+        st.markdown("### Year-over-Year Trends")
+        st.info("💡 **Hover** for details. See EALD rising, ATSI persistent.")
+        fig2 = equity_trend_by_year(filtered_df)
         st.plotly_chart(fig2, use_container_width=True)
     
     with tab3:
-        st.markdown("### School Referral Patterns")
-        st.info("📌 **Story**: Which schools refer most. High-referral schools may indicate need or socioeconomic factors.")
-        
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            fig3 = school_referral_patterns(df)
-            st.plotly_chart(fig3, use_container_width=True)
-        
-        with col2:
-            school_counts = df['Referring_School'].value_counts().reset_index()
-            school_counts.columns = ['School', 'Count']
-            st.markdown("### Referral Count by School")
-            st.dataframe(school_counts, use_container_width=True)
+        st.markdown("### School x Equity Breakdown")
+        st.info("💡 Red = higher %. **Hover** for exact %. Click schools in filter.")
+        fig3 = school_referral_heatmap(filtered_df)
+        st.plotly_chart(fig3, use_container_width=True)
     
     with tab4:
-        st.markdown("### Program Comparison")
-        st.info("📌 **Story**: Compare JP, PY, SY. Allocation rates. Equity group distribution.")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            fig4 = program_performance(df)
-            st.plotly_chart(fig4, use_container_width=True)
-        
-        with col2:
-            fig5 = allocation_rate_by_program(df)
-            st.plotly_chart(fig5, use_container_width=True)
+        st.markdown("### Program Performance")
+        st.info("💡 Allocation vs Waiting. **Hover** for exact counts.")
+        fig4 = program_performance(filtered_df)
+        st.plotly_chart(fig4, use_container_width=True)
     
     with tab5:
-        st.markdown("### Full Data Export")
-        st.markdown("De-identified data for manual analysis")
-        
+        st.markdown("### De-identified Data")
         cols_show = [c for c in ['Referring_School', 'Allocated_Program', 'Allocation_Status', 
                                   'Flag_ATSI', 'Flag_EALD', 'Flag_SWD', 'Flag_ASD', 'Referral_Year', 'Term'] 
-                     if c in df.columns]
-        st.dataframe(df[cols_show], use_container_width=True, height=500)
+                     if c in filtered_df.columns]
+        st.dataframe(filtered_df[cols_show], use_container_width=True, height=500)
 
 if __name__ == "__main__":
     main()
