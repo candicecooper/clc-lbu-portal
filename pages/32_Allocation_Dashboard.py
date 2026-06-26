@@ -1,6 +1,6 @@
 """
-CLC-LBU STRATEGIC ANALYTICS - FULLY INTERACTIVE
-Year/Term/Program filters + clickable charts + deep drill-down
+CLC-LBU INTERACTIVE ANALYTICS - ENHANCED
+Added: Current Cohort view + Modern styling + Better text contrast
 """
 
 import streamlit as st
@@ -9,10 +9,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 import os
 import random
-
-# ============================================================================
-# PAGE CONFIG
-# ============================================================================
+from datetime import datetime, timedelta
 
 st.set_page_config(
     page_title="📊 CLC-LBU Interactive Analytics",
@@ -22,11 +19,12 @@ st.set_page_config(
 )
 
 # ============================================================================
-# GLOWING THEME CSS
+# ENHANCED MODERN THEME CSS
 # ============================================================================
 
 st.markdown("""
 <style>
+    /* DARK BACKGROUND */
     html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
         background-color: #0a0e27 !important;
         color: #ffffff !important;
@@ -37,49 +35,143 @@ st.markdown("""
         border-right: 2px solid rgba(26, 122, 122, 0.5) !important;
     }
     
+    /* BRIGHT HEADERS */
     h1 {
         color: #00e5ff !important;
         text-shadow: 0 0 20px rgba(0, 229, 255, 0.5) !important;
         border-bottom: 2px solid rgba(26, 122, 122, 0.3) !important;
         padding-bottom: 15px !important;
+        font-size: 2.2em !important;
     }
     
     h2 {
         color: #00e5ff !important;
         border-left: 3px solid rgba(0, 229, 255, 0.5) !important;
         padding-left: 10px !important;
-        margin-top: 30px !important;
+        margin-top: 25px !important;
     }
     
     h3 {
-        color: #C8760A !important;
-        border-left: 2px solid rgba(200, 118, 10, 0.6) !important;
+        color: #ffd93d !important;
+        border-left: 2px solid rgba(255, 217, 61, 0.6) !important;
         padding-left: 8px !important;
     }
     
+    /* BRIGHT TEXT - GREY IS GONE */
+    p, span, label, .stText, [data-testid="stMarkdownContainer"] {
+        color: #e8e8e8 !important;
+    }
+    
+    /* MODERN FILTER BOXES */
+    .stSelectbox > div > div {
+        background: linear-gradient(135deg, rgba(26, 122, 122, 0.3) 0%, rgba(0, 229, 255, 0.1) 100%) !important;
+        color: #00e5ff !important;
+        border: 2px solid rgba(0, 229, 255, 0.6) !important;
+        border-radius: 10px !important;
+        box-shadow: 0 0 15px rgba(0, 229, 255, 0.2), inset 0 0 10px rgba(0, 229, 255, 0.05) !important;
+        padding: 10px !important;
+        font-weight: 500 !important;
+    }
+    
+    .stSelectbox label {
+        color: #00e5ff !important;
+        font-weight: bold !important;
+    }
+    
+    /* GLOWING METRICS */
     [data-testid="metric-container"] {
-        background: linear-gradient(135deg, rgba(26, 122, 122, 0.25) 0%, rgba(0, 229, 255, 0.05) 100%) !important;
-        border: 1px solid rgba(0, 229, 255, 0.3) !important;
-        border-left: 4px solid rgba(0, 229, 255, 0.8) !important;
+        background: linear-gradient(135deg, rgba(26, 122, 122, 0.3) 0%, rgba(0, 229, 255, 0.08) 100%) !important;
+        border: 1px solid rgba(0, 229, 255, 0.4) !important;
+        border-left: 5px solid rgba(0, 229, 255, 0.9) !important;
+        border-radius: 12px !important;
+        box-shadow: 0 0 25px rgba(0, 229, 255, 0.2), inset 0 0 15px rgba(0, 229, 255, 0.05) !important;
+        padding: 18px !important;
+    }
+    
+    [data-testid="metric-container"] > div:first-child {
+        color: #00e5ff !important;
+        font-weight: bold !important;
+        font-size: 1.1em !important;
+    }
+    
+    [data-testid="metric-container"] > div:last-child {
+        color: #ffd93d !important;
+        font-weight: bold !important;
+        font-size: 1.8em !important;
+    }
+    
+    /* MODERN GLOWING BUTTONS */
+    .stButton > button {
+        background: linear-gradient(135deg, rgba(26, 122, 122, 0.5) 0%, rgba(0, 229, 255, 0.25) 100%) !important;
+        color: #00e5ff !important;
+        border: 2px solid rgba(0, 229, 255, 0.6) !important;
+        border-radius: 10px !important;
+        box-shadow: 0 0 20px rgba(0, 229, 255, 0.25) !important;
+        font-weight: bold !important;
+        padding: 10px 20px !important;
+        font-size: 0.95em !important;
+    }
+    
+    .stButton > button:hover {
+        background: linear-gradient(135deg, rgba(0, 229, 255, 0.4) 0%, rgba(26, 122, 122, 0.4) 100%) !important;
+        box-shadow: 0 0 30px rgba(0, 229, 255, 0.5), inset 0 0 10px rgba(0, 229, 255, 0.1) !important;
+        border-color: #00e5ff !important;
+    }
+    
+    /* INFO BOXES */
+    .stInfo {
+        background: linear-gradient(135deg, rgba(26, 122, 122, 0.25) 0%, rgba(0, 229, 255, 0.1) 100%) !important;
+        border-left: 5px solid #00e5ff !important;
         border-radius: 10px !important;
         box-shadow: 0 0 20px rgba(0, 229, 255, 0.15) !important;
     }
     
-    .stButton > button {
-        background: linear-gradient(135deg, rgba(26, 122, 122, 0.4) 0%, rgba(0, 229, 255, 0.2) 100%) !important;
+    .stInfo > div {
+        color: #e8e8e8 !important;
+    }
+    
+    .stWarning {
+        background: linear-gradient(135deg, rgba(200, 118, 10, 0.2) 0%, rgba(200, 118, 10, 0.1) 100%) !important;
+        border-left: 5px solid #ffd93d !important;
+        border-radius: 10px !important;
+    }
+    
+    .stSuccess {
+        background: linear-gradient(135deg, rgba(0, 255, 0, 0.15) 0%, rgba(0, 255, 0, 0.05) 100%) !important;
+        border-left: 5px solid #00ff00 !important;
+        border-radius: 10px !important;
+    }
+    
+    /* TABS */
+    [data-testid="stTabs"] [role="tablist"] {
+        border-bottom: 2px solid rgba(0, 229, 255, 0.2) !important;
+    }
+    
+    [data-testid="stTabs"] [role="tab"] {
+        color: #a8a8a8 !important;
+        border-radius: 8px 8px 0 0 !important;
+        font-weight: 500 !important;
+    }
+    
+    [data-testid="stTabs"] [role="tab"][aria-selected="true"] {
+        background: linear-gradient(135deg, rgba(26, 122, 122, 0.3), rgba(0, 229, 255, 0.1)) !important;
+        border-bottom: 3px solid #00e5ff !important;
         color: #00e5ff !important;
-        border: 2px solid rgba(0, 229, 255, 0.5) !important;
-        border-radius: 8px !important;
-        box-shadow: 0 0 15px rgba(0, 229, 255, 0.2) !important;
+        font-weight: bold !important;
     }
     
-    .stInfo {
-        background: linear-gradient(135deg, rgba(26, 122, 122, 0.2) 0%, rgba(0, 229, 255, 0.1) 100%) !important;
-        border-left: 4px solid #00e5ff !important;
-    }
-    
+    /* DIVIDER */
     hr {
         border: 1px solid rgba(0, 229, 255, 0.15) !important;
+    }
+    
+    /* DATAFRAME */
+    [data-testid="stDataFrame"] {
+        background-color: #0a0e27 !important;
+    }
+    
+    [data-testid="stDataFrame"] > div > div {
+        color: #e8e8e8 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -123,8 +215,6 @@ def init_session():
         st.session_state['selected_program'] = 'All'
     if 'selected_school' not in st.session_state:
         st.session_state['selected_school'] = None
-    if 'selected_equity' not in st.session_state:
-        st.session_state['selected_equity'] = None
 
 init_session()
 
@@ -171,7 +261,6 @@ def create_strategic_sample():
 # ============================================================================
 
 def apply_filters(df):
-    """Apply all active filters"""
     filtered = df.copy()
     
     if st.session_state['selected_year'] != 'All':
@@ -195,11 +284,144 @@ def get_equity_count(df, flag):
     return count, pct
 
 # ============================================================================
+# CURRENT COHORT VIEW
+# ============================================================================
+
+def show_current_cohort(df):
+    """Show students currently at CLC-LBU"""
+    current = df[df['Allocation_Status'] == 'Current']
+    
+    st.markdown("### 👥 Current Students at CLC-LBU")
+    
+    # Key metrics for current cohort
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    col1.metric("📍 Currently Enrolled", len(current))
+    
+    atsi_curr = len(current[current['Flag_ATSI'] == 'Yes'])
+    col2.metric("🇦🇺 ATSI", f"{atsi_curr} ({atsi_curr/len(current)*100 if len(current) > 0 else 0:.0f}%)")
+    
+    eald_curr = len(current[current['Flag_EALD'] == 'Yes'])
+    col3.metric("🌍 EALD", f"{eald_curr} ({eald_curr/len(current)*100 if len(current) > 0 else 0:.0f}%)")
+    
+    swd_curr = len(current[current['Flag_SWD'] == 'Yes'])
+    col4.metric("♿ SWD", f"{swd_curr} ({swd_curr/len(current)*100 if len(current) > 0 else 0:.0f}%)")
+    
+    asd_curr = len(current[current['Flag_ASD'] == 'Yes'])
+    col5.metric("🧩 ASD", f"{asd_curr} ({asd_curr/len(current)*100 if len(current) > 0 else 0:.0f}%)")
+    
+    st.markdown("---")
+    
+    # Program distribution
+    st.markdown("### 🎓 Current Students by Program")
+    prog_data = []
+    for prog in ['JP', 'PY', 'SY']:
+        prog_count = len(current[current['Allocated_Program'] == prog])
+        prog_data.append({'Program': prog, 'Count': prog_count})
+    
+    prog_df = pd.DataFrame(prog_data)
+    
+    fig1 = go.Figure(data=[
+        go.Bar(
+            x=prog_df['Program'],
+            y=prog_df['Count'],
+            marker_color=[COLORS['cyan'], COLORS['green'], COLORS['amber']],
+            text=prog_df['Count'],
+            textposition='outside'
+        )
+    ])
+    
+    fig1.update_layout(
+        title='Current Students by Program',
+        paper_bgcolor=COLORS['dark_bg'],
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color=COLORS['white']),
+        height=400,
+        xaxis_title='Program',
+        yaxis_title='Number of Students'
+    )
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.plotly_chart(fig1, use_container_width=True)
+    
+    with col2:
+        # Equity breakdown
+        st.markdown("### ⚖️ Equity Representation (Current)")
+        equity_data = []
+        for equity in ['ATSI', 'EALD', 'SWD', 'ASD']:
+            count = len(current[current[f'Flag_{equity}'] == 'Yes'])
+            pct = (count / len(current) * 100) if len(current) > 0 else 0
+            equity_data.append({'Group': equity, 'Count': count, 'Percentage': pct})
+        
+        equity_df = pd.DataFrame(equity_data)
+        
+        fig2 = go.Figure(data=[
+            go.Bar(
+                x=equity_df['Group'],
+                y=equity_df['Count'],
+                marker_color=[EQUITY_COLORS.get(g, '#00e5ff') for g in equity_df['Group']],
+                text=equity_df['Count'],
+                textposition='outside'
+            )
+        ])
+        
+        fig2.update_layout(
+            title='Current Students by Equity Group',
+            paper_bgcolor=COLORS['dark_bg'],
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color=COLORS['white']),
+            height=400,
+            xaxis_title='Equity Group',
+            yaxis_title='Number of Students'
+        )
+        
+        st.plotly_chart(fig2, use_container_width=True)
+    
+    st.markdown("---")
+    
+    # School distribution
+    st.markdown("### 🏫 Where Current Students Came From")
+    school_data = current['Referring_School'].value_counts().reset_index()
+    school_data.columns = ['School', 'Count']
+    school_data = school_data.sort_values('Count', ascending=True)
+    
+    fig3 = go.Figure(data=[
+        go.Bar(
+            y=school_data['School'],
+            x=school_data['Count'],
+            orientation='h',
+            marker_color=COLORS['cyan'],
+            text=school_data['Count'],
+            textposition='outside'
+        )
+    ])
+    
+    fig3.update_layout(
+        title='Current Students by Referring School',
+        paper_bgcolor=COLORS['dark_bg'],
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color=COLORS['white']),
+        height=400,
+        xaxis_title='Number of Students',
+        yaxis_title='School'
+    )
+    
+    st.plotly_chart(fig3, use_container_width=True)
+    
+    st.markdown("---")
+    
+    # Data table
+    st.markdown("### 📊 Current Student Details")
+    cols_show = [c for c in ['Referring_School', 'Allocated_Program', 'Flag_ATSI', 'Flag_EALD', 'Flag_SWD', 'Flag_ASD', 'Referral_Year', 'Term'] if c in current.columns]
+    st.dataframe(current[cols_show], use_container_width=True, height=400)
+
+# ============================================================================
 # INTERACTIVE CHARTS
 # ============================================================================
 
 def equity_distribution_by_program(df):
-    """Clickable equity by program"""
     programs = sorted([p for p in df['Allocated_Program'].unique() if pd.notna(p)])
     equity_groups = ['ATSI', 'EALD', 'SWD', 'ASD']
     
@@ -227,7 +449,7 @@ def equity_distribution_by_program(df):
         ))
     
     fig.update_layout(
-        title='⚖️ Equity by Program (Click bars to drill)',
+        title='⚖️ Equity by Program',
         barmode='group',
         xaxis_title='Program',
         yaxis_title='Percentage',
@@ -240,7 +462,6 @@ def equity_distribution_by_program(df):
     return fig
 
 def equity_trend_by_year(df):
-    """Trend lines - interactive"""
     years = sorted([y for y in df['Referral_Year'].unique() if y > 0])
     equity_groups = ['ATSI', 'EALD']
     
@@ -270,7 +491,7 @@ def equity_trend_by_year(df):
         ))
     
     fig.update_layout(
-        title='📈 ATSI & EALD Trends (Hover for details)',
+        title='📈 ATSI & EALD Trends',
         xaxis_title='Year',
         yaxis_title='Percentage of Referrals',
         paper_bgcolor=COLORS['dark_bg'],
@@ -282,7 +503,6 @@ def equity_trend_by_year(df):
     return fig
 
 def school_referral_heatmap(df):
-    """School x Equity heatmap"""
     schools = sorted([s for s in df['Referring_School'].unique() if pd.notna(s)])
     equity_groups = ['ATSI', 'EALD', 'SWD', 'ASD']
     
@@ -311,7 +531,7 @@ def school_referral_heatmap(df):
     ))
     
     fig.update_layout(
-        title='🔥 School Equity Heatmap (Red = High %, Click schools)',
+        title='🔥 School Equity Heatmap',
         paper_bgcolor=COLORS['dark_bg'],
         font=dict(color=COLORS['white']),
         height=450
@@ -319,7 +539,6 @@ def school_referral_heatmap(df):
     return fig
 
 def program_performance(df):
-    """Program bars - clickable"""
     programs = sorted([p for p in df['Allocated_Program'].unique() if pd.notna(p)])
     
     data = []
@@ -336,7 +555,7 @@ def program_performance(df):
     fig.add_trace(go.Bar(x=data_df['Program'], y=data_df['Waiting'], name='⏳ Waiting', marker_color=COLORS['red']))
     
     fig.update_layout(
-        title='🎓 Program Allocation (Click to drill)',
+        title='🎓 Program Allocation',
         barmode='stack',
         paper_bgcolor=COLORS['dark_bg'],
         plot_bgcolor='rgba(0,0,0,0)',
@@ -347,11 +566,10 @@ def program_performance(df):
     return fig
 
 # ============================================================================
-# MAIN DASHBOARD
+# MAIN
 # ============================================================================
 
 def main():
-    # Load data
     if not st.session_state['data_loaded']:
         default = load_data()
         if default is not None:
@@ -360,11 +578,9 @@ def main():
     
     df = st.session_state['df']
     
-    # Header
     st.markdown("# 📊 CLC-LBU INTERACTIVE ANALYTICS")
     st.markdown("_Explore equity, programs & outcomes with dynamic filtering_")
     
-    # Data upload
     col1, col2 = st.columns([3, 1])
     with col1:
         uploaded = st.file_uploader("📤 Upload Excel", type=['xlsx', 'xls'])
@@ -387,7 +603,7 @@ def main():
         st.info("👆 Upload or load demo")
         return
     
-    # FILTERS (Top bar)
+    # FILTERS
     st.markdown("## 🔍 Filters")
     
     filter_cols = st.columns(5)
@@ -420,7 +636,6 @@ def main():
             st.session_state['selected_school'] = None
             st.rerun()
     
-    # Apply filters
     filtered_df = apply_filters(df)
     
     st.markdown("---")
@@ -451,7 +666,8 @@ def main():
     # TABS
     st.markdown("## 📊 Analysis")
     
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "👥 Current Cohort",
         "⚖️ Equity by Program",
         "📈 Year Trends",
         "🔥 School Heatmap",
@@ -460,30 +676,25 @@ def main():
     ])
     
     with tab1:
-        st.markdown("### Equity Distribution Across Programs")
-        st.info("💡 **Hover** for counts. **Click bars** to filter further.")
+        show_current_cohort(filtered_df)
+    
+    with tab2:
         fig1 = equity_distribution_by_program(filtered_df)
         st.plotly_chart(fig1, use_container_width=True)
     
-    with tab2:
-        st.markdown("### Year-over-Year Trends")
-        st.info("💡 **Hover** for details. See EALD rising, ATSI persistent.")
+    with tab3:
         fig2 = equity_trend_by_year(filtered_df)
         st.plotly_chart(fig2, use_container_width=True)
     
-    with tab3:
-        st.markdown("### School x Equity Breakdown")
-        st.info("💡 Red = higher %. **Hover** for exact %. Click schools in filter.")
+    with tab4:
         fig3 = school_referral_heatmap(filtered_df)
         st.plotly_chart(fig3, use_container_width=True)
     
-    with tab4:
-        st.markdown("### Program Performance")
-        st.info("💡 Allocation vs Waiting. **Hover** for exact counts.")
+    with tab5:
         fig4 = program_performance(filtered_df)
         st.plotly_chart(fig4, use_container_width=True)
     
-    with tab5:
+    with tab6:
         st.markdown("### De-identified Data")
         cols_show = [c for c in ['Referring_School', 'Allocated_Program', 'Allocation_Status', 
                                   'Flag_ATSI', 'Flag_EALD', 'Flag_SWD', 'Flag_ASD', 'Referral_Year', 'Term'] 
