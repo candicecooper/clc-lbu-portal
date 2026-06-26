@@ -62,57 +62,33 @@ st.markdown("""
         color: #e8e8e8 !important;
     }
     
-    /* MODERN FILTER BOXES */
+    /* MODERN FILTER BOXES - SIMPLIFIED */
+    .stSelectbox > div {
+        background-color: transparent !important;
+    }
+    
     .stSelectbox > div > div {
         background: linear-gradient(135deg, rgba(26, 122, 122, 0.3) 0%, rgba(0, 229, 255, 0.1) 100%) !important;
-        color: #00e5ff !important;
         border: 2px solid rgba(0, 229, 255, 0.6) !important;
         border-radius: 10px !important;
-        box-shadow: 0 0 15px rgba(0, 229, 255, 0.2), inset 0 0 10px rgba(0, 229, 255, 0.05) !important;
+        box-shadow: 0 0 15px rgba(0, 229, 255, 0.2) !important;
         padding: 10px !important;
-        font-weight: 500 !important;
     }
     
-    /* Bright text in selectbox input */
+    .stSelectbox > div > div > div {
+        color: #00e5ff !important;
+        font-weight: bold !important;
+    }
+    
     .stSelectbox input {
         color: #00e5ff !important;
-        background-color: transparent !important;
-    }
-    
-    .stSelectbox input::placeholder {
-        color: rgba(0, 229, 255, 0.6) !important;
-    }
-    
-    /* Dropdown content */
-    [data-baseweb="select"] {
-        color: #00e5ff !important;
-    }
-    
-    [data-baseweb="select"] input {
-        color: #00e5ff !important;
-    }
-    
-    [data-baseweb="popover"] {
-        background-color: rgba(10, 14, 39, 0.95) !important;
-    }
-    
-    [data-baseweb="menu"] {
-        background-color: rgba(10, 14, 39, 0.95) !important;
-    }
-    
-    [data-baseweb="menu"] li {
-        color: #e8e8e8 !important;
-        background-color: transparent !important;
-    }
-    
-    [data-baseweb="menu"] li:hover {
-        background-color: rgba(0, 229, 255, 0.25) !important;
-        color: #00e5ff !important;
+        font-weight: bold !important;
     }
     
     .stSelectbox label {
         color: #00e5ff !important;
         font-weight: bold !important;
+        font-size: 0.95em !important;
     }
     
     /* GLOWING METRICS */
@@ -335,33 +311,27 @@ def get_equity_count(df, flag):
 def show_current_cohort(df):
     """Show students currently at CLC-LBU"""
     
-    # DEBUG: Show available statuses
-    with st.expander("🔍 Debug: Available Status Values"):
-        st.write("Unique Allocation_Status values in data:")
-        statuses = df['Allocation_Status'].unique()
-        st.write(statuses)
-    
-    # Filter for current - match case-insensitive
-    current = df[df['Allocation_Status'].str.lower() == 'current']
-    
-    # If no "Current", try "In Progress" or other common values
-    if len(current) == 0:
-        possible_statuses = [s for s in df['Allocation_Status'].unique() if pd.notna(s)]
-        st.warning(f"⚠️ No students with status 'Current'. Found statuses: {possible_statuses}")
-        
-        # Try alternative names
-        for alt_status in ['In Progress', 'Active', 'Enrolled', 'current']:
-            alt_current = df[df['Allocation_Status'].str.lower() == alt_status.lower()]
-            if len(alt_current) > 0:
-                st.info(f"✅ Using status: '{alt_status}' ({len(alt_current)} students)")
-                current = alt_current
-                break
-    
-    if len(current) == 0:
-        st.error("❌ No current students found. Please check your data's Allocation_Status values.")
-        return
+    # Get all unique statuses
+    all_statuses = df['Allocation_Status'].unique()
+    all_statuses = [s for s in all_statuses if pd.notna(s)]
     
     st.markdown("### 👥 Current Students at CLC-LBU")
+    
+    # Let user select which status = "current"
+    st.info("💡 **Which status represents your 'current' students?** Select from the dropdown:")
+    selected_status = st.selectbox("📌 Select Current Status", all_statuses, index=0 if len(all_statuses) > 0 else None)
+    
+    # Filter for selected status
+    current = df[df['Allocation_Status'] == selected_status]
+    
+    if len(current) == 0:
+        st.error(f"❌ No students found with status '{selected_status}'")
+        st.write(f"Available statuses: {all_statuses}")
+        return
+    
+    st.success(f"✅ Found {len(current)} students with status '{selected_status}'")
+    
+    st.markdown("---")
     
     # Key metrics for current cohort
     col1, col2, col3, col4, col5 = st.columns(5)
@@ -369,123 +339,130 @@ def show_current_cohort(df):
     col1.metric("📍 Currently Enrolled", len(current))
     
     atsi_curr = len(current[current['Flag_ATSI'] == 'Yes'])
-    col2.metric("🇦🇺 ATSI", f"{atsi_curr} ({atsi_curr/len(current)*100 if len(current) > 0 else 0:.0f}%)")
+    atsi_pct = (atsi_curr/len(current)*100) if len(current) > 0 else 0
+    col2.metric("🇦🇺 ATSI", f"{atsi_curr}", f"{atsi_pct:.0f}%")
     
     eald_curr = len(current[current['Flag_EALD'] == 'Yes'])
-    col3.metric("🌍 EALD", f"{eald_curr} ({eald_curr/len(current)*100 if len(current) > 0 else 0:.0f}%)")
+    eald_pct = (eald_curr/len(current)*100) if len(current) > 0 else 0
+    col3.metric("🌍 EALD", f"{eald_curr}", f"{eald_pct:.0f}%")
     
     swd_curr = len(current[current['Flag_SWD'] == 'Yes'])
-    col4.metric("♿ SWD", f"{swd_curr} ({swd_curr/len(current)*100 if len(current) > 0 else 0:.0f}%)")
+    swd_pct = (swd_curr/len(current)*100) if len(current) > 0 else 0
+    col4.metric("♿ SWD", f"{swd_curr}", f"{swd_pct:.0f}%")
     
     asd_curr = len(current[current['Flag_ASD'] == 'Yes'])
-    col5.metric("🧩 ASD", f"{asd_curr} ({asd_curr/len(current)*100 if len(current) > 0 else 0:.0f}%)")
+    asd_pct = (asd_curr/len(current)*100) if len(current) > 0 else 0
+    col5.metric("🧩 ASD", f"{asd_curr}", f"{asd_pct:.0f}%")
     
     st.markdown("---")
     
     # Program distribution
     st.markdown("### 🎓 Current Students by Program")
     prog_data = []
-    for prog in ['JP', 'PY', 'SY']:
+    for prog in sorted([p for p in current['Allocated_Program'].unique() if pd.notna(p)]):
         prog_count = len(current[current['Allocated_Program'] == prog])
         prog_data.append({'Program': prog, 'Count': prog_count})
     
-    prog_df = pd.DataFrame(prog_data)
-    
-    fig1 = go.Figure(data=[
-        go.Bar(
-            x=prog_df['Program'],
-            y=prog_df['Count'],
-            marker_color=[COLORS['cyan'], COLORS['green'], COLORS['amber']],
-            text=prog_df['Count'],
-            textposition='outside'
-        )
-    ])
-    
-    fig1.update_layout(
-        title='Current Students by Program',
-        paper_bgcolor=COLORS['dark_bg'],
-        plot_bgcolor='rgba(0,0,0,0)',
-        font=dict(color=COLORS['white']),
-        height=400,
-        xaxis_title='Program',
-        yaxis_title='Number of Students'
-    )
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.plotly_chart(fig1, use_container_width=True)
-    
-    with col2:
-        # Equity breakdown
-        st.markdown("### ⚖️ Equity Representation (Current)")
-        equity_data = []
-        for equity in ['ATSI', 'EALD', 'SWD', 'ASD']:
-            count = len(current[current[f'Flag_{equity}'] == 'Yes'])
-            pct = (count / len(current) * 100) if len(current) > 0 else 0
-            equity_data.append({'Group': equity, 'Count': count, 'Percentage': pct})
+    if prog_data:
+        prog_df = pd.DataFrame(prog_data)
         
-        equity_df = pd.DataFrame(equity_data)
-        
-        fig2 = go.Figure(data=[
+        fig1 = go.Figure(data=[
             go.Bar(
-                x=equity_df['Group'],
-                y=equity_df['Count'],
-                marker_color=[EQUITY_COLORS.get(g, '#00e5ff') for g in equity_df['Group']],
-                text=equity_df['Count'],
+                x=prog_df['Program'],
+                y=prog_df['Count'],
+                marker_color=[COLORS['cyan'], COLORS['green'], COLORS['amber']][:len(prog_df)],
+                text=prog_df['Count'],
                 textposition='outside'
             )
         ])
         
-        fig2.update_layout(
-            title='Current Students by Equity Group',
+        fig1.update_layout(
+            title='Current Students by Program',
             paper_bgcolor=COLORS['dark_bg'],
             plot_bgcolor='rgba(0,0,0,0)',
             font=dict(color=COLORS['white']),
             height=400,
-            xaxis_title='Equity Group',
+            xaxis_title='Program',
             yaxis_title='Number of Students'
         )
         
-        st.plotly_chart(fig2, use_container_width=True)
-    
-    st.markdown("---")
-    
-    # School distribution
-    st.markdown("### 🏫 Where Current Students Came From")
-    school_data = current['Referring_School'].value_counts().reset_index()
-    school_data.columns = ['School', 'Count']
-    school_data = school_data.sort_values('Count', ascending=True)
-    
-    fig3 = go.Figure(data=[
-        go.Bar(
-            y=school_data['School'],
-            x=school_data['Count'],
-            orientation='h',
-            marker_color=COLORS['cyan'],
-            text=school_data['Count'],
-            textposition='outside'
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.plotly_chart(fig1, use_container_width=True)
+        
+        with col2:
+            # Equity breakdown
+            st.markdown("### ⚖️ Equity Representation (Current)")
+            equity_data = []
+            for equity in ['ATSI', 'EALD', 'SWD', 'ASD']:
+                count = len(current[current[f'Flag_{equity}'] == 'Yes'])
+                pct = (count / len(current) * 100) if len(current) > 0 else 0
+                equity_data.append({'Group': equity, 'Count': count, 'Percentage': pct})
+            
+            equity_df = pd.DataFrame(equity_data)
+            
+            fig2 = go.Figure(data=[
+                go.Bar(
+                    x=equity_df['Group'],
+                    y=equity_df['Count'],
+                    marker_color=[EQUITY_COLORS.get(g, '#00e5ff') for g in equity_df['Group']],
+                    text=equity_df['Count'],
+                    textposition='outside'
+                )
+            ])
+            
+            fig2.update_layout(
+                title='Current Students by Equity Group',
+                paper_bgcolor=COLORS['dark_bg'],
+                plot_bgcolor='rgba(0,0,0,0)',
+                font=dict(color=COLORS['white']),
+                height=400,
+                xaxis_title='Equity Group',
+                yaxis_title='Number of Students'
+            )
+            
+            st.plotly_chart(fig2, use_container_width=True)
+        
+        st.markdown("---")
+        
+        # School distribution
+        st.markdown("### 🏫 Where Current Students Came From")
+        school_data = current['Referring_School'].value_counts().reset_index()
+        school_data.columns = ['School', 'Count']
+        school_data = school_data.sort_values('Count', ascending=True)
+        
+        fig3 = go.Figure(data=[
+            go.Bar(
+                y=school_data['School'],
+                x=school_data['Count'],
+                orientation='h',
+                marker_color=COLORS['cyan'],
+                text=school_data['Count'],
+                textposition='outside'
+            )
+        ])
+        
+        fig3.update_layout(
+            title='Current Students by Referring School',
+            paper_bgcolor=COLORS['dark_bg'],
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color=COLORS['white']),
+            height=400,
+            xaxis_title='Number of Students',
+            yaxis_title='School'
         )
-    ])
-    
-    fig3.update_layout(
-        title='Current Students by Referring School',
-        paper_bgcolor=COLORS['dark_bg'],
-        plot_bgcolor='rgba(0,0,0,0)',
-        font=dict(color=COLORS['white']),
-        height=400,
-        xaxis_title='Number of Students',
-        yaxis_title='School'
-    )
-    
-    st.plotly_chart(fig3, use_container_width=True)
-    
-    st.markdown("---")
-    
-    # Data table
-    st.markdown("### 📊 Current Student Details")
-    cols_show = [c for c in ['Referring_School', 'Allocated_Program', 'Flag_ATSI', 'Flag_EALD', 'Flag_SWD', 'Flag_ASD', 'Referral_Year', 'Term'] if c in current.columns]
-    st.dataframe(current[cols_show], use_container_width=True, height=400)
+        
+        st.plotly_chart(fig3, use_container_width=True)
+        
+        st.markdown("---")
+        
+        # Data table
+        st.markdown("### 📊 Current Student Details")
+        cols_show = [c for c in ['Referring_School', 'Allocated_Program', 'Flag_ATSI', 'Flag_EALD', 'Flag_SWD', 'Flag_ASD', 'Referral_Year', 'Term'] if c in current.columns]
+        st.dataframe(current[cols_show], use_container_width=True, height=400)
+    else:
+        st.warning("⚠️ No programs found in current students")
 
 # ============================================================================
 # INTERACTIVE CHARTS
