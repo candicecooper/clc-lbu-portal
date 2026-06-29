@@ -459,6 +459,27 @@ header{display:none!important}
 .timetable-img{width:100%;display:block}
 .page-divider{border:none;border-top:2px dashed var(--navy-border);margin:4px 0}
 
+/* ── Large booking view — breaks out of the narrow 980px column to fill the screen ── */
+.booking-img{
+  display:block;
+  width:min(1380px, 94vw);
+  margin-left:50%;
+  transform:translateX(-50%);
+  margin-bottom:14px;
+  border:1px solid var(--navy-border);
+  border-radius:8px;
+}
+.booking-wide{
+  width:min(1380px, 94vw);
+  margin-left:50%;
+  transform:translateX(-50%);
+  margin-bottom:18px;
+  background:var(--white);
+  border:1px solid var(--navy-border);
+  border-radius:14px;
+  overflow:hidden;
+}
+
 /* ── Excel booking tables ── */
 .xls-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;padding:14px 16px;font-size:13px}
 .xls-sheet-name{
@@ -879,13 +900,12 @@ def render_timetable_view(program: str):
         with st.spinner("Loading bookings…"):
             html = excel_to_html(file_bytes)
         if html:
-            wrap_style = ""
             if program in BOOKING_PROGRAMS:
-                zoom = st.slider("🔍 View size — drag to enlarge", min_value=100, max_value=260,
-                                 value=150, step=10, format="%d%%", key=f"zoom_{program}")
-                wrap_style = f"font-size:{round(13 * zoom / 100)}px;"
-            st.markdown(f'<div class="card-wrap"><div class="xls-scroll" style="{wrap_style}">{html}</div></div>',
-                        unsafe_allow_html=True)
+                st.markdown(f'<div class="booking-wide"><div class="xls-scroll" style="font-size:16px;padding:18px 20px;">{html}</div></div>',
+                            unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="card-wrap"><div class="xls-scroll">{html}</div></div>',
+                            unsafe_allow_html=True)
         else:
             st.info("Couldn't display this spreadsheet inline (the openpyxl package may be "
                     "missing from requirements). You can still download it below.")
@@ -904,22 +924,26 @@ def render_timetable_view(program: str):
         images = pdf_to_images(file_bytes)
 
     if images:
-        img_width = "100%"
         if program in BOOKING_PROGRAMS:
-            zoom = st.slider("🔍 View size — drag to enlarge", min_value=100, max_value=260,
-                             value=150, step=10, format="%d%%", key=f"zoom_{program}")
-            img_width = f"{zoom}%"
-        st.markdown('<div class="card-wrap"><div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">',
-                    unsafe_allow_html=True)
-        for i, img_b64 in enumerate(images):
-            if i > 0:
-                st.markdown('<hr class="page-divider">', unsafe_allow_html=True)
-            st.markdown(
-                f'<img src="data:image/png;base64,{img_b64}" '
-                f'class="timetable-img" style="width:{img_width};max-width:none;" alt="Page {i+1}">',
-                unsafe_allow_html=True,
-            )
-        st.markdown('</div></div>', unsafe_allow_html=True)
+            # Large, near-full-width booking view
+            for i, img_b64 in enumerate(images):
+                if i > 0:
+                    st.markdown('<hr class="page-divider">', unsafe_allow_html=True)
+                st.markdown(
+                    f'<img src="data:image/png;base64,{img_b64}" class="booking-img" alt="Page {i+1}">',
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.markdown('<div class="card-wrap">', unsafe_allow_html=True)
+            for i, img_b64 in enumerate(images):
+                if i > 0:
+                    st.markdown('<hr class="page-divider">', unsafe_allow_html=True)
+                st.markdown(
+                    f'<img src="data:image/png;base64,{img_b64}" '
+                    f'class="timetable-img" alt="Page {i+1}">',
+                    unsafe_allow_html=True,
+                )
+            st.markdown('</div>', unsafe_allow_html=True)
     else:
         st.warning("⚠️ Could not render PDF as image. Please download below.")
 
