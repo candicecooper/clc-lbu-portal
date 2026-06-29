@@ -69,6 +69,9 @@ PROGRAM_LABELS = {
 # Yard / Kitchen bookings are uploaded separately (PDF or Excel), so they're excluded here.
 SPLIT_PROGRAMS = ["Specialist", "JP", "PY", "SY", "SSO", "Leadership", "Meetings"]
 
+# Booking sheets — managed in their own admin zone so they can never affect teacher timetables.
+BOOKING_PROGRAMS = ["Yard", "Kitchen"]
+
 # ── File-type helpers (PDF vs Excel) ──────────────────────────────────────────
 CONTENT_TYPES = {
     "pdf":  "application/pdf",
@@ -575,8 +578,9 @@ if st.session_state.admin_authed:
     st.markdown("""
     <div style="background:linear-gradient(90deg,#1a2e44,#2d4f72);border-radius:12px;
     padding:1rem 1.25rem;margin-bottom:1.25rem;">
-    <div style="font-size:0.9rem;font-weight:700;color:white;margin-bottom:0.75rem;">
-    📤 Upload New Timetable</div>
+    <div style="font-size:0.9rem;font-weight:700;color:white;">📤 Upload Staff Timetables</div>
+    <div style="font-size:0.72rem;color:rgba(255,255,255,0.75);margin-top:3px;">
+    Specialist, JP, PY, SY, SSO, Leadership &amp; Meetings — Yard &amp; Kitchen bookings have their own zone below.</div>
     </div>""", unsafe_allow_html=True)
 
     upload_mode = st.radio("Upload mode", 
@@ -627,14 +631,14 @@ if st.session_state.admin_authed:
     else:
         st.markdown("""<div style="background:#eef6ff;border:1px solid #c5d3e0;border-radius:8px;
             padding:0.7rem 1rem;font-size:0.83rem;color:#1a2e44;margin-bottom:0.75rem;">
-            📑 Upload a <strong>PDF or Excel</strong> file to any single section — including
-            🌳 Yard Bookings and 🍳 Student Kitchen. PDFs render as page images; Excel files
-            (.xlsx) display as live tables, one per sheet.
+            📑 Upload a <strong>PDF or Excel</strong> file to a single staff timetable section.
+            PDFs render as page images; Excel files (.xlsx) display as live tables.
+            <em>Yard &amp; Student Kitchen bookings have their own upload area further down.</em>
         </div>""", unsafe_allow_html=True)
         with st.form("upload_form_top", clear_on_submit=False):
             col_prog, col_lbl = st.columns([1, 2])
             with col_prog:
-                prog_choice = st.selectbox("Program", options=PROGRAMS,
+                prog_choice = st.selectbox("Program", options=SPLIT_PROGRAMS,
                                            format_func=lambda p: PROGRAM_LABELS[p])
             with col_lbl:
                 lbl = st.text_input("Label", placeholder="e.g. Term 1 · Week 6 · 2 Mar 2026")
@@ -660,14 +664,66 @@ if st.session_state.admin_authed:
                         st.cache_resource.clear()
                         st.rerun()
 
+    st.markdown("---")
+
+    # ── Bookings upload zone (isolated — can only write to Yard / Kitchen) ──
+    st.markdown("""
+    <div style="background:linear-gradient(90deg,#1b6e3c,#2e9e5b);border-radius:12px;
+    padding:1rem 1.25rem;margin-bottom:1rem;">
+    <div style="font-size:0.9rem;font-weight:700;color:white;">📥 Upload Yard &amp; Kitchen Bookings</div>
+    <div style="font-size:0.72rem;color:rgba(255,255,255,0.85);margin-top:3px;">
+    Separate from staff timetables — uploading here only updates the booking sheet you choose.</div>
+    </div>""", unsafe_allow_html=True)
+
+    st.markdown("""<div style="background:#e8f5e1;border:1px solid #6BBF4E;border-radius:8px;
+        padding:0.7rem 1rem;font-size:0.83rem;color:#1a2e44;margin-bottom:0.75rem;">
+        Upload a <strong>PDF or Excel</strong> file for 🌳 Yard Bookings or 🍳 Student Kitchen.
+        Excel (.xlsx) displays as a live table; PDF renders as page images. This zone can only
+        write to the two booking sheets, so it can never overwrite a teacher timetable.
+    </div>""", unsafe_allow_html=True)
+
+    with st.form("booking_upload_form", clear_on_submit=False):
+        bcol_prog, bcol_lbl = st.columns([1, 2])
+        with bcol_prog:
+            booking_choice = st.selectbox("Booking sheet", options=BOOKING_PROGRAMS,
+                                          format_func=lambda p: PROGRAM_LABELS[p],
+                                          key="booking_prog")
+        with bcol_lbl:
+            booking_lbl = st.text_input("Label", placeholder="e.g. Term 1 · Week 6",
+                                        key="booking_lbl")
+
+        booking_file = st.file_uploader("Choose PDF or Excel file",
+                                        type=["pdf", "xlsx", "xls", "xlsm"],
+                                        label_visibility="collapsed", key="booking_file")
+
+        booking_submitted = st.form_submit_button("✅ Upload Booking & Set as Current",
+                                                  type="primary", use_container_width=True)
+
+        if booking_submitted:
+            if not booking_file:
+                st.error("Please choose a PDF or Excel file.")
+            elif not booking_lbl.strip():
+                st.error("Please add a label.")
+            else:
+                booking_file.seek(0)
+                braw = booking_file.read()
+                bb64 = base64.b64encode(braw).decode("utf-8")
+                if save_timetable(booking_file.name, bb64, booking_lbl.strip(), booking_choice):
+                    st.success(f"✅ {PROGRAM_LABELS[booking_choice]} updated — {booking_lbl.strip()}")
+                    st.cache_resource.clear()
+                    st.rerun()
+
+    st.markdown("---")
+
     # ── Version history with delete (admin only) ──
-    with st.expander("🗂️ Version History & Delete Old Versions"):
-        for program in PROGRAMS:
+    def _render_history(programs):
+        any_rows = False
+        for program in programs:
             all_tt = get_all_timetables(program)
             if not all_tt:
                 continue
-            prog_label_str = PROGRAM_LABELS[program]
-            st.markdown(f"**{prog_label_str}**")
+            any_rows = True
+            st.markdown(f"**{PROGRAM_LABELS[program]}**")
             for i, tt in enumerate(all_tt):
                 row_id   = tt.get("id")
                 tt_label = tt.get("label") or tt.get("filename", "")
@@ -688,6 +744,14 @@ if st.session_state.admin_authed:
                     else:
                         st.markdown("<div style='font-size:11px;color:#9aa5b4;text-align:center;padding-top:8px;'>active</div>",
                                     unsafe_allow_html=True)
+        if not any_rows:
+            st.caption("Nothing uploaded yet.")
+
+    with st.expander("🗂️ Timetable Version History & Delete"):
+        _render_history(SPLIT_PROGRAMS)
+
+    with st.expander("🗂️ Bookings Version History & Delete"):
+        _render_history(BOOKING_PROGRAMS)
     
     # Logout button
     if st.button("🚪 Logout Admin", use_container_width=False, key="logout_admin"):
