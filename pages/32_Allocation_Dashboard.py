@@ -167,7 +167,6 @@ with main_tabs[1]:
             'Student_Name': 'student_name',
             'Meeting_Week': 'meeting_week',
             'Meeting_Date': 'meeting_date',
-            'Referral_Date': 'referral_date',
             'Term': 'term',
             'Referral_Year': 'year',
             'Allocated_Program': 'program',
