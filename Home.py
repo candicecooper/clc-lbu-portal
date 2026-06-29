@@ -5,7 +5,7 @@ from datetime import date
 
 st.set_page_config(page_title="CLC LBU Staff Portal", page_icon="🏫", layout="wide", initial_sidebar_state="collapsed")
 apply_clc_theme()
-require_auth("CLC LBU Staff Portal", "🏫")
+# require_auth("CLC LBU Staff Portal", "🏫")
 logout_button("sidebar")
 
 staff_name = get_staff_name()
