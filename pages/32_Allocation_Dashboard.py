@@ -128,7 +128,7 @@ def main():
     with tab1:
         st.markdown("## Placement Data by Program")
         prog_counts = allocation_df[prog_col].value_counts().sort_values(ascending=True)
-        fig = px.barh(x=prog_counts.values, y=prog_counts.index, text_auto=True, 
+        fig = px.bar(x=prog_counts.values, y=prog_counts.index, orientation='h', text_auto=True, 
                      title='Total Enrollments by Program')
         fig.update_layout(plot_bgcolor='rgba(10,14,39,0.8)', paper_bgcolor='rgba(10,14,39,0.8)',
                          font=dict(color='#ffffff'), height=350)
