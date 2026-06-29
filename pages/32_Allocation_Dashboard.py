@@ -204,6 +204,10 @@ with main_tabs[1]:
         # Keep only mapped columns (drop extra columns)
         df_mapped = df_mapped[[col for col in df_mapped.columns if col in column_map.values()]]
         
+        # REMOVE equity flag columns - they don't exist in Supabase table yet
+        equity_flags = ['Flag_ATSI', 'Flag_EALD', 'Flag_SWD', 'Flag_ASD', 'Flag_ADHD']
+        df_mapped = df_mapped.drop(columns=[col for col in equity_flags if col in df_mapped.columns])
+        
         # CLEAN DATA - nuclear option
         df_mapped = df_mapped.fillna('')
         
