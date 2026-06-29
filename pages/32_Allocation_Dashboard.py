@@ -206,14 +206,18 @@ with main_tabs[1]:
         
         # CLEAN DATA
         df_mapped = df_mapped.fillna('')
-        df_mapped = df_mapped.where(pd.notna(df_mapped), '')
         
-        # Convert to string but handle dates carefully
+        # Handle numeric columns specifically
+        numeric_cols = ['year', 'term', 'extension_weeks', 'total_previous_placements']
+        for col in numeric_cols:
+            if col in df_mapped.columns:
+                # Replace NaN/empty with 0
+                df_mapped[col] = pd.to_numeric(df_mapped[col], errors='coerce').fillna(0).astype(int)
+        
+        # Now convert everything else to string
         for col in df_mapped.columns:
-            if 'date' in col.lower() or col in ['Term', 'term', 'Year', 'year']:
-                df_mapped[col] = df_mapped[col].astype(str).str.replace('nan', '').str.replace('NaT', '')
-            else:
-                df_mapped[col] = df_mapped[col].astype(str).str.replace('nan', '').str.replace('<NA>', '').str.strip()
+            if col not in numeric_cols:
+                df_mapped[col] = df_mapped[col].astype(str).str.replace('nan', '').str.replace('NaT', '').str.replace('<NA>', '').str.strip()
         
         st.markdown("### Preview (Mapped)")
         st.dataframe(df_mapped.head(5), use_container_width=True)
