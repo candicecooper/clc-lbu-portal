@@ -208,10 +208,19 @@ with main_tabs[1]:
         if 'id' in df.columns:
             df = df.drop('id', axis=1)
         
+        # AGGRESSIVELY handle NaN - do this FIRST
+        df = df.fillna('')
+        
+        # Remove empty columns
         df = df.dropna(axis=1, how='all')
-        df = df.where(pd.notna(df), '')
-        df = df.astype(str)
-        df = df[(df != '').any(axis=1)]
+        df = df.loc[:, (df != '').any(axis=0)]
+        
+        # Convert everything to string AFTER all NaN handling
+        for col in df.columns:
+            df[col] = df[col].astype(str).str.replace('nan', '').str.replace('<NA>', '').str.strip()
+        
+        # Final NaN check
+        df = df.fillna('')
         
         st.markdown("### Preview (Cleaned)")
         st.dataframe(df.head(5), use_container_width=True)
