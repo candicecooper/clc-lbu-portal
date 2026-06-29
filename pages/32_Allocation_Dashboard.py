@@ -402,11 +402,14 @@ def main():
             # Remove completely empty columns (like Column1 from Excel)
             df = df.dropna(axis=1, how='all')
             
-            # Remove any column that's all empty strings
-            df = df.loc[:, (df != '').any(axis=0)]
+            # Handle NaN values - replace with empty string
+            df = df.where(pd.notna(df), '')
             
-            df = df.fillna('')
+            # Convert to string AFTER handling NaN
             df = df.astype(str)
+            
+            # Remove rows that are all empty
+            df = df[(df != '').any(axis=1)]
             
             st.markdown("### Upload Confirmation")
             
