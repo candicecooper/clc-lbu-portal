@@ -1,15 +1,7 @@
 """
 CLC-LBU ALLOCATION DASHBOARD - STRATEGIC REBUILD
 Purpose: Strategic allocation analysis with meaningful insights
-- Placement Data by Program
-- Enrollment Trends (Terms + Years)
-- SWD Disability Breakdown
-- Complexity Analysis (Multiple Needs)
-- ATSI Representation
-- EALD Representation  
-- Intersectionality (Multiple Overlaps)
-- Assessment Data Integration
-Page name: 32_Allocation_Dashboard.py
+AUTO-DETECTING COLUMNS - works with any data structure
 """
 
 import streamlit as st
@@ -104,6 +96,37 @@ def init_supabase():
 supabase: Client = init_supabase()
 
 # ============================================================================
+# AUTO-DETECT COLUMNS
+# ============================================================================
+
+def detect_columns(df):
+    """Auto-detect year, term, program columns from dataframe"""
+    columns = df.columns.tolist()
+    
+    # Find year column
+    year_col = None
+    for col in columns:
+        if 'year' in col.lower():
+            year_col = col
+            break
+    
+    # Find term column
+    term_col = None
+    for col in columns:
+        if 'term' in col.lower():
+            term_col = col
+            break
+    
+    # Find program column
+    prog_col = None
+    for col in columns:
+        if 'program' in col.lower() or 'allocated' in col.lower():
+            prog_col = col
+            break
+    
+    return year_col, term_col, prog_col
+
+# ============================================================================
 # DATA LOADING
 # ============================================================================
 
@@ -116,7 +139,7 @@ def load_allocation_data():
         response = supabase.table('allocation_students').select('*').execute()
         if response.data:
             df = pd.DataFrame(response.data)
-            # Ensure columns exist
+            # Ensure equity flag columns exist
             for col in ['Flag_ATSI', 'Flag_EALD', 'Flag_SWD', 'Flag_ASD', 'Flag_ADHD']:
                 if col not in df.columns:
                     df[col] = 'No'
@@ -152,6 +175,13 @@ def main():
         st.warning("⚠️ No allocation data found. Upload data to get started.")
         return
     
+    # Auto-detect columns
+    year_col, term_col, prog_col = detect_columns(allocation_df)
+    
+    if not year_col or not term_col or not prog_col:
+        st.error(f"⚠️ Could not auto-detect columns. Found: Year={year_col}, Term={term_col}, Program={prog_col}")
+        return
+    
     st.markdown("---")
     
     # ========================================================================
@@ -165,35 +195,37 @@ def main():
     with col1:
         selected_year = st.selectbox(
             "📅 Year",
-            sorted(allocation_df['Referral_Year'].unique()),
+            sorted(allocation_df[year_col].dropna().unique()),
             help="Select year to view"
         )
     
     with col2:
+        available_terms = sorted(allocation_df[allocation_df[year_col] == selected_year][term_col].dropna().unique())
         selected_term = st.selectbox(
             "📋 Term",
-            sorted(allocation_df[allocation_df['Referral_Year'] == selected_year]['Term'].unique()),
+            available_terms,
             help="Select term within year"
         )
     
     with col3:
+        available_progs = sorted([p for p in allocation_df[prog_col].dropna().unique() if pd.notna(p)])
         selected_program = st.selectbox(
             "🎓 Program",
-            ['All'] + sorted([p for p in allocation_df['Program'].unique() if pd.notna(p)]),
+            ['All'] + available_progs,
             help="Select program or view all"
         )
     
     with col4:
-        st.metric("📊 Total Records Loaded", len(allocation_df), label_visibility="collapsed")
+        st.metric("📊 Total Records", len(allocation_df), label_visibility="collapsed")
     
     # Filter data
     filtered_df = allocation_df[
-        (allocation_df['Referral_Year'] == selected_year) &
-        (allocation_df['Term'] == selected_term)
+        (allocation_df[year_col] == selected_year) &
+        (allocation_df[term_col] == selected_term)
     ]
     
     if selected_program != 'All':
-        filtered_df = filtered_df[filtered_df['Program'] == selected_program]
+        filtered_df = filtered_df[filtered_df[prog_col] == selected_program]
     
     st.info(f"✅ Showing {len(filtered_df)} students | Year: {selected_year} | Term: {selected_term} | Program: {selected_program}")
     
@@ -224,7 +256,7 @@ def main():
         st.markdown("_Student enrollments across programs with demographic breakdown_")
         
         # Overall enrollment by program
-        program_counts = allocation_df['Program'].value_counts().sort_values(ascending=True)
+        program_counts = allocation_df[prog_col].value_counts().sort_values(ascending=True)
         
         fig_programs = px.barh(
             x=program_counts.values,
@@ -248,12 +280,12 @@ def main():
         # Demographic breakdown by program
         st.markdown("### Demographic Breakdown by Program")
         
-        programs_list = sorted([p for p in allocation_df['Program'].unique() if pd.notna(p)])
+        programs_list = sorted([p for p in allocation_df[prog_col].dropna().unique() if pd.notna(p)])
         
-        cols = st.columns(len(programs_list))
+        cols = st.columns(len(programs_list)) if programs_list else [st.empty()]
         
         for idx, program in enumerate(programs_list):
-            prog_data = allocation_df[allocation_df['Program'] == program]
+            prog_data = allocation_df[allocation_df[prog_col] == program]
             
             with cols[idx]:
                 st.markdown(f"#### {program} Program")
@@ -273,16 +305,16 @@ def main():
         # Term patterns within year
         st.markdown("### Enrollment Pattern - Terms Within Year")
         
-        year_terms = allocation_df[allocation_df['Referral_Year'] == selected_year].groupby(['Term', 'Program']).size().reset_index(name='Count')
+        year_terms = allocation_df[allocation_df[year_col] == selected_year].groupby([term_col, prog_col]).size().reset_index(name='Count')
         
         fig_terms = px.bar(
             year_terms,
-            x='Term',
+            x=term_col,
             y='Count',
-            color='Program',
+            color=prog_col,
             barmode='group',
             title=f'Enrollments by Term - {selected_year}',
-            labels={'Count': 'Number of Students', 'Term': 'Term'},
+            labels={'Count': 'Number of Students', term_col: 'Term'},
             text_auto=True
         )
         fig_terms.update_layout(
@@ -300,18 +332,19 @@ def main():
     
     with tab2:
         st.markdown("## 📈 Enrollment Trends")
-        st.markdown("_How enrollments change across terms and years - identifying patterns and decreases_")
+        st.markdown("_How enrollments change across terms and years_")
         
         # Create proper time series: Year + Term
-        trend_df = allocation_df.groupby(['Referral_Year', 'Term', 'Program']).size().reset_index(name='Count')
-        trend_df['YearTerm'] = trend_df['Referral_Year'].astype(str) + ' T' + trend_df['Term'].astype(str)
-        trend_df = trend_df.sort_values(['Referral_Year', 'Term'])
+        trend_df = allocation_df.dropna(subset=[year_col, term_col, prog_col]).copy()
+        trend_df['YearTerm'] = trend_df[year_col].astype(str) + ' T' + trend_df[term_col].astype(str)
+        trend_df = trend_df.groupby(['YearTerm', year_col, term_col, prog_col]).size().reset_index(name='Count')
+        trend_df = trend_df.sort_values([year_col, term_col])
         
         fig_trends = px.line(
             trend_df,
             x='YearTerm',
             y='Count',
-            color='Program',
+            color=prog_col,
             markers=True,
             title='Enrollment Trend Over Time (by Year and Term)',
             labels={'Count': 'Number of Students', 'YearTerm': 'Year & Term'},
@@ -330,17 +363,17 @@ def main():
         # Year-on-year comparison
         st.markdown("### Year-on-Year Comparison")
         
-        yoy_df = allocation_df.groupby(['Referral_Year', 'Program']).size().reset_index(name='Count')
+        yoy_df = allocation_df.dropna(subset=[year_col, prog_col]).groupby([year_col, prog_col]).size().reset_index(name='Count')
         
         fig_yoy = px.bar(
             yoy_df,
-            x='Referral_Year',
+            x=year_col,
             y='Count',
-            color='Program',
+            color=prog_col,
             barmode='group',
             title='Annual Enrollments by Program',
             text_auto=True,
-            labels={'Count': 'Total Students', 'Referral_Year': 'Year'}
+            labels={'Count': 'Total Students', year_col: 'Year'}
         )
         fig_yoy.update_layout(
             plot_bgcolor='rgba(10, 14, 39, 0.8)',
@@ -363,56 +396,55 @@ def main():
         
         if len(swd_df) == 0:
             st.info("No SWD students in filtered data")
-            return
-        
-        # Categorize disability types
-        swd_df['Disability_Type'] = swd_df.apply(
-            lambda row: (
-                'ASD + ADHD' if row.get('Flag_ASD') == 'Yes' and row.get('Flag_ADHD') == 'Yes'
-                else 'ASD Only' if row.get('Flag_ASD') == 'Yes'
-                else 'ADHD Only' if row.get('Flag_ADHD') == 'Yes'
-                else 'Other'
-            ),
-            axis=1
-        )
-        
-        # By program
-        swd_by_prog = swd_df.groupby(['Program', 'Disability_Type']).size().reset_index(name='Count')
-        
-        fig_swd = px.bar(
-            swd_by_prog,
-            x='Program',
-            y='Count',
-            color='Disability_Type',
-            barmode='stack',
-            title='SWD Students by Disability Type & Program',
-            text_auto=True,
-            labels={'Count': 'Number of Students'}
-        )
-        fig_swd.update_layout(
-            plot_bgcolor='rgba(10, 14, 39, 0.8)',
-            paper_bgcolor='rgba(10, 14, 39, 0.8)',
-            font=dict(color='#ffffff'),
-            height=400
-        )
-        fig_swd.update_traces(textposition='inside', textfont=dict(color='#ffffff'))
-        st.plotly_chart(fig_swd, use_container_width=True)
-        
-        # Co-occurrence table
-        st.markdown("### Co-occurrence Patterns")
-        
-        cols = st.columns(3)
-        
-        asd_only = len(swd_df[(swd_df['Flag_ASD'] == 'Yes') & (swd_df['Flag_ADHD'] != 'Yes')])
-        adhd_only = len(swd_df[(swd_df['Flag_ADHD'] == 'Yes') & (swd_df['Flag_ASD'] != 'Yes')])
-        both = len(swd_df[(swd_df['Flag_ASD'] == 'Yes') & (swd_df['Flag_ADHD'] == 'Yes')])
-        
-        with cols[0]:
-            st.metric("🧠 ASD Only", asd_only)
-        with cols[1]:
-            st.metric("⚡ ADHD Only", adhd_only)
-        with cols[2]:
-            st.metric("🔗 Both ASD+ADHD", both)
+        else:
+            # Categorize disability types
+            swd_df['Disability_Type'] = swd_df.apply(
+                lambda row: (
+                    'ASD + ADHD' if row.get('Flag_ASD') == 'Yes' and row.get('Flag_ADHD') == 'Yes'
+                    else 'ASD Only' if row.get('Flag_ASD') == 'Yes'
+                    else 'ADHD Only' if row.get('Flag_ADHD') == 'Yes'
+                    else 'Other'
+                ),
+                axis=1
+            )
+            
+            # By program
+            swd_by_prog = swd_df.groupby([prog_col, 'Disability_Type']).size().reset_index(name='Count')
+            
+            fig_swd = px.bar(
+                swd_by_prog,
+                x=prog_col,
+                y='Count',
+                color='Disability_Type',
+                barmode='stack',
+                title='SWD Students by Disability Type & Program',
+                text_auto=True,
+                labels={'Count': 'Number of Students'}
+            )
+            fig_swd.update_layout(
+                plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                font=dict(color='#ffffff'),
+                height=400
+            )
+            fig_swd.update_traces(textposition='inside', textfont=dict(color='#ffffff'))
+            st.plotly_chart(fig_swd, use_container_width=True)
+            
+            # Co-occurrence table
+            st.markdown("### Co-occurrence Patterns")
+            
+            cols = st.columns(3)
+            
+            asd_only = len(swd_df[(swd_df['Flag_ASD'] == 'Yes') & (swd_df['Flag_ADHD'] != 'Yes')])
+            adhd_only = len(swd_df[(swd_df['Flag_ADHD'] == 'Yes') & (swd_df['Flag_ASD'] != 'Yes')])
+            both = len(swd_df[(swd_df['Flag_ASD'] == 'Yes') & (swd_df['Flag_ADHD'] == 'Yes')])
+            
+            with cols[0]:
+                st.metric("🧠 ASD Only", asd_only)
+            with cols[1]:
+                st.metric("⚡ ADHD Only", adhd_only)
+            with cols[2]:
+                st.metric("🔗 Both ASD+ADHD", both)
     
     # ====================================================================
     # TAB 4: COMPLEXITY
@@ -445,15 +477,15 @@ def main():
         # By program
         st.markdown("### Multiple Needs by Program")
         
-        complexity_prog = allocation_df.groupby('Program')['Needs_Count'].apply(
+        complexity_prog = allocation_df.groupby(prog_col)['Needs_Count'].apply(
             lambda x: (x > 1).sum()
         ).reset_index(name='Multiple_Needs')
-        complexity_prog['Total'] = allocation_df.groupby('Program').size().values
+        complexity_prog['Total'] = allocation_df.groupby(prog_col).size().values
         complexity_prog['Percentage'] = (complexity_prog['Multiple_Needs'] / complexity_prog['Total'] * 100).round(1)
         
         fig_complexity = px.bar(
             complexity_prog,
-            x='Program',
+            x=prog_col,
             y='Multiple_Needs',
             color='Percentage',
             text=['Multiple_Needs'],
@@ -478,15 +510,15 @@ def main():
     
     with tab5:
         st.markdown("## 🔗 Intersectionality")
-        st.markdown("_Students with overlapping identities - ATSI+SWD, EALD+SWD, etc. (whole people counts)_")
+        st.markdown("_Students with overlapping identities - ATSI+SWD, EALD+SWD, etc._")
         
-        # Create intersectionality matrix - WHOLE NUMBERS only
-        programs_list = sorted([p for p in allocation_df['Program'].unique() if pd.notna(p)])
+        # Create intersectionality matrix
+        programs_list = sorted([p for p in allocation_df[prog_col].dropna().unique() if pd.notna(p)])
         
         intersect_data = []
         
         for program in programs_list:
-            prog_data = allocation_df[allocation_df['Program'] == program]
+            prog_data = allocation_df[allocation_df[prog_col] == program]
             
             atsi_swd = len(prog_data[(prog_data['Flag_ATSI'] == 'Yes') & (prog_data['Flag_SWD'] == 'Yes')])
             eald_swd = len(prog_data[(prog_data['Flag_EALD'] == 'Yes') & (prog_data['Flag_SWD'] == 'Yes')])
@@ -531,7 +563,7 @@ def main():
     
     with tab6:
         st.markdown("## 🏳️ ATSI Representation")
-        st.markdown("_Aboriginal and Torres Strait Islander student representation across programs_")
+        st.markdown("_Aboriginal and Torres Strait Islander student representation_")
         
         atsi_data = allocation_df[allocation_df['Flag_ATSI'] == 'Yes']
         
@@ -541,7 +573,6 @@ def main():
             col1, col2 = st.columns(2)
             
             with col1:
-                # Overall percentage
                 total_atsi = len(atsi_data)
                 total_all = len(allocation_df)
                 pct_atsi = (total_atsi / total_all * 100)
@@ -550,17 +581,16 @@ def main():
                 st.metric("Overall %", f"{pct_atsi:.1f}%")
             
             with col2:
-                # By program
-                atsi_by_prog = allocation_df.groupby('Program').apply(
+                atsi_by_prog = allocation_df.groupby(prog_col).apply(
                     lambda x: (x['Flag_ATSI'] == 'Yes').sum()
                 ).reset_index(name='ATSI_Count')
-                atsi_by_prog['Total'] = allocation_df.groupby('Program').size().values
+                atsi_by_prog['Total'] = allocation_df.groupby(prog_col).size().values
                 atsi_by_prog['Percentage'] = (atsi_by_prog['ATSI_Count'] / atsi_by_prog['Total'] * 100).round(1)
                 
                 fig_atsi = px.pie(
                     atsi_by_prog,
                     values='ATSI_Count',
-                    names='Program',
+                    names=prog_col,
                     title='ATSI Students by Program',
                     text='ATSI_Count'
                 )
@@ -597,16 +627,16 @@ def main():
                 st.metric("Overall %", f"{pct_eald:.1f}%")
             
             with col2:
-                eald_by_prog = allocation_df.groupby('Program').apply(
+                eald_by_prog = allocation_df.groupby(prog_col).apply(
                     lambda x: (x['Flag_EALD'] == 'Yes').sum()
                 ).reset_index(name='EALD_Count')
-                eald_by_prog['Total'] = allocation_df.groupby('Program').size().values
+                eald_by_prog['Total'] = allocation_df.groupby(prog_col).size().values
                 eald_by_prog['Percentage'] = (eald_by_prog['EALD_Count'] / eald_by_prog['Total'] * 100).round(1)
                 
                 fig_eald = px.pie(
                     eald_by_prog,
                     values='EALD_Count',
-                    names='Program',
+                    names=prog_col,
                     title='EALD Students by Program',
                     text='EALD_Count'
                 )
@@ -645,7 +675,7 @@ def main():
                     st.metric("👥 Staff", prog_assess['staff_member'].nunique())
                 with cols[2]:
                     latest = prog_assess['date_submitted'].max() if 'date_submitted' in prog_assess.columns else 'N/A'
-                    st.metric("📅 Latest", latest)
+                    st.metric("📅 Latest", str(latest)[:10])
                 
                 st.divider()
         else:
