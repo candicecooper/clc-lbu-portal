@@ -1,7 +1,7 @@
 """
 CLC-LBU ASSESSMENT ANALYTICS (with Program Collation)
 View aggregated assessment data by program
-Data is collated from all staff entries for each program
+UPDATED: Single Program View + Term Overview
 Page name: Assessment_Analytics.py
 """
 
@@ -211,12 +211,115 @@ def collate_by_program(assessments, program, term, year):
     }
 
 # ============================================================================
+# RENDER FUNCTIONS
+# ============================================================================
+
+def render_sounds_write_chart(collated, program):
+    """Render Sounds Write chart"""
+    sw_data = collated['sounds_write']
+    vis_data = []
+    for skill, levels in sw_data.items():
+        vis_data.append({
+            'Skill': skill,
+            'Mastered': levels['Mastered'],
+            'Developing': levels['Developing'],
+            'Requires Dev': levels['Requires Development']
+        })
+    
+    df_sw = pd.DataFrame(vis_data)
+    
+    fig_sw = px.bar(
+        df_sw,
+        x='Skill',
+        y=['Mastered', 'Developing', 'Requires Dev'],
+        barmode='stack',
+        title=f'🎵 Sounds Write - {program} Program',
+        color_discrete_map={
+            'Mastered': '#4CAF50',
+            'Developing': '#FFC107',
+            'Requires Dev': '#F44336'
+        },
+        labels={'value': 'Number of Students', 'variable': 'Performance Level'}
+    )
+    fig_sw.update_layout(
+        plot_bgcolor='rgba(10, 14, 39, 0.8)',
+        paper_bgcolor='rgba(10, 14, 39, 0.8)',
+        font=dict(color='#e8e8e8'),
+        hovermode='x unified',
+        height=400
+    )
+    return fig_sw, df_sw
+
+def render_word_aware_chart(collated, program):
+    """Render Word Aware chart"""
+    wa_data = collated['word_aware']
+    vis_data = []
+    for skill, levels in wa_data.items():
+        vis_data.append({
+            'Skill': skill,
+            'Mastered': levels['Mastered'],
+            'Developing': levels['Developing'],
+            'Requires Dev': levels['Requires Development']
+        })
+    
+    df_wa = pd.DataFrame(vis_data)
+    
+    fig_wa = px.bar(
+        df_wa,
+        x='Skill',
+        y=['Mastered', 'Developing', 'Requires Dev'],
+        barmode='stack',
+        title=f'💬 Word Aware - {program} Program',
+        color_discrete_map={
+            'Mastered': '#4CAF50',
+            'Developing': '#FFC107',
+            'Requires Dev': '#F44336'
+        },
+        labels={'value': 'Number of Students', 'variable': 'Performance Level'}
+    )
+    fig_wa.update_layout(
+        plot_bgcolor='rgba(10, 14, 39, 0.8)',
+        paper_bgcolor='rgba(10, 14, 39, 0.8)',
+        font=dict(color='#e8e8e8'),
+        hovermode='x unified',
+        height=400
+    )
+    return fig_wa, df_wa
+
+def render_smartar_chart(collated, program):
+    """Render SMARTAR chart"""
+    smartar_data = collated['smartar']
+    df_smartar = pd.DataFrame([{
+        'Status': status,
+        'Count': count
+    } for status, count in smartar_data.items()])
+    
+    fig_smartar = px.pie(
+        df_smartar,
+        values='Count',
+        names='Status',
+        title=f'🎯 SMARTAR Goals - {program} Program',
+        color_discrete_map={
+            'Achieved': '#4CAF50',
+            'Exceeded': '#00BCD4',
+            'In Progress': '#FFC107',
+            'Not Started': '#F44336'
+        }
+    )
+    fig_smartar.update_layout(
+        plot_bgcolor='rgba(10, 14, 39, 0.8)',
+        paper_bgcolor='rgba(10, 14, 39, 0.8)',
+        font=dict(color='#e8e8e8'),
+        height=400
+    )
+    return fig_smartar, df_smartar
+
+# ============================================================================
 # MAIN
 # ============================================================================
 
 def main():
     st.markdown("# 📊 ASSESSMENT ANALYTICS")
-    st.markdown("_Program-Level Data (Collated from All Staff)_")
     
     if not supabase:
         st.warning("⚠️ Supabase not configured.")
@@ -229,232 +332,261 @@ def main():
         st.warning("No assessment data found yet.")
         return
     
-    # Filters
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        program = st.selectbox("🎓 Program", ['JP', 'PY', 'SY'])
-    with col2:
-        term = st.selectbox("📅 Term", ['1', '2', '3', '4'])
-    with col3:
-        year = st.selectbox("📆 Year", ['2025', '2026'])
+    # Main view selector
+    view_type = st.radio(
+        "📋 View Type",
+        ["📊 Single Program View", "🎓 Term Overview", "🔍 Detailed Analysis"],
+        horizontal=True
+    )
     
     st.markdown("---")
     
-    # Get collated data
-    collated = collate_by_program(all_assessments, program, term, year)
-    
-    if not collated:
-        st.warning(f"No data found for {program} Term {term} {year}")
-        return
-    
-    # Show info
-    col1, col2, col3 = st.columns(3)
-    col1.metric("📋 Staff Entries", collated['staff_count'])
-    col2.metric("📊 Total Records", collated['record_count'])
-    col3.metric("📅 Selected", f"{program} T{term} {year}")
-    
-    st.markdown("---")
-    
-    # TABS
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "🎵 Sounds Write",
-        "💬 Word Aware",
-        "🎯 SMARTAR Goals",
-        "📋 Raw Data"
-    ])
-    
     # ========================================================================
-    # TAB 1: SOUNDS WRITE ANALYTICS
+    # SINGLE PROGRAM VIEW - All sections on one screen
     # ========================================================================
     
-    with tab1:
-        st.markdown("### 🎵 Sounds Write - Program Total")
-        st.info(f"Combined data from {collated['staff_count']} staff member(s)")
+    if view_type == "📊 Single Program View":
+        col1, col2, col3 = st.columns(3)
         
-        sw_data = collated['sounds_write']
+        with col1:
+            program = st.selectbox("🎓 Program", ['JP', 'PY', 'SY'], key="spv_prog")
+        with col2:
+            term = st.selectbox("📅 Term", ['1', '2', '3', '4'], key="spv_term")
+        with col3:
+            year = st.selectbox("📆 Year", ['2025', '2026'], key="spv_year")
         
-        # Create visualization data
-        vis_data = []
-        for skill, levels in sw_data.items():
-            vis_data.append({
-                'Skill': skill,
-                'Mastered': levels['Mastered'],
-                'Developing': levels['Developing'],
-                'Requires Dev': levels['Requires Development']
-            })
+        st.markdown("---")
         
-        df_sw = pd.DataFrame(vis_data)
+        collated = collate_by_program(all_assessments, program, term, year)
         
-        # Stacked bar chart
-        fig_sw = px.bar(
-            df_sw,
-            x='Skill',
-            y=['Mastered', 'Developing', 'Requires Dev'],
-            barmode='stack',
-            title='Sounds Write Skills - Program Total',
-            color_discrete_map={
-                'Mastered': '#4CAF50',
-                'Developing': '#FFC107',
-                'Requires Dev': '#F44336'
-            },
-            labels={'value': 'Number of Students', 'variable': 'Performance Level'}
-        )
-        fig_sw.update_layout(
-            plot_bgcolor='rgba(10, 14, 39, 0.8)',
-            paper_bgcolor='rgba(10, 14, 39, 0.8)',
-            font=dict(color='#e8e8e8'),
-            hovermode='x unified'
-        )
+        if not collated:
+            st.warning(f"No data found for {program} Term {term} {year}")
+            return
+        
+        # Info row
+        col1, col2, col3 = st.columns(3)
+        col1.metric("📋 Staff Entries", collated['staff_count'])
+        col2.metric("📊 Total Records", collated['record_count'])
+        col3.metric("📅 Selected", f"{program} T{term} {year}")
+        
+        st.markdown("---")
+        
+        # All sections on one screen
+        st.markdown(f"## {program} Program - Term {term} {year} - All Data")
+        
+        # Sounds Write
+        fig_sw, df_sw = render_sounds_write_chart(collated, program)
         st.plotly_chart(fig_sw, use_container_width=True)
         
-        # Data table
-        st.markdown("#### Data Table")
-        st.dataframe(df_sw, use_container_width=True)
-        
-        # Totals
         col1, col2, col3 = st.columns(3)
-        col1.metric("✅ Total Mastered", df_sw['Mastered'].sum())
-        col2.metric("🔄 Total Developing", df_sw['Developing'].sum())
-        col3.metric("⚠️ Total Requires Dev", df_sw['Requires Dev'].sum())
-    
-    # ========================================================================
-    # TAB 2: WORD AWARE ANALYTICS
-    # ========================================================================
-    
-    with tab2:
-        st.markdown("### 💬 Word Aware - Program Total")
-        st.info(f"Combined data from {collated['staff_count']} staff member(s)")
+        col1.metric("✅ Sounds Write Mastered", df_sw['Mastered'].sum())
+        col2.metric("🔄 Sounds Write Developing", df_sw['Developing'].sum())
+        col3.metric("⚠️ Sounds Write Requires Dev", df_sw['Requires Dev'].sum())
         
-        wa_data = collated['word_aware']
+        st.markdown("---")
         
-        # Create visualization data
-        vis_data = []
-        for skill, levels in wa_data.items():
-            vis_data.append({
-                'Skill': skill,
-                'Mastered': levels['Mastered'],
-                'Developing': levels['Developing'],
-                'Requires Dev': levels['Requires Development']
-            })
-        
-        df_wa = pd.DataFrame(vis_data)
-        
-        # Stacked bar chart
-        fig_wa = px.bar(
-            df_wa,
-            x='Skill',
-            y=['Mastered', 'Developing', 'Requires Dev'],
-            barmode='stack',
-            title='Word Aware Skills - Program Total',
-            color_discrete_map={
-                'Mastered': '#4CAF50',
-                'Developing': '#FFC107',
-                'Requires Dev': '#F44336'
-            },
-            labels={'value': 'Number of Students', 'variable': 'Performance Level'}
-        )
-        fig_wa.update_layout(
-            plot_bgcolor='rgba(10, 14, 39, 0.8)',
-            paper_bgcolor='rgba(10, 14, 39, 0.8)',
-            font=dict(color='#e8e8e8'),
-            hovermode='x unified'
-        )
+        # Word Aware
+        fig_wa, df_wa = render_word_aware_chart(collated, program)
         st.plotly_chart(fig_wa, use_container_width=True)
         
-        # Data table
-        st.markdown("#### Data Table")
-        st.dataframe(df_wa, use_container_width=True)
-        
-        # Totals
         col1, col2, col3 = st.columns(3)
-        col1.metric("✅ Total Mastered", df_wa['Mastered'].sum())
-        col2.metric("🔄 Total Developing", df_wa['Developing'].sum())
-        col3.metric("⚠️ Total Requires Dev", df_wa['Requires Dev'].sum())
-    
-    # ========================================================================
-    # TAB 3: SMARTAR GOALS ANALYTICS
-    # ========================================================================
-    
-    with tab3:
-        st.markdown("### 🎯 SMARTAR Goals - Program Total")
-        st.info(f"Combined data from {collated['staff_count']} staff member(s)")
+        col1.metric("✅ Word Aware Mastered", df_wa['Mastered'].sum())
+        col2.metric("🔄 Word Aware Developing", df_wa['Developing'].sum())
+        col3.metric("⚠️ Word Aware Requires Dev", df_wa['Requires Dev'].sum())
         
-        smartar_data = collated['smartar']
+        st.markdown("---")
         
-        # Create visualization data
-        df_smartar = pd.DataFrame([{
-            'Status': status,
-            'Count': count
-        } for status, count in smartar_data.items()])
-        
-        # Pie chart
-        fig_smartar = px.pie(
-            df_smartar,
-            values='Count',
-            names='Status',
-            title='SMARTAR Goals Status - Program Total',
-            color_discrete_map={
-                'Achieved': '#4CAF50',
-                'Exceeded': '#00BCD4',
-                'In Progress': '#FFC107',
-                'Not Started': '#F44336'
-            }
-        )
-        fig_smartar.update_layout(
-            plot_bgcolor='rgba(10, 14, 39, 0.8)',
-            paper_bgcolor='rgba(10, 14, 39, 0.8)',
-            font=dict(color='#e8e8e8')
-        )
+        # SMARTAR
+        fig_smartar, df_smartar = render_smartar_chart(collated, program)
         st.plotly_chart(fig_smartar, use_container_width=True)
         
-        # Metrics
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("🏆 Exceeded", smartar_data['Exceeded'])
-        col2.metric("✅ Achieved", smartar_data['Achieved'])
-        col3.metric("🔄 In Progress", smartar_data['In Progress'])
-        col4.metric("⏳ Not Started", smartar_data['Not Started'])
+        col1.metric("🏆 Exceeded", collated['smartar']['Exceeded'])
+        col2.metric("✅ Achieved", collated['smartar']['Achieved'])
+        col3.metric("🔄 In Progress", collated['smartar']['In Progress'])
+        col4.metric("⏳ Not Started", collated['smartar']['Not Started'])
     
     # ========================================================================
-    # TAB 4: RAW DATA
+    # TERM OVERVIEW - All programs on one screen
     # ========================================================================
     
-    with tab4:
-        st.markdown("### 📋 Raw Data - All Entries")
+    elif view_type == "🎓 Term Overview":
+        col1, col2 = st.columns(2)
         
-        # Get raw records for this program/term/year
-        raw_records = [
-            a for a in all_assessments 
-            if a['program'] == program and 
-               a['term'] == int(term) and 
-               a['year'] == int(year)
-        ]
+        with col1:
+            term = st.selectbox("📅 Term", ['1', '2', '3', '4'], key="to_term")
+        with col2:
+            year = st.selectbox("📆 Year", ['2025', '2026'], key="to_year")
         
-        if raw_records:
-            records_list = []
-            for record in raw_records:
-                records_list.append({
-                    'Staff': record['staff_member'],
-                    'Program': record['program'],
-                    'Term': record['term'],
-                    'Year': record['year'],
-                    'Date': record.get('date_submitted', '')[:10],
-                    'Status': '✅'
-                })
+        st.markdown("---")
+        
+        programs = ['JP', 'PY', 'SY']
+        
+        st.markdown(f"## Term {term} {year} - All Programs Overview")
+        
+        # ====== SOUNDS WRITE OVERVIEW ======
+        st.markdown("### 🎵 Sounds Write - All Programs")
+        
+        sw_cols = st.columns(3)
+        
+        for idx, program in enumerate(programs):
+            collated = collate_by_program(all_assessments, program, term, year)
             
-            df_raw = pd.DataFrame(records_list)
-            st.dataframe(df_raw, use_container_width=True)
+            with sw_cols[idx]:
+                if collated:
+                    fig_sw, df_sw = render_sounds_write_chart(collated, program)
+                    st.plotly_chart(fig_sw, use_container_width=True)
+                    
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric(f"{program} Mastered", df_sw['Mastered'].sum(), label_visibility="collapsed")
+                    col2.metric(f"{program} Dev", df_sw['Developing'].sum(), label_visibility="collapsed")
+                    col3.metric(f"{program} Req Dev", df_sw['Requires Dev'].sum(), label_visibility="collapsed")
+                else:
+                    st.info(f"No data for {program}")
+        
+        st.markdown("---")
+        
+        # ====== WORD AWARE OVERVIEW ======
+        st.markdown("### 💬 Word Aware - All Programs")
+        
+        wa_cols = st.columns(3)
+        
+        for idx, program in enumerate(programs):
+            collated = collate_by_program(all_assessments, program, term, year)
             
-            # Download button
-            csv = df_raw.to_csv(index=False)
-            st.download_button(
-                label="📥 Download CSV",
-                data=csv,
-                file_name=f"assessment_data_{program}_T{term}_{year}.csv",
-                mime="text/csv"
-            )
-        else:
-            st.info("No raw data records found.")
+            with wa_cols[idx]:
+                if collated:
+                    fig_wa, df_wa = render_word_aware_chart(collated, program)
+                    st.plotly_chart(fig_wa, use_container_width=True)
+                    
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric(f"{program} Mastered", df_wa['Mastered'].sum(), label_visibility="collapsed")
+                    col2.metric(f"{program} Dev", df_wa['Developing'].sum(), label_visibility="collapsed")
+                    col3.metric(f"{program} Req Dev", df_wa['Requires Dev'].sum(), label_visibility="collapsed")
+                else:
+                    st.info(f"No data for {program}")
+        
+        st.markdown("---")
+        
+        # ====== SMARTAR OVERVIEW ======
+        st.markdown("### 🎯 SMARTAR Goals - All Programs")
+        
+        smartar_cols = st.columns(3)
+        
+        for idx, program in enumerate(programs):
+            collated = collate_by_program(all_assessments, program, term, year)
+            
+            with smartar_cols[idx]:
+                if collated:
+                    fig_smartar, df_smartar = render_smartar_chart(collated, program)
+                    st.plotly_chart(fig_smartar, use_container_width=True)
+                    
+                    col1, col2 = st.columns(2)
+                    col1.metric(f"{program} Achieved", collated['smartar']['Achieved'], label_visibility="collapsed")
+                    col2.metric(f"{program} In Prog", collated['smartar']['In Progress'], label_visibility="collapsed")
+                else:
+                    st.info(f"No data for {program}")
+    
+    # ========================================================================
+    # DETAILED ANALYSIS - Tabs for deep dive
+    # ========================================================================
+    
+    else:  # "🔍 Detailed Analysis"
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            program = st.selectbox("🎓 Program", ['JP', 'PY', 'SY'], key="da_prog")
+        with col2:
+            term = st.selectbox("📅 Term", ['1', '2', '3', '4'], key="da_term")
+        with col3:
+            year = st.selectbox("📆 Year", ['2025', '2026'], key="da_year")
+        
+        st.markdown("---")
+        
+        collated = collate_by_program(all_assessments, program, term, year)
+        
+        if not collated:
+            st.warning(f"No data found for {program} Term {term} {year}")
+            return
+        
+        # Info
+        col1, col2, col3 = st.columns(3)
+        col1.metric("📋 Staff Entries", collated['staff_count'])
+        col2.metric("📊 Total Records", collated['record_count'])
+        col3.metric("📅 Selected", f"{program} T{term} {year}")
+        
+        st.markdown("---")
+        
+        # TABS for detailed view
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "🎵 Sounds Write",
+            "💬 Word Aware",
+            "🎯 SMARTAR Goals",
+            "📋 Raw Data"
+        ])
+        
+        # Tab 1: Sounds Write
+        with tab1:
+            st.markdown("### 🎵 Sounds Write Assessment")
+            fig_sw, df_sw = render_sounds_write_chart(collated, program)
+            st.plotly_chart(fig_sw, use_container_width=True)
+            st.markdown("#### Data Table")
+            st.dataframe(df_sw, use_container_width=True)
+        
+        # Tab 2: Word Aware
+        with tab2:
+            st.markdown("### 💬 Word Aware Assessment")
+            fig_wa, df_wa = render_word_aware_chart(collated, program)
+            st.plotly_chart(fig_wa, use_container_width=True)
+            st.markdown("#### Data Table")
+            st.dataframe(df_wa, use_container_width=True)
+        
+        # Tab 3: SMARTAR
+        with tab3:
+            st.markdown("### 🎯 SMARTAR Goals")
+            fig_smartar, df_smartar = render_smartar_chart(collated, program)
+            st.plotly_chart(fig_smartar, use_container_width=True)
+            st.markdown("#### Metrics")
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("🏆 Exceeded", collated['smartar']['Exceeded'])
+            col2.metric("✅ Achieved", collated['smartar']['Achieved'])
+            col3.metric("🔄 In Progress", collated['smartar']['In Progress'])
+            col4.metric("⏳ Not Started", collated['smartar']['Not Started'])
+        
+        # Tab 4: Raw Data
+        with tab4:
+            st.markdown("### 📋 Raw Data - All Entries")
+            raw_records = [
+                a for a in all_assessments 
+                if a['program'] == program and 
+                   a['term'] == int(term) and 
+                   a['year'] == int(year)
+            ]
+            
+            if raw_records:
+                records_list = []
+                for record in raw_records:
+                    records_list.append({
+                        'Staff': record['staff_member'],
+                        'Program': record['program'],
+                        'Term': record['term'],
+                        'Year': record['year'],
+                        'Date': record.get('date_submitted', '')[:10],
+                        'Status': '✅'
+                    })
+                
+                df_raw = pd.DataFrame(records_list)
+                st.dataframe(df_raw, use_container_width=True)
+                
+                csv = df_raw.to_csv(index=False)
+                st.download_button(
+                    label="📥 Download CSV",
+                    data=csv,
+                    file_name=f"assessment_data_{program}_T{term}_{year}.csv",
+                    mime="text/csv"
+                )
+            else:
+                st.info("No raw data records found.")
 
 if __name__ == "__main__":
     main()
