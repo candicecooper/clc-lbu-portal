@@ -235,9 +235,15 @@ def main():
     # Header
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        staff_member = st.selectbox("👤 Staff Member", [
-            'Ben Sutton', 'Jacqui', 'Caitie', 'Brenton', 'Naomi', 'Cheryl', 'Roisin'
-        ])
+        staff_list = ['Ben Sutton', 'Ben Selga', 'Jacqui', 'Caitie', 'Brenton', 'Naomi', 'Cheryl', 'Roisin']
+        staff_member = st.selectbox("👤 Staff Member (or type below)", staff_list)
+    
+    # Allow custom staff member if not in list
+    col_custom, _ = st.columns([1, 3])
+    with col_custom:
+        custom_staff = st.text_input("Or enter staff name if not listed", placeholder="e.g., Annette, Tom, Vinnie")
+        if custom_staff.strip():
+            staff_member = custom_staff.strip()
     with col2:
         program = st.selectbox("🎓 Program", ['JP', 'PY', 'SY'])
     with col3:
