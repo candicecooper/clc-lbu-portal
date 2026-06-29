@@ -231,9 +231,10 @@ with main_tabs[1]:
             if col in df_mapped.columns:
                 df_mapped[col] = df_mapped[col].replace(['', 'nan', 'NaT'], None)
         
-        # Use referral_date as fallback for empty meeting_date (meeting_date is NOT NULL)
-        if 'meeting_date' in df_mapped.columns and 'referral_date' in df_mapped.columns:
-            df_mapped['meeting_date'] = df_mapped['meeting_date'].fillna(df_mapped['referral_date'])
+        # Use today's date as fallback for empty meeting_date (meeting_date is NOT NULL)
+        if 'meeting_date' in df_mapped.columns:
+            today = pd.Timestamp.now().strftime('%Y-%m-%d')
+            df_mapped['meeting_date'] = df_mapped['meeting_date'].fillna(today)
         
         st.markdown("### Preview (Mapped)")
         st.dataframe(df_mapped.head(5), use_container_width=True)
