@@ -1,6 +1,7 @@
 """
 CLC-LBU ASSESSMENT ANALYTICS
 View and analyze all term assessment data
+Page name: Assessment_Analytics.py
 """
 
 import streamlit as st
@@ -101,7 +102,6 @@ def parse_assessment_data(assessments):
             wa = json.loads(record.get('word_aware_data', '{}'))
             smartar = json.loads(record.get('smartar_goals', '{}'))
             
-            # Calculate metrics
             sw_mastered = sum([d.get('Mastered', 0) for d in sw.values()])
             wa_mastered = sum([d.get('Mastered', 0) for d in wa.values()])
             
@@ -134,7 +134,6 @@ def main():
         st.warning("⚠️ Supabase not connected")
         return
     
-    # Load data
     assessments = get_all_assessments()
     
     if not assessments:
@@ -143,7 +142,6 @@ def main():
     
     df = parse_assessment_data(assessments)
     
-    # FILTERS
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -155,7 +153,6 @@ def main():
     with col4:
         selected_staff = st.multiselect("Staff", sorted(df['Staff'].unique()), default=sorted(df['Staff'].unique()))
     
-    # Apply filters
     filtered_df = df[
         (df['Year'].isin(selected_year)) &
         (df['Term'].isin(selected_term)) &
@@ -164,8 +161,6 @@ def main():
     ]
     
     st.markdown("---")
-    
-    # OVERVIEW
     st.markdown("## 📈 Overview")
     
     col1, col2, col3, col4 = st.columns(4)
@@ -176,7 +171,6 @@ def main():
     
     st.markdown("---")
     
-    # TABS
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "🎵 Sounds Write",
         "💬 Word Aware",
@@ -185,17 +179,12 @@ def main():
         "📋 Raw Data"
     ])
     
-    # ========================================================================
-    # TAB 1: SOUNDS WRITE ANALYTICS
-    # ========================================================================
-    
     with tab1:
         st.markdown("### 🎵 Sounds Write Analysis")
         
         col1, col2 = st.columns(2)
         
         with col1:
-            # By program
             program_sw = []
             for prog in selected_program:
                 prog_data = filtered_df[filtered_df['Program'] == prog]
@@ -219,7 +208,6 @@ def main():
                 st.plotly_chart(fig, use_container_width=True)
         
         with col2:
-            # By staff
             staff_sw = []
             for staff in selected_staff:
                 staff_data = filtered_df[filtered_df['Staff'] == staff]
@@ -241,10 +229,6 @@ def main():
                     height=350
                 )
                 st.plotly_chart(fig, use_container_width=True)
-    
-    # ========================================================================
-    # TAB 2: WORD AWARE ANALYTICS
-    # ========================================================================
     
     with tab2:
         st.markdown("### 💬 Word Aware Analysis")
@@ -297,10 +281,6 @@ def main():
                 )
                 st.plotly_chart(fig, use_container_width=True)
     
-    # ========================================================================
-    # TAB 3: SMARTAR GOALS
-    # ========================================================================
-    
     with tab3:
         st.markdown("### 🎯 SMARTAR Goals Progress")
         
@@ -317,7 +297,6 @@ def main():
             except:
                 pass
         
-        # Pie chart
         fig = go.Figure(data=[
             go.Pie(
                 labels=list(goal_achievements.keys()),
@@ -334,16 +313,11 @@ def main():
         )
         st.plotly_chart(fig, use_container_width=True)
         
-        # Metrics
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("✅ Achieved", goal_achievements['Achieved'])
         col2.metric("⏳ In Progress", goal_achievements['In Progress'])
         col3.metric("🚀 Exceeded", goal_achievements['Exceeded'])
         col4.metric("⭕ Not Started", goal_achievements['Not Started'])
-    
-    # ========================================================================
-    # TAB 4: STAFF PERFORMANCE
-    # ========================================================================
     
     with tab4:
         st.markdown("### 👥 Staff Performance Summary")
@@ -363,17 +337,12 @@ def main():
         staff_summary_df = pd.DataFrame(staff_summary)
         st.dataframe(staff_summary_df, use_container_width=True)
     
-    # ========================================================================
-    # TAB 5: RAW DATA
-    # ========================================================================
-    
     with tab5:
         st.markdown("### 📋 Assessment Records")
         
         display_df = filtered_df[['Staff', 'Program', 'Term', 'Year', 'Date', 'SW_Mastered', 'WA_Mastered']]
         st.dataframe(display_df, use_container_width=True)
         
-        # Export
         csv = display_df.to_csv(index=False)
         st.download_button(
             "📥 Download CSV",
