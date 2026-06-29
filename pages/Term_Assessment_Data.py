@@ -1,7 +1,7 @@
 """
 CLC-LBU TERM ASSESSMENT DATA ENTRY (with Supabase)
 Staff enter and save Sounds Write, Word Aware, SMARTAR data each term
-UPDATED: Save buttons on each tab + better session state
+UPDATED: Save buttons on each tab + overwrite-enabled saving
 Page name: Term_Assessment_Data.py
 """
 
@@ -140,12 +140,18 @@ if 'last_saved' not in st.session_state:
 # ============================================================================
 
 def save_assessment_to_supabase(staff, program, term, year, sw, wa, smartar):
-    """Save assessment data to Supabase"""
+    """Save assessment data to Supabase - deletes old record then inserts new (allows overwrite)"""
     if not supabase:
         st.error("⚠️ Supabase not connected. Check credentials.")
         return False
     
     try:
+        # Delete any existing record for this staff/program/term/year combo
+        supabase.table('term_assessments').delete().eq(
+            'staff_member', staff
+        ).eq('program', program).eq('term', int(term)).eq('year', int(year)).execute()
+        
+        # Insert fresh record
         record = {
             'staff_member': staff,
             'program': program,
@@ -157,7 +163,7 @@ def save_assessment_to_supabase(staff, program, term, year, sw, wa, smartar):
             'date_submitted': datetime.now().isoformat()
         }
         
-        response = supabase.table('term_assessments').upsert(record).execute()
+        supabase.table('term_assessments').insert(record).execute()
         st.session_state.last_saved = datetime.now()
         return True
     except Exception as e:
