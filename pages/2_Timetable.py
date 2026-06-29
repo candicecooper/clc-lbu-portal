@@ -241,57 +241,84 @@ SECTION_HEADERS = {
 # Staff names that indicate SSO section (case-insensitive)
 SSO_STAFF = ["naomi", "vinnie", "cheryl", "jacqui", "caitie"]
 
-def detect_page_section(page, page_num: int) -> tuple[str | None, str]:
+# Header phrases used to auto-split a COMBINED bookings PDF into Yard vs Kitchen.
+# Most specific first; the bare word ("yard"/"kitchen") is the last-resort fallback.
+BOOKING_SECTION_HEADERS = {
+    "Yard":    ["yard booking", "yard bookings", "yard duty", "yard roster", "yard timetable", "yard"],
+    "Kitchen": ["student kitchen", "kitchen booking", "kitchen bookings", "kitchen roster", "kitchen timetable", "kitchen"],
+}
+
+_STAFF_SENTINEL = object()
+
+def detect_page_section(page, page_num: int, headers=None, staff_map=None) -> tuple[str | None, str]:
     """
-    Analyze page header area and return the program name if detected.
-    Returns (program_name, debug_info) where debug_info shows what was found.
+    Analyze a page's header band and return the section name if detected.
+    `headers`   : {section: [phrases]} to look for (defaults to teacher SECTION_HEADERS)
+    `staff_map` : {section: [names]} to look for as a backup (e.g. SSO staff); None to skip
+    Returns (section_name, debug_info).
     """
     import fitz  # PyMuPDF - needed for fitz.Rect
-    
+
+    if headers is None:
+        headers = SECTION_HEADERS
+
     try:
         # Extract text from just the top 20% of the page (header band area)
         page_rect = page.rect
         header_height = page_rect.height * 0.20  # Top 20% of page
         header_rect = fitz.Rect(0, 0, page_rect.width, header_height)
         header_text = page.get_text(clip=header_rect).lower().strip()
-        
+
         # Also get first 300 characters of full page for backup detection
-        full_text = page.get_text().lower()
-        preview = full_text[:300]
-        
-        # Check for exact section header phrases (prioritize header area)
-        for program, phrases in SECTION_HEADERS.items():
+        preview = page.get_text().lower()[:300]
+
+        # 1. Section header phrases in the header band (highest priority)
+        for section, phrases in headers.items():
             for phrase in phrases:
                 if phrase in header_text:
-                    return program, f"Header: '{phrase}'"
-        
-        # Check for SSO staff names in header
-        for staff_name in SSO_STAFF:
-            if staff_name in header_text:
-                return "SSO", f"SSO staff: '{staff_name}'"
-        
-        # Fallback: check in preview text
-        for program, phrases in SECTION_HEADERS.items():
+                    return section, f"Header: '{phrase}'"
+
+        # 2. Staff names in the header band
+        if staff_map:
+            for section, names in staff_map.items():
+                for nm in names:
+                    if nm in header_text:
+                        return section, f"Staff: '{nm}'"
+
+        # 3. Fallback: header phrases anywhere in the page preview
+        for section, phrases in headers.items():
             for phrase in phrases:
                 if phrase in preview:
-                    return program, f"Preview: '{phrase}'"
-        
-        # Check for SSO staff names in preview
-        for staff_name in SSO_STAFF:
-            if staff_name in preview:
-                return "SSO", f"SSO staff: '{staff_name}' (preview)"
-        
+                    return section, f"Preview: '{phrase}'"
+
+        # 4. Fallback: staff names in the preview
+        if staff_map:
+            for section, names in staff_map.items():
+                for nm in names:
+                    if nm in preview:
+                        return section, f"Staff: '{nm}' (preview)"
+
         return None, f"No match (header: '{header_text[:50]}...')"
-        
+
     except Exception as e:
         return None, f"Error: {e}"
 
-def split_and_save_full_pdf(pdf_bytes: bytes, label: str) -> dict:
+def split_and_save_full_pdf(pdf_bytes: bytes, label: str,
+                            target_programs=None, headers=None,
+                            staff_map=_STAFF_SENTINEL, file_prefix="timetable") -> dict:
     """
-    Split a full timetable PDF into per-program sections by detecting section headers.
-    Groups consecutive pages with the same section title together.
-    Returns a dict of {program: status_message} or {"error": message}.
+    Split a combined PDF into per-section files by detecting section headers,
+    grouping consecutive pages with the same section together.
+    Defaults target the teacher timetable; pass booking config to split Yard/Kitchen.
+    Returns {section: status_message} (plus "_debug") or {"error": message}.
     """
+    if target_programs is None:
+        target_programs = SPLIT_PROGRAMS
+    if headers is None:
+        headers = SECTION_HEADERS
+    if staff_map is _STAFF_SENTINEL:
+        staff_map = {"SSO": SSO_STAFF}
+
     try:
         import fitz  # PyMuPDF
         import base64 as _b64, uuid as _uuid
@@ -307,45 +334,36 @@ def split_and_save_full_pdf(pdf_bytes: bytes, label: str) -> dict:
     # First pass: detect which section each page belongs to
     page_sections = []
     debug_info = []
-    
+
     for page_num in range(total_pages):
         page = full_doc[page_num]
-        section, debug = detect_page_section(page, page_num)
+        section, debug = detect_page_section(page, page_num, headers, staff_map)
         page_sections.append(section)
         debug_info.append(f"Page {page_num + 1}: {section or 'UNDETECTED'} — {debug}")
-    
-    # Group consecutive pages by section
-    section_groups = {}  # {program: [list of page indices]}
+
+    # Group consecutive pages by section (undetected pages join the current section)
+    section_groups = {}
     current_section = None
-    
+
     for page_num, section in enumerate(page_sections):
-        if section:  # Valid section detected
+        if section:
             current_section = section
-            if section not in section_groups:
-                section_groups[section] = []
-            section_groups[section].append(page_num)
-        elif current_section:  # No section detected, but we have a current section
-            # This is likely a continuation page (e.g., "Scheduled Meetings" within Specialist)
-            # Group it with the current section
+            section_groups.setdefault(section, []).append(page_num)
+        elif current_section:
             section_groups[current_section].append(page_num)
             debug_info[page_num] = f"Page {page_num + 1}: {current_section} (continuation) — {debug_info[page_num].split(' — ')[1]}"
-        # else: No section and no current section - page will be skipped
-    
-    # Now save each section
-    results = {}
-    
-    # Add debug info as first result entry
-    results["_debug"] = "\n".join(debug_info)
-    
-    for program in SPLIT_PROGRAMS:
+        # else: no section and no current section → page skipped
+
+    results = {"_debug": "\n".join(debug_info)}
+
+    for program in target_programs:
         if program not in section_groups:
             results[program] = "⚠️ Not found in PDF"
             continue
-        
+
         page_indices = section_groups[program]
-        
+
         try:
-            # Build a new single-program PDF
             sub_doc = fitz.open()
             for page_idx in page_indices:
                 sub_doc.insert_pdf(full_doc, from_page=page_idx, to_page=page_idx)
@@ -353,13 +371,14 @@ def split_and_save_full_pdf(pdf_bytes: bytes, label: str) -> dict:
             sub_bytes = sub_doc.tobytes()
             sub_doc.close()
 
-            filename = f"timetable_{program.lower()}_{_uuid.uuid4().hex[:6]}.pdf"
+            filename = f"{file_prefix}_{program.lower()}_{_uuid.uuid4().hex[:6]}.pdf"
             b64data = _b64.b64encode(sub_bytes).decode("utf-8")
 
             ok = save_timetable(filename, b64data, label, program)
             page_count = len(page_indices)
-            page_list = ", ".join([str(p+1) for p in page_indices])
-            results[program] = f"✅ Uploaded ({page_count} page{'s' if page_count != 1 else ''}: {page_list})" if ok else "❌ Save failed"
+            page_list = ", ".join([str(p + 1) for p in page_indices])
+            results[program] = (f"✅ Uploaded ({page_count} page{'s' if page_count != 1 else ''}: {page_list})"
+                                if ok else "❌ Save failed")
         except Exception as e:
             results[program] = f"❌ Error: {e}"
 
@@ -675,43 +694,89 @@ if st.session_state.admin_authed:
     Separate from staff timetables — uploading here only updates the booking sheet you choose.</div>
     </div>""", unsafe_allow_html=True)
 
-    st.markdown("""<div style="background:#e8f5e1;border:1px solid #6BBF4E;border-radius:8px;
-        padding:0.7rem 1rem;font-size:0.83rem;color:#1a2e44;margin-bottom:0.75rem;">
-        Upload a <strong>PDF or Excel</strong> file for 🌳 Yard Bookings or 🍳 Student Kitchen.
-        Excel (.xlsx) displays as a live table; PDF renders as page images. This zone can only
-        write to the two booking sheets, so it can never overwrite a teacher timetable.
-    </div>""", unsafe_allow_html=True)
+    booking_mode = st.radio("Bookings upload mode",
+        ["📄 Combined PDF (auto-split Yard & Kitchen)", "📑 Single booking sheet (PDF or Excel)"],
+        horizontal=True, key="booking_mode")
 
-    with st.form("booking_upload_form", clear_on_submit=False):
-        bcol_prog, bcol_lbl = st.columns([1, 2])
-        with bcol_prog:
-            booking_choice = st.selectbox("Booking sheet", options=BOOKING_PROGRAMS,
-                                          format_func=lambda p: PROGRAM_LABELS[p],
-                                          key="booking_prog")
-        with bcol_lbl:
-            booking_lbl = st.text_input("Label", placeholder="e.g. Term 1 · Week 6",
-                                        key="booking_lbl")
+    if booking_mode == "📄 Combined PDF (auto-split Yard & Kitchen)":
+        st.markdown("""<div style="background:#e8f5e1;border:1px solid #6BBF4E;border-radius:8px;
+            padding:0.75rem 1rem;font-size:0.85rem;color:#1a2e44;margin-bottom:0.75rem;">
+            🧠 <strong>Smart split:</strong> Upload one PDF containing both the Yard and Student
+            Kitchen pages. The tool reads the header band of each page (looking for "Yard" /
+            "Student Kitchen") and files each page under the correct booking sheet. You'll see
+            exactly what was detected on every page after uploading.
+        </div>""", unsafe_allow_html=True)
 
-        booking_file = st.file_uploader("Choose PDF or Excel file",
-                                        type=["pdf", "xlsx", "xls", "xlsm"],
-                                        label_visibility="collapsed", key="booking_file")
+        combo_lbl  = st.text_input("Label for both sheets", placeholder="e.g. Term 1 · Week 6", key="combo_booking_lbl")
+        combo_file = st.file_uploader("Upload combined bookings PDF (Yard + Kitchen)", type=["pdf"], key="combo_booking_pdf")
 
-        booking_submitted = st.form_submit_button("✅ Upload Booking & Set as Current",
-                                                  type="primary", use_container_width=True)
-
-        if booking_submitted:
-            if not booking_file:
-                st.error("Please choose a PDF or Excel file.")
-            elif not booking_lbl.strip():
+        if st.button("✅ Split & Upload Bookings", type="primary", use_container_width=True, key="combo_booking_btn"):
+            if not combo_file:
+                st.error("Please choose a PDF file.")
+            elif not combo_lbl.strip():
                 st.error("Please add a label.")
             else:
-                booking_file.seek(0)
-                braw = booking_file.read()
-                bb64 = base64.b64encode(braw).decode("utf-8")
-                if save_timetable(booking_file.name, bb64, booking_lbl.strip(), booking_choice):
-                    st.success(f"✅ {PROGRAM_LABELS[booking_choice]} updated — {booking_lbl.strip()}")
+                combo_file.seek(0)
+                raw = combo_file.read()
+                with st.spinner("Detecting Yard & Kitchen pages..."):
+                    results = split_and_save_full_pdf(
+                        raw, combo_lbl.strip(),
+                        target_programs=BOOKING_PROGRAMS,
+                        headers=BOOKING_SECTION_HEADERS,
+                        staff_map=None,
+                        file_prefix="booking",
+                    )
+                if "error" in results:
+                    st.error(f"❌ Split failed: {results['error']}")
+                else:
                     st.cache_resource.clear()
+                    if "_debug" in results:
+                        with st.expander("🔍 Page Detection Details", expanded=True):
+                            st.text(results["_debug"])
+                    for prog, msg in results.items():
+                        if prog == "_debug":
+                            continue
+                        st.markdown(f"**{PROGRAM_LABELS.get(prog, prog)}:** {msg}")
+                    st.success("✅ Bookings uploaded!")
                     st.rerun()
+
+    else:
+        st.markdown("""<div style="background:#e8f5e1;border:1px solid #6BBF4E;border-radius:8px;
+            padding:0.7rem 1rem;font-size:0.83rem;color:#1a2e44;margin-bottom:0.75rem;">
+            Upload a <strong>PDF or Excel</strong> file for 🌳 Yard Bookings or 🍳 Student Kitchen.
+            Excel (.xlsx) displays as a live table; PDF renders as page images.
+        </div>""", unsafe_allow_html=True)
+
+        with st.form("booking_upload_form", clear_on_submit=False):
+            bcol_prog, bcol_lbl = st.columns([1, 2])
+            with bcol_prog:
+                booking_choice = st.selectbox("Booking sheet", options=BOOKING_PROGRAMS,
+                                              format_func=lambda p: PROGRAM_LABELS[p],
+                                              key="booking_prog")
+            with bcol_lbl:
+                booking_lbl = st.text_input("Label", placeholder="e.g. Term 1 · Week 6",
+                                            key="booking_lbl")
+
+            booking_file = st.file_uploader("Choose PDF or Excel file",
+                                            type=["pdf", "xlsx", "xls", "xlsm"],
+                                            label_visibility="collapsed", key="booking_file")
+
+            booking_submitted = st.form_submit_button("✅ Upload Booking & Set as Current",
+                                                      type="primary", use_container_width=True)
+
+            if booking_submitted:
+                if not booking_file:
+                    st.error("Please choose a PDF or Excel file.")
+                elif not booking_lbl.strip():
+                    st.error("Please add a label.")
+                else:
+                    booking_file.seek(0)
+                    braw = booking_file.read()
+                    bb64 = base64.b64encode(braw).decode("utf-8")
+                    if save_timetable(booking_file.name, bb64, booking_lbl.strip(), booking_choice):
+                        st.success(f"✅ {PROGRAM_LABELS[booking_choice]} updated — {booking_lbl.strip()}")
+                        st.cache_resource.clear()
+                        st.rerun()
 
     st.markdown("---")
 
