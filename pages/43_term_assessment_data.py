@@ -1,6 +1,7 @@
 """
 CLC-LBU TERM ASSESSMENT DATA ENTRY (with Supabase)
 Staff enter and save Sounds Write, Word Aware, SMARTAR data each term
+Page name: Term_Assessment_Data.py
 """
 
 import streamlit as st
@@ -9,7 +10,6 @@ import os
 from datetime import datetime
 import json
 
-# Try to import Supabase
 try:
     from supabase import create_client, Client
     SUPABASE_AVAILABLE = True
@@ -135,7 +135,6 @@ def save_assessment_to_supabase(staff, program, term, year, sw, wa, smartar):
         return False
     
     try:
-        # Prepare data
         record = {
             'staff_member': staff,
             'program': program,
@@ -147,9 +146,7 @@ def save_assessment_to_supabase(staff, program, term, year, sw, wa, smartar):
             'date_submitted': datetime.now().isoformat()
         }
         
-        # Upsert (insert or update if exists)
         response = supabase.table('term_assessments').upsert(record).execute()
-        
         return True
     except Exception as e:
         st.error(f"Error saving to database: {e}")
@@ -208,7 +205,6 @@ def main():
     with col4:
         year = st.selectbox("📆 Year", ['2025', '2026'])
     
-    # Try to load existing data
     if st.button("📂 Load Existing Data"):
         existing = load_assessment_from_supabase(staff_member, program, term, year)
         if existing:
@@ -359,7 +355,6 @@ def main():
     with tab4:
         st.markdown("### 📊 Data Summary & Save")
         
-        # Summary metrics
         col1, col2, col3 = st.columns(3)
         
         if st.session_state.sounds_write:
@@ -409,9 +404,6 @@ def main():
                 st.session_state.word_aware = {}
                 st.session_state.smartar = {}
                 st.rerun()
-        
-        with col3:
-            st.markdown("Data will be stored in Supabase and visible in dashboard")
     
     # ========================================================================
     # TAB 5: ALL RECORDS
@@ -426,7 +418,6 @@ def main():
         all_assessments = get_all_assessments()
         
         if all_assessments:
-            # Convert to dataframe
             records = []
             for record in all_assessments:
                 records.append({
@@ -441,7 +432,6 @@ def main():
             df = pd.DataFrame(records)
             st.dataframe(df, use_container_width=True)
             
-            # Export option
             csv = df.to_csv(index=False)
             st.download_button(
                 label="📥 Download CSV",
