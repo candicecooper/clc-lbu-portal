@@ -42,11 +42,7 @@ def load_allocation_data():
     try:
         response = supabase.table('allocation_students').select('*').execute()
         if response.data:
-            df = pd.DataFrame(response.data)
-            for col in ['Flag_ATSI', 'Flag_EALD', 'Flag_SWD', 'Flag_ASD', 'Flag_ADHD']:
-                if col not in df.columns:
-                    df[col] = 'No'
-            return df
+            return pd.DataFrame(response.data)
         return None
     except:
         return None
@@ -69,123 +65,90 @@ with main_tabs[0]:
     if allocation_df is None or allocation_df.empty:
         st.warning("⚠️ No data found. Go to **📤 Upload Data** tab to load data.")
     else:
-        year_col = find_column(allocation_df, ['year', 'referral_year'])
-        term_col = find_column(allocation_df, ['term'])
-        prog_col = find_column(allocation_df, ['program', 'allocated'])
+        prog_col = 'program'
+        year_col = 'year'
+        term_col = 'term'
         
-        if not all([year_col, term_col, prog_col]):
-            st.error(f"Missing columns: {list(allocation_df.columns)}")
-        else:
-            st.markdown("---")
-            
-            # FILTERS
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                years = sorted(allocation_df[year_col].dropna().unique())
-                selected_year = st.selectbox("Year", years)
-            with col2:
-                terms = sorted(allocation_df[allocation_df[year_col] == selected_year][term_col].dropna().unique())
-                selected_term = st.selectbox("Term", terms)
-            with col3:
-                progs = ['All'] + sorted([p for p in allocation_df[prog_col].dropna().unique() if pd.notna(p)])
-                selected_program = st.selectbox("Program", progs)
-            with col4:
-                st.metric("Total", len(allocation_df), label_visibility="collapsed")
-            
-            filtered = allocation_df[
-                (allocation_df[year_col] == selected_year) &
-                (allocation_df[term_col] == selected_term)
-            ]
-            if selected_program != 'All':
-                filtered = filtered[filtered[prog_col] == selected_program]
-            
-            st.info(f"✅ **{len(filtered)} students** | {selected_year} T{selected_term}")
-            st.markdown("---")
-            
-            tabs = st.tabs(["📍 Placement", "📈 Trends", "🧩 SWD", "⚠️ Complexity", "🔗 Intersect", "🏳️ ATSI", "🌐 EALD", "Assessment", "Raw"])
-            
-            with tabs[0]:
-                st.markdown("## Placement Data")
+        st.markdown("---")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            years = sorted(allocation_df[year_col].dropna().unique())
+            selected_year = st.selectbox("Year", years)
+        with col2:
+            terms = sorted(allocation_df[allocation_df[year_col] == selected_year][term_col].dropna().unique())
+            selected_term = st.selectbox("Term", terms)
+        with col3:
+            progs = ['All'] + sorted([p for p in allocation_df[prog_col].dropna().unique() if pd.notna(p)])
+            selected_program = st.selectbox("Program", progs)
+        with col4:
+            st.metric("Total", len(allocation_df), label_visibility="collapsed")
+        
+        filtered = allocation_df[
+            (allocation_df[year_col] == selected_year) &
+            (allocation_df[term_col] == selected_term)
+        ]
+        if selected_program != 'All':
+            filtered = filtered[filtered[prog_col] == selected_program]
+        
+        st.info(f"✅ **{len(filtered)} records** | {int(selected_year)} T{int(selected_term)}")
+        st.markdown("---")
+        
+        tabs = st.tabs(["📍 Placement", "📈 Trends", "🧩 SWD", "⚠️ Complexity", "🔗 Intersect", "🏳️ ATSI", "🌐 EALD", "Assessment", "Raw"])
+        
+        with tabs[0]:
+            st.markdown("## Placement Data")
+            if prog_col in allocation_df.columns:
                 prog_counts = allocation_df[prog_col].value_counts().reset_index()
                 prog_counts.columns = [prog_col, 'Count']
                 fig = px.sunburst(prog_counts, labels=prog_col, values='Count', color='Count', color_continuous_scale='Viridis')
                 fig.update_layout(plot_bgcolor='rgba(10,14,39,0.8)', paper_bgcolor='rgba(10,14,39,0.8)', font=dict(color='#ffffff'), height=400)
                 st.plotly_chart(fig, use_container_width=True)
-                
-                breakdown = []
-                for prog in sorted([p for p in allocation_df[prog_col].unique() if pd.notna(p)]):
-                    p_data = allocation_df[allocation_df[prog_col] == prog]
-                    breakdown.append({'Program': prog, 'Total': len(p_data), 'ATSI': len(p_data[p_data['Flag_ATSI']=='Yes']), 'EALD': len(p_data[p_data['Flag_EALD']=='Yes']), 'SWD': len(p_data[p_data['Flag_SWD']=='Yes'])})
-                st.dataframe(pd.DataFrame(breakdown), use_container_width=True)
-            
-            with tabs[1]:
-                st.markdown("## Trends")
-                trend = allocation_df.dropna(subset=[year_col, term_col, prog_col]).copy()
-                trend['YT'] = trend[year_col].astype(str) + ' T' + trend[term_col].astype(str)
-                tdata = trend.groupby(['YT', prog_col]).size().reset_index(name='Count')
-                fig = px.line(tdata, x='YT', y='Count', color=prog_col, markers=True, line_shape='spline')
-                fig.update_layout(plot_bgcolor='rgba(10,14,39,0.8)', paper_bgcolor='rgba(10,14,39,0.8)', font=dict(color='#ffffff'), height=400)
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with tabs[2]:
-                st.markdown("## SWD Breakdown")
-                swd = allocation_df[allocation_df['Flag_SWD']=='Yes'].copy()
-                if len(swd) > 0:
-                    swd['Type'] = swd.apply(lambda r: 'ASD+ADHD' if r.get('Flag_ASD')=='Yes' and r.get('Flag_ADHD')=='Yes' else 'ASD' if r.get('Flag_ASD')=='Yes' else 'ADHD' if r.get('Flag_ADHD')=='Yes' else 'Other', axis=1)
-                    sdata = swd.groupby([prog_col, 'Type']).size().reset_index(name='Count')
-                    fig = px.bar(sdata, x=prog_col, y='Count', color='Type', barmode='stack', text_auto=True)
-                    fig.update_layout(plot_bgcolor='rgba(10,14,39,0.8)', paper_bgcolor='rgba(10,14,39,0.8)', font=dict(color='#ffffff'), height=350)
-                    st.plotly_chart(fig, use_container_width=True)
-            
-            with tabs[3]:
-                st.markdown("## Complexity")
-                allocation_df['needs'] = ((allocation_df['Flag_SWD']=='Yes').astype(int) + (allocation_df['Flag_ATSI']=='Yes').astype(int) + (allocation_df['Flag_EALD']=='Yes').astype(int))
-                cdata = allocation_df.groupby(prog_col)['needs'].apply(lambda x: (x>1).sum()).reset_index(name='Multiple')
-                cdata['Total'] = allocation_df.groupby(prog_col).size().values
-                fig = px.bar(cdata, x=prog_col, y='Multiple', color='Total', text_auto=True, color_continuous_scale='Reds')
-                fig.update_layout(plot_bgcolor='rgba(10,14,39,0.8)', paper_bgcolor='rgba(10,14,39,0.8)', font=dict(color='#ffffff'), height=350)
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with tabs[4]:
-                st.markdown("## Intersectionality")
-                progs_list = sorted([p for p in allocation_df[prog_col].unique() if pd.notna(p)])
-                idata = []
-                for p in progs_list:
-                    pd_data = allocation_df[allocation_df[prog_col] == p]
-                    idata.append({'Program': p, 'ATSI+SWD': len(pd_data[(pd_data['Flag_ATSI']=='Yes') & (pd_data['Flag_SWD']=='Yes')]), 'EALD+SWD': len(pd_data[(pd_data['Flag_EALD']=='Yes') & (pd_data['Flag_SWD']=='Yes')])})
-                idf = pd.DataFrame(idata)
-                fig = px.imshow(idf.set_index('Program').T, text_auto=True, color_continuous_scale='YlOrRd')
-                fig.update_layout(paper_bgcolor='rgba(10,14,39,0.8)', font=dict(color='#ffffff'), height=350)
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with tabs[5]:
-                st.markdown("## ATSI")
-                atsi = allocation_df.groupby(prog_col).apply(lambda x: (x['Flag_ATSI']=='Yes').sum()).reset_index(name='Count')
-                fig = px.pie(atsi, values='Count', names=prog_col, color_discrete_sequence=['#ff6b6b', '#4ecdc4', '#ffd93d'])
-                fig.update_layout(paper_bgcolor='rgba(10,14,39,0.8)', font=dict(color='#ffffff'), height=400)
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with tabs[6]:
-                st.markdown("## EALD")
-                eald = allocation_df.groupby(prog_col).apply(lambda x: (x['Flag_EALD']=='Yes').sum()).reset_index(name='Count')
-                fig = px.pie(eald, values='Count', names=prog_col, color_discrete_sequence=['#4ecdc4', '#a8e6cf', '#95e1d3'])
-                fig.update_layout(paper_bgcolor='rgba(10,14,39,0.8)', font=dict(color='#ffffff'), height=400)
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with tabs[7]:
-                st.markdown("## Assessment Data")
-                st.info("View in Assessment Analytics dashboard")
-            
-            with tabs[8]:
-                st.markdown("## Raw Data")
-                st.dataframe(filtered, use_container_width=True)
-                csv = filtered.to_csv(index=False)
-                st.download_button("📥 Download CSV", csv, f"data_{selected_year}_T{selected_term}.csv", "text/csv")
+        
+        with tabs[1]:
+            st.markdown("## Trends")
+            st.info("Trends by year and term")
+        
+        with tabs[2]:
+            st.markdown("## SWD")
+            if 'Flag_SWD' in allocation_df.columns:
+                swd_count = len(allocation_df[allocation_df['Flag_SWD'] == 'Yes'])
+                st.metric("Students with Disability", swd_count)
+        
+        with tabs[3]:
+            st.markdown("## Complexity")
+            st.info("Multiple needs analysis")
+        
+        with tabs[4]:
+            st.markdown("## Intersectionality")
+            st.info("Overlapping identities")
+        
+        with tabs[5]:
+            st.markdown("## ATSI")
+            if 'Flag_ATSI' in allocation_df.columns:
+                atsi_count = len(allocation_df[allocation_df['Flag_ATSI'] == 'Yes'])
+                st.metric("ATSI Students", atsi_count)
+        
+        with tabs[6]:
+            st.markdown("## EALD")
+            if 'Flag_EALD' in allocation_df.columns:
+                eald_count = len(allocation_df[allocation_df['Flag_EALD'] == 'Yes'])
+                st.metric("EALD Students", eald_count)
+        
+        with tabs[7]:
+            st.markdown("## Assessment Data")
+            st.info("View in Assessment Analytics")
+        
+        with tabs[8]:
+            st.markdown("## Raw Data")
+            st.dataframe(filtered, use_container_width=True)
+            csv = filtered.to_csv(index=False)
+            st.download_button("📥 Download CSV", csv, "data.csv", "text/csv")
 
 # ==== UPLOAD TAB ====
 with main_tabs[1]:
     st.markdown("## 📤 Upload Allocation Data")
-    st.markdown("_Replace existing data with new file_")
+    st.markdown("_Map Excel columns to Supabase table_")
     st.warning("⚠️ This will DELETE existing data and load your file")
     
     uploaded_file = st.file_uploader("Choose Excel (.xlsx) or CSV", type=['xlsx', 'csv'])
@@ -197,33 +160,64 @@ with main_tabs[1]:
             st.error(f"Error: {e}")
             st.stop()
         
-        st.success(f"✅ Loaded {len(df)} rows × {len(df.columns)} columns")
-        st.dataframe(df.head(10), use_container_width=True)
+        st.success(f"✅ Loaded {len(df)} rows")
         
-        required = ['Flag_ATSI', 'Flag_EALD', 'Flag_SWD', 'Flag_ASD', 'Flag_ADHD']
-        for col in required:
-            if col not in df.columns:
-                df[col] = 'No'
+        # COLUMN MAPPING: Excel → Supabase
+        column_map = {
+            'Student_Name': 'student_name',
+            'Meeting_Week': 'meeting_week',
+            'Meeting_Date': 'meeting_date',
+            'Term': 'term',
+            'Referral_Year': 'year',
+            'Allocated_Program': 'program',
+            'DOB': 'date_of_birth',
+            'Gender': 'gender',
+            'Year_Level': 'year_level',
+            'Referring_School': 'school',
+            'Partnership_Area': 'partnership_area',
+            'Previous_CLC_Placement': 'previous_clc_placement',
+            'Previous_Other_LC': 'previous_other_lc',
+            'Other_LC_Name': 'other_lc_name',
+            'Total_Previous_Placements': 'total_previous_placements',
+            'Placement_History_Notes': 'placement_history_notes',
+            'Bespoke_Placement': 'bespoke_placement',
+            'Waitlist_Status': 'waitlist_status',
+            'Waitlist_Date': 'waitlist_date',
+            'Allocated_From_Waitlist': 'allocated_from_waitlist',
+            'Previously_Referred': 'previously_referred',
+            'Medical_Condition_Details': 'medical_condition_details',
+            'Extension_Weeks': 'extension_weeks',
+            # Equity flags - keep same names
+            'Flag_ATSI': 'Flag_ATSI',
+            'Flag_EALD': 'Flag_EALD',
+            'Flag_SWD': 'Flag_SWD',
+            'Flag_ASD': 'Flag_ASD',
+            'Flag_ADHD': 'Flag_ADHD',
+        }
         
-        if 'id' in df.columns:
-            df = df.drop('id', axis=1)
+        # RENAME columns
+        df_mapped = df.copy()
+        for excel_col, supabase_col in column_map.items():
+            if excel_col in df_mapped.columns:
+                df_mapped = df_mapped.rename(columns={excel_col: supabase_col})
         
-        # AGGRESSIVELY handle NaN - do this FIRST
-        df = df.fillna('')
+        # Keep only mapped columns (drop extra columns)
+        df_mapped = df_mapped[[col for col in df_mapped.columns if col in column_map.values()]]
         
-        # Remove empty columns
-        df = df.dropna(axis=1, how='all')
-        df = df.loc[:, (df != '').any(axis=0)]
+        # CLEAN DATA
+        df_mapped = df_mapped.fillna('')
+        df_mapped = df_mapped.where(pd.notna(df_mapped), '')
         
-        # Convert everything to string AFTER all NaN handling
-        for col in df.columns:
-            df[col] = df[col].astype(str).str.replace('nan', '').str.replace('<NA>', '').str.strip()
+        # Convert to string but handle dates carefully
+        for col in df_mapped.columns:
+            if 'date' in col.lower() or col in ['Term', 'term', 'Year', 'year']:
+                df_mapped[col] = df_mapped[col].astype(str).str.replace('nan', '').str.replace('NaT', '')
+            else:
+                df_mapped[col] = df_mapped[col].astype(str).str.replace('nan', '').str.replace('<NA>', '').str.strip()
         
-        # Final NaN check
-        df = df.fillna('')
-        
-        st.markdown("### Preview (Cleaned)")
-        st.dataframe(df.head(5), use_container_width=True)
+        st.markdown("### Preview (Mapped)")
+        st.dataframe(df_mapped.head(5), use_container_width=True)
+        st.write(f"**Columns to upload:** {list(df_mapped.columns)}")
         
         col1, col2 = st.columns(2)
         with col1:
@@ -236,8 +230,8 @@ with main_tabs[1]:
                             st.write("🗑️ Clearing existing...")
                             supabase.table('allocation_students').delete().gte('id', '00000000-0000-0000-0000-000000000000').execute()
                             
-                            records = df.to_dict('records')
-                            batch_size = 100
+                            records = df_mapped.to_dict('records')
+                            batch_size = 50
                             total = 0
                             
                             for i in range(0, len(records), batch_size):
@@ -250,12 +244,12 @@ with main_tabs[1]:
                             st.balloons()
                             col1, col2, col3 = st.columns(3)
                             col1.metric("Records", total)
-                            col2.metric("Columns", len(df.columns))
+                            col2.metric("Columns", len(df_mapped.columns))
                             col3.metric("Time", datetime.now().strftime("%H:%M"))
                             st.info("💡 Refresh to see data in Analysis tab")
                             
                         except Exception as e:
-                            st.error(f"Upload failed: {e}")
+                            st.error(f"Upload failed: {str(e)[:200]}")
         
         with col2:
-            st.info("✓ Review cleaned data above")
+            st.info("✓ Review columns above")
