@@ -60,11 +60,18 @@ main_tabs = st.tabs(["📊 Analysis", "📤 Upload Data"])
 
 # ==== ANALYSIS TAB ====
 with main_tabs[0]:
+    # Clear cache to get fresh data
+    if st.button("🔄 Refresh Data", key="refresh_btn"):
+        st.cache_data.clear()
+    
     allocation_df = load_allocation_data()
     
     if allocation_df is None or allocation_df.empty:
         st.warning("⚠️ No data found. Go to **📤 Upload Data** tab to load data.")
     else:
+        st.info(f"✅ Loaded {len(allocation_df)} records")
+        st.write(f"**Columns:** {list(allocation_df.columns)}")
+        
         prog_col = 'program'
         year_col = 'year'
         term_col = 'term'
