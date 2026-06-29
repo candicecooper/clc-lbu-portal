@@ -395,6 +395,10 @@ def main():
                 for col in missing:
                     df[col] = 'No'
             
+            # Remove id column first (let Supabase auto-generate)
+            if 'id' in df.columns:
+                df = df.drop('id', axis=1)
+            
             df = df.fillna('')
             df = df.astype(str)
             
@@ -413,13 +417,8 @@ def main():
                                 st.write("🗑️ Clearing existing data...")
                                 supabase.table('allocation_students').delete().neq('id', '').execute()
                                 
-                                # Remove id column if it exists (let Supabase auto-generate)
-                                upload_df = df.copy()
-                                if 'id' in upload_df.columns:
-                                    upload_df = upload_df.drop('id', axis=1)
-                                
-                                # Upload
-                                records = upload_df.to_dict('records')
+                                # Upload (id column already removed above)
+                                records = df.to_dict('records')
                                 batch_size = 100
                                 total = 0
                                 
