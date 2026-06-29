@@ -204,20 +204,27 @@ with main_tabs[1]:
         # Keep only mapped columns (drop extra columns)
         df_mapped = df_mapped[[col for col in df_mapped.columns if col in column_map.values()]]
         
-        # CLEAN DATA
+        # CLEAN DATA - nuclear option
         df_mapped = df_mapped.fillna('')
         
-        # Handle numeric columns specifically
+        # Replace ALL NaN values everywhere with empty string
+        df_mapped = df_mapped.astype(str)
+        df_mapped = df_mapped.replace('nan', '').replace('NaT', '').replace('<NA>', '')
+        
+        # Strip whitespace
+        df_mapped = df_mapped.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+        
+        # Convert numeric columns to int
         numeric_cols = ['year', 'term', 'extension_weeks', 'total_previous_placements']
         for col in numeric_cols:
             if col in df_mapped.columns:
-                # Replace NaN/empty with 0
                 df_mapped[col] = pd.to_numeric(df_mapped[col], errors='coerce').fillna(0).astype(int)
         
-        # Now convert everything else to string
-        for col in df_mapped.columns:
-            if col not in numeric_cols:
-                df_mapped[col] = df_mapped[col].astype(str).str.replace('nan', '').str.replace('NaT', '').str.replace('<NA>', '').str.strip()
+        # Final NaN check - if any NaN remain, drop those rows
+        df_mapped = df_mapped.dropna(how='any')
+        
+        # Convert everything to string one final time
+        df_mapped = df_mapped.astype(str)
         
         st.markdown("### Preview (Mapped)")
         st.dataframe(df_mapped.head(5), use_container_width=True)
