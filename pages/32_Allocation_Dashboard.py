@@ -205,12 +205,6 @@ with main_tabs[1]:
             if col not in df.columns:
                 df[col] = 'No'
         
-        # Add any missing Supabase columns with defaults
-        supabase_cols = ['Allocated_From_Waitlist', 'date_created', 'date_updated']
-        for col in supabase_cols:
-            if col not in df.columns:
-                df[col] = ''
-        
         if 'id' in df.columns:
             df = df.drop('id', axis=1)
         
