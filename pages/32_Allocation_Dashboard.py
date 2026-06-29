@@ -413,8 +413,13 @@ def main():
                                 st.write("🗑️ Clearing existing data...")
                                 supabase.table('allocation_students').delete().neq('id', '').execute()
                                 
+                                # Remove id column if it exists (let Supabase auto-generate)
+                                upload_df = df.copy()
+                                if 'id' in upload_df.columns:
+                                    upload_df = upload_df.drop('id', axis=1)
+                                
                                 # Upload
-                                records = df.to_dict('records')
+                                records = upload_df.to_dict('records')
                                 batch_size = 100
                                 total = 0
                                 
