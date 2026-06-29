@@ -1,6 +1,7 @@
 """
 CLC-LBU TERM ASSESSMENT DATA ENTRY (with Supabase)
 Staff enter and save Sounds Write, Word Aware, SMARTAR data each term
+UPDATED: Save buttons on each tab + better session state
 Page name: Term_Assessment_Data.py
 """
 
@@ -68,6 +69,14 @@ st.markdown("""
         border-left: 5px solid #00e5ff !important;
         border-radius: 10px !important;
     }
+    
+    .success-box {
+        background: linear-gradient(135deg, rgba(76, 175, 80, 0.2) 0%, rgba(76, 175, 80, 0.05) 100%) !important;
+        border-left: 5px solid #4CAF50 !important;
+        padding: 10px;
+        border-radius: 5px;
+        margin: 10px 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -114,7 +123,7 @@ WORD_AWARE_SKILLS = [
 SMARTAR_GOALS = ['Goal 1', 'Goal 2', 'Goal 3', 'Goal 4', 'Goal 5']
 
 # ============================================================================
-# SESSION STATE
+# SESSION STATE - Initialize
 # ============================================================================
 
 if 'sounds_write' not in st.session_state:
@@ -123,6 +132,8 @@ if 'word_aware' not in st.session_state:
     st.session_state.word_aware = {}
 if 'smartar' not in st.session_state:
     st.session_state.smartar = {}
+if 'last_saved' not in st.session_state:
+    st.session_state.last_saved = None
 
 # ============================================================================
 # DATABASE FUNCTIONS
@@ -147,6 +158,7 @@ def save_assessment_to_supabase(staff, program, term, year, sw, wa, smartar):
         }
         
         response = supabase.table('term_assessments').upsert(record).execute()
+        st.session_state.last_saved = datetime.now()
         return True
     except Exception as e:
         st.error(f"Error saving to database: {e}")
@@ -182,6 +194,28 @@ def get_all_assessments():
         return None
 
 # ============================================================================
+# SAVE FUNCTION (used in multiple tabs)
+# ============================================================================
+
+def save_current_data(staff_member, program, term, year):
+    """Save data with confirmation"""
+    if supabase:
+        if save_assessment_to_supabase(
+            staff_member, program, term, year,
+            st.session_state.sounds_write,
+            st.session_state.word_aware,
+            st.session_state.smartar
+        ):
+            st.success(f"✅ SAVED! {staff_member} - {program} Term {term} {year}")
+            return True
+        else:
+            st.error("❌ Failed to save")
+            return False
+    else:
+        st.error("Database not available")
+        return False
+
+# ============================================================================
 # MAIN
 # ============================================================================
 
@@ -205,15 +239,23 @@ def main():
     with col4:
         year = st.selectbox("📆 Year", ['2025', '2026'])
     
-    if st.button("📂 Load Existing Data"):
-        existing = load_assessment_from_supabase(staff_member, program, term, year)
-        if existing:
-            st.success("✅ Existing data loaded!")
-            st.session_state.sounds_write = json.loads(existing.get('sounds_write_data', '{}'))
-            st.session_state.word_aware = json.loads(existing.get('word_aware_data', '{}'))
-            st.session_state.smartar = json.loads(existing.get('smartar_goals', '{}'))
-        else:
-            st.info("No existing data found for this selection.")
+    # Load button
+    col1, col2, col3 = st.columns([1, 1, 2])
+    with col1:
+        if st.button("📂 Load Existing Data"):
+            existing = load_assessment_from_supabase(staff_member, program, term, year)
+            if existing:
+                st.success("✅ Existing data loaded!")
+                st.session_state.sounds_write = json.loads(existing.get('sounds_write_data', '{}'))
+                st.session_state.word_aware = json.loads(existing.get('word_aware_data', '{}'))
+                st.session_state.smartar = json.loads(existing.get('smartar_goals', '{}'))
+                st.rerun()
+            else:
+                st.info("No existing data found for this selection.")
+    
+    with col2:
+        if st.session_state.last_saved:
+            st.info(f"Last saved: {st.session_state.last_saved.strftime('%H:%M:%S')}")
     
     st.markdown("---")
     
@@ -269,6 +311,13 @@ def main():
             }
         
         st.session_state.sounds_write = sounds_write_data
+        
+        # SAVE BUTTON AT BOTTOM OF TAB
+        st.markdown("---")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("💾 Save Sounds Write Data", key="save_sw"):
+                save_current_data(staff_member, program, term, year)
     
     # ========================================================================
     # TAB 2: WORD AWARE
@@ -313,6 +362,13 @@ def main():
             }
         
         st.session_state.word_aware = word_aware_data
+        
+        # SAVE BUTTON AT BOTTOM OF TAB
+        st.markdown("---")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("💾 Save Word Aware Data", key="save_wa"):
+                save_current_data(staff_member, program, term, year)
     
     # ========================================================================
     # TAB 3: SMARTAR GOALS
@@ -347,6 +403,13 @@ def main():
             }
         
         st.session_state.smartar = smartar_data
+        
+        # SAVE BUTTON AT BOTTOM OF TAB
+        st.markdown("---")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("💾 Save SMARTAR Goals", key="save_smartar"):
+                save_current_data(staff_member, program, term, year)
     
     # ========================================================================
     # TAB 4: SUMMARY & SAVE
@@ -379,30 +442,21 @@ def main():
         col3.metric("✅ SMARTAR Goals Achieved", achieved)
         
         st.markdown("---")
-        st.markdown("### 💾 Save Assessment Data")
+        st.markdown("### 💾 Save All Data")
         
         col1, col2, col3 = st.columns([1, 1, 2])
         
         with col1:
-            if st.button("💾 Save to Database"):
-                if supabase:
-                    if save_assessment_to_supabase(
-                        staff_member, program, term, year,
-                        st.session_state.sounds_write,
-                        st.session_state.word_aware,
-                        st.session_state.smartar
-                    ):
-                        st.success(f"✅ Saved! {staff_member} - {program} Term {term} {year}")
-                    else:
-                        st.error("❌ Failed to save")
-                else:
-                    st.error("Database not available")
+            if st.button("💾 Save ALL Data", key="save_all"):
+                if save_current_data(staff_member, program, term, year):
+                    st.balloons()
         
         with col2:
             if st.button("🔄 Clear All"):
                 st.session_state.sounds_write = {}
                 st.session_state.word_aware = {}
                 st.session_state.smartar = {}
+                st.session_state.last_saved = None
                 st.rerun()
     
     # ========================================================================
