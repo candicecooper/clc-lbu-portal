@@ -399,6 +399,12 @@ def main():
             if 'id' in df.columns:
                 df = df.drop('id', axis=1)
             
+            # Remove completely empty columns (like Column1 from Excel)
+            df = df.dropna(axis=1, how='all')
+            
+            # Remove any column that's all empty strings
+            df = df.loc[:, (df != '').any(axis=0)]
+            
             df = df.fillna('')
             df = df.astype(str)
             
@@ -413,11 +419,14 @@ def main():
                     else:
                         with st.spinner("Uploading..."):
                             try:
-                                # Delete existing
+                                # Delete existing - simple truncate
                                 st.write("🗑️ Clearing existing data...")
-                                supabase.table('allocation_students').delete().neq('id', '').execute()
+                                try:
+                                    supabase.table('allocation_students').delete().gte('id', '00000000-0000-0000-0000-000000000000').execute()
+                                except:
+                                    pass  # Table might be empty already
                                 
-                                # Upload (id column already removed above)
+                                # Upload
                                 records = df.to_dict('records')
                                 batch_size = 100
                                 total = 0
