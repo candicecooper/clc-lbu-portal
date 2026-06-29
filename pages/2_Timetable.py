@@ -189,7 +189,7 @@ def pdf_to_images(pdf_bytes: bytes) -> list | None:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         images = []
         for page in doc:
-            mat = fitz.Matrix(2.0, 2.0)   # 2× scale ≈ 150 dpi equivalent
+            mat = fitz.Matrix(2.5, 2.5)   # 2.5× scale — crisper when enlarged
             pix = page.get_pixmap(matrix=mat, alpha=False)
             images.append(base64.b64encode(pix.tobytes("png")).decode())
         doc.close()
@@ -460,17 +460,17 @@ header{display:none!important}
 .page-divider{border:none;border-top:2px dashed var(--navy-border);margin:4px 0}
 
 /* ── Excel booking tables ── */
-.xls-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;padding:14px 16px}
+.xls-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;padding:14px 16px;font-size:13px}
 .xls-sheet-name{
-  font-size:11px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;
+  font-size:0.85em;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;
   color:var(--navy-mid);margin:14px 0 8px;
 }
 .xls-table{
-  width:100%;border-collapse:collapse;font-size:13px;margin-bottom:8px;
+  width:100%;border-collapse:collapse;font-size:1em;margin-bottom:8px;
   font-family:'DM Sans',sans-serif;
 }
 .xls-table td{
-  border:1px solid var(--navy-border);padding:7px 11px;
+  border:1px solid var(--navy-border);padding:0.55em 0.85em;
   color:var(--ink);vertical-align:top;white-space:nowrap;
 }
 .xls-table tr:nth-child(even) td{background:#fafbfd}
@@ -879,7 +879,12 @@ def render_timetable_view(program: str):
         with st.spinner("Loading bookings…"):
             html = excel_to_html(file_bytes)
         if html:
-            st.markdown(f'<div class="card-wrap"><div class="xls-scroll">{html}</div></div>',
+            wrap_style = ""
+            if program in BOOKING_PROGRAMS:
+                zoom = st.slider("🔍 View size — drag to enlarge", min_value=100, max_value=260,
+                                 value=150, step=10, format="%d%%", key=f"zoom_{program}")
+                wrap_style = f"font-size:{round(13 * zoom / 100)}px;"
+            st.markdown(f'<div class="card-wrap"><div class="xls-scroll" style="{wrap_style}">{html}</div></div>',
                         unsafe_allow_html=True)
         else:
             st.info("Couldn't display this spreadsheet inline (the openpyxl package may be "
@@ -899,16 +904,22 @@ def render_timetable_view(program: str):
         images = pdf_to_images(file_bytes)
 
     if images:
-        st.markdown('<div class="card-wrap">', unsafe_allow_html=True)
+        img_width = "100%"
+        if program in BOOKING_PROGRAMS:
+            zoom = st.slider("🔍 View size — drag to enlarge", min_value=100, max_value=260,
+                             value=150, step=10, format="%d%%", key=f"zoom_{program}")
+            img_width = f"{zoom}%"
+        st.markdown('<div class="card-wrap"><div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">',
+                    unsafe_allow_html=True)
         for i, img_b64 in enumerate(images):
             if i > 0:
                 st.markdown('<hr class="page-divider">', unsafe_allow_html=True)
             st.markdown(
                 f'<img src="data:image/png;base64,{img_b64}" '
-                f'class="timetable-img" alt="Page {i+1}">',
+                f'class="timetable-img" style="width:{img_width};max-width:none;" alt="Page {i+1}">',
                 unsafe_allow_html=True,
             )
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div></div>', unsafe_allow_html=True)
     else:
         st.warning("⚠️ Could not render PDF as image. Please download below.")
 
