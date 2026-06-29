@@ -212,7 +212,7 @@ with main_tabs[1]:
         df_mapped = df_mapped.replace('nan', '').replace('NaT', '').replace('<NA>', '')
         
         # Strip whitespace
-        df_mapped = df_mapped.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+        df_mapped = df_mapped.map(lambda x: x.strip() if isinstance(x, str) else x)
         
         # Convert numeric columns to int
         numeric_cols = ['year', 'term', 'extension_weeks', 'total_previous_placements']
