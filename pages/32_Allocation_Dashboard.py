@@ -267,7 +267,7 @@ def main():
                 x=prog_col,
                 y='Multiple',
                 color='Pct',
-                text=['Multiple'],
+                text_auto=True,
                 title='Students with Multiple Needs by Program',
                 color_continuous_scale='Reds'
             )
