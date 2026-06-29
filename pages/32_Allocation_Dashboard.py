@@ -404,19 +404,16 @@ def intersectionality(df):
 # ============================================================================
 
 def show_comparison(df):
-    """Compare programs and terms flexibly"""
+    """Compare programs and terms flexibly with better visualizations"""
     
     st.markdown("### 🔄 Program & Term Comparison")
-    st.info("💡 Select what to compare: multiple programs, multiple terms, or same term across years")
+    st.info("💡 Select what to compare. For Years: shows all 4 terms within each year for detailed trend analysis")
     
     # Control panel
     col1, col2 = st.columns(2)
     
     with col1:
-        comparison_type = st.radio("Compare by:", ["Programs", "Terms", "Years (same term)"])
-    
-    with col2:
-        st.write("")  # Spacing
+        comparison_type = st.radio("Compare by:", ["Programs", "Terms", "Years (all terms)"])
     
     # Get comparison data based on selection
     compare_data = []
@@ -443,10 +440,13 @@ def show_comparison(df):
                 'Total': len(subset),
                 'Allocated': len(subset[subset['Allocation_Status'] == 'Allocated']),
                 'Active': len(subset[subset['Allocation_Status'] == 'Active']),
+                'Waiting': len(subset[subset['Allocation_Status'] == 'On Waiting List']),
                 'ATSI': len(subset[subset['Flag_ATSI'] == 'Yes']),
                 'EALD': len(subset[subset['Flag_EALD'] == 'Yes']),
                 'SWD': len(subset[subset['Flag_SWD'] == 'Yes'])
             })
+        
+        chart_type = "grouped_bars"
     
     elif comparison_type == "Terms":
         terms = sorted([t for t in df['Term'].unique() if t > 0])
@@ -471,36 +471,46 @@ def show_comparison(df):
                 'Total': len(subset),
                 'Allocated': len(subset[subset['Allocation_Status'] == 'Allocated']),
                 'Active': len(subset[subset['Allocation_Status'] == 'Active']),
+                'Waiting': len(subset[subset['Allocation_Status'] == 'On Waiting List']),
                 'ATSI': len(subset[subset['Flag_ATSI'] == 'Yes']),
                 'EALD': len(subset[subset['Flag_EALD'] == 'Yes']),
                 'SWD': len(subset[subset['Flag_SWD'] == 'Yes'])
             })
+        
+        chart_type = "grouped_bars"
     
-    else:  # Years (same term)
+    else:  # Years (all terms)
         years = sorted([y for y in df['Referral_Year'].unique() if y > 0])
         selected_years = st.multiselect("Select years to compare", [str(y) for y in years], default=[str(y) for y in years])
         
         col1, col2 = st.columns(2)
         with col1:
-            selected_term = st.selectbox("Term", sorted([str(t) for t in df['Term'].unique() if t > 0]))
-        with col2:
             selected_prog = st.selectbox("Program", ['All'] + sorted([p for p in df['Allocated_Program'].unique() if pd.notna(p)]))
+        with col2:
+            st.write("")  # Spacing
         
+        # For year comparison, get ALL 4 terms for each year
         for year_str in selected_years:
             year = int(year_str)
-            subset = df[(df['Referral_Year'] == year) & (df['Term'] == int(selected_term))]
-            if selected_prog != 'All':
-                subset = subset[subset['Allocated_Program'] == selected_prog]
-            
-            compare_data.append({
-                'Group': str(year),
-                'Total': len(subset),
-                'Allocated': len(subset[subset['Allocation_Status'] == 'Allocated']),
-                'Active': len(subset[subset['Allocation_Status'] == 'Active']),
-                'ATSI': len(subset[subset['Flag_ATSI'] == 'Yes']),
-                'EALD': len(subset[subset['Flag_EALD'] == 'Yes']),
-                'SWD': len(subset[subset['Flag_SWD'] == 'Yes'])
-            })
+            for term in [1, 2, 3, 4]:
+                subset = df[(df['Referral_Year'] == year) & (df['Term'] == term)]
+                if selected_prog != 'All':
+                    subset = subset[subset['Allocated_Program'] == selected_prog]
+                
+                compare_data.append({
+                    'Group': f'{year} T{term}',
+                    'Year': year,
+                    'Term': term,
+                    'Total': len(subset),
+                    'Allocated': len(subset[subset['Allocation_Status'] == 'Allocated']),
+                    'Active': len(subset[subset['Allocation_Status'] == 'Active']),
+                    'Waiting': len(subset[subset['Allocation_Status'] == 'On Waiting List']),
+                    'ATSI': len(subset[subset['Flag_ATSI'] == 'Yes']),
+                    'EALD': len(subset[subset['Flag_EALD'] == 'Yes']),
+                    'SWD': len(subset[subset['Flag_SWD'] == 'Yes'])
+                })
+        
+        chart_type = "line_chart"
     
     # Display comparison
     if compare_data:
@@ -509,83 +519,148 @@ def show_comparison(df):
         st.markdown("---")
         st.markdown("### 📊 Comparison Results")
         
-        # Metrics comparison
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
+        if chart_type == "grouped_bars":
+            # Grouped bar charts for programs/terms
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                fig = go.Figure(data=[
+                    go.Bar(name='Allocated', x=compare_df['Group'], y=compare_df['Allocated'], marker_color=COLORS['green']),
+                    go.Bar(name='Active', x=compare_df['Group'], y=compare_df['Active'], marker_color=COLORS['amber']),
+                    go.Bar(name='Waiting', x=compare_df['Group'], y=compare_df['Waiting'], marker_color=COLORS['red'])
+                ])
+                fig.update_layout(
+                    title='Allocation Status Breakdown',
+                    barmode='group',
+                    paper_bgcolor=COLORS['dark_bg'],
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    font=dict(color=COLORS['white']),
+                    height=400
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                fig = go.Figure(data=[
+                    go.Bar(name='ATSI', x=compare_df['Group'], y=compare_df['ATSI'], marker_color=COLORS['atsi']),
+                    go.Bar(name='EALD', x=compare_df['Group'], y=compare_df['EALD'], marker_color=COLORS['eald']),
+                    go.Bar(name='SWD', x=compare_df['Group'], y=compare_df['SWD'], marker_color=COLORS['swd'])
+                ])
+                fig.update_layout(
+                    title='Equity Distribution',
+                    barmode='group',
+                    paper_bgcolor=COLORS['dark_bg'],
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    font=dict(color=COLORS['white']),
+                    height=400
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # Allocation rate
+            compare_df['Allocation_Rate'] = (compare_df['Allocated'] / compare_df['Total'] * 100).round(0)
+            
             fig = go.Figure(data=[
-                go.Bar(x=compare_df['Group'], y=compare_df['Total'], marker_color=COLORS['cyan'],
-                       text=compare_df['Total'], textposition='outside')
+                go.Bar(x=compare_df['Group'], y=compare_df['Allocation_Rate'], 
+                       marker_color=COLORS['yellow'],
+                       text=[f"{int(r)}%" for r in compare_df['Allocation_Rate']], 
+                       textposition='outside')
             ])
-            fig.update_layout(title='Total Students', paper_bgcolor=COLORS['dark_bg'], 
-                            plot_bgcolor='rgba(0,0,0,0)', font=dict(color=COLORS['white']), height=300)
+            fig.update_layout(
+                title='Allocation Success Rate %',
+                paper_bgcolor=COLORS['dark_bg'],
+                plot_bgcolor='rgba(0,0,0,0)',
+                font=dict(color=COLORS['white']),
+                yaxis=dict(range=[0, 100]),
+                height=350
+            )
             st.plotly_chart(fig, use_container_width=True)
         
-        with col2:
-            fig = go.Figure(data=[
-                go.Bar(x=compare_df['Group'], y=compare_df['Allocated'], marker_color=COLORS['green'],
-                       text=compare_df['Allocated'], textposition='outside')
-            ])
-            fig.update_layout(title='Allocated Students', paper_bgcolor=COLORS['dark_bg'],
-                            plot_bgcolor='rgba(0,0,0,0)', font=dict(color=COLORS['white']), height=300)
+        else:  # Line chart for years
+            # Total students trend
+            fig = go.Figure()
+            for prog in ['Total', 'Allocated', 'Active']:
+                if prog == 'Total':
+                    color = COLORS['cyan']
+                elif prog == 'Allocated':
+                    color = COLORS['green']
+                else:
+                    color = COLORS['amber']
+                
+                fig.add_trace(go.Scatter(
+                    x=compare_df['Group'],
+                    y=compare_df[prog],
+                    name=prog,
+                    mode='lines+markers',
+                    line=dict(color=color, width=3),
+                    marker=dict(size=8)
+                ))
+            
+            fig.update_layout(
+                title='📈 Student Numbers Over Time (All Terms Shown)',
+                xaxis_title='Year & Term',
+                yaxis_title='Number of Students',
+                paper_bgcolor=COLORS['dark_bg'],
+                plot_bgcolor='rgba(0,0,0,0)',
+                font=dict(color=COLORS['white']),
+                height=400,
+                hovermode='x unified'
+            )
             st.plotly_chart(fig, use_container_width=True)
-        
-        with col3:
-            fig = go.Figure(data=[
-                go.Bar(x=compare_df['Group'], y=compare_df['Active'], marker_color=COLORS['amber'],
-                       text=compare_df['Active'], textposition='outside')
-            ])
-            fig.update_layout(title='Active Students', paper_bgcolor=COLORS['dark_bg'],
-                            plot_bgcolor='rgba(0,0,0,0)', font=dict(color=COLORS['white']), height=300)
+            
+            # Equity trends
+            fig = go.Figure()
+            for equity in ['ATSI', 'EALD', 'SWD']:
+                fig.add_trace(go.Scatter(
+                    x=compare_df['Group'],
+                    y=compare_df[equity],
+                    name=equity,
+                    mode='lines+markers',
+                    line=dict(width=3),
+                    marker=dict(size=8)
+                ))
+            
+            fig.update_layout(
+                title='⚖️ Equity Group Trends (All Terms Shown)',
+                xaxis_title='Year & Term',
+                yaxis_title='Number of Students',
+                paper_bgcolor=COLORS['dark_bg'],
+                plot_bgcolor='rgba(0,0,0,0)',
+                font=dict(color=COLORS['white']),
+                height=400,
+                hovermode='x unified'
+            )
             st.plotly_chart(fig, use_container_width=True)
-        
-        with col4:
-            allocation_rate = (compare_df['Allocated'] / compare_df['Total'] * 100).round(0).astype(int)
+            
+            # Allocation rate trend
+            compare_df['Allocation_Rate'] = (compare_df['Allocated'] / compare_df['Total'] * 100).round(1)
+            
             fig = go.Figure(data=[
-                go.Bar(x=compare_df['Group'], y=allocation_rate, marker_color=COLORS['yellow'],
-                       text=[f"{rate}%" for rate in allocation_rate], textposition='outside')
+                go.Scatter(
+                    x=compare_df['Group'],
+                    y=compare_df['Allocation_Rate'],
+                    mode='lines+markers',
+                    name='Allocation Rate',
+                    line=dict(color=COLORS['yellow'], width=4),
+                    marker=dict(size=10),
+                    fill='tozeroy',
+                    fillcolor=f'rgba(255, 217, 61, 0.2)'
+                )
             ])
-            fig.update_layout(title='Allocation Rate %', paper_bgcolor=COLORS['dark_bg'],
-                            plot_bgcolor='rgba(0,0,0,0)', font=dict(color=COLORS['white']), 
-                            yaxis=dict(range=[0, 100]), height=300)
-            st.plotly_chart(fig, use_container_width=True)
-        
-        # Equity comparison
-        st.markdown("---")
-        st.markdown("### ⚖️ Equity Distribution")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            fig = go.Figure(data=[
-                go.Bar(x=compare_df['Group'], y=compare_df['ATSI'], marker_color=COLORS['atsi'],
-                       text=compare_df['ATSI'], textposition='outside')
-            ])
-            fig.update_layout(title='🇦🇺 ATSI Students', paper_bgcolor=COLORS['dark_bg'],
-                            plot_bgcolor='rgba(0,0,0,0)', font=dict(color=COLORS['white']), height=300)
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            fig = go.Figure(data=[
-                go.Bar(x=compare_df['Group'], y=compare_df['EALD'], marker_color=COLORS['eald'],
-                       text=compare_df['EALD'], textposition='outside')
-            ])
-            fig.update_layout(title='🌍 EALD Students', paper_bgcolor=COLORS['dark_bg'],
-                            plot_bgcolor='rgba(0,0,0,0)', font=dict(color=COLORS['white']), height=300)
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with col3:
-            fig = go.Figure(data=[
-                go.Bar(x=compare_df['Group'], y=compare_df['SWD'], marker_color=COLORS['swd'],
-                       text=compare_df['SWD'], textposition='outside')
-            ])
-            fig.update_layout(title='♿ SWD Students', paper_bgcolor=COLORS['dark_bg'],
-                            plot_bgcolor='rgba(0,0,0,0)', font=dict(color=COLORS['white']), height=300)
+            
+            fig.update_layout(
+                title='📈 Allocation Success Rate Trend',
+                xaxis_title='Year & Term',
+                yaxis_title='Allocation Rate %',
+                paper_bgcolor=COLORS['dark_bg'],
+                plot_bgcolor='rgba(0,0,0,0)',
+                font=dict(color=COLORS['white']),
+                yaxis=dict(range=[0, 100]),
+                height=350
+            )
             st.plotly_chart(fig, use_container_width=True)
         
         # Data table
         st.markdown("---")
-        st.markdown("### 📋 Comparison Table")
+        st.markdown("### 📋 Detailed Comparison Data")
         st.dataframe(compare_df, use_container_width=True)
 
 def main():
@@ -708,13 +783,16 @@ def main():
         st.plotly_chart(fig, use_container_width=True)
     
     with tab6:
+        show_comparison(df)
+    
+    with tab7:
         st.markdown("### De-identified Raw Data")
         cols_show = [c for c in ['Referring_School', 'Allocated_Program', 'Allocation_Status', 
                                   'Flag_ATSI', 'Flag_EALD', 'Flag_SWD', 'Flag_ASD', 'Flag_ADHD', 'Referral_Year', 'Term'] 
                      if c in filtered_df.columns]
         st.dataframe(filtered_df[cols_show], use_container_width=True, height=500)
     
-    with tab7:
+    with tab8:
         st.markdown("### 💡 Key Strategic Insights")
         st.markdown("""
         **Three Separate Equity Groups:**
