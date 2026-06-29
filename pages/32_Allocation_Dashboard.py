@@ -167,6 +167,7 @@ with main_tabs[1]:
             'Student_Name': 'student_name',
             'Meeting_Week': 'meeting_week',
             'Meeting_Date': 'meeting_date',
+            'Referral_Date': 'referral_date',
             'Term': 'term',
             'Referral_Year': 'year',
             'Allocated_Program': 'program',
@@ -187,12 +188,6 @@ with main_tabs[1]:
             'Previously_Referred': 'previously_referred',
             'Medical_Condition_Details': 'medical_condition_details',
             'Extension_Weeks': 'extension_weeks',
-            # Equity flags - keep same names
-            'Flag_ATSI': 'Flag_ATSI',
-            'Flag_EALD': 'Flag_EALD',
-            'Flag_SWD': 'Flag_SWD',
-            'Flag_ASD': 'Flag_ASD',
-            'Flag_ADHD': 'Flag_ADHD',
         }
         
         # RENAME columns
@@ -235,6 +230,10 @@ with main_tabs[1]:
         for col in date_cols:
             if col in df_mapped.columns:
                 df_mapped[col] = df_mapped[col].replace(['', 'nan', 'NaT'], None)
+        
+        # Use referral_date as fallback for empty meeting_date (meeting_date is NOT NULL)
+        if 'meeting_date' in df_mapped.columns and 'referral_date' in df_mapped.columns:
+            df_mapped['meeting_date'] = df_mapped['meeting_date'].fillna(df_mapped['referral_date'])
         
         st.markdown("### Preview (Mapped)")
         st.dataframe(df_mapped.head(5), use_container_width=True)
