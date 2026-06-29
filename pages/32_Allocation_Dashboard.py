@@ -230,6 +230,12 @@ with main_tabs[1]:
         # Convert everything to string one final time
         df_mapped = df_mapped.astype(str)
         
+        # For date columns, convert empty strings to None (NULL in Supabase)
+        date_cols = ['meeting_date', 'date_of_birth', 'waitlist_date']
+        for col in date_cols:
+            if col in df_mapped.columns:
+                df_mapped[col] = df_mapped[col].replace(['', 'nan', 'NaT'], None)
+        
         st.markdown("### Preview (Mapped)")
         st.dataframe(df_mapped.head(5), use_container_width=True)
         st.write(f"**Columns to upload:** {list(df_mapped.columns)}")
