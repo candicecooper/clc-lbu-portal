@@ -272,8 +272,8 @@ else:
         selected_year = st.selectbox("Year", years if years else [2026])
     
     with col2:
-        terms = sorted([t for t in allocation_df[allocation_df['year'] == selected_year]['term'].dropna().unique() if t != ''])
-        selected_term = st.selectbox("Term", terms if terms else ['1'])
+        terms = sorted([int(t) for t in allocation_df[allocation_df['year'] == selected_year]['term'].dropna().unique() if t != '' and int(t) >= 1])
+        selected_term = st.selectbox("Term", terms if terms else [1])
     
     with col3:
         progs = ['All'] + sorted([p for p in allocation_df['program'].dropna().unique() if p != ''])
@@ -294,6 +294,7 @@ else:
     # CONTENT BY SECTION
     if section == "Overview":
         st.markdown("## Overview")
+        st.markdown("High-level snapshot of current enrollment and placement patterns")
         
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Total Students", int(len(filtered)))
@@ -302,7 +303,8 @@ else:
         col4.metric("Updated", datetime.now().strftime("%d/%m/%y"))
         
         st.markdown("---")
-        st.markdown("## Distribution")
+        st.markdown("## Distribution by Program & Year Level")
+        st.markdown("Shows where students are placed across our three programs (JP, PY, SY) and year levels (R-10)")
         
         col1, col2 = st.columns(2)
         
@@ -314,9 +316,10 @@ else:
                 
                 fig = px.bar(prog_data, x='program', y='count', text='count', 
                             color='count', color_continuous_scale='Viridis',
-                            title='By Program', labels={'program': '', 'count': ''})
+                            title='Students by Program', labels={'program': '', 'count': ''})
                 fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
                 st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                st.markdown("**What this shows:** Enrollment numbers in each program")
         
         with col2:
             if 'year_level' in filtered.columns:
@@ -326,12 +329,14 @@ else:
                 
                 fig = px.bar(year_data, x='year_level', y='count', text='count',
                             color_discrete_sequence=['#4ecdc4'],
-                            title='By Year Level', labels={'year_level': '', 'count': ''})
+                            title='Students by Year Level', labels={'year_level': '', 'count': ''})
                 fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
                 st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                st.markdown("**What this shows:** Distribution across year levels R through 10")
         
         st.markdown("---")
         st.markdown("## Partnership Placements")
+        st.markdown("Top partnership areas supporting student placements - shows partnership demand")
         
         if 'partnership_area' in filtered.columns:
             partner_data = filtered['partnership_area'].value_counts().head(10).reset_index()
@@ -343,12 +348,14 @@ else:
                         title='Top 10 Partnerships', labels={'partnership_area': '', 'count': ''})
             fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
             st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+            st.markdown("**What this shows:** Which partnership areas have the most student placements")
     
     elif section == "Trends":
         st.markdown("## Enrollment Trends")
         st.info("Line chart showing enrollment over time by program")
         
         trend_data = allocation_df.dropna(subset=['year', 'term', 'program'])
+        trend_data = trend_data[pd.to_numeric(trend_data['term'], errors='coerce') >= 1]
         trend_data['YT'] = trend_data['year'].astype(str) + ' T' + trend_data['term'].astype(str)
         trend_agg = trend_data.groupby(['YT', 'program']).size().reset_index(name='count')
         trend_agg['count'] = trend_agg['count'].astype(int)
@@ -360,13 +367,32 @@ else:
     
     elif section == "Complexity":
         st.markdown("## Complexity Analysis")
+        st.markdown("Matrix showing how students distribute across year levels and programs. Identifies gaps and concentrations in placement.")
         
         if 'year_level' in filtered.columns and 'program' in filtered.columns:
+            # Define correct year level order
+            year_order = ['R', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+            
+            # Create heatmap data
             heatmap = pd.crosstab(filtered['year_level'], filtered['program'])
             
+            # Reindex to ensure all year levels and all programs appear
+            heatmap = heatmap.reindex(year_order, fill_value=0)
+            heatmap = heatmap.reindex(['JP', 'PY', 'SY'], axis=1, fill_value=0)
+            
             fig = px.imshow(heatmap, text_auto=True, color_continuous_scale='Blues',
-                           title='Year Level × Program', labels={'x': 'Program', 'y': 'Year Level'})
+                           title='Student Distribution: Year Level × Program',
+                           labels={'x': 'Program', 'y': 'Year Level', 'color': 'Count'},
+                           aspect='auto')
+            fig.update_traces(text=heatmap.values, texttemplate='%{text}')
             st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+            
+            st.markdown("**Key Insights:**")
+            st.write("- Numbers show student count in each year level/program combination")
+            st.write("- Darker blue = higher concentration")
+            st.write("- Empty cells = no students placed")
+        else:
+            st.warning("Year level or program data missing")
     
     elif section == "Equity":
         st.markdown("## Equity Analysis")
@@ -375,6 +401,7 @@ else:
     
     elif section == "Waitlist":
         st.markdown("## Waitlist Status")
+        st.markdown("Overview of current waitlist and placement completion rates - tracks student flow through the system")
         
         if 'waitlist_status' in filtered.columns:
             wait_data = filtered['waitlist_status'].value_counts().reset_index()
@@ -382,5 +409,10 @@ else:
             wait_data['count'] = wait_data['count'].astype(int)
             
             fig = px.pie(wait_data, values='count', names='status',
-                        title='Waitlist Status', color_discrete_sequence=['#ff6b6b', '#4ecdc4', '#ffd93d', '#a8e6cf'])
+                        title='Waitlist Status Distribution', color_discrete_sequence=['#ff6b6b', '#4ecdc4', '#ffd93d', '#a8e6cf'])
             st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+            
+            st.markdown("**What this shows:**")
+            st.write("- Breakdown of students by waitlist status")
+            st.write("- Identifies students waiting vs. placed")
+            st.write("- Helps track placement completion")
