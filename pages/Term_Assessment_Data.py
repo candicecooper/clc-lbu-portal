@@ -120,7 +120,13 @@ WORD_AWARE_SKILLS = [
     'Sound Sequencing'
 ]
 
-SMARTAR_GOALS = ['Goal 1', 'Goal 2', 'Goal 3', 'Goal 4', 'Goal 5']
+# SMARTAR goal outcomes are entered as tallies against two capability areas.
+# For each capability, staff record how many students:
+#   - Reached their expected goal
+#   - Reached above expectation
+#   - Are exceeding
+SMARTAR_CAPABILITIES = ['Personal and Social', 'Learning and Engagement']
+SMARTAR_LEVELS = ['Reached Expected', 'Above Expectation', 'Exceeding']
 
 # ============================================================================
 # SESSION STATE - Initialize
@@ -387,35 +393,45 @@ def main():
     # ========================================================================
     
     with tab3:
-        st.markdown("### 🎯 SMARTAR Goal Progress")
-        
+        st.markdown("### 🎯 SMARTAR Goal Outcomes")
+        st.info("For each capability area, enter the number of students at each outcome level (tallies).")
+
         smartar_data = {}
-        
-        for goal in SMARTAR_GOALS:
-            col1, col2 = st.columns([1, 2])
-            
+
+        for capability in SMARTAR_CAPABILITIES:
+            st.markdown(f"**{capability}**")
+            col1, col2, col3 = st.columns(3)
+
             with col1:
-                achievement = st.select_slider(
-                    f"{goal} Achievement",
-                    options=['Not Started', 'In Progress', 'Achieved', 'Exceeded'],
-                    value=st.session_state.smartar.get(goal, {}).get('achievement', 'In Progress'),
-                    key=f"smartar_ach_{goal}"
+                reached = st.number_input(
+                    "Reached Expected Goal",
+                    min_value=0,
+                    value=st.session_state.smartar.get(capability, {}).get('Reached Expected', 0),
+                    key=f"smartar_re_{capability}"
                 )
-            
             with col2:
-                notes = st.text_input(
-                    f"{goal} Notes",
-                    value=st.session_state.smartar.get(goal, {}).get('notes', ''),
-                    key=f"smartar_notes_{goal}"
+                above = st.number_input(
+                    "Above Expectation",
+                    min_value=0,
+                    value=st.session_state.smartar.get(capability, {}).get('Above Expectation', 0),
+                    key=f"smartar_ab_{capability}"
                 )
-            
-            smartar_data[goal] = {
-                'achievement': achievement,
-                'notes': notes
+            with col3:
+                exceeding = st.number_input(
+                    "Exceeding",
+                    min_value=0,
+                    value=st.session_state.smartar.get(capability, {}).get('Exceeding', 0),
+                    key=f"smartar_ex_{capability}"
+                )
+
+            smartar_data[capability] = {
+                'Reached Expected': int(reached),
+                'Above Expectation': int(above),
+                'Exceeding': int(exceeding)
             }
-        
+
         st.session_state.smartar = smartar_data
-        
+
         # SAVE BUTTON AT BOTTOM OF TAB
         st.markdown("---")
         col1, col2 = st.columns(2)
@@ -450,8 +466,15 @@ def main():
             ]) // len(WORD_AWARE_SKILLS)
             col2.metric("💬 Word Aware Students", int(wa_total))
         
-        achieved = sum([1 for g in st.session_state.smartar.values() if g['achievement'] == 'Achieved'])
-        col3.metric("✅ SMARTAR Goals Achieved", achieved)
+        smartar_total = 0
+        for levels in st.session_state.smartar.values():
+            if isinstance(levels, dict):
+                smartar_total += (
+                    levels.get('Reached Expected', 0)
+                    + levels.get('Above Expectation', 0)
+                    + levels.get('Exceeding', 0)
+                )
+        col3.metric("🎯 SMARTAR Outcomes Logged", int(smartar_total))
         
         st.markdown("---")
         st.markdown("### 💾 Save All Data")
