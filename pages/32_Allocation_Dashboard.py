@@ -319,21 +319,23 @@ with main_tabs[1]:
         
         df_mapped = df_mapped[[col for col in df_mapped.columns if col in column_map.values()]]
         
-        # Step 1: Convert everything to string (converts NaN to 'nan')
+        # Handle numeric columns FIRST - convert to int
+        numeric_cols = ['year', 'term', 'extension_weeks', 'total_previous_placements']
+        for col in numeric_cols:
+            if col in df_mapped.columns:
+                df_mapped[col] = pd.to_numeric(df_mapped[col], errors='coerce').fillna(0).astype(int)
+        
+        # NOW convert everything else to string
         df_mapped = df_mapped.astype(str)
-        
-        # Step 2: Replace 'nan' strings with empty string
         df_mapped = df_mapped.replace('nan', '')
-        
-        # Step 3: Fill any remaining NaN with empty
         df_mapped = df_mapped.fillna('')
         
-        # Step 4: Strip whitespace
+        # Strip whitespace
         for col in df_mapped.columns:
             if df_mapped[col].dtype == 'object':
                 df_mapped[col] = df_mapped[col].str.strip()
         
-        # Step 5: Handle meeting_date - fill empty with today
+        # Handle meeting_date - fill empty with today
         if 'meeting_date' in df_mapped.columns:
             today = pd.Timestamp.now().strftime('%Y-%m-%d')
             df_mapped['meeting_date'] = df_mapped['meeting_date'].replace('', today)
