@@ -319,32 +319,24 @@ with main_tabs[1]:
         
         df_mapped = df_mapped[[col for col in df_mapped.columns if col in column_map.values()]]
         
-        # BRUTAL: Replace NaN before ANY conversion
-        df_mapped = df_mapped.fillna('__EMPTY__')
+        # Step 1: Convert everything to string (converts NaN to 'nan')
+        df_mapped = df_mapped.astype(str)
         
-        # Convert ALL to string immediately
+        # Step 2: Replace 'nan' strings with empty string
+        df_mapped = df_mapped.replace('nan', '')
+        
+        # Step 3: Fill any remaining NaN with empty
+        df_mapped = df_mapped.fillna('')
+        
+        # Step 4: Strip whitespace
         for col in df_mapped.columns:
-            df_mapped[col] = df_mapped[col].astype(str)
+            if df_mapped[col].dtype == 'object':
+                df_mapped[col] = df_mapped[col].str.strip()
         
-        # Replace all empty/NaN variations with actual empty string
-        df_mapped = df_mapped.replace(['nan', 'NaT', '<NA>', 'None', '__EMPTY__'], '')
-        
-        # Strip whitespace
-        for col in df_mapped.columns:
-            df_mapped[col] = df_mapped[col].str.strip()
-        
-        # Handle date columns - empty to None for NULL in DB
-        date_cols = ['meeting_date', 'date_of_birth', 'waitlist_date']
-        for col in date_cols:
-            if col in df_mapped.columns:
-                mask = df_mapped[col] == ''
-                df_mapped.loc[mask, col] = None
-        
-        # Fill empty meeting_date with today
+        # Step 5: Handle meeting_date - fill empty with today
         if 'meeting_date' in df_mapped.columns:
             today = pd.Timestamp.now().strftime('%Y-%m-%d')
-            df_mapped['meeting_date'] = df_mapped['meeting_date'].fillna(today)
-            df_mapped.loc[df_mapped['meeting_date'] == '', 'meeting_date'] = today
+            df_mapped['meeting_date'] = df_mapped['meeting_date'].replace('', today)
         
         st.markdown("### Preview (Cleaned)")
         st.dataframe(df_mapped.head(5), use_container_width=True)
@@ -361,7 +353,19 @@ with main_tabs[1]:
                             st.write("🗑️ Clearing existing...")
                             supabase.table('allocation_students').delete().gte('id', '00000000-0000-0000-0000-000000000000').execute()
                             
-                            records = df_mapped.to_dict('records')
+                            # Build records manually - avoids any NaN re-introduction
+                            records = []
+                            for idx, row in df_mapped.iterrows():
+                                record = {}
+                                for col in df_mapped.columns:
+                                    val = row[col]
+                                    # Ensure no NaN in the record
+                                    if pd.isna(val) or val == 'nan' or val == '':
+                                        record[col] = None if col in ['meeting_date', 'date_of_birth', 'waitlist_date'] else ''
+                                    else:
+                                        record[col] = str(val)
+                                records.append(record)
+                            
                             batch_size = 50
                             total = 0
                             
