@@ -15,37 +15,95 @@ st.set_page_config(page_title="Allocation Dashboard", page_icon="📊", layout="
 
 st.markdown("""
 <style>
-    html, body, [data-testid="stAppViewContainer"] {
+    /* HIDE ALL STREAMLIT UI ELEMENTS */
+    #MainMenu { display: none !important; }
+    footer { display: none !important; }
+    header { display: none !important; }
+    .stToolbar { display: none !important; }
+    [data-testid="stToolbar"] { display: none !important; }
+    
+    /* HIDE WHITE BANDS */
+    [data-testid="stAppViewContainer"] > div { background: #0a0e27 !important; }
+    .block-container { background: #0a0e27 !important; }
+    section { background: #0a0e27 !important; }
+    
+    html, body { 
         background-color: #0a0e27 !important;
         color: #ffffff !important;
     }
-    h1, h2, h3 { color: #00e5ff !important; text-shadow: 0 0 15px rgba(0,229,255,0.3); }
-    p, label, span, div { color: #ffffff !important; }
     
-    /* SIDEBAR - WHITE TEXT ON DARK */
-    [data-testid="stSidebar"] { background: #050810 !important; }
-    [data-testid="stSidebar"] label { color: #ffffff !important; font-weight: bold; }
-    [data-testid="stSidebar"] p { color: #ffffff !important; }
-    [data-testid="stSidebar"] span { color: #ffffff !important; }
-    [data-testid="stSidebar"] div { color: #ffffff !important; }
-    [data-testid="stSidebar"] button { color: #ffffff !important; }
+    * { color: #ffffff !important; }
+    
+    h1, h2, h3, h4, h5, h6 { color: #00e5ff !important; text-shadow: 0 0 15px rgba(0,229,255,0.3); }
+    p, span, div, label, button, a { color: #ffffff !important; }
+    
+    /* SIDEBAR - MODERN GRADIENT */
+    [data-testid="stSidebar"] { 
+        background: linear-gradient(180deg, #050810 0%, #0a1020 100%) !important; 
+    }
+    [data-testid="stSidebar"] * { color: #ffffff !important; }
+    [data-testid="stSidebar"] label { 
+        font-weight: bold; 
+        font-size: 14px;
+        color: #ffffff !important;
+    }
+    
+    /* SIDEBAR DIVIDER */
+    [data-testid="stSidebar"] hr { border-color: rgba(0,229,255,0.3) !important; }
+    
+    /* RADIO - STYLED BUTTONS */
+    [role="radio"] { 
+        padding: 10px 15px !important;
+        border-radius: 6px !important;
+        margin: 6px 0 !important;
+        border: 1px solid rgba(0,229,255,0.2) !important;
+        background: transparent !important;
+        transition: all 0.2s !important;
+    }
+    [role="radio"]:hover { 
+        background: rgba(0,229,255,0.1) !important;
+        border-color: rgba(0,229,255,0.5) !important;
+    }
     
     /* BUTTONS */
-    .stButton > button { background: rgba(0,229,255,0.2) !important; border: 1px solid #00e5ff !important; color: #ffffff !important; font-weight: bold; }
-    .stButton > button:hover { background: rgba(0,229,255,0.4) !important; }
+    .stButton > button { 
+        background: rgba(0,229,255,0.15) !important; 
+        border: 1px solid #00e5ff !important; 
+        color: #ffffff !important; 
+        font-weight: bold;
+        border-radius: 6px !important;
+        padding: 10px 20px !important;
+    }
+    .stButton > button:hover { 
+        background: rgba(0,229,255,0.3) !important; 
+    }
     
     /* METRICS */
     [data-testid="stMetricValue"] { color: #00e5ff !important; font-size: 2em; }
-    [data-testid="metric-container"] { background: rgba(0,229,255,0.1) !important; }
+    [data-testid="stMetricLabel"] { color: #ffffff !important; }
+    [data-testid="metric-container"] { background: rgba(0,229,255,0.08) !important; border-radius: 8px !important; }
     
     /* INPUTS */
     [data-testid="stSelectbox"] label { color: #ffffff !important; font-weight: bold; }
     [data-testid="stFileUploader"] label { color: #ffffff !important; font-weight: bold; }
     
-    /* INFO BOXES */
-    .stInfo { background: rgba(0,229,255,0.15) !important; border-left: 4px solid #00e5ff !important; color: #ffffff !important; }
-    .stWarning { background: rgba(255,193,7,0.15) !important; border-left: 4px solid #ffc107 !important; color: #ffffff !important; }
-    .stSuccess { background: rgba(76,175,80,0.15) !important; border-left: 4px solid #4caf50 !important; color: #ffffff !important; }
+    /* BOXES */
+    .stInfo { background: #1a2a3a !important; border-left: 4px solid #00e5ff !important; }
+    .stInfo * { color: #ffffff !important; }
+    .stWarning { background: #2a2415 !important; border-left: 4px solid #ffc107 !important; }
+    .stWarning * { color: #ffffff !important; }
+    .stSuccess { background: #1a2a1a !important; border-left: 4px solid #4caf50 !important; }
+    .stSuccess * { color: #ffffff !important; }
+    .stError { background: #2a1a1a !important; border-left: 4px solid #f44336 !important; }
+    .stError * { color: #ffffff !important; }
+    
+    /* PLOTLY */
+    .plotly text { fill: #ffffff !important; color: #ffffff !important; }
+    .plotly .legend text { fill: #ffffff !important; color: #ffffff !important; }
+    
+    /* DATA FRAMES */
+    [data-testid="stDataFrame"] { background: rgba(10,14,39,0.8) !important; }
+    [data-testid="stDataFrame"] * { color: #ffffff !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -94,18 +152,24 @@ if allocation_df is None or allocation_df.empty:
 else:
     # SIDEBAR
     with st.sidebar:
-        st.markdown("## Navigation")
+        st.markdown("""
+        <div style='text-align: center; margin-bottom: 30px;'>
+            <h2 style='color: #00e5ff; margin: 0; font-size: 24px;'>CLC-LBU</h2>
+            <p style='color: #888; margin: 5px 0 0 0; font-size: 12px;'>Allocation Analytics</p>
+        </div>
+        """, unsafe_allow_html=True)
         
+        st.markdown("**Select Section**")
         section = st.radio(
-            "Select Section",
+            "Navigate to",
             ["Overview", "Trends", "Complexity", "Equity", "Waitlist"],
             label_visibility="collapsed"
         )
         
         st.markdown("---")
-        st.markdown("## Upload Data")
+        st.markdown("**Data Management**")
         
-        uploaded_file = st.file_uploader("Choose Excel or CSV", type=['xlsx', 'csv'], label_visibility="collapsed")
+        uploaded_file = st.file_uploader("Upload Data", type=['xlsx', 'csv'], label_visibility="collapsed")
         
         if uploaded_file is not None:
             try:
@@ -191,8 +255,15 @@ else:
             except Exception as e:
                 st.error(f"Error: {e}")
     
-    # TOP FILTERS
-    st.markdown("# Student Allocation Dashboard")
+    # TOP TITLE
+    st.markdown("""
+    <div style='text-align: center; margin-bottom: 30px;'>
+        <h1 style='color: #00e5ff; font-size: 36px; margin: 0;'>Student Allocation</h1>
+        <p style='color: #888; font-size: 14px; margin: 10px 0 0 0;'>Comprehensive enrollment analytics and equity insights</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("---")
     
     col1, col2, col3 = st.columns(3)
     
