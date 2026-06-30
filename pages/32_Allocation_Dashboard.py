@@ -21,27 +21,31 @@ st.markdown("""
         color: #ffffff !important;
     }
     h1, h2, h3 { color: #00e5ff !important; text-shadow: 0 0 15px rgba(0,229,255,0.3); }
-    p, label, span, div { color: #ffffff !important; }
+    p, label, span, div, input, textarea { color: #ffffff !important; }
     [data-testid="stMetricValue"] { color: #00e5ff !important; font-size: 2em; }
     [data-testid="metric-container"] { background: linear-gradient(135deg, rgba(0,229,255,0.15) 0%, rgba(26,122,122,0.1) 100%) !important; }
     
-    /* Sidebar */
-    [data-testid="stSidebar"] { background: #0a1428 !important; }
-    [data-testid="stSidebar"] label { color: #ffffff !important; font-size: 14px; font-weight: bold; }
-    [data-testid="stSidebar"] p { color: #d0d0d0 !important; }
-    [data-testid="stSidebar"] span { color: #d0d0d0 !important; }
+    /* Sidebar - DARK background, WHITE text */
+    [data-testid="stSidebar"] { background: #050810 !important; }
+    [data-testid="stSidebar"] label { color: #ffffff !important; font-size: 15px; font-weight: bold; }
+    [data-testid="stSidebar"] p { color: #ffffff !important; }
+    [data-testid="stSidebar"] span { color: #ffffff !important; }
+    [data-testid="stSidebar"] div { color: #ffffff !important; }
     
     /* Input fields */
     [data-testid="stSelectbox"] label { color: #ffffff !important; }
+    [data-testid="stSelectbox"] { color: #ffffff !important; }
     [data-testid="stTextInput"] label { color: #ffffff !important; }
+    [data-testid="stFileUploader"] label { color: #ffffff !important; }
+    
+    /* Buttons */
+    .stButton > button { color: #ffffff !important; background: rgba(0,229,255,0.2) !important; border: 1px solid #00e5ff !important; }
     
     /* Info/Warning boxes */
-    .stInfo { background: rgba(0,229,255,0.1) !important; border-left: 4px solid #00e5ff !important; }
-    .stWarning { background: rgba(255,193,7,0.1) !important; border-left: 4px solid #ffc107 !important; }
-    
-    /* Data frame */
-    [data-testid="stDataFrame"] { background: rgba(10,14,39,0.8) !important; }
-    [data-testid="stDataFrame"] p { color: #ffffff !important; }
+    .stInfo { background: rgba(0,229,255,0.15) !important; border-left: 4px solid #00e5ff !important; color: #ffffff !important; }
+    .stWarning { background: rgba(255,193,7,0.15) !important; border-left: 4px solid #ffc107 !important; color: #ffffff !important; }
+    .stSuccess { background: rgba(76,175,80,0.15) !important; border-left: 4px solid #4caf50 !important; color: #ffffff !important; }
+    .stError { background: rgba(244,67,54,0.15) !important; border-left: 4px solid #f44336 !important; color: #ffffff !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -74,13 +78,13 @@ def update_chart_layout(fig):
     fig.update_layout(
         plot_bgcolor='rgba(10,14,39,0.8)',
         paper_bgcolor='rgba(10,14,39,0.8)',
-        font=dict(color='#d0d0d0', size=11),
+        font=dict(color='#ffffff', size=12),
         hovermode='x unified',
         margin=dict(l=40, r=40, t=40, b=40),
         showlegend=True
     )
-    fig.update_xaxes(showgrid=False, linecolor='rgba(100,100,100,0.3)')
-    fig.update_yaxes(showgrid=True, gridcolor='rgba(100,100,100,0.2)', linecolor='rgba(100,100,100,0.3)')
+    fig.update_xaxes(showgrid=False, linecolor='rgba(100,100,100,0.3)', tickcolor='#ffffff', tickfont=dict(color='#ffffff'))
+    fig.update_yaxes(showgrid=True, gridcolor='rgba(100,100,100,0.2)', linecolor='rgba(100,100,100,0.3)', tickcolor='#ffffff', tickfont=dict(color='#ffffff'))
     return fig
 
 # Initialize session state
@@ -231,10 +235,11 @@ else:
             partner_data = filtered['partnership_area'].value_counts().head(12).reset_index()
             partner_data.columns = ['partnership_area', 'count']
             
-            fig_partner = px.barh(
+            fig_partner = px.bar(
                 partner_data,
-                x='count',
                 y='partnership_area',
+                x='count',
+                orientation='h',
                 text='count',
                 color='count',
                 color_continuous_scale='Reds',
