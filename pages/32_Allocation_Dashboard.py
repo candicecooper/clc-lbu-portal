@@ -21,10 +21,27 @@ st.markdown("""
         color: #ffffff !important;
     }
     h1, h2, h3 { color: #00e5ff !important; text-shadow: 0 0 15px rgba(0,229,255,0.3); }
-    p, label, span { color: #ffffff !important; }
+    p, label, span, div { color: #ffffff !important; }
+    [data-testid="stMetricValue"] { color: #00e5ff !important; font-size: 2em; }
     [data-testid="metric-container"] { background: linear-gradient(135deg, rgba(0,229,255,0.15) 0%, rgba(26,122,122,0.1) 100%) !important; }
-    .stTabs [data-baseweb="tab-list"] { gap: 2px; }
-    .stTabs [data-baseweb="tab"] { background: rgba(26,122,122,0.2) !important; border-radius: 8px !important; }
+    
+    /* Sidebar */
+    [data-testid="stSidebar"] { background: #0a1428 !important; }
+    [data-testid="stSidebar"] label { color: #ffffff !important; font-size: 14px; font-weight: bold; }
+    [data-testid="stSidebar"] p { color: #d0d0d0 !important; }
+    [data-testid="stSidebar"] span { color: #d0d0d0 !important; }
+    
+    /* Input fields */
+    [data-testid="stSelectbox"] label { color: #ffffff !important; }
+    [data-testid="stTextInput"] label { color: #ffffff !important; }
+    
+    /* Info/Warning boxes */
+    .stInfo { background: rgba(0,229,255,0.1) !important; border-left: 4px solid #00e5ff !important; }
+    .stWarning { background: rgba(255,193,7,0.1) !important; border-left: 4px solid #ffc107 !important; }
+    
+    /* Data frame */
+    [data-testid="stDataFrame"] { background: rgba(10,14,39,0.8) !important; }
+    [data-testid="stDataFrame"] p { color: #ffffff !important; }
 </style>
 """, unsafe_allow_html=True)
 
