@@ -319,7 +319,18 @@ with main_tabs[1]:
         
         df_mapped = df_mapped[[col for col in df_mapped.columns if col in column_map.values()]]
         
-        # Handle numeric columns FIRST - convert to int
+        # Handle date columns FIRST - parse and reformat to YYYY-MM-DD
+        date_cols = ['meeting_date', 'date_of_birth', 'waitlist_date']
+        for col in date_cols:
+            if col in df_mapped.columns:
+                # Parse dates - handles multiple formats
+                df_mapped[col] = pd.to_datetime(df_mapped[col], errors='coerce')
+                # Format as YYYY-MM-DD string
+                df_mapped[col] = df_mapped[col].dt.strftime('%Y-%m-%d')
+                # Replace NaT with empty
+                df_mapped[col] = df_mapped[col].replace('NaT', '')
+        
+        # Handle numeric columns - convert to int
         numeric_cols = ['year', 'term', 'extension_weeks', 'total_previous_placements']
         for col in numeric_cols:
             if col in df_mapped.columns:
