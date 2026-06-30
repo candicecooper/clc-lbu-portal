@@ -1977,10 +1977,14 @@ The AI extraction is optional!
                         else:
                             st.error(f"Error processing transcript: {e}")
         
-        # DISPLAY EXTRACTED CONTENT
-        if f"adhoc_extracted_{program}" in st.session_state:
-            st.markdown("#### 📊 Extracted Content")
-            st.markdown(st.session_state[f"adhoc_extracted_{program}"])
+        # DISPLAY EXTRACTED CONTENT (from session or loaded meeting)
+        extracted_from_session = st.session_state.get(f"adhoc_extracted_{program}", '')
+        extracted_from_db = meeting_data.get('extracted_notes', '') if meeting_data else ''
+        extracted_content = extracted_from_session or extracted_from_db
+        
+        if extracted_content:
+            st.markdown("#### 📊 Meeting Minutes (from AI Extraction)")
+            st.markdown(extracted_content)
             
             st.markdown("---")
             st.markdown("#### ✏️ Edit Minutes Before Saving")
@@ -1989,7 +1993,7 @@ The AI extraction is optional!
             # Editable text area for extracted content
             edited_minutes = st.text_area(
                 "Edit extracted minutes:",
-                value=st.session_state[f"adhoc_extracted_{program}"],
+                value=extracted_content,
                 height=250,
                 key=f"edited_minutes_{program}",
                 label_visibility="collapsed"
@@ -2006,7 +2010,7 @@ The AI extraction is optional!
             col_inst1, col_inst2 = st.columns([1, 3])
             
             with col_inst1:
-                if st.button("📥 Download Now (Right Now!)", key=f"instant_download_{program}", type="primary", use_container_width=True):
+                if st.button("📥 Download Now", key=f"instant_download_{program}", type="primary", use_container_width=True):
                     # Create Word document with EDITED extracted content
                     doc = generate_minutes_docx(
                         program=program,
