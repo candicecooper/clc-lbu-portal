@@ -319,27 +319,32 @@ with main_tabs[1]:
         
         df_mapped = df_mapped[[col for col in df_mapped.columns if col in column_map.values()]]
         
-        # CRITICAL: Convert ALL to string FIRST to eliminate any float NaN
+        # BRUTAL: Replace NaN before ANY conversion
+        df_mapped = df_mapped.fillna('__EMPTY__')
+        
+        # Convert ALL to string immediately
         for col in df_mapped.columns:
             df_mapped[col] = df_mapped[col].astype(str)
         
-        # Replace all NaN string variations
-        df_mapped = df_mapped.replace(['nan', 'NaT', '<NA>', 'None'], '')
+        # Replace all empty/NaN variations with actual empty string
+        df_mapped = df_mapped.replace(['nan', 'NaT', '<NA>', 'None', '__EMPTY__'], '')
         
         # Strip whitespace
-        df_mapped = df_mapped.map(lambda x: x.strip() if isinstance(x, str) else x)
+        for col in df_mapped.columns:
+            df_mapped[col] = df_mapped[col].str.strip()
         
-        # Now handle numeric columns - convert empty strings to 0
-        numeric_cols = ['year', 'term', 'extension_weeks', 'total_previous_placements']
-        for col in numeric_cols:
-            if col in df_mapped.columns:
-                df_mapped[col] = df_mapped[col].replace('', '0')
-        
-        # Handle date columns - empty to None
+        # Handle date columns - empty to None for NULL in DB
         date_cols = ['meeting_date', 'date_of_birth', 'waitlist_date']
         for col in date_cols:
             if col in df_mapped.columns:
-                df_mapped[col] = df_mapped[col].replace('', None)
+                mask = df_mapped[col] == ''
+                df_mapped.loc[mask, col] = None
+        
+        # Fill empty meeting_date with today
+        if 'meeting_date' in df_mapped.columns:
+            today = pd.Timestamp.now().strftime('%Y-%m-%d')
+            df_mapped['meeting_date'] = df_mapped['meeting_date'].fillna(today)
+            df_mapped.loc[df_mapped['meeting_date'] == '', 'meeting_date'] = today
         
         st.markdown("### Preview (Cleaned)")
         st.dataframe(df_mapped.head(5), use_container_width=True)
