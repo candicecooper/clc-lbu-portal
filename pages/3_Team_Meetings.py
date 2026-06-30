@@ -1775,7 +1775,7 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
                         mtg_facilitator = mtg.get('facilitator', '')
                         mtg_id = mtg.get('id', '')
                         
-                        col1, col2, col3 = st.columns([3, 1, 1])
+                        col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
                         
                         with col1:
                             if st.button(f"📦 {mtg_date} — {mtg_facilitator}", key=f"load_archived_{mtg_id}", use_container_width=True):
@@ -1783,7 +1783,13 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
                                 st.rerun()
                         
                         with col2:
-                            if st.button("📄 Minutes", key=f"minutes_archived_{mtg_id}", use_container_width=True):
+                            if st.button("🔧 Edit", key=f"edit_archived_{mtg_id}", use_container_width=True):
+                                st.session_state.current_meeting_id = mtg_id
+                                st.session_state.meeting_loaded = True
+                                st.info("✅ Meeting loaded - scroll up to edit all fields")
+                        
+                        with col3:
+                            if st.button("📥 Download", key=f"dl_archived_{mtg_id}", use_container_width=True):
                                 # Generate Word document
                                 doc = generate_minutes_docx(
                                     program=program,
@@ -1795,7 +1801,7 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
                                     transcript=mtg.get('transcript', '')
                                 )
                                 
-                                # Save to bytes for download
+                                # Save to bytes
                                 doc_bytes = io.BytesIO()
                                 doc.save(doc_bytes)
                                 doc_bytes.seek(0)
@@ -1805,9 +1811,21 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
                                     data=doc_bytes,
                                     file_name=f"Minutes_{mtg_date}_{mtg_facilitator}_{program}.docx",
                                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                    key=f"dl_minutes_arch_{mtg_id}",
+                                    key=f"dl_minutes_archived_{mtg_id}",
                                     use_container_width=True
                                 )
+                        
+                        with col4:
+                            if st.button("🗑️ Delete", key=f"delete_archived_{mtg_id}", use_container_width=True):
+                                if st.session_state.get(f"confirm_delete_arch_{mtg_id}", False):
+                                    try:
+                                        supabase.table('team_meetings').delete().eq('id', mtg_id).execute()
+                                        st.success(f"🗑️ {mtg_facilitator} deleted")
+                                    except Exception as e:
+                                        st.error(f"Error deleting: {e}")
+                                else:
+                                    st.session_state[f"confirm_delete_arch_{mtg_id}"] = True
+                                    st.warning(f"⚠️ Click again to confirm delete")
                         
                         with col3:
                             if st.button("🔄 Restore", key=f"restore_archived_{mtg_id}", use_container_width=True):
@@ -1833,6 +1851,11 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
                 if result.data:
                     meeting_data = result.data[0]
                     st.info(f"✅ Editing: {meeting_data.get('meeting_date', '')} — {meeting_data.get('facilitator', '')}", icon="✅")
+                    
+                    # Load extracted notes into session state for editing
+                    if meeting_data.get('extracted_notes'):
+                        st.session_state[f"adhoc_extracted_{program}"] = meeting_data.get('extracted_notes', '')
+                        st.session_state[f"adhoc_extracted_edited_{program}"] = meeting_data.get('extracted_notes', '')
             except Exception as e:
                 st.error(f"Error loading meeting: {e}")
         
@@ -1959,31 +1982,57 @@ The AI extraction is optional!
             st.markdown("#### 📊 Extracted Content")
             st.markdown(st.session_state[f"adhoc_extracted_{program}"])
             
-            # INSTANT DOWNLOAD BUTTON
-            if st.button("📥 Download as Word (Right Now!)", key=f"instant_download_{program}", type="primary", use_container_width=True):
-                # Create Word document with extracted content
-                doc = generate_minutes_docx(
-                    program=program,
-                    meeting_date=adhoc_date,
-                    facilitator=adhoc_facilitator,
-                    attendees=adhoc_attendees,
-                    extracted_notes=st.session_state[f"adhoc_extracted_{program}"],
-                    summary_notes="",
-                    transcript=adhoc_transcript
-                )
-                
-                # Save to bytes
-                doc_bytes = io.BytesIO()
-                doc.save(doc_bytes)
-                doc_bytes.seek(0)
-                
-                st.download_button(
-                    label="💾 Click Here to Download",
-                    data=doc_bytes,
-                    file_name=f"Minutes_{adhoc_date}_{adhoc_facilitator}_{program}.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    key=f"instant_dl_button_{program}"
-                )
+            st.markdown("---")
+            st.markdown("#### ✏️ Edit Minutes Before Saving")
+            st.caption("Refine the extracted content below - your edits will be saved")
+            
+            # Editable text area for extracted content
+            edited_minutes = st.text_area(
+                "Edit extracted minutes:",
+                value=st.session_state[f"adhoc_extracted_{program}"],
+                height=250,
+                key=f"edited_minutes_{program}",
+                label_visibility="collapsed"
+            )
+            
+            # Store the edited version in session state
+            st.session_state[f"adhoc_extracted_edited_{program}"] = edited_minutes
+            
+            st.info("💡 Edit the minutes above, then click [💾 Save] below to save your changes")
+            
+            st.markdown("---")
+            
+            # INSTANT DOWNLOAD BUTTON (with edited content)
+            col_inst1, col_inst2 = st.columns([1, 3])
+            
+            with col_inst1:
+                if st.button("📥 Download Now (Right Now!)", key=f"instant_download_{program}", type="primary", use_container_width=True):
+                    # Create Word document with EDITED extracted content
+                    doc = generate_minutes_docx(
+                        program=program,
+                        meeting_date=adhoc_date,
+                        facilitator=adhoc_facilitator,
+                        attendees=adhoc_attendees,
+                        extracted_notes=edited_minutes,  # Use the edited version
+                        summary_notes="",
+                        transcript=adhoc_transcript
+                    )
+                    
+                    # Save to bytes
+                    doc_bytes = io.BytesIO()
+                    doc.save(doc_bytes)
+                    doc_bytes.seek(0)
+                    
+                    st.download_button(
+                        label="💾 Click Here to Download",
+                        data=doc_bytes,
+                        file_name=f"Minutes_{adhoc_date}_{adhoc_facilitator}_{program}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key=f"instant_dl_button_{program}"
+                    )
+            
+            with col_inst2:
+                st.caption("💡 Download with your edits (no need to save first)")
             
             st.markdown("---")
         
@@ -2021,6 +2070,7 @@ The AI extraction is optional!
                             'attendees': adhoc_attendees or '',
                             'transcript': adhoc_transcript,
                             'summary_notes': adhoc_notes,
+                            'extracted_notes': st.session_state.get(f"adhoc_extracted_edited_{program}", ''),
                         }
                         
                         if st.session_state.current_meeting_id:
