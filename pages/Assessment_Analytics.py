@@ -47,8 +47,46 @@ st.markdown("""
         color: #ffd93d !important;
     }
     
-    p, span, label {
-        color: #e8e8e8 !important;
+    /* General text - brightened for readability */
+    p, span, label, li, div {
+        color: #f5f7fa !important;
+    }
+
+    /* Markdown body text */
+    [data-testid="stMarkdownContainer"] p,
+    [data-testid="stMarkdownContainer"] li,
+    [data-testid="stMarkdownContainer"] span {
+        color: #f5f7fa !important;
+    }
+
+    /* Radio buttons (View Type selector) */
+    [data-testid="stRadio"] label,
+    [data-testid="stRadio"] label p,
+    .stRadio label {
+        color: #ffffff !important;
+    }
+
+    /* Selectbox label + selected value + dropdown options */
+    .stSelectbox label,
+    [data-baseweb="select"] div,
+    [data-baseweb="select"] span,
+    [data-baseweb="popover"] li,
+    [role="option"] {
+        color: #ffffff !important;
+    }
+
+    /* Tab labels */
+    [data-baseweb="tab"] {
+        color: #ffffff !important;
+    }
+    [data-baseweb="tab"] p {
+        color: #ffffff !important;
+    }
+
+    /* Number / text input values */
+    .stNumberInput input,
+    .stTextInput input {
+        color: #ffffff !important;
     }
     
     [data-testid="metric-container"] {
@@ -56,6 +94,16 @@ st.markdown("""
         border: 1px solid rgba(0, 229, 255, 0.4) !important;
         border-left: 5px solid rgba(0, 229, 255, 0.9) !important;
         border-radius: 12px !important;
+    }
+
+    /* Metric label + value text - brightened */
+    [data-testid="stMetricLabel"],
+    [data-testid="stMetricLabel"] p,
+    [data-testid="stMetricLabel"] div {
+        color: #f5f7fa !important;
+    }
+    [data-testid="stMetricValue"] {
+        color: #ffffff !important;
     }
     
     .stInfo {
@@ -215,6 +263,95 @@ def collate_by_program(assessments, program, term, year):
         'record_count': len(filtered)
     }
 
+def collate_all_programs(assessments, term, year):
+    """
+    Collate assessment data across ALL programs (JP + PY + SY) for a term/year.
+    Returns one combined set of totals - the sum of every staff entry across
+    every program for the selected term and year.
+    """
+    if not assessments:
+        return None
+
+    # Filter by term and year only (all programs)
+    filtered = [
+        a for a in assessments
+        if a['term'] == int(term) and a['year'] == int(year)
+    ]
+
+    if not filtered:
+        return None
+
+    sounds_write_collated = {}
+    for skill in SOUNDS_WRITE_SKILLS:
+        sounds_write_collated[skill] = {
+            'Mastered': 0,
+            'Developing': 0,
+            'Requires Development': 0
+        }
+
+    word_aware_collated = {}
+    for skill in WORD_AWARE_SKILLS:
+        word_aware_collated[skill] = {
+            'Mastered': 0,
+            'Developing': 0,
+            'Requires Development': 0
+        }
+
+    smartar_collated = {}
+    for cap in SMARTAR_CAPABILITIES:
+        smartar_collated[cap] = {
+            'Reached Expected': 0,
+            'Above Expectation': 0,
+            'Exceeding': 0
+        }
+
+    programs_present = set()
+
+    for assessment in filtered:
+        if assessment.get('program'):
+            programs_present.add(assessment['program'])
+
+        # Sum Sounds Write
+        try:
+            sw_data = json.loads(assessment.get('sounds_write_data', '{}'))
+            for skill, levels in sw_data.items():
+                if skill in sounds_write_collated:
+                    for level, count in levels.items():
+                        if level in sounds_write_collated[skill]:
+                            sounds_write_collated[skill][level] += int(count)
+        except:
+            pass
+
+        # Sum Word Aware
+        try:
+            wa_data = json.loads(assessment.get('word_aware_data', '{}'))
+            for skill, levels in wa_data.items():
+                if skill in word_aware_collated:
+                    for level, count in levels.items():
+                        if level in word_aware_collated[skill]:
+                            word_aware_collated[skill][level] += int(count)
+        except:
+            pass
+
+        # Sum SMARTAR tallies (ignores any old-format goal records gracefully)
+        try:
+            smartar_data = json.loads(assessment.get('smartar_goals', '{}'))
+            for cap, levels in smartar_data.items():
+                if cap in smartar_collated and isinstance(levels, dict):
+                    for level in SMARTAR_LEVELS:
+                        smartar_collated[cap][level] += int(levels.get(level, 0))
+        except:
+            pass
+
+    return {
+        'sounds_write': sounds_write_collated,
+        'word_aware': word_aware_collated,
+        'smartar': smartar_collated,
+        'staff_count': len(filtered),
+        'record_count': len(filtered),
+        'programs_present': sorted(programs_present)
+    }
+
 # ============================================================================
 # RENDER FUNCTIONS
 # ============================================================================
@@ -348,7 +485,7 @@ def main():
     # Main view selector
     view_type = st.radio(
         "📋 View Type",
-        ["📊 Single Program View", "🎓 Term Overview", "🔍 Detailed Analysis"],
+        ["📊 Single Program View", "🎓 Term Overview", "🏫 Whole-Site Totals", "🔍 Detailed Analysis"],
         horizontal=True
     )
     
@@ -499,6 +636,78 @@ def main():
                     col3.metric(f"{program} Exceed", int(df_smartar['Exceeding'].sum()), label_visibility="collapsed")
                 else:
                     st.info(f"No data for {program}")
+    
+    # ========================================================================
+    # WHOLE-SITE TOTALS - JP + PY + SY combined into one set of totals
+    # ========================================================================
+    
+    elif view_type == "🏫 Whole-Site Totals":
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            term = st.selectbox("📅 Term", ['1', '2', '3', '4'], key="ws_term")
+        with col2:
+            year = st.selectbox("📆 Year", ['2025', '2026'], key="ws_year")
+        
+        st.markdown("---")
+        
+        collated = collate_all_programs(all_assessments, term, year)
+        
+        if not collated:
+            st.warning(f"No data found for any program in Term {term} {year}")
+            return
+        
+        programs_present = collated.get('programs_present', [])
+        
+        # Info row
+        col1, col2, col3 = st.columns(3)
+        col1.metric("📋 Total Staff Entries", collated['staff_count'])
+        col2.metric("🎓 Programs Included", ", ".join(programs_present) if programs_present else "—")
+        col3.metric("📅 Selected", f"All T{term} {year}")
+        
+        st.markdown("---")
+        st.markdown(f"## Whole-Site Totals — Term {term} {year} (JP + PY + SY combined)")
+        
+        # Sounds Write
+        fig_sw, df_sw = render_sounds_write_chart(collated, "All Programs")
+        st.plotly_chart(fig_sw, use_container_width=True)
+        
+        col1, col2, col3 = st.columns(3)
+        col1.metric("✅ Sounds Write Mastered", int(df_sw['Mastered'].sum()))
+        col2.metric("🔄 Sounds Write Developing", int(df_sw['Developing'].sum()))
+        col3.metric("⚠️ Sounds Write Requires Dev", int(df_sw['Requires Dev'].sum()))
+        
+        st.markdown("---")
+        
+        # Word Aware
+        fig_wa, df_wa = render_word_aware_chart(collated, "All Programs")
+        st.plotly_chart(fig_wa, use_container_width=True)
+        
+        col1, col2, col3 = st.columns(3)
+        col1.metric("✅ Word Aware Mastered", int(df_wa['Mastered'].sum()))
+        col2.metric("🔄 Word Aware Developing", int(df_wa['Developing'].sum()))
+        col3.metric("⚠️ Word Aware Requires Dev", int(df_wa['Requires Dev'].sum()))
+        
+        st.markdown("---")
+        
+        # SMARTAR
+        fig_smartar, df_smartar = render_smartar_chart(collated, "All Programs")
+        st.plotly_chart(fig_smartar, use_container_width=True)
+        
+        col1, col2, col3 = st.columns(3)
+        col1.metric("✅ Reached Expected", int(df_smartar['Reached Expected'].sum()))
+        col2.metric("⬆️ Above Expectation", int(df_smartar['Above Expectation'].sum()))
+        col3.metric("🌟 Exceeding", int(df_smartar['Exceeding'].sum()))
+        
+        # Combined data tables
+        st.markdown("---")
+        st.markdown("### 📋 Combined Data Tables")
+        st.markdown("#### 🎵 Sounds Write")
+        st.dataframe(df_sw, use_container_width=True)
+        st.markdown("#### 💬 Word Aware")
+        st.dataframe(df_wa, use_container_width=True)
+        st.markdown("#### 🎯 SMARTAR Goal Outcomes")
+        st.dataframe(df_smartar, use_container_width=True)
     
     # ========================================================================
     # DETAILED ANALYSIS - Tabs for deep dive
