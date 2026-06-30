@@ -2101,7 +2101,6 @@ Program: {program}
 Date: {adhoc_date}
 Facilitator: {adhoc_facilitator}
 Attendees: {adhoc_attendees}
-Student(s): {adhoc_student}
 Meeting ID: {st.session_state.current_meeting_id}
 
 TRANSCRIPT / NOTES
@@ -2118,7 +2117,7 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
                 st.download_button(
                     label="📥 Download",
                     data=meeting_text,
-                    file_name=f"AdHoc_{adhoc_date}_{adhoc_student}.txt",
+                    file_name=f"AdHoc_{adhoc_date}_{adhoc_facilitator}.txt",
                     mime="text/plain",
                     key=f"dl_adhoc_{program}"
                 )
