@@ -3,34 +3,33 @@
 ============================================
 Student Communication Register / Log.
 
-Privacy model (unchanged):
-  * Supabase (operational project) stores INITIALS ONLY plus the communication
-    details. FULL NAMES are never written to the comm-log database.
-  * Full names are merged in only at export time, from a roster you upload.
+Privacy model:
+  * student_communications stores INITIALS ONLY + the communication details.
+  * Full names are merged in at export from an uploaded roster.
+  * Attachments (images / PDFs) live in a PRIVATE Supabase Storage bucket and
+    are inherently identifying — a deliberate, optional step beyond the
+    initials-only rule. Viewed via short-lived signed URLs, never public.
 
-NEW in this version
--------------------
-1. Student dropdown is pulled LIVE from the SMARTAR Goal Builder.
-   SMARTAR lives in a SEPARATE Supabase project (the nested [supabase] /
-   BEHAVIOUR_SUPABASE secrets), table `smartar_students`, stored BY NAME.
-   The name is shown so you can pick the student, but only the INITIALS are
-   stored in the comm log. If the SMARTAR connection isn't available the page
-   falls back to existing students + manual add (see "SMARTAR connection
-   status" expander on the Log tab).
+Features
+--------
+1. Student dropdown pulled live from the SMARTAR Goal Builder (separate Supabase
+   project; stored by name, stored here as initials only).
+2. Archive tab — archive a student after confirming the record was downloaded,
+   printed, and digitally archived.
+3. Attachments — attach & label image(s)/PDF(s) to any entry.
 
-2. Archive tab: archive a student only after ticking three confirmations —
-   record downloaded, printed, and digitally archived. Archived students drop
-   off the active lists (their records are kept). Unarchive is available.
-
-Tables needed (operational project):
+Setup in the OPERATIONAL Supabase project (SQL at bottom of this file):
   * student_communications   (already created)
-  * student_comm_archive     (NEW — run the SQL at the bottom of this file)
+  * student_comm_archive     (created earlier)
+  * comm_attachments         (NEW)
+  * a PRIVATE Storage bucket named 'comm-attachments' + the storage policies.
 
 Requirements: streamlit, supabase, pandas, openpyxl, reportlab
 """
 
 import io
 import re
+import uuid
 from datetime import datetime, date, time, timezone
 
 import streamlit as st
@@ -42,8 +41,19 @@ from supabase import create_client
 # ----------------------------------------------------------------------------
 TABLE_NAME = "student_communications"
 ARCHIVE_TABLE = "student_comm_archive"
+ATTACH_TABLE = "comm_attachments"
+BUCKET = "comm-attachments"
+ALLOWED_EXT = ["png", "jpg", "jpeg", "gif", "webp", "pdf"]
 
-# SMARTAR Goal Builder (separate Supabase project) -- adjust here if needed
+ATTACH_WARNING = (
+    "⚠️ **Don't attach anything containing personal information or photos of students** "
+    "(signed forms showing names, medical details, images of children). Upload those to "
+    "**EMS** and reference them in the log summary instead — e.g. *“Signed consent uploaded "
+    "to EMS”*. Attachments here are for non-identifying material only."
+)
+ATTACH_ACK = ("I confirm this file contains no student personal information or photos — "
+              "anything identifying has gone to EMS.")
+
 SMARTAR_TABLE = "smartar_students"
 SMARTAR_NAME_COLS = ["student_name", "name", "full_name", "student"]
 
@@ -53,7 +63,6 @@ DIRECTIONS = ["Received", "Given"]
 CONTACT_ROLES = ["", "Parent / Carer", "Family member", "Agency / DCP",
                  "Health", "School / Education", "Legal", "Other"]
 
-# Optional PDF support
 try:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4, landscape
@@ -80,7 +89,6 @@ def _get_secret(*names):
 
 @st.cache_resource(show_spinner=False)
 def get_client():
-    """Operational project — holds student_communications + student_comm_archive."""
     url = _get_secret("SUPABASE_URL", "supabase_url")
     key = _get_secret("SUPABASE_KEY", "SUPABASE_ANON_KEY", "SUPABASE_SERVICE_KEY",
                       "supabase_key", "supabase_anon_key")
@@ -94,8 +102,6 @@ def get_client():
 
 
 def get_smartar_client():
-    """SMARTAR project (separate). Created fresh each run (no caching) to avoid
-    the stale-connection issues seen previously. Returns client or None."""
     url = key = None
     try:
         sec = st.secrets
@@ -157,7 +163,139 @@ def update_record(client, rec_id, payload):
 
 
 def delete_record(client, rec_id):
+    # remove any attached files from storage first (rows cascade-delete)
+    try:
+        paths = [a["storage_path"] for a in get_attachments(client, rec_id)]
+        if paths:
+            try:
+                client.storage.from_(BUCKET).remove(paths)
+            except Exception:
+                pass
+    except Exception:
+        pass
     return client.table(TABLE_NAME).delete().eq("id", rec_id).execute()
+
+
+# ----------------------------------------------------------------------------
+# ATTACHMENTS
+# ----------------------------------------------------------------------------
+def _safe_name(name):
+    return re.sub(r"[^A-Za-z0-9._-]", "_", name or "file")
+
+
+def get_attachments(client, comm_id):
+    try:
+        res = (client.table(ATTACH_TABLE).select("*").eq("comm_id", comm_id)
+               .order("uploaded_at").execute())
+        return res.data or []
+    except Exception:
+        return []
+
+
+def get_attachment_counts(client, comm_ids):
+    if not comm_ids:
+        return {}
+    try:
+        res = client.table(ATTACH_TABLE).select("comm_id").in_("comm_id", comm_ids).execute()
+        d = {}
+        for r in (res.data or []):
+            d[r["comm_id"]] = d.get(r["comm_id"], 0) + 1
+        return d
+    except Exception:
+        return {}
+
+
+def get_attachment_labels(client, comm_ids):
+    if not comm_ids:
+        return {}
+    try:
+        res = (client.table(ATTACH_TABLE).select("comm_id,label,file_name")
+               .in_("comm_id", comm_ids).execute())
+        d = {}
+        for a in (res.data or []):
+            lab = a.get("label") or a.get("file_name") or "attachment"
+            d.setdefault(a["comm_id"], []).append(lab)
+        return {k: "; ".join(v) for k, v in d.items()}
+    except Exception:
+        return {}
+
+
+def upload_attachment(client, comm_id, uploaded_file, label):
+    try:
+        data = uploaded_file.getvalue()
+        path = f"{comm_id}/{uuid.uuid4().hex}_{_safe_name(uploaded_file.name)}"
+        mime = uploaded_file.type or "application/octet-stream"
+        client.storage.from_(BUCKET).upload(path, data, {"content-type": mime})
+        client.table(ATTACH_TABLE).insert({
+            "comm_id": comm_id, "storage_path": path,
+            "file_name": uploaded_file.name, "label": label or None, "mime_type": mime,
+        }).execute()
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
+def signed_url(client, path, expires=3600):
+    try:
+        res = client.storage.from_(BUCKET).create_signed_url(path, expires)
+        if isinstance(res, dict):
+            return res.get("signedURL") or res.get("signedUrl") or res.get("signed_url")
+        return None
+    except Exception:
+        return None
+
+
+def delete_attachment(client, att):
+    try:
+        client.storage.from_(BUCKET).remove([att["storage_path"]])
+    except Exception:
+        pass
+    try:
+        client.table(ATTACH_TABLE).delete().eq("id", att["id"]).execute()
+    except Exception:
+        pass
+
+
+def render_attachments(client, comm_id, key_prefix):
+    """Show existing attachments + an uploader to add more, for one record."""
+    atts = get_attachments(client, comm_id)
+    if atts:
+        st.markdown("**Attachments**")
+        for a in atts:
+            url = signed_url(client, a["storage_path"])
+            label = a.get("label") or a.get("file_name") or "attachment"
+            is_img = (a.get("mime_type") or "").startswith("image/")
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                if is_img and url:
+                    st.image(url, caption=label, width=240)
+                elif url:
+                    st.markdown(f"📄 **{label}** — [{a.get('file_name')}]({url})")
+                else:
+                    st.write(f"📎 {label} (preview unavailable)")
+            with col2:
+                if st.button("Remove", key=f"{key_prefix}_del_{a['id']}"):
+                    delete_attachment(client, a)
+                    st.rerun()
+
+    st.warning(ATTACH_WARNING)
+    add_files = st.file_uploader("Add image(s) / PDF(s) to this record",
+                                 type=ALLOWED_EXT, accept_multiple_files=True,
+                                 key=f"{key_prefix}_add")
+    add_label = st.text_input("Label for the above (optional)", key=f"{key_prefix}_lbl",
+                              placeholder="e.g. Newsletter or info sheet")
+    add_ack = st.checkbox(ATTACH_ACK, key=f"{key_prefix}_ack") if add_files else False
+    if st.button("Upload", key=f"{key_prefix}_up", disabled=not (add_files and add_ack)):
+        errs = []
+        for f in add_files:
+            ok, err = upload_attachment(client, comm_id, f, add_label)
+            if not ok:
+                errs.append(f"{f.name}: {err}")
+        if errs:
+            st.error("Some uploads failed:\n" + "\n".join(errs))
+        else:
+            st.success("Uploaded.")
+            st.rerun()
 
 
 # ----------------------------------------------------------------------------
@@ -168,7 +306,7 @@ def get_archived_codes(client):
         res = client.table(ARCHIVE_TABLE).select("student_initials").eq("archived", True).execute()
         return [r["student_initials"] for r in (res.data or [])]
     except Exception:
-        return []  # table may not exist yet -> behaves as "none archived"
+        return []
 
 
 def get_archive_rows(client):
@@ -182,17 +320,11 @@ def get_archive_rows(client):
 
 def archive_student(client, code, by):
     now = datetime.now(timezone.utc).isoformat()
-    payload = {
-        "student_initials": code,
-        "archived": True,
-        "record_downloaded": True,
-        "record_printed": True,
-        "record_digitally_archived": True,
-        "archived_at": now,
-        "archived_by": by or None,
-        "updated_at": now,
-    }
-    return client.table(ARCHIVE_TABLE).upsert(payload, on_conflict="student_initials").execute()
+    return client.table(ARCHIVE_TABLE).upsert({
+        "student_initials": code, "archived": True, "record_downloaded": True,
+        "record_printed": True, "record_digitally_archived": True,
+        "archived_at": now, "archived_by": by or None, "updated_at": now,
+    }, on_conflict="student_initials").execute()
 
 
 def unarchive_student(client, code):
@@ -210,8 +342,6 @@ def initials_from_name(name):
 
 
 def fetch_smartar_names(sb):
-    """Return (names list, error str). Active students only (excludes
-    placement_ended / archived if those columns exist)."""
     if sb is None:
         return [], "not connected"
     try:
@@ -235,26 +365,13 @@ def fetch_smartar_names(sb):
 
 
 def build_active_students(op_client, smartar_client):
-    """Return (options, status) where options is a list of (label, code) for the
-    student pickers, excluding archived students. SMARTAR names show as
-    'Name — CODE'; comm-only students show as their code."""
     archived = set(get_archived_codes(op_client))
     comm_codes = set(get_codes(op_client))
-
     smartar_names, err = fetch_smartar_names(smartar_client)
-    status = {
-        "connected": smartar_client is not None and err in (None,),
-        "count": len(smartar_names),
-        "error": None if err in (None,) else err,
-    }
-    if smartar_client is None:
-        status["connected"] = False
+    status = {"connected": smartar_client is not None and err is None,
+              "count": len(smartar_names), "error": err}
 
-    options = []
-    seen_codes = set()
-
-    # SMARTAR students -> deterministic code with collision numbering
-    base_seen = {}
+    options, seen_codes, base_seen = [], set(), {}
     for nm in smartar_names:
         base = initials_from_name(nm)
         if not base:
@@ -265,14 +382,11 @@ def build_active_students(op_client, smartar_client):
             continue
         options.append((f"{nm} — {code}", code))
         seen_codes.add(code)
-
-    # comm-log-only students not already represented
     for c in sorted(comm_codes):
         if c in archived or c in seen_codes:
             continue
         options.append((c, c))
         seen_codes.add(c)
-
     options.sort(key=lambda x: x[0].lower())
     return options, status
 
@@ -289,7 +403,7 @@ def suggest_code(base, existing):
 
 
 # ----------------------------------------------------------------------------
-# EXPORT / ROSTER (unchanged)
+# EXPORT / ROSTER
 # ----------------------------------------------------------------------------
 def parse_roster(uploaded_file):
     try:
@@ -306,9 +420,8 @@ def parse_roster(uploaded_file):
                      if "initial" in k or k == "code" or "student code" in k or k == "id"), None)
     name_col = next((o for k, o in cols.items() if "name" in k), None)
     if code_col is None or name_col is None:
-        return None, ("Couldn't find the right columns. The roster needs a code/initials "
-                      "column (header containing 'Initials' or 'Code') and a full name "
-                      "column (header containing 'Name').")
+        return None, ("Roster needs a code/initials column (header containing 'Initials' "
+                      "or 'Code') and a full name column (header containing 'Name').")
     mapping = {}
     for _, row in df.iterrows():
         code = str(row[code_col]).strip().upper()
@@ -319,17 +432,15 @@ def parse_roster(uploaded_file):
 
 
 def resolve_name(code, roster):
-    if not roster:
-        return None
-    return roster.get((code or "").strip().upper())
+    return roster.get((code or "").strip().upper()) if roster else None
 
 
-def records_to_rows(records, roster=None):
+def records_to_rows(records, roster=None, att_map=None):
     rows = []
     for r in records:
         code = r.get("student_initials", "")
         full = resolve_name(code, roster)
-        rows.append({
+        row = {
             "id": r.get("id"),
             "Full name": full if full else ("" if roster else None),
             "Code": code,
@@ -341,11 +452,14 @@ def records_to_rows(records, roster=None):
             "Role": r.get("contact_role") or "",
             "Summary": r.get("summary", ""),
             "Recorded by": r.get("recorded_by") or "",
-        })
+        }
+        if att_map is not None:
+            row["Attachments"] = att_map.get(r.get("id"), "")
+        rows.append(row)
     return rows
 
 
-def build_excel(rows, roster_used):
+def build_excel(rows, roster_used, with_attachments=False):
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
@@ -354,6 +468,8 @@ def build_excel(rows, roster_used):
     ws.title = "Communication Log"
     headers = (["Full name", "Code"] if roster_used else ["Code"]) + \
               ["Date", "Time", "Direction", "Type", "Who", "Role", "Summary", "Recorded by"]
+    if with_attachments:
+        headers.append("Attachments")
     header_fill = PatternFill("solid", fgColor="1F4E5F")
     header_font = Font(bold=True, color="FFFFFF")
     thin = Side(style="thin", color="D0D0D0")
@@ -367,10 +483,11 @@ def build_excel(rows, roster_used):
     for i, row in enumerate(rows, start=2):
         for c, h in enumerate(headers, start=1):
             cell = ws.cell(row=i, column=c, value=row.get(h, ""))
-            cell.alignment = Alignment(vertical="top", wrap_text=(h == "Summary"))
+            cell.alignment = Alignment(vertical="top", wrap_text=(h in ("Summary", "Attachments")))
             cell.border = border
     widths = {"Full name": 26, "Code": 8, "Date": 12, "Time": 8, "Direction": 11,
-              "Type": 14, "Who": 22, "Role": 16, "Summary": 60, "Recorded by": 14}
+              "Type": 14, "Who": 22, "Role": 16, "Summary": 60, "Recorded by": 14,
+              "Attachments": 30}
     for c, h in enumerate(headers, start=1):
         ws.column_dimensions[get_column_letter(c)].width = widths.get(h, 14)
     ws.freeze_panes = "A2"
@@ -428,15 +545,19 @@ def build_pdf(rows, roster_used, scope_label):
     return buf
 
 
-def build_print_html(rows, roster_used, scope_label):
+def build_print_html(rows, roster_used, scope_label, with_attachments=False):
     head_cells = (["Student"] if roster_used else ["Code"]) + \
                  ["Date", "Time", "Direction", "Type", "Who", "Summary"]
+    if with_attachments:
+        head_cells.append("Attachments")
     thead = "".join(f"<th>{h}</th>" for h in head_cells)
     body = ""
     for r in rows:
         student = (r.get("Full name") or r.get("Code")) if roster_used else r.get("Code")
         cells = [student, r.get("Date", ""), r.get("Time", ""), r.get("Direction", ""),
                  r.get("Type", ""), r.get("Who", ""), r.get("Summary", "")]
+        if with_attachments:
+            cells.append(r.get("Attachments", ""))
         body += "<tr>" + "".join(
             f"<td>{(str(c) if c is not None else '').replace(chr(10),'<br>')}</td>"
             for c in cells) + "</tr>"
@@ -461,7 +582,7 @@ def build_print_html(rows, roster_used, scope_label):
 st.set_page_config(page_title="Communication Log", page_icon="📞", layout="wide")
 st.title("📞 Communication Log")
 st.caption("A chronicle of every communication and document — in or out — for each student. "
-           "Supabase holds **initials only**; full names are merged in at export and never stored.")
+           "Supabase holds **initials only**; full names are merged in at export.")
 
 client = get_client()
 if client is None:
@@ -474,19 +595,25 @@ code_to_label = {}
 for lbl, code in active_options:
     code_to_label.setdefault(code, lbl)
 
+if "up_seed" not in st.session_state:
+    st.session_state.up_seed = 0
+
 tab_log, tab_view, tab_export, tab_archive = st.tabs(
     ["➕ Log a communication", "📋 View / edit", "⬇️ Export & print", "🗄️ Archive"])
 
 # ---- TAB 1: LOG ------------------------------------------------------------
 with tab_log:
     st.subheader("Log a communication")
-
+    _ok = st.session_state.pop("flash_ok", None)
+    if _ok:
+        st.success(_ok)
+    _wn = st.session_state.pop("flash_warn", None)
+    if _wn:
+        st.warning(_wn)
     with st.expander("SMARTAR connection status", expanded=False):
         if not smartar_status["connected"]:
             st.write("⚠️ Not reading from SMARTAR — using existing students + manual add. "
                      f"Detail: `{smartar_status['error'] or 'no SMARTAR secrets found'}`")
-            st.caption("This page expects the SMARTAR project under the nested [supabase] "
-                       "secret or BEHAVIOUR_SUPABASE_URL / _KEY.")
         else:
             st.write(f"✅ Pulled **{smartar_status['count']}** student(s) from `{SMARTAR_TABLE}`.")
 
@@ -529,14 +656,27 @@ with tab_log:
                            placeholder="e.g. Permission given over the phone for the Adelaide Zoo excursion on 14 Aug.")
     recorded_by = st.text_input("Recorded by (optional)", placeholder="Your initials")
 
+    st.markdown("**Attachments (optional)**")
+    st.warning(ATTACH_WARNING)
+    new_files = st.file_uploader("Attach image(s) / PDF(s)", type=ALLOWED_EXT,
+                                 accept_multiple_files=True,
+                                 key=f"log_files_{st.session_state.up_seed}")
+    new_label = st.text_input("Label for the attachment(s) (optional)",
+                              key=f"log_label_{st.session_state.up_seed}",
+                              placeholder="e.g. Newsletter or info sheet")
+    new_ack = st.checkbox(ATTACH_ACK, key=f"log_ack_{st.session_state.up_seed}") if new_files else False
+
     if st.button("💾 Save communication", type="primary"):
         if not student_code:
             st.error("Please choose or add a student.")
         elif not summary.strip():
             st.error("Please add a summary.")
+        elif new_files and not new_ack:
+            st.error("Tick the confirmation under Attachments to upload these file(s) — "
+                     "or remove them to save without attachments.")
         else:
             try:
-                insert_record(client, {
+                res = insert_record(client, {
                     "student_initials": student_code.strip().upper(),
                     "comm_date": comm_date.isoformat(),
                     "comm_time": comm_time.strftime("%H:%M") if include_time and comm_time else None,
@@ -546,7 +686,26 @@ with tab_log:
                     "summary": summary.strip(),
                     "recorded_by": recorded_by.strip() or None,
                 })
-                st.success(f"Logged for {student_code.strip().upper()}.")
+                new_id = res.data[0]["id"] if res.data else None
+                att_errors = []
+                if new_id and new_files:
+                    for f in new_files:
+                        ok, err = upload_attachment(client, new_id, f, new_label)
+                        if not ok:
+                            att_errors.append(f"{f.name}: {err}")
+                # read the record back to confirm it truly persisted
+                code_up = student_code.strip().upper()
+                saved_count = len(fetch_records(client, code=code_up))
+                st.session_state["flash_ok"] = (
+                    f"✅ Saved & verified — **{code_up}** now has **{saved_count}** logged "
+                    f"communication(s). Open the **📋 View / edit** tab to see them."
+                )
+                if att_errors:
+                    st.session_state["flash_warn"] = (
+                        "Record saved, but attachment(s) failed (is the 'comm-attachments' "
+                        "bucket + table set up?):\n" + "\n".join(att_errors)
+                    )
+                st.session_state.up_seed += 1
                 st.cache_resource.clear()
                 st.rerun()
             except Exception as e:
@@ -555,6 +714,12 @@ with tab_log:
 # ---- TAB 2: VIEW / EDIT ----------------------------------------------------
 with tab_view:
     st.subheader("View / edit log")
+    try:
+        _total = len(fetch_records(client))
+        st.caption(f"📁 {_total} communication(s) saved in total. This is the live record — "
+                   "every saved entry is stored in Supabase and listed below.")
+    except Exception:
+        pass
     archived = set(get_archived_codes(client))
     record_codes = get_codes(client)
     fc1, fc2, fc3 = st.columns([1.2, 1, 1])
@@ -579,18 +744,23 @@ with tab_view:
     if not records:
         st.info("No communications match this filter yet.")
     else:
-        df = pd.DataFrame(records_to_rows(records)).drop(columns=["id", "Full name"], errors="ignore")
+        counts = get_attachment_counts(client, [r["id"] for r in records])
+        df = pd.DataFrame(records_to_rows(records)).drop(columns=["Full name"], errors="ignore")
+        df["📎"] = [counts.get(r["id"], 0) for r in records]
+        df = df.drop(columns=["id"], errors="ignore")
         st.dataframe(df, use_container_width=True, hide_index=True)
-        st.caption(f"{len(records)} record(s). Full names appear only in the Export tab.")
+        st.caption(f"{len(records)} record(s). 📎 = attachments. Full names appear only in Export.")
 
-        st.markdown("##### Edit or delete a record")
+        st.markdown("##### Edit a record / manage its attachments")
         def _label(r):
             return f"{r.get('comm_date','')} · {r.get('student_initials','')} · " \
                    f"{r.get('comm_type','')} · {(r.get('summary','') or '')[:50]}"
         idx = st.selectbox("Select a record", list(range(len(records))),
                            format_func=lambda i: _label(records[i]), key="edit_pick")
         rec = records[idx]
-        with st.expander("Edit this record", expanded=False):
+        with st.expander("Open record", expanded=True):
+            render_attachments(client, rec["id"], key_prefix=f"att_{rec['id']}")
+            st.divider()
             e1, e2, e3 = st.columns(3)
             with e1:
                 e_date = st.date_input("Date", value=date.fromisoformat(rec["comm_date"]), key="e_date")
@@ -631,7 +801,7 @@ with tab_view:
                 except Exception as e:
                     st.error(f"Could not update: {e}")
             st.divider()
-            confirm = st.checkbox("Confirm I want to delete this record", key="del_confirm")
+            confirm = st.checkbox("Confirm I want to delete this record (and its attachments)", key="del_confirm")
             if st.button("🗑️ Delete record", key="do_delete", disabled=not confirm):
                 try:
                     delete_record(client, rec["id"])
@@ -643,8 +813,7 @@ with tab_view:
 # ---- TAB 3: EXPORT & PRINT -------------------------------------------------
 with tab_export:
     st.subheader("Export & print")
-    st.markdown("Upload your **master roster** to merge full names in. It needs a "
-                "**code/initials** column and a **full name** column. Names are used in "
+    st.markdown("Upload your **master roster** to merge full names in. Names are used in "
                 "memory only and never saved.")
     roster_file = st.file_uploader("Master roster (.xlsx or .csv)", type=["xlsx", "csv"])
     roster = None
@@ -675,7 +844,10 @@ with tab_export:
     records = fetch_records(client, code=code_filter, date_from=x_from, date_to=x_to)
     if code_filter is None and not inc_arch_x:
         records = [r for r in records if r.get("student_initials") not in archived]
-    rows = records_to_rows(records, roster=roster)
+
+    att_labels = get_attachment_labels(client, [r["id"] for r in records]) if records else {}
+    has_att = bool(att_labels)
+    rows = records_to_rows(records, roster=roster, att_map=att_labels if has_att else None)
     roster_used = roster is not None
 
     scope_label = "All students" if code_filter is None else f"Student: {code_filter}"
@@ -688,7 +860,7 @@ with tab_export:
     if records:
         d1, d2, d3 = st.columns(3)
         with d1:
-            st.download_button("⬇️ Excel (.xlsx)", data=build_excel(rows, roster_used),
+            st.download_button("⬇️ Excel (.xlsx)", data=build_excel(rows, roster_used, has_att),
                                file_name=f"communication_log_{datetime.now():%Y%m%d_%H%M}.xlsx",
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                use_container_width=True)
@@ -702,8 +874,11 @@ with tab_export:
                           help="Add 'reportlab' to requirements.txt to enable PDF export.")
         with d3:
             st.toggle("Show printable list", key="show_print")
+        if has_att:
+            st.caption("Attachment labels are listed in the Excel and the printable list "
+                       "(the PDF stays a compact summary). The files themselves stay in the secure bucket.")
         if st.session_state.get("show_print"):
-            st.markdown(build_print_html(rows, roster_used, scope_label), unsafe_allow_html=True)
+            st.markdown(build_print_html(rows, roster_used, scope_label, has_att), unsafe_allow_html=True)
             st.caption("Use your browser's Print (Ctrl/Cmd + P) to print or save as PDF.")
     else:
         st.info("Nothing to export for this scope yet.")
@@ -711,14 +886,11 @@ with tab_export:
 # ---- TAB 4: ARCHIVE --------------------------------------------------------
 with tab_archive:
     st.subheader("Archive a student")
-    st.markdown("Archive a student once their placement has ended **and** their full "
-                "communication record has been downloaded, printed, and saved to their "
-                "secure digital file. Archiving hides them from the active lists but keeps "
-                "all their records.")
-
+    st.markdown("Archive a student once their placement has ended **and** their full record "
+                "has been downloaded, printed, and saved to their secure digital file. "
+                "Archiving hides them from active lists but keeps all records and attachments.")
     archived = set(get_archived_codes(client))
     candidates = [c for c in get_codes(client) if c not in archived]
-
     if not candidates:
         st.info("No active students with records to archive.")
     else:
@@ -726,13 +898,11 @@ with tab_archive:
                             format_func=lambda c: code_to_label.get(c, c), key="arch_pick")
         n = len(fetch_records(client, code=pick))
         st.caption(f"**{n}** record(s) for {pick}. Download & print them from the Export tab first.")
-
         st.markdown("**Confirm the record lifecycle is complete:**")
         a1 = st.checkbox("✅ Record downloaded (Excel / PDF)", key="arch_dl")
         a2 = st.checkbox("✅ Record printed", key="arch_pr")
         a3 = st.checkbox("✅ Record digitally archived (saved to the student's secure file)", key="arch_da")
         by = st.text_input("Archived by (your initials)", key="arch_by")
-
         ready = a1 and a2 and a3
         if not ready:
             st.caption("Tick all three confirmations to enable archiving.")
@@ -742,7 +912,7 @@ with tab_archive:
                 st.success(f"{pick} archived — confirmations recorded.")
                 st.rerun()
             except Exception as e:
-                st.error(f"Could not archive (has the student_comm_archive table been created?): {e}")
+                st.error(f"Could not archive (has student_comm_archive been created?): {e}")
 
     st.divider()
     st.markdown("##### Archived students")
@@ -767,15 +937,23 @@ with tab_archive:
 
 
 # ============================================================================
-# NEW SUPABASE TABLE SQL  (run in the SQL editor of your OPERATIONAL project)
+# SETUP SQL  — run in the SQL editor of your OPERATIONAL project
 # ============================================================================
-# create table if not exists student_comm_archive (
-#     student_initials          text primary key,
-#     archived                  boolean not null default false,
-#     record_downloaded         boolean not null default false,
-#     record_printed            boolean not null default false,
-#     record_digitally_archived boolean not null default false,
-#     archived_at               timestamptz,
-#     archived_by               text,
-#     updated_at                timestamptz not null default now()
+# -- Attachments table
+# create table if not exists comm_attachments (
+#     id           uuid primary key default gen_random_uuid(),
+#     comm_id      uuid not null references student_communications(id) on delete cascade,
+#     storage_path text not null,
+#     file_name    text,
+#     label        text,
+#     mime_type    text,
+#     uploaded_at  timestamptz not null default now()
 # );
+# create index if not exists idx_comm_attachments_comm on comm_attachments(comm_id);
+#
+# -- Storage bucket: create a PRIVATE bucket named  comm-attachments
+# --   (Dashboard -> Storage -> New bucket -> name: comm-attachments, Public: OFF)
+# -- Then allow the anon role to use just that bucket:
+# create policy "comm_attach_read"  on storage.objects for select to anon using (bucket_id = 'comm-attachments');
+# create policy "comm_attach_write" on storage.objects for insert to anon with check (bucket_id = 'comm-attachments');
+# create policy "comm_attach_del"   on storage.objects for delete to anon using (bucket_id = 'comm-attachments');
