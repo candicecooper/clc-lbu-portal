@@ -1,7 +1,3 @@
-"""
-CLC-LBU ALLOCATION DASHBOARD - FULL BUILD
-All 9 tabs with strategic visualizations
-"""
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -14,7 +10,7 @@ try:
 except ImportError:
     pass
 
-st.set_page_config(page_title="📊 Allocation Dashboard", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Allocation Dashboard", page_icon="📊", layout="wide")
 
 st.markdown("""
 <style>
@@ -54,226 +50,220 @@ def load_allocation_data():
         return None
 
 def update_chart_layout(fig):
-    """Apply consistent styling to all charts"""
     fig.update_layout(
         plot_bgcolor='rgba(10,14,39,0.8)',
         paper_bgcolor='rgba(10,14,39,0.8)',
-        font=dict(color='#ffffff', size=11),
+        font=dict(color='#d0d0d0', size=12),
         hovermode='x unified',
         margin=dict(l=50, r=50, t=50, b=50)
     )
+    fig.update_xaxes(showgrid=False)
+    fig.update_yaxes(showgrid=False)
     return fig
 
-st.markdown("# 📊 CLC-LBU ALLOCATION DASHBOARD")
-st.markdown("_Strategic student placement analysis and equity insights_")
+st.markdown("# Student Allocation Dashboard")
+st.markdown("Active student placements and equity analysis")
 
-main_tabs = st.tabs(["📊 Analysis", "📤 Upload Data"])
+main_tabs = st.tabs(["Overview", "Analysis", "Data Upload"])
 
-# ==== ANALYSIS TAB ====
+# ==== OVERVIEW TAB ====
 with main_tabs[0]:
-    if st.button("🔄 Refresh Data", key="refresh_btn"):
+    if st.button("Refresh Data", key="refresh_btn"):
         st.cache_data.clear()
     
     allocation_df = load_allocation_data()
     
     if allocation_df is None or allocation_df.empty:
-        st.warning("⚠️ No data found. Go to **📤 Upload Data** tab to load data.")
+        st.warning("No data found. Go to Data Upload tab to load data.")
     else:
-        st.info(f"✅ Loaded {len(allocation_df)} records | Columns: {len(allocation_df.columns)}")
+        st.markdown("---")
+        st.markdown("## Current Active Students")
         
         # FILTERS
-        st.markdown("## 🔍 Filters")
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
+        
+        filter_year = None
+        filter_term = None
+        filter_program = None
         
         with col1:
             if 'year' in allocation_df.columns:
                 years = sorted([y for y in allocation_df['year'].dropna().unique() if y != ''])
-                selected_year = st.selectbox("Year", years if years else [2026])
-            else:
-                selected_year = 2026
+                filter_year = st.selectbox("Year", years if years else [2026])
         
         with col2:
-            if 'term' in allocation_df.columns and selected_year:
-                terms = sorted([t for t in allocation_df[allocation_df['year'] == selected_year]['term'].dropna().unique() if t != ''])
-                selected_term = st.selectbox("Term", terms if terms else ['1'])
-            else:
-                selected_term = '1'
+            if 'term' in allocation_df.columns and filter_year:
+                terms = sorted([t for t in allocation_df[allocation_df['year'] == filter_year]['term'].dropna().unique() if t != ''])
+                filter_term = st.selectbox("Term", terms if terms else ['1'])
         
         with col3:
             if 'program' in allocation_df.columns:
                 progs = ['All'] + sorted([p for p in allocation_df['program'].dropna().unique() if p != ''])
-                selected_program = st.selectbox("Program", progs)
-            else:
-                selected_program = 'All'
+                filter_program = st.selectbox("Program", progs)
         
-        # Filter data
-        filtered = allocation_df[
-            (allocation_df['year'] == selected_year) &
-            (allocation_df['term'] == selected_term)
-        ]
+        with col4:
+            st.empty()
         
-        if selected_program != 'All':
-            filtered = filtered[filtered['program'] == selected_program]
+        # APPLY FILTERS BUTTON
+        if st.button("Apply Filters", key="apply_filters"):
+            filtered = allocation_df[
+                (allocation_df['year'] == filter_year) &
+                (allocation_df['term'] == filter_term)
+            ]
+            
+            if filter_program != 'All':
+                filtered = filtered[filtered['program'] == filter_program]
+        else:
+            filtered = allocation_df[
+                (allocation_df['year'] == filter_year) &
+                (allocation_df['term'] == filter_term)
+            ]
+            
+            if filter_program != 'All':
+                filtered = filtered[filtered['program'] == filter_program]
         
-        st.info(f"✅ **{len(filtered)} records** | {int(selected_year)} Term {selected_term} | {selected_program}")
+        st.markdown(f"**{len(filtered)} active students** | {int(filter_year)} Term {filter_term} | {filter_program}")
         st.markdown("---")
         
-        # ANALYSIS TABS
-        tabs = st.tabs([
-            "📍 Placement", "📈 Trends", "🧩 SWD", "⚠️ Complexity",
-            "🔗 Intersect", "🏳️ ATSI", "🌐 EALD", "Assessment", "Raw"
-        ])
+        # KEY METRICS
+        st.markdown("## Summary")
         
-        # TAB 1: PLACEMENT
-        with tabs[0]:
-            st.markdown("## 📍 Placement Data by Program")
-            
-            if 'program' in allocation_df.columns:
-                prog_dist = allocation_df['program'].value_counts().reset_index()
-                prog_dist.columns = ['program', 'count']
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    fig_sun = px.sunburst(
-                        prog_dist,
-                        labels='program',
-                        values='count',
-                        title='Program Distribution',
-                        color='count',
-                        color_continuous_scale='Viridis'
-                    )
-                    st.plotly_chart(update_chart_layout(fig_sun), use_container_width=True)
-                
-                with col2:
-                    metrics = pd.DataFrame({
-                        'Program': prog_dist['program'],
-                        'Students': prog_dist['count'],
-                        '%': (prog_dist['count'] / prog_dist['count'].sum() * 100).round(1)
-                    })
-                    st.dataframe(metrics, use_container_width=True, hide_index=True)
+        col1, col2, col3, col4 = st.columns(4)
         
-        # TAB 2: TRENDS
-        with tabs[1]:
-            st.markdown("## 📈 Enrollment Trends")
-            
-            if 'year' in allocation_df.columns and 'term' in allocation_df.columns and 'program' in allocation_df.columns:
-                trend_data = allocation_df.dropna(subset=['year', 'term', 'program'])
-                trend_data['YearTerm'] = trend_data['year'].astype(str) + ' T' + trend_data['term'].astype(str)
-                trend_agg = trend_data.groupby(['YearTerm', 'program']).size().reset_index(name='count')
-                
-                if len(trend_agg) > 0:
-                    fig_trend = px.bar(
-                        trend_agg,
-                        x='YearTerm',
-                        y='count',
-                        color='program',
-                        title='Enrollment by Year & Term',
-                        barmode='stack',
-                        text_auto=True
-                    )
-                    st.plotly_chart(update_chart_layout(fig_trend), use_container_width=True)
+        with col1:
+            st.metric("Total Active Students", len(filtered))
         
-        # TAB 3: SWD
-        with tabs[2]:
-            st.markdown("## 🧩 Students with Disability")
+        with col2:
+            if 'program' in filtered.columns:
+                programs = filtered['program'].nunique()
+                st.metric("Programs", programs)
+        
+        with col3:
+            st.metric("Data Points", len(filtered.columns))
+        
+        with col4:
+            st.metric("Last Updated", datetime.now().strftime("%d/%m/%Y"))
+        
+        st.markdown("---")
+        
+        # PROGRAM BREAKDOWN
+        st.markdown("## Student Distribution by Program")
+        
+        if 'program' in filtered.columns:
+            prog_data = filtered['program'].value_counts().reset_index()
+            prog_data.columns = ['program', 'count']
             
-            col1, col2 = st.columns(2)
+            col1, col2 = st.columns([2, 1])
             
             with col1:
-                st.metric("Total Students", len(allocation_df))
-            with col2:
-                st.metric("Records Loaded", len(allocation_df))
-            
-            st.info("SWD analysis (add Flag_ATSI, Flag_EALD, Flag_SWD columns to Supabase when ready)")
-        
-        # TAB 4: COMPLEXITY
-        with tabs[3]:
-            st.markdown("## ⚠️ Complexity Analysis")
-            
-            if 'program' in allocation_df.columns:
-                prog_counts = allocation_df['program'].value_counts()
-                
-                fig_complex = px.bar(
-                    x=prog_counts.index,
-                    y=prog_counts.values,
-                    title='Records by Program',
-                    labels={'x': 'Program', 'y': 'Count'},
+                fig_prog = px.bar(
+                    prog_data,
+                    x='program',
+                    y='count',
+                    title='Students by Program',
+                    labels={'program': 'Program', 'count': 'Count'},
                     text_auto=True,
-                    color=prog_counts.values,
+                    color='count',
+                    color_continuous_scale='Viridis'
+                )
+                fig_prog.update_traces(textposition='outside', textfont=dict(color='#d0d0d0'))
+                st.plotly_chart(update_chart_layout(fig_prog), use_container_width=True)
+            
+            with col2:
+                st.markdown("### Program Summary")
+                for idx, row in prog_data.iterrows():
+                    st.write(f"**{row['program']}**: {row['count']} students")
+        
+        st.markdown("---")
+        
+        # EQUITY SNAPSHOT
+        st.markdown("## Equity Overview")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.info("**ATSI Students**\n\nColumn pending addition to database")
+        
+        with col2:
+            st.info("**EALD Students**\n\nColumn pending addition to database")
+        
+        with col3:
+            st.info("**SWD Students**\n\nColumn pending addition to database")
+        
+        st.markdown("---")
+        
+        # YEAR LEVEL DISTRIBUTION
+        st.markdown("## Year Level Distribution")
+        
+        if 'year_level' in filtered.columns:
+            year_level_data = filtered['year_level'].value_counts().reset_index()
+            year_level_data.columns = ['year_level', 'count']
+            year_level_data = year_level_data.sort_values('year_level')
+            
+            fig_year = px.bar(
+                year_level_data,
+                x='year_level',
+                y='count',
+                title='Students by Year Level',
+                labels={'year_level': 'Year Level', 'count': 'Count'},
+                text_auto=True,
+                color_discrete_sequence=['#4ecdc4']
+            )
+            fig_year.update_traces(textposition='outside', textfont=dict(color='#d0d0d0'))
+            st.plotly_chart(update_chart_layout(fig_year), use_container_width=True)
+        
+        st.markdown("---")
+        
+        # PARTNERSHIP PLACEMENTS
+        st.markdown("## High Partnership Placements")
+        
+        if 'partnership_area' in filtered.columns:
+            partnership_data = filtered['partnership_area'].value_counts().head(10).reset_index()
+            partnership_data.columns = ['partnership_area', 'count']
+            
+            if len(partnership_data) > 0:
+                fig_partner = px.barh(
+                    partnership_data,
+                    y='partnership_area',
+                    x='count',
+                    title='Top 10 Partnership Areas',
+                    labels={'partnership_area': 'Partnership', 'count': 'Count'},
+                    text_auto=True,
+                    color='count',
                     color_continuous_scale='Reds'
                 )
-                st.plotly_chart(update_chart_layout(fig_complex), use_container_width=True)
-        
-        # TAB 5: INTERSECTIONALITY
-        with tabs[4]:
-            st.markdown("## 🔗 Intersectionality")
-            
-            if 'program' in allocation_df.columns and 'year_level' in allocation_df.columns:
-                intersect = pd.crosstab(
-                    allocation_df['program'],
-                    allocation_df['year_level'],
-                    margins=True
-                )
-                st.dataframe(intersect, use_container_width=True)
+                fig_partner.update_traces(textposition='outside', textfont=dict(color='#d0d0d0'))
+                st.plotly_chart(update_chart_layout(fig_partner), use_container_width=True)
             else:
-                st.info("Need program and year_level columns for intersectionality analysis")
+                st.info("No partnership data available")
         
-        # TAB 6: ATSI
-        with tabs[5]:
-            st.markdown("## 🏳️ ATSI Representation")
+        st.markdown("---")
+        
+        # WAITLIST STATUS
+        st.markdown("## Waitlist Status")
+        
+        if 'waitlist_status' in filtered.columns:
+            waitlist_data = filtered['waitlist_status'].value_counts().reset_index()
+            waitlist_data.columns = ['waitlist_status', 'count']
             
-            if 'program' in allocation_df.columns:
-                prog_counts = allocation_df['program'].value_counts()
-                
-                fig_atsi = px.pie(
-                    values=prog_counts.values,
-                    names=prog_counts.index,
-                    title='Distribution by Program',
-                    color_discrete_sequence=['#ff6b6b', '#4ecdc4', '#ffd93d', '#a8e6cf']
-                )
-                st.plotly_chart(update_chart_layout(fig_atsi), use_container_width=True)
-        
-        # TAB 7: EALD
-        with tabs[6]:
-            st.markdown("## 🌐 EALD Representation")
-            
-            if 'year_level' in allocation_df.columns:
-                level_counts = allocation_df['year_level'].value_counts()
-                
-                fig_eald = px.bar(
-                    x=level_counts.index,
-                    y=level_counts.values,
-                    title='Distribution by Year Level',
-                    labels={'x': 'Year Level', 'y': 'Count'},
-                    text_auto=True,
-                    color_discrete_sequence=['#4ecdc4']
-                )
-                st.plotly_chart(update_chart_layout(fig_eald), use_container_width=True)
-        
-        # TAB 8: ASSESSMENT
-        with tabs[7]:
-            st.markdown("## 📊 Assessment Integration")
-            st.info("Assessment data will integrate with Term Assessment Data and Assessment Analytics dashboards")
-        
-        # TAB 9: RAW
-        with tabs[8]:
-            st.markdown("## 📋 Raw Data")
-            st.dataframe(filtered, use_container_width=True, height=400)
-            
-            csv = filtered.to_csv(index=False)
-            st.download_button(
-                label="📥 Download CSV",
-                data=csv,
-                file_name=f"allocation_{int(selected_year)}_T{selected_term}.csv",
-                mime="text/csv"
+            fig_wait = px.pie(
+                waitlist_data,
+                values='count',
+                names='waitlist_status',
+                title='Waitlist Status Distribution',
+                color_discrete_sequence=['#ff6b6b', '#4ecdc4', '#ffd93d', '#a8e6cf']
             )
+            st.plotly_chart(update_chart_layout(fig_wait), use_container_width=True)
+
+# ==== ANALYSIS TAB ====
+with main_tabs[1]:
+    st.markdown("## Detailed Analysis")
+    st.info("Additional analysis sections coming - Trends, Complexity, Intersectionality, etc.")
 
 # ==== UPLOAD TAB ====
-with main_tabs[1]:
-    st.markdown("## 📤 Upload Allocation Data")
-    st.markdown("_Map Excel columns to Supabase table_")
-    st.warning("⚠️ This will DELETE existing data and load your file")
+with main_tabs[2]:
+    st.markdown("## Upload Student Allocation Data")
+    st.warning("This will replace all existing data with your file")
     
     uploaded_file = st.file_uploader("Choose Excel (.xlsx) or CSV", type=['xlsx', 'csv'])
     
@@ -284,7 +274,7 @@ with main_tabs[1]:
             st.error(f"Error: {e}")
             st.stop()
         
-        st.success(f"✅ Loaded {len(df)} rows")
+        st.success(f"Loaded {len(df)} rows")
         
         column_map = {
             'Student_Name': 'student_name',
@@ -319,54 +309,47 @@ with main_tabs[1]:
         
         df_mapped = df_mapped[[col for col in df_mapped.columns if col in column_map.values()]]
         
-        # Handle date columns FIRST - parse and reformat to YYYY-MM-DD
+        # Handle date columns FIRST
         date_cols = ['meeting_date', 'date_of_birth', 'waitlist_date']
         for col in date_cols:
             if col in df_mapped.columns:
-                # Parse dates - handles multiple formats
                 df_mapped[col] = pd.to_datetime(df_mapped[col], errors='coerce')
-                # Format as YYYY-MM-DD string
                 df_mapped[col] = df_mapped[col].dt.strftime('%Y-%m-%d')
-                # Replace NaT with empty
                 df_mapped[col] = df_mapped[col].replace('NaT', '')
         
-        # Handle numeric columns - convert to int
+        # Handle numeric columns
         numeric_cols = ['year', 'term', 'extension_weeks', 'total_previous_placements']
         for col in numeric_cols:
             if col in df_mapped.columns:
                 df_mapped[col] = pd.to_numeric(df_mapped[col], errors='coerce').fillna(0).astype(int)
         
-        # NOW convert everything else to string
+        # Convert to string
         df_mapped = df_mapped.astype(str)
         df_mapped = df_mapped.replace('nan', '')
         df_mapped = df_mapped.fillna('')
         
-        # Strip whitespace
         for col in df_mapped.columns:
             if df_mapped[col].dtype == 'object':
                 df_mapped[col] = df_mapped[col].str.strip()
         
-        # Handle meeting_date - fill empty with today
         if 'meeting_date' in df_mapped.columns:
             today = pd.Timestamp.now().strftime('%Y-%m-%d')
             df_mapped['meeting_date'] = df_mapped['meeting_date'].replace('', today)
         
-        st.markdown("### Preview (Cleaned)")
+        st.markdown("### Data Preview")
         st.dataframe(df_mapped.head(5), use_container_width=True)
-        st.write(f"**Columns:** {list(df_mapped.columns)}")
         
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("✅ CONFIRM - Upload", key="upload_btn"):
+            if st.button("Confirm Upload", key="upload_btn"):
                 if not supabase:
                     st.error("Supabase not connected")
                 else:
                     with st.spinner("Uploading..."):
                         try:
-                            st.write("🗑️ Clearing existing...")
+                            st.write("Clearing existing data...")
                             supabase.table('allocation_students').delete().gte('id', '00000000-0000-0000-0000-000000000000').execute()
                             
-                            # Build records manually - avoids any NaN re-introduction
                             numeric_cols = ['year', 'term', 'extension_weeks', 'total_previous_placements']
                             date_cols = ['meeting_date', 'date_of_birth', 'waitlist_date']
                             
@@ -376,16 +359,7 @@ with main_tabs[1]:
                                 for col in df_mapped.columns:
                                     val = row[col]
                                     
-                                    # Handle NaN
-                                    if pd.isna(val) or val == 'nan':
-                                        if col in numeric_cols:
-                                            record[col] = 0
-                                        elif col in date_cols:
-                                            record[col] = None
-                                        else:
-                                            record[col] = ''
-                                    # Handle empty strings
-                                    elif val == '':
+                                    if pd.isna(val) or val == 'nan' or val == '':
                                         if col in numeric_cols:
                                             record[col] = 0
                                         elif col in date_cols:
@@ -404,18 +378,14 @@ with main_tabs[1]:
                                 batch = records[i:i+batch_size]
                                 supabase.table('allocation_students').insert(batch).execute()
                                 total += len(batch)
-                                st.write(f"📤 {total}/{len(records)}...")
+                                st.write(f"Uploaded {total}/{len(records)}...")
                             
-                            st.success(f"✅ DONE! Uploaded {total} records")
+                            st.success(f"Complete! {total} records uploaded")
                             st.balloons()
-                            col1, col2, col3 = st.columns(3)
-                            col1.metric("Records", total)
-                            col2.metric("Columns", len(df_mapped.columns))
-                            col3.metric("Time", datetime.now().strftime("%H:%M"))
-                            st.info("💡 Go to Analysis tab and click Refresh Data")
+                            st.info("Go to Overview tab and click Refresh Data")
                             
                         except Exception as e:
-                            st.error(f"Upload failed: {str(e)[:200]}")
+                            st.error(f"Failed: {str(e)[:200]}")
         
         with col2:
-            st.info("✓ Review columns above")
+            st.info("Review data above before uploading")
