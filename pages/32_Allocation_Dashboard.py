@@ -354,16 +354,34 @@ with main_tabs[1]:
                             supabase.table('allocation_students').delete().gte('id', '00000000-0000-0000-0000-000000000000').execute()
                             
                             # Build records manually - avoids any NaN re-introduction
+                            numeric_cols = ['year', 'term', 'extension_weeks', 'total_previous_placements']
+                            date_cols = ['meeting_date', 'date_of_birth', 'waitlist_date']
+                            
                             records = []
                             for idx, row in df_mapped.iterrows():
                                 record = {}
                                 for col in df_mapped.columns:
                                     val = row[col]
-                                    # Ensure no NaN in the record
-                                    if pd.isna(val) or val == 'nan' or val == '':
-                                        record[col] = None if col in ['meeting_date', 'date_of_birth', 'waitlist_date'] else ''
+                                    
+                                    # Handle NaN
+                                    if pd.isna(val) or val == 'nan':
+                                        if col in numeric_cols:
+                                            record[col] = 0
+                                        elif col in date_cols:
+                                            record[col] = None
+                                        else:
+                                            record[col] = ''
+                                    # Handle empty strings
+                                    elif val == '':
+                                        if col in numeric_cols:
+                                            record[col] = 0
+                                        elif col in date_cols:
+                                            record[col] = None
+                                        else:
+                                            record[col] = ''
                                     else:
                                         record[col] = str(val)
+                                
                                 records.append(record)
                             
                             batch_size = 50
