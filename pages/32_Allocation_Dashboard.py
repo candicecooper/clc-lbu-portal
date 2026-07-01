@@ -195,53 +195,49 @@ def update_chart_layout(fig):
 
 allocation_df = load_allocation_data()
 
-# Load flag columns from Excel (temporary until they're in Supabase)
+# Load flag columns from Excel 
 flag_df = None
+flag_load_error = None
+flag_load_debug = {}
+
 if allocation_df is not None:
     try:
         import os
-        import glob
+        excel_path = '/mnt/user-data/uploads/CLC_Allocation_Dashboard_2026_WithNames_1.xlsx'
+        flag_load_debug['step_1_path_check'] = os.path.exists(excel_path)
         
-        # Try different approaches to find the Excel file
-        excel_path = None
-        
-        # Approach 1: Direct path
-        if os.path.exists('/mnt/user-data/uploads/CLC_Allocation_Dashboard_2026_WithNames_1.xlsx'):
-            excel_path = '/mnt/user-data/uploads/CLC_Allocation_Dashboard_2026_WithNames_1.xlsx'
-        
-        # Approach 2: Glob search
-        if not excel_path:
-            excel_files = glob.glob('/mnt/user-data/uploads/*Allocation*WithNames*.xlsx')
-            if excel_files:
-                excel_path = excel_files[0]
-        
-        # Approach 3: Any Allocation file
-        if not excel_path:
-            excel_files = glob.glob('/mnt/user-data/uploads/*Allocation*.xlsx')
-            if excel_files:
-                excel_path = excel_files[0]
-        
-        if excel_path:
+        if os.path.exists(excel_path):
             excel_data = pd.read_excel(excel_path)
+            flag_load_debug['step_2_excel_loaded'] = True
+            flag_load_debug['step_3_excel_shape'] = excel_data.shape
+            flag_load_debug['step_4_has_student_name'] = 'Student_Name' in excel_data.columns
             
-            # Normalize names and create flag dataframe
             if 'Student_Name' in excel_data.columns:
                 excel_data['name_match'] = excel_data['Student_Name'].str.strip().str.lower()
+                flag_load_debug['step_5_name_match_created'] = True
                 
                 flag_cols = ['name_match']
-                if 'Flag_ATSI' in excel_data.columns:
-                    flag_cols.append('Flag_ATSI')
-                if 'Flag_EALD' in excel_data.columns:
-                    flag_cols.append('Flag_EALD')
-                if 'Flag_DCP_involvement' in excel_data.columns:
-                    flag_cols.append('Flag_DCP_involvement')
+                for col in ['Flag_ATSI', 'Flag_EALD', 'Flag_DCP_involvement']:
+                    if col in excel_data.columns:
+                        flag_cols.append(col)
                 
-                if len(flag_cols) > 1:  # More than just name_match
+                flag_load_debug['step_6_flag_cols'] = flag_cols
+                flag_load_debug['step_7_len_flag_cols'] = len(flag_cols)
+                
+                if len(flag_cols) > 1:
                     flag_df = excel_data[flag_cols].drop_duplicates('name_match')
-    
+                    flag_load_debug['step_8_flag_df_shape'] = flag_df.shape
+                    flag_load_debug['step_8_success'] = True
+                else:
+                    flag_load_error = f"No flag columns found. Cols: {flag_cols}"
+            else:
+                flag_load_error = "Student_Name column not found"
+        else:
+            flag_load_error = f"File not found: {excel_path}"
+            
     except Exception as e:
-        # Silent fail - equity section will show flag_df is None
-        pass
+        flag_load_error = f"Exception: {str(e)}"
+        flag_load_debug['exception'] = str(e)
 
 if allocation_df is None or allocation_df.empty:
     st.error("No data loaded")
@@ -1038,13 +1034,23 @@ else:
         # DEBUG: Show flag_df status
         with st.expander("🔍 DEBUG - Flag Loading"):
             st.write(f"**flag_df loaded:** {flag_df is not None}")
+            
+            # Show step-by-step debug
+            if flag_load_debug:
+                st.write("**Loading steps:**")
+                for step, value in flag_load_debug.items():
+                    st.write(f"  {step}: {value}")
+            
+            if flag_load_error:
+                st.error(f"**Error:** {flag_load_error}")
+            
             if flag_df is not None:
                 st.write(f"**flag_df shape:** {flag_df.shape}")
                 st.write(f"**flag_df columns:** {list(flag_df.columns)}")
                 st.write(f"**First 3 rows:**")
                 st.dataframe(flag_df.head(3), use_container_width=True)
             else:
-                st.error("⚠️ flag_df is None - flags were not loaded from Excel")
+                st.warning("⚠️ flag_df is None")
         
         # Merge pre-loaded flags with filtered data
         equity_df = filtered.copy()
