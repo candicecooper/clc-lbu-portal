@@ -211,7 +211,7 @@ else:
         st.markdown("**Navigate**", help="Select an analysis section")
         section = st.radio(
             "Select Section",
-            ["Overview", "Trends", "Complexity", "Risk Assessment", "Equity", "Waitlist", "Diagnostics"],
+            ["Overview", "Trends", "Complexity", "Risk Assessment", "Cohort Analysis", "Equity", "Waitlist", "Diagnostics"],
             label_visibility="collapsed"
         )
         
@@ -429,11 +429,14 @@ else:
         trend_agg = trend_data.groupby(['YearTerm', 'program']).size().reset_index(name='count')
         trend_agg['count'] = trend_agg['count'].astype(int)
         
-        # Sort by year and term for proper ordering
+        # Create sort key for proper ordering
         trend_agg['year_sort'] = trend_agg['YearTerm'].str.extract(r'(\d{4})')[0].astype(int)
         trend_agg['term_sort'] = trend_agg['YearTerm'].str.extract(r'T(\d)')[0].astype(int)
         trend_agg['sort_key'] = trend_agg['year_sort'] * 100 + trend_agg['term_sort']
         trend_agg = trend_agg.sort_values('sort_key').reset_index(drop=True)
+        
+        # Get unique year-terms in order
+        unique_yearterms = trend_agg.sort_values('sort_key')['YearTerm'].unique().tolist()
         
         # ACTUAL DATA
         fig_trend = px.line(
@@ -445,6 +448,7 @@ else:
             title='Actual Enrollment by Program',
             labels={'YearTerm': '', 'count': 'Students'}
         )
+        fig_trend.update_xaxes(categoryorder='array', categoryarray=unique_yearterms)
         fig_trend.update_traces(line=dict(width=3), marker=dict(size=8))
         st.plotly_chart(update_chart_layout(fig_trend), use_container_width=True)
         
@@ -458,25 +462,29 @@ else:
         for prog in trend_agg['program'].unique():
             prog_data = trend_agg[trend_agg['program'] == prog].sort_values('sort_key')
             
-            if len(prog_data) >= 2:
-                # Get last 2 points to calculate trend
-                last_counts = prog_data['count'].tail(2).values
-                trend_rate = last_counts[-1] - last_counts[-2]
-                
-                # Add actual data
-                for idx, row in prog_data.iterrows():
-                    forecast_data.append({
-                        'YearTerm': row['YearTerm'],
-                        'count': row['count'],
-                        'program': prog,
-                        'type': 'Actual',
-                        'sort_key': row['sort_key']
-                    })
-                
-                # Generate forecast for next 4 periods
+            # Add actual data
+            for idx, row in prog_data.iterrows():
+                forecast_data.append({
+                    'YearTerm': row['YearTerm'],
+                    'count': row['count'],
+                    'program': prog,
+                    'type': 'Actual',
+                    'sort_key': row['sort_key']
+                })
+            
+            # Generate forecast for next 4 periods
+            if len(prog_data) >= 1:
                 last_year = prog_data.iloc[-1]['year_sort']
                 last_term = prog_data.iloc[-1]['term_sort']
-                last_count = last_counts[-1]
+                
+                # Calculate trend from last 2 points if available
+                if len(prog_data) >= 2:
+                    last_counts = prog_data['count'].tail(2).values
+                    trend_rate = last_counts[-1] - last_counts[-2]
+                else:
+                    trend_rate = 0
+                
+                last_count = prog_data.iloc[-1]['count']
                 
                 for i in range(1, 5):
                     new_term = last_term + i
@@ -496,6 +504,10 @@ else:
                     })
         
         forecast_df = pd.DataFrame(forecast_data)
+        forecast_df = forecast_df.sort_values('sort_key')
+        
+        # Get all unique year-terms in correct order
+        all_yearterms = sorted(forecast_df['YearTerm'].unique(), key=lambda x: (int(x.split()[0]), int(x.split('T')[1])))
         
         # Separate actual and forecast
         actual = forecast_df[forecast_df['type'] == 'Actual']
@@ -504,31 +516,34 @@ else:
         # Create combined figure
         fig_forecast = go.Figure()
         
-        # Add actual lines
-        for prog in actual['program'].unique():
+        # Add actual lines - ensure ALL programs shown
+        all_programs = sorted(forecast_df['program'].unique())
+        for prog in all_programs:
             prog_actual = actual[actual['program'] == prog].sort_values('sort_key')
-            fig_forecast.add_trace(go.Scatter(
-                x=prog_actual['YearTerm'],
-                y=prog_actual['count'],
-                mode='lines+markers',
-                name=f'{prog} (Actual)',
-                line=dict(width=3),
-                marker=dict(size=8)
-            ))
+            if len(prog_actual) > 0:
+                fig_forecast.add_trace(go.Scatter(
+                    x=prog_actual['YearTerm'],
+                    y=prog_actual['count'],
+                    mode='lines+markers',
+                    name=f'{prog} (Actual)',
+                    line=dict(width=3),
+                    marker=dict(size=8)
+                ))
         
         # Add forecast lines (dashed)
-        for prog in predicted['program'].unique():
+        for prog in all_programs:
             prog_forecast = predicted[predicted['program'] == prog].sort_values('sort_key')
             
-            fig_forecast.add_trace(go.Scatter(
-                x=prog_forecast['YearTerm'],
-                y=prog_forecast['count'],
-                mode='lines+markers',
-                name=f'{prog} (Forecast)',
-                line=dict(width=2, dash='dash'),
-                marker=dict(size=6, symbol='diamond'),
-                opacity=0.6
-            ))
+            if len(prog_forecast) > 0:
+                fig_forecast.add_trace(go.Scatter(
+                    x=prog_forecast['YearTerm'],
+                    y=prog_forecast['count'],
+                    mode='lines+markers',
+                    name=f'{prog} (Forecast)',
+                    line=dict(width=2, dash='dash'),
+                    marker=dict(size=6, symbol='diamond'),
+                    opacity=0.6
+                ))
         
         fig_forecast.update_layout(
             title='Enrollment Trends & Forecast',
@@ -539,7 +554,8 @@ else:
             font=dict(color='#ffffff', size=12),
             hovermode='x unified',
             margin=dict(l=40, r=40, t=40, b=40),
-            showlegend=True
+            showlegend=True,
+            xaxis=dict(categoryorder='array', categoryarray=all_yearterms)
         )
         fig_forecast.update_xaxes(showgrid=False, tickfont=dict(color='#ffffff'))
         fig_forecast.update_yaxes(showgrid=True, gridcolor='rgba(100,100,100,0.2)', tickfont=dict(color='#ffffff'))
@@ -707,7 +723,253 @@ else:
         )
         st.plotly_chart(update_chart_layout(fig_success), use_container_width=True)
     
-    elif section == "Equity":
+    elif section == "Cohort Analysis":
+        st.markdown("## Cohort Deep Dive Analysis")
+        st.markdown("Detailed breakdown by program, year level, and partnerships - identify patterns and opportunities")
+        
+        # Create tabs for different views
+        tab1, tab2, tab3 = st.tabs(["Program Deep Dive", "Year Level Deep Dive", "Partnership Analysis"])
+        
+        # === TAB 1: PROGRAM DEEP DIVE ===
+        with tab1:
+            st.markdown("### Program Deep Dive")
+            st.markdown("Comprehensive analysis of each program (JP, PY, SY)")
+            
+            programs = sorted([p for p in filtered['program'].unique() if p != '' and p != ':2'])
+            
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                # Program comparison - bar chart
+                prog_data = filtered['program'].value_counts().reset_index()
+                prog_data.columns = ['program', 'count']
+                prog_data['count'] = prog_data['count'].astype(int)
+                prog_data = prog_data.sort_values('count', ascending=False)
+                
+                fig_prog_comp = px.bar(
+                    prog_data,
+                    x='program',
+                    y='count',
+                    text='count',
+                    color='program',
+                    title='Student Count by Program',
+                    labels={'program': '', 'count': 'Students'}
+                )
+                fig_prog_comp.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                st.plotly_chart(update_chart_layout(fig_prog_comp), use_container_width=True)
+            
+            with col2:
+                st.markdown("**Program Summary**")
+                for idx, row in prog_data.iterrows():
+                    st.write(f"**{row['program']}**: {row['count']} students")
+            
+            st.markdown("---")
+            
+            # Deep dive by each program
+            for prog in programs:
+                prog_filtered = filtered[filtered['program'] == prog]
+                
+                if len(prog_filtered) > 0:
+                    st.markdown(f"#### {prog} Program Details")
+                    
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric(f"{prog} Total", int(len(prog_filtered)))
+                    col2.metric(f"Year Levels", int(prog_filtered['year_level'].nunique()))
+                    col3.metric(f"Partnerships", int(prog_filtered['partnership_area'].nunique()))
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        # Year level distribution
+                        year_dist = prog_filtered['year_level'].value_counts().sort_index().reset_index()
+                        year_dist.columns = ['year_level', 'count']
+                        year_dist['count'] = year_dist['count'].astype(int)
+                        
+                        fig_year = px.bar(
+                            year_dist,
+                            x='year_level',
+                            y='count',
+                            text='count',
+                            color_discrete_sequence=['#00e5ff'],
+                            title=f'{prog} by Year Level',
+                            labels={'year_level': '', 'count': 'Count'}
+                        )
+                        fig_year.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                        st.plotly_chart(update_chart_layout(fig_year), use_container_width=True)
+                    
+                    with col2:
+                        # Top partnerships
+                        part_dist = prog_filtered['partnership_area'].value_counts().head(8).reset_index()
+                        part_dist.columns = ['partnership_area', 'count']
+                        part_dist['count'] = part_dist['count'].astype(int)
+                        
+                        fig_part = px.bar(
+                            part_dist,
+                            y='partnership_area',
+                            x='count',
+                            orientation='h',
+                            text='count',
+                            color_discrete_sequence=['#ffc107'],
+                            title=f'{prog} Top Partnerships',
+                            labels={'partnership_area': '', 'count': 'Count'}
+                        )
+                        fig_part.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                        st.plotly_chart(update_chart_layout(fig_part), use_container_width=True)
+                    
+                    st.markdown("---")
+        
+        # === TAB 2: YEAR LEVEL DEEP DIVE ===
+        with tab2:
+            st.markdown("### Year Level Deep Dive")
+            st.markdown("Student distribution and characteristics by year level (R through 10)")
+            
+            year_order = ['R', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+            year_levels = [y for y in year_order if y in filtered['year_level'].unique()]
+            
+            # Year level overview
+            year_summary = filtered['year_level'].value_counts().reindex(year_levels, fill_value=0).reset_index()
+            year_summary.columns = ['year_level', 'count']
+            year_summary['count'] = year_summary['count'].astype(int)
+            
+            fig_year_overview = px.bar(
+                year_summary,
+                x='year_level',
+                y='count',
+                text='count',
+                color='count',
+                color_continuous_scale='Viridis',
+                title='Student Distribution by Year Level',
+                labels={'year_level': 'Year Level', 'count': 'Students'}
+            )
+            fig_year_overview.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+            st.plotly_chart(update_chart_layout(fig_year_overview), use_container_width=True)
+            
+            st.markdown("---")
+            
+            # Deep dive by year level
+            for year in year_levels:
+                year_filtered = filtered[filtered['year_level'] == year]
+                
+                if len(year_filtered) > 0:
+                    st.markdown(f"#### Year Level {year}")
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric(f"Year {year} Students", int(len(year_filtered)))
+                    col2.metric("Programs", int(year_filtered['program'].nunique()))
+                    col3.metric("Partnerships", int(year_filtered['partnership_area'].nunique()))
+                    
+                    # Average risk score for this year level
+                    risk_score = 0
+                    if 'total_previous_placements' in year_filtered.columns:
+                        risk_score += (pd.to_numeric(year_filtered['total_previous_placements'], errors='coerce').fillna(0) > 0).sum()
+                    if 'bespoke_placement' in year_filtered.columns:
+                        risk_score += (year_filtered['bespoke_placement'] == 'Yes').sum()
+                    
+                    col4.metric("Risk Indicators", int(risk_score))
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        # Programs for this year
+                        prog_dist = year_filtered['program'].value_counts().reset_index()
+                        prog_dist.columns = ['program', 'count']
+                        prog_dist['count'] = prog_dist['count'].astype(int)
+                        
+                        fig_prog_year = px.pie(
+                            prog_dist,
+                            values='count',
+                            names='program',
+                            title=f'Year {year} - Programs',
+                            color_discrete_sequence=['#ff6b6b', '#4ecdc4', '#ffd93d']
+                        )
+                        st.plotly_chart(update_chart_layout(fig_prog_year), use_container_width=True)
+                    
+                    with col2:
+                        # Top partnerships
+                        part_year = year_filtered['partnership_area'].value_counts().head(6).reset_index()
+                        part_year.columns = ['partnership', 'count']
+                        part_year['count'] = part_year['count'].astype(int)
+                        
+                        fig_part_year = px.bar(
+                            part_year,
+                            y='partnership',
+                            x='count',
+                            orientation='h',
+                            text='count',
+                            color_discrete_sequence=['#a8e6cf'],
+                            title=f'Year {year} - Top Partnerships',
+                            labels={'partnership': '', 'count': 'Count'}
+                        )
+                        fig_part_year.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                        st.plotly_chart(update_chart_layout(fig_part_year), use_container_width=True)
+                    
+                    st.markdown("---")
+        
+        # === TAB 3: PARTNERSHIP ANALYSIS ===
+        with tab3:
+            st.markdown("### Partnership Effectiveness")
+            st.markdown("Student volume and distribution across partnerships")
+            
+            # Overall partnership ranking
+            part_summary = filtered['partnership_area'].value_counts().head(15).reset_index()
+            part_summary.columns = ['partnership', 'count']
+            part_summary['count'] = part_summary['count'].astype(int)
+            
+            fig_part_ranking = px.bar(
+                part_summary,
+                y='partnership',
+                x='count',
+                orientation='h',
+                text='count',
+                color='count',
+                color_continuous_scale='Reds',
+                title='Top 15 Partnerships by Student Volume',
+                labels={'partnership': '', 'count': 'Students'}
+            )
+            fig_part_ranking.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+            fig_part_ranking.update_yaxes(categoryorder='total ascending')
+            st.plotly_chart(update_chart_layout(fig_part_ranking), use_container_width=True)
+            
+            st.markdown("---")
+            st.markdown("### Partnership × Program Matrix")
+            st.markdown("How many students in each program are placed with each partnership")
+            
+            # Create matrix
+            if 'partnership_area' in filtered.columns and 'program' in filtered.columns:
+                part_prog_matrix = pd.crosstab(
+                    filtered['partnership_area'],
+                    filtered['program']
+                )
+                
+                # Keep top 12 partnerships
+                top_parts = part_prog_matrix.sum(axis=1).nlargest(12).index
+                part_prog_matrix = part_prog_matrix.loc[top_parts]
+                
+                fig_matrix = px.imshow(
+                    part_prog_matrix,
+                    text_auto=True,
+                    color_continuous_scale='YlOrRd',
+                    title='Partnership × Program Distribution',
+                    labels={'x': 'Program', 'y': 'Partnership', 'color': 'Students'}
+                )
+                fig_matrix.update_traces(text=part_prog_matrix.values, texttemplate='%{text}')
+                st.plotly_chart(update_chart_layout(fig_matrix), use_container_width=True)
+            
+            st.markdown("---")
+            st.markdown("### Partnership Insights")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("Total Partnerships", int(filtered['partnership_area'].nunique()))
+            with col2:
+                largest_part = filtered['partnership_area'].value_counts().index[0]
+                largest_count = filtered['partnership_area'].value_counts().values[0]
+                st.metric("Largest Partnership", f"{largest_part} ({largest_count})")
+            with col3:
+                st.metric("Avg Students/Partnership", int(len(filtered) / filtered['partnership_area'].nunique()))
+    
+
         st.markdown("## Equity Analysis")
         st.warning("Flag_ATSI, Flag_EALD, Flag_SWD columns - ready for addition")
         st.info("Once added: representation %, intersectionality, gap analysis")
