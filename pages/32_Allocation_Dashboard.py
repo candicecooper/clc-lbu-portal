@@ -54,10 +54,28 @@ st.markdown("""
         background: #1a2a3a !important;
         border: 1px solid #00e5ff !important;
         border-radius: 6px !important;
+        color: #ffffff !important;
     }
     [data-testid="stSelectbox"] label { color: #ffffff !important; font-weight: bold; }
-    [data-testid="stSelectbox"] [role="listbox"] { background: #1a2a3a !important; }
-    [data-testid="stSelectbox"] [role="option"] { color: #ffffff !important; }
+    
+    /* DROPDOWN MENU/LIST WHEN OPENED */
+    [data-testid="stSelectbox"] [role="listbox"] { 
+        background: #1a2a3a !important; 
+        border: 1px solid #00e5ff !important;
+    }
+    [data-testid="stSelectbox"] [role="option"] { 
+        color: #ffffff !important; 
+        background: #1a2a3a !important;
+    }
+    [data-testid="stSelectbox"] [role="option"]:hover { 
+        background: rgba(0,229,255,0.3) !important;
+        color: #ffffff !important;
+    }
+    
+    /* STREAMLIT SELECT OVERRIDE */
+    .stSelectbox [role="listbox"] { background: #1a2a3a !important; }
+    .stSelectbox [role="option"] { color: #ffffff !important; background: #1a2a3a !important; }
+    .stSelectbox [aria-selected="true"] { background: rgba(0,229,255,0.2) !important; color: #ffffff !important; }
     
     /* FILE UPLOADER */
     [data-testid="stFileUploader"] { background: #1a2a3a !important; border: 1px solid #00e5ff !important; border-radius: 6px !important; }
