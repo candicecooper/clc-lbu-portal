@@ -987,28 +987,46 @@ else:
         st.markdown("## Equity Deep Dive Analysis")
         st.markdown("Separate analysis of ATSI, EALD, and DCP cohorts with school socioeconomic context")
         
-        # Load Excel file to get flag columns (not yet in Supabase)
+        # Load Excel file to get flag columns
+        equity_df = filtered.copy()
         try:
             excel_df = pd.read_excel('/mnt/user-data/uploads/CLC_Allocation_Dashboard_2026_WithNames_1.xlsx')
-            flag_cols_to_merge = ['Student_Name', 'Flag_ATSI', 'Flag_EALD', 'Flag_DCP_involvement']
-            flag_df = excel_df[[col for col in flag_cols_to_merge if col in excel_df.columns]]
             
-            # Merge with filtered data
-            equity_df = filtered.copy()
+            # Normalize names for matching
+            excel_df['name_match'] = excel_df['Student_Name'].str.strip().str.lower() if 'Student_Name' in excel_df.columns else ''
+            equity_df['name_match'] = equity_df['student_name'].str.strip().str.lower()
+            
+            # Create flag dataframe with normalized names
+            flag_cols_to_keep = ['name_match']
+            if 'Flag_ATSI' in excel_df.columns:
+                flag_cols_to_keep.append('Flag_ATSI')
+            if 'Flag_EALD' in excel_df.columns:
+                flag_cols_to_keep.append('Flag_EALD')
+            if 'Flag_DCP_involvement' in excel_df.columns:
+                flag_cols_to_keep.append('Flag_DCP_involvement')
+            
+            flag_df = excel_df[flag_cols_to_keep].drop_duplicates('name_match')
+            
+            # Merge on normalized name
             equity_df = equity_df.merge(
                 flag_df,
-                left_on='student_name',
-                right_on='Student_Name',
+                on='name_match',
                 how='left'
             )
+            equity_df = equity_df.drop('name_match', axis=1)
+            
         except Exception as e:
             st.error(f"Could not load flag columns from Excel: {e}")
-            equity_df = filtered.copy()
         
         # DEBUG
-        with st.expander("🔍 Debug - Loaded Columns"):
-            flag_cols = [c for c in equity_df.columns if 'Flag' in c or 'flag' in c]
+        with st.expander("🔍 Debug - Equity Section"):
+            flag_cols = [c for c in equity_df.columns if 'Flag' in c]
             st.write(f"**Flag columns found:** {flag_cols}")
+            st.write(f"**Rows after merge:** {len(equity_df)}")
+            if 'Flag_ATSI' in equity_df.columns:
+                st.write(f"Flag_ATSI value counts:\n{equity_df['Flag_ATSI'].value_counts(dropna=False)}")
+            if 'Flag_EALD' in equity_df.columns:
+                st.write(f"Flag_EALD value counts:\n{equity_df['Flag_EALD'].value_counts(dropna=False)}")
         
         # Standardize flag values
         def standardize_flag(val):
