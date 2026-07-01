@@ -490,6 +490,36 @@ def render_smartar_chart(collated, program):
     return fig_smartar, df_smartar
 
 # ============================================================================
+# REPORT BUILDERS (CSV downloads)
+# ============================================================================
+
+def build_section_report(df, section_name, scope_label, term, year):
+    """Return CSV bytes for a single section with a short report header."""
+    header = (
+        "CLC-LBU Assessment Analytics Report\n"
+        f"Section,{section_name}\n"
+        f"Scope,{scope_label}\n"
+        f"Term,{term}\n"
+        f"Year,{year}\n"
+        f"Generated,{datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
+    )
+    return (header + df.to_csv(index=False)).encode('utf-8')
+
+def build_combined_report(sections, scope_label, term, year):
+    """sections: list of (name, dataframe). Returns one CSV with all sections stacked."""
+    parts = [
+        "CLC-LBU Assessment Analytics Report\n",
+        f"Scope,{scope_label}\n",
+        f"Term,{term}\n",
+        f"Year,{year}\n",
+        f"Generated,{datetime.now().strftime('%d/%m/%Y %H:%M')}\n",
+    ]
+    for name, df in sections:
+        parts.append(f"\n{name}\n")
+        parts.append(df.to_csv(index=False))
+    return ("".join(parts)).encode('utf-8')
+
+# ============================================================================
 # MAIN
 # ============================================================================
 
@@ -579,6 +609,46 @@ def main():
         col1.metric("✅ Reached Expected", int(df_smartar['Reached Expected'].sum()))
         col2.metric("⬆️ Above Expectation", int(df_smartar['Above Expectation'].sum()))
         col3.metric("🌟 Exceeding", int(df_smartar['Exceeding'].sum()))
+        
+        # Download reports
+        st.markdown("---")
+        st.markdown("### 📥 Download Reports")
+        dl1, dl2, dl3, dl4 = st.columns(4)
+        with dl1:
+            st.download_button(
+                "🎵 Sounds Write",
+                data=build_section_report(df_sw, "Sounds Write", program, term, year),
+                file_name=f"sounds_write_{program}_T{term}_{year}.csv",
+                mime="text/csv",
+                key="dl_spv_sw"
+            )
+        with dl2:
+            st.download_button(
+                "💬 Word Aware",
+                data=build_section_report(df_wa, "Word Aware", program, term, year),
+                file_name=f"word_aware_{program}_T{term}_{year}.csv",
+                mime="text/csv",
+                key="dl_spv_wa"
+            )
+        with dl3:
+            st.download_button(
+                "🎯 SMARTAR",
+                data=build_section_report(df_smartar, "SMARTAR Goal Outcomes", program, term, year),
+                file_name=f"smartar_{program}_T{term}_{year}.csv",
+                mime="text/csv",
+                key="dl_spv_sm"
+            )
+        with dl4:
+            st.download_button(
+                "📦 Full Report (all)",
+                data=build_combined_report(
+                    [("SOUNDS WRITE", df_sw), ("WORD AWARE", df_wa), ("SMARTAR GOAL OUTCOMES", df_smartar)],
+                    program, term, year
+                ),
+                file_name=f"full_report_{program}_T{term}_{year}.csv",
+                mime="text/csv",
+                key="dl_spv_all"
+            )
     
     # ========================================================================
     # TERM OVERVIEW - All programs on one screen
@@ -733,6 +803,46 @@ def main():
         st.dataframe(df_wa, use_container_width=True)
         st.markdown("#### 🎯 SMARTAR Goal Outcomes")
         st.dataframe(df_smartar, use_container_width=True)
+        
+        # Download reports
+        st.markdown("---")
+        st.markdown("### 📥 Download Reports")
+        dl1, dl2, dl3, dl4 = st.columns(4)
+        with dl1:
+            st.download_button(
+                "🎵 Sounds Write",
+                data=build_section_report(df_sw, "Sounds Write", "All Programs", term, year),
+                file_name=f"sounds_write_AllPrograms_T{term}_{year}.csv",
+                mime="text/csv",
+                key="dl_ws_sw"
+            )
+        with dl2:
+            st.download_button(
+                "💬 Word Aware",
+                data=build_section_report(df_wa, "Word Aware", "All Programs", term, year),
+                file_name=f"word_aware_AllPrograms_T{term}_{year}.csv",
+                mime="text/csv",
+                key="dl_ws_wa"
+            )
+        with dl3:
+            st.download_button(
+                "🎯 SMARTAR",
+                data=build_section_report(df_smartar, "SMARTAR Goal Outcomes", "All Programs", term, year),
+                file_name=f"smartar_AllPrograms_T{term}_{year}.csv",
+                mime="text/csv",
+                key="dl_ws_sm"
+            )
+        with dl4:
+            st.download_button(
+                "📦 Full Report (all)",
+                data=build_combined_report(
+                    [("SOUNDS WRITE", df_sw), ("WORD AWARE", df_wa), ("SMARTAR GOAL OUTCOMES", df_smartar)],
+                    "All Programs", term, year
+                ),
+                file_name=f"full_report_AllPrograms_T{term}_{year}.csv",
+                mime="text/csv",
+                key="dl_ws_all"
+            )
     
     # ========================================================================
     # DETAILED ANALYSIS - Tabs for deep dive
@@ -779,6 +889,13 @@ def main():
             st.plotly_chart(fig_sw, use_container_width=True)
             st.markdown("#### Data Table")
             st.dataframe(df_sw, use_container_width=True)
+            st.download_button(
+                "📥 Download Sounds Write Report",
+                data=build_section_report(df_sw, "Sounds Write", program, term, year),
+                file_name=f"sounds_write_{program}_T{term}_{year}.csv",
+                mime="text/csv",
+                key="dl_da_sw"
+            )
         
         # Tab 2: Word Aware
         with tab2:
@@ -787,6 +904,13 @@ def main():
             st.plotly_chart(fig_wa, use_container_width=True)
             st.markdown("#### Data Table")
             st.dataframe(df_wa, use_container_width=True)
+            st.download_button(
+                "📥 Download Word Aware Report",
+                data=build_section_report(df_wa, "Word Aware", program, term, year),
+                file_name=f"word_aware_{program}_T{term}_{year}.csv",
+                mime="text/csv",
+                key="dl_da_wa"
+            )
         
         # Tab 3: SMARTAR
         with tab3:
@@ -800,6 +924,13 @@ def main():
             col3.metric("🌟 Exceeding", int(df_smartar['Exceeding'].sum()))
             st.markdown("#### Data Table")
             st.dataframe(df_smartar, use_container_width=True)
+            st.download_button(
+                "📥 Download SMARTAR Report",
+                data=build_section_report(df_smartar, "SMARTAR Goal Outcomes", program, term, year),
+                file_name=f"smartar_{program}_T{term}_{year}.csv",
+                mime="text/csv",
+                key="dl_da_sm"
+            )
         
         # Tab 4: Raw Data
         with tab4:
