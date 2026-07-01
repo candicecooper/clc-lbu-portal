@@ -64,18 +64,18 @@ st.markdown("""
         font-weight: bold !important;
     }
     
-    /* Download buttons - amber fill, white bold text (always readable) */
+    /* Download buttons - match the Program/Term/Year selector boxes */
     .stDownloadButton > button {
-        background: linear-gradient(135deg, #C8760A 0%, #e08a1e 100%) !important;
+        background-color: #12193f !important;
         color: #ffffff !important;
-        border: 1px solid #ffb45a !important;
-        border-radius: 10px !important;
-        font-weight: 700 !important;
+        border: 1px solid rgba(0, 229, 255, 0.4) !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
     }
     .stDownloadButton > button:hover {
-        background: linear-gradient(135deg, #e08a1e 0%, #C8760A 100%) !important;
+        background-color: #1f2a5a !important;
         color: #ffffff !important;
-        border: 1px solid #ffffff !important;
+        border: 1px solid rgba(0, 229, 255, 0.8) !important;
     }
     .stDownloadButton > button * {
         color: #ffffff !important;
