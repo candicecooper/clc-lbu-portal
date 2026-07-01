@@ -199,24 +199,49 @@ allocation_df = load_allocation_data()
 flag_df = None
 if allocation_df is not None:
     try:
+        import os
         import glob
-        # Find the Excel file in uploads
-        excel_files = glob.glob('/mnt/user-data/uploads/*Allocation*.xlsx')
-        if excel_files:
-            excel_path = excel_files[0]  # Use first matching file
+        
+        # Try different approaches to find the Excel file
+        excel_path = None
+        
+        # Approach 1: Direct path
+        if os.path.exists('/mnt/user-data/uploads/CLC_Allocation_Dashboard_2026_WithNames_1.xlsx'):
+            excel_path = '/mnt/user-data/uploads/CLC_Allocation_Dashboard_2026_WithNames_1.xlsx'
+        
+        # Approach 2: Glob search
+        if not excel_path:
+            excel_files = glob.glob('/mnt/user-data/uploads/*Allocation*WithNames*.xlsx')
+            if excel_files:
+                excel_path = excel_files[0]
+        
+        # Approach 3: Any Allocation file
+        if not excel_path:
+            excel_files = glob.glob('/mnt/user-data/uploads/*Allocation*.xlsx')
+            if excel_files:
+                excel_path = excel_files[0]
+        
+        if excel_path:
             excel_data = pd.read_excel(excel_path)
+            
             # Normalize names and create flag dataframe
-            excel_data['name_match'] = excel_data['Student_Name'].str.strip().str.lower() if 'Student_Name' in excel_data.columns else ''
-            flag_cols = ['name_match']
-            if 'Flag_ATSI' in excel_data.columns:
-                flag_cols.append('Flag_ATSI')
-            if 'Flag_EALD' in excel_data.columns:
-                flag_cols.append('Flag_EALD')
-            if 'Flag_DCP_involvement' in excel_data.columns:
-                flag_cols.append('Flag_DCP_involvement')
-            flag_df = excel_data[flag_cols].drop_duplicates('name_match') if flag_cols else None
+            if 'Student_Name' in excel_data.columns:
+                excel_data['name_match'] = excel_data['Student_Name'].str.strip().str.lower()
+                
+                flag_cols = ['name_match']
+                if 'Flag_ATSI' in excel_data.columns:
+                    flag_cols.append('Flag_ATSI')
+                if 'Flag_EALD' in excel_data.columns:
+                    flag_cols.append('Flag_EALD')
+                if 'Flag_DCP_involvement' in excel_data.columns:
+                    flag_cols.append('Flag_DCP_involvement')
+                
+                if len(flag_cols) > 1:  # More than just name_match
+                    flag_df = excel_data[flag_cols].drop_duplicates('name_match')
+    
     except Exception as e:
-        pass  # Silently fail if Excel loading doesn't work
+        # Silent fail - equity section will show flag_df is None
+        pass
 
 if allocation_df is None or allocation_df.empty:
     st.error("No data loaded")
