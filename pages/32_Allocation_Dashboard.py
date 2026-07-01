@@ -650,8 +650,8 @@ else:
             funding_summary = risk_df['funding_category'].value_counts().reset_index()
             funding_summary.columns = ['category', 'count']
             funding_summary['count'] = funding_summary['count'].astype(int)
-            # Sort by category number
-            funding_summary['sort_key'] = funding_summary['category'].str.extract(r'(\d+)').astype(int)
+            # Sort by category number - handle NaN safely
+            funding_summary['sort_key'] = pd.to_numeric(funding_summary['category'].str.extract(r'(\d+)')[0], errors='coerce').fillna(0).astype(int)
             funding_summary = funding_summary.sort_values('sort_key', ascending=False)
             
             fig_funding = px.bar(
@@ -982,341 +982,202 @@ else:
 
 
 
+
     elif section == "Equity":
         st.markdown("## Equity Deep Dive Analysis")
         st.markdown("Separate analysis of ATSI, EALD, and DCP cohorts with school socioeconomic context")
         
-        # Load school SES data (master database)
+        # Standardize flag values
+        def standardize_flag(val):
+            if pd.isna(val):
+                return 'No'
+            return 'Yes' if str(val).upper() == 'YES' else 'No'
+        
+        # Create working copy with standardized flags
+        equity_df = filtered.copy()
+        if 'Flag_ATSI' in equity_df.columns:
+            equity_df['Flag_ATSI'] = equity_df['Flag_ATSI'].apply(standardize_flag)
+        if 'Flag_EALD' in equity_df.columns:
+            equity_df['Flag_EALD'] = equity_df['Flag_EALD'].apply(standardize_flag)
+        if 'Flag_DCP_involvement' in equity_df.columns:
+            equity_df['Flag_DCP'] = equity_df['Flag_DCP_involvement'].apply(standardize_flag)
+        
+        # School SES data
         school_ses_data = {
-            'Le Fevre High School': {'SEIFA_IRSAD': 850, 'Disadvantage_Level': 'Very High', 'Indigenous_Percent': 18, 'EALD_Percent': 22},
-            'Largs Bay Primary School': {'SEIFA_IRSAD': 860, 'Disadvantage_Level': 'Very High', 'Indigenous_Percent': 16, 'EALD_Percent': 20},
-            'Ocean View College': {'SEIFA_IRSAD': 880, 'Disadvantage_Level': 'High', 'Indigenous_Percent': 12, 'EALD_Percent': 18},
-            'Woodville High School': {'SEIFA_IRSAD': 890, 'Disadvantage_Level': 'High', 'Indigenous_Percent': 8, 'EALD_Percent': 15},
-            'Adelaide High School': {'SEIFA_IRSAD': 900, 'Disadvantage_Level': 'Medium', 'Indigenous_Percent': 7, 'EALD_Percent': 14},
-            'Elizabeth High School': {'SEIFA_IRSAD': 820, 'Disadvantage_Level': 'Very High', 'Indigenous_Percent': 15, 'EALD_Percent': 25},
-            'Port Adelaide High School': {'SEIFA_IRSAD': 840, 'Disadvantage_Level': 'Very High', 'Indigenous_Percent': 20, 'EALD_Percent': 28},
-            'Brighton Primary School': {'SEIFA_IRSAD': 950, 'Disadvantage_Level': 'Low', 'Indigenous_Percent': 4, 'EALD_Percent': 8},
-            'Glenelg High School': {'SEIFA_IRSAD': 930, 'Disadvantage_Level': 'Low', 'Indigenous_Percent': 3, 'EALD_Percent': 7},
+            'Le Fevre High School': {'SEIFA_IRSAD': 850, 'Disadvantage_Level': 'Very High'},
+            'Largs Bay Primary School': {'SEIFA_IRSAD': 860, 'Disadvantage_Level': 'Very High'},
+            'Ocean View College': {'SEIFA_IRSAD': 880, 'Disadvantage_Level': 'High'},
+            'Woodville High School': {'SEIFA_IRSAD': 890, 'Disadvantage_Level': 'High'},
+            'Adelaide High School': {'SEIFA_IRSAD': 900, 'Disadvantage_Level': 'Medium'},
+            'Elizabeth High School': {'SEIFA_IRSAD': 820, 'Disadvantage_Level': 'Very High'},
+            'Port Adelaide High School': {'SEIFA_IRSAD': 840, 'Disadvantage_Level': 'Very High'},
+            'Brighton Primary School': {'SEIFA_IRSAD': 950, 'Disadvantage_Level': 'Low'},
+            'Glenelg High School': {'SEIFA_IRSAD': 930, 'Disadvantage_Level': 'Low'},
         }
         
-        # Create tabs for each cohort
-        tab_atsi, tab_eald, tab_dcp = st.tabs(["ATSI Deep Dive", "EALD Deep Dive", "DCP Deep Dive"])
+        tab_atsi, tab_eald, tab_dcp = st.tabs(["🇦🇺 ATSI Deep Dive", "🗣️ EALD Deep Dive", "🌏 DCP Deep Dive"])
         
-        # === TAB 1: ATSI ===
+        # === ATSI ===
         with tab_atsi:
-            st.markdown("### Aboriginal & Torres Strait Islander (ATSI) Students")
+            st.markdown("### Aboriginal & Torres Strait Islander Students")
+            atsi_df = equity_df[equity_df['Flag_ATSI'] == 'Yes']
             
-            atsi_students = filtered[filtered['Flag_ATSI'] == 'Yes'].copy() if 'Flag_ATSI' in filtered.columns else pd.DataFrame()
-            
-            if len(atsi_students) > 0:
-                atsi_students['intersecting_needs'] = 0
-                
-                if 'Flag_EALD' in atsi_students.columns:
-                    atsi_students.loc[atsi_students['Flag_EALD'] == 'Yes', 'intersecting_needs'] += 1
-                if 'Flag_DCP' in atsi_students.columns:
-                    atsi_students.loc[atsi_students['Flag_DCP'] == 'Yes', 'intersecting_needs'] += 1
-                
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("ATSI Total", int(len(atsi_students)))
-                col2.metric("With 1+ Additional Need", int((atsi_students['intersecting_needs'] > 0).sum()))
-                col3.metric("ATSI + EALD", int(((atsi_students['Flag_EALD'] == 'Yes') if 'Flag_EALD' in atsi_students.columns else False).sum()))
-                col4.metric("ATSI + DCP", int(((atsi_students['Flag_DCP'] == 'Yes') if 'Flag_DCP' in atsi_students.columns else False).sum()))
+            if len(atsi_df) > 0:
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Total ATSI", len(atsi_df))
+                multi_need = ((atsi_df['Flag_EALD'] == 'Yes') | (atsi_df['Flag_DCP'] == 'Yes')).sum()
+                c2.metric("With 1+ Need", multi_need)
+                c3.metric("ATSI + EALD", (atsi_df['Flag_EALD'] == 'Yes').sum())
+                c4.metric("ATSI + DCP", (atsi_df['Flag_DCP'] == 'Yes').sum())
                 
                 st.markdown("---")
-                st.markdown("#### ATSI Students by Term")
-                
-                if 'term_clean' in atsi_students.columns:
-                    atsi_by_term = atsi_students['term_clean'].value_counts().sort_index().reset_index()
-                    atsi_by_term.columns = ['term', 'count']
-                    atsi_by_term['count'] = atsi_by_term['count'].astype(int)
-                    atsi_by_term['Term'] = 'T' + atsi_by_term['term'].astype(int).astype(str)
-                    
-                    fig_atsi_term = px.bar(
-                        atsi_by_term,
-                        x='Term',
-                        y='count',
-                        text='count',
-                        color_discrete_sequence=['#8B4513'],
-                        title='ATSI Students per Term',
-                        labels={'Term': '', 'count': 'Students'}
-                    )
-                    fig_atsi_term.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
-                    st.plotly_chart(update_chart_layout(fig_atsi_term), use_container_width=True)
+                if 'term_clean' in atsi_df.columns and len(atsi_df['term_clean'].dropna()) > 0:
+                    by_term = atsi_df['term_clean'].value_counts().sort_index()
+                    fig = px.bar(by_term, title='ATSI Students by Term', labels={'term_clean': 'Term', 'value': 'Count'},
+                                 color_discrete_sequence=['#8B4513'])
+                    fig.update_traces(textposition='outside', text=by_term.values, textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig), use_container_width=True)
                 
                 st.markdown("---")
-                st.markdown("#### Schools Referring ATSI Students (with SES Context)")
-                
-                if 'school' in atsi_students.columns:
-                    school_alloc = atsi_students['school'].value_counts().head(10).reset_index()
-                    school_alloc.columns = ['school', 'atsi_referrals']
-                    school_alloc['atsi_referrals'] = school_alloc['atsi_referrals'].astype(int)
+                if 'school' in atsi_df.columns:
+                    school_counts = atsi_df['school'].value_counts().head(10)
+                    school_data = pd.DataFrame({'School': school_counts.index, 'Count': school_counts.values})
+                    school_data['SES'] = school_data['School'].apply(lambda x: school_ses_data.get(x, {}).get('Disadvantage_Level', 'Unknown'))
                     
-                    school_alloc['SES_Context'] = school_alloc['school'].apply(
-                        lambda x: school_ses_data.get(x, {}).get('Disadvantage_Level', 'Unknown')
-                    )
-                    
-                    fig_school = px.bar(
-                        school_alloc,
-                        y='school',
-                        x='atsi_referrals',
-                        orientation='h',
-                        text='atsi_referrals',
-                        color='SES_Context',
+                    fig = px.bar(school_data, y='School', x='Count', orientation='h', text='Count', color='SES',
                         color_discrete_map={'Very High': '#f44336', 'High': '#ff9800', 'Medium': '#ffc107', 'Low': '#4caf50', 'Unknown': '#999'},
-                        title='Top Schools Referring ATSI Students',
-                        labels={'school': '', 'atsi_referrals': 'ATSI Referrals'}
-                    )
-                    fig_school.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
-                    fig_school.update_yaxes(categoryorder='total ascending')
-                    st.plotly_chart(update_chart_layout(fig_school), use_container_width=True)
+                        title='Top Schools (ATSI Referrals)')
+                    fig.update_yaxes(categoryorder='total ascending')
+                    fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig), use_container_width=True)
                 
                 st.markdown("---")
-                st.markdown("#### ATSI Partnerships")
-                
-                if 'partnership_area' in atsi_students.columns:
-                    atsi_partners = atsi_students['partnership_area'].value_counts().head(8).reset_index()
-                    atsi_partners.columns = ['partnership', 'count']
-                    atsi_partners['count'] = atsi_partners['count'].astype(int)
-                    
-                    fig_part = px.bar(
-                        atsi_partners,
-                        y='partnership',
-                        x='count',
-                        orientation='h',
-                        text='count',
-                        color_discrete_sequence=['#8B4513'],
-                        title='Top Partnerships Serving ATSI Students',
-                        labels={'partnership': '', 'count': 'Count'}
-                    )
-                    fig_part.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
-                    st.plotly_chart(update_chart_layout(fig_part), use_container_width=True)
+                if 'partnership_area' in atsi_df.columns:
+                    part_counts = atsi_df['partnership_area'].value_counts().head(8)
+                    fig = px.bar(part_counts, title='Top Partnerships (ATSI)',
+                        color_discrete_sequence=['#8B4513'], labels={'value': 'Students'})
+                    fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig), use_container_width=True)
                 
                 st.markdown("---")
-                st.markdown("#### ATSI with Multiple Needs (2+)")
-                
-                multi_need_atsi = atsi_students[atsi_students['intersecting_needs'] >= 2]
-                if len(multi_need_atsi) > 0:
-                    display_cols = ['student_name', 'program', 'year_level', 'school', 'partnership_area']
-                    display_cols = [col for col in display_cols if col in multi_need_atsi.columns]
-                    
-                    multi_display = multi_need_atsi[display_cols].copy()
-                    st.dataframe(multi_display, use_container_width=True, hide_index=True)
-                    st.info(f"**{len(multi_need_atsi)} ATSI students** with 2+ additional needs")
+                multi_atsi = atsi_df[(atsi_df['Flag_EALD'] == 'Yes') & (atsi_df['Flag_DCP'] == 'Yes')]
+                if len(multi_atsi) > 0:
+                    cols_show = ['student_name', 'program', 'year_level', 'school']
+                    cols_show = [c for c in cols_show if c in multi_atsi.columns]
+                    st.markdown("#### ATSI with BOTH EALD + DCP")
+                    st.dataframe(multi_atsi[cols_show], use_container_width=True, hide_index=True)
                 else:
-                    st.success("✅ No ATSI students with multiple intersecting needs")
+                    st.info("No ATSI students with both EALD + DCP")
             else:
-                st.info("No ATSI students in current selection")
+                st.info("No ATSI students in current filters")
         
-        # === TAB 2: EALD ===
+        # === EALD ===
         with tab_eald:
-            st.markdown("### English as Additional Language or Dialect (EALD) Students")
+            st.markdown("### English as Additional Language (EALD) Students")
+            eald_df = equity_df[equity_df['Flag_EALD'] == 'Yes']
             
-            eald_students = filtered[filtered['Flag_EALD'] == 'Yes'].copy() if 'Flag_EALD' in filtered.columns else pd.DataFrame()
-            
-            if len(eald_students) > 0:
-                eald_students['intersecting_needs'] = 0
-                
-                if 'Flag_ATSI' in eald_students.columns:
-                    eald_students.loc[eald_students['Flag_ATSI'] == 'Yes', 'intersecting_needs'] += 1
-                if 'Flag_DCP' in eald_students.columns:
-                    eald_students.loc[eald_students['Flag_DCP'] == 'Yes', 'intersecting_needs'] += 1
-                
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("EALD Total", int(len(eald_students)))
-                col2.metric("With 1+ Additional Need", int((eald_students['intersecting_needs'] > 0).sum()))
-                col3.metric("EALD + ATSI", int(((eald_students['Flag_ATSI'] == 'Yes') if 'Flag_ATSI' in eald_students.columns else False).sum()))
-                col4.metric("EALD + DCP", int(((eald_students['Flag_DCP'] == 'Yes') if 'Flag_DCP' in eald_students.columns else False).sum()))
+            if len(eald_df) > 0:
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Total EALD", len(eald_df))
+                multi_need = ((eald_df['Flag_ATSI'] == 'Yes') | (eald_df['Flag_DCP'] == 'Yes')).sum()
+                c2.metric("With 1+ Need", multi_need)
+                c3.metric("EALD + ATSI", (eald_df['Flag_ATSI'] == 'Yes').sum())
+                c4.metric("EALD + DCP", (eald_df['Flag_DCP'] == 'Yes').sum())
                 
                 st.markdown("---")
-                st.markdown("#### EALD Students by Term")
-                
-                if 'term_clean' in eald_students.columns:
-                    eald_by_term = eald_students['term_clean'].value_counts().sort_index().reset_index()
-                    eald_by_term.columns = ['term', 'count']
-                    eald_by_term['count'] = eald_by_term['count'].astype(int)
-                    eald_by_term['Term'] = 'T' + eald_by_term['term'].astype(int).astype(str)
-                    
-                    fig_eald_term = px.bar(
-                        eald_by_term,
-                        x='Term',
-                        y='count',
-                        text='count',
-                        color_discrete_sequence=['#20B2AA'],
-                        title='EALD Students per Term',
-                        labels={'Term': '', 'count': 'Students'}
-                    )
-                    fig_eald_term.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
-                    st.plotly_chart(update_chart_layout(fig_eald_term), use_container_width=True)
+                if 'term_clean' in eald_df.columns and len(eald_df['term_clean'].dropna()) > 0:
+                    by_term = eald_df['term_clean'].value_counts().sort_index()
+                    fig = px.bar(by_term, title='EALD Students by Term', labels={'term_clean': 'Term', 'value': 'Count'},
+                                 color_discrete_sequence=['#20B2AA'])
+                    fig.update_traces(textposition='outside', text=by_term.values, textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig), use_container_width=True)
                 
                 st.markdown("---")
-                st.markdown("#### Schools Referring EALD Students (with SES Context)")
-                
-                if 'school' in eald_students.columns:
-                    school_eald = eald_students['school'].value_counts().head(10).reset_index()
-                    school_eald.columns = ['school', 'eald_referrals']
-                    school_eald['eald_referrals'] = school_eald['eald_referrals'].astype(int)
+                if 'school' in eald_df.columns:
+                    school_counts = eald_df['school'].value_counts().head(10)
+                    school_data = pd.DataFrame({'School': school_counts.index, 'Count': school_counts.values})
+                    school_data['SES'] = school_data['School'].apply(lambda x: school_ses_data.get(x, {}).get('Disadvantage_Level', 'Unknown'))
                     
-                    school_eald['SES_Context'] = school_eald['school'].apply(
-                        lambda x: school_ses_data.get(x, {}).get('Disadvantage_Level', 'Unknown')
-                    )
-                    
-                    fig_school_eald = px.bar(
-                        school_eald,
-                        y='school',
-                        x='eald_referrals',
-                        orientation='h',
-                        text='eald_referrals',
-                        color='SES_Context',
+                    fig = px.bar(school_data, y='School', x='Count', orientation='h', text='Count', color='SES',
                         color_discrete_map={'Very High': '#f44336', 'High': '#ff9800', 'Medium': '#ffc107', 'Low': '#4caf50', 'Unknown': '#999'},
-                        title='Top Schools Referring EALD Students',
-                        labels={'school': '', 'eald_referrals': 'EALD Referrals'}
-                    )
-                    fig_school_eald.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
-                    fig_school_eald.update_yaxes(categoryorder='total ascending')
-                    st.plotly_chart(update_chart_layout(fig_school_eald), use_container_width=True)
+                        title='Top Schools (EALD Referrals)')
+                    fig.update_yaxes(categoryorder='total ascending')
+                    fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig), use_container_width=True)
                 
                 st.markdown("---")
-                st.markdown("#### EALD Partnerships")
-                
-                if 'partnership_area' in eald_students.columns:
-                    eald_partners = eald_students['partnership_area'].value_counts().head(8).reset_index()
-                    eald_partners.columns = ['partnership', 'count']
-                    eald_partners['count'] = eald_partners['count'].astype(int)
-                    
-                    fig_part_eald = px.bar(
-                        eald_partners,
-                        y='partnership',
-                        x='count',
-                        orientation='h',
-                        text='count',
-                        color_discrete_sequence=['#20B2AA'],
-                        title='Top Partnerships Serving EALD Students',
-                        labels={'partnership': '', 'count': 'Count'}
-                    )
-                    fig_part_eald.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
-                    st.plotly_chart(update_chart_layout(fig_part_eald), use_container_width=True)
+                if 'partnership_area' in eald_df.columns:
+                    part_counts = eald_df['partnership_area'].value_counts().head(8)
+                    fig = px.bar(part_counts, title='Top Partnerships (EALD)',
+                        color_discrete_sequence=['#20B2AA'], labels={'value': 'Students'})
+                    fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig), use_container_width=True)
                 
                 st.markdown("---")
-                st.markdown("#### EALD with Multiple Needs (2+)")
-                
-                multi_eald = eald_students[eald_students['intersecting_needs'] >= 2]
+                multi_eald = eald_df[(eald_df['Flag_ATSI'] == 'Yes') & (eald_df['Flag_DCP'] == 'Yes')]
                 if len(multi_eald) > 0:
-                    display_cols = ['student_name', 'program', 'year_level', 'school', 'partnership_area']
-                    display_cols = [col for col in display_cols if col in multi_eald.columns]
-                    
-                    multi_eald_display = multi_eald[display_cols].copy()
-                    st.dataframe(multi_eald_display, use_container_width=True, hide_index=True)
-                    st.info(f"**{len(multi_eald)} EALD students** with 2+ additional needs")
+                    cols_show = ['student_name', 'program', 'year_level', 'school']
+                    cols_show = [c for c in cols_show if c in multi_eald.columns]
+                    st.markdown("#### EALD with BOTH ATSI + DCP")
+                    st.dataframe(multi_eald[cols_show], use_container_width=True, hide_index=True)
                 else:
-                    st.success("✅ No EALD students with multiple intersecting needs")
+                    st.info("No EALD students with both ATSI + DCP")
             else:
-                st.info("No EALD students in current selection")
+                st.info("No EALD students in current filters")
         
-        # === TAB 3: DCP ===
+        # === DCP ===
         with tab_dcp:
-            st.markdown("### Diverse Cultural and Linguistic Background (DCP) Students")
+            st.markdown("### Diverse Cultural & Linguistic Background (DCP) Students")
+            dcp_df = equity_df[equity_df['Flag_DCP'] == 'Yes']
             
-            dcp_students = filtered[filtered['Flag_DCP'] == 'Yes'].copy() if 'Flag_DCP' in filtered.columns else pd.DataFrame()
-            
-            if len(dcp_students) > 0:
-                dcp_students['intersecting_needs'] = 0
-                
-                if 'Flag_ATSI' in dcp_students.columns:
-                    dcp_students.loc[dcp_students['Flag_ATSI'] == 'Yes', 'intersecting_needs'] += 1
-                if 'Flag_EALD' in dcp_students.columns:
-                    dcp_students.loc[dcp_students['Flag_EALD'] == 'Yes', 'intersecting_needs'] += 1
-                
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("DCP Total", int(len(dcp_students)))
-                col2.metric("With 1+ Additional Need", int((dcp_students['intersecting_needs'] > 0).sum()))
-                col3.metric("DCP + ATSI", int(((dcp_students['Flag_ATSI'] == 'Yes') if 'Flag_ATSI' in dcp_students.columns else False).sum()))
-                col4.metric("DCP + EALD", int(((dcp_students['Flag_EALD'] == 'Yes') if 'Flag_EALD' in dcp_students.columns else False).sum()))
+            if len(dcp_df) > 0:
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Total DCP", len(dcp_df))
+                multi_need = ((dcp_df['Flag_ATSI'] == 'Yes') | (dcp_df['Flag_EALD'] == 'Yes')).sum()
+                c2.metric("With 1+ Need", multi_need)
+                c3.metric("DCP + ATSI", (dcp_df['Flag_ATSI'] == 'Yes').sum())
+                c4.metric("DCP + EALD", (dcp_df['Flag_EALD'] == 'Yes').sum())
                 
                 st.markdown("---")
-                st.markdown("#### DCP Students by Term")
-                
-                if 'term_clean' in dcp_students.columns:
-                    dcp_by_term = dcp_students['term_clean'].value_counts().sort_index().reset_index()
-                    dcp_by_term.columns = ['term', 'count']
-                    dcp_by_term['count'] = dcp_by_term['count'].astype(int)
-                    dcp_by_term['Term'] = 'T' + dcp_by_term['term'].astype(int).astype(str)
-                    
-                    fig_dcp_term = px.bar(
-                        dcp_by_term,
-                        x='Term',
-                        y='count',
-                        text='count',
-                        color_discrete_sequence=['#9370DB'],
-                        title='DCP Students per Term',
-                        labels={'Term': '', 'count': 'Students'}
-                    )
-                    fig_dcp_term.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
-                    st.plotly_chart(update_chart_layout(fig_dcp_term), use_container_width=True)
+                if 'term_clean' in dcp_df.columns and len(dcp_df['term_clean'].dropna()) > 0:
+                    by_term = dcp_df['term_clean'].value_counts().sort_index()
+                    fig = px.bar(by_term, title='DCP Students by Term', labels={'term_clean': 'Term', 'value': 'Count'},
+                                 color_discrete_sequence=['#9370DB'])
+                    fig.update_traces(textposition='outside', text=by_term.values, textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig), use_container_width=True)
                 
                 st.markdown("---")
-                st.markdown("#### Schools Referring DCP Students (with SES Context)")
-                
-                if 'school' in dcp_students.columns:
-                    school_dcp = dcp_students['school'].value_counts().head(10).reset_index()
-                    school_dcp.columns = ['school', 'dcp_referrals']
-                    school_dcp['dcp_referrals'] = school_dcp['dcp_referrals'].astype(int)
+                if 'school' in dcp_df.columns:
+                    school_counts = dcp_df['school'].value_counts().head(10)
+                    school_data = pd.DataFrame({'School': school_counts.index, 'Count': school_counts.values})
+                    school_data['SES'] = school_data['School'].apply(lambda x: school_ses_data.get(x, {}).get('Disadvantage_Level', 'Unknown'))
                     
-                    school_dcp['SES_Context'] = school_dcp['school'].apply(
-                        lambda x: school_ses_data.get(x, {}).get('Disadvantage_Level', 'Unknown')
-                    )
-                    
-                    fig_school_dcp = px.bar(
-                        school_dcp,
-                        y='school',
-                        x='dcp_referrals',
-                        orientation='h',
-                        text='dcp_referrals',
-                        color='SES_Context',
+                    fig = px.bar(school_data, y='School', x='Count', orientation='h', text='Count', color='SES',
                         color_discrete_map={'Very High': '#f44336', 'High': '#ff9800', 'Medium': '#ffc107', 'Low': '#4caf50', 'Unknown': '#999'},
-                        title='Schools Referring DCP Students',
-                        labels={'school': '', 'dcp_referrals': 'DCP Referrals'}
-                    )
-                    fig_school_dcp.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
-                    fig_school_dcp.update_yaxes(categoryorder='total ascending')
-                    st.plotly_chart(update_chart_layout(fig_school_dcp), use_container_width=True)
+                        title='Top Schools (DCP Referrals)')
+                    fig.update_yaxes(categoryorder='total ascending')
+                    fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig), use_container_width=True)
                 
                 st.markdown("---")
-                st.markdown("#### DCP Partnerships")
-                
-                if 'partnership_area' in dcp_students.columns:
-                    dcp_partners = dcp_students['partnership_area'].value_counts().head(8).reset_index()
-                    dcp_partners.columns = ['partnership', 'count']
-                    dcp_partners['count'] = dcp_partners['count'].astype(int)
-                    
-                    fig_part_dcp = px.bar(
-                        dcp_partners,
-                        y='partnership',
-                        x='count',
-                        orientation='h',
-                        text='count',
-                        color_discrete_sequence=['#9370DB'],
-                        title='Top Partnerships Serving DCP Students',
-                        labels={'partnership': '', 'count': 'Count'}
-                    )
-                    fig_part_dcp.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
-                    st.plotly_chart(update_chart_layout(fig_part_dcp), use_container_width=True)
+                if 'partnership_area' in dcp_df.columns:
+                    part_counts = dcp_df['partnership_area'].value_counts().head(8)
+                    fig = px.bar(part_counts, title='Top Partnerships (DCP)',
+                        color_discrete_sequence=['#9370DB'], labels={'value': 'Students'})
+                    fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig), use_container_width=True)
                 
                 st.markdown("---")
-                st.markdown("#### DCP with Multiple Needs (2+)")
-                
-                multi_dcp = dcp_students[dcp_students['intersecting_needs'] >= 2]
+                multi_dcp = dcp_df[(dcp_df['Flag_ATSI'] == 'Yes') & (dcp_df['Flag_EALD'] == 'Yes')]
                 if len(multi_dcp) > 0:
-                    display_cols = ['student_name', 'program', 'year_level', 'school', 'partnership_area']
-                    display_cols = [col for col in display_cols if col in multi_dcp.columns]
-                    
-                    multi_dcp_display = multi_dcp[display_cols].copy()
-                    st.dataframe(multi_dcp_display, use_container_width=True, hide_index=True)
-                    st.info(f"**{len(multi_dcp)} DCP students** with 2+ additional needs")
+                    cols_show = ['student_name', 'program', 'year_level', 'school']
+                    cols_show = [c for c in cols_show if c in multi_dcp.columns]
+                    st.markdown("#### DCP with BOTH ATSI + EALD")
+                    st.dataframe(multi_dcp[cols_show], use_container_width=True, hide_index=True)
                 else:
-                    st.success("✅ No DCP students with multiple intersecting needs")
+                    st.info("No DCP students with both ATSI + EALD")
             else:
-                st.info("No DCP students in current selection")
-    
+                st.info("No DCP students in current filters")
 
     elif section == "Waitlist":
         st.markdown("## Waitlist Status")
