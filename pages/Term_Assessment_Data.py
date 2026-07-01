@@ -64,6 +64,23 @@ st.markdown("""
         font-weight: bold !important;
     }
     
+    /* Download buttons - amber fill, white bold text (always readable) */
+    .stDownloadButton > button {
+        background: linear-gradient(135deg, #C8760A 0%, #e08a1e 100%) !important;
+        color: #ffffff !important;
+        border: 1px solid #ffb45a !important;
+        border-radius: 10px !important;
+        font-weight: 700 !important;
+    }
+    .stDownloadButton > button:hover {
+        background: linear-gradient(135deg, #e08a1e 0%, #C8760A 100%) !important;
+        color: #ffffff !important;
+        border: 1px solid #ffffff !important;
+    }
+    .stDownloadButton > button * {
+        color: #ffffff !important;
+    }
+    
     .stInfo {
         background: linear-gradient(135deg, rgba(26, 122, 122, 0.25) 0%, rgba(0, 229, 255, 0.1) 100%) !important;
         border-left: 5px solid #00e5ff !important;
