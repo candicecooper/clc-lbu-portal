@@ -259,6 +259,36 @@ def save_current_data(staff_member, program, term, year):
         st.error("Database not available")
         return False
 
+def apply_data_to_widgets(sw, wa, smartar):
+    """
+    Push section data into the individual number-field state keys so that
+    every tab displays the loaded values. This is essential: number fields
+    are driven by their own widget state, so loading a record must seed
+    these keys directly - otherwise untouched sections would rebuild as
+    zeros and overwrite previously lodged data on save.
+    """
+    sw = sw if isinstance(sw, dict) else {}
+    wa = wa if isinstance(wa, dict) else {}
+    smartar = smartar if isinstance(smartar, dict) else {}
+
+    for skill in SOUNDS_WRITE_SKILLS:
+        d = sw.get(skill, {}) if isinstance(sw.get(skill), dict) else {}
+        st.session_state[f"sw_m_{skill}"] = int(d.get('Mastered', 0))
+        st.session_state[f"sw_d_{skill}"] = int(d.get('Developing', 0))
+        st.session_state[f"sw_r_{skill}"] = int(d.get('Requires Development', 0))
+
+    for skill in WORD_AWARE_SKILLS:
+        d = wa.get(skill, {}) if isinstance(wa.get(skill), dict) else {}
+        st.session_state[f"wa_m_{skill}"] = int(d.get('Mastered', 0))
+        st.session_state[f"wa_d_{skill}"] = int(d.get('Developing', 0))
+        st.session_state[f"wa_r_{skill}"] = int(d.get('Requires Development', 0))
+
+    for cap in SMARTAR_CAPABILITIES:
+        d = smartar.get(cap, {}) if isinstance(smartar.get(cap), dict) else {}
+        st.session_state[f"smartar_re_{cap}"] = int(d.get('Reached Expected', 0))
+        st.session_state[f"smartar_ab_{cap}"] = int(d.get('Above Expectation', 0))
+        st.session_state[f"smartar_ex_{cap}"] = int(d.get('Exceeding', 0))
+
 # ============================================================================
 # MAIN
 # ============================================================================
@@ -295,10 +325,16 @@ def main():
         if st.button("📂 Load Existing Data"):
             existing = load_assessment_from_supabase(staff_member, program, term, year)
             if existing:
+                sw = json.loads(existing.get('sounds_write_data', '{}'))
+                wa = json.loads(existing.get('word_aware_data', '{}'))
+                sm = json.loads(existing.get('smartar_goals', '{}'))
+                # Seed the number fields directly so EVERY tab shows the loaded
+                # values (prevents untouched sections being zeroed on save)
+                apply_data_to_widgets(sw, wa, sm)
+                st.session_state.sounds_write = sw
+                st.session_state.word_aware = wa
+                st.session_state.smartar = sm
                 st.success("✅ Existing data loaded!")
-                st.session_state.sounds_write = json.loads(existing.get('sounds_write_data', '{}'))
-                st.session_state.word_aware = json.loads(existing.get('word_aware_data', '{}'))
-                st.session_state.smartar = json.loads(existing.get('smartar_goals', '{}'))
                 st.rerun()
             else:
                 st.info("No existing data found for this selection.")
@@ -336,22 +372,19 @@ def main():
                 mastered = st.number_input(
                     "Mastered (85-100%)",
                     min_value=0,
-                    value=st.session_state.sounds_write.get(skill, {}).get('Mastered', 0),
-                    key=f"sw_m_{skill}"
+                        key=f"sw_m_{skill}"
                 )
             with col2:
                 developing = st.number_input(
                     "Developing (65-84%)",
                     min_value=0,
-                    value=st.session_state.sounds_write.get(skill, {}).get('Developing', 0),
-                    key=f"sw_d_{skill}"
+                        key=f"sw_d_{skill}"
                 )
             with col3:
                 requires = st.number_input(
                     "Requires Dev (<65%)",
                     min_value=0,
-                    value=st.session_state.sounds_write.get(skill, {}).get('Requires Development', 0),
-                    key=f"sw_r_{skill}"
+                        key=f"sw_r_{skill}"
                 )
             
             sounds_write_data[skill] = {
@@ -387,22 +420,19 @@ def main():
                 mastered = st.number_input(
                     "Mastered (85-100%)",
                     min_value=0,
-                    value=st.session_state.word_aware.get(skill, {}).get('Mastered', 0),
-                    key=f"wa_m_{skill}"
+                        key=f"wa_m_{skill}"
                 )
             with col2:
                 developing = st.number_input(
                     "Developing (65-84%)",
                     min_value=0,
-                    value=st.session_state.word_aware.get(skill, {}).get('Developing', 0),
-                    key=f"wa_d_{skill}"
+                        key=f"wa_d_{skill}"
                 )
             with col3:
                 requires = st.number_input(
                     "Requires Dev (<65%)",
                     min_value=0,
-                    value=st.session_state.word_aware.get(skill, {}).get('Requires Development', 0),
-                    key=f"wa_r_{skill}"
+                        key=f"wa_r_{skill}"
                 )
             
             word_aware_data[skill] = {
@@ -438,22 +468,19 @@ def main():
                 reached = st.number_input(
                     "Reached Expected Goal",
                     min_value=0,
-                    value=st.session_state.smartar.get(capability, {}).get('Reached Expected', 0),
-                    key=f"smartar_re_{capability}"
+                        key=f"smartar_re_{capability}"
                 )
             with col2:
                 above = st.number_input(
                     "Above Expectation",
                     min_value=0,
-                    value=st.session_state.smartar.get(capability, {}).get('Above Expectation', 0),
-                    key=f"smartar_ab_{capability}"
+                        key=f"smartar_ab_{capability}"
                 )
             with col3:
                 exceeding = st.number_input(
                     "Exceeding",
                     min_value=0,
-                    value=st.session_state.smartar.get(capability, {}).get('Exceeding', 0),
-                    key=f"smartar_ex_{capability}"
+                        key=f"smartar_ex_{capability}"
                 )
 
             smartar_data[capability] = {
@@ -520,6 +547,7 @@ def main():
         
         with col2:
             if st.button("🔄 Clear All"):
+                apply_data_to_widgets({}, {}, {})
                 st.session_state.sounds_write = {}
                 st.session_state.word_aware = {}
                 st.session_state.smartar = {}
