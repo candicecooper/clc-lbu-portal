@@ -49,33 +49,52 @@ st.markdown("""
         margin-top: 15px;
     }
     
-    /* DROPDOWN/SELECT BOXES - DARK WITH WHITE TEXT */
-    [data-testid="stSelectbox"] > div > div { 
+    /* DROPDOWN/SELECT BOXES - AGGRESSIVE DARK STYLING */
+    [data-testid="stSelectbox"] > div > div > div { 
         background: #1a2a3a !important;
         border: 1px solid #00e5ff !important;
         border-radius: 6px !important;
         color: #ffffff !important;
     }
-    [data-testid="stSelectbox"] label { color: #ffffff !important; font-weight: bold; }
     
-    /* DROPDOWN MENU/LIST WHEN OPENED */
-    [data-testid="stSelectbox"] [role="listbox"] { 
+    /* All select/combobox variations */
+    [class*="select"] { background: #1a2a3a !important; color: #ffffff !important; }
+    [class*="combobox"] { background: #1a2a3a !important; color: #ffffff !important; }
+    
+    /* Baseui Select Override */
+    [data-baseweb="select"] { background: #1a2a3a !important; }
+    [data-baseweb="select"] > div { background: #1a2a3a !important; border: 1px solid #00e5ff !important; }
+    [data-baseweb="popover"] { background: #1a2a3a !important; }
+    [data-baseweb="menu"] { background: #1a2a3a !important; }
+    
+    /* Dropdown opened state */
+    [role="listbox"] { 
         background: #1a2a3a !important; 
         border: 1px solid #00e5ff !important;
+        color: #ffffff !important;
     }
-    [data-testid="stSelectbox"] [role="option"] { 
+    [role="option"] { 
         color: #ffffff !important; 
         background: #1a2a3a !important;
     }
-    [data-testid="stSelectbox"] [role="option"]:hover { 
+    [role="option"]:hover,
+    [role="option"][aria-selected="true"] { 
         background: rgba(0,229,255,0.3) !important;
         color: #ffffff !important;
     }
     
-    /* STREAMLIT SELECT OVERRIDE */
-    .stSelectbox [role="listbox"] { background: #1a2a3a !important; }
-    .stSelectbox [role="option"] { color: #ffffff !important; background: #1a2a3a !important; }
-    .stSelectbox [aria-selected="true"] { background: rgba(0,229,255,0.2) !important; color: #ffffff !important; }
+    /* Text in select */
+    [data-testid="stSelectbox"] input { 
+        background: #1a2a3a !important;
+        color: #ffffff !important;
+        border: 1px solid #00e5ff !important;
+    }
+    
+    /* Selectbox label */
+    [data-testid="stSelectbox"] label { 
+        color: #ffffff !important; 
+        font-weight: bold; 
+    }
     
     /* FILE UPLOADER */
     [data-testid="stFileUploader"] { background: #1a2a3a !important; border: 1px solid #00e5ff !important; border-radius: 6px !important; }
@@ -192,7 +211,7 @@ else:
         st.markdown("**Navigate**", help="Select an analysis section")
         section = st.radio(
             "Select Section",
-            ["Overview", "Trends", "Complexity", "Equity", "Waitlist"],
+            ["Overview", "Trends", "Complexity", "Risk Assessment", "Equity", "Waitlist"],
             label_visibility="collapsed"
         )
         
@@ -424,11 +443,138 @@ else:
         else:
             st.warning("Year level or program data missing")
     
+    elif section == "Risk Assessment":
+        st.markdown("## Risk & Complexity Assessment")
+        st.markdown("Identifies high-risk students and predicts placement success - enables early intervention")
+        
+        # CALCULATE RISK SCORES
+        risk_df = filtered.copy()
+        risk_df['risk_score'] = 0
+        risk_df['risk_factors'] = ''
+        
+        # Factor 1: Multiple previous placements (higher = more complex)
+        if 'total_previous_placements' in risk_df.columns:
+            risk_df['prev_placements_num'] = pd.to_numeric(risk_df['total_previous_placements'], errors='coerce').fillna(0)
+            risk_df.loc[risk_df['prev_placements_num'] >= 2, 'risk_score'] += 3
+            risk_df.loc[risk_df['prev_placements_num'] == 1, 'risk_score'] += 1
+        
+        # Factor 2: Waitlist status (waiting = higher risk)
+        if 'waitlist_status' in risk_df.columns:
+            risk_df.loc[risk_df['waitlist_status'] == 'Waiting', 'risk_score'] += 2
+        
+        # Factor 3: Extended placement (extension weeks = complexity)
+        if 'extension_weeks' in risk_df.columns:
+            risk_df['ext_weeks_num'] = pd.to_numeric(risk_df['extension_weeks'], errors='coerce').fillna(0)
+            risk_df.loc[risk_df['ext_weeks_num'] > 4, 'risk_score'] += 2
+            risk_df.loc[(risk_df['ext_weeks_num'] > 0) & (risk_df['ext_weeks_num'] <= 4), 'risk_score'] += 1
+        
+        # Factor 4: Bespoke placement (specialized needs)
+        if 'bespoke_placement' in risk_df.columns:
+            risk_df.loc[risk_df['bespoke_placement'] == 'Yes', 'risk_score'] += 2
+        
+        # Categorize risk level
+        risk_df['risk_level'] = 'Low'
+        risk_df.loc[risk_df['risk_score'] >= 5, 'risk_level'] = 'Critical'
+        risk_df.loc[(risk_df['risk_score'] >= 3) & (risk_df['risk_score'] < 5), 'risk_level'] = 'High'
+        risk_df.loc[(risk_df['risk_score'] >= 1) & (risk_df['risk_score'] < 3), 'risk_level'] = 'Medium'
+        
+        # SUMMARY METRICS
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Critical Risk", int((risk_df['risk_level'] == 'Critical').sum()))
+        col2.metric("High Risk", int((risk_df['risk_level'] == 'High').sum()))
+        col3.metric("Medium Risk", int((risk_df['risk_level'] == 'Medium').sum()))
+        col4.metric("Low Risk", int((risk_df['risk_level'] == 'Low').sum()))
+        
+        st.markdown("---")
+        st.markdown("## Risk Distribution")
+        st.markdown("Breakdown of students by risk level - Critical/High need immediate support planning")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            risk_summary = risk_df['risk_level'].value_counts().reindex(['Critical', 'High', 'Medium', 'Low'], fill_value=0)
+            fig_risk = px.bar(
+                x=risk_summary.index,
+                y=risk_summary.values,
+                text=risk_summary.values,
+                color=risk_summary.index,
+                color_discrete_map={'Critical': '#f44336', 'High': '#ff9800', 'Medium': '#ffc107', 'Low': '#4caf50'},
+                title='Students by Risk Level',
+                labels={'x': 'Risk Level', 'y': 'Count'}
+            )
+            fig_risk.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+            st.plotly_chart(update_chart_layout(fig_risk), use_container_width=True)
+        
+        with col2:
+            risk_by_prog = risk_df.groupby(['program', 'risk_level']).size().unstack(fill_value=0)
+            fig_prog_risk = px.bar(
+                risk_by_prog,
+                x=risk_by_prog.index,
+                y=['Critical', 'High', 'Medium', 'Low'],
+                title='Risk by Program',
+                labels={'value': 'Count', 'index': 'Program'},
+                color_discrete_map={'Critical': '#f44336', 'High': '#ff9800', 'Medium': '#ffc107', 'Low': '#4caf50'}
+            )
+            st.plotly_chart(update_chart_layout(fig_prog_risk), use_container_width=True)
+        
+        st.markdown("---")
+        st.markdown("## Risk Score Analysis")
+        st.markdown("Distribution of risk scores (0-9 scale) - higher score = more complex needs")
+        
+        fig_score = px.histogram(
+            risk_df,
+            x='risk_score',
+            nbins=10,
+            color_discrete_sequence=['#00e5ff'],
+            title='Risk Score Distribution',
+            labels={'risk_score': 'Risk Score (0-9)', 'count': 'Students'}
+        )
+        fig_score.update_traces(textposition='outside')
+        st.plotly_chart(update_chart_layout(fig_score), use_container_width=True)
+        
+        st.markdown("---")
+        st.markdown("## High-Risk Students (Critical)")
+        st.markdown("Students requiring immediate attention and intensive support")
+        
+        critical = risk_df[risk_df['risk_level'] == 'Critical'].copy()
+        if len(critical) > 0:
+            display_cols = ['student_name', 'program', 'year_level', 'risk_score', 'waitlist_status', 'bespoke_placement']
+            display_cols = [col for col in display_cols if col in critical.columns]
+            
+            critical_display = critical[display_cols].copy()
+            critical_display['risk_score'] = critical_display['risk_score'].astype(int)
+            critical_display = critical_display.sort_values('risk_score', ascending=False)
+            
+            st.dataframe(critical_display, use_container_width=True, hide_index=True)
+            st.info(f"**{len(critical)} students** require intervention planning")
+        else:
+            st.success("✅ No critical risk students detected")
+        
+        st.markdown("---")
+        st.markdown("## Placement Success Prediction")
+        st.markdown("Estimated likelihood of successful placement completion based on risk profile")
+        
+        risk_df['success_likelihood'] = 100 - (risk_df['risk_score'] * 10)
+        risk_df['success_likelihood'] = risk_df['success_likelihood'].clip(0, 100)
+        
+        fig_success = px.scatter(
+            risk_df,
+            x='risk_score',
+            y='success_likelihood',
+            color='risk_level',
+            size='success_likelihood',
+            hover_data=['student_name', 'program'],
+            title='Risk vs Placement Success Likelihood',
+            labels={'risk_score': 'Risk Score', 'success_likelihood': 'Success %'},
+            color_discrete_map={'Critical': '#f44336', 'High': '#ff9800', 'Medium': '#ffc107', 'Low': '#4caf50'}
+        )
+        st.plotly_chart(update_chart_layout(fig_success), use_container_width=True)
+    
     elif section == "Equity":
         st.markdown("## Equity Analysis")
         st.warning("Flag_ATSI, Flag_EALD, Flag_SWD columns - ready for addition")
         st.info("Once added: representation %, intersectionality, gap analysis")
-    
+
     elif section == "Waitlist":
         st.markdown("## Waitlist Status")
         st.markdown("Overview of current waitlist and placement completion rates - tracks student flow through the system")
