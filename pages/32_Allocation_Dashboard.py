@@ -987,6 +987,12 @@ else:
         st.markdown("## Equity Deep Dive Analysis")
         st.markdown("Separate analysis of ATSI, EALD, and DCP cohorts with school socioeconomic context")
         
+        # DEBUG
+        with st.expander("🔍 Debug - Available Columns"):
+            flag_cols = [c for c in filtered.columns if 'Flag' in c or 'flag' in c]
+            st.write(f"**Flag columns found:** {flag_cols}")
+            st.write(f"**Total columns:** {len(filtered.columns)}")
+        
         # Standardize flag values
         def standardize_flag(val):
             if pd.isna(val):
@@ -1020,7 +1026,11 @@ else:
         # === ATSI ===
         with tab_atsi:
             st.markdown("### Aboriginal & Torres Strait Islander Students")
-            atsi_df = equity_df[equity_df['Flag_ATSI'] == 'Yes']
+            if 'Flag_ATSI' not in equity_df.columns:
+                st.warning("Flag_ATSI column not found in data")
+                atsi_df = pd.DataFrame()
+            else:
+                atsi_df = equity_df[equity_df['Flag_ATSI'] == 'Yes']
             
             if len(atsi_df) > 0:
                 c1, c2, c3, c4 = st.columns(4)
@@ -1074,7 +1084,11 @@ else:
         # === EALD ===
         with tab_eald:
             st.markdown("### English as Additional Language (EALD) Students")
-            eald_df = equity_df[equity_df['Flag_EALD'] == 'Yes']
+            if 'Flag_EALD' not in equity_df.columns:
+                st.warning("Flag_EALD column not found in data")
+                eald_df = pd.DataFrame()
+            else:
+                eald_df = equity_df[equity_df['Flag_EALD'] == 'Yes']
             
             if len(eald_df) > 0:
                 c1, c2, c3, c4 = st.columns(4)
@@ -1128,7 +1142,11 @@ else:
         # === DCP ===
         with tab_dcp:
             st.markdown("### Diverse Cultural & Linguistic Background (DCP) Students")
-            dcp_df = equity_df[equity_df['Flag_DCP'] == 'Yes']
+            if 'Flag_DCP' not in equity_df.columns:
+                st.warning("Flag_DCP column not found in data")
+                dcp_df = pd.DataFrame()
+            else:
+                dcp_df = equity_df[equity_df['Flag_DCP'] == 'Yes']
             
             if len(dcp_df) > 0:
                 c1, c2, c3, c4 = st.columns(4)
