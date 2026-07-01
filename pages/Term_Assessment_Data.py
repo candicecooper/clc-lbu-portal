@@ -205,6 +205,21 @@ def get_all_assessments():
         st.error(f"Error fetching assessments: {e}")
         return None
 
+def delete_assessment_from_supabase(staff, program, term, year):
+    """Delete a single assessment record by staff/program/term/year"""
+    if not supabase:
+        st.error("⚠️ Supabase not connected.")
+        return False
+    
+    try:
+        supabase.table('term_assessments').delete().eq(
+            'staff_member', staff
+        ).eq('program', program).eq('term', int(term)).eq('year', int(year)).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error deleting record: {e}")
+        return False
+
 # ============================================================================
 # SAVE FUNCTION (used in multiple tabs)
 # ============================================================================
@@ -528,6 +543,43 @@ def main():
                 file_name=f"clc_assessments_{datetime.now().strftime('%Y%m%d')}.csv",
                 mime="text/csv"
             )
+            
+            # ================================================================
+            # DELETE A RECORD
+            # ================================================================
+            st.markdown("---")
+            st.markdown("### 🗑️ Delete a Record")
+            st.warning(
+                "Deleting permanently removes that staff member's data for the "
+                "selected program, term and year. This cannot be undone."
+            )
+            
+            # Build a label -> record map for the selector
+            record_options = {
+                f"{r['staff_member']} — {r['program']} — Term {r['term']} {r['year']}": r
+                for r in all_assessments
+            }
+            selected_label = st.selectbox(
+                "Select record to delete",
+                list(record_options.keys()),
+                key="delete_select"
+            )
+            
+            confirm_delete = st.checkbox(
+                "I understand this permanently deletes the selected record",
+                key="delete_confirm"
+            )
+            
+            if st.button("🗑️ Delete Selected Record", key="delete_btn"):
+                if not confirm_delete:
+                    st.error("Please tick the confirmation box before deleting.")
+                else:
+                    rec = record_options[selected_label]
+                    if delete_assessment_from_supabase(
+                        rec['staff_member'], rec['program'], rec['term'], rec['year']
+                    ):
+                        st.success(f"🗑️ Deleted: {selected_label}")
+                        st.rerun()
         else:
             st.info("No assessment records found yet.")
 
