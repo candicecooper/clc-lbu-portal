@@ -987,11 +987,28 @@ else:
         st.markdown("## Equity Deep Dive Analysis")
         st.markdown("Separate analysis of ATSI, EALD, and DCP cohorts with school socioeconomic context")
         
+        # Load Excel file to get flag columns (not yet in Supabase)
+        try:
+            excel_df = pd.read_excel('/mnt/user-data/uploads/CLC_Allocation_Dashboard_2026_WithNames_1.xlsx')
+            flag_cols_to_merge = ['Student_Name', 'Flag_ATSI', 'Flag_EALD', 'Flag_DCP_involvement']
+            flag_df = excel_df[[col for col in flag_cols_to_merge if col in excel_df.columns]]
+            
+            # Merge with filtered data
+            equity_df = filtered.copy()
+            equity_df = equity_df.merge(
+                flag_df,
+                left_on='student_name',
+                right_on='Student_Name',
+                how='left'
+            )
+        except Exception as e:
+            st.error(f"Could not load flag columns from Excel: {e}")
+            equity_df = filtered.copy()
+        
         # DEBUG
-        with st.expander("🔍 Debug - Available Columns"):
-            flag_cols = [c for c in filtered.columns if 'Flag' in c or 'flag' in c]
+        with st.expander("🔍 Debug - Loaded Columns"):
+            flag_cols = [c for c in equity_df.columns if 'Flag' in c or 'flag' in c]
             st.write(f"**Flag columns found:** {flag_cols}")
-            st.write(f"**Total columns:** {len(filtered.columns)}")
         
         # Standardize flag values
         def standardize_flag(val):
@@ -999,8 +1016,7 @@ else:
                 return 'No'
             return 'Yes' if str(val).upper() == 'YES' else 'No'
         
-        # Create working copy with standardized flags
-        equity_df = filtered.copy()
+        # Standardize flag columns
         if 'Flag_ATSI' in equity_df.columns:
             equity_df['Flag_ATSI'] = equity_df['Flag_ATSI'].apply(standardize_flag)
         if 'Flag_EALD' in equity_df.columns:
