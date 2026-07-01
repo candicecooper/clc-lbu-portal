@@ -980,9 +980,343 @@ else:
                 st.metric("Avg Students/Partnership", int(len(filtered) / filtered['partnership_area'].nunique()))
     
 
-        st.markdown("## Equity Analysis")
-        st.warning("Flag_ATSI, Flag_EALD, Flag_SWD columns - ready for addition")
-        st.info("Once added: representation %, intersectionality, gap analysis")
+
+
+    elif section == "Equity":
+        st.markdown("## Equity Deep Dive Analysis")
+        st.markdown("Separate analysis of ATSI, EALD, and DCP cohorts with school socioeconomic context")
+        
+        # Load school SES data (master database)
+        school_ses_data = {
+            'Le Fevre High School': {'SEIFA_IRSAD': 850, 'Disadvantage_Level': 'Very High', 'Indigenous_Percent': 18, 'EALD_Percent': 22},
+            'Largs Bay Primary School': {'SEIFA_IRSAD': 860, 'Disadvantage_Level': 'Very High', 'Indigenous_Percent': 16, 'EALD_Percent': 20},
+            'Ocean View College': {'SEIFA_IRSAD': 880, 'Disadvantage_Level': 'High', 'Indigenous_Percent': 12, 'EALD_Percent': 18},
+            'Woodville High School': {'SEIFA_IRSAD': 890, 'Disadvantage_Level': 'High', 'Indigenous_Percent': 8, 'EALD_Percent': 15},
+            'Adelaide High School': {'SEIFA_IRSAD': 900, 'Disadvantage_Level': 'Medium', 'Indigenous_Percent': 7, 'EALD_Percent': 14},
+            'Elizabeth High School': {'SEIFA_IRSAD': 820, 'Disadvantage_Level': 'Very High', 'Indigenous_Percent': 15, 'EALD_Percent': 25},
+            'Port Adelaide High School': {'SEIFA_IRSAD': 840, 'Disadvantage_Level': 'Very High', 'Indigenous_Percent': 20, 'EALD_Percent': 28},
+            'Brighton Primary School': {'SEIFA_IRSAD': 950, 'Disadvantage_Level': 'Low', 'Indigenous_Percent': 4, 'EALD_Percent': 8},
+            'Glenelg High School': {'SEIFA_IRSAD': 930, 'Disadvantage_Level': 'Low', 'Indigenous_Percent': 3, 'EALD_Percent': 7},
+        }
+        
+        # Create tabs for each cohort
+        tab_atsi, tab_eald, tab_dcp = st.tabs(["ATSI Deep Dive", "EALD Deep Dive", "DCP Deep Dive"])
+        
+        # === TAB 1: ATSI ===
+        with tab_atsi:
+            st.markdown("### Aboriginal & Torres Strait Islander (ATSI) Students")
+            
+            atsi_students = filtered[filtered['Flag_ATSI'] == 'Yes'].copy() if 'Flag_ATSI' in filtered.columns else pd.DataFrame()
+            
+            if len(atsi_students) > 0:
+                atsi_students['intersecting_needs'] = 0
+                
+                if 'Flag_EALD' in atsi_students.columns:
+                    atsi_students.loc[atsi_students['Flag_EALD'] == 'Yes', 'intersecting_needs'] += 1
+                if 'Flag_DCP' in atsi_students.columns:
+                    atsi_students.loc[atsi_students['Flag_DCP'] == 'Yes', 'intersecting_needs'] += 1
+                
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("ATSI Total", int(len(atsi_students)))
+                col2.metric("With 1+ Additional Need", int((atsi_students['intersecting_needs'] > 0).sum()))
+                col3.metric("ATSI + EALD", int(((atsi_students['Flag_EALD'] == 'Yes') if 'Flag_EALD' in atsi_students.columns else False).sum()))
+                col4.metric("ATSI + DCP", int(((atsi_students['Flag_DCP'] == 'Yes') if 'Flag_DCP' in atsi_students.columns else False).sum()))
+                
+                st.markdown("---")
+                st.markdown("#### ATSI Students by Term")
+                
+                if 'term_clean' in atsi_students.columns:
+                    atsi_by_term = atsi_students['term_clean'].value_counts().sort_index().reset_index()
+                    atsi_by_term.columns = ['term', 'count']
+                    atsi_by_term['count'] = atsi_by_term['count'].astype(int)
+                    atsi_by_term['Term'] = 'T' + atsi_by_term['term'].astype(int).astype(str)
+                    
+                    fig_atsi_term = px.bar(
+                        atsi_by_term,
+                        x='Term',
+                        y='count',
+                        text='count',
+                        color_discrete_sequence=['#8B4513'],
+                        title='ATSI Students per Term',
+                        labels={'Term': '', 'count': 'Students'}
+                    )
+                    fig_atsi_term.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig_atsi_term), use_container_width=True)
+                
+                st.markdown("---")
+                st.markdown("#### Schools Referring ATSI Students (with SES Context)")
+                
+                if 'school' in atsi_students.columns:
+                    school_alloc = atsi_students['school'].value_counts().head(10).reset_index()
+                    school_alloc.columns = ['school', 'atsi_referrals']
+                    school_alloc['atsi_referrals'] = school_alloc['atsi_referrals'].astype(int)
+                    
+                    school_alloc['SES_Context'] = school_alloc['school'].apply(
+                        lambda x: school_ses_data.get(x, {}).get('Disadvantage_Level', 'Unknown')
+                    )
+                    
+                    fig_school = px.bar(
+                        school_alloc,
+                        y='school',
+                        x='atsi_referrals',
+                        orientation='h',
+                        text='atsi_referrals',
+                        color='SES_Context',
+                        color_discrete_map={'Very High': '#f44336', 'High': '#ff9800', 'Medium': '#ffc107', 'Low': '#4caf50', 'Unknown': '#999'},
+                        title='Top Schools Referring ATSI Students',
+                        labels={'school': '', 'atsi_referrals': 'ATSI Referrals'}
+                    )
+                    fig_school.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    fig_school.update_yaxes(categoryorder='total ascending')
+                    st.plotly_chart(update_chart_layout(fig_school), use_container_width=True)
+                
+                st.markdown("---")
+                st.markdown("#### ATSI Partnerships")
+                
+                if 'partnership_area' in atsi_students.columns:
+                    atsi_partners = atsi_students['partnership_area'].value_counts().head(8).reset_index()
+                    atsi_partners.columns = ['partnership', 'count']
+                    atsi_partners['count'] = atsi_partners['count'].astype(int)
+                    
+                    fig_part = px.bar(
+                        atsi_partners,
+                        y='partnership',
+                        x='count',
+                        orientation='h',
+                        text='count',
+                        color_discrete_sequence=['#8B4513'],
+                        title='Top Partnerships Serving ATSI Students',
+                        labels={'partnership': '', 'count': 'Count'}
+                    )
+                    fig_part.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig_part), use_container_width=True)
+                
+                st.markdown("---")
+                st.markdown("#### ATSI with Multiple Needs (2+)")
+                
+                multi_need_atsi = atsi_students[atsi_students['intersecting_needs'] >= 2]
+                if len(multi_need_atsi) > 0:
+                    display_cols = ['student_name', 'program', 'year_level', 'school', 'partnership_area']
+                    display_cols = [col for col in display_cols if col in multi_need_atsi.columns]
+                    
+                    multi_display = multi_need_atsi[display_cols].copy()
+                    st.dataframe(multi_display, use_container_width=True, hide_index=True)
+                    st.info(f"**{len(multi_need_atsi)} ATSI students** with 2+ additional needs")
+                else:
+                    st.success("✅ No ATSI students with multiple intersecting needs")
+            else:
+                st.info("No ATSI students in current selection")
+        
+        # === TAB 2: EALD ===
+        with tab_eald:
+            st.markdown("### English as Additional Language or Dialect (EALD) Students")
+            
+            eald_students = filtered[filtered['Flag_EALD'] == 'Yes'].copy() if 'Flag_EALD' in filtered.columns else pd.DataFrame()
+            
+            if len(eald_students) > 0:
+                eald_students['intersecting_needs'] = 0
+                
+                if 'Flag_ATSI' in eald_students.columns:
+                    eald_students.loc[eald_students['Flag_ATSI'] == 'Yes', 'intersecting_needs'] += 1
+                if 'Flag_DCP' in eald_students.columns:
+                    eald_students.loc[eald_students['Flag_DCP'] == 'Yes', 'intersecting_needs'] += 1
+                
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("EALD Total", int(len(eald_students)))
+                col2.metric("With 1+ Additional Need", int((eald_students['intersecting_needs'] > 0).sum()))
+                col3.metric("EALD + ATSI", int(((eald_students['Flag_ATSI'] == 'Yes') if 'Flag_ATSI' in eald_students.columns else False).sum()))
+                col4.metric("EALD + DCP", int(((eald_students['Flag_DCP'] == 'Yes') if 'Flag_DCP' in eald_students.columns else False).sum()))
+                
+                st.markdown("---")
+                st.markdown("#### EALD Students by Term")
+                
+                if 'term_clean' in eald_students.columns:
+                    eald_by_term = eald_students['term_clean'].value_counts().sort_index().reset_index()
+                    eald_by_term.columns = ['term', 'count']
+                    eald_by_term['count'] = eald_by_term['count'].astype(int)
+                    eald_by_term['Term'] = 'T' + eald_by_term['term'].astype(int).astype(str)
+                    
+                    fig_eald_term = px.bar(
+                        eald_by_term,
+                        x='Term',
+                        y='count',
+                        text='count',
+                        color_discrete_sequence=['#20B2AA'],
+                        title='EALD Students per Term',
+                        labels={'Term': '', 'count': 'Students'}
+                    )
+                    fig_eald_term.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig_eald_term), use_container_width=True)
+                
+                st.markdown("---")
+                st.markdown("#### Schools Referring EALD Students (with SES Context)")
+                
+                if 'school' in eald_students.columns:
+                    school_eald = eald_students['school'].value_counts().head(10).reset_index()
+                    school_eald.columns = ['school', 'eald_referrals']
+                    school_eald['eald_referrals'] = school_eald['eald_referrals'].astype(int)
+                    
+                    school_eald['SES_Context'] = school_eald['school'].apply(
+                        lambda x: school_ses_data.get(x, {}).get('Disadvantage_Level', 'Unknown')
+                    )
+                    
+                    fig_school_eald = px.bar(
+                        school_eald,
+                        y='school',
+                        x='eald_referrals',
+                        orientation='h',
+                        text='eald_referrals',
+                        color='SES_Context',
+                        color_discrete_map={'Very High': '#f44336', 'High': '#ff9800', 'Medium': '#ffc107', 'Low': '#4caf50', 'Unknown': '#999'},
+                        title='Top Schools Referring EALD Students',
+                        labels={'school': '', 'eald_referrals': 'EALD Referrals'}
+                    )
+                    fig_school_eald.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    fig_school_eald.update_yaxes(categoryorder='total ascending')
+                    st.plotly_chart(update_chart_layout(fig_school_eald), use_container_width=True)
+                
+                st.markdown("---")
+                st.markdown("#### EALD Partnerships")
+                
+                if 'partnership_area' in eald_students.columns:
+                    eald_partners = eald_students['partnership_area'].value_counts().head(8).reset_index()
+                    eald_partners.columns = ['partnership', 'count']
+                    eald_partners['count'] = eald_partners['count'].astype(int)
+                    
+                    fig_part_eald = px.bar(
+                        eald_partners,
+                        y='partnership',
+                        x='count',
+                        orientation='h',
+                        text='count',
+                        color_discrete_sequence=['#20B2AA'],
+                        title='Top Partnerships Serving EALD Students',
+                        labels={'partnership': '', 'count': 'Count'}
+                    )
+                    fig_part_eald.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig_part_eald), use_container_width=True)
+                
+                st.markdown("---")
+                st.markdown("#### EALD with Multiple Needs (2+)")
+                
+                multi_eald = eald_students[eald_students['intersecting_needs'] >= 2]
+                if len(multi_eald) > 0:
+                    display_cols = ['student_name', 'program', 'year_level', 'school', 'partnership_area']
+                    display_cols = [col for col in display_cols if col in multi_eald.columns]
+                    
+                    multi_eald_display = multi_eald[display_cols].copy()
+                    st.dataframe(multi_eald_display, use_container_width=True, hide_index=True)
+                    st.info(f"**{len(multi_eald)} EALD students** with 2+ additional needs")
+                else:
+                    st.success("✅ No EALD students with multiple intersecting needs")
+            else:
+                st.info("No EALD students in current selection")
+        
+        # === TAB 3: DCP ===
+        with tab_dcp:
+            st.markdown("### Diverse Cultural and Linguistic Background (DCP) Students")
+            
+            dcp_students = filtered[filtered['Flag_DCP'] == 'Yes'].copy() if 'Flag_DCP' in filtered.columns else pd.DataFrame()
+            
+            if len(dcp_students) > 0:
+                dcp_students['intersecting_needs'] = 0
+                
+                if 'Flag_ATSI' in dcp_students.columns:
+                    dcp_students.loc[dcp_students['Flag_ATSI'] == 'Yes', 'intersecting_needs'] += 1
+                if 'Flag_EALD' in dcp_students.columns:
+                    dcp_students.loc[dcp_students['Flag_EALD'] == 'Yes', 'intersecting_needs'] += 1
+                
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("DCP Total", int(len(dcp_students)))
+                col2.metric("With 1+ Additional Need", int((dcp_students['intersecting_needs'] > 0).sum()))
+                col3.metric("DCP + ATSI", int(((dcp_students['Flag_ATSI'] == 'Yes') if 'Flag_ATSI' in dcp_students.columns else False).sum()))
+                col4.metric("DCP + EALD", int(((dcp_students['Flag_EALD'] == 'Yes') if 'Flag_EALD' in dcp_students.columns else False).sum()))
+                
+                st.markdown("---")
+                st.markdown("#### DCP Students by Term")
+                
+                if 'term_clean' in dcp_students.columns:
+                    dcp_by_term = dcp_students['term_clean'].value_counts().sort_index().reset_index()
+                    dcp_by_term.columns = ['term', 'count']
+                    dcp_by_term['count'] = dcp_by_term['count'].astype(int)
+                    dcp_by_term['Term'] = 'T' + dcp_by_term['term'].astype(int).astype(str)
+                    
+                    fig_dcp_term = px.bar(
+                        dcp_by_term,
+                        x='Term',
+                        y='count',
+                        text='count',
+                        color_discrete_sequence=['#9370DB'],
+                        title='DCP Students per Term',
+                        labels={'Term': '', 'count': 'Students'}
+                    )
+                    fig_dcp_term.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig_dcp_term), use_container_width=True)
+                
+                st.markdown("---")
+                st.markdown("#### Schools Referring DCP Students (with SES Context)")
+                
+                if 'school' in dcp_students.columns:
+                    school_dcp = dcp_students['school'].value_counts().head(10).reset_index()
+                    school_dcp.columns = ['school', 'dcp_referrals']
+                    school_dcp['dcp_referrals'] = school_dcp['dcp_referrals'].astype(int)
+                    
+                    school_dcp['SES_Context'] = school_dcp['school'].apply(
+                        lambda x: school_ses_data.get(x, {}).get('Disadvantage_Level', 'Unknown')
+                    )
+                    
+                    fig_school_dcp = px.bar(
+                        school_dcp,
+                        y='school',
+                        x='dcp_referrals',
+                        orientation='h',
+                        text='dcp_referrals',
+                        color='SES_Context',
+                        color_discrete_map={'Very High': '#f44336', 'High': '#ff9800', 'Medium': '#ffc107', 'Low': '#4caf50', 'Unknown': '#999'},
+                        title='Schools Referring DCP Students',
+                        labels={'school': '', 'dcp_referrals': 'DCP Referrals'}
+                    )
+                    fig_school_dcp.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    fig_school_dcp.update_yaxes(categoryorder='total ascending')
+                    st.plotly_chart(update_chart_layout(fig_school_dcp), use_container_width=True)
+                
+                st.markdown("---")
+                st.markdown("#### DCP Partnerships")
+                
+                if 'partnership_area' in dcp_students.columns:
+                    dcp_partners = dcp_students['partnership_area'].value_counts().head(8).reset_index()
+                    dcp_partners.columns = ['partnership', 'count']
+                    dcp_partners['count'] = dcp_partners['count'].astype(int)
+                    
+                    fig_part_dcp = px.bar(
+                        dcp_partners,
+                        y='partnership',
+                        x='count',
+                        orientation='h',
+                        text='count',
+                        color_discrete_sequence=['#9370DB'],
+                        title='Top Partnerships Serving DCP Students',
+                        labels={'partnership': '', 'count': 'Count'}
+                    )
+                    fig_part_dcp.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig_part_dcp), use_container_width=True)
+                
+                st.markdown("---")
+                st.markdown("#### DCP with Multiple Needs (2+)")
+                
+                multi_dcp = dcp_students[dcp_students['intersecting_needs'] >= 2]
+                if len(multi_dcp) > 0:
+                    display_cols = ['student_name', 'program', 'year_level', 'school', 'partnership_area']
+                    display_cols = [col for col in display_cols if col in multi_dcp.columns]
+                    
+                    multi_dcp_display = multi_dcp[display_cols].copy()
+                    st.dataframe(multi_dcp_display, use_container_width=True, hide_index=True)
+                    st.info(f"**{len(multi_dcp)} DCP students** with 2+ additional needs")
+                else:
+                    st.success("✅ No DCP students with multiple intersecting needs")
+            else:
+                st.info("No DCP students in current selection")
+    
 
     elif section == "Waitlist":
         st.markdown("## Waitlist Status")
