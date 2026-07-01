@@ -1031,36 +1031,44 @@ else:
         st.markdown("## Equity Deep Dive Analysis")
         st.markdown("Separate analysis of ATSI, EALD, and DCP cohorts with school socioeconomic context")
         
-        # DEBUG: Show flag_df status
-        with st.expander("🔍 DEBUG - Flag Loading"):
-            st.write(f"**flag_df loaded:** {flag_df is not None}")
-            
-            # Show step-by-step debug
-            if flag_load_debug:
-                st.write("**Loading steps:**")
-                for step, value in flag_load_debug.items():
-                    st.write(f"  {step}: {value}")
-            
-            if flag_load_error:
-                st.error(f"**Error:** {flag_load_error}")
-            
-            if flag_df is not None:
-                st.write(f"**flag_df shape:** {flag_df.shape}")
-                st.write(f"**flag_df columns:** {list(flag_df.columns)}")
-                st.write(f"**First 3 rows:**")
-                st.dataframe(flag_df.head(3), use_container_width=True)
-            else:
-                st.warning("⚠️ flag_df is None")
+        # File uploader for flag data
+        st.markdown("### 📁 Load Flag Data")
+        uploaded_file = st.file_uploader("Upload Excel file with Flag_ATSI, Flag_EALD, Flag_DCP_involvement columns", 
+                                         type=['xlsx', 'xls'],
+                                         help="Select the CLC_Allocation_Dashboard Excel file with flag columns")
         
-        # Merge pre-loaded flags with filtered data
         equity_df = filtered.copy()
-        if flag_df is not None and len(flag_df) > 0:
-            equity_df['name_match'] = equity_df['student_name'].str.strip().str.lower()
-            equity_df = equity_df.merge(flag_df, on='name_match', how='left')
-            equity_df = equity_df.drop('name_match', axis=1)
-            st.info(f"✅ Merged flags: {len(equity_df)} rows")
+        
+        if uploaded_file is not None:
+            try:
+                excel_data = pd.read_excel(uploaded_file)
+                
+                if 'Student_Name' in excel_data.columns:
+                    excel_data['name_match'] = excel_data['Student_Name'].str.strip().str.lower()
+                    
+                    flag_cols = ['name_match']
+                    for col in ['Flag_ATSI', 'Flag_EALD', 'Flag_DCP_involvement']:
+                        if col in excel_data.columns:
+                            flag_cols.append(col)
+                    
+                    if len(flag_cols) > 1:
+                        flag_df_temp = excel_data[flag_cols].drop_duplicates('name_match')
+                        
+                        # Merge with filtered data
+                        equity_df['name_match'] = equity_df['student_name'].str.strip().str.lower()
+                        equity_df = equity_df.merge(flag_df_temp, on='name_match', how='left')
+                        equity_df = equity_df.drop('name_match', axis=1)
+                        
+                        st.success(f"✅ Loaded flags for {len(flag_df_temp)} students")
+                    else:
+                        st.error("No flag columns found (Flag_ATSI, Flag_EALD, Flag_DCP_involvement)")
+                else:
+                    st.error("Student_Name column not found in Excel file")
+                    
+            except Exception as e:
+                st.error(f"Error loading file: {e}")
         else:
-            st.warning("⚠️ Could not merge flags - flag_df is empty or None")
+            st.info("📌 Please upload the Excel file to see equity analysis")
         
         # Standardize flag values
         def standardize_flag(val):
