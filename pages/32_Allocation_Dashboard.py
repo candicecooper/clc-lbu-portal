@@ -287,7 +287,7 @@ else:
         )
         
         st.markdown("---")
-        st.markdown("**Data Upload**", help="Upload new student allocation data")
+        st.markdown("**Data Upload**", help="Upload Excel file with student allocation data and optional flag columns")
         
         uploaded_file = st.file_uploader("Choose Excel or CSV file", type=['xlsx', 'csv'], label_visibility="collapsed")
         
@@ -295,6 +295,20 @@ else:
             try:
                 df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('.xlsx') else pd.read_csv(uploaded_file)
                 
+                # === EXTRACT FLAG DATA (if columns exist) ===
+                flag_cols_available = []
+                for col in ['Flag_ATSI', 'Flag_EALD', 'Flag_DCP_involvement']:
+                    if col in df.columns:
+                        flag_cols_available.append(col)
+                
+                if 'Student_Name' in df.columns and flag_cols_available:
+                    # Extract and cache flag data
+                    flag_data = df[['Student_Name'] + flag_cols_available].copy()
+                    flag_data['name_match'] = flag_data['Student_Name'].str.strip().str.lower()
+                    flag_cols_for_merge = ['name_match'] + flag_cols_available
+                    st.session_state.flag_df = flag_data[flag_cols_for_merge].drop_duplicates('name_match')
+                
+                # === PROCESS STUDENT DATA ===
                 column_map = {
                     'Student_Name': 'student_name', 'Meeting_Week': 'meeting_week', 'Meeting_Date': 'meeting_date',
                     'Term': 'term', 'Referral_Year': 'year', 'Allocated_Program': 'program',
@@ -339,7 +353,11 @@ else:
                     today = pd.Timestamp.now().strftime('%Y-%m-%d')
                     df_mapped['meeting_date'] = df_mapped['meeting_date'].replace('', today)
                 
-                st.success(f"Ready: {len(df_mapped)} rows")
+                # Show status
+                status_msg = f"Ready: {len(df_mapped)} student records"
+                if 'flag_df' in st.session_state:
+                    status_msg += f" + {len(st.session_state.flag_df)} flag records"
+                st.success(status_msg)
                 
                 if st.button("Upload Now"):
                     if not supabase:
@@ -377,9 +395,13 @@ else:
     
     # TOP TITLE
     st.markdown("""
-    <div style='text-align: center; margin-bottom: 30px;'>
-        <h1 style='color: #00e5ff; font-size: 36px; margin: 0;'>Student Allocation</h1>
-        <p style='color: #888; font-size: 14px; margin: 10px 0 0 0;'>Comprehensive enrollment analytics and equity insights</p>
+    <div style='background: linear-gradient(135deg, rgba(0,229,255,0.15) 0%, rgba(0,229,255,0.08) 100%); 
+                border: 2px solid #00e5ff; border-radius: 12px; padding: 30px 25px; 
+                margin-bottom: 30px; text-align: center;'>
+        <h1 style='color: #00e5ff; font-size: 52px; margin: 0; font-weight: bold; 
+                   letter-spacing: 0.5px;'>Student Allocation</h1>
+        <p style='color: #00e5ff; font-size: 16px; margin: 15px 0 0 0; 
+                 font-weight: 500; opacity: 0.9;'>Comprehensive Enrollment Analytics & Equity Insights</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -432,7 +454,19 @@ else:
     if selected_program != 'All':
         filtered = filtered[filtered['program'] == selected_program]
     
-    st.info(f"**{len(filtered)} active students** | Year {selected_year if selected_year != 'All' else 'All'} | Term {selected_term if selected_term != 'All' else 'All'} | {selected_program}")
+    st.markdown(f"""
+    <div style='background: rgba(0,229,255,0.1); border-left: 4px solid #00e5ff; 
+                padding: 16px 20px; border-radius: 6px; margin: 20px 0;'>
+        <p style='color: #00e5ff; font-size: 18px; margin: 0; font-weight: 600;'>
+            📊 {len(filtered)} Active Students
+        </p>
+        <p style='color: #00e5ff; font-size: 13px; margin: 8px 0 0 0; opacity: 0.85;'>
+            Year: <strong>{selected_year if selected_year != 'All' else 'All'}</strong> 
+            | Term: <strong>{selected_term if selected_term != 'All' else 'All'}</strong> 
+            | Program: <strong>{selected_program}</strong>
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
     st.markdown("---")
     
     # CONTENT BY SECTION
@@ -1059,44 +1093,24 @@ else:
         st.markdown("Separate analysis of ATSI, EALD, and DCP cohorts with school socioeconomic context")
         
         equity_df = filtered.copy()
-        flag_df_to_use = cached_flag_df  # Use pre-loaded flags by default
         
-        # Option to upload different file
-        with st.expander("📁 Or upload a different Excel file"):
-            uploaded_file = st.file_uploader("Upload Excel file with Flag_ATSI, Flag_EALD, Flag_DCP_involvement columns", 
-                                             type=['xlsx', 'xls'],
-                                             help="Select an Excel file with flag columns (optional - uses cached data by default)")
-            
-            if uploaded_file is not None:
-                try:
-                    excel_data = pd.read_excel(uploaded_file)
-                    
-                    if 'Student_Name' in excel_data.columns:
-                        excel_data['name_match'] = excel_data['Student_Name'].str.strip().str.lower()
-                        
-                        flag_cols = ['name_match']
-                        for col in ['Flag_ATSI', 'Flag_EALD', 'Flag_DCP_involvement']:
-                            if col in excel_data.columns:
-                                flag_cols.append(col)
-                        
-                        if len(flag_cols) > 1:
-                            flag_df_to_use = excel_data[flag_cols].drop_duplicates('name_match')
-                            st.success(f"✅ Loaded custom file with flags for {len(flag_df_to_use)} students")
-                        else:
-                            st.error("No flag columns found (Flag_ATSI, Flag_EALD, Flag_DCP_involvement)")
-                    else:
-                        st.error("Student_Name column not found in Excel file")
-                        
-                except Exception as e:
-                    st.error(f"Error loading file: {e}")
+        # Use flag data from session state, cached data, or show instructions
+        flag_df_to_use = None
+        
+        if 'flag_df' in st.session_state and st.session_state.flag_df is not None:
+            flag_df_to_use = st.session_state.flag_df
+            st.info("✅ Using flag data from sidebar upload")
+        elif cached_flag_df is not None:
+            flag_df_to_use = cached_flag_df
+            st.info("✅ Using cached flag data")
+        else:
+            st.warning("📌 **Upload flag data in the sidebar** under 'Flag Data Upload' to see equity analysis")
         
         # Merge flags with filtered data
-        if flag_df_to_use is not None:
+        if flag_df_to_use is not None and len(flag_df_to_use) > 0:
             equity_df['name_match'] = equity_df['student_name'].str.strip().str.lower()
             equity_df = equity_df.merge(flag_df_to_use, on='name_match', how='left')
             equity_df = equity_df.drop('name_match', axis=1)
-        else:
-            st.error("⚠️ No flag data available. Please ensure the Excel file is uploaded to the system.")
         
         # Standardize flag values
         def standardize_flag(val):
