@@ -317,21 +317,33 @@ else:
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        years = sorted([y for y in allocation_df['year'].dropna().unique() if y != ''])
-        selected_year = st.selectbox("Year", years if years else [2026])
+        # Get unique years - handle both string and numeric
+        allocation_df['year_clean'] = pd.to_numeric(allocation_df['year'], errors='coerce')
+        years = sorted([int(y) for y in allocation_df['year_clean'].dropna().unique()])
+        if not years:
+            years = [2026]
+        selected_year = st.selectbox("Year", years)
     
     with col2:
-        terms = sorted([int(t) for t in allocation_df[allocation_df['year'] == selected_year]['term'].dropna().unique() if t != '' and int(t) >= 1])
-        selected_term = st.selectbox("Term", terms if terms else [1])
+        # Filter terms by selected year
+        year_data = allocation_df[allocation_df['year_clean'] == selected_year]
+        year_data['term_clean'] = pd.to_numeric(year_data['term'], errors='coerce')
+        terms = sorted([int(t) for t in year_data['term_clean'].dropna().unique() if t >= 1])
+        if not terms:
+            terms = [1]
+        selected_term = st.selectbox("Term", terms)
     
     with col3:
-        progs = ['All'] + sorted([p for p in allocation_df['program'].dropna().unique() if p != ''])
+        progs = ['All'] + sorted([p for p in allocation_df['program'].dropna().unique() if p != '' and p != ':2'])
         selected_program = st.selectbox("Program", progs)
     
-    # FILTER DATA
+    # FILTER DATA - convert to numeric first
+    allocation_df['year_clean'] = pd.to_numeric(allocation_df['year'], errors='coerce')
+    allocation_df['term_clean'] = pd.to_numeric(allocation_df['term'], errors='coerce')
+    
     filtered = allocation_df[
-        (allocation_df['year'] == selected_year) &
-        (allocation_df['term'] == selected_term)
+        (allocation_df['year_clean'] == selected_year) &
+        (allocation_df['term_clean'] == selected_term)
     ]
     
     if selected_program != 'All':
