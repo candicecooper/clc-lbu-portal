@@ -211,7 +211,7 @@ else:
         st.markdown("**Navigate**", help="Select an analysis section")
         section = st.radio(
             "Select Section",
-            ["Overview", "Trends", "Complexity", "Risk Assessment", "Equity", "Waitlist"],
+            ["Overview", "Trends", "Complexity", "Risk Assessment", "Equity", "Waitlist", "Diagnostics"],
             label_visibility="collapsed"
         )
         
@@ -592,3 +592,49 @@ else:
             st.write("- Breakdown of students by waitlist status")
             st.write("- Identifies students waiting vs. placed")
             st.write("- Helps track placement completion")
+
+
+    elif section == "Diagnostics":
+        st.markdown("## Data Diagnostics")
+        st.markdown("Debug information to verify data is loaded correctly")
+        
+        st.markdown("### Raw Data Preview")
+        st.write(f"**Total rows loaded:** {len(allocation_df)}")
+        st.write(f"**Columns:** {list(allocation_df.columns)}")
+        
+        st.markdown("### Filtered Data Preview")
+        st.write(f"**Rows after filtering:** {len(filtered)}")
+        st.dataframe(filtered.head(10), use_container_width=True)
+        
+        st.markdown("### Column Value Samples")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("**Programs**")
+            if 'program' in allocation_df.columns:
+                progs = allocation_df['program'].value_counts()
+                for prog, count in progs.items():
+                    st.write(f"- {prog}: {count}")
+        
+        with col2:
+            st.markdown("**Year Levels**")
+            if 'year_level' in allocation_df.columns:
+                levels = allocation_df['year_level'].value_counts().sort_index()
+                for level, count in levels.items():
+                    st.write(f"- {level}: {count}")
+        
+        with col3:
+            st.markdown("**Partnership Areas**")
+            if 'partnership_area' in allocation_df.columns:
+                partners = allocation_df['partnership_area'].value_counts().head(5)
+                for partner, count in partners.items():
+                    st.write(f"- {partner}: {count}")
+        
+        st.markdown("### Data Quality Check")
+        st.write("**Missing values:**")
+        missing = allocation_df.isnull().sum()
+        missing = missing[missing > 0]
+        if len(missing) > 0:
+            st.dataframe(missing)
+        else:
+            st.success("✅ No missing values")
