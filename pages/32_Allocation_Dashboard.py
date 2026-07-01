@@ -413,18 +413,143 @@ else:
     
     elif section == "Trends":
         st.markdown("## Enrollment Trends")
-        st.info("Line chart showing enrollment over time by program")
+        st.markdown("Line chart showing enrollment over time by program. **Solid lines = actual data | Dashed lines = forecast**")
         
-        trend_data = allocation_df.dropna(subset=['year', 'term', 'program'])
-        trend_data = trend_data[pd.to_numeric(trend_data['term'], errors='coerce') >= 1]
-        trend_data['YT'] = trend_data['year'].astype(str) + ' T' + trend_data['term'].astype(str)
-        trend_agg = trend_data.groupby(['YT', 'program']).size().reset_index(name='count')
+        # Make sure we have clean numeric columns
+        trend_data = allocation_df.dropna(subset=['program']).copy()
+        trend_data['year_num'] = pd.to_numeric(trend_data['year'], errors='coerce')
+        trend_data['term_num'] = pd.to_numeric(trend_data['term'], errors='coerce')
+        
+        # Filter for valid data
+        trend_data = trend_data.dropna(subset=['year_num', 'term_num'])
+        trend_data = trend_data[trend_data['term_num'] >= 1]
+        
+        # Create proper year-term format (2025 T1, 2025 T2, etc)
+        trend_data['YearTerm'] = trend_data['year_num'].astype(int).astype(str) + ' T' + trend_data['term_num'].astype(int).astype(str)
+        trend_agg = trend_data.groupby(['YearTerm', 'program']).size().reset_index(name='count')
         trend_agg['count'] = trend_agg['count'].astype(int)
         
-        fig = px.line(trend_agg, x='YT', y='count', color='program', markers=True,
-                     title='Enrollment Trend', labels={'YT': '', 'count': 'Students'})
-        fig.update_traces(line=dict(width=3), marker=dict(size=8))
-        st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+        # Sort by year and term for proper ordering
+        trend_agg['year_sort'] = trend_agg['YearTerm'].str.extract(r'(\d{4})')[0].astype(int)
+        trend_agg['term_sort'] = trend_agg['YearTerm'].str.extract(r'T(\d)')[0].astype(int)
+        trend_agg['sort_key'] = trend_agg['year_sort'] * 100 + trend_agg['term_sort']
+        trend_agg = trend_agg.sort_values('sort_key').reset_index(drop=True)
+        
+        # ACTUAL DATA
+        fig_trend = px.line(
+            trend_agg,
+            x='YearTerm',
+            y='count',
+            color='program',
+            markers=True,
+            title='Actual Enrollment by Program',
+            labels={'YearTerm': '', 'count': 'Students'}
+        )
+        fig_trend.update_traces(line=dict(width=3), marker=dict(size=8))
+        st.plotly_chart(update_chart_layout(fig_trend), use_container_width=True)
+        
+        st.markdown("---")
+        st.markdown("## Enrollment Forecast")
+        st.markdown("Predicted enrollment trends based on current patterns - **for planning purposes only**")
+        
+        # CREATE FORECAST DATA
+        forecast_data = []
+        
+        for prog in trend_agg['program'].unique():
+            prog_data = trend_agg[trend_agg['program'] == prog].sort_values('sort_key')
+            
+            if len(prog_data) >= 2:
+                # Get last 2 points to calculate trend
+                last_counts = prog_data['count'].tail(2).values
+                trend_rate = last_counts[-1] - last_counts[-2]
+                
+                # Add actual data
+                for idx, row in prog_data.iterrows():
+                    forecast_data.append({
+                        'YearTerm': row['YearTerm'],
+                        'count': row['count'],
+                        'program': prog,
+                        'type': 'Actual',
+                        'sort_key': row['sort_key']
+                    })
+                
+                # Generate forecast for next 4 periods
+                last_year = prog_data.iloc[-1]['year_sort']
+                last_term = prog_data.iloc[-1]['term_sort']
+                last_count = last_counts[-1]
+                
+                for i in range(1, 5):
+                    new_term = last_term + i
+                    new_year = last_year
+                    
+                    if new_term > 4:
+                        new_year = last_year + (new_term - 1) // 4
+                        new_term = ((new_term - 1) % 4) + 1
+                    
+                    forecast_count = max(last_count + (trend_rate * i), 0)
+                    forecast_data.append({
+                        'YearTerm': f'{new_year} T{new_term}',
+                        'count': int(forecast_count),
+                        'program': prog,
+                        'type': 'Forecast',
+                        'sort_key': new_year * 100 + new_term
+                    })
+        
+        forecast_df = pd.DataFrame(forecast_data)
+        
+        # Separate actual and forecast
+        actual = forecast_df[forecast_df['type'] == 'Actual']
+        predicted = forecast_df[forecast_df['type'] == 'Forecast']
+        
+        # Create combined figure
+        fig_forecast = go.Figure()
+        
+        # Add actual lines
+        for prog in actual['program'].unique():
+            prog_actual = actual[actual['program'] == prog].sort_values('sort_key')
+            fig_forecast.add_trace(go.Scatter(
+                x=prog_actual['YearTerm'],
+                y=prog_actual['count'],
+                mode='lines+markers',
+                name=f'{prog} (Actual)',
+                line=dict(width=3),
+                marker=dict(size=8)
+            ))
+        
+        # Add forecast lines (dashed)
+        for prog in predicted['program'].unique():
+            prog_forecast = predicted[predicted['program'] == prog].sort_values('sort_key')
+            
+            fig_forecast.add_trace(go.Scatter(
+                x=prog_forecast['YearTerm'],
+                y=prog_forecast['count'],
+                mode='lines+markers',
+                name=f'{prog} (Forecast)',
+                line=dict(width=2, dash='dash'),
+                marker=dict(size=6, symbol='diamond'),
+                opacity=0.6
+            ))
+        
+        fig_forecast.update_layout(
+            title='Enrollment Trends & Forecast',
+            xaxis_title='',
+            yaxis_title='Students',
+            plot_bgcolor='rgba(10,14,39,0.8)',
+            paper_bgcolor='rgba(10,14,39,0.8)',
+            font=dict(color='#ffffff', size=12),
+            hovermode='x unified',
+            margin=dict(l=40, r=40, t=40, b=40),
+            showlegend=True
+        )
+        fig_forecast.update_xaxes(showgrid=False, tickfont=dict(color='#ffffff'))
+        fig_forecast.update_yaxes(showgrid=True, gridcolor='rgba(100,100,100,0.2)', tickfont=dict(color='#ffffff'))
+        
+        st.plotly_chart(fig_forecast, use_container_width=True)
+        
+        st.markdown("**Legend:**")
+        st.write("- **Solid lines** = Actual enrollment data")
+        st.write("- **Dashed lines** = Forecast projections (4 terms ahead)")
+        st.write("- Based on recent enrollment trends")
     
     elif section == "Complexity":
         st.markdown("## Complexity Analysis")
