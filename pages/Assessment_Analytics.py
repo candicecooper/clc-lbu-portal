@@ -12,6 +12,15 @@ from datetime import datetime
 import json
 import plotly.express as px
 import plotly.graph_objects as go
+from io import BytesIO
+
+try:
+    from openpyxl import Workbook
+    from openpyxl.chart import BarChart, Reference
+    from openpyxl.styles import Font, PatternFill, Alignment
+    EXCEL_AVAILABLE = True
+except ImportError:
+    EXCEL_AVAILABLE = False
 
 try:
     from supabase import create_client, Client
@@ -111,6 +120,41 @@ st.markdown("""
     /* Number / text input values */
     .stNumberInput input,
     .stTextInput input {
+        color: #ffffff !important;
+    }
+
+    /* Regular buttons - teal, white text (readable without hover) */
+    .stButton > button {
+        background: linear-gradient(135deg, #1A7A7A 0%, #14a3a3 100%) !important;
+        color: #ffffff !important;
+        border: 1px solid rgba(0, 229, 255, 0.6) !important;
+        border-radius: 10px !important;
+        font-weight: 600 !important;
+    }
+    .stButton > button:hover {
+        background: linear-gradient(135deg, #14a3a3 0%, #1A7A7A 100%) !important;
+        color: #ffffff !important;
+        border: 1px solid #ffffff !important;
+    }
+    .stButton > button * {
+        color: #ffffff !important;
+    }
+
+    /* Download buttons - amber fill, white bold text (always readable) */
+    .stDownloadButton > button {
+        background: linear-gradient(135deg, #C8760A 0%, #e08a1e 100%) !important;
+        color: #ffffff !important;
+        border: 1px solid #ffb45a !important;
+        border-radius: 10px !important;
+        font-weight: 700 !important;
+        width: 100% !important;
+    }
+    .stDownloadButton > button:hover {
+        background: linear-gradient(135deg, #e08a1e 0%, #C8760A 100%) !important;
+        color: #ffffff !important;
+        border: 1px solid #ffffff !important;
+    }
+    .stDownloadButton > button * {
         color: #ffffff !important;
     }
     
@@ -519,6 +563,85 @@ def build_combined_report(sections, scope_label, term, year):
         parts.append(df.to_csv(index=False))
     return ("".join(parts)).encode('utf-8')
 
+def build_excel_report(sections, scope_label, term, year):
+    """
+    Build a finished Excel workbook: one sheet per section, each with a
+    native Excel bar chart on top and the data table below it.
+    sections: list of (title, dataframe, grouping) where grouping is
+    'stacked' or 'clustered'. Returns .xlsx bytes, or None if unavailable.
+    """
+    if not EXCEL_AVAILABLE:
+        return None
+
+    try:
+        wb = Workbook()
+        wb.remove(wb.active)
+        generated = datetime.now().strftime('%d/%m/%Y %H:%M')
+
+        for title, df, grouping in sections:
+            ws = wb.create_sheet(title[:31])
+
+            # Header block
+            ws['A1'] = f'CLC-LBU — {title}'
+            ws['A1'].font = Font(size=14, bold=True, color='FF1A7A7A')
+            ws['A2'] = (f'Scope: {scope_label}  |  Term: {term}  |  '
+                        f'Year: {year}  |  Generated: {generated}')
+            ws['A2'].font = Font(size=9, italic=True, color='FF666666')
+
+            headers = list(df.columns)
+            n_cols = len(headers)
+            data_start = 21  # leave rows 4-20 for the chart above the table
+
+            # Table header
+            for c, h in enumerate(headers, start=1):
+                cell = ws.cell(row=data_start, column=c, value=str(h))
+                cell.font = Font(bold=True, color='FFFFFFFF')
+                cell.fill = PatternFill('solid', fgColor='FF1A7A7A')
+                cell.alignment = Alignment(horizontal='center')
+
+            # Table rows (category as text, measures as ints)
+            for r, (_, row) in enumerate(df.iterrows(), start=data_start + 1):
+                for c, h in enumerate(headers, start=1):
+                    val = row[h]
+                    if c == 1:
+                        ws.cell(row=r, column=c, value=str(val))
+                    else:
+                        try:
+                            ws.cell(row=r, column=c, value=int(val))
+                        except (ValueError, TypeError):
+                            ws.cell(row=r, column=c, value=val)
+
+            last_row = data_start + len(df)
+
+            # Chart on top, referencing the table below
+            chart = BarChart()
+            chart.type = 'col'
+            chart.grouping = grouping
+            chart.overlap = 100 if grouping == 'stacked' else -27
+            chart.title = title
+            chart.y_axis.title = 'Number of Students'
+            chart.x_axis.title = headers[0]
+            data_ref = Reference(ws, min_col=2, max_col=n_cols,
+                                 min_row=data_start, max_row=last_row)
+            cats_ref = Reference(ws, min_col=1,
+                                 min_row=data_start + 1, max_row=last_row)
+            chart.add_data(data_ref, titles_from_data=True)
+            chart.set_categories(cats_ref)
+            chart.height = 8
+            chart.width = 22
+            ws.add_chart(chart, 'A4')
+
+            # Column widths
+            ws.column_dimensions['A'].width = 30
+            for ci in range(2, n_cols + 1):
+                ws.column_dimensions[chr(64 + ci)].width = 18
+
+        bio = BytesIO()
+        wb.save(bio)
+        return bio.getvalue()
+    except Exception:
+        return None
+
 # ============================================================================
 # MAIN
 # ============================================================================
@@ -649,6 +772,26 @@ def main():
                 mime="text/csv",
                 key="dl_spv_all"
             )
+        
+        # Finished Excel report (charts + data below)
+        excel_bytes = build_excel_report(
+            [
+                ("Sounds Write", df_sw, "stacked"),
+                ("Word Aware", df_wa, "stacked"),
+                ("SMARTAR Goal Outcomes", df_smartar, "clustered"),
+            ],
+            program, term, year
+        )
+        if excel_bytes:
+            st.download_button(
+                "📗 Download Finished Excel Report (charts + data)",
+                data=excel_bytes,
+                file_name=f"CLC_Report_{program}_T{term}_{year}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="xl_spv"
+            )
+        else:
+            st.caption("📗 Excel report unavailable — add 'openpyxl' to requirements.txt to enable it.")
     
     # ========================================================================
     # TERM OVERVIEW - All programs on one screen
@@ -843,6 +986,26 @@ def main():
                 mime="text/csv",
                 key="dl_ws_all"
             )
+        
+        # Finished Excel report (charts + data below)
+        excel_bytes = build_excel_report(
+            [
+                ("Sounds Write", df_sw, "stacked"),
+                ("Word Aware", df_wa, "stacked"),
+                ("SMARTAR Goal Outcomes", df_smartar, "clustered"),
+            ],
+            "All Programs", term, year
+        )
+        if excel_bytes:
+            st.download_button(
+                "📗 Download Finished Excel Report (charts + data)",
+                data=excel_bytes,
+                file_name=f"CLC_Report_AllPrograms_T{term}_{year}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="xl_ws"
+            )
+        else:
+            st.caption("📗 Excel report unavailable — add 'openpyxl' to requirements.txt to enable it.")
     
     # ========================================================================
     # DETAILED ANALYSIS - Tabs for deep dive
