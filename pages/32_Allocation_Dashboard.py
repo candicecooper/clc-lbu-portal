@@ -37,7 +37,7 @@ st.markdown("""
     h1, h2, h3, h4, h5, h6 { color: #00e5ff !important; text-shadow: 0 0 15px rgba(0,229,255,0.3); }
     p, span, div, label, button, a { color: #ffffff !important; }
     
-    /* SIDEBAR - MODERN GRADIENT */
+    /* SIDEBAR - MODERN GRADIENT WITH BETTER STYLING */
     [data-testid="stSidebar"] { 
         background: linear-gradient(180deg, #050810 0%, #0a1020 100%) !important; 
     }
@@ -46,7 +46,22 @@ st.markdown("""
         font-weight: bold; 
         font-size: 14px;
         color: #ffffff !important;
+        margin-top: 15px;
     }
+    
+    /* DROPDOWN/SELECT BOXES - DARK WITH WHITE TEXT */
+    [data-testid="stSelectbox"] > div > div { 
+        background: #1a2a3a !important;
+        border: 1px solid #00e5ff !important;
+        border-radius: 6px !important;
+    }
+    [data-testid="stSelectbox"] label { color: #ffffff !important; font-weight: bold; }
+    [data-testid="stSelectbox"] [role="listbox"] { background: #1a2a3a !important; }
+    [data-testid="stSelectbox"] [role="option"] { color: #ffffff !important; }
+    
+    /* FILE UPLOADER */
+    [data-testid="stFileUploader"] { background: #1a2a3a !important; border: 1px solid #00e5ff !important; border-radius: 6px !important; }
+    [data-testid="stFileUploader"] label { color: #ffffff !important; font-weight: bold; }
     
     /* SIDEBAR DIVIDER */
     [data-testid="stSidebar"] hr { border-color: rgba(0,229,255,0.3) !important; }
@@ -82,10 +97,6 @@ st.markdown("""
     [data-testid="stMetricValue"] { color: #00e5ff !important; font-size: 2em; }
     [data-testid="stMetricLabel"] { color: #ffffff !important; }
     [data-testid="metric-container"] { background: rgba(0,229,255,0.08) !important; border-radius: 8px !important; }
-    
-    /* INPUTS */
-    [data-testid="stSelectbox"] label { color: #ffffff !important; font-weight: bold; }
-    [data-testid="stFileUploader"] label { color: #ffffff !important; font-weight: bold; }
     
     /* BOXES */
     .stInfo { background: #1a2a3a !important; border-left: 4px solid #00e5ff !important; }
@@ -153,23 +164,24 @@ else:
     # SIDEBAR
     with st.sidebar:
         st.markdown("""
-        <div style='text-align: center; margin-bottom: 30px;'>
-            <h2 style='color: #00e5ff; margin: 0; font-size: 24px;'>CLC-LBU</h2>
-            <p style='color: #888; margin: 5px 0 0 0; font-size: 12px;'>Allocation Analytics</p>
+        <div style='text-align: center; margin-bottom: 40px; padding: 20px 0; border-bottom: 2px solid rgba(0,229,255,0.5);'>
+            <div style='font-size: 32px; margin-bottom: 8px;'>📊</div>
+            <h2 style='color: #00e5ff; margin: 0; font-size: 20px; font-weight: bold;'>CLC-LBU</h2>
+            <p style='color: #00e5ff; margin: 5px 0 0 0; font-size: 11px; font-weight: bold; letter-spacing: 1px;'>ALLOCATION ANALYTICS</p>
         </div>
         """, unsafe_allow_html=True)
         
-        st.markdown("**Select Section**")
+        st.markdown("**Navigate**", help="Select an analysis section")
         section = st.radio(
-            "Navigate to",
+            "Select Section",
             ["Overview", "Trends", "Complexity", "Equity", "Waitlist"],
             label_visibility="collapsed"
         )
         
         st.markdown("---")
-        st.markdown("**Data Management**")
+        st.markdown("**Data Upload**", help="Upload new student allocation data")
         
-        uploaded_file = st.file_uploader("Upload Data", type=['xlsx', 'csv'], label_visibility="collapsed")
+        uploaded_file = st.file_uploader("Choose Excel or CSV file", type=['xlsx', 'csv'], label_visibility="collapsed")
         
         if uploaded_file is not None:
             try:
