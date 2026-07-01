@@ -195,6 +195,29 @@ def update_chart_layout(fig):
 
 allocation_df = load_allocation_data()
 
+# Load flag columns from Excel (temporary until they're in Supabase)
+flag_df = None
+if allocation_df is not None:
+    try:
+        import glob
+        # Find the Excel file in uploads
+        excel_files = glob.glob('/mnt/user-data/uploads/*Allocation*.xlsx')
+        if excel_files:
+            excel_path = excel_files[0]  # Use first matching file
+            excel_data = pd.read_excel(excel_path)
+            # Normalize names and create flag dataframe
+            excel_data['name_match'] = excel_data['Student_Name'].str.strip().str.lower() if 'Student_Name' in excel_data.columns else ''
+            flag_cols = ['name_match']
+            if 'Flag_ATSI' in excel_data.columns:
+                flag_cols.append('Flag_ATSI')
+            if 'Flag_EALD' in excel_data.columns:
+                flag_cols.append('Flag_EALD')
+            if 'Flag_DCP_involvement' in excel_data.columns:
+                flag_cols.append('Flag_DCP_involvement')
+            flag_df = excel_data[flag_cols].drop_duplicates('name_match') if flag_cols else None
+    except Exception as e:
+        pass  # Silently fail if Excel loading doesn't work
+
 if allocation_df is None or allocation_df.empty:
     st.error("No data loaded")
 else:
@@ -987,46 +1010,12 @@ else:
         st.markdown("## Equity Deep Dive Analysis")
         st.markdown("Separate analysis of ATSI, EALD, and DCP cohorts with school socioeconomic context")
         
-        # Load Excel file to get flag columns
+        # Merge pre-loaded flags with filtered data
         equity_df = filtered.copy()
-        try:
-            excel_df = pd.read_excel('/mnt/user-data/uploads/CLC_Allocation_Dashboard_2026_WithNames_1.xlsx')
-            
-            # Normalize names for matching
-            excel_df['name_match'] = excel_df['Student_Name'].str.strip().str.lower() if 'Student_Name' in excel_df.columns else ''
+        if flag_df is not None:
             equity_df['name_match'] = equity_df['student_name'].str.strip().str.lower()
-            
-            # Create flag dataframe with normalized names
-            flag_cols_to_keep = ['name_match']
-            if 'Flag_ATSI' in excel_df.columns:
-                flag_cols_to_keep.append('Flag_ATSI')
-            if 'Flag_EALD' in excel_df.columns:
-                flag_cols_to_keep.append('Flag_EALD')
-            if 'Flag_DCP_involvement' in excel_df.columns:
-                flag_cols_to_keep.append('Flag_DCP_involvement')
-            
-            flag_df = excel_df[flag_cols_to_keep].drop_duplicates('name_match')
-            
-            # Merge on normalized name
-            equity_df = equity_df.merge(
-                flag_df,
-                on='name_match',
-                how='left'
-            )
+            equity_df = equity_df.merge(flag_df, on='name_match', how='left')
             equity_df = equity_df.drop('name_match', axis=1)
-            
-        except Exception as e:
-            st.error(f"Could not load flag columns from Excel: {e}")
-        
-        # DEBUG
-        with st.expander("🔍 Debug - Equity Section"):
-            flag_cols = [c for c in equity_df.columns if 'Flag' in c]
-            st.write(f"**Flag columns found:** {flag_cols}")
-            st.write(f"**Rows after merge:** {len(equity_df)}")
-            if 'Flag_ATSI' in equity_df.columns:
-                st.write(f"Flag_ATSI value counts:\n{equity_df['Flag_ATSI'].value_counts(dropna=False)}")
-            if 'Flag_EALD' in equity_df.columns:
-                st.write(f"Flag_EALD value counts:\n{equity_df['Flag_EALD'].value_counts(dropna=False)}")
         
         # Standardize flag values
         def standardize_flag(val):
