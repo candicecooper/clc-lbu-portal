@@ -67,11 +67,36 @@ st.markdown("""
     }
 
     /* Selectbox label + selected value + dropdown options */
-    .stSelectbox label,
+    /* Selectbox label */
+    .stSelectbox label {
+        color: #ffffff !important;
+    }
+
+    /* Selectbox closed control box - dark background, light text */
+    [data-baseweb="select"] > div {
+        background-color: #12193f !important;
+        border: 1px solid rgba(0, 229, 255, 0.4) !important;
+    }
     [data-baseweb="select"] div,
     [data-baseweb="select"] span,
-    [data-baseweb="popover"] li,
+    [data-baseweb="select"] input {
+        color: #ffffff !important;
+    }
+
+    /* Open dropdown menu (popover) - dark surface so options are readable */
+    [data-baseweb="popover"] div,
+    [data-baseweb="menu"],
+    [data-baseweb="menu"] ul,
+    ul[role="listbox"] {
+        background-color: #12193f !important;
+    }
     [role="option"] {
+        background-color: #12193f !important;
+        color: #ffffff !important;
+    }
+    [role="option"]:hover,
+    [role="option"][aria-selected="true"] {
+        background-color: #1f2a5a !important;
         color: #ffffff !important;
     }
 
