@@ -207,6 +207,7 @@ def load_flag_data_from_excel():
 # Pre-load flags at startup
 cached_flag_df = load_flag_data_from_excel()
 
+def update_chart_layout(fig):
     fig.update_layout(
         plot_bgcolor='rgba(10,14,39,0.8)',
         paper_bgcolor='rgba(10,14,39,0.8)',
