@@ -322,34 +322,46 @@ else:
         years = sorted([int(y) for y in allocation_df['year_clean'].dropna().unique()])
         if not years:
             years = [2026]
-        selected_year = st.selectbox("Year", years)
+        year_options = ['All'] + years
+        selected_year = st.selectbox("Year", year_options)
     
     with col2:
-        # Filter terms by selected year
-        year_data = allocation_df[allocation_df['year_clean'] == selected_year]
+        # Filter terms by selected year (or show all if "All" selected)
+        if selected_year == 'All':
+            year_data = allocation_df
+        else:
+            year_data = allocation_df[allocation_df['year_clean'] == selected_year]
+        
         year_data['term_clean'] = pd.to_numeric(year_data['term'], errors='coerce')
         terms = sorted([int(t) for t in year_data['term_clean'].dropna().unique() if t >= 1])
         if not terms:
             terms = [1]
-        selected_term = st.selectbox("Term", terms)
+        term_options = ['All'] + terms
+        selected_term = st.selectbox("Term", term_options)
     
     with col3:
         progs = ['All'] + sorted([p for p in allocation_df['program'].dropna().unique() if p != '' and p != ':2'])
         selected_program = st.selectbox("Program", progs)
     
-    # FILTER DATA - convert to numeric first
+    # FILTER DATA - handle "All" selections
     allocation_df['year_clean'] = pd.to_numeric(allocation_df['year'], errors='coerce')
     allocation_df['term_clean'] = pd.to_numeric(allocation_df['term'], errors='coerce')
     
-    filtered = allocation_df[
-        (allocation_df['year_clean'] == selected_year) &
-        (allocation_df['term_clean'] == selected_term)
-    ]
+    filtered = allocation_df.copy()
     
+    # Apply year filter
+    if selected_year != 'All':
+        filtered = filtered[filtered['year_clean'] == selected_year]
+    
+    # Apply term filter
+    if selected_term != 'All':
+        filtered = filtered[filtered['term_clean'] == selected_term]
+    
+    # Apply program filter
     if selected_program != 'All':
         filtered = filtered[filtered['program'] == selected_program]
     
-    st.info(f"**{len(filtered)} active students** | Year {int(selected_year)} Term {selected_term} | {selected_program}")
+    st.info(f"**{len(filtered)} active students** | Year {selected_year if selected_year != 'All' else 'All'} | Term {selected_term if selected_term != 'All' else 'All'} | {selected_program}")
     st.markdown("---")
     
     # CONTENT BY SECTION
@@ -574,13 +586,17 @@ else:
         if 'year_level' in filtered.columns and 'program' in filtered.columns:
             # Define correct year level order
             year_order = ['R', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+            program_order = ['JP', 'PY', 'SY']
             
             # Create heatmap data
             heatmap = pd.crosstab(filtered['year_level'], filtered['program'])
             
-            # Reindex to ensure all year levels and all programs appear
-            heatmap = heatmap.reindex(year_order, fill_value=0)
-            heatmap = heatmap.reindex(['JP', 'PY', 'SY'], axis=1, fill_value=0)
+            # Reindex to ensure ALL year levels appear (even if empty)
+            heatmap = heatmap.reindex([y for y in year_order if y in filtered['year_level'].unique()], fill_value=0)
+            
+            # Reindex to ensure ALL programs appear (even if empty)
+            available_progs = [p for p in program_order if p in filtered['program'].unique()]
+            heatmap = heatmap.reindex(available_progs, axis=1, fill_value=0)
             
             fig = px.imshow(heatmap, text_auto=True, color_continuous_scale='Blues',
                            title='Student Distribution: Year Level × Program',
@@ -597,131 +613,125 @@ else:
             st.warning("Year level or program data missing")
     
     elif section == "Risk Assessment":
-        st.markdown("## Risk & Complexity Assessment")
-        st.markdown("Identifies high-risk students and predicts placement success - enables early intervention")
+        st.markdown("## Funding & Support Category Analysis")
+        st.markdown("Student distribution by funding category (Cat 1-9 + RAAP) - identifies support needs and resource allocation")
         
-        # CALCULATE RISK SCORES
+        # Extract funding category for each student
         risk_df = filtered.copy()
-        risk_df['risk_score'] = 0
-        risk_df['risk_factors'] = ''
+        risk_df['funding_category'] = 'None'
+        risk_df['is_raap'] = 'No'
         
-        # Factor 1: Multiple previous placements (higher = more complex)
-        if 'total_previous_placements' in risk_df.columns:
-            risk_df['prev_placements_num'] = pd.to_numeric(risk_df['total_previous_placements'], errors='coerce').fillna(0)
-            risk_df.loc[risk_df['prev_placements_num'] >= 2, 'risk_score'] += 3
-            risk_df.loc[risk_df['prev_placements_num'] == 1, 'risk_score'] += 1
+        # Check for RAAP
+        if 'Flag_9plus_sRAAP' in risk_df.columns:
+            risk_df.loc[risk_df['Flag_9plus_sRAAP'] == 'Yes', 'is_raap'] = 'Yes (RAAP)'
         
-        # Factor 2: Waitlist status (waiting = higher risk)
-        if 'waitlist_status' in risk_df.columns:
-            risk_df.loc[risk_df['waitlist_status'] == 'Waiting', 'risk_score'] += 2
-        
-        # Factor 3: Extended placement (extension weeks = complexity)
-        if 'extension_weeks' in risk_df.columns:
-            risk_df['ext_weeks_num'] = pd.to_numeric(risk_df['extension_weeks'], errors='coerce').fillna(0)
-            risk_df.loc[risk_df['ext_weeks_num'] > 4, 'risk_score'] += 2
-            risk_df.loc[(risk_df['ext_weeks_num'] > 0) & (risk_df['ext_weeks_num'] <= 4), 'risk_score'] += 1
-        
-        # Factor 4: Bespoke placement (specialized needs)
-        if 'bespoke_placement' in risk_df.columns:
-            risk_df.loc[risk_df['bespoke_placement'] == 'Yes', 'risk_score'] += 2
-        
-        # Categorize risk level
-        risk_df['risk_level'] = 'Low'
-        risk_df.loc[risk_df['risk_score'] >= 5, 'risk_level'] = 'Critical'
-        risk_df.loc[(risk_df['risk_score'] >= 3) & (risk_df['risk_score'] < 5), 'risk_level'] = 'High'
-        risk_df.loc[(risk_df['risk_score'] >= 1) & (risk_df['risk_score'] < 3), 'risk_level'] = 'Medium'
+        # Determine funding category (highest category takes precedence)
+        for cat in range(9, 0, -1):
+            col_name = f'Funding_Category_{cat}'
+            if col_name in risk_df.columns:
+                risk_df.loc[risk_df[col_name] == 'Yes', 'funding_category'] = f'Cat {cat}'
         
         # SUMMARY METRICS
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Critical Risk", int((risk_df['risk_level'] == 'Critical').sum()))
-        col2.metric("High Risk", int((risk_df['risk_level'] == 'High').sum()))
-        col3.metric("Medium Risk", int((risk_df['risk_level'] == 'Medium').sum()))
-        col4.metric("Low Risk", int((risk_df['risk_level'] == 'Low').sum()))
+        
+        cat_counts = risk_df['funding_category'].value_counts()
+        col1.metric("Cat 9 (Highest)", int(cat_counts.get('Cat 9', 0)))
+        col2.metric("Cat 5-8", int(sum(cat_counts.get(f'Cat {i}', 0) for i in range(5, 9))))
+        col3.metric("Cat 1-4", int(sum(cat_counts.get(f'Cat {i}', 0) for i in range(1, 5))))
+        col4.metric("RAAP", int((risk_df['is_raap'] == 'Yes (RAAP)').sum()))
         
         st.markdown("---")
-        st.markdown("## Risk Distribution")
-        st.markdown("Breakdown of students by risk level - Critical/High need immediate support planning")
+        st.markdown("## Funding Category Distribution")
+        st.markdown("How many students are in each funding category")
         
         col1, col2 = st.columns(2)
         
         with col1:
-            risk_summary = risk_df['risk_level'].value_counts().reindex(['Critical', 'High', 'Medium', 'Low'], fill_value=0)
-            fig_risk = px.bar(
-                x=risk_summary.index,
-                y=risk_summary.values,
-                text=risk_summary.values,
-                color=risk_summary.index,
-                color_discrete_map={'Critical': '#f44336', 'High': '#ff9800', 'Medium': '#ffc107', 'Low': '#4caf50'},
-                title='Students by Risk Level',
-                labels={'x': 'Risk Level', 'y': 'Count'}
+            funding_summary = risk_df['funding_category'].value_counts().reset_index()
+            funding_summary.columns = ['category', 'count']
+            funding_summary['count'] = funding_summary['count'].astype(int)
+            # Sort by category number
+            funding_summary['sort_key'] = funding_summary['category'].str.extract(r'(\d+)').astype(int)
+            funding_summary = funding_summary.sort_values('sort_key', ascending=False)
+            
+            fig_funding = px.bar(
+                funding_summary,
+                x='category',
+                y='count',
+                text='count',
+                color='sort_key',
+                color_continuous_scale='Reds',
+                title='Students by Funding Category',
+                labels={'category': 'Category', 'count': 'Students'}
             )
-            fig_risk.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
-            st.plotly_chart(update_chart_layout(fig_risk), use_container_width=True)
+            fig_funding.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+            st.plotly_chart(update_chart_layout(fig_funding), use_container_width=True)
         
         with col2:
-            risk_by_prog = risk_df.groupby(['program', 'risk_level']).size().unstack(fill_value=0)
-            fig_prog_risk = px.bar(
-                risk_by_prog,
-                x=risk_by_prog.index,
-                y=['Critical', 'High', 'Medium', 'Low'],
-                title='Risk by Program',
-                labels={'value': 'Count', 'index': 'Program'},
-                color_discrete_map={'Critical': '#f44336', 'High': '#ff9800', 'Medium': '#ffc107', 'Low': '#4caf50'}
+            # Funding by program
+            if 'program' in risk_df.columns:
+                fund_prog = risk_df.groupby(['program', 'funding_category']).size().unstack(fill_value=0)
+                
+                fig_fund_prog = px.bar(
+                    fund_prog,
+                    barmode='stack',
+                    title='Funding Categories by Program',
+                    labels={'value': 'Count', 'index': 'Program'}
+                )
+                st.plotly_chart(update_chart_layout(fig_fund_prog), use_container_width=True)
+        
+        st.markdown("---")
+        st.markdown("## Funding Category Details")
+        st.markdown("Breakdown by category and program")
+        
+        # Create matrix of programs x funding categories
+        if 'program' in risk_df.columns and 'funding_category' in risk_df.columns:
+            fund_matrix = pd.crosstab(risk_df['program'], risk_df['funding_category'])
+            
+            # Reorder columns (highest funding first)
+            cat_order = [f'Cat {i}' for i in range(9, 0, -1)] + ['None']
+            cat_order = [c for c in cat_order if c in fund_matrix.columns]
+            fund_matrix = fund_matrix[cat_order]
+            
+            fig_matrix = px.imshow(
+                fund_matrix,
+                text_auto=True,
+                color_continuous_scale='YlOrRd',
+                title='Program × Funding Category',
+                labels={'x': 'Funding Category', 'y': 'Program', 'color': 'Students'}
             )
-            st.plotly_chart(update_chart_layout(fig_prog_risk), use_container_width=True)
+            fig_matrix.update_traces(text=fund_matrix.values, texttemplate='%{text}')
+            st.plotly_chart(update_chart_layout(fig_matrix), use_container_width=True)
         
         st.markdown("---")
-        st.markdown("## Risk Score Analysis")
-        st.markdown("Distribution of risk scores (0-9 scale) - higher score = more complex needs")
+        st.markdown("## High-Need Students (Cat 8-9)")
+        st.markdown("Students requiring intensive support and resources")
         
-        fig_score = px.histogram(
-            risk_df,
-            x='risk_score',
-            nbins=10,
-            color_discrete_sequence=['#00e5ff'],
-            title='Risk Score Distribution',
-            labels={'risk_score': 'Risk Score (0-9)', 'count': 'Students'}
-        )
-        fig_score.update_traces(textposition='outside')
-        st.plotly_chart(update_chart_layout(fig_score), use_container_width=True)
+        high_need = risk_df[risk_df['funding_category'].isin(['Cat 9', 'Cat 8'])].copy()
         
-        st.markdown("---")
-        st.markdown("## High-Risk Students (Critical)")
-        st.markdown("Students requiring immediate attention and intensive support")
-        
-        critical = risk_df[risk_df['risk_level'] == 'Critical'].copy()
-        if len(critical) > 0:
-            display_cols = ['student_name', 'program', 'year_level', 'risk_score', 'waitlist_status', 'bespoke_placement']
-            display_cols = [col for col in display_cols if col in critical.columns]
+        if len(high_need) > 0:
+            display_cols = ['student_name', 'program', 'year_level', 'funding_category', 'partnership_area']
+            display_cols = [col for col in display_cols if col in high_need.columns]
             
-            critical_display = critical[display_cols].copy()
-            critical_display['risk_score'] = critical_display['risk_score'].astype(int)
-            critical_display = critical_display.sort_values('risk_score', ascending=False)
+            high_need_display = high_need[display_cols].copy().sort_values('funding_category')
             
-            st.dataframe(critical_display, use_container_width=True, hide_index=True)
-            st.info(f"**{len(critical)} students** require intervention planning")
+            st.dataframe(high_need_display, use_container_width=True, hide_index=True)
+            st.info(f"**{len(high_need)} students** in Cat 8-9 (highest support needs)")
         else:
-            st.success("✅ No critical risk students detected")
+            st.success("✅ No Cat 8-9 students in current selection")
         
         st.markdown("---")
-        st.markdown("## Placement Success Prediction")
-        st.markdown("Estimated likelihood of successful placement completion based on risk profile")
+        st.markdown("## Resource Allocation Summary")
         
-        risk_df['success_likelihood'] = 100 - (risk_df['risk_score'] * 10)
-        risk_df['success_likelihood'] = risk_df['success_likelihood'].clip(0, 100)
+        col1, col2, col3 = st.columns(3)
         
-        fig_success = px.scatter(
-            risk_df,
-            x='risk_score',
-            y='success_likelihood',
-            color='risk_level',
-            size='success_likelihood',
-            hover_data=['student_name', 'program'],
-            title='Risk vs Placement Success Likelihood',
-            labels={'risk_score': 'Risk Score', 'success_likelihood': 'Success %'},
-            color_discrete_map={'Critical': '#f44336', 'High': '#ff9800', 'Medium': '#ffc107', 'Low': '#4caf50'}
-        )
-        st.plotly_chart(update_chart_layout(fig_success), use_container_width=True)
+        total_students = len(risk_df)
+        cat_9_pct = int((risk_df['funding_category'] == 'Cat 9').sum() / total_students * 100) if total_students > 0 else 0
+        raap_pct = int((risk_df['is_raap'] == 'Yes (RAAP)').sum() / total_students * 100) if total_students > 0 else 0
+        
+        col1.metric("Cat 9 %", f"{cat_9_pct}%")
+        col2.metric("RAAP %", f"{raap_pct}%")
+        col3.metric("High Need (8-9) %", f"{int((len(high_need) / total_students * 100) if total_students > 0 else 0)}%")
     
     elif section == "Cohort Analysis":
         st.markdown("## Cohort Deep Dive Analysis")
