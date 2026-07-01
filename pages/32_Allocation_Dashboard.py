@@ -180,7 +180,33 @@ def load_allocation_data():
     except:
         return None
 
-def update_chart_layout(fig):
+@st.cache_data
+def load_flag_data_from_excel():
+    """Load flag columns from Excel file - cached for performance"""
+    try:
+        import os
+        excel_path = '/mnt/user-data/uploads/CLC_Allocation_Dashboard_2026_WithNames_1.xlsx'
+        
+        if os.path.exists(excel_path):
+            excel_data = pd.read_excel(excel_path)
+            
+            if 'Student_Name' in excel_data.columns:
+                excel_data['name_match'] = excel_data['Student_Name'].str.strip().str.lower()
+                
+                flag_cols = ['name_match']
+                for col in ['Flag_ATSI', 'Flag_EALD', 'Flag_DCP_involvement']:
+                    if col in excel_data.columns:
+                        flag_cols.append(col)
+                
+                if len(flag_cols) > 1:
+                    return excel_data[flag_cols].drop_duplicates('name_match')
+    except:
+        pass
+    return None
+
+# Pre-load flags at startup
+cached_flag_df = load_flag_data_from_excel()
+
     fig.update_layout(
         plot_bgcolor='rgba(10,14,39,0.8)',
         paper_bgcolor='rgba(10,14,39,0.8)',
@@ -1031,44 +1057,45 @@ else:
         st.markdown("## Equity Deep Dive Analysis")
         st.markdown("Separate analysis of ATSI, EALD, and DCP cohorts with school socioeconomic context")
         
-        # File uploader for flag data
-        st.markdown("### 📁 Load Flag Data")
-        uploaded_file = st.file_uploader("Upload Excel file with Flag_ATSI, Flag_EALD, Flag_DCP_involvement columns", 
-                                         type=['xlsx', 'xls'],
-                                         help="Select the CLC_Allocation_Dashboard Excel file with flag columns")
-        
         equity_df = filtered.copy()
+        flag_df_to_use = cached_flag_df  # Use pre-loaded flags by default
         
-        if uploaded_file is not None:
-            try:
-                excel_data = pd.read_excel(uploaded_file)
-                
-                if 'Student_Name' in excel_data.columns:
-                    excel_data['name_match'] = excel_data['Student_Name'].str.strip().str.lower()
+        # Option to upload different file
+        with st.expander("📁 Or upload a different Excel file"):
+            uploaded_file = st.file_uploader("Upload Excel file with Flag_ATSI, Flag_EALD, Flag_DCP_involvement columns", 
+                                             type=['xlsx', 'xls'],
+                                             help="Select an Excel file with flag columns (optional - uses cached data by default)")
+            
+            if uploaded_file is not None:
+                try:
+                    excel_data = pd.read_excel(uploaded_file)
                     
-                    flag_cols = ['name_match']
-                    for col in ['Flag_ATSI', 'Flag_EALD', 'Flag_DCP_involvement']:
-                        if col in excel_data.columns:
-                            flag_cols.append(col)
-                    
-                    if len(flag_cols) > 1:
-                        flag_df_temp = excel_data[flag_cols].drop_duplicates('name_match')
+                    if 'Student_Name' in excel_data.columns:
+                        excel_data['name_match'] = excel_data['Student_Name'].str.strip().str.lower()
                         
-                        # Merge with filtered data
-                        equity_df['name_match'] = equity_df['student_name'].str.strip().str.lower()
-                        equity_df = equity_df.merge(flag_df_temp, on='name_match', how='left')
-                        equity_df = equity_df.drop('name_match', axis=1)
+                        flag_cols = ['name_match']
+                        for col in ['Flag_ATSI', 'Flag_EALD', 'Flag_DCP_involvement']:
+                            if col in excel_data.columns:
+                                flag_cols.append(col)
                         
-                        st.success(f"✅ Loaded flags for {len(flag_df_temp)} students")
+                        if len(flag_cols) > 1:
+                            flag_df_to_use = excel_data[flag_cols].drop_duplicates('name_match')
+                            st.success(f"✅ Loaded custom file with flags for {len(flag_df_to_use)} students")
+                        else:
+                            st.error("No flag columns found (Flag_ATSI, Flag_EALD, Flag_DCP_involvement)")
                     else:
-                        st.error("No flag columns found (Flag_ATSI, Flag_EALD, Flag_DCP_involvement)")
-                else:
-                    st.error("Student_Name column not found in Excel file")
-                    
-            except Exception as e:
-                st.error(f"Error loading file: {e}")
+                        st.error("Student_Name column not found in Excel file")
+                        
+                except Exception as e:
+                    st.error(f"Error loading file: {e}")
+        
+        # Merge flags with filtered data
+        if flag_df_to_use is not None:
+            equity_df['name_match'] = equity_df['student_name'].str.strip().str.lower()
+            equity_df = equity_df.merge(flag_df_to_use, on='name_match', how='left')
+            equity_df = equity_df.drop('name_match', axis=1)
         else:
-            st.info("📌 Please upload the Excel file to see equity analysis")
+            st.error("⚠️ No flag data available. Please ensure the Excel file is uploaded to the system.")
         
         # Standardize flag values
         def standardize_flag(val):
@@ -1148,9 +1175,10 @@ else:
                 st.markdown("---")
                 multi_atsi = atsi_df[(atsi_df['Flag_EALD'] == 'Yes') & (atsi_df['Flag_DCP'] == 'Yes')]
                 if len(multi_atsi) > 0:
-                    cols_show = ['student_name', 'program', 'year_level', 'school']
+                    cols_show = ['program', 'year_level', 'school', 'partnership_area']
                     cols_show = [c for c in cols_show if c in multi_atsi.columns]
                     st.markdown("#### ATSI with BOTH EALD + DCP")
+                    st.write(f"**{len(multi_atsi)} students** with this combination (student names hidden for privacy)")
                     st.dataframe(multi_atsi[cols_show], use_container_width=True, hide_index=True)
                 else:
                     st.info("No ATSI students with both EALD + DCP")
@@ -1206,9 +1234,10 @@ else:
                 st.markdown("---")
                 multi_eald = eald_df[(eald_df['Flag_ATSI'] == 'Yes') & (eald_df['Flag_DCP'] == 'Yes')]
                 if len(multi_eald) > 0:
-                    cols_show = ['student_name', 'program', 'year_level', 'school']
+                    cols_show = ['program', 'year_level', 'school', 'partnership_area']
                     cols_show = [c for c in cols_show if c in multi_eald.columns]
                     st.markdown("#### EALD with BOTH ATSI + DCP")
+                    st.write(f"**{len(multi_eald)} students** with this combination (student names hidden for privacy)")
                     st.dataframe(multi_eald[cols_show], use_container_width=True, hide_index=True)
                 else:
                     st.info("No EALD students with both ATSI + DCP")
@@ -1264,9 +1293,10 @@ else:
                 st.markdown("---")
                 multi_dcp = dcp_df[(dcp_df['Flag_ATSI'] == 'Yes') & (dcp_df['Flag_EALD'] == 'Yes')]
                 if len(multi_dcp) > 0:
-                    cols_show = ['student_name', 'program', 'year_level', 'school']
+                    cols_show = ['program', 'year_level', 'school', 'partnership_area']
                     cols_show = [c for c in cols_show if c in multi_dcp.columns]
                     st.markdown("#### DCP with BOTH ATSI + EALD")
+                    st.write(f"**{len(multi_dcp)} students** with this combination (student names hidden for privacy)")
                     st.dataframe(multi_dcp[cols_show], use_container_width=True, hide_index=True)
                 else:
                     st.info("No DCP students with both ATSI + EALD")
