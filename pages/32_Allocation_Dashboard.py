@@ -1010,12 +1010,26 @@ else:
         st.markdown("## Equity Deep Dive Analysis")
         st.markdown("Separate analysis of ATSI, EALD, and DCP cohorts with school socioeconomic context")
         
+        # DEBUG: Show flag_df status
+        with st.expander("🔍 DEBUG - Flag Loading"):
+            st.write(f"**flag_df loaded:** {flag_df is not None}")
+            if flag_df is not None:
+                st.write(f"**flag_df shape:** {flag_df.shape}")
+                st.write(f"**flag_df columns:** {list(flag_df.columns)}")
+                st.write(f"**First 3 rows:**")
+                st.dataframe(flag_df.head(3), use_container_width=True)
+            else:
+                st.error("⚠️ flag_df is None - flags were not loaded from Excel")
+        
         # Merge pre-loaded flags with filtered data
         equity_df = filtered.copy()
-        if flag_df is not None:
+        if flag_df is not None and len(flag_df) > 0:
             equity_df['name_match'] = equity_df['student_name'].str.strip().str.lower()
             equity_df = equity_df.merge(flag_df, on='name_match', how='left')
             equity_df = equity_df.drop('name_match', axis=1)
+            st.info(f"✅ Merged flags: {len(equity_df)} rows")
+        else:
+            st.warning("⚠️ Could not merge flags - flag_df is empty or None")
         
         # Standardize flag values
         def standardize_flag(val):
