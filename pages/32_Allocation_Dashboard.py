@@ -1874,6 +1874,11 @@ else:
                         st.markdown("**Sounds Write**")
                         
                         if 'sounds_write_data' in filtered_assess.columns:
+                            # Debug - show sample
+                            with st.expander("🔍 Debug"):
+                                for idx, row in filtered_assess.iterrows():
+                                    st.write(f"Record {idx}: {row['sounds_write_data']}")
+                            
                             sw_totals = {}
                             
                             import json
@@ -1895,8 +1900,10 @@ else:
                                                 for level, count in levels.items():
                                                     count = int(count) if isinstance(count, (int, float)) else 0
                                                     sw_totals[skill][level] = sw_totals[skill].get(level, 0) + count
-                                except:
-                                    pass
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+                            
+                            st.write(f"Data found: {sw_totals}")
                             
                             if sw_totals:
                                 # Display metrics
@@ -1944,7 +1951,7 @@ else:
                                 )
                                 st.plotly_chart(fig, use_container_width=True)
                             else:
-                                st.info("No Sounds Write data")
+                                st.info("No Sounds Write data found")
                         else:
                             st.info("No Sounds Write data")
                     
