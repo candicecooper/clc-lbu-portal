@@ -23,6 +23,36 @@ if 'raap_df' not in st.session_state:
 if 'incidents_df' not in st.session_state:
     st.session_state.incidents_df = None
 
+# SMART CALENDAR DETECTION - Determine current term and year
+def get_current_term_year():
+    """
+    Determine current SA school term and year based on date
+    SA 2026 Terms: T1 (Jan-Mar), T2 (Apr-Jun), T3 (Jul-Sep), T4 (Oct-Dec)
+    """
+    today = datetime.now()
+    year = today.year
+    month = today.month
+    
+    # Determine term based on month
+    if month in [1, 2, 3]:
+        term = 1
+    elif month in [4, 5, 6]:
+        term = 2
+    elif month in [7, 8, 9]:
+        term = 3
+    else:  # 10, 11, 12
+        term = 4
+    
+    return year, term
+
+# Initialize smart filters
+if 'auto_year' not in st.session_state:
+    current_year, current_term = get_current_term_year()
+    st.session_state.auto_year = current_year
+    st.session_state.auto_term = current_term
+    st.session_state.selected_year = current_year
+    st.session_state.selected_term = current_term
+
 st.markdown("""
 <style>
     /* HIDE ALL STREAMLIT UI ELEMENTS */
@@ -495,7 +525,10 @@ else:
         if not years:
             years = [2026]
         year_options = ['All'] + years
-        selected_year = st.selectbox("Year", year_options)
+        
+        # Default to current year
+        default_year_idx = year_options.index(st.session_state.auto_year) if st.session_state.auto_year in year_options else 1
+        selected_year = st.selectbox("Year", year_options, index=default_year_idx)
     
     with col2:
         # Filter terms by selected year (or show all if "All" selected)
@@ -507,16 +540,26 @@ else:
         year_data['term_clean'] = pd.to_numeric(year_data['term'], errors='coerce')
         terms = sorted([int(t) for t in year_data['term_clean'].dropna().unique() if t >= 1])
         if not terms:
-            terms = [1]
+            terms = [1, 2, 3, 4]
         term_options = ['All'] + terms
-        selected_term = st.selectbox("Term", term_options)
+        
+        # Default to current term (if in current year)
+        if selected_year == 'All':
+            default_term_idx = 1
+        elif selected_year == st.session_state.auto_year:
+            default_term_idx = term_options.index(st.session_state.auto_term) if st.session_state.auto_term in term_options else 1
+        else:
+            default_term_idx = 1
+        
+        selected_term = st.selectbox("Term", term_options, index=default_term_idx)
     
     with col3:
         # Clean program data and build dropdown - handle variations and blanks
         allocation_df['program_clean'] = allocation_df['program'].fillna('').str.strip().str.upper()
         all_progs = sorted([p for p in allocation_df['program_clean'].unique() if p and p != '' and p != ':2'])
         progs = ['All'] + all_progs
-        selected_program = st.selectbox("Program", progs)
+        # Default program to "All"
+        selected_program = st.selectbox("Program", progs, index=0)
     
     # FILTER DATA - handle "All" selections
     allocation_df['year_clean'] = pd.to_numeric(allocation_df['year'], errors='coerce')
@@ -554,14 +597,18 @@ else:
     
     # CONTENT BY SECTION
     if section == "Overview":
-        st.markdown("## Overview")
-        st.markdown("High-level snapshot of current enrollment and placement patterns")
+        # Display year/term context in title
+        year_display = st.session_state.auto_year if selected_year == 'All' else selected_year
+        term_display = st.session_state.auto_term if selected_term == 'All' else selected_term
+        
+        st.markdown(f"## Active Students Overview")
+        st.markdown(f"**Year {year_display} | Term {term_display}** - Current enrollment and placement status")
         
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Total Students", int(len(filtered)))
         col2.metric("Programs", int(filtered['program'].nunique()))
         col3.metric("Year Levels", int(filtered['year_level'].nunique()))
-        col4.metric("Updated", datetime.now().strftime("%d/%m/%y"))
+        col4.metric("As at", datetime.now().strftime("%d/%m/%y"))
         
         st.markdown("---")
         st.markdown("## Distribution by Program & Year Level")
