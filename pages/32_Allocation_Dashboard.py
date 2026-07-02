@@ -1574,61 +1574,127 @@ else:
         st.markdown("## Assessment Analytics")
         st.markdown("Term assessment outcomes and progress tracking - SMARTAR goal achievement and student growth")
         
-        # Load assessment data from Supabase
+        # Load assessment data from Supabase with better error handling
+        assessments = []
+        error_msg = None
+        
         try:
             if supabase:
                 response = supabase.table('term_assessments').select('*').execute()
                 assessments = response.data if response.data else []
             else:
-                assessments = []
-        except:
-            assessments = []
+                error_msg = "Supabase connection not available"
+        except Exception as e:
+            error_msg = f"Error loading assessments: {str(e)}"
         
-        if not assessments:
-            st.warning("No assessment data available. Assessment data is updated separately in the Assessment Analytics page.")
+        if error_msg:
+            st.error(f"⚠️ {error_msg}")
+            st.info("Assessment data is maintained in the Assessment Analytics page and auto-syncs here.")
+        elif not assessments:
+            st.info("📌 No assessment data available yet. Data will appear here once assessments are entered in the Assessment Analytics page.")
         else:
             assessments_df = pd.DataFrame(assessments)
             
             # Add refresh button
             col1, col2 = st.columns([4, 1])
             with col2:
-                if st.button("🔄 Refresh Data"):
+                if st.button("🔄 Refresh"):
                     st.cache_data.clear()
                     st.rerun()
             
             with col1:
-                st.info("Assessment data is maintained in the Assessment Analytics page. Changes sync automatically to this view.")
+                st.success("✅ Assessment data auto-synced from Assessment Analytics page")
+            
+            # Normalize column names (handle different naming conventions)
+            col_mapping = {
+                'year': 'year', 'yr': 'year',
+                'term': 'term',
+                'program': 'program', 'prog': 'program',
+                'status': 'status',
+                'achieved': 'achieved',
+                'not_achieved': 'not_achieved'
+            }
+            
+            assessments_df.columns = assessments_df.columns.str.lower()
             
             # Filter assessments by current term/year if possible
-            if 'term' in assessments_df.columns and 'year' in assessments_df.columns:
+            if 'year' in assessments_df.columns:
+                assessments_df['year'] = pd.to_numeric(assessments_df['year'], errors='coerce')
                 if selected_year != 'All':
                     assessments_df = assessments_df[assessments_df['year'] == selected_year]
+            
+            if 'term' in assessments_df.columns:
+                assessments_df['term'] = pd.to_numeric(assessments_df['term'], errors='coerce')
                 if selected_term != 'All':
                     assessments_df = assessments_df[assessments_df['term'] == selected_term]
             
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Total Assessments", len(assessments_df))
-            
-            # Try to count achieved goals
-            if 'status' in assessments_df.columns:
-                achieved = (assessments_df['status'] == 'Achieved').sum()
-                col2.metric("Goals Achieved", int(achieved))
-                col3.metric("Achievement Rate", f"{int((achieved/len(assessments_df)*100)) if len(assessments_df) > 0 else 0}%")
-            
-            st.markdown("---")
-            st.markdown("**Note:** Assessment data updates through the separate Assessment Analytics page. This view shows current data from the term_assessments table.")
-            
-            # Show sample data
-            with st.expander("📊 View assessment data sample"):
-                if 'program' in assessments_df.columns:
-                    prog_summary = assessments_df['program'].value_counts()
-                    st.write("**Assessments by Program:**")
-                    st.bar_chart(prog_summary)
+            if len(assessments_df) == 0:
+                st.info("No assessment data for current year/term filters")
+            else:
+                # SUMMARY METRICS
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Total Assessments", len(assessments_df))
                 
-                if len(assessments_df) > 0:
-                    st.write("**Sample records:**")
-                    display_cols = [c for c in ['student_name', 'program', 'term', 'status', 'created_at'] if c in assessments_df.columns]
-                    st.dataframe(assessments_df[display_cols].head(10), use_container_width=True)
+                # Count achieved (handle different column names)
+                achieved_count = 0
+                if 'status' in assessments_df.columns:
+                    achieved_count = (assessments_df['status'] == 'Achieved').sum()
+                elif 'achieved' in assessments_df.columns:
+                    achieved_count = assessments_df['achieved'].sum()
+                
+                col2.metric("Achieved", int(achieved_count))
+                
+                achievement_rate = int((achieved_count/len(assessments_df)*100)) if len(assessments_df) > 0 else 0
+                col3.metric("Achievement Rate", f"{achievement_rate}%")
+                
+                # Count programs
+                if 'program' in assessments_df.columns:
+                    col4.metric("Programs", assessments_df['program'].nunique())
+                
+                st.markdown("---")
+                st.markdown("## Assessment Breakdown")
+                
+                col1, col2 = st.columns(2)
+                
+                # By Program
+                with col1:
+                    if 'program' in assessments_df.columns:
+                        prog_counts = assessments_df['program'].value_counts()
+                        fig_prog = px.bar(
+                            x=prog_counts.index,
+                            y=prog_counts.values,
+                            title="Assessments by Program",
+                            labels={'x': 'Program', 'y': 'Count'}
+                        )
+                        fig_prog.update_traces(marker_color='#4CAF50')
+                        st.plotly_chart(update_chart_layout(fig_prog), use_container_width=True)
+                
+                # By Status
+                with col2:
+                    if 'status' in assessments_df.columns:
+                        status_counts = assessments_df['status'].value_counts()
+                        colors_status = {'Achieved': '#4CAF50', 'Not Achieved': '#f44336', 'In Progress': '#FF9800'}
+                        colors = [colors_status.get(s, '#2196F3') for s in status_counts.index]
+                        
+                        fig_status = px.bar(
+                            x=status_counts.index,
+                            y=status_counts.values,
+                            title="Assessment Status",
+                            labels={'x': 'Status', 'y': 'Count'}
+                        )
+                        fig_status.update_traces(marker_color=colors)
+                        st.plotly_chart(update_chart_layout(fig_status), use_container_width=True)
+                
+                st.markdown("---")
+                st.markdown("## Assessment Details")
+                
+                # Show summary table
+                with st.expander("📊 View assessment records"):
+                    display_cols = [col for col in ['program', 'term', 'year', 'status', 'created_at'] if col in assessments_df.columns]
+                    if display_cols:
+                        st.dataframe(assessments_df[display_cols].head(50), use_container_width=True, hide_index=True)
+                    else:
+                        st.write("Assessment data columns:", list(assessments_df.columns))
 
     elif section == "Waitlist":
         st.markdown("## Waitlist Status")
