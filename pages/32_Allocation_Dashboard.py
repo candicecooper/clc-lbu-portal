@@ -1887,64 +1887,114 @@ else:
                     with tab3:
                         st.markdown("**Sounds Write Assessment**")
                         
-                        # Find Sounds Write columns
-                        sw_cols = [col for col in filtered_assess.columns if col.startswith('sounds_write_') and col not in ['sounds_write_data']]
+                        # First check what columns exist and what data they contain
+                        sw_cols = [col for col in filtered_assess.columns if col.startswith('sounds_write_')]
                         
-                        if sw_cols:
-                            st.write(f"Found {len(sw_cols)} Sounds Write assessment areas")
+                        st.write(f"Found {len(sw_cols)} Sounds Write columns")
+                        
+                        # Show sample data
+                        st.markdown("**Sample Data:**")
+                        for col in sw_cols[:3]:  # Show first 3
+                            st.write(f"**{col}:**")
+                            sample_val = filtered_assess[col].iloc[0] if len(filtered_assess) > 0 else None
+                            st.write(f"  Type: `{type(sample_val).__name__}`")
+                            st.write(f"  Value: `{sample_val}`")
+                        
+                        st.markdown("---")
+                        
+                        # Now try to process
+                        if 'sounds_write_data' in filtered_assess.columns:
+                            st.write("**Processing sounds_write_data column (JSON)**")
+                            # This should be the aggregated JSON like SMARTAR
+                            sw_totals = {}
                             
-                            # Summary - count non-null values per skill
-                            sw_summary = {}
-                            for col in sw_cols:
-                                skill_name = col.replace('sounds_write_', '').replace('_', ' ').title()
-                                count = filtered_assess[col].notna().sum()
-                                if count > 0:
-                                    sw_summary[skill_name] = count
+                            import json
+                            for idx, row in filtered_assess.iterrows():
+                                try:
+                                    data = row['sounds_write_data']
+                                    if pd.isna(data) or data is None or data == '{}':
+                                        continue
+                                    
+                                    if isinstance(data, str):
+                                        data = json.loads(data)
+                                    
+                                    if isinstance(data, dict):
+                                        for skill, levels in data.items():
+                                            if skill not in sw_totals:
+                                                sw_totals[skill] = {}
+                                            if isinstance(levels, dict):
+                                                for level, count in levels.items():
+                                                    count = int(count) if isinstance(count, (int, float)) else 0
+                                                    sw_totals[skill][level] = sw_totals[skill].get(level, 0) + count
+                                except:
+                                    pass
                             
-                            if sw_summary:
+                            if sw_totals:
+                                df = pd.DataFrame(sw_totals).T
+                                st.dataframe(df, use_container_width=True)
                                 st.markdown("---")
-                                fig = px.bar(x=list(sw_summary.keys()), y=list(sw_summary.values()), title="Sounds Write - Records with Data", labels={'y': 'Count'})
+                                fig = px.bar(df, barmode='stack', title="Sounds Write by Skill")
                                 st.plotly_chart(update_chart_layout(fig), use_container_width=True)
-                                
-                                with st.expander("📋 View detailed data"):
-                                    cols_to_show = ['program', 'staff_member', 'term'] + sw_cols
-                                    cols_to_show = [c for c in cols_to_show if c in filtered_assess.columns]
-                                    st.dataframe(filtered_assess[cols_to_show], use_container_width=True, hide_index=True)
                             else:
-                                st.info("No Sounds Write data available")
+                                st.info("No Sounds Write data in sounds_write_data column")
                         else:
-                            st.info("No Sounds Write columns found")
+                            st.info("No sounds_write_data column found")
                     
                     with tab4:
                         st.markdown("**Word Aware Assessment**")
                         
-                        # Find Word Aware columns
-                        wa_cols = [col for col in filtered_assess.columns if col.startswith('word_aware_') and col not in ['word_aware_data']]
+                        # First check what columns exist and what data they contain
+                        wa_cols = [col for col in filtered_assess.columns if col.startswith('word_aware_')]
                         
-                        if wa_cols:
-                            st.write(f"Found {len(wa_cols)} Word Aware assessment areas")
+                        st.write(f"Found {len(wa_cols)} Word Aware columns")
+                        
+                        # Show sample data
+                        st.markdown("**Sample Data:**")
+                        for col in wa_cols[:3]:  # Show first 3
+                            st.write(f"**{col}:**")
+                            sample_val = filtered_assess[col].iloc[0] if len(filtered_assess) > 0 else None
+                            st.write(f"  Type: `{type(sample_val).__name__}`")
+                            st.write(f"  Value: `{sample_val}`")
+                        
+                        st.markdown("---")
+                        
+                        # Now try to process
+                        if 'word_aware_data' in filtered_assess.columns:
+                            st.write("**Processing word_aware_data column (JSON)**")
+                            # This should be the aggregated JSON like SMARTAR
+                            wa_totals = {}
                             
-                            # Summary - count non-null values per skill
-                            wa_summary = {}
-                            for col in wa_cols:
-                                skill_name = col.replace('word_aware_', '').replace('_', ' ').title()
-                                count = filtered_assess[col].notna().sum()
-                                if count > 0:
-                                    wa_summary[skill_name] = count
+                            import json
+                            for idx, row in filtered_assess.iterrows():
+                                try:
+                                    data = row['word_aware_data']
+                                    if pd.isna(data) or data is None or data == '{}':
+                                        continue
+                                    
+                                    if isinstance(data, str):
+                                        data = json.loads(data)
+                                    
+                                    if isinstance(data, dict):
+                                        for skill, levels in data.items():
+                                            if skill not in wa_totals:
+                                                wa_totals[skill] = {}
+                                            if isinstance(levels, dict):
+                                                for level, count in levels.items():
+                                                    count = int(count) if isinstance(count, (int, float)) else 0
+                                                    wa_totals[skill][level] = wa_totals[skill].get(level, 0) + count
+                                except:
+                                    pass
                             
-                            if wa_summary:
+                            if wa_totals:
+                                df = pd.DataFrame(wa_totals).T
+                                st.dataframe(df, use_container_width=True)
                                 st.markdown("---")
-                                fig = px.bar(x=list(wa_summary.keys()), y=list(wa_summary.values()), title="Word Aware - Records with Data", labels={'y': 'Count'})
+                                fig = px.bar(df, barmode='stack', title="Word Aware by Skill")
                                 st.plotly_chart(update_chart_layout(fig), use_container_width=True)
-                                
-                                with st.expander("📋 View detailed data"):
-                                    cols_to_show = ['program', 'staff_member', 'term'] + wa_cols
-                                    cols_to_show = [c for c in cols_to_show if c in filtered_assess.columns]
-                                    st.dataframe(filtered_assess[cols_to_show], use_container_width=True, hide_index=True)
                             else:
-                                st.info("No Word Aware data available")
+                                st.info("No Word Aware data in word_aware_data column")
                         else:
-                            st.info("No Word Aware columns found")
+                            st.info("No word_aware_data column found")
                     
                     with tab1:
                         c1, c2, c3, c4 = st.columns(4)
