@@ -1754,11 +1754,17 @@ else:
                                     if prog not in smartar_by_prog:
                                         smartar_by_prog[prog] = {'Achieved': 0, 'Exceeded': 0, 'In Progress': 0, 'Not Started': 0}
                                     
-                                    for status in data.values():
+                                    # Data structure: {goal_name: {achievement: 'Achieved'}}
+                                    for goal_name, goal_data in data.items():
+                                        if isinstance(goal_data, dict):
+                                            status = goal_data.get('achievement', 'Not Started')
+                                        else:
+                                            status = str(goal_data)
+                                        
                                         if status in smartar_all:
                                             smartar_all[status] += 1
                                             smartar_by_prog[prog][status] += 1
-                            except:
+                            except Exception as e:
                                 pass
                         
                         c1, c2, c3, c4 = st.columns(4)
@@ -1767,7 +1773,7 @@ else:
                         c3.metric("In Progress", smartar_all['In Progress'])
                         c4.metric("Not Started", smartar_all['Not Started'])
                         
-                        if smartar_all:
+                        if sum(smartar_all.values()) > 0:
                             st.markdown("---")
                             fig = px.bar(x=list(smartar_all.keys()), y=list(smartar_all.values()), title="SMARTAR Status")
                             fig.update_traces(marker_color=['#4CAF50', '#2196F3', '#FF9800', '#f44336'])
@@ -1777,6 +1783,10 @@ else:
                             df = pd.DataFrame(smartar_by_prog).T
                             fig = px.bar(df, barmode='group', title="SMARTAR by Program")
                             st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                        else:
+                            st.info("No SMARTAR data found")
+                    else:
+                        st.info("smartar_goals column not found")
                 
                 with tab3:
                     sw_data = {}
@@ -1797,7 +1807,7 @@ else:
                                         if isinstance(levels, dict):
                                             for level, count in levels.items():
                                                 if level in sw_data[skill]:
-                                                    sw_data[skill][level] += count
+                                                    sw_data[skill][level] += int(count) if isinstance(count, (int, float)) else 0
                             except:
                                 pass
                         
@@ -1805,12 +1815,16 @@ else:
                             df = pd.DataFrame(sw_data).T
                             st.dataframe(df, use_container_width=True)
                             st.markdown("---")
-                            fig = px.bar(df, barmode='stack', title="Sounds Write Mastery")
+                            fig = px.bar(df, barmode='stack', title="Sounds Write Mastery Levels")
                             fig.update_traces(marker_color=['#4CAF50', '#FF9800', '#f44336'])
                             st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                        else:
+                            st.info("No Sounds Write data available")
+                    else:
+                        st.info("sounds_write_data column not found")
                 
                 with tab4:
-                    wa_data = {}
+                    wa_skills = {}
                     import json
                     if 'word_aware_data' in filtered_assess.columns:
                         for _, row in filtered_assess.iterrows():
@@ -1823,22 +1837,30 @@ else:
                                         data = eval(data)
                                     
                                     for skill, levels in data.items():
-                                        if skill not in wa_data:
-                                            wa_data[skill] = {'Mastered': 0, 'Developing': 0, 'Requires Development': 0}
+                                        if skill not in wa_skills:
+                                            wa_skills[skill] = {
+                                                'More than 10': 0, 
+                                                'More than 5': 0, 
+                                                'More than 2': 0
+                                            }
                                         if isinstance(levels, dict):
                                             for level, count in levels.items():
-                                                if level in wa_data[skill]:
-                                                    wa_data[skill][level] += count
+                                                if level in wa_skills[skill]:
+                                                    wa_skills[skill][level] += int(count) if isinstance(count, (int, float)) else 0
                             except:
                                 pass
                         
-                        if wa_data:
-                            df = pd.DataFrame(wa_data).T
+                        if wa_skills:
+                            df = pd.DataFrame(wa_skills).T
                             st.dataframe(df, use_container_width=True)
                             st.markdown("---")
-                            fig = px.bar(df, barmode='stack', title="Word Aware Mastery")
+                            fig = px.bar(df, barmode='stack', title="Word Aware Achievement Levels")
                             fig.update_traces(marker_color=['#4CAF50', '#FF9800', '#f44336'])
                             st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                        else:
+                            st.info("No Word Aware data available")
+                    else:
+                        st.info("word_aware_data column not found")
 
     elif section == "Waitlist":
         st.markdown("## Waitlist Status")
