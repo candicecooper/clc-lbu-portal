@@ -426,7 +426,7 @@ else:
                 st.error(f"Error: {e}")
         
         st.markdown("---")
-        st.markdown("**Data Status**", help="Shows what data has been loaded")
+        st.markdown("**Data Status**")
         
         status_items = []
         if 'flag_df' in st.session_state and st.session_state.flag_df is not None:
@@ -445,7 +445,7 @@ else:
             status_items.append("⚪ RAAP: not loaded")
         
         for item in status_items:
-            st.write(item, help="Auto-loaded from Excel upload")
+            st.write(item)
     
     # TOP TITLE
     st.markdown("""
