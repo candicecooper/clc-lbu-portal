@@ -1794,7 +1794,7 @@ else:
                     # Process all assessment data first (outside tabs)
                     import json
                     
-                    smartar_stats = {'Achieved': 0, 'Exceeded': 0, 'In Progress': 0, 'Not Started': 0}
+                    smartar_stats = {'Reached Expected': 0, 'Above Expectation': 0, 'Exceeding': 0}
                     sw_totals = {}
                     wa_totals = {}
                     
@@ -1891,11 +1891,10 @@ else:
                     with tab2:
                         st.markdown("**SMARTAR Goals**")
                         
-                        c1, c2, c3, c4 = st.columns(4)
-                        c1.metric("Exceeded", smartar_stats['Exceeded'])
-                        c2.metric("Achieved", smartar_stats['Achieved'])
-                        c3.metric("In Progress", smartar_stats['In Progress'])
-                        c4.metric("Not Started", smartar_stats['Not Started'])
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric("Exceeding", smartar_stats['Exceeding'])
+                        c2.metric("Above Expectation", smartar_stats['Above Expectation'])
+                        c3.metric("Reached Expected", smartar_stats['Reached Expected'])
                         
                         if sum(smartar_stats.values()) > 0:
                             st.markdown("---")
@@ -1909,10 +1908,9 @@ else:
                                 values='Count',
                                 names='Status',
                                 color_discrete_map={
-                                    'Achieved': '#4CAF50',
-                                    'Exceeded': '#00BCD4',
-                                    'In Progress': '#FFC107',
-                                    'Not Started': '#F44336'
+                                    'Exceeding': '#4CAF50',
+                                    'Above Expectation': '#00BCD4',
+                                    'Reached Expected': '#FFC107'
                                 }
                             )
                             fig.update_layout(
@@ -2011,77 +2009,48 @@ else:
                     with tab4:
                         st.markdown("**Word Aware**")
                         
-                        if 'word_aware_data' in filtered_assess.columns:
-                            wa_totals = {}
+                        if wa_totals:
+                            more_than_10 = sum([v.get('>10 words', 0) for v in wa_totals.values()])
+                            more_than_5 = sum([v.get('>5 words', 0) for v in wa_totals.values()])
+                            more_than_2 = sum([v.get('>2 words', 0) for v in wa_totals.values()])
                             
-                            import json
-                            for idx, row in filtered_assess.iterrows():
-                                try:
-                                    data = row['word_aware_data']
-                                    
-                                    if pd.isna(data) or data is None:
-                                        continue
-                                    
-                                    if isinstance(data, str) and data.strip():
-                                        data = json.loads(data)
-                                    
-                                    if isinstance(data, dict):
-                                        for skill, levels in data.items():
-                                            if skill not in wa_totals:
-                                                wa_totals[skill] = {}
-                                            if isinstance(levels, dict):
-                                                for level, count in levels.items():
-                                                    count = int(count) if isinstance(count, (int, float)) else 0
-                                                    wa_totals[skill][level] = wa_totals[skill].get(level, 0) + count
-                                except:
-                                    pass
+                            c1, c2, c3 = st.columns(3)
+                            c1.metric(">10 words", more_than_10)
+                            c2.metric(">5 words", more_than_5)
+                            c3.metric(">2 words", more_than_2)
                             
-                            if wa_totals:
-                                # Display metrics
-                                mastered = sum([v.get('Mastered', 0) for v in wa_totals.values()])
-                                developing = sum([v.get('Developing', 0) for v in wa_totals.values()])
-                                requires_dev = sum([v.get('Requires Development', 0) for v in wa_totals.values()])
-                                
-                                c1, c2, c3 = st.columns(3)
-                                c1.metric("Mastered", mastered)
-                                c2.metric("Developing", developing)
-                                c3.metric("Requires Development", requires_dev)
-                                
-                                st.markdown("---")
-                                
-                                # Build chart data
-                                vis_data = []
-                                for skill, levels in wa_totals.items():
-                                    vis_data.append({
-                                        'Skill': skill,
-                                        'Mastered': levels.get('Mastered', 0),
-                                        'Developing': levels.get('Developing', 0),
-                                        'Requires Dev': levels.get('Requires Development', 0)
-                                    })
-                                
-                                df_wa = pd.DataFrame(vis_data)
-                                
-                                fig = px.bar(
-                                    df_wa,
-                                    x='Skill',
-                                    y=['Mastered', 'Developing', 'Requires Dev'],
-                                    barmode='stack',
-                                    color_discrete_map={
-                                        'Mastered': '#4CAF50',
-                                        'Developing': '#FFC107',
-                                        'Requires Dev': '#F44336'
-                                    },
-                                    labels={'value': 'Count', 'variable': 'Level'}
-                                )
-                                fig.update_layout(
-                                    plot_bgcolor='rgba(10, 14, 39, 0.8)',
-                                    paper_bgcolor='rgba(10, 14, 39, 0.8)',
-                                    font=dict(color='#e8e8e8'),
-                                    hovermode='x unified',
-                                    height=400
-                                )
-                                st.plotly_chart(fig, use_container_width=True)
-                            else:
-                                st.info("No Word Aware data")
+                            st.markdown("---")
+                            
+                            vis_data = []
+                            for skill, levels in wa_totals.items():
+                                vis_data.append({
+                                    'Skill': skill,
+                                    '>10': levels.get('>10 words', 0),
+                                    '>5': levels.get('>5 words', 0),
+                                    '>2': levels.get('>2 words', 0)
+                                })
+                            
+                            df_wa = pd.DataFrame(vis_data)
+                            
+                            fig = px.bar(
+                                df_wa,
+                                x='Skill',
+                                y=['>10', '>5', '>2'],
+                                barmode='stack',
+                                color_discrete_map={
+                                    '>10': '#4CAF50',
+                                    '>5': '#FFC107',
+                                    '>2': '#F44336'
+                                },
+                                labels={'value': 'Count', 'variable': 'Level'}
+                            )
+                            fig.update_layout(
+                                plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                                paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                                font=dict(color='#e8e8e8'),
+                                hovermode='x unified',
+                                height=400
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
                         else:
                             st.info("No Word Aware data")
