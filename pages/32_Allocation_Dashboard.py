@@ -822,6 +822,10 @@ else:
                 if col_name in risk_df.columns:
                     risk_df.loc[risk_df[col_name] == 'Yes', 'funding_category'] = f'Cat {cat}'
         
+        # Ensure funding_category is string type
+        risk_df['funding_category'] = risk_df['funding_category'].astype(str)
+        risk_df['funding_category'] = risk_df['funding_category'].replace('nan', 'None')
+        
         # SUMMARY METRICS
         col1, col2, col3, col4 = st.columns(4)
         
