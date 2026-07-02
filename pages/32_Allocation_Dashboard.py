@@ -1649,144 +1649,162 @@ else:
 
     elif section == "Assessment":
         st.markdown("## Assessment Analytics")
-        st.markdown("Term assessment outcomes and progress tracking - SMARTAR goal achievement and student growth")
+        st.markdown("Multiple views of assessment data - SMARTAR Goals, Sounds Write, Word Aware")
         
-        # Load assessment data from Supabase with better error handling
         assessments = []
-        error_msg = None
-        
         try:
             if supabase:
-                response = supabase.table('term_assessments').select('*').execute()
+                response = supabase.table('term_assessments').select('*').order('created_at', desc=True).execute()
                 assessments = response.data if response.data else []
-            else:
-                error_msg = "Supabase connection not available"
         except Exception as e:
-            error_msg = f"Error loading assessments: {str(e)}"
+            st.error(f"Error loading: {e}")
         
-        if error_msg:
-            st.error(f"⚠️ {error_msg}")
-            st.info("Assessment data is maintained in the Assessment Analytics page and auto-syncs here.")
-        elif not assessments:
-            st.warning("📌 No assessment data available yet.")
-            st.info("Data will appear here once assessments are entered in the Assessment Analytics page.")
-            
-            # Show debug info
-            with st.expander("🔍 Debug Information"):
-                st.write("Checking Supabase connection...")
-                if supabase:
-                    st.write("✅ Supabase is connected")
-                    try:
-                        test_response = supabase.table('term_assessments').select('count', count='exact').execute()
-                        st.write(f"✅ term_assessments table exists")
-                        st.write(f"Record count in table: {test_response.count if hasattr(test_response, 'count') else 'Unknown'}")
-                    except Exception as e:
-                        st.write(f"❌ Error accessing term_assessments table: {e}")
-                else:
-                    st.write("❌ Supabase connection failed")
+        if not assessments:
+            st.warning("📌 No assessment records")
         else:
             assessments_df = pd.DataFrame(assessments)
+            assessments_df.columns = assessments_df.columns.str.lower()
             
-            # Add refresh button
             col1, col2 = st.columns([4, 1])
             with col2:
                 if st.button("🔄 Refresh"):
-                    st.cache_data.clear()
                     st.rerun()
-            
             with col1:
-                st.success("✅ Assessment data auto-synced from Assessment Analytics page")
+                st.success(f"✅ {len(assessments_df)} records")
             
-            # Normalize column names (handle different naming conventions)
-            col_mapping = {
-                'year': 'year', 'yr': 'year',
-                'term': 'term',
-                'program': 'program', 'prog': 'program',
-                'status': 'status',
-                'achieved': 'achieved',
-                'not_achieved': 'not_achieved'
-            }
-            
-            assessments_df.columns = assessments_df.columns.str.lower()
-            
-            # Filter assessments by current term/year if possible
-            if 'year' in assessments_df.columns:
-                assessments_df['year'] = pd.to_numeric(assessments_df['year'], errors='coerce')
+            filtered_assess = assessments_df.copy()
+            if 'year' in filtered_assess.columns:
+                filtered_assess['year'] = pd.to_numeric(filtered_assess['year'], errors='coerce')
                 if selected_year != 'All':
-                    assessments_df = assessments_df[assessments_df['year'] == selected_year]
-            
-            if 'term' in assessments_df.columns:
-                assessments_df['term'] = pd.to_numeric(assessments_df['term'], errors='coerce')
+                    filtered_assess = filtered_assess[filtered_assess['year'] == selected_year]
+            if 'term' in filtered_assess.columns:
+                filtered_assess['term'] = pd.to_numeric(filtered_assess['term'], errors='coerce')
                 if selected_term != 'All':
-                    assessments_df = assessments_df[assessments_df['term'] == selected_term]
+                    filtered_assess = filtered_assess[filtered_assess['term'] == selected_term]
             
-            if len(assessments_df) == 0:
-                st.info("No assessment data for current year/term filters")
+            if len(filtered_assess) == 0:
+                st.info("No data for selected filters")
             else:
-                # SUMMARY METRICS
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Total Assessments", len(assessments_df))
+                tab1, tab2, tab3, tab4 = st.tabs(["📊 Summary", "🎯 SMARTAR", "✍️ Sounds Write", "📖 Word Aware"])
                 
-                # Count achieved (handle different column names)
-                achieved_count = 0
-                if 'status' in assessments_df.columns:
-                    achieved_count = (assessments_df['status'] == 'Achieved').sum()
-                elif 'achieved' in assessments_df.columns:
-                    achieved_count = assessments_df['achieved'].sum()
+                with tab1:
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Records", len(filtered_assess))
+                    if 'program' in filtered_assess.columns:
+                        c2.metric("Programs", filtered_assess['program'].nunique())
+                    if 'staff_name' in filtered_assess.columns:
+                        c3.metric("Staff", filtered_assess['staff_name'].nunique())
+                    c4.metric("Filtered", "Yes")
+                    
+                    if 'program' in filtered_assess.columns:
+                        st.markdown("---")
+                        fig = px.bar(filtered_assess['program'].value_counts(), title="Records by Program")
+                        st.plotly_chart(update_chart_layout(fig), use_container_width=True)
                 
-                col2.metric("Achieved", int(achieved_count))
-                
-                achievement_rate = int((achieved_count/len(assessments_df)*100)) if len(assessments_df) > 0 else 0
-                col3.metric("Achievement Rate", f"{achievement_rate}%")
-                
-                # Count programs
-                if 'program' in assessments_df.columns:
-                    col4.metric("Programs", assessments_df['program'].nunique())
-                
-                st.markdown("---")
-                st.markdown("## Assessment Breakdown")
-                
-                col1, col2 = st.columns(2)
-                
-                # By Program
-                with col1:
-                    if 'program' in assessments_df.columns:
-                        prog_counts = assessments_df['program'].value_counts()
-                        fig_prog = px.bar(
-                            x=prog_counts.index,
-                            y=prog_counts.values,
-                            title="Assessments by Program",
-                            labels={'x': 'Program', 'y': 'Count'}
-                        )
-                        fig_prog.update_traces(marker_color='#4CAF50')
-                        st.plotly_chart(update_chart_layout(fig_prog), use_container_width=True)
-                
-                # By Status
-                with col2:
-                    if 'status' in assessments_df.columns:
-                        status_counts = assessments_df['status'].value_counts()
-                        colors_status = {'Achieved': '#4CAF50', 'Not Achieved': '#f44336', 'In Progress': '#FF9800'}
-                        colors = [colors_status.get(s, '#2196F3') for s in status_counts.index]
+                with tab2:
+                    smartar_all = {'Achieved': 0, 'Exceeded': 0, 'In Progress': 0, 'Not Started': 0}
+                    smartar_by_prog = {}
+                    
+                    import json
+                    if 'smartar_goals' in filtered_assess.columns:
+                        for _, row in filtered_assess.iterrows():
+                            try:
+                                data = row['smartar_goals']
+                                if isinstance(data, str) and data and data != '{}':
+                                    try:
+                                        data = json.loads(data)
+                                    except:
+                                        data = eval(data)
+                                    
+                                    prog = row.get('program', 'Unknown')
+                                    if prog not in smartar_by_prog:
+                                        smartar_by_prog[prog] = {'Achieved': 0, 'Exceeded': 0, 'In Progress': 0, 'Not Started': 0}
+                                    
+                                    for status in data.values():
+                                        if status in smartar_all:
+                                            smartar_all[status] += 1
+                                            smartar_by_prog[prog][status] += 1
+                            except:
+                                pass
                         
-                        fig_status = px.bar(
-                            x=status_counts.index,
-                            y=status_counts.values,
-                            title="Assessment Status",
-                            labels={'x': 'Status', 'y': 'Count'}
-                        )
-                        fig_status.update_traces(marker_color=colors)
-                        st.plotly_chart(update_chart_layout(fig_status), use_container_width=True)
+                        c1, c2, c3, c4 = st.columns(4)
+                        c1.metric("Achieved", smartar_all['Achieved'])
+                        c2.metric("Exceeded", smartar_all['Exceeded'])
+                        c3.metric("In Progress", smartar_all['In Progress'])
+                        c4.metric("Not Started", smartar_all['Not Started'])
+                        
+                        if smartar_all:
+                            st.markdown("---")
+                            fig = px.bar(x=list(smartar_all.keys()), y=list(smartar_all.values()), title="SMARTAR Status")
+                            fig.update_traces(marker_color=['#4CAF50', '#2196F3', '#FF9800', '#f44336'])
+                            st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                        
+                        if smartar_by_prog:
+                            df = pd.DataFrame(smartar_by_prog).T
+                            fig = px.bar(df, barmode='group', title="SMARTAR by Program")
+                            st.plotly_chart(update_chart_layout(fig), use_container_width=True)
                 
-                st.markdown("---")
-                st.markdown("## Assessment Details")
+                with tab3:
+                    sw_data = {}
+                    import json
+                    if 'sounds_write_data' in filtered_assess.columns:
+                        for _, row in filtered_assess.iterrows():
+                            try:
+                                data = row['sounds_write_data']
+                                if isinstance(data, str) and data and data != '{}':
+                                    try:
+                                        data = json.loads(data)
+                                    except:
+                                        data = eval(data)
+                                    
+                                    for skill, levels in data.items():
+                                        if skill not in sw_data:
+                                            sw_data[skill] = {'Mastered': 0, 'Developing': 0, 'Requires Development': 0}
+                                        if isinstance(levels, dict):
+                                            for level, count in levels.items():
+                                                if level in sw_data[skill]:
+                                                    sw_data[skill][level] += count
+                            except:
+                                pass
+                        
+                        if sw_data:
+                            df = pd.DataFrame(sw_data).T
+                            st.dataframe(df, use_container_width=True)
+                            st.markdown("---")
+                            fig = px.bar(df, barmode='stack', title="Sounds Write Mastery")
+                            fig.update_traces(marker_color=['#4CAF50', '#FF9800', '#f44336'])
+                            st.plotly_chart(update_chart_layout(fig), use_container_width=True)
                 
-                # Show summary table
-                with st.expander("📊 View assessment records"):
-                    display_cols = [col for col in ['program', 'term', 'year', 'status', 'created_at'] if col in assessments_df.columns]
-                    if display_cols:
-                        st.dataframe(assessments_df[display_cols].head(50), use_container_width=True, hide_index=True)
-                    else:
-                        st.write("Assessment data columns:", list(assessments_df.columns))
+                with tab4:
+                    wa_data = {}
+                    import json
+                    if 'word_aware_data' in filtered_assess.columns:
+                        for _, row in filtered_assess.iterrows():
+                            try:
+                                data = row['word_aware_data']
+                                if isinstance(data, str) and data and data != '{}':
+                                    try:
+                                        data = json.loads(data)
+                                    except:
+                                        data = eval(data)
+                                    
+                                    for skill, levels in data.items():
+                                        if skill not in wa_data:
+                                            wa_data[skill] = {'Mastered': 0, 'Developing': 0, 'Requires Development': 0}
+                                        if isinstance(levels, dict):
+                                            for level, count in levels.items():
+                                                if level in wa_data[skill]:
+                                                    wa_data[skill][level] += count
+                            except:
+                                pass
+                        
+                        if wa_data:
+                            df = pd.DataFrame(wa_data).T
+                            st.dataframe(df, use_container_width=True)
+                            st.markdown("---")
+                            fig = px.bar(df, barmode='stack', title="Word Aware Mastery")
+                            fig.update_traces(marker_color=['#4CAF50', '#FF9800', '#f44336'])
+                            st.plotly_chart(update_chart_layout(fig), use_container_width=True)
 
     elif section == "Waitlist":
         st.markdown("## Waitlist Status")
