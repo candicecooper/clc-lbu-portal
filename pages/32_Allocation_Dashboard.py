@@ -308,6 +308,26 @@ else:
                     flag_cols_for_merge = ['name_match'] + flag_cols_available
                     st.session_state.flag_df = flag_data[flag_cols_for_merge].drop_duplicates('name_match')
                 
+                # === EXTRACT FUNDING CATEGORY DATA (if columns exist) ===
+                funding_cols_available = []
+                for i in range(1, 10):
+                    col = f'Funding_Category_{i}'
+                    if col in df.columns:
+                        funding_cols_available.append(col)
+                
+                if 'Student_Name' in df.columns and funding_cols_available:
+                    # Extract and cache funding data
+                    funding_data = df[['Student_Name'] + funding_cols_available].copy()
+                    funding_data['name_match'] = funding_data['Student_Name'].str.strip().str.lower()
+                    funding_cols_for_merge = ['name_match'] + funding_cols_available
+                    st.session_state.funding_df = funding_data[funding_cols_for_merge].drop_duplicates('name_match')
+                
+                # === EXTRACT RAAP FLAG (if exists) ===
+                if 'Flag_9plus_sRAAP' in df.columns and 'Student_Name' in df.columns:
+                    raap_data = df[['Student_Name', 'Flag_9plus_sRAAP']].copy()
+                    raap_data['name_match'] = raap_data['Student_Name'].str.strip().str.lower()
+                    st.session_state.raap_df = raap_data[['name_match', 'Flag_9plus_sRAAP']].drop_duplicates('name_match')
+                
                 # === PROCESS STUDENT DATA ===
                 column_map = {
                     'Student_Name': 'student_name', 'Meeting_Week': 'meeting_week', 'Meeting_Date': 'meeting_date',
@@ -433,12 +453,16 @@ else:
         selected_term = st.selectbox("Term", term_options)
     
     with col3:
-        progs = ['All'] + sorted([p for p in allocation_df['program'].dropna().unique() if p != '' and p != ':2'])
+        # Clean program data and build dropdown - handle variations
+        allocation_df['program_clean'] = allocation_df['program'].str.strip().str.upper()
+        all_progs = sorted([p for p in allocation_df['program_clean'].dropna().unique() if p != '' and p != ':2'])
+        progs = ['All'] + all_progs
         selected_program = st.selectbox("Program", progs)
     
     # FILTER DATA - handle "All" selections
     allocation_df['year_clean'] = pd.to_numeric(allocation_df['year'], errors='coerce')
     allocation_df['term_clean'] = pd.to_numeric(allocation_df['term'], errors='coerce')
+    allocation_df['program_clean'] = allocation_df['program'].str.strip().str.upper()
     
     filtered = allocation_df.copy()
     
@@ -452,7 +476,7 @@ else:
     
     # Apply program filter
     if selected_program != 'All':
-        filtered = filtered[filtered['program'] == selected_program]
+        filtered = filtered[filtered['program_clean'] == selected_program]
     
     st.markdown(f"""
     <div style='background: rgba(0,229,255,0.1); border-left: 4px solid #00e5ff; 
@@ -726,6 +750,18 @@ else:
         risk_df['funding_category'] = 'None'
         risk_df['is_raap'] = 'No'
         
+        # Merge funding data if available
+        if 'funding_df' in st.session_state and st.session_state.funding_df is not None:
+            risk_df['name_match'] = risk_df['student_name'].str.strip().str.lower()
+            risk_df = risk_df.merge(st.session_state.funding_df, on='name_match', how='left')
+            risk_df = risk_df.drop('name_match', axis=1)
+        
+        # Merge RAAP data if available
+        if 'raap_df' in st.session_state and st.session_state.raap_df is not None:
+            risk_df['name_match'] = risk_df['student_name'].str.strip().str.lower()
+            risk_df = risk_df.merge(st.session_state.raap_df, on='name_match', how='left')
+            risk_df = risk_df.drop('name_match', axis=1)
+        
         # Check for RAAP
         if 'Flag_9plus_sRAAP' in risk_df.columns:
             risk_df.loc[risk_df['Flag_9plus_sRAAP'] == 'Yes', 'is_raap'] = 'Yes (RAAP)'
@@ -850,13 +886,13 @@ else:
             st.markdown("### Program Deep Dive")
             st.markdown("Comprehensive analysis of each program (JP, PY, SY)")
             
-            programs = sorted([p for p in filtered['program'].unique() if p != '' and p != ':2'])
+            programs = sorted([p for p in filtered['program_clean'].unique() if p != '' and p != ':2' and pd.notna(p)])
             
             col1, col2 = st.columns([2, 1])
             
             with col1:
                 # Program comparison - bar chart
-                prog_data = filtered['program'].value_counts().reset_index()
+                prog_data = filtered['program_clean'].value_counts().reset_index()
                 prog_data.columns = ['program', 'count']
                 prog_data['count'] = prog_data['count'].astype(int)
                 prog_data = prog_data.sort_values('count', ascending=False)
@@ -882,7 +918,7 @@ else:
             
             # Deep dive by each program
             for prog in programs:
-                prog_filtered = filtered[filtered['program'] == prog]
+                prog_filtered = filtered[filtered['program_clean'] == prog]
                 
                 if len(prog_filtered) > 0:
                     st.markdown(f"#### {prog} Program Details")
@@ -1160,11 +1196,14 @@ else:
                 
                 st.markdown("---")
                 if 'term_clean' in atsi_df.columns and len(atsi_df['term_clean'].dropna()) > 0:
-                    by_term = atsi_df['term_clean'].value_counts().sort_index()
-                    fig = px.bar(by_term, title='ATSI Students by Term', labels={'term_clean': 'Term', 'value': 'Count'},
-                                 color_discrete_sequence=['#8B4513'])
-                    fig.update_traces(textposition='outside', text=by_term.values, textfont=dict(color='#ffffff'))
-                    st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                    by_term = atsi_df[atsi_df['term_clean'] >= 1]['term_clean'].value_counts().sort_index()
+                    if len(by_term) > 0:
+                        term_df = pd.DataFrame({'Term': by_term.index, 'Count': by_term.values})
+                        fig = px.bar(term_df, x='Term', y='Count', title='ATSI Students by Term',
+                                     color_discrete_sequence=['#8B4513'])
+                        fig.update_traces(textposition='outside', text=term_df['Count'].values, textfont=dict(color='#ffffff'))
+                        fig.update_xaxes(type='category', categoryorder='array', categoryarray=[1, 2, 3, 4])
+                        st.plotly_chart(update_chart_layout(fig), use_container_width=True)
                 
                 st.markdown("---")
                 if 'school' in atsi_df.columns:
@@ -1219,11 +1258,14 @@ else:
                 
                 st.markdown("---")
                 if 'term_clean' in eald_df.columns and len(eald_df['term_clean'].dropna()) > 0:
-                    by_term = eald_df['term_clean'].value_counts().sort_index()
-                    fig = px.bar(by_term, title='EALD Students by Term', labels={'term_clean': 'Term', 'value': 'Count'},
-                                 color_discrete_sequence=['#20B2AA'])
-                    fig.update_traces(textposition='outside', text=by_term.values, textfont=dict(color='#ffffff'))
-                    st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                    by_term = eald_df[eald_df['term_clean'] >= 1]['term_clean'].value_counts().sort_index()
+                    if len(by_term) > 0:
+                        term_df = pd.DataFrame({'Term': by_term.index, 'Count': by_term.values})
+                        fig = px.bar(term_df, x='Term', y='Count', title='EALD Students by Term',
+                                     color_discrete_sequence=['#20B2AA'])
+                        fig.update_traces(textposition='outside', text=term_df['Count'].values, textfont=dict(color='#ffffff'))
+                        fig.update_xaxes(type='category', categoryorder='array', categoryarray=[1, 2, 3, 4])
+                        st.plotly_chart(update_chart_layout(fig), use_container_width=True)
                 
                 st.markdown("---")
                 if 'school' in eald_df.columns:
@@ -1278,11 +1320,14 @@ else:
                 
                 st.markdown("---")
                 if 'term_clean' in dcp_df.columns and len(dcp_df['term_clean'].dropna()) > 0:
-                    by_term = dcp_df['term_clean'].value_counts().sort_index()
-                    fig = px.bar(by_term, title='DCP Students by Term', labels={'term_clean': 'Term', 'value': 'Count'},
-                                 color_discrete_sequence=['#9370DB'])
-                    fig.update_traces(textposition='outside', text=by_term.values, textfont=dict(color='#ffffff'))
-                    st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                    by_term = dcp_df[dcp_df['term_clean'] >= 1]['term_clean'].value_counts().sort_index()
+                    if len(by_term) > 0:
+                        term_df = pd.DataFrame({'Term': by_term.index, 'Count': by_term.values})
+                        fig = px.bar(term_df, x='Term', y='Count', title='DCP Students by Term',
+                                     color_discrete_sequence=['#9370DB'])
+                        fig.update_traces(textposition='outside', text=term_df['Count'].values, textfont=dict(color='#ffffff'))
+                        fig.update_xaxes(type='category', categoryorder='array', categoryarray=[1, 2, 3, 4])
+                        st.plotly_chart(update_chart_layout(fig), use_container_width=True)
                 
                 st.markdown("---")
                 if 'school' in dcp_df.columns:
