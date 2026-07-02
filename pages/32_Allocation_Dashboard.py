@@ -1,1338 +1,1791 @@
-"""
-CLC-LBU ASSESSMENT ANALYTICS (with Program Collation)
-View aggregated assessment data by program
-UPDATED: Single Program View + Term Overview
-Page name: Assessment_Analytics.py
-"""
-
 import streamlit as st
 import pandas as pd
-import os
-from datetime import datetime
-import json
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from io import BytesIO
-
-try:
-    from openpyxl import Workbook
-    from openpyxl.chart import BarChart, Reference
-    from openpyxl.styles import Font, PatternFill, Alignment
-    EXCEL_AVAILABLE = True
-except ImportError:
-    EXCEL_AVAILABLE = False
-
-try:
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib import colors as rl_colors
-    from reportlab.lib.units import cm
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-    from reportlab.graphics.shapes import Drawing
-    from reportlab.graphics.charts.barcharts import VerticalBarChart
-    from reportlab.graphics.charts.legends import Legend
-    PDF_AVAILABLE = True
-except ImportError:
-    PDF_AVAILABLE = False
+import os
+from datetime import datetime
 
 try:
     from supabase import create_client, Client
-    SUPABASE_AVAILABLE = True
 except ImportError:
-    SUPABASE_AVAILABLE = False
+    pass
 
-st.set_page_config(
-    page_title="📊 Assessment Analytics",
-    page_icon="📊",
-    layout="wide"
-)
+st.set_page_config(page_title="Allocation Dashboard", page_icon="📊", layout="wide")
 
-# ============================================================================
-# THEME
-# ============================================================================
+# Initialize session state variables
+if 'flag_df' not in st.session_state:
+    st.session_state.flag_df = None
+if 'funding_df' not in st.session_state:
+    st.session_state.funding_df = None
+if 'raap_df' not in st.session_state:
+    st.session_state.raap_df = None
+if 'incidents_df' not in st.session_state:
+    st.session_state.incidents_df = None
 
 st.markdown("""
 <style>
-    html, body, [data-testid="stAppViewContainer"] {
+    /* HIDE ALL STREAMLIT UI ELEMENTS */
+    #MainMenu { display: none !important; }
+    footer { display: none !important; }
+    header { display: none !important; }
+    .stToolbar { display: none !important; }
+    [data-testid="stToolbar"] { display: none !important; }
+    
+    /* HIDE WHITE BANDS */
+    [data-testid="stAppViewContainer"] > div { background: linear-gradient(135deg, rgba(10,14,39,1) 0%, rgba(8,12,32,1) 100%) !important; }
+    .block-container { background: linear-gradient(135deg, rgba(10,14,39,0.95) 0%, rgba(8,12,32,0.95) 100%) !important; }
+    section { background: linear-gradient(135deg, rgba(10,14,39,0.95) 0%, rgba(8,12,32,0.95) 100%) !important; }
+    
+    html, body { 
         background-color: #0a0e27 !important;
         color: #ffffff !important;
     }
     
-    h1 {
-        color: #00e5ff !important;
-        text-shadow: 0 0 20px rgba(0, 229, 255, 0.5) !important;
-        border-bottom: 2px solid rgba(26, 122, 122, 0.3) !important;
-        padding-bottom: 15px !important;
+    * { color: #ffffff !important; }
+    
+    h1, h2, h3, h4, h5, h6 { color: #00e5ff !important; text-shadow: 0 0 15px rgba(0,229,255,0.3); }
+    p, span, div, label, button, a { color: #ffffff !important; }
+    
+    /* SIDEBAR - MATCH MAIN BACKGROUND WITH LIGHT BLUE ACCENT */
+    [data-testid="stSidebar"] { 
+        background: linear-gradient(135deg, rgba(10,14,39,0.98) 0%, rgba(8,12,32,0.98) 100%) !important;
+        border-right: 2px solid rgba(0,229,255,0.25) !important;
+    }
+    [data-testid="stSidebar"] * { color: #ffffff !important; }
+    [data-testid="stSidebar"] label { 
+        font-weight: bold; 
+        font-size: 14px;
+        color: #ffffff !important;
+        margin-top: 15px;
     }
     
-    h2, h3 {
-        color: #ffd93d !important;
+    /* DROPDOWN/SELECT BOXES - AGGRESSIVE DARK STYLING */
+    [data-testid="stSelectbox"] > div > div > div { 
+        background: #1a2a3a !important;
+        border: 1px solid #00e5ff !important;
+        border-radius: 6px !important;
+        color: #ffffff !important;
     }
     
-    /* General text - brightened for readability */
-    p, span, label, li, div {
-        color: #f5f7fa !important;
-    }
-
-    /* Markdown body text */
-    [data-testid="stMarkdownContainer"] p,
-    [data-testid="stMarkdownContainer"] li,
-    [data-testid="stMarkdownContainer"] span {
-        color: #f5f7fa !important;
-    }
-
-    /* Radio buttons (View Type selector) */
-    [data-testid="stRadio"] label,
-    [data-testid="stRadio"] label p,
-    .stRadio label {
+    /* All select/combobox variations */
+    [class*="select"] { background: #1a2a3a !important; color: #ffffff !important; }
+    [class*="combobox"] { background: #1a2a3a !important; color: #ffffff !important; }
+    
+    /* Baseui Select Override */
+    [data-baseweb="select"] { background: #1a2a3a !important; }
+    [data-baseweb="select"] > div { background: #1a2a3a !important; border: 1px solid #00e5ff !important; }
+    [data-baseweb="popover"] { background: #1a2a3a !important; }
+    [data-baseweb="menu"] { background: #1a2a3a !important; }
+    
+    /* Dropdown opened state */
+    [role="listbox"] { 
+        background: #1a2a3a !important; 
+        border: 1px solid #00e5ff !important;
         color: #ffffff !important;
     }
-
-    /* Selectbox label + selected value + dropdown options */
-    /* Selectbox label */
-    .stSelectbox label {
-        color: #ffffff !important;
-    }
-
-    /* Selectbox closed control box - dark background, light text */
-    [data-baseweb="select"] > div {
-        background-color: #12193f !important;
-        border: 1px solid rgba(0, 229, 255, 0.4) !important;
-    }
-    [data-baseweb="select"] div,
-    [data-baseweb="select"] span,
-    [data-baseweb="select"] input {
-        color: #ffffff !important;
-    }
-
-    /* Open dropdown menu (popover) - dark surface so options are readable */
-    [data-baseweb="popover"] div,
-    [data-baseweb="menu"],
-    [data-baseweb="menu"] ul,
-    ul[role="listbox"] {
-        background-color: #12193f !important;
-    }
-    [role="option"] {
-        background-color: #12193f !important;
-        color: #ffffff !important;
+    [role="option"] { 
+        color: #ffffff !important; 
+        background: #1a2a3a !important;
     }
     [role="option"]:hover,
-    [role="option"][aria-selected="true"] {
-        background-color: #1f2a5a !important;
-        color: #ffffff !important;
-    }
-
-    /* Tab labels */
-    [data-baseweb="tab"] {
-        color: #ffffff !important;
-    }
-    [data-baseweb="tab"] p {
-        color: #ffffff !important;
-    }
-
-    /* Number / text input values */
-    .stNumberInput input,
-    .stTextInput input {
-        color: #ffffff !important;
-    }
-
-    /* Regular buttons - teal, white text (readable without hover) */
-    .stButton > button {
-        background: linear-gradient(135deg, #1A7A7A 0%, #14a3a3 100%) !important;
-        color: #ffffff !important;
-        border: 1px solid rgba(0, 229, 255, 0.6) !important;
-        border-radius: 10px !important;
-        font-weight: 600 !important;
-    }
-    .stButton > button:hover {
-        background: linear-gradient(135deg, #14a3a3 0%, #1A7A7A 100%) !important;
-        color: #ffffff !important;
-        border: 1px solid #ffffff !important;
-    }
-    .stButton > button * {
-        color: #ffffff !important;
-    }
-
-    /* Download buttons - match the Program/Term/Year selector boxes */
-    .stDownloadButton > button {
-        background-color: #12193f !important;
-        color: #ffffff !important;
-        border: 1px solid rgba(0, 229, 255, 0.4) !important;
-        border-radius: 8px !important;
-        font-weight: 600 !important;
-        width: 100% !important;
-    }
-    .stDownloadButton > button:hover {
-        background-color: #1f2a5a !important;
-        color: #ffffff !important;
-        border: 1px solid rgba(0, 229, 255, 0.8) !important;
-    }
-    .stDownloadButton > button * {
+    [role="option"][aria-selected="true"] { 
+        background: rgba(0,229,255,0.3) !important;
         color: #ffffff !important;
     }
     
-    [data-testid="metric-container"] {
-        background: linear-gradient(135deg, rgba(26, 122, 122, 0.3) 0%, rgba(0, 229, 255, 0.08) 100%) !important;
-        border: 1px solid rgba(0, 229, 255, 0.4) !important;
-        border-left: 5px solid rgba(0, 229, 255, 0.9) !important;
-        border-radius: 12px !important;
-    }
-
-    /* Metric label + value text - brightened */
-    [data-testid="stMetricLabel"],
-    [data-testid="stMetricLabel"] p,
-    [data-testid="stMetricLabel"] div {
-        color: #f5f7fa !important;
-    }
-    [data-testid="stMetricValue"] {
+    /* Text in select */
+    [data-testid="stSelectbox"] input { 
+        background: #1a2a3a !important;
         color: #ffffff !important;
+        border: 1px solid #00e5ff !important;
     }
     
-    .stInfo {
-        background: linear-gradient(135deg, rgba(26, 122, 122, 0.25) 0%, rgba(0, 229, 255, 0.1) 100%) !important;
-        border-left: 5px solid #00e5ff !important;
-        border-radius: 10px !important;
+    /* Selectbox label */
+    [data-testid="stSelectbox"] label { 
+        color: #ffffff !important; 
+        font-weight: bold; 
     }
+    
+    /* FILE UPLOADER */
+    [data-testid="stFileUploader"] { background: #1a2a3a !important; border: 1px solid #00e5ff !important; border-radius: 6px !important; }
+    [data-testid="stFileUploader"] label { color: #ffffff !important; font-weight: bold; }
+    
+    /* SIDEBAR DIVIDER */
+    [data-testid="stSidebar"] hr { border-color: rgba(0,229,255,0.3) !important; }
+    
+    /* RADIO - STYLED BUTTONS */
+    [role="radio"] { 
+        padding: 10px 15px !important;
+        border-radius: 6px !important;
+        margin: 6px 0 !important;
+        border: 1px solid rgba(0,229,255,0.2) !important;
+        background: transparent !important;
+        transition: all 0.2s !important;
+    }
+    [role="radio"]:hover { 
+        background: rgba(0,229,255,0.1) !important;
+        border-color: rgba(0,229,255,0.5) !important;
+    }
+    
+    /* BUTTONS */
+    .stButton > button { 
+        background: rgba(0,229,255,0.15) !important; 
+        border: 1px solid #00e5ff !important; 
+        color: #ffffff !important; 
+        font-weight: bold;
+        border-radius: 6px !important;
+        padding: 10px 20px !important;
+    }
+    .stButton > button:hover { 
+        background: rgba(0,229,255,0.3) !important; 
+    }
+    
+    /* METRICS */
+    [data-testid="stMetricValue"] { color: #00e5ff !important; font-size: 2em; }
+    [data-testid="stMetricLabel"] { color: #ffffff !important; }
+    [data-testid="metric-container"] { background: rgba(0,229,255,0.08) !important; border-radius: 8px !important; }
+    
+    /* BOXES */
+    .stInfo { background: #1a2a3a !important; border-left: 4px solid #00e5ff !important; }
+    .stInfo * { color: #ffffff !important; }
+    .stWarning { background: #2a2415 !important; border-left: 4px solid #ffc107 !important; }
+    .stWarning * { color: #ffffff !important; }
+    .stSuccess { background: #1a2a1a !important; border-left: 4px solid #4caf50 !important; }
+    .stSuccess * { color: #ffffff !important; }
+    .stError { background: #2a1a1a !important; border-left: 4px solid #f44336 !important; }
+    .stError * { color: #ffffff !important; }
+    
+    /* PLOTLY */
+    .plotly text { fill: #ffffff !important; color: #ffffff !important; }
+    .plotly .legend text { fill: #ffffff !important; color: #ffffff !important; }
+    
+    /* DATA FRAMES */
+    [data-testid="stDataFrame"] { background: rgba(10,14,39,0.8) !important; }
+    [data-testid="stDataFrame"] * { color: #ffffff !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# ============================================================================
-# SUPABASE CONNECTION
-# ============================================================================
-
 @st.cache_resource
 def init_supabase():
-    """Initialize Supabase connection"""
     url = os.getenv("SUPABASE_URL", "")
     key = os.getenv("SUPABASE_KEY", "")
-    
     if url and key:
         try:
             return create_client(url, key)
-        except Exception as e:
-            st.error(f"Supabase connection error: {e}")
+        except:
             return None
     return None
 
-supabase: Client = init_supabase()
+supabase = init_supabase()
 
-# ============================================================================
-# DATA STRUCTURE
-# ============================================================================
-
-SOUNDS_WRITE_SKILLS = [
-    'Blending',
-    'Segmenting',
-    'Phoneme manipulation',
-    'Alphabet Code Knowledge test',
-    'Non-word Reading test'
-]
-
-# Word Aware is presented in analysis as the Vocabulary Development Test:
-# a single measure (words explicitly taught) tallied into three word-count bands.
-WORD_AWARE_MEASURES = ['Number of words explicitly taught']
-WORD_AWARE_LEVELS = ['>10 words', '>5 words', '>2 words']
-VOCAB_LABEL = 'Vocabulary Development Test'
-
-SMARTAR_CAPABILITIES = ['Personal and Social', 'Learning and Engagement']
-SMARTAR_LEVELS = ['Reached Expected', 'Above Expectation', 'Exceeding']
-
-# ============================================================================
-# DATABASE FUNCTIONS
-# ============================================================================
-
-def get_all_assessments():
-    """Get all assessment records from Supabase"""
+@st.cache_data
+def load_allocation_data():
     if not supabase:
         return None
-    
     try:
-        response = supabase.table('term_assessments').select('*').execute()
-        return response.data
-    except Exception as e:
-        st.error(f"Error fetching assessments: {e}")
+        response = supabase.table('allocation_students').select('*').execute()
+        if response.data:
+            return pd.DataFrame(response.data)
+        return None
+    except:
         return None
 
-def collate_by_program(assessments, program, term, year):
-    """
-    Collate assessment data from all staff for a specific program/term/year
-    Returns aggregated data (sums across all staff)
-    """
-    if not assessments:
-        return None
-    
-    # Filter by program, term, year
-    filtered = [
-        a for a in assessments 
-        if a['program'] == program and 
-           a['term'] == int(term) and 
-           a['year'] == int(year)
-    ]
-    
-    if not filtered:
-        return None
-    
-    # Collate Sounds Write data
-    sounds_write_collated = {}
-    for skill in SOUNDS_WRITE_SKILLS:
-        sounds_write_collated[skill] = {
-            'Mastered': 0,
-            'Developing': 0,
-            'Requires Development': 0
-        }
-    
-    # Collate Word Aware / Vocabulary data
-    word_aware_collated = {}
-    for measure in WORD_AWARE_MEASURES:
-        word_aware_collated[measure] = {
-            '>10 words': 0,
-            '>5 words': 0,
-            '>2 words': 0
-        }
-    
-    # SMARTAR collated - tallies per capability area
-    smartar_collated = {}
-    for cap in SMARTAR_CAPABILITIES:
-        smartar_collated[cap] = {
-            'Reached Expected': 0,
-            'Above Expectation': 0,
-            'Exceeding': 0
-        }
-    
-    staff_count = 0
-    
-    # Sum across all staff
-    for assessment in filtered:
-        staff_count += 1
-        
-        # Sum Sounds Write
-        try:
-            sw_data = json.loads(assessment.get('sounds_write_data', '{}'))
-            for skill, levels in sw_data.items():
-                if skill in sounds_write_collated:
-                    for level, count in levels.items():
-                        sounds_write_collated[skill][level] += int(count)
-        except:
-            pass
-        
-        # Sum Word Aware / Vocabulary
-        try:
-            wa_data = json.loads(assessment.get('word_aware_data', '{}'))
-            for measure, levels in wa_data.items():
-                if measure in word_aware_collated and isinstance(levels, dict):
-                    for level in WORD_AWARE_LEVELS:
-                        word_aware_collated[measure][level] += int(levels.get(level, 0))
-        except:
-            pass
-        
-        # Sum SMARTAR tallies (ignores any old-format goal records gracefully)
-        try:
-            smartar_data = json.loads(assessment.get('smartar_goals', '{}'))
-            for cap, levels in smartar_data.items():
-                if cap in smartar_collated and isinstance(levels, dict):
-                    for level in SMARTAR_LEVELS:
-                        smartar_collated[cap][level] += int(levels.get(level, 0))
-        except:
-            pass
-    
-    return {
-        'sounds_write': sounds_write_collated,
-        'word_aware': word_aware_collated,
-        'smartar': smartar_collated,
-        'staff_count': staff_count,
-        'record_count': len(filtered)
-    }
-
-def collate_all_programs(assessments, term, year):
-    """
-    Collate assessment data across ALL programs (JP + PY + SY) for a term/year.
-    Returns one combined set of totals - the sum of every staff entry across
-    every program for the selected term and year.
-    """
-    if not assessments:
-        return None
-
-    # Filter by term and year only (all programs)
-    filtered = [
-        a for a in assessments
-        if a['term'] == int(term) and a['year'] == int(year)
-    ]
-
-    if not filtered:
-        return None
-
-    sounds_write_collated = {}
-    for skill in SOUNDS_WRITE_SKILLS:
-        sounds_write_collated[skill] = {
-            'Mastered': 0,
-            'Developing': 0,
-            'Requires Development': 0
-        }
-
-    word_aware_collated = {}
-    for measure in WORD_AWARE_MEASURES:
-        word_aware_collated[measure] = {
-            '>10 words': 0,
-            '>5 words': 0,
-            '>2 words': 0
-        }
-
-    smartar_collated = {}
-    for cap in SMARTAR_CAPABILITIES:
-        smartar_collated[cap] = {
-            'Reached Expected': 0,
-            'Above Expectation': 0,
-            'Exceeding': 0
-        }
-
-    programs_present = set()
-
-    for assessment in filtered:
-        if assessment.get('program'):
-            programs_present.add(assessment['program'])
-
-        # Sum Sounds Write
-        try:
-            sw_data = json.loads(assessment.get('sounds_write_data', '{}'))
-            for skill, levels in sw_data.items():
-                if skill in sounds_write_collated:
-                    for level, count in levels.items():
-                        if level in sounds_write_collated[skill]:
-                            sounds_write_collated[skill][level] += int(count)
-        except:
-            pass
-
-        # Sum Word Aware / Vocabulary
-        try:
-            wa_data = json.loads(assessment.get('word_aware_data', '{}'))
-            for measure, levels in wa_data.items():
-                if measure in word_aware_collated and isinstance(levels, dict):
-                    for level in WORD_AWARE_LEVELS:
-                        word_aware_collated[measure][level] += int(levels.get(level, 0))
-        except:
-            pass
-
-        # Sum SMARTAR tallies (ignores any old-format goal records gracefully)
-        try:
-            smartar_data = json.loads(assessment.get('smartar_goals', '{}'))
-            for cap, levels in smartar_data.items():
-                if cap in smartar_collated and isinstance(levels, dict):
-                    for level in SMARTAR_LEVELS:
-                        smartar_collated[cap][level] += int(levels.get(level, 0))
-        except:
-            pass
-
-    return {
-        'sounds_write': sounds_write_collated,
-        'word_aware': word_aware_collated,
-        'smartar': smartar_collated,
-        'staff_count': len(filtered),
-        'record_count': len(filtered),
-        'programs_present': sorted(programs_present)
-    }
-
-# ============================================================================
-# RENDER FUNCTIONS
-# ============================================================================
-
-def render_sounds_write_chart(collated, program):
-    """Render Sounds Write chart"""
-    sw_data = collated['sounds_write']
-    vis_data = []
-    for skill, levels in sw_data.items():
-        vis_data.append({
-            'Skill': skill,
-            'Mastered': levels['Mastered'],
-            'Developing': levels['Developing'],
-            'Requires Dev': levels['Requires Development']
-        })
-    
-    df_sw = pd.DataFrame(vis_data)
-    
-    fig_sw = px.bar(
-        df_sw,
-        x='Skill',
-        y=['Mastered', 'Developing', 'Requires Dev'],
-        barmode='stack',
-        title=f'🎵 Sounds Write - {program} Program',
-        color_discrete_map={
-            'Mastered': '#4CAF50',
-            'Developing': '#FFC107',
-            'Requires Dev': '#F44336'
-        },
-        labels={'value': 'Number of Students', 'variable': 'Performance Level'}
-    )
-    fig_sw.update_layout(
-        plot_bgcolor='rgba(10, 14, 39, 0.8)',
-        paper_bgcolor='rgba(10, 14, 39, 0.8)',
-        font=dict(color='#e8e8e8'),
-        hovermode='x unified',
-        height=400
-    )
-    return fig_sw, df_sw
-
-def render_word_aware_chart(collated, program):
-    """Render Vocabulary Development Test chart - students by word-count band"""
-    wa_data = collated['word_aware']
-    measure = WORD_AWARE_MEASURES[0]
-    levels = wa_data.get(measure, {})
-
-    df_wa = pd.DataFrame([
-        {'Word Band': lvl, 'Students': int(levels.get(lvl, 0))}
-        for lvl in WORD_AWARE_LEVELS
-    ])
-
-    fig_wa = px.bar(
-        df_wa,
-        x='Word Band',
-        y='Students',
-        color='Word Band',
-        title=f'📚 {VOCAB_LABEL} - {program} Program',
-        color_discrete_map={
-            '>10 words': '#4CAF50',
-            '>5 words': '#00BCD4',
-            '>2 words': '#F0B400'
-        },
-        category_orders={'Word Band': WORD_AWARE_LEVELS},
-        labels={'Students': 'Number of Students', 'Word Band': 'Words Explicitly Taught'}
-    )
-    fig_wa.update_layout(
-        plot_bgcolor='rgba(10, 14, 39, 0.8)',
-        paper_bgcolor='rgba(10, 14, 39, 0.8)',
-        font=dict(color='#e8e8e8'),
-        hovermode='x unified',
-        height=400,
-        showlegend=False
-    )
-    return fig_wa, df_wa
-
-def render_smartar_chart(collated, program):
-    """Render SMARTAR outcomes chart - tallies by capability area"""
-    smartar_data = collated['smartar']
-    vis_data = []
-    for cap, levels in smartar_data.items():
-        vis_data.append({
-            'Capability': cap,
-            'Reached Expected': levels['Reached Expected'],
-            'Above Expectation': levels['Above Expectation'],
-            'Exceeding': levels['Exceeding']
-        })
-
-    df_smartar = pd.DataFrame(vis_data)
-
-    fig_smartar = px.bar(
-        df_smartar,
-        x='Capability',
-        y=['Reached Expected', 'Above Expectation', 'Exceeding'],
-        barmode='group',
-        title=f'🎯 SMARTAR Goal Outcomes - {program} Program',
-        color_discrete_map={
-            'Reached Expected': '#4CAF50',
-            'Above Expectation': '#00BCD4',
-            'Exceeding': '#FFD93D'
-        },
-        labels={'value': 'Number of Students', 'variable': 'Outcome Level'}
-    )
-    fig_smartar.update_layout(
-        plot_bgcolor='rgba(10, 14, 39, 0.8)',
-        paper_bgcolor='rgba(10, 14, 39, 0.8)',
-        font=dict(color='#e8e8e8'),
-        hovermode='x unified',
-        height=400
-    )
-    return fig_smartar, df_smartar
-
-# ============================================================================
-# REPORT BUILDERS (CSV downloads)
-# ============================================================================
-
-def build_section_report(df, section_name, scope_label, term, year):
-    """Return CSV bytes for a single section with a short report header."""
-    header = (
-        "CLC-LBU Assessment Analytics Report\n"
-        f"Section,{section_name}\n"
-        f"Scope,{scope_label}\n"
-        f"Term,{term}\n"
-        f"Year,{year}\n"
-        f"Generated,{datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
-    )
-    return (header + df.to_csv(index=False)).encode('utf-8')
-
-def build_combined_report(sections, scope_label, term, year):
-    """sections: list of (name, dataframe). Returns one CSV with all sections stacked."""
-    parts = [
-        "CLC-LBU Assessment Analytics Report\n",
-        f"Scope,{scope_label}\n",
-        f"Term,{term}\n",
-        f"Year,{year}\n",
-        f"Generated,{datetime.now().strftime('%d/%m/%Y %H:%M')}\n",
-    ]
-    for name, df in sections:
-        parts.append(f"\n{name}\n")
-        parts.append(df.to_csv(index=False))
-    return ("".join(parts)).encode('utf-8')
-
-def build_excel_report(sections, scope_label, term, year):
-    """
-    Build a finished Excel workbook: one sheet per section, each with a
-    native Excel bar chart on top and the data table below it.
-    sections: list of (title, dataframe, grouping) where grouping is
-    'stacked' or 'clustered'. Returns .xlsx bytes, or None if unavailable.
-    """
-    if not EXCEL_AVAILABLE:
-        return None
-
+@st.cache_data
+def load_flag_data_from_excel():
+    """Load flag columns from Excel file - cached for performance"""
     try:
-        wb = Workbook()
-        wb.remove(wb.active)
-        generated = datetime.now().strftime('%d/%m/%Y %H:%M')
+        import os
+        excel_path = '/mnt/user-data/uploads/CLC_Allocation_Dashboard_2026_WithNames_1.xlsx'
+        
+        if os.path.exists(excel_path):
+            excel_data = pd.read_excel(excel_path)
+            
+            if 'Student_Name' in excel_data.columns:
+                excel_data['name_match'] = excel_data['Student_Name'].str.strip().str.lower()
+                
+                flag_cols = ['name_match']
+                for col in ['Flag_ATSI', 'Flag_EALD', 'Flag_DCP_involvement']:
+                    if col in excel_data.columns:
+                        flag_cols.append(col)
+                
+                if len(flag_cols) > 1:
+                    return excel_data[flag_cols].drop_duplicates('name_match')
+    except:
+        pass
+    return None
 
-        for title, df, grouping in sections:
-            ws = wb.create_sheet(title[:31])
+# Pre-load flags at startup
+cached_flag_df = load_flag_data_from_excel()
 
-            # Header block
-            ws['A1'] = f'CLC-LBU — {title}'
-            ws['A1'].font = Font(size=14, bold=True, color='FF1A7A7A')
-            ws['A2'] = (f'Scope: {scope_label}  |  Term: {term}  |  '
-                        f'Year: {year}  |  Generated: {generated}')
-            ws['A2'].font = Font(size=9, italic=True, color='FF666666')
+def update_chart_layout(fig):
+    fig.update_layout(
+        plot_bgcolor='rgba(10,14,39,0.8)',
+        paper_bgcolor='rgba(10,14,39,0.8)',
+        font=dict(color='#ffffff', size=12),
+        hovermode='x unified',
+        margin=dict(l=40, r=40, t=40, b=40),
+        showlegend=True
+    )
+    fig.update_xaxes(showgrid=False, tickfont=dict(color='#ffffff'))
+    fig.update_yaxes(showgrid=True, gridcolor='rgba(100,100,100,0.2)', tickfont=dict(color='#ffffff'))
+    return fig
 
-            headers = list(df.columns)
-            n_cols = len(headers)
-            data_start = 21  # leave rows 4-20 for the chart above the table
+allocation_df = load_allocation_data()
 
-            # Table header
-            for c, h in enumerate(headers, start=1):
-                cell = ws.cell(row=data_start, column=c, value=str(h))
-                cell.font = Font(bold=True, color='FFFFFFFF')
-                cell.fill = PatternFill('solid', fgColor='FF1A7A7A')
-                cell.alignment = Alignment(horizontal='center')
+# Load flag columns from Excel 
+flag_df = None
+flag_load_error = None
+flag_load_debug = {}
 
-            # Table rows (category as text, measures as ints)
-            for r, (_, row) in enumerate(df.iterrows(), start=data_start + 1):
-                for c, h in enumerate(headers, start=1):
-                    val = row[h]
-                    if c == 1:
-                        ws.cell(row=r, column=c, value=str(val))
-                    else:
-                        try:
-                            ws.cell(row=r, column=c, value=int(val))
-                        except (ValueError, TypeError):
-                            ws.cell(row=r, column=c, value=val)
-
-            last_row = data_start + len(df)
-
-            # Chart on top, referencing the table below
-            chart = BarChart()
-            chart.type = 'col'
-            chart.grouping = grouping
-            chart.overlap = 100 if grouping == 'stacked' else -27
-            chart.title = title
-            chart.y_axis.title = 'Number of Students'
-            chart.x_axis.title = headers[0]
-            data_ref = Reference(ws, min_col=2, max_col=n_cols,
-                                 min_row=data_start, max_row=last_row)
-            cats_ref = Reference(ws, min_col=1,
-                                 min_row=data_start + 1, max_row=last_row)
-            chart.add_data(data_ref, titles_from_data=True)
-            chart.set_categories(cats_ref)
-            chart.height = 8
-            chart.width = 22
-            ws.add_chart(chart, 'A4')
-
-            # Column widths
-            ws.column_dimensions['A'].width = 30
-            for ci in range(2, n_cols + 1):
-                ws.column_dimensions[chr(64 + ci)].width = 18
-
-        bio = BytesIO()
-        wb.save(bio)
-        return bio.getvalue()
-    except Exception:
-        return None
-
-def build_pdf_report(sections, scope_label, term, year):
-    """
-    Build a finished PDF report: for each section a heading, a bar chart,
-    and the data table below it. sections: list of (title, dataframe, grouping).
-    Returns PDF bytes, or None if unavailable.
-    """
-    if not PDF_AVAILABLE:
-        return None
-
+if allocation_df is not None:
     try:
-        TEAL = rl_colors.HexColor('#1A7A7A')
-        SERIES_COLORS = [
-            rl_colors.HexColor('#4CAF50'),
-            rl_colors.HexColor('#00BCD4'),
-            rl_colors.HexColor('#F0B400'),
-        ]
-
-        buf = BytesIO()
-        doc = SimpleDocTemplate(
-            buf, pagesize=A4,
-            topMargin=1.5 * cm, bottomMargin=1.5 * cm,
-            leftMargin=1.5 * cm, rightMargin=1.5 * cm,
-            title='CLC-LBU Assessment Report'
-        )
-        styles = getSampleStyleSheet()
-        title_style = ParagraphStyle('clc_title', parent=styles['Title'],
-                                      textColor=TEAL, fontSize=18)
-        h_style = ParagraphStyle('clc_h', parent=styles['Heading2'], textColor=TEAL)
-        meta_style = ParagraphStyle('clc_meta', parent=styles['Normal'],
-                                    fontSize=9, textColor=rl_colors.grey)
-
-        story = []
-        generated = datetime.now().strftime('%d/%m/%Y %H:%M')
-        story.append(Paragraph('CLC-LBU Assessment Report', title_style))
-        story.append(Paragraph(
-            f'Scope: {scope_label} &nbsp;|&nbsp; Term: {term} &nbsp;|&nbsp; '
-            f'Year: {year} &nbsp;|&nbsp; Generated: {generated}', meta_style))
-        story.append(Spacer(1, 0.5 * cm))
-
-        for title, df, grouping in sections:
-            story.append(Paragraph(title, h_style))
-            story.append(Spacer(1, 0.2 * cm))
-
-            headers = list(df.columns)
-            cats = [str(v) for v in df[headers[0]].tolist()]
-            value_cols = headers[1:]
-            data_series = [[int(v) for v in df[col].tolist()] for col in value_cols]
-
-            # Bar chart
-            d = Drawing(470, 210)
-            bc = VerticalBarChart()
-            bc.x = 35
-            bc.y = 25
-            bc.height = 140
-            bc.width = 400
-            bc.data = data_series
-            bc.categoryAxis.categoryNames = cats
-            bc.categoryAxis.labels.boxAnchor = 'ne'
-            bc.categoryAxis.labels.angle = 20
-            bc.categoryAxis.labels.fontSize = 7
-            bc.valueAxis.valueMin = 0
-            bc.groupSpacing = 10
-            bc.barSpacing = 1
-            for i in range(len(value_cols)):
-                bc.bars[i].fillColor = SERIES_COLORS[i % len(SERIES_COLORS)]
-            d.add(bc)
-
-            legend = Legend()
-            legend.x = 35
-            legend.y = 200
-            legend.dx = 8
-            legend.dy = 8
-            legend.fontSize = 7
-            legend.boxAnchor = 'nw'
-            legend.columnMaximum = 1
-            legend.deltax = 60
-            legend.alignment = 'right'
-            legend.colorNamePairs = [
-                (SERIES_COLORS[i % len(SERIES_COLORS)], value_cols[i])
-                for i in range(len(value_cols))
-            ]
-            d.add(legend)
-            story.append(d)
-            story.append(Spacer(1, 0.3 * cm))
-
-            # Data table
-            table_rows = [list(headers)]
-            for _, row in df.iterrows():
-                table_rows.append(
-                    [str(row[headers[0]])] + [int(row[c]) for c in value_cols]
-                )
-            t = Table(table_rows, hAlign='LEFT')
-            t.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), TEAL),
-                ('TEXTCOLOR', (0, 0), (-1, 0), rl_colors.white),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('GRID', (0, 0), (-1, -1), 0.5, rl_colors.HexColor('#cccccc')),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1),
-                 [rl_colors.white, rl_colors.HexColor('#eef5f5')]),
-                ('FONTSIZE', (0, 0), (-1, -1), 9),
-                ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
-                ('LEFTPADDING', (0, 0), (-1, -1), 6),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 6),
-                ('TOPPADDING', (0, 0), (-1, -1), 4),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-            ]))
-            story.append(t)
-            story.append(Spacer(1, 0.7 * cm))
-
-        doc.build(story)
-        return buf.getvalue()
-    except Exception:
-        return None
-
-# ============================================================================
-# MAIN
-# ============================================================================
-
-def main():
-    st.markdown("# 📊 ASSESSMENT ANALYTICS")
-    
-    if not supabase:
-        st.warning("⚠️ Supabase not configured.")
-        return
-    
-    # Get all assessments
-    all_assessments = get_all_assessments()
-    
-    if not all_assessments:
-        st.warning("No assessment data found yet.")
-        return
-    
-    # ------------------------------------------------------------------
-    # Troubleshooting panel: shows what is actually stored for Word Aware /
-    # Vocabulary in each record, so mismatches are easy to spot.
-    # ------------------------------------------------------------------
-    with st.expander("🔧 Vocabulary data check (troubleshooting)"):
-        st.caption(
-            "Shows the keys stored in each record's Word Aware data. "
-            "For the Vocabulary Development Test to display, this should read "
-            "'Number of words explicitly taught'. If it shows the old skill "
-            "names (e.g. 'Word Finding'), that record was saved before the "
-            "update and needs re-entering."
-        )
-        check_rows = []
-        for a in all_assessments:
-            wa_raw = a.get('word_aware_data', '') or ''
-            try:
-                wa_parsed = json.loads(wa_raw) if wa_raw else {}
-                if isinstance(wa_parsed, dict) and wa_parsed:
-                    keys = ", ".join(str(k) for k in wa_parsed.keys())
+        import os
+        excel_path = '/mnt/user-data/uploads/CLC_Allocation_Dashboard_2026_WithNames_1.xlsx'
+        flag_load_debug['step_1_path_check'] = os.path.exists(excel_path)
+        
+        if os.path.exists(excel_path):
+            excel_data = pd.read_excel(excel_path)
+            flag_load_debug['step_2_excel_loaded'] = True
+            flag_load_debug['step_3_excel_shape'] = excel_data.shape
+            flag_load_debug['step_4_has_student_name'] = 'Student_Name' in excel_data.columns
+            
+            if 'Student_Name' in excel_data.columns:
+                excel_data['name_match'] = excel_data['Student_Name'].str.strip().str.lower()
+                flag_load_debug['step_5_name_match_created'] = True
+                
+                flag_cols = ['name_match']
+                for col in ['Flag_ATSI', 'Flag_EALD', 'Flag_DCP_involvement']:
+                    if col in excel_data.columns:
+                        flag_cols.append(col)
+                
+                flag_load_debug['step_6_flag_cols'] = flag_cols
+                flag_load_debug['step_7_len_flag_cols'] = len(flag_cols)
+                
+                if len(flag_cols) > 1:
+                    flag_df = excel_data[flag_cols].drop_duplicates('name_match')
+                    flag_load_debug['step_8_flag_df_shape'] = flag_df.shape
+                    flag_load_debug['step_8_success'] = True
                 else:
-                    keys = "(empty)"
-            except Exception:
-                keys = "(invalid data)"
-            check_rows.append({
-                'Staff': a.get('staff_member', ''),
-                'Program': a.get('program', ''),
-                'Term': a.get('term', ''),
-                'Year': a.get('year', ''),
-                'Stored Word Aware keys': keys,
-                'Raw word_aware_data': wa_raw
-            })
-        st.dataframe(pd.DataFrame(check_rows), use_container_width=True)
-        st.caption(
-            "The 'Raw word_aware_data' column shows exactly what is stored. "
-            "For a working record it should look like: "
-            '{"Number of words explicitly taught": {">10 words": 3, ">5 words": 1, ">2 words": 0}}'
+                    flag_load_error = f"No flag columns found. Cols: {flag_cols}"
+            else:
+                flag_load_error = "Student_Name column not found"
+        else:
+            flag_load_error = f"File not found: {excel_path}"
+            
+    except Exception as e:
+        flag_load_error = f"Exception: {str(e)}"
+        flag_load_debug['exception'] = str(e)
+
+if allocation_df is None or allocation_df.empty:
+    st.error("No data loaded")
+else:
+    # SIDEBAR
+    with st.sidebar:
+        st.markdown("""
+        <div style='text-align: center; margin-bottom: 40px; padding: 20px 0; border-bottom: 2px solid rgba(0,229,255,0.5);'>
+            <div style='font-size: 32px; margin-bottom: 8px;'>📊</div>
+            <h2 style='color: #00e5ff; margin: 0; font-size: 20px; font-weight: bold;'>CLC-LBU</h2>
+            <p style='color: #00e5ff; margin: 5px 0 0 0; font-size: 11px; font-weight: bold; letter-spacing: 1px;'>ALLOCATION ANALYTICS</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("**Navigate**", help="Select an analysis section")
+        section = st.radio(
+            "Select Section",
+            ["Overview", "Trends", "Complexity", "Category of Support", "Cohort Analysis", "Equity", "Critical Incidents", "Assessment", "Waitlist", "Diagnostics"],
+            label_visibility="collapsed"
         )
+        
+        st.markdown("---")
+        st.markdown("**Data Upload**", help="Upload Excel file with student allocation data and optional flag columns")
+        
+        uploaded_file = st.file_uploader("Choose Excel or CSV file", type=['xlsx', 'csv'], label_visibility="collapsed")
+        
+        if uploaded_file is not None:
+            try:
+                df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('.xlsx') else pd.read_csv(uploaded_file)
+                
+                # Show available columns for debugging
+                with st.expander("📋 Available columns in file"):
+                    st.write("All columns:", list(df.columns))
+                
+                # === EXTRACT FLAG DATA (if columns exist) ===
+                flag_cols_available = []
+                for col in ['Flag_ATSI', 'Flag_EALD', 'Flag_DCP_involvement']:
+                    if col in df.columns:
+                        flag_cols_available.append(col)
+                
+                if 'Student_Name' in df.columns and flag_cols_available:
+                    # Extract and cache flag data
+                    flag_data = df[['Student_Name'] + flag_cols_available].copy()
+                    flag_data['name_match'] = flag_data['Student_Name'].str.strip().str.lower()
+                    flag_cols_for_merge = ['name_match'] + flag_cols_available
+                    st.session_state.flag_df = flag_data[flag_cols_for_merge].drop_duplicates('name_match')
+                
+                # === EXTRACT FUNDING CATEGORY DATA (if columns exist) ===
+                funding_cols_available = []
+                for i in range(1, 10):
+                    col = f'Flag_Category_{i}'
+                    if col in df.columns:
+                        funding_cols_available.append(col)
+                
+                if funding_cols_available:
+                    st.info(f"✅ Found funding columns: {', '.join(funding_cols_available)}")
+                
+                if 'Student_Name' in df.columns and funding_cols_available:
+                    # Extract and cache funding data
+                    funding_data = df[['Student_Name'] + funding_cols_available].copy()
+                    funding_data['name_match'] = funding_data['Student_Name'].str.strip().str.lower()
+                    funding_cols_for_merge = ['name_match'] + funding_cols_available
+                    st.session_state.funding_df = funding_data[funding_cols_for_merge].drop_duplicates('name_match')
+                else:
+                    if 'Student_Name' in df.columns:
+                        st.warning("No funding category columns found (Flag_Category_1 to 9)")
+                
+                # === EXTRACT RAAP FLAG (if exists) ===
+                if 'Flag_9plusRAAP' in df.columns and 'Student_Name' in df.columns:
+                    raap_data = df[['Student_Name', 'Flag_9plusRAAP']].copy()
+                    raap_data['name_match'] = raap_data['Student_Name'].str.strip().str.lower()
+                    st.session_state.raap_df = raap_data[['name_match', 'Flag_9plusRAAP']].drop_duplicates('name_match')
+                # === EXTRACT CRITICAL INCIDENTS (if sheet exists) ===
+                try:
+                    # Try to read Critical_Incidents sheet
+                    if isinstance(uploaded_file.name, str) and uploaded_file.name.endswith('.xlsx'):
+                        incidents_df = pd.read_excel(uploaded_file, sheet_name='Critical_Incidents')
+                        if len(incidents_df) > 0 and 'Student_Name' in incidents_df.columns:
+                            incidents_df['name_match'] = incidents_df['Student_Name'].str.strip().str.lower()
+                            st.session_state.incidents_df = incidents_df
+                except:
+                    pass
+                
+                # === PROCESS STUDENT DATA ===
+                column_map = {
+                    'Student_Name': 'student_name', 'Meeting_Week': 'meeting_week', 'Meeting_Date': 'meeting_date',
+                    'Term': 'term', 'Referral_Year': 'year', 'Allocated_Program': 'program',
+                    'DOB': 'date_of_birth', 'Gender': 'gender', 'Year_Level': 'year_level',
+                    'Referring_School': 'school', 'Partnership_Area': 'partnership_area',
+                    'Previous_CLC_Placement': 'previous_clc_placement', 'Previous_Other_LC': 'previous_other_lc',
+                    'Other_LC_Name': 'other_lc_name', 'Total_Previous_Placements': 'total_previous_placements',
+                    'Placement_History_Notes': 'placement_history_notes', 'Bespoke_Placement': 'bespoke_placement',
+                    'Waitlist_Status': 'waitlist_status', 'Waitlist_Date': 'waitlist_date',
+                    'Allocated_From_Waitlist': 'allocated_from_waitlist', 'Previously_Referred': 'previously_referred',
+                    'Medical_Condition_Details': 'medical_condition_details', 'Extension_Weeks': 'extension_weeks',
+                }
+                
+                df_mapped = df.copy()
+                for excel_col, supabase_col in column_map.items():
+                    if excel_col in df_mapped.columns:
+                        df_mapped = df_mapped.rename(columns={excel_col: supabase_col})
+                
+                df_mapped = df_mapped[[col for col in df_mapped.columns if col in column_map.values()]]
+                
+                date_cols = ['meeting_date', 'date_of_birth', 'waitlist_date']
+                for col in date_cols:
+                    if col in df_mapped.columns:
+                        df_mapped[col] = pd.to_datetime(df_mapped[col], errors='coerce')
+                        df_mapped[col] = df_mapped[col].dt.strftime('%Y-%m-%d')
+                        df_mapped[col] = df_mapped[col].replace('NaT', '')
+                
+                numeric_cols = ['year', 'term', 'extension_weeks', 'total_previous_placements']
+                for col in numeric_cols:
+                    if col in df_mapped.columns:
+                        df_mapped[col] = pd.to_numeric(df_mapped[col], errors='coerce').fillna(0).astype(int)
+                
+                df_mapped = df_mapped.astype(str)
+                df_mapped = df_mapped.replace('nan', '')
+                df_mapped = df_mapped.fillna('')
+                
+                for col in df_mapped.columns:
+                    if df_mapped[col].dtype == 'object':
+                        df_mapped[col] = df_mapped[col].str.strip()
+                
+                if 'meeting_date' in df_mapped.columns:
+                    today = pd.Timestamp.now().strftime('%Y-%m-%d')
+                    df_mapped['meeting_date'] = df_mapped['meeting_date'].replace('', today)
+                
+                # Show status
+                status_msg = f"Ready: {len(df_mapped)} student records"
+                if 'flag_df' in st.session_state and st.session_state.flag_df is not None:
+                    status_msg += f" + {len(st.session_state.flag_df)} flag records"
+                if 'funding_df' in st.session_state and st.session_state.funding_df is not None:
+                    status_msg += f" + {len(st.session_state.funding_df)} funding records"
+                if 'raap_df' in st.session_state and st.session_state.raap_df is not None:
+                    status_msg += f" + RAAP"
+                if 'incidents_df' in st.session_state and st.session_state.incidents_df is not None:
+                    status_msg += f" + {len(st.session_state.incidents_df)} incidents"
+                st.success(status_msg)
+                
+                if st.button("Upload Now"):
+                    if not supabase:
+                        st.error("Supabase not connected")
+                    else:
+                        with st.spinner("Uploading..."):
+                            try:
+                                supabase.table('allocation_students').delete().gte('id', '00000000-0000-0000-0000-000000000000').execute()
+                                
+                                numeric_cols = ['year', 'term', 'extension_weeks', 'total_previous_placements']
+                                date_cols = ['meeting_date', 'date_of_birth', 'waitlist_date']
+                                
+                                records = []
+                                for idx, row in df_mapped.iterrows():
+                                    record = {}
+                                    for col in df_mapped.columns:
+                                        val = row[col]
+                                        if pd.isna(val) or val == 'nan' or val == '':
+                                            record[col] = 0 if col in numeric_cols else (None if col in date_cols else '')
+                                        else:
+                                            record[col] = str(val)
+                                    records.append(record)
+                                
+                                for i in range(0, len(records), 50):
+                                    supabase.table('allocation_students').insert(records[i:i+50]).execute()
+                                
+                                st.success(f"Uploaded {len(records)} records!")
+                                st.cache_data.clear()
+                                
+                            except Exception as e:
+                                st.error(f"Failed: {str(e)[:150]}")
+            
+            except Exception as e:
+                st.error(f"Error: {e}")
+        
+        st.markdown("---")
+        st.markdown("**Data Status**")
+        
+        status_items = []
+        if 'flag_df' in st.session_state and st.session_state.flag_df is not None:
+            status_items.append(f"✅ Flags: {len(st.session_state.flag_df)} records")
+        else:
+            status_items.append("⚪ Flags: not loaded")
+        
+        if 'funding_df' in st.session_state and st.session_state.funding_df is not None:
+            status_items.append(f"✅ Funding: {len(st.session_state.funding_df)} records")
+        else:
+            status_items.append("⚪ Funding: not loaded")
+        
+        if 'raap_df' in st.session_state and st.session_state.raap_df is not None:
+            status_items.append(f"✅ RAAP: loaded")
+        else:
+            status_items.append("⚪ RAAP: not loaded")
+        
+        for item in status_items:
+            st.write(item)
     
-    # Main view selector
-    view_type = st.radio(
-        "📋 View Type",
-        ["📊 Single Program View", "🎓 Term Overview", "🏫 Whole-Site Totals", "🔍 Detailed Analysis"],
-        horizontal=True
-    )
+    # TOP TITLE
+    st.markdown("""
+    <div style='background: linear-gradient(135deg, rgba(0,229,255,0.15) 0%, rgba(0,229,255,0.08) 100%); 
+                border: 2px solid #00e5ff; border-radius: 12px; padding: 30px 25px; 
+                margin-bottom: 30px; text-align: center;'>
+        <h1 style='color: #00e5ff; font-size: 52px; margin: 0; font-weight: bold; 
+                   letter-spacing: 0.5px;'>Student Allocation</h1>
+        <p style='color: #00e5ff; font-size: 16px; margin: 15px 0 0 0; 
+                 font-weight: 500; opacity: 0.9;'>Comprehensive Enrollment Analytics & Equity Insights</p>
+    </div>
+    """, unsafe_allow_html=True)
     
     st.markdown("---")
     
-    # ========================================================================
-    # SINGLE PROGRAM VIEW - All sections on one screen
-    # ========================================================================
+    col1, col2, col3 = st.columns(3)
     
-    if view_type == "📊 Single Program View":
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            program = st.selectbox("🎓 Program", ['JP', 'PY', 'SY'], key="spv_prog")
-        with col2:
-            term = st.selectbox("📅 Term", ['1', '2', '3', '4'], key="spv_term")
-        with col3:
-            year = st.selectbox("📆 Year", ['2025', '2026'], key="spv_year")
-        
-        st.markdown("---")
-        
-        collated = collate_by_program(all_assessments, program, term, year)
-        
-        if not collated:
-            st.warning(f"No data found for {program} Term {term} {year}")
-            return
-        
-        # Info row
-        col1, col2, col3 = st.columns(3)
-        col1.metric("📋 Staff Entries", collated['staff_count'])
-        col2.metric("📊 Total Records", collated['record_count'])
-        col3.metric("📅 Selected", f"{program} T{term} {year}")
-        
-        st.markdown("---")
-        
-        # All sections on one screen
-        st.markdown(f"## {program} Program - Term {term} {year} - All Data")
-        
-        # Sounds Write
-        fig_sw, df_sw = render_sounds_write_chart(collated, program)
-        st.plotly_chart(fig_sw, use_container_width=True)
-        
-        col1, col2, col3 = st.columns(3)
-        col1.metric("✅ Sounds Write Mastered", df_sw['Mastered'].sum())
-        col2.metric("🔄 Sounds Write Developing", df_sw['Developing'].sum())
-        col3.metric("⚠️ Sounds Write Requires Dev", df_sw['Requires Dev'].sum())
-        
-        st.markdown("---")
-        
-        # Word Aware
-        fig_wa, df_wa = render_word_aware_chart(collated, program)
-        st.plotly_chart(fig_wa, use_container_width=True)
-        
-        col1, col2, col3 = st.columns(3)
-        wa_counts = dict(zip(df_wa['Word Band'], df_wa['Students']))
-        col1.metric("📚 >10 words", int(wa_counts.get('>10 words', 0)))
-        col2.metric("📗 >5 words", int(wa_counts.get('>5 words', 0)))
-        col3.metric("📙 >2 words", int(wa_counts.get('>2 words', 0)))
-        
-        st.markdown("---")
-        
-        # SMARTAR
-        fig_smartar, df_smartar = render_smartar_chart(collated, program)
-        st.plotly_chart(fig_smartar, use_container_width=True)
-        
-        col1, col2, col3 = st.columns(3)
-        col1.metric("✅ Reached Expected", int(df_smartar['Reached Expected'].sum()))
-        col2.metric("⬆️ Above Expectation", int(df_smartar['Above Expectation'].sum()))
-        col3.metric("🌟 Exceeding", int(df_smartar['Exceeding'].sum()))
-        
-        # Download reports
-        st.markdown("---")
-        st.markdown("### 📥 Download Reports")
-        dl1, dl2, dl3, dl4 = st.columns(4)
-        with dl1:
-            st.download_button(
-                "🎵 Sounds Write",
-                data=build_section_report(df_sw, "Sounds Write", program, term, year),
-                file_name=f"sounds_write_{program}_T{term}_{year}.csv",
-                mime="text/csv",
-                key="dl_spv_sw"
-            )
-        with dl2:
-            st.download_button(
-                "📚 Vocabulary",
-                data=build_section_report(df_wa, VOCAB_LABEL, program, term, year),
-                file_name=f"word_aware_{program}_T{term}_{year}.csv",
-                mime="text/csv",
-                key="dl_spv_wa"
-            )
-        with dl3:
-            st.download_button(
-                "🎯 SMARTAR",
-                data=build_section_report(df_smartar, "SMARTAR Goal Outcomes", program, term, year),
-                file_name=f"smartar_{program}_T{term}_{year}.csv",
-                mime="text/csv",
-                key="dl_spv_sm"
-            )
-        with dl4:
-            st.download_button(
-                "📦 Full Report (all)",
-                data=build_combined_report(
-                    [("SOUNDS WRITE", df_sw), ("VOCABULARY DEVELOPMENT TEST", df_wa), ("SMARTAR GOAL OUTCOMES", df_smartar)],
-                    program, term, year
-                ),
-                file_name=f"full_report_{program}_T{term}_{year}.csv",
-                mime="text/csv",
-                key="dl_spv_all"
-            )
-        
-        # Finished Excel report (charts + data below)
-        excel_bytes = build_excel_report(
-            [
-                ("Sounds Write", df_sw, "stacked"),
-                (VOCAB_LABEL, df_wa, "clustered"),
-                ("SMARTAR Goal Outcomes", df_smartar, "clustered"),
-            ],
-            program, term, year
-        )
-        if excel_bytes:
-            st.download_button(
-                "📗 Download Finished Excel Report (charts + data)",
-                data=excel_bytes,
-                file_name=f"CLC_Report_{program}_T{term}_{year}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="xl_spv"
-            )
+    with col1:
+        # Get unique years - handle both string and numeric
+        allocation_df['year_clean'] = pd.to_numeric(allocation_df['year'], errors='coerce')
+        years = sorted([int(y) for y in allocation_df['year_clean'].dropna().unique()])
+        if not years:
+            years = [2026]
+        year_options = ['All'] + years
+        selected_year = st.selectbox("Year", year_options)
+    
+    with col2:
+        # Filter terms by selected year (or show all if "All" selected)
+        if selected_year == 'All':
+            year_data = allocation_df
         else:
-            st.caption("📗 Excel report unavailable — add 'openpyxl' to requirements.txt to enable it.")
+            year_data = allocation_df[allocation_df['year_clean'] == selected_year]
         
-        # Finished PDF report (charts + data below)
-        pdf_bytes = build_pdf_report(
-            [
-                ("Sounds Write", df_sw, "stacked"),
-                (VOCAB_LABEL, df_wa, "clustered"),
-                ("SMARTAR Goal Outcomes", df_smartar, "clustered"),
-            ],
-            program, term, year
-        )
-        if pdf_bytes:
-            st.download_button(
-                "📕 Download PDF Report (charts + data)",
-                data=pdf_bytes,
-                file_name=f"CLC_Report_{program}_T{term}_{year}.pdf",
-                mime="application/pdf",
-                key="pdf_spv"
-            )
-        else:
-            st.caption("📕 PDF report unavailable — add 'reportlab' to requirements.txt to enable it.")
+        year_data['term_clean'] = pd.to_numeric(year_data['term'], errors='coerce')
+        terms = sorted([int(t) for t in year_data['term_clean'].dropna().unique() if t >= 1])
+        if not terms:
+            terms = [1]
+        term_options = ['All'] + terms
+        selected_term = st.selectbox("Term", term_options)
     
-    # ========================================================================
-    # TERM OVERVIEW - All programs on one screen
-    # ========================================================================
+    with col3:
+        # Clean program data and build dropdown - handle variations and blanks
+        allocation_df['program_clean'] = allocation_df['program'].fillna('').str.strip().str.upper()
+        all_progs = sorted([p for p in allocation_df['program_clean'].unique() if p and p != '' and p != ':2'])
+        progs = ['All'] + all_progs
+        selected_program = st.selectbox("Program", progs)
     
-    elif view_type == "🎓 Term Overview":
+    # FILTER DATA - handle "All" selections
+    allocation_df['year_clean'] = pd.to_numeric(allocation_df['year'], errors='coerce')
+    allocation_df['term_clean'] = pd.to_numeric(allocation_df['term'], errors='coerce')
+    allocation_df['program_clean'] = allocation_df['program'].fillna('').str.strip().str.upper()
+    
+    filtered = allocation_df.copy()
+    
+    # Apply year filter
+    if selected_year != 'All':
+        filtered = filtered[filtered['year_clean'] == selected_year]
+    
+    # Apply term filter
+    if selected_term != 'All':
+        filtered = filtered[filtered['term_clean'] == selected_term]
+    
+    # Apply program filter
+    if selected_program != 'All':
+        filtered = filtered[filtered['program_clean'] == selected_program]
+    
+    st.markdown(f"""
+    <div style='background: rgba(0,229,255,0.1); border-left: 4px solid #00e5ff; 
+                padding: 16px 20px; border-radius: 6px; margin: 20px 0;'>
+        <p style='color: #00e5ff; font-size: 18px; margin: 0; font-weight: 600;'>
+            📊 {len(filtered)} Active Students
+        </p>
+        <p style='color: #00e5ff; font-size: 13px; margin: 8px 0 0 0; opacity: 0.85;'>
+            Year: <strong>{selected_year if selected_year != 'All' else 'All'}</strong> 
+            | Term: <strong>{selected_term if selected_term != 'All' else 'All'}</strong> 
+            | Program: <strong>{selected_program}</strong>
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    st.markdown("---")
+    
+    # CONTENT BY SECTION
+    if section == "Overview":
+        st.markdown("## Overview")
+        st.markdown("High-level snapshot of current enrollment and placement patterns")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total Students", int(len(filtered)))
+        col2.metric("Programs", int(filtered['program'].nunique()))
+        col3.metric("Year Levels", int(filtered['year_level'].nunique()))
+        col4.metric("Updated", datetime.now().strftime("%d/%m/%y"))
+        
+        st.markdown("---")
+        st.markdown("## Distribution by Program & Year Level")
+        st.markdown("Shows where students are placed across our three programs (JP, PY, SY) and year levels (R-10)")
+        
         col1, col2 = st.columns(2)
         
         with col1:
-            term = st.selectbox("📅 Term", ['1', '2', '3', '4'], key="to_term")
+            if 'program' in filtered.columns:
+                prog_data = filtered['program'].value_counts().reset_index()
+                prog_data.columns = ['program', 'count']
+                prog_data['count'] = prog_data['count'].astype(int)
+                
+                fig = px.bar(prog_data, x='program', y='count', text='count', 
+                            color='count', color_continuous_scale='Viridis',
+                            title='Students by Program', labels={'program': '', 'count': ''})
+                fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                st.markdown("**What this shows:** Enrollment numbers in each program")
+        
         with col2:
-            year = st.selectbox("📆 Year", ['2025', '2026'], key="to_year")
+            if 'year_level' in filtered.columns:
+                year_data = filtered['year_level'].value_counts().sort_index().reset_index()
+                year_data.columns = ['year_level', 'count']
+                year_data['count'] = year_data['count'].astype(int)
+                
+                fig = px.bar(year_data, x='year_level', y='count', text='count',
+                            color_discrete_sequence=['#4ecdc4'],
+                            title='Students by Year Level', labels={'year_level': '', 'count': ''})
+                fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                st.markdown("**What this shows:** Distribution across year levels R through 10")
         
         st.markdown("---")
+        st.markdown("## Partnership Placements")
+        st.markdown("Top partnership areas supporting student placements - shows partnership demand")
         
-        programs = ['JP', 'PY', 'SY']
-        
-        st.markdown(f"## Term {term} {year} - All Programs Overview")
-        
-        # ====== SOUNDS WRITE OVERVIEW ======
-        st.markdown("### 🎵 Sounds Write - All Programs")
-        
-        sw_cols = st.columns(3)
-        
-        for idx, program in enumerate(programs):
-            collated = collate_by_program(all_assessments, program, term, year)
+        if 'partnership_area' in filtered.columns:
+            partner_data = filtered['partnership_area'].value_counts().head(10).reset_index()
+            partner_data.columns = ['partnership_area', 'count']
+            partner_data['count'] = partner_data['count'].astype(int)
             
-            with sw_cols[idx]:
-                if collated:
-                    fig_sw, df_sw = render_sounds_write_chart(collated, program)
-                    st.plotly_chart(fig_sw, use_container_width=True)
-                    
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric(f"{program} Mastered", df_sw['Mastered'].sum(), label_visibility="collapsed")
-                    col2.metric(f"{program} Dev", df_sw['Developing'].sum(), label_visibility="collapsed")
-                    col3.metric(f"{program} Req Dev", df_sw['Requires Dev'].sum(), label_visibility="collapsed")
-                else:
-                    st.info(f"No data for {program}")
-        
-        st.markdown("---")
-        
-        # ====== VOCABULARY DEVELOPMENT TEST OVERVIEW ======
-        st.markdown("### 📚 Vocabulary Development Test - All Programs")
-        
-        wa_cols = st.columns(3)
-        
-        for idx, program in enumerate(programs):
-            collated = collate_by_program(all_assessments, program, term, year)
-            
-            with wa_cols[idx]:
-                if collated:
-                    fig_wa, df_wa = render_word_aware_chart(collated, program)
-                    st.plotly_chart(fig_wa, use_container_width=True)
-                    
-                    wa_counts = dict(zip(df_wa['Word Band'], df_wa['Students']))
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric(f"{program} >10", int(wa_counts.get('>10 words', 0)), label_visibility="collapsed")
-                    col2.metric(f"{program} >5", int(wa_counts.get('>5 words', 0)), label_visibility="collapsed")
-                    col3.metric(f"{program} >2", int(wa_counts.get('>2 words', 0)), label_visibility="collapsed")
-                else:
-                    st.info(f"No data for {program}")
-        
-        st.markdown("---")
-        
-        # ====== SMARTAR OVERVIEW ======
-        st.markdown("### 🎯 SMARTAR Goals - All Programs")
-        
-        smartar_cols = st.columns(3)
-        
-        for idx, program in enumerate(programs):
-            collated = collate_by_program(all_assessments, program, term, year)
-            
-            with smartar_cols[idx]:
-                if collated:
-                    fig_smartar, df_smartar = render_smartar_chart(collated, program)
-                    st.plotly_chart(fig_smartar, use_container_width=True)
-                    
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric(f"{program} Reached", int(df_smartar['Reached Expected'].sum()), label_visibility="collapsed")
-                    col2.metric(f"{program} Above", int(df_smartar['Above Expectation'].sum()), label_visibility="collapsed")
-                    col3.metric(f"{program} Exceed", int(df_smartar['Exceeding'].sum()), label_visibility="collapsed")
-                else:
-                    st.info(f"No data for {program}")
+            fig = px.bar(partner_data, y='partnership_area', x='count', orientation='h',
+                        text='count', color='count', color_continuous_scale='Reds',
+                        title='Top 10 Partnerships', labels={'partnership_area': '', 'count': ''})
+            fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+            st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+            st.markdown("**What this shows:** Which partnership areas have the most student placements")
     
-    # ========================================================================
-    # WHOLE-SITE TOTALS - JP + PY + SY combined into one set of totals
-    # ========================================================================
-    
-    elif view_type == "🏫 Whole-Site Totals":
-        col1, col2 = st.columns(2)
+    elif section == "Trends":
+        st.markdown("## Enrollment Trends")
+        st.markdown("Line chart showing enrollment over time by program. **Solid lines = actual data | Dashed lines = forecast**")
         
-        with col1:
-            term = st.selectbox("📅 Term", ['1', '2', '3', '4'], key="ws_term")
-        with col2:
-            year = st.selectbox("📆 Year", ['2025', '2026'], key="ws_year")
+        # Make sure we have clean numeric columns
+        trend_data = allocation_df.dropna(subset=['program']).copy()
+        trend_data['year_num'] = pd.to_numeric(trend_data['year'], errors='coerce')
+        trend_data['term_num'] = pd.to_numeric(trend_data['term'], errors='coerce')
         
-        st.markdown("---")
+        # Filter for valid data
+        trend_data = trend_data.dropna(subset=['year_num', 'term_num'])
+        trend_data = trend_data[trend_data['term_num'] >= 1]
         
-        collated = collate_all_programs(all_assessments, term, year)
+        # Create proper year-term format (2025 T1, 2025 T2, etc)
+        trend_data['YearTerm'] = trend_data['year_num'].astype(int).astype(str) + ' T' + trend_data['term_num'].astype(int).astype(str)
+        trend_agg = trend_data.groupby(['YearTerm', 'program']).size().reset_index(name='count')
+        trend_agg['count'] = trend_agg['count'].astype(int)
         
-        if not collated:
-            st.warning(f"No data found for any program in Term {term} {year}")
-            return
+        # Create sort key for proper ordering
+        trend_agg['year_sort'] = trend_agg['YearTerm'].str.extract(r'(\d{4})')[0].astype(int)
+        trend_agg['term_sort'] = trend_agg['YearTerm'].str.extract(r'T(\d)')[0].astype(int)
+        trend_agg['sort_key'] = trend_agg['year_sort'] * 100 + trend_agg['term_sort']
+        trend_agg = trend_agg.sort_values('sort_key').reset_index(drop=True)
         
-        programs_present = collated.get('programs_present', [])
+        # Get unique year-terms in order
+        unique_yearterms = trend_agg.sort_values('sort_key')['YearTerm'].unique().tolist()
         
-        # Info row
-        col1, col2, col3 = st.columns(3)
-        col1.metric("📋 Total Staff Entries", collated['staff_count'])
-        col2.metric("🎓 Programs Included", ", ".join(programs_present) if programs_present else "—")
-        col3.metric("📅 Selected", f"All T{term} {year}")
-        
-        st.markdown("---")
-        st.markdown(f"## Whole-Site Totals — Term {term} {year} (JP + PY + SY combined)")
-        
-        # Sounds Write
-        fig_sw, df_sw = render_sounds_write_chart(collated, "All Programs")
-        st.plotly_chart(fig_sw, use_container_width=True)
-        
-        col1, col2, col3 = st.columns(3)
-        col1.metric("✅ Sounds Write Mastered", int(df_sw['Mastered'].sum()))
-        col2.metric("🔄 Sounds Write Developing", int(df_sw['Developing'].sum()))
-        col3.metric("⚠️ Sounds Write Requires Dev", int(df_sw['Requires Dev'].sum()))
-        
-        st.markdown("---")
-        
-        # Vocabulary Development Test
-        fig_wa, df_wa = render_word_aware_chart(collated, "All Programs")
-        st.plotly_chart(fig_wa, use_container_width=True)
-        
-        col1, col2, col3 = st.columns(3)
-        wa_counts = dict(zip(df_wa['Word Band'], df_wa['Students']))
-        col1.metric("📚 >10 words", int(wa_counts.get('>10 words', 0)))
-        col2.metric("📗 >5 words", int(wa_counts.get('>5 words', 0)))
-        col3.metric("📙 >2 words", int(wa_counts.get('>2 words', 0)))
-        
-        st.markdown("---")
-        
-        # SMARTAR
-        fig_smartar, df_smartar = render_smartar_chart(collated, "All Programs")
-        st.plotly_chart(fig_smartar, use_container_width=True)
-        
-        col1, col2, col3 = st.columns(3)
-        col1.metric("✅ Reached Expected", int(df_smartar['Reached Expected'].sum()))
-        col2.metric("⬆️ Above Expectation", int(df_smartar['Above Expectation'].sum()))
-        col3.metric("🌟 Exceeding", int(df_smartar['Exceeding'].sum()))
-        
-        # Combined data tables
-        st.markdown("---")
-        st.markdown("### 📋 Combined Data Tables")
-        st.markdown("#### 🎵 Sounds Write")
-        st.dataframe(df_sw, use_container_width=True)
-        st.markdown("#### 📚 Vocabulary Development Test")
-        st.dataframe(df_wa, use_container_width=True)
-        st.markdown("#### 🎯 SMARTAR Goal Outcomes")
-        st.dataframe(df_smartar, use_container_width=True)
-        
-        # Download reports
-        st.markdown("---")
-        st.markdown("### 📥 Download Reports")
-        dl1, dl2, dl3, dl4 = st.columns(4)
-        with dl1:
-            st.download_button(
-                "🎵 Sounds Write",
-                data=build_section_report(df_sw, "Sounds Write", "All Programs", term, year),
-                file_name=f"sounds_write_AllPrograms_T{term}_{year}.csv",
-                mime="text/csv",
-                key="dl_ws_sw"
-            )
-        with dl2:
-            st.download_button(
-                "📚 Vocabulary",
-                data=build_section_report(df_wa, VOCAB_LABEL, "All Programs", term, year),
-                file_name=f"word_aware_AllPrograms_T{term}_{year}.csv",
-                mime="text/csv",
-                key="dl_ws_wa"
-            )
-        with dl3:
-            st.download_button(
-                "🎯 SMARTAR",
-                data=build_section_report(df_smartar, "SMARTAR Goal Outcomes", "All Programs", term, year),
-                file_name=f"smartar_AllPrograms_T{term}_{year}.csv",
-                mime="text/csv",
-                key="dl_ws_sm"
-            )
-        with dl4:
-            st.download_button(
-                "📦 Full Report (all)",
-                data=build_combined_report(
-                    [("SOUNDS WRITE", df_sw), ("VOCABULARY DEVELOPMENT TEST", df_wa), ("SMARTAR GOAL OUTCOMES", df_smartar)],
-                    "All Programs", term, year
-                ),
-                file_name=f"full_report_AllPrograms_T{term}_{year}.csv",
-                mime="text/csv",
-                key="dl_ws_all"
-            )
-        
-        # Finished Excel report (charts + data below)
-        excel_bytes = build_excel_report(
-            [
-                ("Sounds Write", df_sw, "stacked"),
-                (VOCAB_LABEL, df_wa, "clustered"),
-                ("SMARTAR Goal Outcomes", df_smartar, "clustered"),
-            ],
-            "All Programs", term, year
+        # ACTUAL DATA
+        fig_trend = px.line(
+            trend_agg,
+            x='YearTerm',
+            y='count',
+            color='program',
+            markers=True,
+            title='Actual Enrollment by Program',
+            labels={'YearTerm': '', 'count': 'Students'}
         )
-        if excel_bytes:
-            st.download_button(
-                "📗 Download Finished Excel Report (charts + data)",
-                data=excel_bytes,
-                file_name=f"CLC_Report_AllPrograms_T{term}_{year}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="xl_ws"
-            )
-        else:
-            st.caption("📗 Excel report unavailable — add 'openpyxl' to requirements.txt to enable it.")
-        
-        # Finished PDF report (charts + data below)
-        pdf_bytes = build_pdf_report(
-            [
-                ("Sounds Write", df_sw, "stacked"),
-                (VOCAB_LABEL, df_wa, "clustered"),
-                ("SMARTAR Goal Outcomes", df_smartar, "clustered"),
-            ],
-            "All Programs", term, year
-        )
-        if pdf_bytes:
-            st.download_button(
-                "📕 Download PDF Report (charts + data)",
-                data=pdf_bytes,
-                file_name=f"CLC_Report_AllPrograms_T{term}_{year}.pdf",
-                mime="application/pdf",
-                key="pdf_ws"
-            )
-        else:
-            st.caption("📕 PDF report unavailable — add 'reportlab' to requirements.txt to enable it.")
-    
-    # ========================================================================
-    # DETAILED ANALYSIS - Tabs for deep dive
-    # ========================================================================
-    
-    else:  # "🔍 Detailed Analysis"
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            program = st.selectbox("🎓 Program", ['JP', 'PY', 'SY'], key="da_prog")
-        with col2:
-            term = st.selectbox("📅 Term", ['1', '2', '3', '4'], key="da_term")
-        with col3:
-            year = st.selectbox("📆 Year", ['2025', '2026'], key="da_year")
+        fig_trend.update_xaxes(categoryorder='array', categoryarray=unique_yearterms)
+        fig_trend.update_traces(line=dict(width=3), marker=dict(size=8))
+        st.plotly_chart(update_chart_layout(fig_trend), use_container_width=True)
         
         st.markdown("---")
+        st.markdown("## Enrollment Forecast")
+        st.markdown("Predicted enrollment trends based on current patterns - **for planning purposes only**")
         
-        collated = collate_by_program(all_assessments, program, term, year)
+        # CREATE FORECAST DATA
+        forecast_data = []
         
-        if not collated:
-            st.warning(f"No data found for {program} Term {term} {year}")
-            return
-        
-        # Info
-        col1, col2, col3 = st.columns(3)
-        col1.metric("📋 Staff Entries", collated['staff_count'])
-        col2.metric("📊 Total Records", collated['record_count'])
-        col3.metric("📅 Selected", f"{program} T{term} {year}")
-        
-        st.markdown("---")
-        
-        # TABS for detailed view
-        tab1, tab2, tab3, tab4 = st.tabs([
-            "🎵 Sounds Write",
-            "📚 Vocabulary",
-            "🎯 SMARTAR Goals",
-            "📋 Raw Data"
-        ])
-        
-        # Tab 1: Sounds Write
-        with tab1:
-            st.markdown("### 🎵 Sounds Write Assessment")
-            fig_sw, df_sw = render_sounds_write_chart(collated, program)
-            st.plotly_chart(fig_sw, use_container_width=True)
-            st.markdown("#### Data Table")
-            st.dataframe(df_sw, use_container_width=True)
-            st.download_button(
-                "📥 Download Sounds Write Report",
-                data=build_section_report(df_sw, "Sounds Write", program, term, year),
-                file_name=f"sounds_write_{program}_T{term}_{year}.csv",
-                mime="text/csv",
-                key="dl_da_sw"
-            )
-        
-        # Tab 2: Vocabulary Development Test
-        with tab2:
-            st.markdown("### 📚 Vocabulary Development Test")
-            fig_wa, df_wa = render_word_aware_chart(collated, program)
-            st.plotly_chart(fig_wa, use_container_width=True)
-            st.markdown("#### Data Table")
-            st.dataframe(df_wa, use_container_width=True)
-            st.download_button(
-                "📥 Download Vocabulary Report",
-                data=build_section_report(df_wa, VOCAB_LABEL, program, term, year),
-                file_name=f"vocabulary_{program}_T{term}_{year}.csv",
-                mime="text/csv",
-                key="dl_da_wa"
-            )
-        
-        # Tab 3: SMARTAR
-        with tab3:
-            st.markdown("### 🎯 SMARTAR Goals")
-            fig_smartar, df_smartar = render_smartar_chart(collated, program)
-            st.plotly_chart(fig_smartar, use_container_width=True)
-            st.markdown("#### Metrics")
-            col1, col2, col3 = st.columns(3)
-            col1.metric("✅ Reached Expected", int(df_smartar['Reached Expected'].sum()))
-            col2.metric("⬆️ Above Expectation", int(df_smartar['Above Expectation'].sum()))
-            col3.metric("🌟 Exceeding", int(df_smartar['Exceeding'].sum()))
-            st.markdown("#### Data Table")
-            st.dataframe(df_smartar, use_container_width=True)
-            st.download_button(
-                "📥 Download SMARTAR Report",
-                data=build_section_report(df_smartar, "SMARTAR Goal Outcomes", program, term, year),
-                file_name=f"smartar_{program}_T{term}_{year}.csv",
-                mime="text/csv",
-                key="dl_da_sm"
-            )
-        
-        # Tab 4: Raw Data
-        with tab4:
-            st.markdown("### 📋 Raw Data - All Entries")
-            raw_records = [
-                a for a in all_assessments 
-                if a['program'] == program and 
-                   a['term'] == int(term) and 
-                   a['year'] == int(year)
-            ]
+        for prog in trend_agg['program'].unique():
+            prog_data = trend_agg[trend_agg['program'] == prog].sort_values('sort_key')
             
-            if raw_records:
-                records_list = []
-                for record in raw_records:
-                    records_list.append({
-                        'Staff': record['staff_member'],
-                        'Program': record['program'],
-                        'Term': record['term'],
-                        'Year': record['year'],
-                        'Date': record.get('date_submitted', '')[:10],
-                        'Status': '✅'
+            # Add actual data
+            for idx, row in prog_data.iterrows():
+                forecast_data.append({
+                    'YearTerm': row['YearTerm'],
+                    'count': row['count'],
+                    'program': prog,
+                    'type': 'Actual',
+                    'sort_key': row['sort_key']
+                })
+            
+            # Generate forecast for next 4 periods
+            if len(prog_data) >= 1:
+                last_year = prog_data.iloc[-1]['year_sort']
+                last_term = prog_data.iloc[-1]['term_sort']
+                
+                # Calculate trend from last 2 points if available
+                if len(prog_data) >= 2:
+                    last_counts = prog_data['count'].tail(2).values
+                    trend_rate = last_counts[-1] - last_counts[-2]
+                else:
+                    trend_rate = 0
+                
+                last_count = prog_data.iloc[-1]['count']
+                
+                for i in range(1, 5):
+                    new_term = last_term + i
+                    new_year = last_year
+                    
+                    if new_term > 4:
+                        new_year = last_year + (new_term - 1) // 4
+                        new_term = ((new_term - 1) % 4) + 1
+                    
+                    forecast_count = max(last_count + (trend_rate * i), 0)
+                    forecast_data.append({
+                        'YearTerm': f'{new_year} T{new_term}',
+                        'count': int(forecast_count),
+                        'program': prog,
+                        'type': 'Forecast',
+                        'sort_key': new_year * 100 + new_term
                     })
+        
+        forecast_df = pd.DataFrame(forecast_data)
+        forecast_df = forecast_df.sort_values('sort_key')
+        
+        # Get all unique year-terms in correct order
+        all_yearterms = sorted(forecast_df['YearTerm'].unique(), key=lambda x: (int(x.split()[0]), int(x.split('T')[1])))
+        
+        # Separate actual and forecast
+        actual = forecast_df[forecast_df['type'] == 'Actual']
+        predicted = forecast_df[forecast_df['type'] == 'Forecast']
+        
+        # Create combined figure
+        fig_forecast = go.Figure()
+        
+        # Add actual lines - ensure ALL programs shown
+        all_programs = sorted(forecast_df['program'].unique())
+        for prog in all_programs:
+            prog_actual = actual[actual['program'] == prog].sort_values('sort_key')
+            if len(prog_actual) > 0:
+                fig_forecast.add_trace(go.Scatter(
+                    x=prog_actual['YearTerm'],
+                    y=prog_actual['count'],
+                    mode='lines+markers',
+                    name=f'{prog} (Actual)',
+                    line=dict(width=3),
+                    marker=dict(size=8)
+                ))
+        
+        # Add forecast lines (dashed)
+        for prog in all_programs:
+            prog_forecast = predicted[predicted['program'] == prog].sort_values('sort_key')
+            
+            if len(prog_forecast) > 0:
+                fig_forecast.add_trace(go.Scatter(
+                    x=prog_forecast['YearTerm'],
+                    y=prog_forecast['count'],
+                    mode='lines+markers',
+                    name=f'{prog} (Forecast)',
+                    line=dict(width=2, dash='dash'),
+                    marker=dict(size=6, symbol='diamond'),
+                    opacity=0.6
+                ))
+        
+        fig_forecast.update_layout(
+            title='Enrollment Trends & Forecast',
+            xaxis_title='',
+            yaxis_title='Students',
+            plot_bgcolor='rgba(10,14,39,0.8)',
+            paper_bgcolor='rgba(10,14,39,0.8)',
+            font=dict(color='#ffffff', size=12),
+            hovermode='x unified',
+            margin=dict(l=40, r=40, t=40, b=40),
+            showlegend=True,
+            xaxis=dict(categoryorder='array', categoryarray=all_yearterms)
+        )
+        fig_forecast.update_xaxes(showgrid=False, tickfont=dict(color='#ffffff'))
+        fig_forecast.update_yaxes(showgrid=True, gridcolor='rgba(100,100,100,0.2)', tickfont=dict(color='#ffffff'))
+        
+        st.plotly_chart(fig_forecast, use_container_width=True)
+        
+        st.markdown("**Legend:**")
+        st.write("- **Solid lines** = Actual enrollment data")
+        st.write("- **Dashed lines** = Forecast projections (4 terms ahead)")
+        st.write("- Based on recent enrollment trends")
+    
+    elif section == "Complexity":
+        st.markdown("## Complexity Analysis")
+        st.markdown("Matrix showing how students distribute across year levels and programs. Identifies gaps and concentrations in placement.")
+        
+        if 'year_level' in filtered.columns and 'program' in filtered.columns:
+            # Define correct year level order
+            year_order = ['R', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+            program_order = ['JP', 'PY', 'SY']
+            
+            # Create heatmap data
+            heatmap = pd.crosstab(filtered['year_level'], filtered['program'])
+            
+            # Reindex to ensure ALL year levels appear (even if empty)
+            heatmap = heatmap.reindex([y for y in year_order if y in filtered['year_level'].unique()], fill_value=0)
+            
+            # Reindex to ensure ALL programs appear (even if empty)
+            available_progs = [p for p in program_order if p in filtered['program'].unique()]
+            heatmap = heatmap.reindex(available_progs, axis=1, fill_value=0)
+            
+            fig = px.imshow(heatmap, text_auto=True, color_continuous_scale='Blues',
+                           title='Student Distribution: Year Level × Program',
+                           labels={'x': 'Program', 'y': 'Year Level', 'color': 'Count'},
+                           aspect='auto')
+            fig.update_traces(text=heatmap.values, texttemplate='%{text}')
+            st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+            
+            st.markdown("**Key Insights:**")
+            st.write("- Numbers show student count in each year level/program combination")
+            st.write("- Darker blue = higher concentration")
+            st.write("- Empty cells = no students placed")
+        else:
+            st.warning("Year level or program data missing")
+    
+    elif section == "Category of Support":
+        st.markdown("## Category of Support Analysis")
+        st.markdown("Student distribution by support category (Cat 1-9 + RAAP) - identifies support needs and resource allocation")
+        
+        # Extract funding category for each student
+        risk_df = filtered.copy()
+        risk_df['funding_category'] = 'None'
+        risk_df['is_raap'] = 'No'
+        
+        # Merge funding data if available (for uploaded data)
+        if 'funding_df' in st.session_state and st.session_state.funding_df is not None:
+            risk_df['name_match'] = risk_df['student_name'].str.strip().str.lower()
+            risk_df = risk_df.merge(st.session_state.funding_df, on='name_match', how='left')
+            risk_df = risk_df.drop('name_match', axis=1)
+        
+        # Merge RAAP data if available
+        if 'raap_df' in st.session_state and st.session_state.raap_df is not None:
+            risk_df['name_match'] = risk_df['student_name'].str.strip().str.lower()
+            risk_df = risk_df.merge(st.session_state.raap_df, on='name_match', how='left')
+            risk_df = risk_df.drop('name_match', axis=1)
+        
+        # Determine funding category from Flag_Category columns (highest category takes precedence)
+        for cat in range(9, 0, -1):
+            col_name = f'Flag_Category_{cat}'
+            if col_name in risk_df.columns:
+                # Handle both 'Yes' and True values
+                risk_df.loc[(risk_df[col_name] == 'Yes') | (risk_df[col_name] == True), 'funding_category'] = f'Cat {cat}'
+        
+        # Check for RAAP AFTER setting base category - if Cat 9 + RAAP, change to Cat 9+RAAP
+        if 'Flag_9plusRAAP' in risk_df.columns:
+            raap_mask = (risk_df['Flag_9plusRAAP'] == 'Yes') | (risk_df['Flag_9plusRAAP'] == True)
+            risk_df.loc[raap_mask, 'funding_category'] = 'Cat 9+RAAP'
+            risk_df.loc[raap_mask, 'is_raap'] = 'Yes (RAAP)'
+        
+        # If cat_funding column exists and funding_category is still None, use it
+        if 'cat_funding' in risk_df.columns:
+            cat_funding_values = risk_df.loc[risk_df['funding_category'] == 'None', 'cat_funding'].fillna('None').astype(str)
+            risk_df.loc[risk_df['funding_category'] == 'None', 'funding_category'] = cat_funding_values
+        
+        # Ensure funding_category is string type
+        risk_df['funding_category'] = risk_df['funding_category'].astype(str)
+        risk_df['funding_category'] = risk_df['funding_category'].replace('nan', 'None')
+        
+        # SUMMARY METRICS
+        col1, col2, col3, col4 = st.columns(4)
+        
+        cat_counts = risk_df['funding_category'].value_counts().to_dict()
+        col1.metric("Cat 9+RAAP", int(cat_counts.get('Cat 9+RAAP', 0)))
+        col2.metric("Cat 9 Only", int(cat_counts.get('Cat 9', 0)))
+        col3.metric("Cat 5-8", int(sum(cat_counts.get(f'Cat {i}', 0) for i in range(5, 9))))
+        col4.metric("Cat 1-4", int(sum(cat_counts.get(f'Cat {i}', 0) for i in range(1, 5))))
+        
+        st.markdown("---")
+        st.markdown("## Funding Category Distribution")
+        st.markdown("How many students are in each funding category")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            funding_summary = risk_df['funding_category'].value_counts().reset_index()
+            funding_summary.columns = ['category', 'count']
+            funding_summary['count'] = funding_summary['count'].astype(int)
+            
+            # Create custom sort order - Cat 9+RAAP at top (highest), then Cat 9, then 8-1, then None
+            category_order = ['Cat 9+RAAP', 'Cat 9', 'Cat 8', 'Cat 7', 'Cat 6', 'Cat 5', 'Cat 4', 'Cat 3', 'Cat 2', 'Cat 1', 'None']
+            funding_summary['sort_order'] = funding_summary['category'].apply(
+                lambda x: category_order.index(x) if x in category_order else 999
+            )
+            funding_summary = funding_summary.sort_values('sort_order')
+            
+            # Color by urgency - Cat 9+RAAP darkest
+            color_map = {
+                'Cat 9+RAAP': 99,
+                'Cat 9': 9,
+                'Cat 8': 8,
+                'Cat 7': 7,
+                'Cat 6': 6,
+                'Cat 5': 5,
+                'Cat 4': 4,
+                'Cat 3': 3,
+                'Cat 2': 2,
+                'Cat 1': 1,
+                'None': 0
+            }
+            funding_summary['color_key'] = funding_summary['category'].map(color_map)
+            
+            fig_funding = px.bar(
+                funding_summary,
+                x='category',
+                y='count',
+                text='count',
+                color='color_key',
+                color_continuous_scale='Reds',
+                title='Students by Funding Category',
+                labels={'category': 'Category', 'count': 'Students', 'color_key': 'Urgency'}
+            )
+            fig_funding.update_xaxes(categoryorder='array', categoryarray=category_order)
+            fig_funding.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+            st.plotly_chart(update_chart_layout(fig_funding), use_container_width=True)
+        
+        with col2:
+            # Funding by program
+            if 'program' in risk_df.columns:
+                fund_prog = risk_df.groupby(['program', 'funding_category']).size().unstack(fill_value=0)
                 
-                df_raw = pd.DataFrame(records_list)
-                st.dataframe(df_raw, use_container_width=True)
-                
-                csv = df_raw.to_csv(index=False)
-                st.download_button(
-                    label="📥 Download CSV",
-                    data=csv,
-                    file_name=f"assessment_data_{program}_T{term}_{year}.csv",
-                    mime="text/csv"
+                fig_fund_prog = px.bar(
+                    fund_prog,
+                    barmode='stack',
+                    title='Funding Categories by Program',
+                    labels={'value': 'Count', 'index': 'Program'}
                 )
-            else:
-                st.info("No raw data records found.")
+                st.plotly_chart(update_chart_layout(fig_fund_prog), use_container_width=True)
+        
+        st.markdown("---")
+        st.markdown("## Funding Category Details")
+        st.markdown("Breakdown by category and program")
+        
+        # Create matrix of programs x funding categories
+        if 'program' in risk_df.columns and 'funding_category' in risk_df.columns:
+            fund_matrix = pd.crosstab(risk_df['program'], risk_df['funding_category'])
+            
+            # Reorder columns (Cat 9+RAAP first, then highest to lowest)
+            cat_order = ['Cat 9+RAAP'] + [f'Cat {i}' for i in range(9, 0, -1)] + ['None']
+            cat_order = [c for c in cat_order if c in fund_matrix.columns]
+            fund_matrix = fund_matrix[cat_order]
+            
+            fig_matrix = px.imshow(
+                fund_matrix,
+                text_auto=True,
+                color_continuous_scale='YlOrRd',
+                title='Program × Funding Category',
+                labels={'x': 'Funding Category', 'y': 'Program', 'color': 'Students'}
+            )
+            fig_matrix.update_traces(text=fund_matrix.values, texttemplate='%{text}')
+            fig_matrix.update_xaxes(categoryorder='array', categoryarray=cat_order)
+            st.plotly_chart(update_chart_layout(fig_matrix), use_container_width=True)
+        
+        st.markdown("---")
+        st.markdown("## Highest-Need Students (Cat 9+RAAP & Cat 9)")
+        st.markdown("Students requiring most intensive support and resources")
+        
+        high_need = risk_df[risk_df['funding_category'].isin(['Cat 9+RAAP', 'Cat 9', 'Cat 8'])].copy()
+        
+        if len(high_need) > 0:
+            display_cols = ['program', 'year_level', 'funding_category', 'partnership_area']
+            display_cols = [col for col in display_cols if col in high_need.columns]
+            
+            high_need_display = high_need[display_cols].copy().sort_values('funding_category', ascending=False)
+            
+            # Highlight Cat 9+RAAP in the data
+            st.dataframe(high_need_display, use_container_width=True, hide_index=True)
+            
+            cat_9_raap_count = (high_need['funding_category'] == 'Cat 9+RAAP').sum()
+            cat_9_only_count = (high_need['funding_category'] == 'Cat 9').sum()
+            cat_8_count = (high_need['funding_category'] == 'Cat 8').sum()
+            
+            st.info(f"**{int(cat_9_raap_count)} students** in Cat 9+RAAP | **{int(cat_9_only_count)} students** in Cat 9 | **{int(cat_8_count)} students** in Cat 8 (highest support needs)")
+        else:
+            st.success("✅ No highest-need students in current selection")
+        
+        st.markdown("---")
+        st.markdown("## Resource Allocation Summary")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        total_students = len(risk_df)
+        cat_9_raap_pct = int((risk_df['funding_category'] == 'Cat 9+RAAP').sum() / total_students * 100) if total_students > 0 else 0
+        cat_9_only_pct = int((risk_df['funding_category'] == 'Cat 9').sum() / total_students * 100) if total_students > 0 else 0
+        
+        col1.metric("Cat 9+RAAP %", f"{cat_9_raap_pct}%")
+        col2.metric("Cat 9 Only %", f"{cat_9_only_pct}%")
+        col3.metric("High Need (8-9+RAAP) %", f"{int(((cat_9_raap_pct + cat_9_only_pct) / 100 * total_students) / total_students * 100 if total_students > 0 else 0)}%")
+    
+    elif section == "Cohort Analysis":
+        st.markdown("## Cohort Deep Dive Analysis")
+        st.markdown("Detailed breakdown by program, year level, and partnerships - identify patterns and opportunities")
+        
+        # Create tabs for different views
+        tab1, tab2, tab3 = st.tabs(["Program Deep Dive", "Year Level Deep Dive", "Partnership Analysis"])
+        
+        # === TAB 1: PROGRAM DEEP DIVE ===
+        with tab1:
+            st.markdown("### Program Deep Dive")
+            st.markdown("Comprehensive analysis of each program (JP, PY, SY)")
+            
+            programs = sorted([p for p in filtered['program_clean'].unique() if p != '' and p != ':2' and pd.notna(p)])
+            
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                # Program comparison - bar chart
+                prog_data = filtered['program_clean'].value_counts().reset_index()
+                prog_data.columns = ['program', 'count']
+                prog_data['count'] = prog_data['count'].astype(int)
+                prog_data = prog_data.sort_values('count', ascending=False)
+                
+                fig_prog_comp = px.bar(
+                    prog_data,
+                    x='program',
+                    y='count',
+                    text='count',
+                    color='program',
+                    title='Student Count by Program',
+                    labels={'program': '', 'count': 'Students'}
+                )
+                fig_prog_comp.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                st.plotly_chart(update_chart_layout(fig_prog_comp), use_container_width=True)
+            
+            with col2:
+                st.markdown("**Program Summary**")
+                for idx, row in prog_data.iterrows():
+                    st.write(f"**{row['program']}**: {row['count']} students")
+            
+            st.markdown("---")
+            
+            # Deep dive by each program
+            for prog in programs:
+                prog_filtered = filtered[filtered['program_clean'] == prog]
+                
+                if len(prog_filtered) > 0:
+                    st.markdown(f"#### {prog} Program Details")
+                    
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric(f"{prog} Total", int(len(prog_filtered)))
+                    col2.metric(f"Year Levels", int(prog_filtered['year_level'].nunique()))
+                    col3.metric(f"Partnerships", int(prog_filtered['partnership_area'].nunique()))
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        # Year level distribution
+                        year_dist = prog_filtered['year_level'].value_counts().sort_index().reset_index()
+                        year_dist.columns = ['year_level', 'count']
+                        year_dist['count'] = year_dist['count'].astype(int)
+                        
+                        fig_year = px.bar(
+                            year_dist,
+                            x='year_level',
+                            y='count',
+                            text='count',
+                            color_discrete_sequence=['#00e5ff'],
+                            title=f'{prog} by Year Level',
+                            labels={'year_level': '', 'count': 'Count'}
+                        )
+                        fig_year.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                        st.plotly_chart(update_chart_layout(fig_year), use_container_width=True)
+                    
+                    with col2:
+                        # Top partnerships
+                        part_dist = prog_filtered['partnership_area'].value_counts().head(8).reset_index()
+                        part_dist.columns = ['partnership_area', 'count']
+                        part_dist['count'] = part_dist['count'].astype(int)
+                        
+                        fig_part = px.bar(
+                            part_dist,
+                            y='partnership_area',
+                            x='count',
+                            orientation='h',
+                            text='count',
+                            color_discrete_sequence=['#ffc107'],
+                            title=f'{prog} Top Partnerships',
+                            labels={'partnership_area': '', 'count': 'Count'}
+                        )
+                        fig_part.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                        st.plotly_chart(update_chart_layout(fig_part), use_container_width=True)
+                    
+                    st.markdown("---")
+        
+        # === TAB 2: YEAR LEVEL DEEP DIVE ===
+        with tab2:
+            st.markdown("### Year Level Deep Dive")
+            st.markdown("Student distribution and characteristics by year level (R through 10)")
+            
+            year_order = ['R', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+            year_levels = [y for y in year_order if y in filtered['year_level'].unique()]
+            
+            # Year level overview
+            year_summary = filtered['year_level'].value_counts().reindex(year_levels, fill_value=0).reset_index()
+            year_summary.columns = ['year_level', 'count']
+            year_summary['count'] = year_summary['count'].astype(int)
+            
+            fig_year_overview = px.bar(
+                year_summary,
+                x='year_level',
+                y='count',
+                text='count',
+                color='count',
+                color_continuous_scale='Viridis',
+                title='Student Distribution by Year Level',
+                labels={'year_level': 'Year Level', 'count': 'Students'}
+            )
+            fig_year_overview.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+            st.plotly_chart(update_chart_layout(fig_year_overview), use_container_width=True)
+            
+            st.markdown("---")
+            
+            # Deep dive by year level
+            for year in year_levels:
+                year_filtered = filtered[filtered['year_level'] == year]
+                
+                if len(year_filtered) > 0:
+                    st.markdown(f"#### Year Level {year}")
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric(f"Year {year} Students", int(len(year_filtered)))
+                    col2.metric("Programs", int(year_filtered['program'].nunique()))
+                    col3.metric("Partnerships", int(year_filtered['partnership_area'].nunique()))
+                    
+                    # Average risk score for this year level
+                    risk_score = 0
+                    if 'total_previous_placements' in year_filtered.columns:
+                        risk_score += (pd.to_numeric(year_filtered['total_previous_placements'], errors='coerce').fillna(0) > 0).sum()
+                    if 'bespoke_placement' in year_filtered.columns:
+                        risk_score += (year_filtered['bespoke_placement'] == 'Yes').sum()
+                    
+                    col4.metric("Risk Indicators", int(risk_score))
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        # Programs for this year
+                        prog_dist = year_filtered['program'].value_counts().reset_index()
+                        prog_dist.columns = ['program', 'count']
+                        prog_dist['count'] = prog_dist['count'].astype(int)
+                        
+                        fig_prog_year = px.pie(
+                            prog_dist,
+                            values='count',
+                            names='program',
+                            title=f'Year {year} - Programs',
+                            color_discrete_sequence=['#ff6b6b', '#4ecdc4', '#ffd93d']
+                        )
+                        st.plotly_chart(update_chart_layout(fig_prog_year), use_container_width=True)
+                    
+                    with col2:
+                        # Top partnerships
+                        part_year = year_filtered['partnership_area'].value_counts().head(6).reset_index()
+                        part_year.columns = ['partnership', 'count']
+                        part_year['count'] = part_year['count'].astype(int)
+                        
+                        fig_part_year = px.bar(
+                            part_year,
+                            y='partnership',
+                            x='count',
+                            orientation='h',
+                            text='count',
+                            color_discrete_sequence=['#a8e6cf'],
+                            title=f'Year {year} - Top Partnerships',
+                            labels={'partnership': '', 'count': 'Count'}
+                        )
+                        fig_part_year.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                        st.plotly_chart(update_chart_layout(fig_part_year), use_container_width=True)
+                    
+                    st.markdown("---")
+        
+        # === TAB 3: PARTNERSHIP ANALYSIS ===
+        with tab3:
+            st.markdown("### Partnership Effectiveness")
+            st.markdown("Student volume and distribution across partnerships")
+            
+            # Overall partnership ranking
+            part_summary = filtered['partnership_area'].value_counts().head(15).reset_index()
+            part_summary.columns = ['partnership', 'count']
+            part_summary['count'] = part_summary['count'].astype(int)
+            
+            fig_part_ranking = px.bar(
+                part_summary,
+                y='partnership',
+                x='count',
+                orientation='h',
+                text='count',
+                color='count',
+                color_continuous_scale='Reds',
+                title='Top 15 Partnerships by Student Volume',
+                labels={'partnership': '', 'count': 'Students'}
+            )
+            fig_part_ranking.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+            fig_part_ranking.update_yaxes(categoryorder='total ascending')
+            st.plotly_chart(update_chart_layout(fig_part_ranking), use_container_width=True)
+            
+            st.markdown("---")
+            st.markdown("### Partnership × Program Matrix")
+            st.markdown("How many students in each program are placed with each partnership")
+            
+            # Create matrix
+            if 'partnership_area' in filtered.columns and 'program' in filtered.columns:
+                part_prog_matrix = pd.crosstab(
+                    filtered['partnership_area'],
+                    filtered['program']
+                )
+                
+                # Keep top 12 partnerships
+                top_parts = part_prog_matrix.sum(axis=1).nlargest(12).index
+                part_prog_matrix = part_prog_matrix.loc[top_parts]
+                
+                fig_matrix = px.imshow(
+                    part_prog_matrix,
+                    text_auto=True,
+                    color_continuous_scale='YlOrRd',
+                    title='Partnership × Program Distribution',
+                    labels={'x': 'Program', 'y': 'Partnership', 'color': 'Students'}
+                )
+                fig_matrix.update_traces(text=part_prog_matrix.values, texttemplate='%{text}')
+                st.plotly_chart(update_chart_layout(fig_matrix), use_container_width=True)
+            
+            st.markdown("---")
+            st.markdown("### Partnership Insights")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("Total Partnerships", int(filtered['partnership_area'].nunique()))
+            with col2:
+                largest_part = filtered['partnership_area'].value_counts().index[0]
+                largest_count = filtered['partnership_area'].value_counts().values[0]
+                st.metric("Largest Partnership", f"{largest_part} ({largest_count})")
+            with col3:
+                st.metric("Avg Students/Partnership", int(len(filtered) / filtered['partnership_area'].nunique()))
+    
 
-if __name__ == "__main__":
-    main()
+
+
+
+    elif section == "Equity":
+        st.markdown("## Equity Deep Dive Analysis")
+        st.markdown("Separate analysis of ATSI, EALD, and DCP cohorts with school socioeconomic context")
+        
+        equity_df = filtered.copy()
+        
+        # Use flag data from session state, cached data, or show instructions
+        flag_df_to_use = None
+        
+        if 'flag_df' in st.session_state and st.session_state.flag_df is not None:
+            flag_df_to_use = st.session_state.flag_df
+            st.info("✅ Using flag data from sidebar upload")
+        elif cached_flag_df is not None:
+            flag_df_to_use = cached_flag_df
+            st.info("✅ Using cached flag data")
+        else:
+            st.warning("📌 **Upload flag data in the sidebar** under 'Flag Data Upload' to see equity analysis")
+        
+        # Merge flags with filtered data
+        if flag_df_to_use is not None and len(flag_df_to_use) > 0:
+            equity_df['name_match'] = equity_df['student_name'].str.strip().str.lower()
+            equity_df = equity_df.merge(flag_df_to_use, on='name_match', how='left')
+            equity_df = equity_df.drop('name_match', axis=1)
+        
+        # Standardize flag values
+        def standardize_flag(val):
+            if pd.isna(val):
+                return 'No'
+            return 'Yes' if str(val).upper() == 'YES' else 'No'
+        
+        # Standardize flag columns
+        if 'Flag_ATSI' in equity_df.columns:
+            equity_df['Flag_ATSI'] = equity_df['Flag_ATSI'].apply(standardize_flag)
+        if 'Flag_EALD' in equity_df.columns:
+            equity_df['Flag_EALD'] = equity_df['Flag_EALD'].apply(standardize_flag)
+        if 'Flag_DCP_involvement' in equity_df.columns:
+            equity_df['Flag_DCP'] = equity_df['Flag_DCP_involvement'].apply(standardize_flag)
+        
+        # School SES data
+        school_ses_data = {
+            'Le Fevre High School': {'SEIFA_IRSAD': 850, 'Disadvantage_Level': 'Very High'},
+            'Largs Bay Primary School': {'SEIFA_IRSAD': 860, 'Disadvantage_Level': 'Very High'},
+            'Ocean View College': {'SEIFA_IRSAD': 880, 'Disadvantage_Level': 'High'},
+            'Woodville High School': {'SEIFA_IRSAD': 890, 'Disadvantage_Level': 'High'},
+            'Adelaide High School': {'SEIFA_IRSAD': 900, 'Disadvantage_Level': 'Medium'},
+            'Elizabeth High School': {'SEIFA_IRSAD': 820, 'Disadvantage_Level': 'Very High'},
+            'Port Adelaide High School': {'SEIFA_IRSAD': 840, 'Disadvantage_Level': 'Very High'},
+            'Brighton Primary School': {'SEIFA_IRSAD': 950, 'Disadvantage_Level': 'Low'},
+            'Glenelg High School': {'SEIFA_IRSAD': 930, 'Disadvantage_Level': 'Low'},
+        }
+        
+        tab_atsi, tab_eald, tab_dcp = st.tabs(["🇦🇺 ATSI Deep Dive", "🗣️ EALD Deep Dive", "🌏 DCP Deep Dive"])
+        
+        # === ATSI ===
+        with tab_atsi:
+            st.markdown("### Aboriginal & Torres Strait Islander Students")
+            if 'Flag_ATSI' not in equity_df.columns:
+                st.warning("Flag_ATSI column not found in data")
+                atsi_df = pd.DataFrame()
+            else:
+                atsi_df = equity_df[equity_df['Flag_ATSI'] == 'Yes']
+            
+            if len(atsi_df) > 0:
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Total ATSI", len(atsi_df))
+                multi_need = ((atsi_df['Flag_EALD'] == 'Yes') | (atsi_df['Flag_DCP'] == 'Yes')).sum()
+                c2.metric("With 1+ Need", multi_need)
+                c3.metric("ATSI + EALD", (atsi_df['Flag_EALD'] == 'Yes').sum())
+                c4.metric("ATSI + DCP", (atsi_df['Flag_DCP'] == 'Yes').sum())
+                
+                st.markdown("---")
+                if 'term_clean' in atsi_df.columns and len(atsi_df['term_clean'].dropna()) > 0:
+                    by_term = atsi_df[atsi_df['term_clean'] >= 1]['term_clean'].value_counts().sort_index()
+                    if len(by_term) > 0:
+                        term_df = pd.DataFrame({'Term': by_term.index, 'Count': by_term.values})
+                        fig = px.bar(term_df, x='Term', y='Count', title='ATSI Students by Term',
+                                     color_discrete_sequence=['#8B4513'])
+                        fig.update_traces(textposition='outside', text=term_df['Count'].values, textfont=dict(color='#ffffff'))
+                        fig.update_xaxes(type='category', categoryorder='array', categoryarray=[1, 2, 3, 4])
+                        st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                
+                st.markdown("---")
+                if 'school' in atsi_df.columns:
+                    school_counts = atsi_df['school'].value_counts().head(10)
+                    school_data = pd.DataFrame({'School': school_counts.index, 'Count': school_counts.values})
+                    school_data['SES'] = school_data['School'].apply(lambda x: school_ses_data.get(x, {}).get('Disadvantage_Level', 'Unknown'))
+                    
+                    fig = px.bar(school_data, y='School', x='Count', orientation='h', text='Count', color='SES',
+                        color_discrete_map={'Very High': '#f44336', 'High': '#ff9800', 'Medium': '#ffc107', 'Low': '#4caf50', 'Unknown': '#999'},
+                        title='Top Schools (ATSI Referrals)')
+                    fig.update_yaxes(categoryorder='total ascending')
+                    fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                
+                st.markdown("---")
+                if 'partnership_area' in atsi_df.columns:
+                    part_counts = atsi_df['partnership_area'].value_counts().head(8)
+                    fig = px.bar(part_counts, title='Top Partnerships (ATSI)',
+                        color_discrete_sequence=['#8B4513'], labels={'value': 'Students'})
+                    fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                
+                st.markdown("---")
+                multi_atsi = atsi_df[(atsi_df['Flag_EALD'] == 'Yes') & (atsi_df['Flag_DCP'] == 'Yes')]
+                if len(multi_atsi) > 0:
+                    cols_show = ['program', 'year_level', 'school', 'partnership_area']
+                    cols_show = [c for c in cols_show if c in multi_atsi.columns]
+                    st.markdown("#### ATSI with BOTH EALD + DCP")
+                    st.write(f"**{len(multi_atsi)} students** with this combination (student names hidden for privacy)")
+                    st.dataframe(multi_atsi[cols_show], use_container_width=True, hide_index=True)
+                else:
+                    st.info("No ATSI students with both EALD + DCP")
+            else:
+                st.info("No ATSI students in current filters")
+        
+        # === EALD ===
+        with tab_eald:
+            st.markdown("### English as Additional Language (EALD) Students")
+            if 'Flag_EALD' not in equity_df.columns:
+                st.warning("Flag_EALD column not found in data")
+                eald_df = pd.DataFrame()
+            else:
+                eald_df = equity_df[equity_df['Flag_EALD'] == 'Yes']
+            
+            if len(eald_df) > 0:
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Total EALD", len(eald_df))
+                multi_need = ((eald_df['Flag_ATSI'] == 'Yes') | (eald_df['Flag_DCP'] == 'Yes')).sum()
+                c2.metric("With 1+ Need", multi_need)
+                c3.metric("EALD + ATSI", (eald_df['Flag_ATSI'] == 'Yes').sum())
+                c4.metric("EALD + DCP", (eald_df['Flag_DCP'] == 'Yes').sum())
+                
+                st.markdown("---")
+                if 'term_clean' in eald_df.columns and len(eald_df['term_clean'].dropna()) > 0:
+                    by_term = eald_df[eald_df['term_clean'] >= 1]['term_clean'].value_counts().sort_index()
+                    if len(by_term) > 0:
+                        term_df = pd.DataFrame({'Term': by_term.index, 'Count': by_term.values})
+                        fig = px.bar(term_df, x='Term', y='Count', title='EALD Students by Term',
+                                     color_discrete_sequence=['#20B2AA'])
+                        fig.update_traces(textposition='outside', text=term_df['Count'].values, textfont=dict(color='#ffffff'))
+                        fig.update_xaxes(type='category', categoryorder='array', categoryarray=[1, 2, 3, 4])
+                        st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                
+                st.markdown("---")
+                if 'school' in eald_df.columns:
+                    school_counts = eald_df['school'].value_counts().head(10)
+                    school_data = pd.DataFrame({'School': school_counts.index, 'Count': school_counts.values})
+                    school_data['SES'] = school_data['School'].apply(lambda x: school_ses_data.get(x, {}).get('Disadvantage_Level', 'Unknown'))
+                    
+                    fig = px.bar(school_data, y='School', x='Count', orientation='h', text='Count', color='SES',
+                        color_discrete_map={'Very High': '#f44336', 'High': '#ff9800', 'Medium': '#ffc107', 'Low': '#4caf50', 'Unknown': '#999'},
+                        title='Top Schools (EALD Referrals)')
+                    fig.update_yaxes(categoryorder='total ascending')
+                    fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                
+                st.markdown("---")
+                if 'partnership_area' in eald_df.columns:
+                    part_counts = eald_df['partnership_area'].value_counts().head(8)
+                    fig = px.bar(part_counts, title='Top Partnerships (EALD)',
+                        color_discrete_sequence=['#20B2AA'], labels={'value': 'Students'})
+                    fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                
+                st.markdown("---")
+                multi_eald = eald_df[(eald_df['Flag_ATSI'] == 'Yes') & (eald_df['Flag_DCP'] == 'Yes')]
+                if len(multi_eald) > 0:
+                    cols_show = ['program', 'year_level', 'school', 'partnership_area']
+                    cols_show = [c for c in cols_show if c in multi_eald.columns]
+                    st.markdown("#### EALD with BOTH ATSI + DCP")
+                    st.write(f"**{len(multi_eald)} students** with this combination (student names hidden for privacy)")
+                    st.dataframe(multi_eald[cols_show], use_container_width=True, hide_index=True)
+                else:
+                    st.info("No EALD students with both ATSI + DCP")
+            else:
+                st.info("No EALD students in current filters")
+        
+        # === DCP ===
+        with tab_dcp:
+            st.markdown("### Diverse Cultural & Linguistic Background (DCP) Students")
+            if 'Flag_DCP' not in equity_df.columns:
+                st.warning("Flag_DCP column not found in data")
+                dcp_df = pd.DataFrame()
+            else:
+                dcp_df = equity_df[equity_df['Flag_DCP'] == 'Yes']
+            
+            if len(dcp_df) > 0:
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Total DCP", len(dcp_df))
+                multi_need = ((dcp_df['Flag_ATSI'] == 'Yes') | (dcp_df['Flag_EALD'] == 'Yes')).sum()
+                c2.metric("With 1+ Need", multi_need)
+                c3.metric("DCP + ATSI", (dcp_df['Flag_ATSI'] == 'Yes').sum())
+                c4.metric("DCP + EALD", (dcp_df['Flag_EALD'] == 'Yes').sum())
+                
+                st.markdown("---")
+                if 'term_clean' in dcp_df.columns and len(dcp_df['term_clean'].dropna()) > 0:
+                    by_term = dcp_df[dcp_df['term_clean'] >= 1]['term_clean'].value_counts().sort_index()
+                    if len(by_term) > 0:
+                        term_df = pd.DataFrame({'Term': by_term.index, 'Count': by_term.values})
+                        fig = px.bar(term_df, x='Term', y='Count', title='DCP Students by Term',
+                                     color_discrete_sequence=['#9370DB'])
+                        fig.update_traces(textposition='outside', text=term_df['Count'].values, textfont=dict(color='#ffffff'))
+                        fig.update_xaxes(type='category', categoryorder='array', categoryarray=[1, 2, 3, 4])
+                        st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                
+                st.markdown("---")
+                if 'school' in dcp_df.columns:
+                    school_counts = dcp_df['school'].value_counts().head(10)
+                    school_data = pd.DataFrame({'School': school_counts.index, 'Count': school_counts.values})
+                    school_data['SES'] = school_data['School'].apply(lambda x: school_ses_data.get(x, {}).get('Disadvantage_Level', 'Unknown'))
+                    
+                    fig = px.bar(school_data, y='School', x='Count', orientation='h', text='Count', color='SES',
+                        color_discrete_map={'Very High': '#f44336', 'High': '#ff9800', 'Medium': '#ffc107', 'Low': '#4caf50', 'Unknown': '#999'},
+                        title='Top Schools (DCP Referrals)')
+                    fig.update_yaxes(categoryorder='total ascending')
+                    fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                
+                st.markdown("---")
+                if 'partnership_area' in dcp_df.columns:
+                    part_counts = dcp_df['partnership_area'].value_counts().head(8)
+                    fig = px.bar(part_counts, title='Top Partnerships (DCP)',
+                        color_discrete_sequence=['#9370DB'], labels={'value': 'Students'})
+                    fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                
+                st.markdown("---")
+                multi_dcp = dcp_df[(dcp_df['Flag_ATSI'] == 'Yes') & (dcp_df['Flag_EALD'] == 'Yes')]
+                if len(multi_dcp) > 0:
+                    cols_show = ['program', 'year_level', 'school', 'partnership_area']
+                    cols_show = [c for c in cols_show if c in multi_dcp.columns]
+                    st.markdown("#### DCP with BOTH ATSI + EALD")
+                    st.write(f"**{len(multi_dcp)} students** with this combination (student names hidden for privacy)")
+                    st.dataframe(multi_dcp[cols_show], use_container_width=True, hide_index=True)
+                else:
+                    st.info("No DCP students with both ATSI + EALD")
+            else:
+                st.info("No DCP students in current filters")
+
+    elif section == "Critical Incidents":
+        st.markdown("## Critical Incidents Tracking")
+        st.markdown("Track and analyze critical incidents by program, year level, and term - identify support patterns and resource needs")
+        
+        # Check if incidents data is available
+        if 'incidents_df' not in st.session_state or st.session_state.incidents_df is None:
+            st.warning("⚠️ No critical incidents data loaded. To add incidents:")
+            st.info("""
+            1. Add a **"Critical_Incidents"** sheet to your Excel file with columns:
+               - Student_Name, Incident_Date, Incident_Type, Severity
+               - Term, Year, Program, Year_Level, Partnership_Area
+               - Action_Taken, Actioned_By, Notes
+            2. Upload the Excel file through the sidebar
+            3. Incidents will appear here automatically
+            """)
+        else:
+            incidents = st.session_state.incidents_df.copy()
+            
+            # Add refresh button
+            col1, col2 = st.columns([4, 1])
+            with col2:
+                if st.button("🔄 Refresh"):
+                    st.rerun()
+            
+            with col1:
+                st.info(f"📌 Total incidents recorded: {len(incidents)}")
+            
+            # Filter by current year/term
+            if 'Year' in incidents.columns:
+                incidents['Year'] = pd.to_numeric(incidents['Year'], errors='coerce')
+                if selected_year != 'All':
+                    incidents = incidents[incidents['Year'] == selected_year]
+            
+            if 'Term' in incidents.columns:
+                incidents['Term'] = pd.to_numeric(incidents['Term'], errors='coerce')
+                if selected_term != 'All':
+                    incidents = incidents[incidents['Term'] == selected_term]
+            
+            if len(incidents) == 0:
+                st.success("✅ No incidents in current filters")
+            else:
+                # Summary metrics
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Total Incidents", len(incidents))
+                
+                # Severity counts
+                if 'Severity' in incidents.columns:
+                    critical_count = (incidents['Severity'] == 'Critical').sum()
+                    col2.metric("Critical", int(critical_count))
+                
+                # Incident type count
+                if 'Incident_Type' in incidents.columns:
+                    col3.metric("Incident Types", incidents['Incident_Type'].nunique())
+                
+                # Programs affected
+                if 'Program' in incidents.columns:
+                    col4.metric("Programs Affected", incidents['Program'].nunique())
+                
+                st.markdown("---")
+                
+                # Incident Type Breakdown
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    if 'Incident_Type' in incidents.columns:
+                        type_counts = incidents['Incident_Type'].value_counts()
+                        fig_type = px.bar(
+                            x=type_counts.index,
+                            y=type_counts.values,
+                            title="Incidents by Type",
+                            labels={'x': 'Type', 'y': 'Count'}
+                        )
+                        fig_type.update_traces(marker_color='#ff7675')
+                        st.plotly_chart(update_chart_layout(fig_type), use_container_width=True)
+                
+                with col2:
+                    if 'Severity' in incidents.columns:
+                        severity_order = ['Critical', 'High', 'Medium', 'Low']
+                        severity_counts = incidents['Severity'].value_counts().reindex(severity_order, fill_value=0)
+                        colors_severity = ['#d32f2f', '#f57c00', '#ffa726', '#fdd835']
+                        
+                        fig_sev = px.bar(
+                            x=severity_counts.index,
+                            y=severity_counts.values,
+                            title="Incidents by Severity",
+                            labels={'x': 'Severity', 'y': 'Count'}
+                        )
+                        fig_sev.update_traces(marker_color=colors_severity[:len(severity_counts)])
+                        st.plotly_chart(update_chart_layout(fig_sev), use_container_width=True)
+                
+                st.markdown("---")
+                
+                # By Program
+                if 'Program' in incidents.columns:
+                    prog_counts = incidents['Program'].value_counts()
+                    fig_prog = px.bar(
+                        x=prog_counts.index,
+                        y=prog_counts.values,
+                        title="Incidents by Program",
+                        labels={'x': 'Program', 'y': 'Count'}
+                    )
+                    st.plotly_chart(update_chart_layout(fig_prog), use_container_width=True)
+                
+                # By Year Level
+                if 'Year_Level' in incidents.columns:
+                    yl_counts = incidents['Year_Level'].value_counts().sort_index()
+                    fig_yl = px.bar(
+                        x=yl_counts.index,
+                        y=yl_counts.values,
+                        title="Incidents by Year Level",
+                        labels={'x': 'Year Level', 'y': 'Count'}
+                    )
+                    st.plotly_chart(update_chart_layout(fig_yl), use_container_width=True)
+                
+                st.markdown("---")
+                st.markdown("## Incident Details")
+                
+                # Show incidents table (without student names for privacy by default)
+                with st.expander("📋 View all incidents"):
+                    display_cols = ['Incident_Date', 'Incident_Type', 'Severity', 'Program', 'Year_Level', 'Partnership_Area']
+                    display_cols = [col for col in display_cols if col in incidents.columns]
+                    
+                    st.dataframe(incidents[display_cols].sort_values('Incident_Date', ascending=False), 
+                                use_container_width=True, hide_index=True)
+                
+                # High-severity incidents summary
+                if 'Severity' in incidents.columns:
+                    high_sev = incidents[incidents['Severity'].isin(['Critical', 'High'])]
+                    if len(high_sev) > 0:
+                        st.markdown("---")
+                        st.markdown("⚠️ **High/Critical Incidents**")
+                        st.warning(f"{len(high_sev)} high-severity incidents requiring attention")
+                        
+                        summary_cols = ['Incident_Date', 'Incident_Type', 'Severity', 'Program', 'Action_Taken'] if 'Action_Taken' in incidents.columns else ['Incident_Date', 'Incident_Type', 'Severity', 'Program']
+                        summary_cols = [col for col in summary_cols if col in high_sev.columns]
+                        
+                        st.dataframe(high_sev[summary_cols], use_container_width=True, hide_index=True)
+
+    elif section == "Assessment":
+        st.markdown("## Assessment Analytics")
+        st.markdown("Term assessment outcomes and progress tracking - SMARTAR goal achievement and student growth")
+        
+        # Load assessment data from Supabase with better error handling
+        assessments = []
+        error_msg = None
+        
+        try:
+            if supabase:
+                response = supabase.table('term_assessments').select('*').execute()
+                assessments = response.data if response.data else []
+            else:
+                error_msg = "Supabase connection not available"
+        except Exception as e:
+            error_msg = f"Error loading assessments: {str(e)}"
+        
+        if error_msg:
+            st.error(f"⚠️ {error_msg}")
+            st.info("Assessment data is maintained in the Assessment Analytics page and auto-syncs here.")
+        elif not assessments:
+            st.info("📌 No assessment data available yet. Data will appear here once assessments are entered in the Assessment Analytics page.")
+        else:
+            assessments_df = pd.DataFrame(assessments)
+            
+            # Add refresh button
+            col1, col2 = st.columns([4, 1])
+            with col2:
+                if st.button("🔄 Refresh"):
+                    st.cache_data.clear()
+                    st.rerun()
+            
+            with col1:
+                st.success("✅ Assessment data auto-synced from Assessment Analytics page")
+            
+            # Normalize column names (handle different naming conventions)
+            col_mapping = {
+                'year': 'year', 'yr': 'year',
+                'term': 'term',
+                'program': 'program', 'prog': 'program',
+                'status': 'status',
+                'achieved': 'achieved',
+                'not_achieved': 'not_achieved'
+            }
+            
+            assessments_df.columns = assessments_df.columns.str.lower()
+            
+            # Filter assessments by current term/year if possible
+            if 'year' in assessments_df.columns:
+                assessments_df['year'] = pd.to_numeric(assessments_df['year'], errors='coerce')
+                if selected_year != 'All':
+                    assessments_df = assessments_df[assessments_df['year'] == selected_year]
+            
+            if 'term' in assessments_df.columns:
+                assessments_df['term'] = pd.to_numeric(assessments_df['term'], errors='coerce')
+                if selected_term != 'All':
+                    assessments_df = assessments_df[assessments_df['term'] == selected_term]
+            
+            if len(assessments_df) == 0:
+                st.info("No assessment data for current year/term filters")
+            else:
+                # SUMMARY METRICS
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Total Assessments", len(assessments_df))
+                
+                # Count achieved (handle different column names)
+                achieved_count = 0
+                if 'status' in assessments_df.columns:
+                    achieved_count = (assessments_df['status'] == 'Achieved').sum()
+                elif 'achieved' in assessments_df.columns:
+                    achieved_count = assessments_df['achieved'].sum()
+                
+                col2.metric("Achieved", int(achieved_count))
+                
+                achievement_rate = int((achieved_count/len(assessments_df)*100)) if len(assessments_df) > 0 else 0
+                col3.metric("Achievement Rate", f"{achievement_rate}%")
+                
+                # Count programs
+                if 'program' in assessments_df.columns:
+                    col4.metric("Programs", assessments_df['program'].nunique())
+                
+                st.markdown("---")
+                st.markdown("## Assessment Breakdown")
+                
+                col1, col2 = st.columns(2)
+                
+                # By Program
+                with col1:
+                    if 'program' in assessments_df.columns:
+                        prog_counts = assessments_df['program'].value_counts()
+                        fig_prog = px.bar(
+                            x=prog_counts.index,
+                            y=prog_counts.values,
+                            title="Assessments by Program",
+                            labels={'x': 'Program', 'y': 'Count'}
+                        )
+                        fig_prog.update_traces(marker_color='#4CAF50')
+                        st.plotly_chart(update_chart_layout(fig_prog), use_container_width=True)
+                
+                # By Status
+                with col2:
+                    if 'status' in assessments_df.columns:
+                        status_counts = assessments_df['status'].value_counts()
+                        colors_status = {'Achieved': '#4CAF50', 'Not Achieved': '#f44336', 'In Progress': '#FF9800'}
+                        colors = [colors_status.get(s, '#2196F3') for s in status_counts.index]
+                        
+                        fig_status = px.bar(
+                            x=status_counts.index,
+                            y=status_counts.values,
+                            title="Assessment Status",
+                            labels={'x': 'Status', 'y': 'Count'}
+                        )
+                        fig_status.update_traces(marker_color=colors)
+                        st.plotly_chart(update_chart_layout(fig_status), use_container_width=True)
+                
+                st.markdown("---")
+                st.markdown("## Assessment Details")
+                
+                # Show summary table
+                with st.expander("📊 View assessment records"):
+                    display_cols = [col for col in ['program', 'term', 'year', 'status', 'created_at'] if col in assessments_df.columns]
+                    if display_cols:
+                        st.dataframe(assessments_df[display_cols].head(50), use_container_width=True, hide_index=True)
+                    else:
+                        st.write("Assessment data columns:", list(assessments_df.columns))
+
+    elif section == "Waitlist":
+        st.markdown("## Waitlist Status")
+        st.markdown("Overview of current waitlist and placement completion rates - tracks student flow through the system")
+        
+        if 'waitlist_status' in filtered.columns:
+            wait_data = filtered['waitlist_status'].value_counts().reset_index()
+            wait_data.columns = ['status', 'count']
+            wait_data['count'] = wait_data['count'].astype(int)
+            
+            fig = px.pie(wait_data, values='count', names='status',
+                        title='Waitlist Status Distribution', color_discrete_sequence=['#ff6b6b', '#4ecdc4', '#ffd93d', '#a8e6cf'])
+            st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+            
+            st.markdown("**What this shows:**")
+            st.write("- Breakdown of students by waitlist status")
+            st.write("- Identifies students waiting vs. placed")
+            st.write("- Helps track placement completion")
+
+
+    elif section == "Diagnostics":
+        st.markdown("## Data Diagnostics")
+        st.markdown("Debug information to verify data is loaded correctly")
+        
+        st.markdown("### Raw Data Preview")
+        st.write(f"**Total rows loaded:** {len(allocation_df)}")
+        st.write(f"**Columns:** {list(allocation_df.columns)}")
+        
+        st.markdown("### Filtered Data Preview")
+        st.write(f"**Rows after filtering:** {len(filtered)}")
+        st.dataframe(filtered.head(10), use_container_width=True)
+        
+        st.markdown("### Column Value Samples")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("**Programs**")
+            if 'program' in allocation_df.columns:
+                progs = allocation_df['program'].value_counts()
+                for prog, count in progs.items():
+                    st.write(f"- {prog}: {count}")
+        
+        with col2:
+            st.markdown("**Year Levels**")
+            if 'year_level' in allocation_df.columns:
+                levels = allocation_df['year_level'].value_counts().sort_index()
+                for level, count in levels.items():
+                    st.write(f"- {level}: {count}")
+        
+        with col3:
+            st.markdown("**Partnership Areas**")
+            if 'partnership_area' in allocation_df.columns:
+                partners = allocation_df['partnership_area'].value_counts().head(5)
+                for partner, count in partners.items():
+                    st.write(f"- {partner}: {count}")
+        
+        st.markdown("### Data Quality Check")
+        st.write("**Missing values:**")
+        missing = allocation_df.isnull().sum()
+        missing = missing[missing > 0]
+        if len(missing) > 0:
+            st.dataframe(missing)
+        else:
+            st.success("✅ No missing values")
