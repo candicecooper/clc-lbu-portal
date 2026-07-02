@@ -324,12 +324,12 @@ else:
                 # === EXTRACT FUNDING CATEGORY DATA (if columns exist) ===
                 funding_cols_available = []
                 for i in range(1, 10):
-                    col = f'Funding_Category_{i}'
+                    col = f'Flag_Category_{i}'
                     if col in df.columns:
                         funding_cols_available.append(col)
                 
                 if funding_cols_available:
-                    st.info(f"Found funding columns: {', '.join(funding_cols_available)}")
+                    st.info(f"✅ Found funding columns: {', '.join(funding_cols_available)}")
                 
                 if 'Student_Name' in df.columns and funding_cols_available:
                     # Extract and cache funding data
@@ -339,13 +339,13 @@ else:
                     st.session_state.funding_df = funding_data[funding_cols_for_merge].drop_duplicates('name_match')
                 else:
                     if 'Student_Name' in df.columns:
-                        st.warning("No funding category columns found (Funding_Category_1 to 9)")
+                        st.warning("No funding category columns found (Flag_Category_1 to 9)")
                 
                 # === EXTRACT RAAP FLAG (if exists) ===
-                if 'Flag_9plus_sRAAP' in df.columns and 'Student_Name' in df.columns:
-                    raap_data = df[['Student_Name', 'Flag_9plus_sRAAP']].copy()
+                if 'Flag_9plusRAAP' in df.columns and 'Student_Name' in df.columns:
+                    raap_data = df[['Student_Name', 'Flag_9plusRAAP']].copy()
                     raap_data['name_match'] = raap_data['Student_Name'].str.strip().str.lower()
-                    st.session_state.raap_df = raap_data[['name_match', 'Flag_9plus_sRAAP']].drop_duplicates('name_match')
+                    st.session_state.raap_df = raap_data[['name_match', 'Flag_9plusRAAP']].drop_duplicates('name_match')
                 
                 # === PROCESS STUDENT DATA ===
                 column_map = {
@@ -812,13 +812,13 @@ else:
             risk_df = risk_df.drop('name_match', axis=1)
         
         # Check for RAAP
-        if 'Flag_9plus_sRAAP' in risk_df.columns:
-            risk_df.loc[risk_df['Flag_9plus_sRAAP'] == 'Yes', 'is_raap'] = 'Yes (RAAP)'
+        if 'Flag_9plusRAAP' in risk_df.columns:
+            risk_df.loc[risk_df['Flag_9plusRAAP'] == 'Yes', 'is_raap'] = 'Yes (RAAP)'
         
         # Determine funding category (from individual columns if they exist)
         if 'cat_funding' not in risk_df.columns or risk_df['cat_funding'].isna().all():
             for cat in range(9, 0, -1):
-                col_name = f'Funding_Category_{cat}'
+                col_name = f'Flag_Category_{cat}'
                 if col_name in risk_df.columns:
                     risk_df.loc[risk_df[col_name] == 'Yes', 'funding_category'] = f'Cat {cat}'
         
