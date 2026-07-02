@@ -638,6 +638,20 @@ else:
         st.markdown(f"## Active Students Overview")
         st.markdown(f"**Year {year_display} | Term {term_display}** - Current enrollment and placement status")
         
+        # Debug expander
+        with st.expander("🔍 Debug - View filtering details"):
+            st.write(f"Selected Year: {selected_year}")
+            st.write(f"Selected Term: {selected_term}")
+            st.write(f"Selected Program: {selected_program}")
+            st.write(f"Total records after filtering: {len(filtered)}")
+            st.write(f"Unique programs in filtered data: {filtered['program'].unique().tolist()}")
+            st.write(f"Unique years in filtered data: {filtered['year_clean'].unique().tolist()}")
+            st.write(f"Unique terms in filtered data: {filtered['term_clean'].unique().tolist()}")
+            
+            # Show program breakdown
+            prog_breakdown = filtered['program'].value_counts().to_dict()
+            st.write(f"Program breakdown: {prog_breakdown}")
+        
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Total Students", int(len(filtered)))
         col2.metric("Programs", int(filtered['program'].nunique()))
