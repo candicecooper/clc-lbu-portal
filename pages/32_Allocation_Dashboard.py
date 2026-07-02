@@ -20,6 +20,8 @@ if 'funding_df' not in st.session_state:
     st.session_state.funding_df = None
 if 'raap_df' not in st.session_state:
     st.session_state.raap_df = None
+if 'incidents_df' not in st.session_state:
+    st.session_state.incidents_df = None
 
 st.markdown("""
 <style>
@@ -291,7 +293,7 @@ else:
         st.markdown("**Navigate**", help="Select an analysis section")
         section = st.radio(
             "Select Section",
-            ["Overview", "Trends", "Complexity", "Category of Support", "Cohort Analysis", "Equity", "Assessment", "Waitlist", "Diagnostics"],
+            ["Overview", "Trends", "Complexity", "Category of Support", "Cohort Analysis", "Equity", "Critical Incidents", "Assessment", "Waitlist", "Diagnostics"],
             label_visibility="collapsed"
         )
         
@@ -346,6 +348,16 @@ else:
                     raap_data = df[['Student_Name', 'Flag_9plusRAAP']].copy()
                     raap_data['name_match'] = raap_data['Student_Name'].str.strip().str.lower()
                     st.session_state.raap_df = raap_data[['name_match', 'Flag_9plusRAAP']].drop_duplicates('name_match')
+                # === EXTRACT CRITICAL INCIDENTS (if sheet exists) ===
+                try:
+                    # Try to read Critical_Incidents sheet
+                    if isinstance(uploaded_file.name, str) and uploaded_file.name.endswith('.xlsx'):
+                        incidents_df = pd.read_excel(uploaded_file, sheet_name='Critical_Incidents')
+                        if len(incidents_df) > 0 and 'Student_Name' in incidents_df.columns:
+                            incidents_df['name_match'] = incidents_df['Student_Name'].str.strip().str.lower()
+                            st.session_state.incidents_df = incidents_df
+                except:
+                    pass
                 
                 # === PROCESS STUDENT DATA ===
                 column_map = {
@@ -400,6 +412,8 @@ else:
                     status_msg += f" + {len(st.session_state.funding_df)} funding records"
                 if 'raap_df' in st.session_state and st.session_state.raap_df is not None:
                     status_msg += f" + RAAP"
+                if 'incidents_df' in st.session_state and st.session_state.incidents_df is not None:
+                    status_msg += f" + {len(st.session_state.incidents_df)} incidents"
                 st.success(status_msg)
                 
                 if st.button("Upload Now"):
@@ -1417,6 +1431,144 @@ else:
                     st.info("No DCP students with both ATSI + EALD")
             else:
                 st.info("No DCP students in current filters")
+
+    elif section == "Critical Incidents":
+        st.markdown("## Critical Incidents Tracking")
+        st.markdown("Track and analyze critical incidents by program, year level, and term - identify support patterns and resource needs")
+        
+        # Check if incidents data is available
+        if 'incidents_df' not in st.session_state or st.session_state.incidents_df is None:
+            st.warning("⚠️ No critical incidents data loaded. To add incidents:")
+            st.info("""
+            1. Add a **"Critical_Incidents"** sheet to your Excel file with columns:
+               - Student_Name, Incident_Date, Incident_Type, Severity
+               - Term, Year, Program, Year_Level, Partnership_Area
+               - Action_Taken, Actioned_By, Notes
+            2. Upload the Excel file through the sidebar
+            3. Incidents will appear here automatically
+            """)
+        else:
+            incidents = st.session_state.incidents_df.copy()
+            
+            # Add refresh button
+            col1, col2 = st.columns([4, 1])
+            with col2:
+                if st.button("🔄 Refresh"):
+                    st.rerun()
+            
+            with col1:
+                st.info(f"📌 Total incidents recorded: {len(incidents)}")
+            
+            # Filter by current year/term
+            if 'Year' in incidents.columns:
+                incidents['Year'] = pd.to_numeric(incidents['Year'], errors='coerce')
+                if selected_year != 'All':
+                    incidents = incidents[incidents['Year'] == selected_year]
+            
+            if 'Term' in incidents.columns:
+                incidents['Term'] = pd.to_numeric(incidents['Term'], errors='coerce')
+                if selected_term != 'All':
+                    incidents = incidents[incidents['Term'] == selected_term]
+            
+            if len(incidents) == 0:
+                st.success("✅ No incidents in current filters")
+            else:
+                # Summary metrics
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Total Incidents", len(incidents))
+                
+                # Severity counts
+                if 'Severity' in incidents.columns:
+                    critical_count = (incidents['Severity'] == 'Critical').sum()
+                    col2.metric("Critical", int(critical_count))
+                
+                # Incident type count
+                if 'Incident_Type' in incidents.columns:
+                    col3.metric("Incident Types", incidents['Incident_Type'].nunique())
+                
+                # Programs affected
+                if 'Program' in incidents.columns:
+                    col4.metric("Programs Affected", incidents['Program'].nunique())
+                
+                st.markdown("---")
+                
+                # Incident Type Breakdown
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    if 'Incident_Type' in incidents.columns:
+                        type_counts = incidents['Incident_Type'].value_counts()
+                        fig_type = px.bar(
+                            x=type_counts.index,
+                            y=type_counts.values,
+                            title="Incidents by Type",
+                            labels={'x': 'Type', 'y': 'Count'}
+                        )
+                        fig_type.update_traces(marker_color='#ff7675')
+                        st.plotly_chart(update_chart_layout(fig_type), use_container_width=True)
+                
+                with col2:
+                    if 'Severity' in incidents.columns:
+                        severity_order = ['Critical', 'High', 'Medium', 'Low']
+                        severity_counts = incidents['Severity'].value_counts().reindex(severity_order, fill_value=0)
+                        colors_severity = ['#d32f2f', '#f57c00', '#ffa726', '#fdd835']
+                        
+                        fig_sev = px.bar(
+                            x=severity_counts.index,
+                            y=severity_counts.values,
+                            title="Incidents by Severity",
+                            labels={'x': 'Severity', 'y': 'Count'}
+                        )
+                        fig_sev.update_traces(marker_color=colors_severity[:len(severity_counts)])
+                        st.plotly_chart(update_chart_layout(fig_sev), use_container_width=True)
+                
+                st.markdown("---")
+                
+                # By Program
+                if 'Program' in incidents.columns:
+                    prog_counts = incidents['Program'].value_counts()
+                    fig_prog = px.bar(
+                        x=prog_counts.index,
+                        y=prog_counts.values,
+                        title="Incidents by Program",
+                        labels={'x': 'Program', 'y': 'Count'}
+                    )
+                    st.plotly_chart(update_chart_layout(fig_prog), use_container_width=True)
+                
+                # By Year Level
+                if 'Year_Level' in incidents.columns:
+                    yl_counts = incidents['Year_Level'].value_counts().sort_index()
+                    fig_yl = px.bar(
+                        x=yl_counts.index,
+                        y=yl_counts.values,
+                        title="Incidents by Year Level",
+                        labels={'x': 'Year Level', 'y': 'Count'}
+                    )
+                    st.plotly_chart(update_chart_layout(fig_yl), use_container_width=True)
+                
+                st.markdown("---")
+                st.markdown("## Incident Details")
+                
+                # Show incidents table (without student names for privacy by default)
+                with st.expander("📋 View all incidents"):
+                    display_cols = ['Incident_Date', 'Incident_Type', 'Severity', 'Program', 'Year_Level', 'Partnership_Area']
+                    display_cols = [col for col in display_cols if col in incidents.columns]
+                    
+                    st.dataframe(incidents[display_cols].sort_values('Incident_Date', ascending=False), 
+                                use_container_width=True, hide_index=True)
+                
+                # High-severity incidents summary
+                if 'Severity' in incidents.columns:
+                    high_sev = incidents[incidents['Severity'].isin(['Critical', 'High'])]
+                    if len(high_sev) > 0:
+                        st.markdown("---")
+                        st.markdown("⚠️ **High/Critical Incidents**")
+                        st.warning(f"{len(high_sev)} high-severity incidents requiring attention")
+                        
+                        summary_cols = ['Incident_Date', 'Incident_Type', 'Severity', 'Program', 'Action_Taken'] if 'Action_Taken' in incidents.columns else ['Incident_Date', 'Incident_Type', 'Severity', 'Program']
+                        summary_cols = [col for col in summary_cols if col in high_sev.columns]
+                        
+                        st.dataframe(high_sev[summary_cols], use_container_width=True, hide_index=True)
 
     elif section == "Assessment":
         st.markdown("## Assessment Analytics")
