@@ -1789,7 +1789,73 @@ else:
                                         cols = [c for c in cols if c in other_data.columns]
                                         st.dataframe(other_data[cols], use_container_width=True, hide_index=True)
                 else:
-                    # Create tabs
+                    st.markdown("---")
+                    
+                    # Process all assessment data first (outside tabs)
+                    import json
+                    
+                    smartar_stats = {'Achieved': 0, 'Exceeded': 0, 'In Progress': 0, 'Not Started': 0}
+                    sw_totals = {}
+                    wa_totals = {}
+                    
+                    for idx, row in filtered_assess.iterrows():
+                        try:
+                            # SMARTAR
+                            if 'smartar_goals' in row and row['smartar_goals'] is not None:
+                                data = row['smartar_goals']
+                                if isinstance(data, str):
+                                    data = json.loads(data)
+                                if isinstance(data, dict):
+                                    for category, achievements in data.items():
+                                        if isinstance(achievements, dict):
+                                            for level, count in achievements.items():
+                                                count = int(count) if isinstance(count, (int, float)) else 0
+                                                if level in smartar_stats:
+                                                    smartar_stats[level] += count
+                        except:
+                            pass
+                        
+                        try:
+                            # Sounds Write
+                            if 'sounds_write_data' in row and row['sounds_write_data'] is not None:
+                                data = row['sounds_write_data']
+                                if isinstance(data, str):
+                                    data = json.loads(data)
+                                if isinstance(data, dict):
+                                    for skill, levels in data.items():
+                                        if skill not in sw_totals:
+                                            sw_totals[skill] = {}
+                                        if isinstance(levels, dict):
+                                            for level, count in levels.items():
+                                                count = int(count) if isinstance(count, (int, float)) else 0
+                                                sw_totals[skill][level] = sw_totals[skill].get(level, 0) + count
+                        except:
+                            pass
+                        
+                        try:
+                            # Word Aware
+                            if 'word_aware_data' in row and row['word_aware_data'] is not None:
+                                data = row['word_aware_data']
+                                if isinstance(data, str):
+                                    data = json.loads(data)
+                                if isinstance(data, dict):
+                                    for skill, levels in data.items():
+                                        if skill not in wa_totals:
+                                            wa_totals[skill] = {}
+                                        if isinstance(levels, dict):
+                                            for level, count in levels.items():
+                                                count = int(count) if isinstance(count, (int, float)) else 0
+                                                wa_totals[skill][level] = wa_totals[skill].get(level, 0) + count
+                        except:
+                            pass
+                    
+                    # Show debug
+                    with st.expander("🔍 Processed Data"):
+                        st.write(f"SMARTAR: {smartar_stats}")
+                        st.write(f"Sounds Write skills: {list(sw_totals.keys())}")
+                        st.write(f"Word Aware skills: {list(wa_totals.keys())}")
+                    
+                    # Now create tabs with processed data
                     tab1, tab2, tab3, tab4 = st.tabs(["📊 Summary", "🎯 SMARTAR Goals", "✍️ Sounds Write", "📖 Word Aware"])
                     
                     with tab1:
@@ -1812,63 +1878,37 @@ else:
                     with tab2:
                         st.markdown("**SMARTAR Goals**")
                         
-                        if 'smartar_goals' in filtered_assess.columns:
-                            total_stats = {'Achieved': 0, 'Exceeded': 0, 'In Progress': 0, 'Not Started': 0}
+                        c1, c2, c3, c4 = st.columns(4)
+                        c1.metric("Exceeded", smartar_stats['Exceeded'])
+                        c2.metric("Achieved", smartar_stats['Achieved'])
+                        c3.metric("In Progress", smartar_stats['In Progress'])
+                        c4.metric("Not Started", smartar_stats['Not Started'])
+                        
+                        if sum(smartar_stats.values()) > 0:
+                            st.markdown("---")
+                            df = pd.DataFrame([{
+                                'Status': status,
+                                'Count': count
+                            } for status, count in smartar_stats.items()])
                             
-                            import json
-                            for idx, row in filtered_assess.iterrows():
-                                try:
-                                    data = row['smartar_goals']
-                                    if pd.isna(data) or data is None or data == '{}':
-                                        continue
-                                    
-                                    if isinstance(data, str):
-                                        data = json.loads(data)
-                                    
-                                    if isinstance(data, dict):
-                                        for category, achievements in data.items():
-                                            if isinstance(achievements, dict):
-                                                for level, count in achievements.items():
-                                                    count = int(count) if isinstance(count, (int, float)) else 0
-                                                    if level in total_stats:
-                                                        total_stats[level] += count
-                                except:
-                                    pass
-                            
-                            # Display as simple metrics
-                            c1, c2, c3, c4 = st.columns(4)
-                            c1.metric("Exceeded", total_stats['Exceeded'])
-                            c2.metric("Achieved", total_stats['Achieved'])
-                            c3.metric("In Progress", total_stats['In Progress'])
-                            c4.metric("Not Started", total_stats['Not Started'])
-                            
-                            if sum(total_stats.values()) > 0:
-                                st.markdown("---")
-                                df = pd.DataFrame([{
-                                    'Status': status,
-                                    'Count': count
-                                } for status, count in total_stats.items()])
-                                
-                                fig = px.pie(
-                                    df,
-                                    values='Count',
-                                    names='Status',
-                                    color_discrete_map={
-                                        'Achieved': '#4CAF50',
-                                        'Exceeded': '#00BCD4',
-                                        'In Progress': '#FFC107',
-                                        'Not Started': '#F44336'
-                                    }
-                                )
-                                fig.update_layout(
-                                    plot_bgcolor='rgba(10, 14, 39, 0.8)',
-                                    paper_bgcolor='rgba(10, 14, 39, 0.8)',
-                                    font=dict(color='#e8e8e8'),
-                                    height=400
-                                )
-                                st.plotly_chart(fig, use_container_width=True)
-                        else:
-                            st.info("No SMARTAR data")
+                            fig = px.pie(
+                                df,
+                                values='Count',
+                                names='Status',
+                                color_discrete_map={
+                                    'Achieved': '#4CAF50',
+                                    'Exceeded': '#00BCD4',
+                                    'In Progress': '#FFC107',
+                                    'Not Started': '#F44336'
+                                }
+                            )
+                            fig.update_layout(
+                                plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                                paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                                font=dict(color='#e8e8e8'),
+                                height=400
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
                 
                     with tab3:
                         st.markdown("**Sounds Write**")
