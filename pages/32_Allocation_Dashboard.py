@@ -795,10 +795,6 @@ else:
         risk_df['funding_category'] = 'None'
         risk_df['is_raap'] = 'No'
         
-        # If cat_funding column exists, use it directly
-        if 'cat_funding' in risk_df.columns:
-            risk_df['funding_category'] = risk_df['cat_funding'].fillna('None')
-        
         # Merge funding data if available (for uploaded data)
         if 'funding_df' in st.session_state and st.session_state.funding_df is not None:
             risk_df['name_match'] = risk_df['student_name'].str.strip().str.lower()
@@ -811,16 +807,20 @@ else:
             risk_df = risk_df.merge(st.session_state.raap_df, on='name_match', how='left')
             risk_df = risk_df.drop('name_match', axis=1)
         
-        # Check for RAAP
-        if 'Flag_9plusRAAP' in risk_df.columns:
-            risk_df.loc[risk_df['Flag_9plusRAAP'] == 'Yes', 'is_raap'] = 'Yes (RAAP)'
+        # Determine funding category from Flag_Category columns (highest category takes precedence)
+        for cat in range(9, 0, -1):
+            col_name = f'Flag_Category_{cat}'
+            if col_name in risk_df.columns:
+                # Handle both 'Yes' and True values
+                risk_df.loc[(risk_df[col_name] == 'Yes') | (risk_df[col_name] == True), 'funding_category'] = f'Cat {cat}'
         
-        # Determine funding category (from individual columns if they exist)
-        if 'cat_funding' not in risk_df.columns or risk_df['cat_funding'].isna().all():
-            for cat in range(9, 0, -1):
-                col_name = f'Flag_Category_{cat}'
-                if col_name in risk_df.columns:
-                    risk_df.loc[risk_df[col_name] == 'Yes', 'funding_category'] = f'Cat {cat}'
+        # Check for RAAP if column exists
+        if 'Flag_9plusRAAP' in risk_df.columns:
+            risk_df.loc[(risk_df['Flag_9plusRAAP'] == 'Yes') | (risk_df['Flag_9plusRAAP'] == True), 'is_raap'] = 'Yes (RAAP)'
+        
+        # If cat_funding column exists and funding_category is still None, use it
+        if 'cat_funding' in risk_df.columns:
+            risk_df.loc[risk_df['funding_category'] == 'None', 'funding_category'] = risk_df.loc[risk_df['funding_category'] == 'None', 'cat_funding'].fillna('None')
         
         # Ensure funding_category is string type
         risk_df['funding_category'] = risk_df['funding_category'].astype(str)
