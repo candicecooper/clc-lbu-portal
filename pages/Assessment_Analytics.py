@@ -811,9 +811,15 @@ def main():
                 'Program': a.get('program', ''),
                 'Term': a.get('term', ''),
                 'Year': a.get('year', ''),
-                'Stored Word Aware keys': keys
+                'Stored Word Aware keys': keys,
+                'Raw word_aware_data': wa_raw
             })
         st.dataframe(pd.DataFrame(check_rows), use_container_width=True)
+        st.caption(
+            "The 'Raw word_aware_data' column shows exactly what is stored. "
+            "For a working record it should look like: "
+            '{"Number of words explicitly taught": {">10 words": 3, ">5 words": 1, ">2 words": 0}}'
+        )
     
     # Main view selector
     view_type = st.radio(
