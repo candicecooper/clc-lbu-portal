@@ -783,6 +783,38 @@ def main():
         st.warning("No assessment data found yet.")
         return
     
+    # ------------------------------------------------------------------
+    # Troubleshooting panel: shows what is actually stored for Word Aware /
+    # Vocabulary in each record, so mismatches are easy to spot.
+    # ------------------------------------------------------------------
+    with st.expander("🔧 Vocabulary data check (troubleshooting)"):
+        st.caption(
+            "Shows the keys stored in each record's Word Aware data. "
+            "For the Vocabulary Development Test to display, this should read "
+            "'Number of words explicitly taught'. If it shows the old skill "
+            "names (e.g. 'Word Finding'), that record was saved before the "
+            "update and needs re-entering."
+        )
+        check_rows = []
+        for a in all_assessments:
+            wa_raw = a.get('word_aware_data', '') or ''
+            try:
+                wa_parsed = json.loads(wa_raw) if wa_raw else {}
+                if isinstance(wa_parsed, dict) and wa_parsed:
+                    keys = ", ".join(str(k) for k in wa_parsed.keys())
+                else:
+                    keys = "(empty)"
+            except Exception:
+                keys = "(invalid data)"
+            check_rows.append({
+                'Staff': a.get('staff_member', ''),
+                'Program': a.get('program', ''),
+                'Term': a.get('term', ''),
+                'Year': a.get('year', ''),
+                'Stored Word Aware keys': keys
+            })
+        st.dataframe(pd.DataFrame(check_rows), use_container_width=True)
+    
     # Main view selector
     view_type = st.radio(
         "📋 View Type",
