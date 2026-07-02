@@ -1779,7 +1779,7 @@ else:
                         c2.metric("Programs", int(filtered_assess['program'].nunique()))
                     if 'staff_member' in filtered_assess.columns:
                         c3.metric("Staff", int(filtered_assess['staff_member'].nunique()))
-                    c4.metric("Year", int(view_year))
+                    c4.metric("Year", 2026)
                     
                     st.markdown("---")
                     
