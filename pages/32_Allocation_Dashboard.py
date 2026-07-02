@@ -1817,6 +1817,7 @@ else:
                             smartar_by_prog = {}
                             
                             import json
+                            goals_found = 0
                             for idx, row in filtered_assess.iterrows():
                                 try:
                                     data = row['smartar_goals']
@@ -1842,8 +1843,11 @@ else:
                                                     smartar_all[status] += 1
                                                     if status in smartar_by_prog[prog]:
                                                         smartar_by_prog[prog][status] += 1
-                                except:
-                                    pass
+                                                    goals_found += 1
+                                except Exception as e:
+                                    st.write(f"Error processing row {idx}: {e}")
+                            
+                            st.write(f"**Goals found: {goals_found}**")
                             
                             c1, c2, c3, c4 = st.columns(4)
                             c1.metric("Achieved", smartar_all['Achieved'])
@@ -1861,6 +1865,8 @@ else:
                                 df = pd.DataFrame(smartar_by_prog).T
                                 fig = px.bar(df, barmode='group', title="SMARTAR by Program")
                                 st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                            else:
+                                st.info("No SMARTAR data aggregated")
                         else:
                             st.info("smartar_goals column not found")
                 
