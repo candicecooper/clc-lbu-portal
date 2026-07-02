@@ -291,7 +291,7 @@ else:
         st.markdown("**Navigate**", help="Select an analysis section")
         section = st.radio(
             "Select Section",
-            ["Overview", "Trends", "Complexity", "Risk Assessment", "Cohort Analysis", "Equity", "Waitlist", "Diagnostics"],
+            ["Overview", "Trends", "Complexity", "Category of Support", "Cohort Analysis", "Equity", "Assessment", "Waitlist", "Diagnostics"],
             label_visibility="collapsed"
         )
         
@@ -786,9 +786,9 @@ else:
         else:
             st.warning("Year level or program data missing")
     
-    elif section == "Risk Assessment":
-        st.markdown("## Funding & Support Category Analysis")
-        st.markdown("Student distribution by funding category (Cat 1-9 + RAAP) - identifies support needs and resource allocation")
+    elif section == "Category of Support":
+        st.markdown("## Category of Support Analysis")
+        st.markdown("Student distribution by support category (Cat 1-9 + RAAP) - identifies support needs and resource allocation")
         
         # Extract funding category for each student
         risk_df = filtered.copy()
@@ -906,7 +906,7 @@ else:
         high_need = risk_df[risk_df['funding_category'].isin(['Cat 9', 'Cat 8'])].copy()
         
         if len(high_need) > 0:
-            display_cols = ['student_name', 'program', 'year_level', 'funding_category', 'partnership_area']
+            display_cols = ['program', 'year_level', 'funding_category', 'partnership_area']
             display_cols = [col for col in display_cols if col in high_need.columns]
             
             high_need_display = high_need[display_cols].copy().sort_values('funding_category')
@@ -1417,6 +1417,66 @@ else:
                     st.info("No DCP students with both ATSI + EALD")
             else:
                 st.info("No DCP students in current filters")
+
+    elif section == "Assessment":
+        st.markdown("## Assessment Analytics")
+        st.markdown("Term assessment outcomes and progress tracking - SMARTAR goal achievement and student growth")
+        
+        # Load assessment data from Supabase
+        try:
+            if supabase:
+                response = supabase.table('term_assessments').select('*').execute()
+                assessments = response.data if response.data else []
+            else:
+                assessments = []
+        except:
+            assessments = []
+        
+        if not assessments:
+            st.warning("No assessment data available. Assessment data is updated separately in the Assessment Analytics page.")
+        else:
+            assessments_df = pd.DataFrame(assessments)
+            
+            # Add refresh button
+            col1, col2 = st.columns([4, 1])
+            with col2:
+                if st.button("🔄 Refresh Data"):
+                    st.cache_data.clear()
+                    st.rerun()
+            
+            with col1:
+                st.info("Assessment data is maintained in the Assessment Analytics page. Changes sync automatically to this view.")
+            
+            # Filter assessments by current term/year if possible
+            if 'term' in assessments_df.columns and 'year' in assessments_df.columns:
+                if selected_year != 'All':
+                    assessments_df = assessments_df[assessments_df['year'] == selected_year]
+                if selected_term != 'All':
+                    assessments_df = assessments_df[assessments_df['term'] == selected_term]
+            
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total Assessments", len(assessments_df))
+            
+            # Try to count achieved goals
+            if 'status' in assessments_df.columns:
+                achieved = (assessments_df['status'] == 'Achieved').sum()
+                col2.metric("Goals Achieved", int(achieved))
+                col3.metric("Achievement Rate", f"{int((achieved/len(assessments_df)*100)) if len(assessments_df) > 0 else 0}%")
+            
+            st.markdown("---")
+            st.markdown("**Note:** Assessment data updates through the separate Assessment Analytics page. This view shows current data from the term_assessments table.")
+            
+            # Show sample data
+            with st.expander("📊 View assessment data sample"):
+                if 'program' in assessments_df.columns:
+                    prog_summary = assessments_df['program'].value_counts()
+                    st.write("**Assessments by Program:**")
+                    st.bar_chart(prog_summary)
+                
+                if len(assessments_df) > 0:
+                    st.write("**Sample records:**")
+                    display_cols = [c for c in ['student_name', 'program', 'term', 'status', 'created_at'] if c in assessments_df.columns]
+                    st.dataframe(assessments_df[display_cols].head(10), use_container_width=True)
 
     elif section == "Waitlist":
         st.markdown("## Waitlist Status")
