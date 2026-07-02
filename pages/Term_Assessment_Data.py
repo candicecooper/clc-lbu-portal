@@ -129,13 +129,11 @@ SOUNDS_WRITE_SKILLS = [
     'Non-word Reading test'
 ]
 
-WORD_AWARE_SKILLS = [
-    'Syllable Segmentation',
-    'Word Finding',
-    'Rhyme Production',
-    'Initial Sound Identification',
-    'Sound Sequencing'
-]
+# Word Aware assessment (presented in analysis as the Vocabulary Development Test):
+# a single measure - the number of words explicitly taught - tallied into
+# three word-count bands across all students.
+WORD_AWARE_MEASURES = ['Number of words explicitly taught']
+WORD_AWARE_LEVELS = ['>10 words', '>5 words', '>2 words']
 
 # SMARTAR goal outcomes are entered as tallies against two capability areas.
 # For each capability, staff record how many students:
@@ -277,11 +275,11 @@ def apply_data_to_widgets(sw, wa, smartar):
         st.session_state[f"sw_d_{skill}"] = int(d.get('Developing', 0))
         st.session_state[f"sw_r_{skill}"] = int(d.get('Requires Development', 0))
 
-    for skill in WORD_AWARE_SKILLS:
-        d = wa.get(skill, {}) if isinstance(wa.get(skill), dict) else {}
-        st.session_state[f"wa_m_{skill}"] = int(d.get('Mastered', 0))
-        st.session_state[f"wa_d_{skill}"] = int(d.get('Developing', 0))
-        st.session_state[f"wa_r_{skill}"] = int(d.get('Requires Development', 0))
+    for measure in WORD_AWARE_MEASURES:
+        d = wa.get(measure, {}) if isinstance(wa.get(measure), dict) else {}
+        st.session_state[f"wa_g10_{measure}"] = int(d.get('>10 words', 0))
+        st.session_state[f"wa_g5_{measure}"] = int(d.get('>5 words', 0))
+        st.session_state[f"wa_g2_{measure}"] = int(d.get('>2 words', 0))
 
     for cap in SMARTAR_CAPABILITIES:
         d = smartar.get(cap, {}) if isinstance(smartar.get(cap), dict) else {}
@@ -408,37 +406,37 @@ def main():
     
     with tab2:
         st.markdown("### 💬 Word Aware Assessment")
-        st.info("For each skill, enter number of students at each performance level")
+        st.info("Enter the number of students by how many words were explicitly taught (all students).")
         
         word_aware_data = {}
         
-        for skill in WORD_AWARE_SKILLS:
-            st.markdown(f"**{skill}**")
+        for measure in WORD_AWARE_MEASURES:
+            st.markdown(f"**{measure} (all students)**")
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                mastered = st.number_input(
-                    "Mastered (85-100%)",
+                g10 = st.number_input(
+                    ">10 words",
                     min_value=0,
-                        key=f"wa_m_{skill}"
+                    key=f"wa_g10_{measure}"
                 )
             with col2:
-                developing = st.number_input(
-                    "Developing (65-84%)",
+                g5 = st.number_input(
+                    ">5 words",
                     min_value=0,
-                        key=f"wa_d_{skill}"
+                    key=f"wa_g5_{measure}"
                 )
             with col3:
-                requires = st.number_input(
-                    "Requires Dev (<65%)",
+                g2 = st.number_input(
+                    ">2 words",
                     min_value=0,
-                        key=f"wa_r_{skill}"
+                    key=f"wa_g2_{measure}"
                 )
             
-            word_aware_data[skill] = {
-                'Mastered': int(mastered),
-                'Developing': int(developing),
-                'Requires Development': int(requires)
+            word_aware_data[measure] = {
+                '>10 words': int(g10),
+                '>5 words': int(g5),
+                '>2 words': int(g2)
             }
         
         st.session_state.word_aware = word_aware_data
@@ -517,13 +515,15 @@ def main():
             col1.metric("🎵 Sounds Write Students", int(sw_total))
         
         if st.session_state.word_aware:
-            wa_total = sum([
-                st.session_state.word_aware[s]['Mastered'] + 
-                st.session_state.word_aware[s]['Developing'] + 
-                st.session_state.word_aware[s]['Requires Development']
-                for s in WORD_AWARE_SKILLS
-            ]) // len(WORD_AWARE_SKILLS)
-            col2.metric("💬 Word Aware Students", int(wa_total))
+            wa_total = 0
+            for levels in st.session_state.word_aware.values():
+                if isinstance(levels, dict):
+                    wa_total += (
+                        levels.get('>10 words', 0)
+                        + levels.get('>5 words', 0)
+                        + levels.get('>2 words', 0)
+                    )
+            col2.metric("💬 Vocabulary Students", int(wa_total))
         
         smartar_total = 0
         for levels in st.session_state.smartar.values():
