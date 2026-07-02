@@ -13,6 +13,14 @@ except ImportError:
 
 st.set_page_config(page_title="Allocation Dashboard", page_icon="📊", layout="wide")
 
+# Initialize session state variables
+if 'flag_df' not in st.session_state:
+    st.session_state.flag_df = None
+if 'funding_df' not in st.session_state:
+    st.session_state.funding_df = None
+if 'raap_df' not in st.session_state:
+    st.session_state.raap_df = None
+
 st.markdown("""
 <style>
     /* HIDE ALL STREAMLIT UI ELEMENTS */
@@ -375,8 +383,12 @@ else:
                 
                 # Show status
                 status_msg = f"Ready: {len(df_mapped)} student records"
-                if 'flag_df' in st.session_state:
+                if 'flag_df' in st.session_state and st.session_state.flag_df is not None:
                     status_msg += f" + {len(st.session_state.flag_df)} flag records"
+                if 'funding_df' in st.session_state and st.session_state.funding_df is not None:
+                    status_msg += f" + {len(st.session_state.funding_df)} funding records"
+                if 'raap_df' in st.session_state and st.session_state.raap_df is not None:
+                    status_msg += f" + RAAP"
                 st.success(status_msg)
                 
                 if st.button("Upload Now"):
@@ -412,6 +424,28 @@ else:
             
             except Exception as e:
                 st.error(f"Error: {e}")
+        
+        st.markdown("---")
+        st.markdown("**Data Status**", help="Shows what data has been loaded")
+        
+        status_items = []
+        if 'flag_df' in st.session_state and st.session_state.flag_df is not None:
+            status_items.append(f"✅ Flags: {len(st.session_state.flag_df)} records")
+        else:
+            status_items.append("⚪ Flags: not loaded")
+        
+        if 'funding_df' in st.session_state and st.session_state.funding_df is not None:
+            status_items.append(f"✅ Funding: {len(st.session_state.funding_df)} records")
+        else:
+            status_items.append("⚪ Funding: not loaded")
+        
+        if 'raap_df' in st.session_state and st.session_state.raap_df is not None:
+            status_items.append(f"✅ RAAP: loaded")
+        else:
+            status_items.append("⚪ RAAP: not loaded")
+        
+        for item in status_items:
+            st.write(item, help="Auto-loaded from Excel upload")
     
     # TOP TITLE
     st.markdown("""
