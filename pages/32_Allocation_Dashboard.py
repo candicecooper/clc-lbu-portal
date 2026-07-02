@@ -1730,9 +1730,24 @@ else:
             assessments_df = pd.DataFrame(assessments)
             assessments_df.columns = assessments_df.columns.str.lower()
             
-            # Parse year
+            # DEBUG
+            with st.expander("🔍 Debug - All Assessment Data"):
+                st.write(f"**Total raw records:** {len(assessments_df)}")
+                st.write(f"**Year column values:**")
+                if 'year' in assessments_df.columns:
+                    st.write(assessments_df['year'].unique().tolist())
+                    st.write(f"**Year data types:** {assessments_df['year'].dtype}")
+                
+                st.write(f"**All records by year:**")
+                if 'year' in assessments_df.columns:
+                    year_counts = assessments_df['year'].value_counts().sort_index()
+                    st.write(year_counts)
+            
+            # Parse year - handle both string and numeric
             if 'year' in assessments_df.columns:
-                assessments_df['year_num'] = pd.to_numeric(assessments_df['year'], errors='coerce')
+                # Try to convert to numeric, handling both string and int
+                assessments_df['year_str'] = assessments_df['year'].astype(str).str.strip()
+                assessments_df['year_num'] = pd.to_numeric(assessments_df['year_str'], errors='coerce')
             
             # Get available years
             available_years = sorted([int(y) for y in assessments_df['year_num'].dropna().unique()])
@@ -1740,35 +1755,40 @@ else:
             col1, col2 = st.columns([4, 1])
             
             with col1:
-                st.markdown(f"**Showing 2026 data** (Current year)")
+                st.markdown(f"**Available years: {available_years}**")
             
             with col2:
                 if st.button("🔄 Refresh"):
                     st.rerun()
             
-            # Default to 2026
-            filtered_assess = assessments_df[assessments_df['year_num'] == 2026].copy()
+            # Filter to 2026 (or first available year if 2026 not available)
+            target_year = 2026 if 2026 in available_years else (available_years[0] if available_years else None)
             
-            st.success(f"✅ {len(filtered_assess)} records in 2026")
-            
-            if len(filtered_assess) == 0:
-                st.info("No assessment data for 2026")
-                
-                if len(available_years) > 1:
-                    st.markdown("---")
-                    with st.expander("📅 View assessments from other years"):
-                        other_years = [y for y in available_years if y != 2026]
-                        if other_years:
-                            selected_other_year = st.selectbox("Select year", other_years)
-                            other_data = assessments_df[assessments_df['year_num'] == selected_other_year].copy()
-                            
-                            if len(other_data) > 0:
-                                st.write(f"**{selected_other_year}: {len(other_data)} records**")
-                                with st.expander("View records"):
-                                    cols = ['program', 'staff_member', 'term', 'date_submitted']
-                                    cols = [c for c in cols if c in other_data.columns]
-                                    st.dataframe(other_data[cols], use_container_width=True, hide_index=True)
+            if target_year is None:
+                st.error("No valid year data found")
             else:
+                filtered_assess = assessments_df[assessments_df['year_num'] == target_year].copy()
+                
+                st.success(f"✅ {len(filtered_assess)} records in {target_year}")
+                
+                if len(filtered_assess) == 0:
+                    st.info(f"No assessment data for {target_year}")
+                    
+                    if len(available_years) > 0:
+                        st.markdown("---")
+                        with st.expander("📅 View assessments from other years"):
+                            other_years = [y for y in available_years if y != target_year]
+                            if other_years:
+                                selected_other_year = st.selectbox("Select year", other_years)
+                                other_data = assessments_df[assessments_df['year_num'] == selected_other_year].copy()
+                                
+                                if len(other_data) > 0:
+                                    st.write(f"**{selected_other_year}: {len(other_data)} records**")
+                                    with st.expander("View records"):
+                                        cols = ['program', 'staff_member', 'term', 'date_submitted']
+                                        cols = [c for c in cols if c in other_data.columns]
+                                        st.dataframe(other_data[cols], use_container_width=True, hide_index=True)
+                else:
                 # Create tabs
                 tab1, tab2, tab3, tab4 = st.tabs(["📊 Summary", "🎯 SMARTAR Goals", "✍️ Sounds Write", "📖 Word Aware"])
                 
