@@ -317,25 +317,52 @@ def main():
     with col4:
         year = st.selectbox("📆 Year", ['2025', '2026'])
     
-    # Load button
+    # ------------------------------------------------------------------
+    # AUTO-LOAD: whenever the staff/program/term/year selection changes,
+    # pull that record from the database into the fields. This guarantees
+    # the fields ALWAYS reflect what is stored for the selected record -
+    # so one record can never bleed into another, and you can never
+    # accidentally save zeros over a section you didn't touch.
+    # ------------------------------------------------------------------
+    current_key = f"{staff_member}|{program}|{term}|{year}"
+    if st.session_state.get('_loaded_key') != current_key:
+        existing = load_assessment_from_supabase(staff_member, program, term, year)
+        if existing:
+            sw = json.loads(existing.get('sounds_write_data', '{}'))
+            wa = json.loads(existing.get('word_aware_data', '{}'))
+            sm = json.loads(existing.get('smartar_goals', '{}'))
+        else:
+            sw, wa, sm = {}, {}, {}
+        apply_data_to_widgets(sw, wa, sm)
+        st.session_state.sounds_write = sw
+        st.session_state.word_aware = wa
+        st.session_state.smartar = sm
+        st.session_state._loaded_key = current_key
+        st.rerun()
+    
+    # Currently-editing indicator
+    if st.session_state.get('_loaded_key'):
+        loaded_exists = any(st.session_state.sounds_write) or any(st.session_state.word_aware) or any(st.session_state.smartar)
+        status = "existing data loaded" if loaded_exists else "no saved data yet - new entry"
+        st.caption(f"📝 Now editing: **{staff_member} — {program} — Term {term} {year}** ({status})")
+    
+    # Manual reload (discard any unsaved edits and re-pull from the database)
     col1, col2, col3 = st.columns([1, 1, 2])
     with col1:
-        if st.button("📂 Load Existing Data"):
+        if st.button("🔄 Reload from Database"):
             existing = load_assessment_from_supabase(staff_member, program, term, year)
             if existing:
                 sw = json.loads(existing.get('sounds_write_data', '{}'))
                 wa = json.loads(existing.get('word_aware_data', '{}'))
                 sm = json.loads(existing.get('smartar_goals', '{}'))
-                # Seed the number fields directly so EVERY tab shows the loaded
-                # values (prevents untouched sections being zeroed on save)
                 apply_data_to_widgets(sw, wa, sm)
                 st.session_state.sounds_write = sw
                 st.session_state.word_aware = wa
                 st.session_state.smartar = sm
-                st.success("✅ Existing data loaded!")
+                st.success("✅ Reloaded from database.")
                 st.rerun()
             else:
-                st.info("No existing data found for this selection.")
+                st.info("No saved data for this selection yet.")
     
     with col2:
         if st.session_state.last_saved:
