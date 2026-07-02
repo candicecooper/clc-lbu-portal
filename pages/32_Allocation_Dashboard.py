@@ -1854,6 +1854,19 @@ else:
                         st.write(f"SMARTAR: {smartar_stats}")
                         st.write(f"Sounds Write skills: {list(sw_totals.keys())}")
                         st.write(f"Word Aware skills: {list(wa_totals.keys())}")
+                        
+                        st.markdown("---")
+                        st.markdown("**Raw SMARTAR data (first record):**")
+                        if len(filtered_assess) > 0:
+                            st.write(filtered_assess.iloc[0]['smartar_goals'])
+                        
+                        st.markdown("**Raw Sounds Write data (first record):**")
+                        if len(filtered_assess) > 0:
+                            st.write(filtered_assess.iloc[0]['sounds_write_data'])
+                        
+                        st.markdown("**Raw Word Aware data (first record):**")
+                        if len(filtered_assess) > 0:
+                            st.write(filtered_assess.iloc[0]['word_aware_data'])
                     
                     # Now create tabs with processed data
                     tab1, tab2, tab3, tab4 = st.tabs(["📊 Summary", "🎯 SMARTAR Goals", "✍️ Sounds Write", "📖 Word Aware"])
