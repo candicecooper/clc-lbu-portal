@@ -445,6 +445,31 @@ def load_plan(plan_id: str):
 def delete_plan(plan_id: str):
     supabase.table("pdp_plans").delete().eq("id", plan_id).execute()
 
+def render_sidebar_pdps():
+    from collections import defaultdict
+    with st.sidebar:
+        st.markdown("### 📁 Completed PDPs")
+        try:
+            plans = load_my_plans()
+        except Exception:
+            plans = []
+        if not plans:
+            st.caption("No saved PDPs yet.")
+            return
+        groups = defaultdict(list)
+        for p in plans:
+            who = (p.get("employee_name") or "").strip() or (p.get("staff_name") or "").strip() or "(no name)"
+            groups[who].append(p)
+        st.caption(f"{len(plans)} plan(s) · {len(groups)} staff")
+        for who in sorted(groups, key=lambda s: s.lower()):
+            items = sorted(groups[who], key=lambda x: str(x.get("updated_at", "")), reverse=True)
+            with st.expander(f"{who} ({len(items)})"):
+                for p in items:
+                    label = f"{p.get('plan_date','') or '—'} · saved {str(p.get('updated_at',''))[:10]}"
+                    if st.button(label, key=f"sb_pdp_{p['id']}", use_container_width=True):
+                        st.session_state["_load_plan_id"] = p["id"]
+                        st.rerun()
+
 def plan_to_markdown() -> str:
     g = st.session_state.get
     def block(wk):
@@ -705,6 +730,8 @@ st.markdown(f"""
 st.info(
     "This supports the collaborative employee-and-leader PDP process. Drafts are a starting point — review and "
     "edit every field.", icon="💬")
+
+render_sidebar_pdps()
 
 # ── Identity ──────────────────────────────────────────────────────────────────
 c1, c2, c3 = st.columns([2, 2, 1])
