@@ -27,21 +27,55 @@ if 'incidents_df' not in st.session_state:
 def get_current_term_year():
     """
     Determine current SA school term and year based on date
-    SA 2026 Terms: T1 (Jan-Mar), T2 (Apr-Jun), T3 (Jul-Sep), T4 (Oct-Dec)
+    SA 2026 Terms with accurate dates:
+    - T1: Jan 29 - Mar 20
+    - T2: Apr 21 - Jun 26  
+    - T3: Jul 27 - Sep 18
+    - T4: Sep 19 - Dec 11
     """
     today = datetime.now()
     year = today.year
     month = today.month
+    day = today.day
     
-    # Determine term based on month
-    if month in [1, 2, 3]:
-        term = 1
-    elif month in [4, 5, 6]:
-        term = 2
-    elif month in [7, 8, 9]:
-        term = 3
-    else:  # 10, 11, 12
-        term = 4
+    # 2026 specific term boundaries
+    if year == 2026:
+        if month == 1:
+            if day >= 29:
+                term = 1
+            else:
+                term = 4  # Before Jan 29 is still T4 of previous year
+        elif month == 2 or month == 3:
+            if month == 3 and day > 20:
+                term = 2  # After Mar 20 is T2
+            else:
+                term = 1
+        elif month in [4, 5, 6]:
+            if month == 4 and day < 21:
+                term = 1  # Before Apr 21 is still T1
+            elif month == 6 and day > 26:
+                term = 3  # After Jun 26 is T3
+            else:
+                term = 2
+        elif month in [7, 8, 9]:
+            if month == 7 and day < 27:
+                term = 2  # Before Jul 27 is still T2
+            elif month == 9 and day > 18:
+                term = 4  # After Sep 18 is T4
+            else:
+                term = 3
+        else:  # Oct, Nov, Dec
+            term = 4
+    else:
+        # Generic fallback
+        if month in [1, 2, 3]:
+            term = 1
+        elif month in [4, 5, 6]:
+            term = 2
+        elif month in [7, 8, 9]:
+            term = 3
+        else:
+            term = 4
     
     return year, term
 
@@ -1654,7 +1688,7 @@ else:
         assessments = []
         try:
             if supabase:
-                response = supabase.table('term_assessments').select('*').order('created_at', desc=True).execute()
+                response = supabase.table('term_assessments').select('*').execute()
                 assessments = response.data if response.data else []
         except Exception as e:
             st.error(f"Error loading: {e}")
