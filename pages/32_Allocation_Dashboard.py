@@ -1810,86 +1810,77 @@ else:
                             st.dataframe(filtered_assess[summary_cols], use_container_width=True, hide_index=True)
                 
                     with tab2:
-                        st.markdown("**SMARTAR Goal Achievement**")
+                        st.markdown("**SMARTAR Achievement Summary**")
                         
                         if 'smartar_goals' in filtered_assess.columns:
                             st.markdown("---")
-                            st.markdown("**Raw Data Sample:**")
                             
-                            # Show first 3 records
-                            for idx, row in filtered_assess.iterrows():
-                                st.write(f"**Record {idx} ({row.get('program', '?')}):**")
-                                data = row['smartar_goals']
-                                st.write(f"  - Type: `{type(data).__name__}`")
-                                st.write(f"  - Length: {len(data) if isinstance(data, (list, str, dict)) else 'N/A'}")
-                                st.write(f"  - First 200 chars: `{str(data)[:200]}`")
-                            
-                            st.markdown("---")
-                            
-                            smartar_all = {'Achieved': 0, 'Exceeded': 0, 'In Progress': 0, 'Not Started': 0}
-                            smartar_by_prog = {}
+                            # Parse SMARTAR data - it's aggregated by category
+                            total_stats = {'Reached Expected': 0, 'Above Expectation': 0, 'Exceeding': 0}
+                            by_program = {}
                             
                             import json
-                            goals_found = 0
+                            records_processed = 0
+                            
                             for idx, row in filtered_assess.iterrows():
                                 try:
                                     data = row['smartar_goals']
                                     
                                     # Handle None/NaN/empty
-                                    if pd.isna(data) or data is None or data == '' or data == '[]':
+                                    if pd.isna(data) or data is None or data == '' or data == '{}':
                                         continue
                                     
-                                    # Data might already be a list (not JSON string)
+                                    # Data is stored as JSON string
                                     if isinstance(data, str):
                                         try:
                                             data = json.loads(data)
                                         except:
-                                            # Try eval as fallback
-                                            try:
-                                                data = eval(data)
-                                            except:
-                                                continue
+                                            continue
                                     
                                     prog = str(row.get('program', 'Unknown')).strip()
-                                    if prog not in smartar_by_prog:
-                                        smartar_by_prog[prog] = {'Achieved': 0, 'Exceeded': 0, 'In Progress': 0, 'Not Started': 0}
+                                    if prog not in by_program:
+                                        by_program[prog] = {'Reached Expected': 0, 'Above Expectation': 0, 'Exceeding': 0}
                                     
-                                    # Data is a list of dicts: [{achievement: 'Achieved', goal_name: '...', notes: '...'}]
-                                    if isinstance(data, list):
-                                        for goal in data:
-                                            if isinstance(goal, dict):
-                                                status = goal.get('achievement', 'Not Started')
-                                                # Clean up status value
-                                                status = str(status).strip() if status else 'Not Started'
-                                                
-                                                if status in smartar_all:
-                                                    smartar_all[status] += 1
-                                                    if status in smartar_by_prog[prog]:
-                                                        smartar_by_prog[prog][status] += 1
-                                                    goals_found += 1
+                                    # Data structure: {category: {achievement_level: count, ...}, ...}
+                                    if isinstance(data, dict):
+                                        for category, achievements in data.items():
+                                            if isinstance(achievements, dict):
+                                                for level, count in achievements.items():
+                                                    count = int(count) if isinstance(count, (int, float)) else 0
+                                                    if level in total_stats:
+                                                        total_stats[level] += count
+                                                        if level in by_program[prog]:
+                                                            by_program[prog][level] += count
+                                        records_processed += 1
                                 except Exception as e:
-                                    st.error(f"Error processing row {idx}: {str(e)}")
+                                    st.error(f"Error processing record {idx}: {str(e)}")
                             
-                            st.write(f"**Goals parsed: {goals_found}**")
+                            st.write(f"**Records processed: {records_processed}**")
                             
-                            c1, c2, c3, c4 = st.columns(4)
-                            c1.metric("Achieved", smartar_all['Achieved'])
-                            c2.metric("Exceeded", smartar_all['Exceeded'])
-                            c3.metric("In Progress", smartar_all['In Progress'])
-                            c4.metric("Not Started", smartar_all['Not Started'])
+                            # Show totals
+                            c1, c2, c3 = st.columns(3)
+                            c1.metric("Exceeding", total_stats['Exceeding'])
+                            c2.metric("Above Expectation", total_stats['Above Expectation'])
+                            c3.metric("Reached Expected", total_stats['Reached Expected'])
                             
-                            if sum(smartar_all.values()) > 0:
+                            if sum(total_stats.values()) > 0:
                                 st.markdown("---")
-                                fig = px.bar(x=list(smartar_all.keys()), y=list(smartar_all.values()), title="SMARTAR Status Distribution", labels={'y': 'Count'})
-                                fig.update_traces(marker_color=['#4CAF50', '#2196F3', '#FF9800', '#f44336'])
+                                fig = px.bar(
+                                    x=list(total_stats.keys()), 
+                                    y=list(total_stats.values()), 
+                                    title="SMARTAR Achievement Distribution",
+                                    labels={'y': 'Count'}
+                                )
+                                fig.update_traces(marker_color=['#4CAF50', '#2196F3', '#FF9800'])
                                 st.plotly_chart(update_chart_layout(fig), use_container_width=True)
                                 
-                                if smartar_by_prog:
-                                    df = pd.DataFrame(smartar_by_prog).T
+                                if by_program:
+                                    st.markdown("---")
+                                    df = pd.DataFrame(by_program).T
                                     fig = px.bar(df, barmode='group', title="SMARTAR by Program")
                                     st.plotly_chart(update_chart_layout(fig), use_container_width=True)
                             else:
-                                st.info("No SMARTAR goal data found in records")
+                                st.info("No SMARTAR data found")
                         else:
                             st.info("smartar_goals column not found")
                 
