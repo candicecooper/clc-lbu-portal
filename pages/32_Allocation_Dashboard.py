@@ -590,7 +590,8 @@ else:
     with col3:
         # Clean program data and build dropdown - handle variations and blanks
         allocation_df['program_clean'] = allocation_df['program'].fillna('').str.strip().str.upper()
-        all_progs = sorted([p for p in allocation_df['program_clean'].unique() if p and p != '' and p != ':2'])
+        # Only include non-blank, valid programs
+        all_progs = sorted([p for p in allocation_df['program_clean'].unique() if p and p not in ['', ':', 'NONE']])
         progs = ['All'] + all_progs
         # Default program to "All"
         selected_program = st.selectbox("Program", progs, index=0)
@@ -598,9 +599,25 @@ else:
     # FILTER DATA - handle "All" selections
     allocation_df['year_clean'] = pd.to_numeric(allocation_df['year'], errors='coerce')
     allocation_df['term_clean'] = pd.to_numeric(allocation_df['term'], errors='coerce')
+    
+    # CLEAN PROGRAM DATA - Remove blanks and inconsistencies
+    allocation_df['program'] = allocation_df['program'].fillna('').str.strip()
+    allocation_df['program'] = allocation_df['program'].replace(['', ':', 'None'], None)
     allocation_df['program_clean'] = allocation_df['program'].fillna('').str.strip().str.upper()
+    allocation_df['program_clean'] = allocation_df['program_clean'].replace(['', ':', 'NONE'], '')
+    
+    # CLEAN YEAR_LEVEL - Remove blanks
+    allocation_df['year_level'] = allocation_df['year_level'].fillna('').astype(str).str.strip()
+    allocation_df['year_level'] = allocation_df['year_level'].replace(['', 'nan', 'None'], None)
+    
+    # CLEAN PARTNERSHIP AREA - Remove blanks
+    allocation_df['partnership_area'] = allocation_df['partnership_area'].fillna('').astype(str).str.strip()
+    allocation_df['partnership_area'] = allocation_df['partnership_area'].replace(['', 'nan', 'None'], None)
     
     filtered = allocation_df.copy()
+    
+    # Remove records with blank programs from all filtered data
+    filtered = filtered[filtered['program_clean'] != '']
     
     # Apply year filter
     if selected_year != 'All':
