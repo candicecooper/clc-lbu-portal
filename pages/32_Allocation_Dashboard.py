@@ -820,7 +820,8 @@ else:
         
         # If cat_funding column exists and funding_category is still None, use it
         if 'cat_funding' in risk_df.columns:
-            risk_df.loc[risk_df['funding_category'] == 'None', 'funding_category'] = risk_df.loc[risk_df['funding_category'] == 'None', 'cat_funding'].fillna('None')
+            cat_funding_values = risk_df.loc[risk_df['funding_category'] == 'None', 'cat_funding'].fillna('None').astype(str)
+            risk_df.loc[risk_df['funding_category'] == 'None', 'funding_category'] = cat_funding_values
         
         # Ensure funding_category is string type
         risk_df['funding_category'] = risk_df['funding_category'].astype(str)
