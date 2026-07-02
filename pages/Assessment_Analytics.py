@@ -228,13 +228,11 @@ SOUNDS_WRITE_SKILLS = [
     'Non-word Reading test'
 ]
 
-WORD_AWARE_SKILLS = [
-    'Syllable Segmentation',
-    'Word Finding',
-    'Rhyme Production',
-    'Initial Sound Identification',
-    'Sound Sequencing'
-]
+# Word Aware is presented in analysis as the Vocabulary Development Test:
+# a single measure (words explicitly taught) tallied into three word-count bands.
+WORD_AWARE_MEASURES = ['Number of words explicitly taught']
+WORD_AWARE_LEVELS = ['>10 words', '>5 words', '>2 words']
+VOCAB_LABEL = 'Vocabulary Development Test'
 
 SMARTAR_CAPABILITIES = ['Personal and Social', 'Learning and Engagement']
 SMARTAR_LEVELS = ['Reached Expected', 'Above Expectation', 'Exceeding']
@@ -283,13 +281,13 @@ def collate_by_program(assessments, program, term, year):
             'Requires Development': 0
         }
     
-    # Collate Word Aware data
+    # Collate Word Aware / Vocabulary data
     word_aware_collated = {}
-    for skill in WORD_AWARE_SKILLS:
-        word_aware_collated[skill] = {
-            'Mastered': 0,
-            'Developing': 0,
-            'Requires Development': 0
+    for measure in WORD_AWARE_MEASURES:
+        word_aware_collated[measure] = {
+            '>10 words': 0,
+            '>5 words': 0,
+            '>2 words': 0
         }
     
     # SMARTAR collated - tallies per capability area
@@ -317,13 +315,13 @@ def collate_by_program(assessments, program, term, year):
         except:
             pass
         
-        # Sum Word Aware
+        # Sum Word Aware / Vocabulary
         try:
             wa_data = json.loads(assessment.get('word_aware_data', '{}'))
-            for skill, levels in wa_data.items():
-                if skill in word_aware_collated:
-                    for level, count in levels.items():
-                        word_aware_collated[skill][level] += int(count)
+            for measure, levels in wa_data.items():
+                if measure in word_aware_collated and isinstance(levels, dict):
+                    for level in WORD_AWARE_LEVELS:
+                        word_aware_collated[measure][level] += int(levels.get(level, 0))
         except:
             pass
         
@@ -372,11 +370,11 @@ def collate_all_programs(assessments, term, year):
         }
 
     word_aware_collated = {}
-    for skill in WORD_AWARE_SKILLS:
-        word_aware_collated[skill] = {
-            'Mastered': 0,
-            'Developing': 0,
-            'Requires Development': 0
+    for measure in WORD_AWARE_MEASURES:
+        word_aware_collated[measure] = {
+            '>10 words': 0,
+            '>5 words': 0,
+            '>2 words': 0
         }
 
     smartar_collated = {}
@@ -404,14 +402,13 @@ def collate_all_programs(assessments, term, year):
         except:
             pass
 
-        # Sum Word Aware
+        # Sum Word Aware / Vocabulary
         try:
             wa_data = json.loads(assessment.get('word_aware_data', '{}'))
-            for skill, levels in wa_data.items():
-                if skill in word_aware_collated:
-                    for level, count in levels.items():
-                        if level in word_aware_collated[skill]:
-                            word_aware_collated[skill][level] += int(count)
+            for measure, levels in wa_data.items():
+                if measure in word_aware_collated and isinstance(levels, dict):
+                    for level in WORD_AWARE_LEVELS:
+                        word_aware_collated[measure][level] += int(levels.get(level, 0))
         except:
             pass
 
@@ -475,38 +472,37 @@ def render_sounds_write_chart(collated, program):
     return fig_sw, df_sw
 
 def render_word_aware_chart(collated, program):
-    """Render Word Aware chart"""
+    """Render Vocabulary Development Test chart - students by word-count band"""
     wa_data = collated['word_aware']
-    vis_data = []
-    for skill, levels in wa_data.items():
-        vis_data.append({
-            'Skill': skill,
-            'Mastered': levels['Mastered'],
-            'Developing': levels['Developing'],
-            'Requires Dev': levels['Requires Development']
-        })
-    
-    df_wa = pd.DataFrame(vis_data)
-    
+    measure = WORD_AWARE_MEASURES[0]
+    levels = wa_data.get(measure, {})
+
+    df_wa = pd.DataFrame([
+        {'Word Band': lvl, 'Students': int(levels.get(lvl, 0))}
+        for lvl in WORD_AWARE_LEVELS
+    ])
+
     fig_wa = px.bar(
         df_wa,
-        x='Skill',
-        y=['Mastered', 'Developing', 'Requires Dev'],
-        barmode='stack',
-        title=f'💬 Word Aware - {program} Program',
+        x='Word Band',
+        y='Students',
+        color='Word Band',
+        title=f'📚 {VOCAB_LABEL} - {program} Program',
         color_discrete_map={
-            'Mastered': '#4CAF50',
-            'Developing': '#FFC107',
-            'Requires Dev': '#F44336'
+            '>10 words': '#4CAF50',
+            '>5 words': '#00BCD4',
+            '>2 words': '#F0B400'
         },
-        labels={'value': 'Number of Students', 'variable': 'Performance Level'}
+        category_orders={'Word Band': WORD_AWARE_LEVELS},
+        labels={'Students': 'Number of Students', 'Word Band': 'Words Explicitly Taught'}
     )
     fig_wa.update_layout(
         plot_bgcolor='rgba(10, 14, 39, 0.8)',
         paper_bgcolor='rgba(10, 14, 39, 0.8)',
         font=dict(color='#e8e8e8'),
         hovermode='x unified',
-        height=400
+        height=400,
+        showlegend=False
     )
     return fig_wa, df_wa
 
@@ -845,9 +841,10 @@ def main():
         st.plotly_chart(fig_wa, use_container_width=True)
         
         col1, col2, col3 = st.columns(3)
-        col1.metric("✅ Word Aware Mastered", df_wa['Mastered'].sum())
-        col2.metric("🔄 Word Aware Developing", df_wa['Developing'].sum())
-        col3.metric("⚠️ Word Aware Requires Dev", df_wa['Requires Dev'].sum())
+        wa_counts = dict(zip(df_wa['Word Band'], df_wa['Students']))
+        col1.metric("📚 >10 words", int(wa_counts.get('>10 words', 0)))
+        col2.metric("📗 >5 words", int(wa_counts.get('>5 words', 0)))
+        col3.metric("📙 >2 words", int(wa_counts.get('>2 words', 0)))
         
         st.markdown("---")
         
@@ -874,8 +871,8 @@ def main():
             )
         with dl2:
             st.download_button(
-                "💬 Word Aware",
-                data=build_section_report(df_wa, "Word Aware", program, term, year),
+                "📚 Vocabulary",
+                data=build_section_report(df_wa, VOCAB_LABEL, program, term, year),
                 file_name=f"word_aware_{program}_T{term}_{year}.csv",
                 mime="text/csv",
                 key="dl_spv_wa"
@@ -892,7 +889,7 @@ def main():
             st.download_button(
                 "📦 Full Report (all)",
                 data=build_combined_report(
-                    [("SOUNDS WRITE", df_sw), ("WORD AWARE", df_wa), ("SMARTAR GOAL OUTCOMES", df_smartar)],
+                    [("SOUNDS WRITE", df_sw), ("VOCABULARY DEVELOPMENT TEST", df_wa), ("SMARTAR GOAL OUTCOMES", df_smartar)],
                     program, term, year
                 ),
                 file_name=f"full_report_{program}_T{term}_{year}.csv",
@@ -904,7 +901,7 @@ def main():
         excel_bytes = build_excel_report(
             [
                 ("Sounds Write", df_sw, "stacked"),
-                ("Word Aware", df_wa, "stacked"),
+                (VOCAB_LABEL, df_wa, "clustered"),
                 ("SMARTAR Goal Outcomes", df_smartar, "clustered"),
             ],
             program, term, year
@@ -924,7 +921,7 @@ def main():
         pdf_bytes = build_pdf_report(
             [
                 ("Sounds Write", df_sw, "stacked"),
-                ("Word Aware", df_wa, "stacked"),
+                (VOCAB_LABEL, df_wa, "clustered"),
                 ("SMARTAR Goal Outcomes", df_smartar, "clustered"),
             ],
             program, term, year
@@ -980,8 +977,8 @@ def main():
         
         st.markdown("---")
         
-        # ====== WORD AWARE OVERVIEW ======
-        st.markdown("### 💬 Word Aware - All Programs")
+        # ====== VOCABULARY DEVELOPMENT TEST OVERVIEW ======
+        st.markdown("### 📚 Vocabulary Development Test - All Programs")
         
         wa_cols = st.columns(3)
         
@@ -993,10 +990,11 @@ def main():
                     fig_wa, df_wa = render_word_aware_chart(collated, program)
                     st.plotly_chart(fig_wa, use_container_width=True)
                     
+                    wa_counts = dict(zip(df_wa['Word Band'], df_wa['Students']))
                     col1, col2, col3 = st.columns(3)
-                    col1.metric(f"{program} Mastered", df_wa['Mastered'].sum(), label_visibility="collapsed")
-                    col2.metric(f"{program} Dev", df_wa['Developing'].sum(), label_visibility="collapsed")
-                    col3.metric(f"{program} Req Dev", df_wa['Requires Dev'].sum(), label_visibility="collapsed")
+                    col1.metric(f"{program} >10", int(wa_counts.get('>10 words', 0)), label_visibility="collapsed")
+                    col2.metric(f"{program} >5", int(wa_counts.get('>5 words', 0)), label_visibility="collapsed")
+                    col3.metric(f"{program} >2", int(wa_counts.get('>2 words', 0)), label_visibility="collapsed")
                 else:
                     st.info(f"No data for {program}")
         
@@ -1064,14 +1062,15 @@ def main():
         
         st.markdown("---")
         
-        # Word Aware
+        # Vocabulary Development Test
         fig_wa, df_wa = render_word_aware_chart(collated, "All Programs")
         st.plotly_chart(fig_wa, use_container_width=True)
         
         col1, col2, col3 = st.columns(3)
-        col1.metric("✅ Word Aware Mastered", int(df_wa['Mastered'].sum()))
-        col2.metric("🔄 Word Aware Developing", int(df_wa['Developing'].sum()))
-        col3.metric("⚠️ Word Aware Requires Dev", int(df_wa['Requires Dev'].sum()))
+        wa_counts = dict(zip(df_wa['Word Band'], df_wa['Students']))
+        col1.metric("📚 >10 words", int(wa_counts.get('>10 words', 0)))
+        col2.metric("📗 >5 words", int(wa_counts.get('>5 words', 0)))
+        col3.metric("📙 >2 words", int(wa_counts.get('>2 words', 0)))
         
         st.markdown("---")
         
@@ -1089,7 +1088,7 @@ def main():
         st.markdown("### 📋 Combined Data Tables")
         st.markdown("#### 🎵 Sounds Write")
         st.dataframe(df_sw, use_container_width=True)
-        st.markdown("#### 💬 Word Aware")
+        st.markdown("#### 📚 Vocabulary Development Test")
         st.dataframe(df_wa, use_container_width=True)
         st.markdown("#### 🎯 SMARTAR Goal Outcomes")
         st.dataframe(df_smartar, use_container_width=True)
@@ -1108,8 +1107,8 @@ def main():
             )
         with dl2:
             st.download_button(
-                "💬 Word Aware",
-                data=build_section_report(df_wa, "Word Aware", "All Programs", term, year),
+                "📚 Vocabulary",
+                data=build_section_report(df_wa, VOCAB_LABEL, "All Programs", term, year),
                 file_name=f"word_aware_AllPrograms_T{term}_{year}.csv",
                 mime="text/csv",
                 key="dl_ws_wa"
@@ -1126,7 +1125,7 @@ def main():
             st.download_button(
                 "📦 Full Report (all)",
                 data=build_combined_report(
-                    [("SOUNDS WRITE", df_sw), ("WORD AWARE", df_wa), ("SMARTAR GOAL OUTCOMES", df_smartar)],
+                    [("SOUNDS WRITE", df_sw), ("VOCABULARY DEVELOPMENT TEST", df_wa), ("SMARTAR GOAL OUTCOMES", df_smartar)],
                     "All Programs", term, year
                 ),
                 file_name=f"full_report_AllPrograms_T{term}_{year}.csv",
@@ -1138,7 +1137,7 @@ def main():
         excel_bytes = build_excel_report(
             [
                 ("Sounds Write", df_sw, "stacked"),
-                ("Word Aware", df_wa, "stacked"),
+                (VOCAB_LABEL, df_wa, "clustered"),
                 ("SMARTAR Goal Outcomes", df_smartar, "clustered"),
             ],
             "All Programs", term, year
@@ -1158,7 +1157,7 @@ def main():
         pdf_bytes = build_pdf_report(
             [
                 ("Sounds Write", df_sw, "stacked"),
-                ("Word Aware", df_wa, "stacked"),
+                (VOCAB_LABEL, df_wa, "clustered"),
                 ("SMARTAR Goal Outcomes", df_smartar, "clustered"),
             ],
             "All Programs", term, year
@@ -1207,7 +1206,7 @@ def main():
         # TABS for detailed view
         tab1, tab2, tab3, tab4 = st.tabs([
             "🎵 Sounds Write",
-            "💬 Word Aware",
+            "📚 Vocabulary",
             "🎯 SMARTAR Goals",
             "📋 Raw Data"
         ])
@@ -1227,17 +1226,17 @@ def main():
                 key="dl_da_sw"
             )
         
-        # Tab 2: Word Aware
+        # Tab 2: Vocabulary Development Test
         with tab2:
-            st.markdown("### 💬 Word Aware Assessment")
+            st.markdown("### 📚 Vocabulary Development Test")
             fig_wa, df_wa = render_word_aware_chart(collated, program)
             st.plotly_chart(fig_wa, use_container_width=True)
             st.markdown("#### Data Table")
             st.dataframe(df_wa, use_container_width=True)
             st.download_button(
-                "📥 Download Word Aware Report",
-                data=build_section_report(df_wa, "Word Aware", program, term, year),
-                file_name=f"word_aware_{program}_T{term}_{year}.csv",
+                "📥 Download Vocabulary Report",
+                data=build_section_report(df_wa, VOCAB_LABEL, program, term, year),
+                file_name=f"vocabulary_{program}_T{term}_{year}.csv",
                 mime="text/csv",
                 key="dl_da_wa"
             )
