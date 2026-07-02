@@ -1789,155 +1789,155 @@ else:
                                         cols = [c for c in cols if c in other_data.columns]
                                         st.dataframe(other_data[cols], use_container_width=True, hide_index=True)
                 else:
-                # Create tabs
-                tab1, tab2, tab3, tab4 = st.tabs(["📊 Summary", "🎯 SMARTAR Goals", "✍️ Sounds Write", "📖 Word Aware"])
+                    # Create tabs
+                    tab1, tab2, tab3, tab4 = st.tabs(["📊 Summary", "🎯 SMARTAR Goals", "✍️ Sounds Write", "📖 Word Aware"])
                 
-                with tab1:
-                    c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("Records", len(filtered_assess))
-                    if 'program' in filtered_assess.columns:
-                        c2.metric("Programs", int(filtered_assess['program'].nunique()))
-                    if 'staff_member' in filtered_assess.columns:
-                        c3.metric("Staff", int(filtered_assess['staff_member'].nunique()))
-                    c4.metric("Year", 2026)
-                    
-                    st.markdown("---")
-                    
-                    # Summary table
-                    with st.expander("📋 View all records"):
-                        summary_cols = ['program', 'staff_member', 'term', 'year', 'date_submitted']
-                        summary_cols = [c for c in summary_cols if c in filtered_assess.columns]
-                        st.dataframe(filtered_assess[summary_cols], use_container_width=True, hide_index=True)
-                
-                with tab2:
-                    st.markdown("**SMARTAR Goal Achievement**")
-                    
-                    if 'smartar_goals' in filtered_assess.columns:
-                        smartar_all = {'Achieved': 0, 'Exceeded': 0, 'In Progress': 0, 'Not Started': 0}
-                        smartar_by_prog = {}
-                        
-                        import json
-                        for idx, row in filtered_assess.iterrows():
-                            try:
-                                data = row['smartar_goals']
-                                if pd.isna(data) or data is None or data == '' or data == '[]':
-                                    continue
-                                
-                                if isinstance(data, str):
-                                    try:
-                                        data = json.loads(data)
-                                    except:
-                                        continue
-                                
-                                prog = row.get('program', 'Unknown')
-                                if prog not in smartar_by_prog:
-                                    smartar_by_prog[prog] = {'Achieved': 0, 'Exceeded': 0, 'In Progress': 0, 'Not Started': 0}
-                                
-                                # Data is a list of dicts: [{achievement: 'Achieved', goal_name: '...'}]
-                                if isinstance(data, list):
-                                    for goal in data:
-                                        if isinstance(goal, dict):
-                                            status = goal.get('achievement', 'Not Started')
-                                            if status in smartar_all:
-                                                smartar_all[status] += 1
-                                                if status in smartar_by_prog[prog]:
-                                                    smartar_by_prog[prog][status] += 1
-                            except:
-                                pass
-                        
+                    with tab1:
                         c1, c2, c3, c4 = st.columns(4)
-                        c1.metric("Achieved", smartar_all['Achieved'])
-                        c2.metric("Exceeded", smartar_all['Exceeded'])
-                        c3.metric("In Progress", smartar_all['In Progress'])
-                        c4.metric("Not Started", smartar_all['Not Started'])
+                        c1.metric("Records", len(filtered_assess))
+                        if 'program' in filtered_assess.columns:
+                            c2.metric("Programs", int(filtered_assess['program'].nunique()))
+                        if 'staff_member' in filtered_assess.columns:
+                            c3.metric("Staff", int(filtered_assess['staff_member'].nunique()))
+                        c4.metric("Year", 2026)
                         
-                        if sum(smartar_all.values()) > 0:
-                            st.markdown("---")
-                            fig = px.bar(x=list(smartar_all.keys()), y=list(smartar_all.values()), title="SMARTAR Status", labels={'y': 'Goals'})
-                            fig.update_traces(marker_color=['#4CAF50', '#2196F3', '#FF9800', '#f44336'])
-                            st.plotly_chart(update_chart_layout(fig), use_container_width=True)
-                        
-                        if smartar_by_prog:
-                            df = pd.DataFrame(smartar_by_prog).T
-                            fig = px.bar(df, barmode='group', title="SMARTAR by Program")
-                            st.plotly_chart(update_chart_layout(fig), use_container_width=True)
-                    else:
-                        st.info("smartar_goals column not found")
-                
-                with tab3:
-                    st.markdown("**Sounds Write Assessment**")
-                    
-                    # Find Sounds Write columns
-                    sw_cols = [col for col in filtered_assess.columns if col.startswith('sounds_write_') and col not in ['sounds_write_data']]
-                    
-                    if sw_cols:
-                        st.write(f"Found {len(sw_cols)} Sounds Write assessment areas")
-                        
-                        # Summary - count non-null values per skill
-                        sw_summary = {}
-                        for col in sw_cols:
-                            skill_name = col.replace('sounds_write_', '').replace('_', ' ').title()
-                            count = filtered_assess[col].notna().sum()
-                            if count > 0:
-                                sw_summary[skill_name] = count
-                        
-                        if sw_summary:
-                            st.markdown("---")
-                            fig = px.bar(x=list(sw_summary.keys()), y=list(sw_summary.values()), title="Sounds Write - Records with Data", labels={'y': 'Count'})
-                            st.plotly_chart(update_chart_layout(fig), use_container_width=True)
-                            
-                            with st.expander("📋 View detailed data"):
-                                cols_to_show = ['program', 'staff_member', 'term'] + sw_cols
-                                cols_to_show = [c for c in cols_to_show if c in filtered_assess.columns]
-                                st.dataframe(filtered_assess[cols_to_show], use_container_width=True, hide_index=True)
-                        else:
-                            st.info("No Sounds Write data available")
-                    else:
-                        st.info("No Sounds Write columns found")
-                
-                with tab4:
-                    st.markdown("**Word Aware Assessment**")
-                    
-                    # Find Word Aware columns
-                    wa_cols = [col for col in filtered_assess.columns if col.startswith('word_aware_') and col not in ['word_aware_data']]
-                    
-                    if wa_cols:
-                        st.write(f"Found {len(wa_cols)} Word Aware assessment areas")
-                        
-                        # Summary - count non-null values per skill
-                        wa_summary = {}
-                        for col in wa_cols:
-                            skill_name = col.replace('word_aware_', '').replace('_', ' ').title()
-                            count = filtered_assess[col].notna().sum()
-                            if count > 0:
-                                wa_summary[skill_name] = count
-                        
-                        if wa_summary:
-                            st.markdown("---")
-                            fig = px.bar(x=list(wa_summary.keys()), y=list(wa_summary.values()), title="Word Aware - Records with Data", labels={'y': 'Count'})
-                            st.plotly_chart(update_chart_layout(fig), use_container_width=True)
-                            
-                            with st.expander("📋 View detailed data"):
-                                cols_to_show = ['program', 'staff_member', 'term'] + wa_cols
-                                cols_to_show = [c for c in cols_to_show if c in filtered_assess.columns]
-                                st.dataframe(filtered_assess[cols_to_show], use_container_width=True, hide_index=True)
-                        else:
-                            st.info("No Word Aware data available")
-                    else:
-                        st.info("No Word Aware columns found")
-                
-                with tab1:
-                    c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("Records", len(filtered_assess))
-                    if 'program' in filtered_assess.columns:
-                        c2.metric("Programs", filtered_assess['program'].nunique())
-                    if 'staff_name' in filtered_assess.columns:
-                        c3.metric("Staff", filtered_assess['staff_name'].nunique())
-                    c4.metric("Filtered", "Yes")
-                    
-                    if 'program' in filtered_assess.columns:
                         st.markdown("---")
-                        fig = px.bar(filtered_assess['program'].value_counts(), title="Records by Program")
+                        
+                        # Summary table
+                        with st.expander("📋 View all records"):
+                            summary_cols = ['program', 'staff_member', 'term', 'year', 'date_submitted']
+                            summary_cols = [c for c in summary_cols if c in filtered_assess.columns]
+                            st.dataframe(filtered_assess[summary_cols], use_container_width=True, hide_index=True)
+                
+                    with tab2:
+                        st.markdown("**SMARTAR Goal Achievement**")
+                        
+                        if 'smartar_goals' in filtered_assess.columns:
+                            smartar_all = {'Achieved': 0, 'Exceeded': 0, 'In Progress': 0, 'Not Started': 0}
+                            smartar_by_prog = {}
+                            
+                            import json
+                            for idx, row in filtered_assess.iterrows():
+                                try:
+                                    data = row['smartar_goals']
+                                    if pd.isna(data) or data is None or data == '' or data == '[]':
+                                        continue
+                                    
+                                    if isinstance(data, str):
+                                        try:
+                                            data = json.loads(data)
+                                        except:
+                                            continue
+                                    
+                                    prog = row.get('program', 'Unknown')
+                                    if prog not in smartar_by_prog:
+                                        smartar_by_prog[prog] = {'Achieved': 0, 'Exceeded': 0, 'In Progress': 0, 'Not Started': 0}
+                                    
+                                    # Data is a list of dicts: [{achievement: 'Achieved', goal_name: '...'}]
+                                    if isinstance(data, list):
+                                        for goal in data:
+                                            if isinstance(goal, dict):
+                                                status = goal.get('achievement', 'Not Started')
+                                                if status in smartar_all:
+                                                    smartar_all[status] += 1
+                                                    if status in smartar_by_prog[prog]:
+                                                        smartar_by_prog[prog][status] += 1
+                                except:
+                                    pass
+                            
+                            c1, c2, c3, c4 = st.columns(4)
+                            c1.metric("Achieved", smartar_all['Achieved'])
+                            c2.metric("Exceeded", smartar_all['Exceeded'])
+                            c3.metric("In Progress", smartar_all['In Progress'])
+                            c4.metric("Not Started", smartar_all['Not Started'])
+                            
+                            if sum(smartar_all.values()) > 0:
+                                st.markdown("---")
+                                fig = px.bar(x=list(smartar_all.keys()), y=list(smartar_all.values()), title="SMARTAR Status", labels={'y': 'Goals'})
+                                fig.update_traces(marker_color=['#4CAF50', '#2196F3', '#FF9800', '#f44336'])
+                                st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                            
+                            if smartar_by_prog:
+                                df = pd.DataFrame(smartar_by_prog).T
+                                fig = px.bar(df, barmode='group', title="SMARTAR by Program")
+                                st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                        else:
+                            st.info("smartar_goals column not found")
+                
+                    with tab3:
+                        st.markdown("**Sounds Write Assessment**")
+                        
+                        # Find Sounds Write columns
+                        sw_cols = [col for col in filtered_assess.columns if col.startswith('sounds_write_') and col not in ['sounds_write_data']]
+                        
+                        if sw_cols:
+                            st.write(f"Found {len(sw_cols)} Sounds Write assessment areas")
+                            
+                            # Summary - count non-null values per skill
+                            sw_summary = {}
+                            for col in sw_cols:
+                                skill_name = col.replace('sounds_write_', '').replace('_', ' ').title()
+                                count = filtered_assess[col].notna().sum()
+                                if count > 0:
+                                    sw_summary[skill_name] = count
+                            
+                            if sw_summary:
+                                st.markdown("---")
+                                fig = px.bar(x=list(sw_summary.keys()), y=list(sw_summary.values()), title="Sounds Write - Records with Data", labels={'y': 'Count'})
+                                st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                                
+                                with st.expander("📋 View detailed data"):
+                                    cols_to_show = ['program', 'staff_member', 'term'] + sw_cols
+                                    cols_to_show = [c for c in cols_to_show if c in filtered_assess.columns]
+                                    st.dataframe(filtered_assess[cols_to_show], use_container_width=True, hide_index=True)
+                            else:
+                                st.info("No Sounds Write data available")
+                        else:
+                            st.info("No Sounds Write columns found")
+                    
+                    with tab4:
+                        st.markdown("**Word Aware Assessment**")
+                        
+                        # Find Word Aware columns
+                        wa_cols = [col for col in filtered_assess.columns if col.startswith('word_aware_') and col not in ['word_aware_data']]
+                        
+                        if wa_cols:
+                            st.write(f"Found {len(wa_cols)} Word Aware assessment areas")
+                            
+                            # Summary - count non-null values per skill
+                            wa_summary = {}
+                            for col in wa_cols:
+                                skill_name = col.replace('word_aware_', '').replace('_', ' ').title()
+                                count = filtered_assess[col].notna().sum()
+                                if count > 0:
+                                    wa_summary[skill_name] = count
+                            
+                            if wa_summary:
+                                st.markdown("---")
+                                fig = px.bar(x=list(wa_summary.keys()), y=list(wa_summary.values()), title="Word Aware - Records with Data", labels={'y': 'Count'})
+                                st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                                
+                                with st.expander("📋 View detailed data"):
+                                    cols_to_show = ['program', 'staff_member', 'term'] + wa_cols
+                                    cols_to_show = [c for c in cols_to_show if c in filtered_assess.columns]
+                                    st.dataframe(filtered_assess[cols_to_show], use_container_width=True, hide_index=True)
+                            else:
+                                st.info("No Word Aware data available")
+                        else:
+                            st.info("No Word Aware columns found")
+                    
+                    with tab1:
+                        c1, c2, c3, c4 = st.columns(4)
+                        c1.metric("Records", len(filtered_assess))
+                        if 'program' in filtered_assess.columns:
+                            c2.metric("Programs", filtered_assess['program'].nunique())
+                        if 'staff_name' in filtered_assess.columns:
+                            c3.metric("Staff", filtered_assess['staff_name'].nunique())
+                        c4.metric("Filtered", "Yes")
+                        
+                        if 'program' in filtered_assess.columns:
+                            st.markdown("---")
+                            fig = px.bar(filtered_assess['program'].value_counts(), title="Records by Program")
                         st.plotly_chart(update_chart_layout(fig), use_container_width=True)
                 
                 with tab2:
@@ -2028,44 +2028,44 @@ else:
                     else:
                         st.info("sounds_write_data column not found")
                 
-                with tab4:
-                    wa_skills = {}
-                    import json
-                    if 'word_aware_data' in filtered_assess.columns:
-                        for _, row in filtered_assess.iterrows():
-                            try:
-                                data = row['word_aware_data']
-                                if isinstance(data, str) and data and data != '{}':
-                                    try:
-                                        data = json.loads(data)
-                                    except:
-                                        data = eval(data)
-                                    
-                                    for skill, levels in data.items():
-                                        if skill not in wa_skills:
-                                            wa_skills[skill] = {
-                                                'More than 10': 0, 
-                                                'More than 5': 0, 
-                                                'More than 2': 0
-                                            }
-                                        if isinstance(levels, dict):
-                                            for level, count in levels.items():
-                                                if level in wa_skills[skill]:
-                                                    wa_skills[skill][level] += int(count) if isinstance(count, (int, float)) else 0
-                            except:
-                                pass
-                        
-                        if wa_skills:
-                            df = pd.DataFrame(wa_skills).T
-                            st.dataframe(df, use_container_width=True)
-                            st.markdown("---")
-                            fig = px.bar(df, barmode='stack', title="Word Aware Achievement Levels")
-                            fig.update_traces(marker_color=['#4CAF50', '#FF9800', '#f44336'])
-                            st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                    with tab4:
+                        wa_skills = {}
+                        import json
+                        if 'word_aware_data' in filtered_assess.columns:
+                            for _, row in filtered_assess.iterrows():
+                                try:
+                                    data = row['word_aware_data']
+                                    if isinstance(data, str) and data and data != '{}':
+                                        try:
+                                            data = json.loads(data)
+                                        except:
+                                            data = eval(data)
+                                        
+                                        for skill, levels in data.items():
+                                            if skill not in wa_skills:
+                                                wa_skills[skill] = {
+                                                    'More than 10': 0, 
+                                                    'More than 5': 0, 
+                                                    'More than 2': 0
+                                                }
+                                            if isinstance(levels, dict):
+                                                for level, count in levels.items():
+                                                    if level in wa_skills[skill]:
+                                                        wa_skills[skill][level] += int(count) if isinstance(count, (int, float)) else 0
+                                except:
+                                    pass
+                            
+                            if wa_skills:
+                                df = pd.DataFrame(wa_skills).T
+                                st.dataframe(df, use_container_width=True)
+                                st.markdown("---")
+                                fig = px.bar(df, barmode='stack', title="Word Aware Achievement Levels")
+                                fig.update_traces(marker_color=['#4CAF50', '#FF9800', '#f44336'])
+                                st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                            else:
+                                st.info("No Word Aware data available")
                         else:
-                            st.info("No Word Aware data available")
-                    else:
-                        st.info("word_aware_data column not found")
+                            st.info("word_aware_data column not found")
 
     elif section == "Waitlist":
         st.markdown("## Waitlist Status")
@@ -2077,7 +2077,7 @@ else:
             wait_data['count'] = wait_data['count'].astype(int)
             
             fig = px.pie(wait_data, values='count', names='status',
-                        title='Waitlist Status Distribution', color_discrete_sequence=['#ff6b6b', '#4ecdc4', '#ffd93d', '#a8e6cf'])
+                            title='Waitlist Status Distribution', color_discrete_sequence=['#ff6b6b', '#4ecdc4', '#ffd93d', '#a8e6cf'])
             st.plotly_chart(update_chart_layout(fig), use_container_width=True)
             
             st.markdown("**What this shows:**")
@@ -2104,23 +2104,23 @@ else:
         with col1:
             st.markdown("**Programs**")
             if 'program' in allocation_df.columns:
-                progs = allocation_df['program'].value_counts()
-                for prog, count in progs.items():
-                    st.write(f"- {prog}: {count}")
+                    progs = allocation_df['program'].value_counts()
+                    for prog, count in progs.items():
+                        st.write(f"- {prog}: {count}")
         
         with col2:
             st.markdown("**Year Levels**")
             if 'year_level' in allocation_df.columns:
-                levels = allocation_df['year_level'].value_counts().sort_index()
-                for level, count in levels.items():
-                    st.write(f"- {level}: {count}")
+                    levels = allocation_df['year_level'].value_counts().sort_index()
+                    for level, count in levels.items():
+                        st.write(f"- {level}: {count}")
         
         with col3:
             st.markdown("**Partnership Areas**")
             if 'partnership_area' in allocation_df.columns:
-                partners = allocation_df['partnership_area'].value_counts().head(5)
-                for partner, count in partners.items():
-                    st.write(f"- {partner}: {count}")
+                    partners = allocation_df['partnership_area'].value_counts().head(5)
+                    for partner, count in partners.items():
+                        st.write(f"- {partner}: {count}")
         
         st.markdown("### Data Quality Check")
         st.write("**Missing values:**")
