@@ -31,9 +31,9 @@ st.markdown("""
     [data-testid="stToolbar"] { display: none !important; }
     
     /* HIDE WHITE BANDS */
-    [data-testid="stAppViewContainer"] > div { background: #0a0e27 !important; }
-    .block-container { background: #0a0e27 !important; }
-    section { background: #0a0e27 !important; }
+    [data-testid="stAppViewContainer"] > div { background: linear-gradient(135deg, rgba(10,14,39,1) 0%, rgba(8,12,32,1) 100%) !important; }
+    .block-container { background: linear-gradient(135deg, rgba(10,14,39,0.95) 0%, rgba(8,12,32,0.95) 100%) !important; }
+    section { background: linear-gradient(135deg, rgba(10,14,39,0.95) 0%, rgba(8,12,32,0.95) 100%) !important; }
     
     html, body { 
         background-color: #0a0e27 !important;
@@ -45,9 +45,10 @@ st.markdown("""
     h1, h2, h3, h4, h5, h6 { color: #00e5ff !important; text-shadow: 0 0 15px rgba(0,229,255,0.3); }
     p, span, div, label, button, a { color: #ffffff !important; }
     
-    /* SIDEBAR - MODERN GRADIENT WITH BETTER STYLING */
+    /* SIDEBAR - MATCH MAIN BACKGROUND WITH LIGHT BLUE ACCENT */
     [data-testid="stSidebar"] { 
-        background: linear-gradient(180deg, #050810 0%, #0a1020 100%) !important; 
+        background: linear-gradient(135deg, rgba(10,14,39,0.98) 0%, rgba(8,12,32,0.98) 100%) !important;
+        border-right: 2px solid rgba(0,229,255,0.25) !important;
     }
     [data-testid="stSidebar"] * { color: #ffffff !important; }
     [data-testid="stSidebar"] label { 
@@ -303,6 +304,10 @@ else:
             try:
                 df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('.xlsx') else pd.read_csv(uploaded_file)
                 
+                # Show available columns for debugging
+                with st.expander("📋 Available columns in file"):
+                    st.write("All columns:", list(df.columns))
+                
                 # === EXTRACT FLAG DATA (if columns exist) ===
                 flag_cols_available = []
                 for col in ['Flag_ATSI', 'Flag_EALD', 'Flag_DCP_involvement']:
@@ -323,12 +328,18 @@ else:
                     if col in df.columns:
                         funding_cols_available.append(col)
                 
+                if funding_cols_available:
+                    st.info(f"Found funding columns: {', '.join(funding_cols_available)}")
+                
                 if 'Student_Name' in df.columns and funding_cols_available:
                     # Extract and cache funding data
                     funding_data = df[['Student_Name'] + funding_cols_available].copy()
                     funding_data['name_match'] = funding_data['Student_Name'].str.strip().str.lower()
                     funding_cols_for_merge = ['name_match'] + funding_cols_available
                     st.session_state.funding_df = funding_data[funding_cols_for_merge].drop_duplicates('name_match')
+                else:
+                    if 'Student_Name' in df.columns:
+                        st.warning("No funding category columns found (Funding_Category_1 to 9)")
                 
                 # === EXTRACT RAAP FLAG (if exists) ===
                 if 'Flag_9plus_sRAAP' in df.columns and 'Student_Name' in df.columns:
@@ -487,16 +498,16 @@ else:
         selected_term = st.selectbox("Term", term_options)
     
     with col3:
-        # Clean program data and build dropdown - handle variations
-        allocation_df['program_clean'] = allocation_df['program'].str.strip().str.upper()
-        all_progs = sorted([p for p in allocation_df['program_clean'].dropna().unique() if p != '' and p != ':2'])
+        # Clean program data and build dropdown - handle variations and blanks
+        allocation_df['program_clean'] = allocation_df['program'].fillna('').str.strip().str.upper()
+        all_progs = sorted([p for p in allocation_df['program_clean'].unique() if p and p != '' and p != ':2'])
         progs = ['All'] + all_progs
         selected_program = st.selectbox("Program", progs)
     
     # FILTER DATA - handle "All" selections
     allocation_df['year_clean'] = pd.to_numeric(allocation_df['year'], errors='coerce')
     allocation_df['term_clean'] = pd.to_numeric(allocation_df['term'], errors='coerce')
-    allocation_df['program_clean'] = allocation_df['program'].str.strip().str.upper()
+    allocation_df['program_clean'] = allocation_df['program'].fillna('').str.strip().str.upper()
     
     filtered = allocation_df.copy()
     
@@ -784,7 +795,11 @@ else:
         risk_df['funding_category'] = 'None'
         risk_df['is_raap'] = 'No'
         
-        # Merge funding data if available
+        # If cat_funding column exists, use it directly
+        if 'cat_funding' in risk_df.columns:
+            risk_df['funding_category'] = risk_df['cat_funding'].fillna('None')
+        
+        # Merge funding data if available (for uploaded data)
         if 'funding_df' in st.session_state and st.session_state.funding_df is not None:
             risk_df['name_match'] = risk_df['student_name'].str.strip().str.lower()
             risk_df = risk_df.merge(st.session_state.funding_df, on='name_match', how='left')
@@ -800,11 +815,12 @@ else:
         if 'Flag_9plus_sRAAP' in risk_df.columns:
             risk_df.loc[risk_df['Flag_9plus_sRAAP'] == 'Yes', 'is_raap'] = 'Yes (RAAP)'
         
-        # Determine funding category (highest category takes precedence)
-        for cat in range(9, 0, -1):
-            col_name = f'Funding_Category_{cat}'
-            if col_name in risk_df.columns:
-                risk_df.loc[risk_df[col_name] == 'Yes', 'funding_category'] = f'Cat {cat}'
+        # Determine funding category (from individual columns if they exist)
+        if 'cat_funding' not in risk_df.columns or risk_df['cat_funding'].isna().all():
+            for cat in range(9, 0, -1):
+                col_name = f'Funding_Category_{cat}'
+                if col_name in risk_df.columns:
+                    risk_df.loc[risk_df[col_name] == 'Yes', 'funding_category'] = f'Cat {cat}'
         
         # SUMMARY METRICS
         col1, col2, col3, col4 = st.columns(4)
