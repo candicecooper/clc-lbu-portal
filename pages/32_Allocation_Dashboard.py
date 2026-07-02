@@ -1621,7 +1621,22 @@ else:
             st.error(f"⚠️ {error_msg}")
             st.info("Assessment data is maintained in the Assessment Analytics page and auto-syncs here.")
         elif not assessments:
-            st.info("📌 No assessment data available yet. Data will appear here once assessments are entered in the Assessment Analytics page.")
+            st.warning("📌 No assessment data available yet.")
+            st.info("Data will appear here once assessments are entered in the Assessment Analytics page.")
+            
+            # Show debug info
+            with st.expander("🔍 Debug Information"):
+                st.write("Checking Supabase connection...")
+                if supabase:
+                    st.write("✅ Supabase is connected")
+                    try:
+                        test_response = supabase.table('term_assessments').select('count', count='exact').execute()
+                        st.write(f"✅ term_assessments table exists")
+                        st.write(f"Record count in table: {test_response.count if hasattr(test_response, 'count') else 'Unknown'}")
+                    except Exception as e:
+                        st.write(f"❌ Error accessing term_assessments table: {e}")
+                else:
+                    st.write("❌ Supabase connection failed")
         else:
             assessments_df = pd.DataFrame(assessments)
             
