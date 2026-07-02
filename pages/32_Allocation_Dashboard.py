@@ -825,7 +825,7 @@ else:
         # SUMMARY METRICS
         col1, col2, col3, col4 = st.columns(4)
         
-        cat_counts = risk_df['funding_category'].value_counts()
+        cat_counts = risk_df['funding_category'].value_counts().to_dict()
         col1.metric("Cat 9 (Highest)", int(cat_counts.get('Cat 9', 0)))
         col2.metric("Cat 5-8", int(sum(cat_counts.get(f'Cat {i}', 0) for i in range(5, 9))))
         col3.metric("Cat 1-4", int(sum(cat_counts.get(f'Cat {i}', 0) for i in range(1, 5))))
