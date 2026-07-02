@@ -1813,12 +1813,18 @@ else:
                         st.markdown("**SMARTAR Goal Achievement**")
                         
                         if 'smartar_goals' in filtered_assess.columns:
-                            # Show sample data structure
-                            with st.expander("🔍 View raw smartar_goals data"):
-                                for idx, row in filtered_assess.iterrows():
-                                    st.write(f"**Record {idx}:**")
-                                    st.write(f"  Type: {type(row['smartar_goals'])}")
-                                    st.write(f"  Value: {row['smartar_goals']}")
+                            st.markdown("---")
+                            st.markdown("**Raw Data Sample:**")
+                            
+                            # Show first 3 records
+                            for idx, row in filtered_assess.iterrows():
+                                st.write(f"**Record {idx} ({row.get('program', '?')}):**")
+                                data = row['smartar_goals']
+                                st.write(f"  - Type: `{type(data).__name__}`")
+                                st.write(f"  - Length: {len(data) if isinstance(data, (list, str, dict)) else 'N/A'}")
+                                st.write(f"  - First 200 chars: `{str(data)[:200]}`")
+                            
+                            st.markdown("---")
                             
                             smartar_all = {'Achieved': 0, 'Exceeded': 0, 'In Progress': 0, 'Not Started': 0}
                             smartar_by_prog = {}
@@ -1862,7 +1868,7 @@ else:
                                                         smartar_by_prog[prog][status] += 1
                                                     goals_found += 1
                                 except Exception as e:
-                                    st.write(f"Error processing row {idx}: {str(e)}")
+                                    st.error(f"Error processing row {idx}: {str(e)}")
                             
                             st.write(f"**Goals parsed: {goals_found}**")
                             
