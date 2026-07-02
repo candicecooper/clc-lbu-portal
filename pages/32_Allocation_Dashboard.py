@@ -1737,6 +1737,20 @@ else:
             with col1:
                 st.success(f"✅ {len(assessments_df)} records")
             
+            # DEBUG EXPANDER
+            with st.expander("🔍 Assessment Data Debug"):
+                st.write(f"**Total records loaded:** {len(assessments_df)}")
+                st.write(f"**Columns:** {list(assessments_df.columns)}")
+                st.write("**Sample data (first record):**")
+                if len(assessments_df) > 0:
+                    sample = assessments_df.iloc[0]
+                    for col in ['year', 'term', 'program', 'smartar_goals', 'sounds_write_data', 'word_aware_data']:
+                        if col in assessments_df.columns:
+                            val = sample[col]
+                            st.write(f"  - **{col}**: {val}")
+                        else:
+                            st.write(f"  - **{col}**: [column not found]")
+            
             filtered_assess = assessments_df.copy()
             if 'year' in filtered_assess.columns:
                 filtered_assess['year'] = pd.to_numeric(filtered_assess['year'], errors='coerce')
