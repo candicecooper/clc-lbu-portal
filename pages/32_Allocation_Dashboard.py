@@ -362,17 +362,17 @@ else:
         )
         
         st.markdown("---")
-        st.markdown("**Data Upload**", help="Upload Excel file with student allocation data and optional flag columns")
+        st.markdown("**Data Management**")
         
-        uploaded_file = st.file_uploader("Choose Excel or CSV file", type=['xlsx', 'csv'], label_visibility="collapsed")
+        with st.expander("🔐 Update Data (Staff Only)", expanded=False):
+            st.warning("⚠️ **Confidential:** This upload is for authorized staff only. The most recent upload becomes the dataset for all dashboard users.")
+            
+            uploaded_file = st.file_uploader("Choose Excel or CSV file", type=['xlsx', 'csv'], label_visibility="collapsed")
         
         if uploaded_file is not None:
             try:
                 df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('.xlsx') else pd.read_csv(uploaded_file)
                 
-                # Show available columns for debugging
-                with st.expander("📋 Available columns in file"):
-                    st.write("All columns:", list(df.columns))
                 
                 # === EXTRACT FLAG DATA (if columns exist) ===
                 flag_cols_available = []
@@ -395,7 +395,6 @@ else:
                         funding_cols_available.append(col)
                 
                 if funding_cols_available:
-                    st.info(f"✅ Found funding columns: {', '.join(funding_cols_available)}")
                 
                 if 'Student_Name' in df.columns and funding_cols_available:
                     # Extract and cache funding data
@@ -405,7 +404,6 @@ else:
                     st.session_state.funding_df = funding_data[funding_cols_for_merge].drop_duplicates('name_match')
                 else:
                     if 'Student_Name' in df.columns:
-                        st.warning("No funding category columns found (Flag_Category_1 to 9)")
                 
                 # === EXTRACT DISABILITY FLAGS ===
                 disability_flags = ['Flag_SWD', 'Flag_ASD', 'Flag_Intellectual', 'Flag_Learning_Difficulty',
@@ -415,7 +413,6 @@ else:
                 disability_cols_available = [col for col in disability_flags if col in df.columns]
                 
                 if disability_cols_available and 'Student_Name' in df.columns:
-                    st.info(f"✅ Found disability columns: {', '.join(disability_cols_available)}")
                     # Extract and cache disability data
                     disability_data = df[['Student_Name'] + disability_cols_available].copy()
                     disability_data['name_match'] = disability_data['Student_Name'].str.strip().str.lower()
@@ -1918,10 +1915,50 @@ else:
                                            (disability_df['Medical_Condition_Details'] != 'No')]
             
             if len(medical_details) > 0:
-                st.markdown(f"**{len(medical_details)} students with documented medical conditions:**")
-                with st.expander("View medical conditions"):
-                    for idx, row in medical_details.iterrows():
-                        st.write(f"• {row['student_name']}: {row['Medical_Condition_Details']}")
+                st.markdown(f"**{len(medical_details)} students with documented medical conditions**")
+                
+                # Analyze conditions
+                conditions = medical_details['Medical_Condition_Details'].value_counts()
+                
+                if len(conditions) > 0:
+                    st.markdown("---")
+                    st.markdown("**Medical Conditions Summary:**")
+                    
+                    col1, col2 = st.columns([1.2, 1])
+                    
+                    with col1:
+                        # Chart of conditions
+                        conditions_data = pd.DataFrame({
+                            'Condition': conditions.index,
+                            'Count': conditions.values
+                        })
+                        
+                        fig = px.bar(
+                            conditions_data,
+                            x='Count',
+                            y='Condition',
+                            orientation='h',
+                            text='Count',
+                            color='Count',
+                            color_continuous_scale='Oranges',
+                            title='Medical Conditions Documented'
+                        )
+                        fig.update_xaxes(dtick=1)
+                        fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                        fig.update_layout(
+                            plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                            paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                            font=dict(color='#e8e8e8'),
+                            height=300,
+                            showlegend=False
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    with col1:
+                        st.markdown("**Breakdown:**")
+                        for condition, count in conditions.items():
+                            pct = (count / len(medical_details) * 100)
+                            st.write(f"**{condition}:** {count} ({pct:.1f}%)")
             else:
                 st.info("No medical conditions documented")
 
