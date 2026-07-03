@@ -656,18 +656,6 @@ else:
         st.markdown(f"**Year {year_display} | Term {term_display}** - Current enrollment and placement status")
         
         # Debug expander
-        with st.expander("🔍 Debug - View filtering details"):
-            st.write(f"Selected Year: {selected_year}")
-            st.write(f"Selected Term: {selected_term}")
-            st.write(f"Selected Program: {selected_program}")
-            st.write(f"Total records after filtering: {len(filtered)}")
-            st.write(f"Unique programs in filtered data: {filtered['program'].unique().tolist()}")
-            st.write(f"Unique years in filtered data: {filtered['year_clean'].unique().tolist()}")
-            st.write(f"Unique terms in filtered data: {filtered['term_clean'].unique().tolist()}")
-            
-            # Show program breakdown
-            prog_breakdown = filtered['program'].value_counts().to_dict()
-            st.write(f"Program breakdown: {prog_breakdown}")
         
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Total Students", int(len(filtered)))
@@ -700,10 +688,26 @@ else:
                 year_data.columns = ['year_level', 'count']
                 year_data['count'] = year_data['count'].astype(int)
                 
-                fig = px.bar(year_data, x='year_level', y='count', text='count',
+                # Define all possible year levels in order
+                all_year_levels = ['R', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+                # Create full dataframe with all year levels
+                year_data_full = pd.DataFrame({'year_level': all_year_levels})
+                year_data_full = year_data_full.merge(year_data, on='year_level', how='left').fillna(0)
+                year_data_full['count'] = year_data_full['count'].astype(int)
+                
+                fig = px.bar(year_data_full, x='year_level', y='count', text='count',
                             color_discrete_sequence=['#4ecdc4'],
                             title='Students by Year Level', labels={'year_level': '', 'count': ''})
+                fig.update_xaxes(
+                    type='category', 
+                    categoryorder='array', 
+                    categoryarray=all_year_levels,
+                    tickangle=0,
+                    showticklabels=True,
+                    tickfont=dict(size=12)
+                )
                 fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                fig.update_layout(xaxis_title='Year Level (R = Kindergarten, 1-10 = Grades 1-10)')
                 st.plotly_chart(update_chart_layout(fig), use_container_width=True)
                 st.markdown("**What this shows:** Distribution across year levels R through 10")
         
@@ -892,7 +896,7 @@ else:
             heatmap = pd.crosstab(filtered['year_level'], filtered['program'])
             
             # Reindex to ensure ALL year levels appear (even if empty)
-            heatmap = heatmap.reindex([y for y in year_order if y in filtered['year_level'].unique()], fill_value=0)
+            heatmap = heatmap.reindex(year_order, fill_value=0)
             
             # Reindex to ensure ALL programs appear (even if empty)
             available_progs = [p for p in program_order if p in filtered['program'].unique()]
@@ -923,14 +927,20 @@ else:
         
         # Merge funding data if available (for uploaded data)
         if 'funding_df' in st.session_state and st.session_state.funding_df is not None:
+            # Try name-based merge
             risk_df['name_match'] = risk_df['student_name'].str.strip().str.lower()
-            risk_df = risk_df.merge(st.session_state.funding_df, on='name_match', how='left')
+            funding_df_merge = st.session_state.funding_df.copy()
+            if 'name_match' in funding_df_merge.columns:
+                risk_df = risk_df.merge(funding_df_merge, on='name_match', how='left', suffixes=('', '_fund'))
             risk_df = risk_df.drop('name_match', axis=1)
         
         # Merge RAAP data if available
         if 'raap_df' in st.session_state and st.session_state.raap_df is not None:
+            # Try name-based merge
             risk_df['name_match'] = risk_df['student_name'].str.strip().str.lower()
-            risk_df = risk_df.merge(st.session_state.raap_df, on='name_match', how='left')
+            raap_df_merge = st.session_state.raap_df.copy()
+            if 'name_match' in raap_df_merge.columns:
+                risk_df = risk_df.merge(raap_df_merge, on='name_match', how='left', suffixes=('', '_raap'))
             risk_df = risk_df.drop('name_match', axis=1)
         
         # Determine funding category from Flag_Category columns (highest category takes precedence)
@@ -938,7 +948,8 @@ else:
             col_name = f'Flag_Category_{cat}'
             if col_name in risk_df.columns:
                 # Handle both 'Yes' and True values
-                risk_df.loc[(risk_df[col_name] == 'Yes') | (risk_df[col_name] == True), 'funding_category'] = f'Cat {cat}'
+                mask = (risk_df[col_name] == 'Yes') | (risk_df[col_name] == True)
+                risk_df.loc[mask, 'funding_category'] = f'Cat {cat}'
         
         # Check for RAAP AFTER setting base category - if Cat 9 + RAAP, change to Cat 9+RAAP
         if 'Flag_9plusRAAP' in risk_df.columns:
@@ -959,8 +970,12 @@ else:
         col1, col2, col3, col4 = st.columns(4)
         
         cat_counts = risk_df['funding_category'].value_counts().to_dict()
-        col1.metric("Cat 9+RAAP", int(cat_counts.get('Cat 9+RAAP', 0)))
-        col2.metric("Cat 9 Only", int(cat_counts.get('Cat 9', 0)))
+        
+        # Highlight Cat 9+RAAP with special styling
+        cat_9_raap = int(cat_counts.get('Cat 9+RAAP', 0))
+        col1.metric("🔴 Cat 9+RAAP (Highest Priority)", cat_9_raap)
+        
+        col2.metric("Cat 9", int(cat_counts.get('Cat 9', 0)))
         col3.metric("Cat 5-8", int(sum(cat_counts.get(f'Cat {i}', 0) for i in range(5, 9))))
         col4.metric("Cat 1-4", int(sum(cat_counts.get(f'Cat {i}', 0) for i in range(1, 5))))
         
@@ -1029,6 +1044,9 @@ else:
         st.markdown("## Funding Category Details")
         st.markdown("Breakdown by category and program")
         
+        # Add legend explanation
+        st.info("🔴 **Color Guide:** Darker red = Higher category (more intensive support needed). Cat 9+RAAP is the most intensive support level.")
+        
         # Create matrix of programs x funding categories
         if 'program' in risk_df.columns and 'funding_category' in risk_df.columns:
             fund_matrix = pd.crosstab(risk_df['program'], risk_df['funding_category'])
@@ -1042,15 +1060,90 @@ else:
                 fund_matrix,
                 text_auto=True,
                 color_continuous_scale='YlOrRd',
-                title='Program × Funding Category',
+                title='Program × Funding Category (Cat 9+RAAP = Highest Priority)',
                 labels={'x': 'Funding Category', 'y': 'Program', 'color': 'Students'}
             )
             fig_matrix.update_traces(text=fund_matrix.values, texttemplate='%{text}')
             fig_matrix.update_xaxes(categoryorder='array', categoryarray=cat_order)
+            fig_matrix.update_layout(
+                xaxis_title='Funding Category (9+RAAP = Most Intensive →)',
+                yaxis_title='Program'
+            )
             st.plotly_chart(update_chart_layout(fig_matrix), use_container_width=True)
         
         st.markdown("---")
-        st.markdown("## Highest-Need Students (Cat 9+RAAP & Cat 9)")
+        st.markdown("## Placement Alignment Analysis")
+        st.markdown("Shows students placed in programs different from their typical year level alignment")
+        
+        # Define expected program alignment
+        expected_alignment = {
+            'JP': ['R', '1', '2'],
+            'PY': ['3', '4', '5', '6'],
+            'SY': ['7', '8', '9', '10']
+        }
+        
+        # Check for cross-program placements
+        risk_df['expected_program'] = None
+        risk_df['is_cross_placement'] = False
+        
+        for prog, year_levels in expected_alignment.items():
+            mask = risk_df['year_level'].astype(str).isin(year_levels)
+            risk_df.loc[mask, 'expected_program'] = prog
+        
+        # Mark students not in their expected program
+        risk_df['is_cross_placement'] = risk_df['program'] != risk_df['expected_program']
+        
+        # Count cross-placements
+        cross_count = risk_df['is_cross_placement'].sum()
+        expected_count = len(risk_df) - cross_count
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            col_a, col_b = st.columns(2)
+            col_a.metric("Expected Alignment", expected_count)
+            col_b.metric("Site Decision Placement", cross_count)
+        
+        with col2:
+            # Chart of alignment
+            alignment_data = pd.DataFrame({
+                'Placement Type': ['Expected Program', 'Site Decision (Different)'],
+                'Count': [expected_count, cross_count]
+            })
+            
+            fig = px.bar(
+                alignment_data,
+                x='Placement Type',
+                y='Count',
+                text='Count',
+                color='Placement Type',
+                color_discrete_map={
+                    'Expected Program': '#4CAF50',
+                    'Site Decision (Different)': '#FF9800'
+                },
+                title='Program Placement Type',
+                labels={'Count': 'Students'}
+            )
+            fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+            st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+        
+        # Show cross-placement details
+        if cross_count > 0:
+            st.markdown("---")
+            st.markdown("### Cross-Program Placements (Site Decision)")
+            st.markdown(f"**{cross_count} students** placed in different program than typical year level alignment")
+            
+            cross_placements = risk_df[risk_df['is_cross_placement']].copy()
+            
+            display_cols = ['program', 'year_level', 'expected_program', 'funding_category', 'partnership_area']
+            display_cols = [col for col in display_cols if col in cross_placements.columns]
+            
+            if display_cols:
+                # Rename for display
+                cross_placements_display = cross_placements[display_cols].copy()
+                cross_placements_display.columns = ['Program', 'Year Level', 'Expected Program', 'Funding', 'Area']
+                
+                with st.expander(f"📋 View all {cross_count} cross-placements"):
+                    st.dataframe(cross_placements_display.reset_index(drop=True), use_container_width=True, hide_index=True)
         st.markdown("Students requiring most intensive support and resources")
         
         high_need = risk_df[risk_df['funding_category'].isin(['Cat 9+RAAP', 'Cat 9', 'Cat 8'])].copy()
@@ -1731,18 +1824,6 @@ else:
             assessments_df.columns = assessments_df.columns.str.lower()
             
             # DEBUG
-            with st.expander("🔍 Debug - All Assessment Data"):
-                st.write(f"**Total raw records:** {len(assessments_df)}")
-                st.write(f"**Year column values:**")
-                if 'year' in assessments_df.columns:
-                    st.write(assessments_df['year'].unique().tolist())
-                    st.write(f"**Year data types:** {assessments_df['year'].dtype}")
-                
-                st.write(f"**All records by year:**")
-                if 'year' in assessments_df.columns:
-                    year_counts = assessments_df['year'].value_counts().sort_index()
-                    st.write(year_counts)
-            
             # Parse year - handle both string and numeric
             if 'year' in assessments_df.columns:
                 # Try to convert to numeric, handling both string and int
@@ -1850,24 +1931,6 @@ else:
                             pass
                     
                     # Show debug
-                    with st.expander("🔍 Processed Data"):
-                        st.write(f"SMARTAR: {smartar_stats}")
-                        st.write(f"Sounds Write skills: {list(sw_totals.keys())}")
-                        st.write(f"Word Aware skills: {list(wa_totals.keys())}")
-                        
-                        st.markdown("---")
-                        st.markdown("**Raw SMARTAR data (first record):**")
-                        if len(filtered_assess) > 0:
-                            st.write(filtered_assess.iloc[0]['smartar_goals'])
-                        
-                        st.markdown("**Raw Sounds Write data (first record):**")
-                        if len(filtered_assess) > 0:
-                            st.write(filtered_assess.iloc[0]['sounds_write_data'])
-                        
-                        st.markdown("**Raw Word Aware data (first record):**")
-                        if len(filtered_assess) > 0:
-                            st.write(filtered_assess.iloc[0]['word_aware_data'])
-                    
                     # Now create tabs with processed data
                     tab1, tab2, tab3, tab4 = st.tabs(["📊 Summary", "🎯 SMARTAR Goals", "✍️ Sounds Write", "📖 Word Aware"])
                     
