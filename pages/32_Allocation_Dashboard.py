@@ -407,6 +407,21 @@ else:
                     if 'Student_Name' in df.columns:
                         st.warning("No funding category columns found (Flag_Category_1 to 9)")
                 
+                # === EXTRACT DISABILITY FLAGS ===
+                disability_flags = ['Flag_SWD', 'Flag_ASD', 'Flag_Intellectual', 'Flag_Learning_Difficulty',
+                                   'Flag_Sensory_Processing', 'Flag_ADHD', 'Flag_ODD', 'Flag_PDA',
+                                   'Flag_Medication', 'Flag_Medical_condition', 'Medical_Condition_Details']
+                
+                disability_cols_available = [col for col in disability_flags if col in df.columns]
+                
+                if disability_cols_available and 'Student_Name' in df.columns:
+                    st.info(f"✅ Found disability columns: {', '.join(disability_cols_available)}")
+                    # Extract and cache disability data
+                    disability_data = df[['Student_Name'] + disability_cols_available].copy()
+                    disability_data['name_match'] = disability_data['Student_Name'].str.strip().str.lower()
+                    disability_cols_for_merge = ['name_match'] + disability_cols_available
+                    st.session_state.disability_df = disability_data[disability_cols_for_merge].drop_duplicates('name_match')
+                
                 # === EXTRACT RAAP FLAG (if exists) ===
                 if 'Flag_9plusRAAP' in df.columns and 'Student_Name' in df.columns:
                     raap_data = df[['Student_Name', 'Flag_9plusRAAP']].copy()
@@ -1734,13 +1749,13 @@ else:
         # Merge disability flags into filtered data
         disability_df = filtered.copy()
         
-        # Merge uploaded flag data if available
-        if 'funding_df' in st.session_state and st.session_state.funding_df is not None:
+        # Merge uploaded disability flag data if available
+        if 'disability_df' in st.session_state and st.session_state.disability_df is not None:
             disability_df['name_match'] = disability_df['student_name'].str.strip().str.lower()
-            funding_df_merge = st.session_state.funding_df.copy()
-            if 'name_match' in funding_df_merge.columns:
+            disability_flag_merge = st.session_state.disability_df.copy()
+            if 'name_match' in disability_flag_merge.columns:
                 before_merge = len(disability_df)
-                disability_df = disability_df.merge(funding_df_merge, on='name_match', how='left', suffixes=('', '_flag'))
+                disability_df = disability_df.merge(disability_flag_merge, on='name_match', how='left', suffixes=('', '_flag'))
                 after_merge = len(disability_df)
                 st.write(f"Merge result: {before_merge} → {after_merge} rows")
             disability_df = disability_df.drop('name_match', axis=1)
