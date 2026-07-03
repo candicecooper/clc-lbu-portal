@@ -364,15 +364,22 @@ else:
         st.markdown("---")
         st.markdown("**Data Upload**", help="Upload Excel file with student allocation data and optional flag columns")
         
-        uploaded_file = st.file_uploader("Choose Excel or CSV file", type=['xlsx', 'csv'], label_visibility="collapsed")
+        # Authentication for upload
+        upload_password = st.text_input("🔒 Upload Access Password", type="password", help="Only staff authorized to manage data uploads should have this password")
         
-        if uploaded_file is not None:
-            try:
-                df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('.xlsx') else pd.read_csv(uploaded_file)
+        if upload_password:
+            if upload_password == "clcstaff2026":
+                st.success("✅ Upload access granted")
                 
-                # Show available columns for debugging
-                with st.expander("📋 Available columns in file"):
-                    st.write("All columns:", list(df.columns))
+                uploaded_file = st.file_uploader("Choose Excel or CSV file", type=['xlsx', 'csv'], label_visibility="collapsed")
+                
+                if uploaded_file is not None:
+                    try:
+                        df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('.xlsx') else pd.read_csv(uploaded_file)
+                        
+                        # Show available columns for debugging
+                        with st.expander("📋 Available columns in file"):
+                            st.write("All columns:", list(df.columns))
                 
                 # === EXTRACT FLAG DATA (if columns exist) ===
                 flag_cols_available = []
@@ -513,6 +520,10 @@ else:
             
             except Exception as e:
                 st.error(f"Error: {e}")
+            else:
+                st.warning("❌ Incorrect password. Contact Candice for upload access.")
+        else:
+            st.info("🔒 Enter password to enable data upload (authorized staff only)")
         
         st.markdown("---")
         st.markdown("**Data Status**")
@@ -547,6 +558,9 @@ else:
                  font-weight: 500; opacity: 0.9;'>Comprehensive Enrollment Analytics & Equity Insights</p>
     </div>
     """, unsafe_allow_html=True)
+    
+    # Data persistence notice
+    st.info("📌 **Data Persistence:** The most recently uploaded dataset remains accessible to all users until a new upload is performed. Only authorized staff can upload data.")
     
     st.markdown("---")
     
@@ -1025,6 +1039,7 @@ else:
                 labels={'category': 'Category', 'count': 'Students', 'color_key': 'Urgency'}
             )
             fig_funding.update_yaxes(categoryorder='array', categoryarray=list(reversed(category_order)))
+            fig_funding.update_xaxes(dtick=1)
             fig_funding.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
             st.plotly_chart(update_chart_layout(fig_funding), use_container_width=True)
         
@@ -1064,6 +1079,7 @@ else:
                     labels={'value': 'Count', 'index': 'Program'},
                     color_discrete_map=color_discrete_map
                 )
+                fig_fund_prog.update_yaxes(dtick=1)
                 st.plotly_chart(update_chart_layout(fig_fund_prog), use_container_width=True)
         
         st.markdown("---")
