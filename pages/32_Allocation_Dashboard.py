@@ -364,134 +364,138 @@ else:
         st.markdown("---")
         st.markdown("**Data Management**")
         
-        with st.expander("🔐 Update Data (Staff Only)", expanded=False):
-            st.warning("⚠️ **Confidential:** This upload is for authorized staff only. The most recent upload becomes the dataset for all dashboard users.")
-            
-            uploaded_file = st.file_uploader("Choose Excel or CSV file", type=['xlsx', 'csv'], label_visibility="collapsed")
+        # Password gate for upload
+        upload_password = st.text_input("🔐 Enter password to access data upload", type="password", help="Only authorized staff have this password")
+        
+        if upload_password == "clcstaff2026":
+            with st.expander("📤 Update Data", expanded=False):
+                st.info("This upload updates the dataset for all dashboard users. The most recent upload is the active dataset.")
+                
+                uploaded_file = st.file_uploader("Choose Excel or CSV file", type=['xlsx', 'csv'], label_visibility="collapsed")
         
         if uploaded_file is not None:
             try:
                 df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('.xlsx') else pd.read_csv(uploaded_file)
                 
                 
-                # === EXTRACT FLAG DATA (if columns exist) ===
-                flag_cols_available = []
-                for col in ['Flag_ATSI', 'Flag_EALD', 'Flag_DCP_involvement']:
-                    if col in df.columns:
-                        flag_cols_available.append(col)
-                
-                if 'Student_Name' in df.columns and flag_cols_available:
-                    # Extract and cache flag data
-                    flag_data = df[['Student_Name'] + flag_cols_available].copy()
-                    flag_data['name_match'] = flag_data['Student_Name'].str.strip().str.lower()
-                    flag_cols_for_merge = ['name_match'] + flag_cols_available
-                    st.session_state.flag_df = flag_data[flag_cols_for_merge].drop_duplicates('name_match')
-                
-                # === EXTRACT FUNDING CATEGORY DATA (if columns exist) ===
-                funding_cols_available = []
-                for i in range(1, 10):
-                    col = f'Flag_Category_{i}'
-                    if col in df.columns:
-                        funding_cols_available.append(col)
-                
-                if 'Student_Name' in df.columns and funding_cols_available:
-                    # Extract and cache funding data
-                    funding_data = df[['Student_Name'] + funding_cols_available].copy()
-                    funding_data['name_match'] = funding_data['Student_Name'].str.strip().str.lower()
-                    funding_cols_for_merge = ['name_match'] + funding_cols_available
-                    st.session_state.funding_df = funding_data[funding_cols_for_merge].drop_duplicates('name_match')
-                
-                # === EXTRACT DISABILITY FLAGS ===
-                disability_flags = ['Flag_SWD', 'Flag_ASD', 'Flag_Intellectual', 'Flag_Learning_Difficulty',
-                                   'Flag_Sensory_Processing', 'Flag_ADHD', 'Flag_ODD', 'Flag_PDA',
-                                   'Medical_Condition_Details']
-                
-                disability_cols_available = [col for col in disability_flags if col in df.columns]
-                
-                if disability_cols_available and 'Student_Name' in df.columns:
-                    # Extract and cache disability data
-                    disability_data = df[['Student_Name'] + disability_cols_available].copy()
-                    disability_data['name_match'] = disability_data['Student_Name'].str.strip().str.lower()
-                    disability_cols_for_merge = ['name_match'] + disability_cols_available
-                    st.session_state.disability_df = disability_data[disability_cols_for_merge].drop_duplicates('name_match')
-                
-                # === EXTRACT RAAP FLAG (if exists) ===
-                if 'Flag_9plusRAAP' in df.columns and 'Student_Name' in df.columns:
-                    raap_data = df[['Student_Name', 'Flag_9plusRAAP']].copy()
-                    raap_data['name_match'] = raap_data['Student_Name'].str.strip().str.lower()
-                    st.session_state.raap_df = raap_data[['name_match', 'Flag_9plusRAAP']].drop_duplicates('name_match')
-                
-                # === EXTRACT CRITICAL INCIDENTS (if sheet exists) ===
-                try:
-                    if isinstance(uploaded_file.name, str) and uploaded_file.name.endswith('.xlsx'):
-                        incidents_df = pd.read_excel(uploaded_file, sheet_name='Critical_Incidents')
-                        if len(incidents_df) > 0 and 'Student_Name' in incidents_df.columns:
-                            incidents_df['name_match'] = incidents_df['Student_Name'].str.strip().str.lower()
-                            st.session_state.incidents_df = incidents_df
-                except:
-                    pass
-                
-                # === PROCESS STUDENT DATA ===
-                column_map = {
-                    'Student_Name': 'student_name', 'Meeting_Week': 'meeting_week', 'Meeting_Date': 'meeting_date',
-                    'Term': 'term', 'Referral_Year': 'year', 'Allocated_Program': 'program',
-                    'DOB': 'date_of_birth', 'Gender': 'gender', 'Year_Level': 'year_level',
-                    'Referring_School': 'school', 'Partnership_Area': 'partnership_area',
-                    'Previous_CLC_Placement': 'previous_clc_placement', 'Previous_Other_LC': 'previous_other_lc',
-                    'Other_LC_Name': 'other_lc_name', 'Total_Previous_Placements': 'total_previous_placements',
-                    'Placement_History_Notes': 'placement_history_notes', 'Bespoke_Placement': 'bespoke_placement',
-                    'Waitlist_Status': 'waitlist_status', 'Waitlist_Date': 'waitlist_date',
-                    'Allocated_From_Waitlist': 'allocated_from_waitlist', 'Previously_Referred': 'previously_referred',
-                    'Medical_Condition_Details': 'medical_condition_details', 'Extension_Weeks': 'extension_weeks',
-                }
-                
-                df_mapped = df.copy()
-                for excel_col, supabase_col in column_map.items():
-                    if excel_col in df_mapped.columns:
-                        df_mapped = df_mapped.rename(columns={excel_col: supabase_col})
-                
-                df_mapped = df_mapped[[col for col in df_mapped.columns if col in column_map.values()]]
-                
-                date_cols = ['meeting_date', 'date_of_birth', 'waitlist_date']
-                for col in date_cols:
-                    if col in df_mapped.columns:
-                        df_mapped[col] = pd.to_datetime(df_mapped[col], errors='coerce')
-                        df_mapped[col] = df_mapped[col].dt.strftime('%Y-%m-%d')
-                        df_mapped[col] = df_mapped[col].replace('NaT', '')
-                
-                numeric_cols = ['year', 'term', 'extension_weeks', 'total_previous_placements']
-                for col in numeric_cols:
-                    if col in df_mapped.columns:
-                        df_mapped[col] = pd.to_numeric(df_mapped[col], errors='coerce').fillna(0).astype(int)
-                
-                df_mapped = df_mapped.astype(str)
-                df_mapped = df_mapped.replace('nan', '')
-                df_mapped = df_mapped.fillna('')
-                
-                for col in df_mapped.columns:
-                    if df_mapped[col].dtype == 'object':
-                        df_mapped[col] = df_mapped[col].str.strip()
-                
-                if 'meeting_date' in df_mapped.columns:
-                    today = pd.Timestamp.now().strftime('%Y-%m-%d')
-                    df_mapped['meeting_date'] = df_mapped['meeting_date'].replace('', today)
-                
-                # Show status
-                status_msg = f"Ready: {len(df_mapped)} student records"
-                if 'flag_df' in st.session_state and st.session_state.flag_df is not None:
-                    status_msg += f" + {len(st.session_state.flag_df)} flag records"
-                if 'funding_df' in st.session_state and st.session_state.funding_df is not None:
-                    status_msg += f" + {len(st.session_state.funding_df)} funding records"
-                if 'raap_df' in st.session_state and st.session_state.raap_df is not None:
-                    status_msg += f" + RAAP"
-                if 'incidents_df' in st.session_state and st.session_state.incidents_df is not None:
-                    status_msg += f" + {len(st.session_state.incidents_df)} incidents"
-                st.success(status_msg)
-                
-                if st.button("Upload Now"):
-                    if not supabase:
-                        st.error("Supabase not connected")
-                    else:
+                    # === EXTRACT FLAG DATA (if columns exist) ===
+                    flag_cols_available = []
+                    for col in ['Flag_ATSI', 'Flag_EALD', 'Flag_DCP_involvement']:
+                        if col in df.columns:
+                            flag_cols_available.append(col)
+                    
+                    if 'Student_Name' in df.columns and flag_cols_available:
+                        # Extract and cache flag data
+                        flag_data = df[['Student_Name'] + flag_cols_available].copy()
+                        flag_data['name_match'] = flag_data['Student_Name'].str.strip().str.lower()
+                        flag_cols_for_merge = ['name_match'] + flag_cols_available
+                        st.session_state.flag_df = flag_data[flag_cols_for_merge].drop_duplicates('name_match')
+                    
+                    # === EXTRACT FUNDING CATEGORY DATA (if columns exist) ===
+                    funding_cols_available = []
+                    for i in range(1, 10):
+                        col = f'Flag_Category_{i}'
+                        if col in df.columns:
+                            funding_cols_available.append(col)
+                    
+                    if 'Student_Name' in df.columns and funding_cols_available:
+                        # Extract and cache funding data
+                        funding_data = df[['Student_Name'] + funding_cols_available].copy()
+                        funding_data['name_match'] = funding_data['Student_Name'].str.strip().str.lower()
+                        funding_cols_for_merge = ['name_match'] + funding_cols_available
+                        st.session_state.funding_df = funding_data[funding_cols_for_merge].drop_duplicates('name_match')
+                    
+                    # === EXTRACT DISABILITY FLAGS ===
+                    disability_flags = ['Flag_SWD', 'Flag_ASD', 'Flag_Intellectual', 'Flag_Learning_Difficulty',
+                                       'Flag_Sensory_Processing', 'Flag_ADHD', 'Flag_ODD', 'Flag_PDA',
+                                       'Medical_Condition_Details']
+                    
+                    disability_cols_available = [col for col in disability_flags if col in df.columns]
+                    
+                    if disability_cols_available and 'Student_Name' in df.columns:
+                        # Extract and cache disability data
+                        disability_data = df[['Student_Name'] + disability_cols_available].copy()
+                        disability_data['name_match'] = disability_data['Student_Name'].str.strip().str.lower()
+                        disability_cols_for_merge = ['name_match'] + disability_cols_available
+                        st.session_state.disability_df = disability_data[disability_cols_for_merge].drop_duplicates('name_match')
+                    
+                    # === EXTRACT RAAP FLAG (if exists) ===
+                    if 'Flag_9plusRAAP' in df.columns and 'Student_Name' in df.columns:
+                        raap_data = df[['Student_Name', 'Flag_9plusRAAP']].copy()
+                        raap_data['name_match'] = raap_data['Student_Name'].str.strip().str.lower()
+                        st.session_state.raap_df = raap_data[['name_match', 'Flag_9plusRAAP']].drop_duplicates('name_match')
+                    
+                    # === EXTRACT CRITICAL INCIDENTS (if sheet exists) ===
+                    try:
+                        if isinstance(uploaded_file.name, str) and uploaded_file.name.endswith('.xlsx'):
+                            incidents_df = pd.read_excel(uploaded_file, sheet_name='Critical_Incidents')
+                            if len(incidents_df) > 0 and 'Student_Name' in incidents_df.columns:
+                                incidents_df['name_match'] = incidents_df['Student_Name'].str.strip().str.lower()
+                                st.session_state.incidents_df = incidents_df
+                    except:
+                        pass
+                    
+                    # === PROCESS STUDENT DATA ===
+                    column_map = {
+                        'Student_Name': 'student_name', 'Meeting_Week': 'meeting_week', 'Meeting_Date': 'meeting_date',
+                        'Term': 'term', 'Referral_Year': 'year', 'Allocated_Program': 'program',
+                        'DOB': 'date_of_birth', 'Gender': 'gender', 'Year_Level': 'year_level',
+                        'Referring_School': 'school', 'Partnership_Area': 'partnership_area',
+                        'Previous_CLC_Placement': 'previous_clc_placement', 'Previous_Other_LC': 'previous_other_lc',
+                        'Other_LC_Name': 'other_lc_name', 'Total_Previous_Placements': 'total_previous_placements',
+                        'Placement_History_Notes': 'placement_history_notes', 'Bespoke_Placement': 'bespoke_placement',
+                        'Waitlist_Status': 'waitlist_status', 'Waitlist_Date': 'waitlist_date',
+                        'Allocated_From_Waitlist': 'allocated_from_waitlist', 'Previously_Referred': 'previously_referred',
+                        'Medical_Condition_Details': 'medical_condition_details', 'Extension_Weeks': 'extension_weeks',
+                    }
+                    
+                    df_mapped = df.copy()
+                    for excel_col, supabase_col in column_map.items():
+                        if excel_col in df_mapped.columns:
+                            df_mapped = df_mapped.rename(columns={excel_col: supabase_col})
+                    
+                    df_mapped = df_mapped[[col for col in df_mapped.columns if col in column_map.values()]]
+                    
+                    date_cols = ['meeting_date', 'date_of_birth', 'waitlist_date']
+                    for col in date_cols:
+                        if col in df_mapped.columns:
+                            df_mapped[col] = pd.to_datetime(df_mapped[col], errors='coerce')
+                            df_mapped[col] = df_mapped[col].dt.strftime('%Y-%m-%d')
+                            df_mapped[col] = df_mapped[col].replace('NaT', '')
+                    
+                    numeric_cols = ['year', 'term', 'extension_weeks', 'total_previous_placements']
+                    for col in numeric_cols:
+                        if col in df_mapped.columns:
+                            df_mapped[col] = pd.to_numeric(df_mapped[col], errors='coerce').fillna(0).astype(int)
+                    
+                    df_mapped = df_mapped.astype(str)
+                    df_mapped = df_mapped.replace('nan', '')
+                    df_mapped = df_mapped.fillna('')
+                    
+                    for col in df_mapped.columns:
+                        if df_mapped[col].dtype == 'object':
+                            df_mapped[col] = df_mapped[col].str.strip()
+                    
+                    if 'meeting_date' in df_mapped.columns:
+                        today = pd.Timestamp.now().strftime('%Y-%m-%d')
+                        df_mapped['meeting_date'] = df_mapped['meeting_date'].replace('', today)
+                    
+                    # Show status
+                    status_msg = f"Ready: {len(df_mapped)} student records"
+                    if 'flag_df' in st.session_state and st.session_state.flag_df is not None:
+                        status_msg += f" + {len(st.session_state.flag_df)} flag records"
+                    if 'funding_df' in st.session_state and st.session_state.funding_df is not None:
+                        status_msg += f" + {len(st.session_state.funding_df)} funding records"
+                    if 'raap_df' in st.session_state and st.session_state.raap_df is not None:
+                        status_msg += f" + RAAP"
+                    if 'incidents_df' in st.session_state and st.session_state.incidents_df is not None:
+                        status_msg += f" + {len(st.session_state.incidents_df)} incidents"
+                    st.success(status_msg)
+                    
+                    if st.button("Upload Now"):
+                        if not supabase:
+                            st.error("Supabase not connected")
+                        else:
                         with st.spinner("Uploading..."):
                             try:
                                 supabase.table('allocation_students').delete().gte('id', '00000000-0000-0000-0000-000000000000').execute()
@@ -521,28 +525,9 @@ else:
             
             except Exception as e:
                 st.error(f"Error: {e}")
-        
-        st.markdown("---")
-        st.markdown("**Data Status**")
-        
-        status_items = []
-        if 'flag_df' in st.session_state and st.session_state.flag_df is not None:
-            status_items.append(f"✅ Flags: {len(st.session_state.flag_df)} records")
         else:
-            status_items.append("⚪ Flags: not loaded")
-        
-        if 'funding_df' in st.session_state and st.session_state.funding_df is not None:
-            status_items.append(f"✅ Funding: {len(st.session_state.funding_df)} records")
-        else:
-            status_items.append("⚪ Funding: not loaded")
-        
-        if 'raap_df' in st.session_state and st.session_state.raap_df is not None:
-            status_items.append(f"✅ RAAP: loaded")
-        else:
-            status_items.append("⚪ RAAP: not loaded")
-        
-        for item in status_items:
-            st.write(item)
+            if upload_password:  # Only show if they entered something
+                st.error("❌ Incorrect password. Contact Candice for upload access.")
     
     # TOP TITLE
     st.markdown("""
