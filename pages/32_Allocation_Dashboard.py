@@ -496,31 +496,31 @@ else:
                     if not supabase:
                         st.error("Supabase not connected")
                     else:
-                    with st.spinner("Uploading..."):
-                        try:
-                            supabase.table('allocation_students').delete().gte('id', '00000000-0000-0000-0000-000000000000').execute()
-                            
-                            numeric_cols = ['year', 'term', 'extension_weeks', 'total_previous_placements']
-                            date_cols = ['meeting_date', 'date_of_birth', 'waitlist_date']
-                            
-                            records = []
-                            for idx, row in df_mapped.iterrows():
-                                record = {}
-                                for col in df_mapped.columns:
-                                    val = row[col]
-                                    if pd.isna(val) or val == 'nan' or val == '':
-                                        record[col] = 0 if col in numeric_cols else (None if col in date_cols else '')
-                                    else:
-                                        record[col] = str(val)
-                                records.append(record)
-                            
-                            for i in range(0, len(records), 50):
-                                supabase.table('allocation_students').insert(records[i:i+50]).execute()
-                            
-                            st.success(f"Uploaded {len(records)} records!")
-                            st.cache_data.clear()
-                            
-                        except Exception as e:
+                        with st.spinner("Uploading..."):
+                            try:
+                                supabase.table('allocation_students').delete().gte('id', '00000000-0000-0000-0000-000000000000').execute()
+                                
+                                numeric_cols = ['year', 'term', 'extension_weeks', 'total_previous_placements']
+                                date_cols = ['meeting_date', 'date_of_birth', 'waitlist_date']
+                                
+                                records = []
+                                for idx, row in df_mapped.iterrows():
+                                    record = {}
+                                    for col in df_mapped.columns:
+                                        val = row[col]
+                                        if pd.isna(val) or val == 'nan' or val == '':
+                                            record[col] = 0 if col in numeric_cols else (None if col in date_cols else '')
+                                        else:
+                                            record[col] = str(val)
+                                    records.append(record)
+                                
+                                for i in range(0, len(records), 50):
+                                    supabase.table('allocation_students').insert(records[i:i+50]).execute()
+                                
+                                st.success(f"Uploaded {len(records)} records!")
+                                st.cache_data.clear()
+                                
+                            except Exception as e:
                             st.error(f"Failed: {str(e)[:150]}")
             
             except Exception as e:
