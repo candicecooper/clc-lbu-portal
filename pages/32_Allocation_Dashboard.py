@@ -936,15 +936,18 @@ else:
             
             # DEBUG: Check PY students
             with st.expander("🔍 Debug - Funding Merge Check"):
-                py_students = risk_df[risk_df['program'] == 'PY']
+                py_students = risk_df[risk_df['program'] == 'PY'].copy()
                 st.write(f"**Total PY students:** {len(py_students)}")
                 st.write(f"**PY students with Cat 4+:** {len(py_students[py_students['funding_category'].str.contains('Cat [4-9]', regex=True, na=False)])}")
                 st.write(f"**Funding columns in risk_df:** {[c for c in risk_df.columns if 'Flag_Category' in c]}")
+                
                 if len(py_students) > 0:
-                    st.write("**Sample PY student funding:**")
-                    sample_cols = ['student_name', 'program', 'funding_category'] + [c for c in risk_df.columns if 'Flag_Category' in c][:3]
-                    sample_cols = [c for c in sample_cols if c in risk_df.columns]
-                    st.dataframe(py_students[sample_cols].head(3), use_container_width=True)
+                    st.write("**Sample PY student data - ALL columns:**")
+                    # Show all columns for first PY student
+                    st.write(py_students.iloc[0].to_dict())
+                    
+                    st.write("**All PY students - funding_category values:**")
+                    st.dataframe(py_students[['student_name', 'funding_category', 'Flag_Category_1', 'Flag_Category_2', 'Flag_Category_3', 'Flag_Category_4', 'Flag_Category_5']], use_container_width=True)
         
         # Merge RAAP data if available
         if 'raap_df' in st.session_state and st.session_state.raap_df is not None:
