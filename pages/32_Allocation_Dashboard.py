@@ -1013,10 +1013,11 @@ else:
             }
             funding_summary['color_key'] = funding_summary['category'].map(color_map)
             
-            fig_funding = px.barh(
+            fig_funding = px.bar(
                 funding_summary,
                 x='count',
                 y='category',
+                orientation='h',
                 text='count',
                 color='color_key',
                 color_continuous_scale='Reds',
