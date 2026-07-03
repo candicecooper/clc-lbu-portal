@@ -1906,13 +1906,14 @@ else:
                     # Process all assessment data first (outside tabs)
                     import json
                     
-                    smartar_stats = {'Reached Expected': 0, 'Above Expectation': 0, 'Exceeding': 0}
+                    smartar_personal_social = {'Reached Expected': 0, 'Above Expectation': 0, 'Exceeding': 0}
+                    smartar_learning = {'Reached Expected': 0, 'Above Expectation': 0, 'Exceeding': 0}
                     sw_totals = {}
                     wa_totals = {}
                     
                     for idx, row in filtered_assess.iterrows():
                         try:
-                            # SMARTAR
+                            # SMARTAR - separate by category
                             if 'smartar_goals' in row and row['smartar_goals'] is not None:
                                 data = row['smartar_goals']
                                 if isinstance(data, str):
@@ -1920,10 +1921,18 @@ else:
                                 if isinstance(data, dict):
                                     for category, achievements in data.items():
                                         if isinstance(achievements, dict):
-                                            for level, count in achievements.items():
-                                                count = int(count) if isinstance(count, (int, float)) else 0
-                                                if level in smartar_stats:
-                                                    smartar_stats[level] += count
+                                            # Route to appropriate stats based on category
+                                            target_stats = None
+                                            if 'Personal' in category or 'Social' in category:
+                                                target_stats = smartar_personal_social
+                                            elif 'Learning' in category or 'Engagement' in category:
+                                                target_stats = smartar_learning
+                                            
+                                            if target_stats:
+                                                for level, count in achievements.items():
+                                                    count = int(count) if isinstance(count, (int, float)) else 0
+                                                    if level in target_stats:
+                                                        target_stats[level] += count
                         except:
                             pass
                         
@@ -1985,35 +1994,77 @@ else:
                     with tab2:
                         st.markdown("**SMARTAR Goals**")
                         
-                        c1, c2, c3 = st.columns(3)
-                        c1.metric("Exceeding", smartar_stats['Exceeding'])
-                        c2.metric("Above Expectation", smartar_stats['Above Expectation'])
-                        c3.metric("Reached Expected", smartar_stats['Reached Expected'])
+                        col1, col2 = st.columns(2)
                         
-                        if sum(smartar_stats.values()) > 0:
-                            st.markdown("---")
-                            df = pd.DataFrame([{
-                                'Status': status,
-                                'Count': count
-                            } for status, count in smartar_stats.items()])
+                        # Personal and Social
+                        with col1:
+                            st.markdown("**Personal & Social**")
+                            c1, c2, c3 = st.columns(3)
+                            c1.metric("Exceeding", smartar_personal_social['Exceeding'])
+                            c2.metric("Above Expectation", smartar_personal_social['Above Expectation'])
+                            c3.metric("Reached Expected", smartar_personal_social['Reached Expected'])
                             
-                            fig = px.pie(
-                                df,
-                                values='Count',
-                                names='Status',
-                                color_discrete_map={
-                                    'Exceeding': '#4CAF50',
-                                    'Above Expectation': '#00BCD4',
-                                    'Reached Expected': '#FFC107'
-                                }
-                            )
-                            fig.update_layout(
-                                plot_bgcolor='rgba(10, 14, 39, 0.8)',
-                                paper_bgcolor='rgba(10, 14, 39, 0.8)',
-                                font=dict(color='#e8e8e8'),
-                                height=400
-                            )
-                            st.plotly_chart(fig, use_container_width=True)
+                            if sum(smartar_personal_social.values()) > 0:
+                                df_ps = pd.DataFrame([{
+                                    'Status': status,
+                                    'Count': count
+                                } for status, count in smartar_personal_social.items()])
+                                
+                                fig_ps = px.pie(
+                                    df_ps,
+                                    values='Count',
+                                    names='Status',
+                                    color_discrete_map={
+                                        'Exceeding': '#4CAF50',
+                                        'Above Expectation': '#00BCD4',
+                                        'Reached Expected': '#FFC107'
+                                    }
+                                )
+                                fig_ps.update_layout(
+                                    plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                                    paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                                    font=dict(color='#e8e8e8'),
+                                    height=400,
+                                    showlegend=True
+                                )
+                                st.plotly_chart(fig_ps, use_container_width=True)
+                            else:
+                                st.info("No Personal & Social data")
+                        
+                        # Learning and Engagement
+                        with col2:
+                            st.markdown("**Learning and Engagement**")
+                            c4, c5, c6 = st.columns(3)
+                            c4.metric("Exceeding", smartar_learning['Exceeding'])
+                            c5.metric("Above Expectation", smartar_learning['Above Expectation'])
+                            c6.metric("Reached Expected", smartar_learning['Reached Expected'])
+                            
+                            if sum(smartar_learning.values()) > 0:
+                                df_le = pd.DataFrame([{
+                                    'Status': status,
+                                    'Count': count
+                                } for status, count in smartar_learning.items()])
+                                
+                                fig_le = px.pie(
+                                    df_le,
+                                    values='Count',
+                                    names='Status',
+                                    color_discrete_map={
+                                        'Exceeding': '#4CAF50',
+                                        'Above Expectation': '#00BCD4',
+                                        'Reached Expected': '#FFC107'
+                                    }
+                                )
+                                fig_le.update_layout(
+                                    plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                                    paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                                    font=dict(color='#e8e8e8'),
+                                    height=400,
+                                    showlegend=True
+                                )
+                                st.plotly_chart(fig_le, use_container_width=True)
+                            else:
+                                st.info("No Learning & Engagement data")
                 
                     with tab3:
                         st.markdown("**Sounds Write**")
