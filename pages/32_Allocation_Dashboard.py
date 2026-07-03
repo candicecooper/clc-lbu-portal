@@ -933,6 +933,18 @@ else:
             if 'name_match' in funding_df_merge.columns:
                 risk_df = risk_df.merge(funding_df_merge, on='name_match', how='left', suffixes=('', '_fund'))
             risk_df = risk_df.drop('name_match', axis=1)
+            
+            # DEBUG: Check PY students
+            with st.expander("🔍 Debug - Funding Merge Check"):
+                py_students = risk_df[risk_df['program'] == 'PY']
+                st.write(f"**Total PY students:** {len(py_students)}")
+                st.write(f"**PY students with Cat 4+:** {len(py_students[py_students['funding_category'].str.contains('Cat [4-9]', regex=True, na=False)])}")
+                st.write(f"**Funding columns in risk_df:** {[c for c in risk_df.columns if 'Flag_Category' in c]}")
+                if len(py_students) > 0:
+                    st.write("**Sample PY student funding:**")
+                    sample_cols = ['student_name', 'program', 'funding_category'] + [c for c in risk_df.columns if 'Flag_Category' in c][:3]
+                    sample_cols = [c for c in sample_cols if c in risk_df.columns]
+                    st.dataframe(py_students[sample_cols].head(3), use_container_width=True)
         
         # Merge RAAP data if available
         if 'raap_df' in st.session_state and st.session_state.raap_df is not None:
@@ -1033,11 +1045,36 @@ else:
             if 'program' in risk_df.columns:
                 fund_prog = risk_df.groupby(['program', 'funding_category']).size().unstack(fill_value=0)
                 
+                # Ensure all categories are present, ordered from highest to lowest
+                category_order = ['Cat 9+RAAP', 'Cat 9', 'Cat 8', 'Cat 7', 'Cat 6', 'Cat 5', 'Cat 4', 'Cat 3', 'Cat 2', 'Cat 1', 'None']
+                for cat in category_order:
+                    if cat not in fund_prog.columns:
+                        fund_prog[cat] = 0
+                
+                # Reorder columns
+                fund_prog = fund_prog[[c for c in category_order if c in fund_prog.columns]]
+                
+                # Create color map
+                color_discrete_map = {
+                    'Cat 9+RAAP': '#8B0000',  # Dark red
+                    'Cat 9': '#DC143C',       # Crimson
+                    'Cat 8': '#FF6347',       # Tomato
+                    'Cat 7': '#FFA07A',       # Light salmon
+                    'Cat 6': '#FFB6C1',       # Light pink
+                    'Cat 5': '#FFE4E1',       # Misty rose
+                    'Cat 4': '#FFF0F5',       # Lavender blush
+                    'Cat 3': '#E0FFFF',       # Light cyan
+                    'Cat 2': '#B0E0E6',       # Powder blue
+                    'Cat 1': '#87CEEB',       # Sky blue
+                    'None': '#D3D3D3'         # Light gray
+                }
+                
                 fig_fund_prog = px.bar(
                     fund_prog,
                     barmode='stack',
                     title='Funding Categories by Program',
-                    labels={'value': 'Count', 'index': 'Program'}
+                    labels={'value': 'Count', 'index': 'Program'},
+                    color_discrete_map=color_discrete_map
                 )
                 st.plotly_chart(update_chart_layout(fig_fund_prog), use_container_width=True)
         
