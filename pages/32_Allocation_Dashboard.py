@@ -380,12 +380,12 @@ else:
                         # Show available columns for debugging
                         with st.expander("📋 Available columns in file"):
                             st.write("All columns:", list(df.columns))
-                
-                # === EXTRACT FLAG DATA (if columns exist) ===
-                flag_cols_available = []
-                for col in ['Flag_ATSI', 'Flag_EALD', 'Flag_DCP_involvement']:
-                    if col in df.columns:
-                        flag_cols_available.append(col)
+                        
+                        # === EXTRACT FLAG DATA (if columns exist) ===
+                        flag_cols_available = []
+                        for col in ['Flag_ATSI', 'Flag_EALD', 'Flag_DCP_involvement']:
+                            if col in df.columns:
+                                flag_cols_available.append(col)
                 
                 if 'Student_Name' in df.columns and flag_cols_available:
                     # Extract and cache flag data
@@ -393,17 +393,17 @@ else:
                     flag_data['name_match'] = flag_data['Student_Name'].str.strip().str.lower()
                     flag_cols_for_merge = ['name_match'] + flag_cols_available
                     st.session_state.flag_df = flag_data[flag_cols_for_merge].drop_duplicates('name_match')
-                
+                    
                 # === EXTRACT FUNDING CATEGORY DATA (if columns exist) ===
                 funding_cols_available = []
                 for i in range(1, 10):
                     col = f'Flag_Category_{i}'
                     if col in df.columns:
                         funding_cols_available.append(col)
-                
+                    
                 if funding_cols_available:
                     st.info(f"✅ Found funding columns: {', '.join(funding_cols_available)}")
-                
+                    
                 if 'Student_Name' in df.columns and funding_cols_available:
                     # Extract and cache funding data
                     funding_data = df[['Student_Name'] + funding_cols_available].copy()
@@ -413,7 +413,7 @@ else:
                 else:
                     if 'Student_Name' in df.columns:
                         st.warning("No funding category columns found (Flag_Category_1 to 9)")
-                
+                    
                 # === EXTRACT RAAP FLAG (if exists) ===
                 if 'Flag_9plusRAAP' in df.columns and 'Student_Name' in df.columns:
                     raap_data = df[['Student_Name', 'Flag_9plusRAAP']].copy()
@@ -429,7 +429,7 @@ else:
                             st.session_state.incidents_df = incidents_df
                 except:
                     pass
-                
+                    
                 # === PROCESS STUDENT DATA ===
                 column_map = {
                     'Student_Name': 'student_name', 'Meeting_Week': 'meeting_week', 'Meeting_Date': 'meeting_date',
@@ -443,38 +443,38 @@ else:
                     'Allocated_From_Waitlist': 'allocated_from_waitlist', 'Previously_Referred': 'previously_referred',
                     'Medical_Condition_Details': 'medical_condition_details', 'Extension_Weeks': 'extension_weeks',
                 }
-                
+                    
                 df_mapped = df.copy()
                 for excel_col, supabase_col in column_map.items():
                     if excel_col in df_mapped.columns:
                         df_mapped = df_mapped.rename(columns={excel_col: supabase_col})
-                
+                    
                 df_mapped = df_mapped[[col for col in df_mapped.columns if col in column_map.values()]]
-                
+                    
                 date_cols = ['meeting_date', 'date_of_birth', 'waitlist_date']
                 for col in date_cols:
                     if col in df_mapped.columns:
                         df_mapped[col] = pd.to_datetime(df_mapped[col], errors='coerce')
                         df_mapped[col] = df_mapped[col].dt.strftime('%Y-%m-%d')
                         df_mapped[col] = df_mapped[col].replace('NaT', '')
-                
+                    
                 numeric_cols = ['year', 'term', 'extension_weeks', 'total_previous_placements']
                 for col in numeric_cols:
                     if col in df_mapped.columns:
                         df_mapped[col] = pd.to_numeric(df_mapped[col], errors='coerce').fillna(0).astype(int)
-                
+                    
                 df_mapped = df_mapped.astype(str)
                 df_mapped = df_mapped.replace('nan', '')
                 df_mapped = df_mapped.fillna('')
-                
+                    
                 for col in df_mapped.columns:
                     if df_mapped[col].dtype == 'object':
                         df_mapped[col] = df_mapped[col].str.strip()
-                
+                    
                 if 'meeting_date' in df_mapped.columns:
                     today = pd.Timestamp.now().strftime('%Y-%m-%d')
                     df_mapped['meeting_date'] = df_mapped['meeting_date'].replace('', today)
-                
+                    
                 # Show status
                 status_msg = f"Ready: {len(df_mapped)} student records"
                 if 'flag_df' in st.session_state and st.session_state.flag_df is not None:
@@ -486,7 +486,7 @@ else:
                 if 'incidents_df' in st.session_state and st.session_state.incidents_df is not None:
                     status_msg += f" + {len(st.session_state.incidents_df)} incidents"
                 st.success(status_msg)
-                
+                    
                 if st.button("Upload Now"):
                     if not supabase:
                         st.error("Supabase not connected")
@@ -494,10 +494,10 @@ else:
                         with st.spinner("Uploading..."):
                             try:
                                 supabase.table('allocation_students').delete().gte('id', '00000000-0000-0000-0000-000000000000').execute()
-                                
+                                    
                                 numeric_cols = ['year', 'term', 'extension_weeks', 'total_previous_placements']
                                 date_cols = ['meeting_date', 'date_of_birth', 'waitlist_date']
-                                
+                                    
                                 records = []
                                 for idx, row in df_mapped.iterrows():
                                     record = {}
@@ -508,13 +508,13 @@ else:
                                         else:
                                             record[col] = str(val)
                                     records.append(record)
-                                
+                                    
                                 for i in range(0, len(records), 50):
                                     supabase.table('allocation_students').insert(records[i:i+50]).execute()
-                                
+                                    
                                 st.success(f"Uploaded {len(records)} records!")
                                 st.cache_data.clear()
-                                
+                                    
                             except Exception as e:
                                 st.error(f"Failed: {str(e)[:150]}")
             
