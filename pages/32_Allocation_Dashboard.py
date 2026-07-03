@@ -1710,35 +1710,177 @@ else:
 
     elif section == "Disability & Support Needs":
         st.markdown("## Disability & Support Needs Analysis")
-        st.markdown("Deep analysis of student disabilities and complex support needs - including intersectionality with ATSI, EALD, and DCP flags")
+        st.markdown("Deep analysis of student disabilities and complex support needs - including intersectionality with ATSI, EALD, and DCP")
         
-        st.info("🔍 **Note:** This section analyzes primary disability types and complex needs. ATSI, EALD, and DCP are tracked as intersecting identity factors, not as disabilities.")
-        
-        st.markdown("---")
-        
-        # For now, show placeholder - waiting for you to specify which columns contain disability data
-        st.warning("⚠️ **Setup Required:** Please specify which column(s) in your Excel file contain disability information (e.g., 'Primary_Disability', 'Disability_Type', etc.)")
-        
-        st.markdown("""
-        **What we'll analyze:**
-        - Primary disability types and distribution
-        - Students with multiple/complex disabilities
-        - Intersection of disabilities with ATSI, EALD, DCP status
-        - Support category allocation by disability
-        - Funding needs by disability type
-        - Program placement patterns for disability categories
-        """)
+        st.info("🔍 **Note:** This section analyzes disability types and complex needs. ATSI, EALD, and DCP are tracked as intersecting identity factors, not as disabilities.")
         
         st.markdown("---")
-        st.markdown("**Data Collection Instructions:**")
-        st.markdown("""
-        Please add disability data columns to your Excel file:
-        - `Primary_Disability` - main disability type
-        - `Secondary_Disability` (optional) - additional disabilities
-        - `Disability_Support_Level` (optional) - intensity of support needed
         
-        Contact Candice to configure this section once data is available.
-        """)
+        # Check if we have disability flag data
+        disability_flags = ['Flag_SWD', 'Flag_ASD', 'Flag_Intellectual', 'Flag_Learning_Difficulty', 
+                           'Flag_Sensory_Processing', 'Flag_ADHD', 'Flag_ODD', 'Flag_PDA', 
+                           'Flag_Medication', 'Flag_Medical_condition']
+        
+        # Filter to current selections
+        disability_df = filtered.copy()
+        
+        # Count students with at least one disability flag
+        disability_df['has_disability'] = False
+        disability_df['disability_count'] = 0
+        
+        for flag in disability_flags:
+            if flag in disability_df.columns:
+                mask = (disability_df[flag] == 'Yes') | (disability_df[flag] == 'YES')
+                disability_df.loc[mask, 'has_disability'] = True
+                disability_df['disability_count'] += mask.astype(int)
+        
+        total_students = len(disability_df)
+        students_with_disability = disability_df['has_disability'].sum()
+        students_no_disability = total_students - students_with_disability
+        
+        # Metrics row
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total Students", total_students)
+        col2.metric("With Disability", students_with_disability)
+        col3.metric("No Disability Flag", students_no_disability)
+        col4.metric("% with Disability", f"{(students_with_disability/total_students*100):.1f}%" if total_students > 0 else "0%")
+        
+        st.markdown("---")
+        st.markdown("### Disability Type Distribution")
+        
+        # Count each disability type
+        disability_counts = {}
+        for flag in disability_flags:
+            if flag in disability_df.columns:
+                count = ((disability_df[flag] == 'Yes') | (disability_df[flag] == 'YES')).sum()
+                if count > 0:
+                    # Clean up flag name
+                    name = flag.replace('Flag_', '').replace('_', ' ')
+                    disability_counts[name] = count
+        
+        if disability_counts:
+            # Sort by count descending
+            disability_counts = dict(sorted(disability_counts.items(), key=lambda x: x[1], reverse=True))
+            
+            disability_data = pd.DataFrame(list(disability_counts.items()), columns=['Disability Type', 'Count'])
+            
+            col1, col2 = st.columns([1.2, 1])
+            
+            with col1:
+                # Horizontal bar chart
+                fig = px.bar(
+                    disability_data,
+                    x='Count',
+                    y='Disability Type',
+                    orientation='h',
+                    text='Count',
+                    color='Count',
+                    color_continuous_scale='Blues',
+                    title='Students by Disability Type'
+                )
+                fig.update_xaxes(dtick=1)
+                fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                fig.update_layout(
+                    plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                    paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                    font=dict(color='#e8e8e8'),
+                    height=400,
+                    showlegend=False
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                # Display as list with percentages
+                st.markdown("**Breakdown**")
+                for disability, count in disability_counts.items():
+                    pct = (count / students_with_disability * 100) if students_with_disability > 0 else 0
+                    st.write(f"**{disability}:** {count} ({pct:.1f}%)")
+        
+        else:
+            st.info("No disability data found in current filters")
+        
+        st.markdown("---")
+        st.markdown("### Multiple Disabilities (Complex Needs)")
+        
+        # Analyze students with multiple disabilities
+        multiple_disability = disability_df[disability_df['disability_count'] >= 2]
+        
+        if len(multiple_disability) > 0:
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Students with 2+ Disabilities", len(multiple_disability))
+            col2.metric("% of All Students", f"{(len(multiple_disability)/total_students*100):.1f}%")
+            col3.metric("Avg Disabilities per Student", f"{multiple_disability['disability_count'].mean():.1f}")
+            
+            st.markdown("---")
+            
+            # Distribution of disability count
+            count_dist = multiple_disability['disability_count'].value_counts().sort_index()
+            count_data = pd.DataFrame({'Number of Disabilities': count_dist.index, 'Students': count_dist.values})
+            
+            fig = px.bar(
+                count_data,
+                x='Number of Disabilities',
+                y='Students',
+                text='Students',
+                color='Students',
+                color_continuous_scale='Reds',
+                title='Students by Number of Disabilities'
+            )
+            fig.update_xaxes(dtick=1)
+            fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+            fig.update_layout(
+                plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                font=dict(color='#e8e8e8'),
+                showlegend=False
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No students with multiple disabilities in current filters")
+        
+        st.markdown("---")
+        st.markdown("### Intersectionality: Disability × ATSI/EALD/DCP")
+        
+        # Create intersection analysis
+        if students_with_disability > 0:
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.markdown("**Disability + ATSI**")
+                disability_atsi = disability_df[(disability_df['has_disability']) & (disability_df['Flag_ATSI'] == 'Yes')]
+                st.metric("Students", len(disability_atsi))
+                if students_with_disability > 0:
+                    st.write(f"{(len(disability_atsi)/students_with_disability*100):.1f}% of students with disability")
+            
+            with col2:
+                st.markdown("**Disability + EALD**")
+                disability_eald = disability_df[(disability_df['has_disability']) & (disability_df['Flag_EALD'] == 'Yes')]
+                st.metric("Students", len(disability_eald))
+                if students_with_disability > 0:
+                    st.write(f"{(len(disability_eald)/students_with_disability*100):.1f}% of students with disability")
+            
+            with col3:
+                st.markdown("**Disability + DCP**")
+                disability_dcp = disability_df[(disability_df['has_disability']) & (disability_df['Flag_DCP'] == 'Yes')]
+                st.metric("Students", len(disability_dcp))
+                if students_with_disability > 0:
+                    st.write(f"{(len(disability_dcp)/students_with_disability*100):.1f}% of students with disability")
+        
+        st.markdown("---")
+        st.markdown("### Medical Conditions")
+        
+        if 'Medical_Condition_Details' in disability_df.columns:
+            medical_details = disability_df[disability_df['Medical_Condition_Details'].notna() & 
+                                           (disability_df['Medical_Condition_Details'] != '') & 
+                                           (disability_df['Medical_Condition_Details'] != 'No')]
+            
+            if len(medical_details) > 0:
+                st.markdown(f"**{len(medical_details)} students with documented medical conditions:**")
+                with st.expander("View medical conditions"):
+                    for idx, row in medical_details.iterrows():
+                        st.write(f"• {row['student_name']}: {row['Medical_Condition_Details']}")
+            else:
+                st.info("No medical conditions documented")
 
     elif section == "Critical Incidents":
         st.markdown("## Critical Incidents Tracking")
