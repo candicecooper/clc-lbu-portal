@@ -394,16 +394,12 @@ else:
                     if col in df.columns:
                         funding_cols_available.append(col)
                 
-                if funding_cols_available:
-                
                 if 'Student_Name' in df.columns and funding_cols_available:
                     # Extract and cache funding data
                     funding_data = df[['Student_Name'] + funding_cols_available].copy()
                     funding_data['name_match'] = funding_data['Student_Name'].str.strip().str.lower()
                     funding_cols_for_merge = ['name_match'] + funding_cols_available
                     st.session_state.funding_df = funding_data[funding_cols_for_merge].drop_duplicates('name_match')
-                else:
-                    if 'Student_Name' in df.columns:
                 
                 # === EXTRACT DISABILITY FLAGS ===
                 disability_flags = ['Flag_SWD', 'Flag_ASD', 'Flag_Intellectual', 'Flag_Learning_Difficulty',
