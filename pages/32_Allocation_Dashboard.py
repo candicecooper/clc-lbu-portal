@@ -689,7 +689,7 @@ else:
                 year_data['count'] = year_data['count'].astype(int)
                 
                 # Define all possible year levels in order
-                all_year_levels = ['R', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+                all_year_levels = ['F', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
                 # Create full dataframe with all year levels
                 year_data_full = pd.DataFrame({'year_level': all_year_levels})
                 year_data_full = year_data_full.merge(year_data, on='year_level', how='left').fillna(0)
@@ -707,9 +707,9 @@ else:
                     tickfont=dict(size=12)
                 )
                 fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
-                fig.update_layout(xaxis_title='Year Level (R = Kindergarten, 1-10 = Grades 1-10)')
+                fig.update_layout(xaxis_title='Year Level (F = Foundation, 1-10 = Years 1-10)')
                 st.plotly_chart(update_chart_layout(fig), use_container_width=True)
-                st.markdown("**What this shows:** Distribution across year levels R through 10")
+                st.markdown("**What this shows:** Distribution across year levels F through 10")
         
         st.markdown("---")
         st.markdown("## Partnership Placements")
@@ -889,7 +889,7 @@ else:
         
         if 'year_level' in filtered.columns and 'program' in filtered.columns:
             # Define correct year level order
-            year_order = ['R', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+            year_order = ['F', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
             program_order = ['JP', 'PY', 'SY']
             
             # Create heatmap data
@@ -1077,7 +1077,7 @@ else:
         
         # Define expected program alignment
         expected_alignment = {
-            'JP': ['R', '1', '2'],
+            'JP': ['F', '1', '2'],
             'PY': ['3', '4', '5', '6'],
             'SY': ['7', '8', '9', '10']
         }
@@ -1278,7 +1278,7 @@ else:
             st.markdown("### Year Level Deep Dive")
             st.markdown("Student distribution and characteristics by year level (R through 10)")
             
-            year_order = ['R', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+            year_order = ['F', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
             year_levels = [y for y in year_order if y in filtered['year_level'].unique()]
             
             # Year level overview
