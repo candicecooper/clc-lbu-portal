@@ -357,7 +357,7 @@ else:
         st.markdown("**Navigate**", help="Select an analysis section")
         section = st.radio(
             "Select Section",
-            ["Overview", "Trends", "Complexity", "Category of Support", "Cohort Analysis", "Equity", "Critical Incidents", "Assessment", "Waitlist", "Diagnostics"],
+            ["Overview", "Trends", "Complexity", "Category of Support", "Cohort Analysis", "Equity", "Disability & Support Needs", "Critical Incidents", "Assessment", "Waitlist", "Diagnostics"],
             label_visibility="collapsed"
         )
         
@@ -1533,12 +1533,22 @@ else:
                 if 'term_clean' in atsi_df.columns and len(atsi_df['term_clean'].dropna()) > 0:
                     by_term = atsi_df[atsi_df['term_clean'] >= 1]['term_clean'].value_counts().sort_index()
                     if len(by_term) > 0:
-                        term_df = pd.DataFrame({'Term': by_term.index, 'Count': by_term.values})
-                        fig = px.bar(term_df, x='Term', y='Count', title='ATSI Students by Term',
-                                     color_discrete_sequence=['#8B4513'])
-                        fig.update_traces(textposition='outside', text=term_df['Count'].values, textfont=dict(color='#ffffff'))
-                        fig.update_xaxes(type='category', categoryorder='array', categoryarray=[1, 2, 3, 4])
-                        st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                        # If only one term, show as metric; otherwise show bar chart
+                        if len(by_term) == 1:
+                            term_num = int(by_term.index[0])
+                            count = by_term.values[0]
+                            st.markdown(f"**ATSI Students in Term {term_num}**")
+                            col1, col2, col3 = st.columns(3)
+                            col1.metric("Students", count)
+                            col2.metric("% of ATSI Total", f"{(count/len(atsi_df)*100):.1f}%")
+                            col3.metric("% of Cohort", f"{(count/len(equity_df)*100):.1f}%")
+                        else:
+                            term_df = pd.DataFrame({'Term': by_term.index, 'Count': by_term.values})
+                            fig = px.bar(term_df, x='Term', y='Count', title='ATSI Students by Term',
+                                         color_discrete_sequence=['#8B4513'])
+                            fig.update_traces(textposition='outside', text=term_df['Count'].values, textfont=dict(color='#ffffff'))
+                            fig.update_xaxes(type='category', categoryorder='array', categoryarray=[1, 2, 3, 4])
+                            st.plotly_chart(update_chart_layout(fig), use_container_width=True)
                 
                 st.markdown("---")
                 if 'school' in atsi_df.columns:
@@ -1697,6 +1707,38 @@ else:
                     st.info("No DCP students with both ATSI + EALD")
             else:
                 st.info("No DCP students in current filters")
+
+    elif section == "Disability & Support Needs":
+        st.markdown("## Disability & Support Needs Analysis")
+        st.markdown("Deep analysis of student disabilities and complex support needs - including intersectionality with ATSI, EALD, and DCP flags")
+        
+        st.info("🔍 **Note:** This section analyzes primary disability types and complex needs. ATSI, EALD, and DCP are tracked as intersecting identity factors, not as disabilities.")
+        
+        st.markdown("---")
+        
+        # For now, show placeholder - waiting for you to specify which columns contain disability data
+        st.warning("⚠️ **Setup Required:** Please specify which column(s) in your Excel file contain disability information (e.g., 'Primary_Disability', 'Disability_Type', etc.)")
+        
+        st.markdown("""
+        **What we'll analyze:**
+        - Primary disability types and distribution
+        - Students with multiple/complex disabilities
+        - Intersection of disabilities with ATSI, EALD, DCP status
+        - Support category allocation by disability
+        - Funding needs by disability type
+        - Program placement patterns for disability categories
+        """)
+        
+        st.markdown("---")
+        st.markdown("**Data Collection Instructions:**")
+        st.markdown("""
+        Please add disability data columns to your Excel file:
+        - `Primary_Disability` - main disability type
+        - `Secondary_Disability` (optional) - additional disabilities
+        - `Disability_Support_Level` (optional) - intensity of support needed
+        
+        Contact Candice to configure this section once data is available.
+        """)
 
     elif section == "Critical Incidents":
         st.markdown("## Critical Incidents Tracking")
@@ -2121,26 +2163,64 @@ else:
                                 
                                 df_sw = pd.DataFrame(vis_data)
                                 
-                                fig = px.bar(
-                                    df_sw,
-                                    x='Skill',
-                                    y=['Mastered', 'Developing', 'Requires Dev'],
-                                    barmode='stack',
-                                    color_discrete_map={
-                                        'Mastered': '#4CAF50',
-                                        'Developing': '#FFC107',
-                                        'Requires Dev': '#F44336'
-                                    },
-                                    labels={'value': 'Count', 'variable': 'Level'}
-                                )
-                                fig.update_layout(
-                                    plot_bgcolor='rgba(10, 14, 39, 0.8)',
-                                    paper_bgcolor='rgba(10, 14, 39, 0.8)',
-                                    font=dict(color='#e8e8e8'),
-                                    hovermode='x unified',
-                                    height=400
-                                )
-                                st.plotly_chart(fig, use_container_width=True)
+                                # If only one skill, show as metrics/donut instead of wide bar
+                                if len(df_sw) == 1:
+                                    skill_name = df_sw.iloc[0]['Skill']
+                                    st.markdown(f"**{skill_name}**")
+                                    
+                                    col1, col2 = st.columns([1, 1])
+                                    with col1:
+                                        m1, m2, m3 = st.columns(3)
+                                        m1.metric("Mastered", int(df_sw.iloc[0]['Mastered']))
+                                        m2.metric("Developing", int(df_sw.iloc[0]['Developing']))
+                                        m3.metric("Requires Dev", int(df_sw.iloc[0]['Requires Dev']))
+                                    
+                                    with col2:
+                                        # Donut chart for single skill
+                                        donut_data = pd.DataFrame({
+                                            'Level': ['Mastered', 'Developing', 'Requires Dev'],
+                                            'Count': [df_sw.iloc[0]['Mastered'], df_sw.iloc[0]['Developing'], df_sw.iloc[0]['Requires Dev']]
+                                        })
+                                        fig_donut = px.pie(
+                                            donut_data,
+                                            values='Count',
+                                            names='Level',
+                                            hole=0.4,
+                                            color_discrete_map={
+                                                'Mastered': '#4CAF50',
+                                                'Developing': '#FFC107',
+                                                'Requires Dev': '#F44336'
+                                            }
+                                        )
+                                        fig_donut.update_layout(
+                                            plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                                            paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                                            font=dict(color='#e8e8e8'),
+                                            height=350
+                                        )
+                                        st.plotly_chart(fig_donut, use_container_width=True)
+                                else:
+                                    # Multiple skills - use stacked bar
+                                    fig = px.bar(
+                                        df_sw,
+                                        x='Skill',
+                                        y=['Mastered', 'Developing', 'Requires Dev'],
+                                        barmode='stack',
+                                        color_discrete_map={
+                                            'Mastered': '#4CAF50',
+                                            'Developing': '#FFC107',
+                                            'Requires Dev': '#F44336'
+                                        },
+                                        labels={'value': 'Count', 'variable': 'Level'}
+                                    )
+                                    fig.update_layout(
+                                        plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                                        paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                                        font=dict(color='#e8e8e8'),
+                                        hovermode='x unified',
+                                        height=400
+                                    )
+                                    st.plotly_chart(fig, use_container_width=True)
                             else:
                                 st.info("No Sounds Write data found")
                         else:
@@ -2172,25 +2252,63 @@ else:
                             
                             df_wa = pd.DataFrame(vis_data)
                             
-                            fig = px.bar(
-                                df_wa,
-                                x='Skill',
-                                y=['>10', '>5', '>2'],
-                                barmode='stack',
-                                color_discrete_map={
-                                    '>10': '#4CAF50',
-                                    '>5': '#FFC107',
-                                    '>2': '#F44336'
-                                },
-                                labels={'value': 'Count', 'variable': 'Level'}
-                            )
-                            fig.update_layout(
-                                plot_bgcolor='rgba(10, 14, 39, 0.8)',
-                                paper_bgcolor='rgba(10, 14, 39, 0.8)',
-                                font=dict(color='#e8e8e8'),
-                                hovermode='x unified',
-                                height=400
-                            )
-                            st.plotly_chart(fig, use_container_width=True)
+                            # If only one skill, show as metrics/donut instead of wide bar
+                            if len(df_wa) == 1:
+                                skill_name = df_wa.iloc[0]['Skill']
+                                st.markdown(f"**{skill_name}**")
+                                
+                                col1, col2 = st.columns([1, 1])
+                                with col1:
+                                    m1, m2, m3 = st.columns(3)
+                                    m1.metric(">10 words", int(df_wa.iloc[0]['>10']))
+                                    m2.metric(">5 words", int(df_wa.iloc[0]['>5']))
+                                    m3.metric(">2 words", int(df_wa.iloc[0]['>2']))
+                                
+                                with col2:
+                                    # Donut chart for single skill
+                                    donut_data = pd.DataFrame({
+                                        'Level': ['>10 words', '>5 words', '>2 words'],
+                                        'Count': [df_wa.iloc[0]['>10'], df_wa.iloc[0]['>5'], df_wa.iloc[0]['>2']]
+                                    })
+                                    fig_donut = px.pie(
+                                        donut_data,
+                                        values='Count',
+                                        names='Level',
+                                        hole=0.4,
+                                        color_discrete_map={
+                                            '>10 words': '#4CAF50',
+                                            '>5 words': '#FFC107',
+                                            '>2 words': '#F44336'
+                                        }
+                                    )
+                                    fig_donut.update_layout(
+                                        plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                                        paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                                        font=dict(color='#e8e8e8'),
+                                        height=350
+                                    )
+                                    st.plotly_chart(fig_donut, use_container_width=True)
+                            else:
+                                # Multiple skills - use stacked bar
+                                fig = px.bar(
+                                    df_wa,
+                                    x='Skill',
+                                    y=['>10', '>5', '>2'],
+                                    barmode='stack',
+                                    color_discrete_map={
+                                        '>10': '#4CAF50',
+                                        '>5': '#FFC107',
+                                        '>2': '#F44336'
+                                    },
+                                    labels={'value': 'Count', 'variable': 'Level'}
+                                )
+                                fig.update_layout(
+                                    plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                                    paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                                    font=dict(color='#e8e8e8'),
+                                    hovermode='x unified',
+                                    height=400
+                                )
+                                st.plotly_chart(fig, use_container_width=True)
                         else:
                             st.info("No Word Aware data")
