@@ -137,6 +137,15 @@ def seed_state():
                 st.session_state[k] = v
         except Exception:
             pass
+    # Apply a pending draft resume before any widgets are instantiated
+    did = st.session_state.pop("_load_draft_id", None)
+    if did:
+        try:
+            res = supabase.table("pdp_drafts").select("data").eq("id", did).single().execute()
+            for k, v in ((res.data or {}).get("data", {}) or {}).items():
+                st.session_state[k] = v
+        except Exception:
+            pass
 
 seed_state()
 
@@ -445,6 +454,62 @@ def load_plan(plan_id: str):
 def delete_plan(plan_id: str):
     supabase.table("pdp_plans").delete().eq("id", plan_id).execute()
 
+# ── Auto-save drafts (survive sign-outs / timeouts) ───────────────────────────
+def _plan_hash() -> str:
+    import hashlib
+    return hashlib.md5(json.dumps(collect_plan(), sort_keys=True).encode()).hexdigest()
+
+def autosave_draft():
+    emp = str(st.session_state.get("w_emp", "")).strip()
+    if not emp:
+        return  # need an employee name as the key
+    if not any(str(st.session_state.get(wk, "")).strip() for wk in KEY_MAP.values()):
+        return  # nothing substantive to save yet
+    h = _plan_hash()
+    if st.session_state.get("_last_draft_hash") == h:
+        return  # unchanged since last save
+    try:
+        supabase.table("pdp_drafts").upsert({
+            "employee_name": emp,
+            "leader_name": str(st.session_state.get("w_ldr", "")).strip(),
+            "data": collect_plan(),
+            "updated_at": datetime.utcnow().isoformat(),
+        }, on_conflict="employee_name,leader_name").execute()
+        st.session_state["_last_draft_hash"] = h
+        st.session_state["_last_draft_time"] = datetime.now().strftime("%H:%M")
+    except Exception:
+        pass  # never let a save hiccup interrupt editing
+
+def list_drafts() -> list:
+    try:
+        res = (supabase.table("pdp_drafts")
+               .select("id, employee_name, leader_name, updated_at")
+               .order("updated_at", desc=True).limit(100).execute())
+        return res.data or []
+    except Exception:
+        return []
+
+def delete_draft(draft_id: str):
+    try:
+        supabase.table("pdp_drafts").delete().eq("id", draft_id).execute()
+    except Exception:
+        pass
+
+def render_sidebar_drafts():
+    with st.sidebar:
+        st.markdown("### 🕒 Resume a draft")
+        st.caption("Your work auto-saves here as you go.")
+        drafts = list_drafts()
+        if not drafts:
+            st.caption("No in-progress drafts.")
+            return
+        for d in drafts:
+            emp = (d.get("employee_name") or "(no name)").strip()
+            ldr = (d.get("leader_name") or "").strip()
+            lbl = emp + (f" · {ldr}" if ldr else "") + f" · {str(d.get('updated_at',''))[:16]}"
+            if st.button(lbl, key=f"sb_draft_{d['id']}", use_container_width=True):
+                st.session_state["_load_draft_id"] = d["id"]; st.rerun()
+
 def render_sidebar_pdps():
     from collections import defaultdict
     with st.sidebar:
@@ -731,6 +796,7 @@ st.info(
     "This supports the collaborative employee-and-leader PDP process. Drafts are a starting point — review and "
     "edit every field.", icon="💬")
 
+render_sidebar_drafts()
 render_sidebar_pdps()
 
 # ── Identity ──────────────────────────────────────────────────────────────────
@@ -969,3 +1035,8 @@ st.caption("Plans are stored privately against your staff name. Additions from t
 _store = st.session_state.setdefault("plan_store", {})
 for _k in PLAN_KEYS:
     _store[_k] = st.session_state.get(_k, "")
+
+# Auto-save a draft so nothing is lost to a sign-out or timeout.
+autosave_draft()
+if st.session_state.get("_last_draft_time"):
+    st.sidebar.caption(f"✓ Draft auto-saved at {st.session_state['_last_draft_time']}")
