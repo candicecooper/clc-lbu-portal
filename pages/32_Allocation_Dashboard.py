@@ -1013,17 +1013,17 @@ else:
             }
             funding_summary['color_key'] = funding_summary['category'].map(color_map)
             
-            fig_funding = px.bar(
+            fig_funding = px.barh(
                 funding_summary,
-                x='category',
-                y='count',
+                x='count',
+                y='category',
                 text='count',
                 color='color_key',
                 color_continuous_scale='Reds',
                 title='Students by Funding Category',
                 labels={'category': 'Category', 'count': 'Students', 'color_key': 'Urgency'}
             )
-            fig_funding.update_xaxes(categoryorder='array', categoryarray=category_order)
+            fig_funding.update_yaxes(categoryorder='array', categoryarray=list(reversed(category_order)))
             fig_funding.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
             st.plotly_chart(update_chart_layout(fig_funding), use_container_width=True)
         
