@@ -1716,13 +1716,21 @@ else:
         
         st.markdown("---")
         
+        # Merge disability flags into filtered data
+        disability_df = filtered.copy()
+        
+        # Merge uploaded flag data if available
+        if 'funding_df' in st.session_state and st.session_state.funding_df is not None:
+            disability_df['name_match'] = disability_df['student_name'].str.strip().str.lower()
+            funding_df_merge = st.session_state.funding_df.copy()
+            if 'name_match' in funding_df_merge.columns:
+                disability_df = disability_df.merge(funding_df_merge, on='name_match', how='left', suffixes=('', '_flag'))
+            disability_df = disability_df.drop('name_match', axis=1)
+        
         # Check if we have disability flag data
         disability_flags = ['Flag_SWD', 'Flag_ASD', 'Flag_Intellectual', 'Flag_Learning_Difficulty', 
                            'Flag_Sensory_Processing', 'Flag_ADHD', 'Flag_ODD', 'Flag_PDA', 
                            'Flag_Medication', 'Flag_Medical_condition']
-        
-        # Filter to current selections
-        disability_df = filtered.copy()
         
         # Count students with at least one disability flag
         disability_df['has_disability'] = False
