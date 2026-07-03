@@ -1716,6 +1716,21 @@ else:
         
         st.markdown("---")
         
+        # Debug: Check what data we have
+        with st.expander("🔍 Debug - Available Data"):
+            st.write(f"**Filtered data shape:** {filtered.shape}")
+            st.write(f"**Filtered columns:** {list(filtered.columns)}")
+            
+            if 'funding_df' in st.session_state and st.session_state.funding_df is not None:
+                st.write(f"**Funding DF shape:** {st.session_state.funding_df.shape}")
+                st.write(f"**Funding DF columns:** {list(st.session_state.funding_df.columns)}")
+                st.write(f"**Funding DF sample:**")
+                st.dataframe(st.session_state.funding_df.head())
+            else:
+                st.write("**No funding_df in session state**")
+        
+        st.markdown("---")
+        
         # Merge disability flags into filtered data
         disability_df = filtered.copy()
         
@@ -1724,7 +1739,10 @@ else:
             disability_df['name_match'] = disability_df['student_name'].str.strip().str.lower()
             funding_df_merge = st.session_state.funding_df.copy()
             if 'name_match' in funding_df_merge.columns:
+                before_merge = len(disability_df)
                 disability_df = disability_df.merge(funding_df_merge, on='name_match', how='left', suffixes=('', '_flag'))
+                after_merge = len(disability_df)
+                st.write(f"Merge result: {before_merge} → {after_merge} rows")
             disability_df = disability_df.drop('name_match', axis=1)
         
         # Check if we have disability flag data
@@ -1732,15 +1750,18 @@ else:
                            'Flag_Sensory_Processing', 'Flag_ADHD', 'Flag_ODD', 'Flag_PDA', 
                            'Flag_Medication', 'Flag_Medical_condition']
         
+        # Find which flags actually exist
+        available_flags = [f for f in disability_flags if f in disability_df.columns]
+        st.write(f"**Available disability flags:** {available_flags}")
+        
         # Count students with at least one disability flag
         disability_df['has_disability'] = False
         disability_df['disability_count'] = 0
         
-        for flag in disability_flags:
-            if flag in disability_df.columns:
-                mask = (disability_df[flag] == 'Yes') | (disability_df[flag] == 'YES')
-                disability_df.loc[mask, 'has_disability'] = True
-                disability_df['disability_count'] += mask.astype(int)
+        for flag in available_flags:
+            mask = (disability_df[flag] == 'Yes') | (disability_df[flag] == 'YES')
+            disability_df.loc[mask, 'has_disability'] = True
+            disability_df['disability_count'] += mask.astype(int)
         
         total_students = len(disability_df)
         students_with_disability = disability_df['has_disability'].sum()
