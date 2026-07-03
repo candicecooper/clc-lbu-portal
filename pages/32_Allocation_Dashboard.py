@@ -1988,10 +1988,6 @@ else:
                         st.markdown("**Sounds Write**")
                         
                         if 'sounds_write_data' in filtered_assess.columns:
-                            # Debug - show sample
-                            with st.expander("🔍 Debug"):
-                                for idx, row in filtered_assess.iterrows():
-                                    st.write(f"Record {idx}: {row['sounds_write_data']}")
                             
                             sw_totals = {}
                             
@@ -2017,7 +2013,6 @@ else:
                                 except Exception as e:
                                     st.error(f"Error: {e}")
                             
-                            st.write(f"Data found: {sw_totals}")
                             
                             if sw_totals:
                                 # Display metrics
