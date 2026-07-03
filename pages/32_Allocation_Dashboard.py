@@ -357,7 +357,7 @@ else:
         st.markdown("**Navigate**", help="Select an analysis section")
         section = st.radio(
             "Select Section",
-            ["Overview", "Trends", "Complexity", "Category of Support", "Cohort Analysis", "Equity", "Disability & Support Needs", "Critical Incidents", "Assessment", "Waitlist", "Diagnostics"],
+            ["Overview", "Trends", "Complexity", "Category of Support", "Cohort Analysis", "Equity", "Disability & Support Needs", "ASD Deep Dive", "Critical Incidents", "Assessment", "Waitlist", "Diagnostics"],
             label_visibility="collapsed"
         )
         
@@ -410,7 +410,7 @@ else:
                 # === EXTRACT DISABILITY FLAGS ===
                 disability_flags = ['Flag_SWD', 'Flag_ASD', 'Flag_Intellectual', 'Flag_Learning_Difficulty',
                                    'Flag_Sensory_Processing', 'Flag_ADHD', 'Flag_ODD', 'Flag_PDA',
-                                   'Flag_Medication', 'Flag_Medical_condition', 'Medical_Condition_Details']
+                                   'Medical_Condition_Details']
                 
                 disability_cols_available = [col for col in disability_flags if col in df.columns]
                 
@@ -1762,8 +1762,7 @@ else:
         
         # Check if we have disability flag data
         disability_flags = ['Flag_SWD', 'Flag_ASD', 'Flag_Intellectual', 'Flag_Learning_Difficulty', 
-                           'Flag_Sensory_Processing', 'Flag_ADHD', 'Flag_ODD', 'Flag_PDA', 
-                           'Flag_Medication', 'Flag_Medical_condition']
+                           'Flag_Sensory_Processing', 'Flag_ADHD', 'Flag_ODD', 'Flag_PDA']
         
         # Find which flags actually exist
         available_flags = [f for f in disability_flags if f in disability_df.columns]
@@ -1891,21 +1890,21 @@ else:
             
             with col1:
                 st.markdown("**Disability + ATSI**")
-                disability_atsi = disability_df[(disability_df['has_disability']) & (disability_df['Flag_ATSI'] == 'Yes')]
+                disability_atsi = disability_df[(disability_df['has_disability']) & (disability_df['Flag_ATSI'] == 'Yes')] if 'Flag_ATSI' in disability_df.columns else disability_df[disability_df['has_disability'] & False]
                 st.metric("Students", len(disability_atsi))
                 if students_with_disability > 0:
                     st.write(f"{(len(disability_atsi)/students_with_disability*100):.1f}% of students with disability")
             
             with col2:
                 st.markdown("**Disability + EALD**")
-                disability_eald = disability_df[(disability_df['has_disability']) & (disability_df['Flag_EALD'] == 'Yes')]
+                disability_eald = disability_df[(disability_df['has_disability']) & (disability_df['Flag_EALD'] == 'Yes')] if 'Flag_EALD' in disability_df.columns else disability_df[disability_df['has_disability'] & False]
                 st.metric("Students", len(disability_eald))
                 if students_with_disability > 0:
                     st.write(f"{(len(disability_eald)/students_with_disability*100):.1f}% of students with disability")
             
             with col3:
                 st.markdown("**Disability + DCP**")
-                disability_dcp = disability_df[(disability_df['has_disability']) & (disability_df['Flag_DCP'] == 'Yes')]
+                disability_dcp = disability_df[(disability_df['has_disability']) & (disability_df['Flag_DCP'] == 'Yes')] if 'Flag_DCP' in disability_df.columns else disability_df[disability_df['has_disability'] & False]
                 st.metric("Students", len(disability_dcp))
                 if students_with_disability > 0:
                     st.write(f"{(len(disability_dcp)/students_with_disability*100):.1f}% of students with disability")
@@ -1925,6 +1924,238 @@ else:
                         st.write(f"• {row['student_name']}: {row['Medical_Condition_Details']}")
             else:
                 st.info("No medical conditions documented")
+
+
+    elif section == "ASD Deep Dive":
+        st.markdown("## Autism Spectrum Disorder (ASD) - Deep Analysis")
+        st.markdown("Comprehensive overview of ASD students: prevalence, comparisons, and distribution across programs, year levels, partnerships, and returning students")
+        
+        st.markdown("---")
+        
+        # Merge disability data for ASD analysis
+        asd_df = filtered.copy()
+        
+        if 'disability_df' in st.session_state and st.session_state.disability_df is not None:
+            asd_df['name_match'] = asd_df['student_name'].str.strip().str.lower()
+            disability_flag_merge = st.session_state.disability_df.copy()
+            if 'name_match' in disability_flag_merge.columns:
+                asd_df = asd_df.merge(disability_flag_merge, on='name_match', how='left', suffixes=('', '_flag'))
+            asd_df = asd_df.drop('name_match', axis=1)
+        
+        # Count ASD students
+        asd_count = ((asd_df['Flag_ASD'] == 'Yes') | (asd_df['Flag_ASD'] == 'YES')).sum() if 'Flag_ASD' in asd_df.columns else 0
+        total_students = len(asd_df)
+        non_asd_count = total_students - asd_count
+        
+        st.markdown("### Overview")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("ASD Students", asd_count)
+        col2.metric("Non-ASD Students", non_asd_count)
+        col3.metric("% ASD", f"{(asd_count/total_students*100):.1f}%" if total_students > 0 else "0%")
+        col4.metric("ASD:Non-ASD Ratio", f"1:{(non_asd_count/asd_count):.1f}" if asd_count > 0 else "N/A")
+        
+        st.markdown("---")
+        st.markdown("### ASD Prevalence Comparison")
+        
+        # Comparison pie chart
+        comparison_data = pd.DataFrame({
+            'Group': ['ASD', 'Non-ASD'],
+            'Count': [asd_count, non_asd_count]
+        })
+        
+        fig = px.pie(
+            comparison_data,
+            values='Count',
+            names='Group',
+            color_discrete_map={'ASD': '#FF6B6B', 'Non-ASD': '#4ECDC4'},
+            title='Student Population: ASD vs Non-ASD'
+        )
+        fig.update_layout(
+            plot_bgcolor='rgba(10, 14, 39, 0.8)',
+            paper_bgcolor='rgba(10, 14, 39, 0.8)',
+            font=dict(color='#e8e8e8'),
+            height=350
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.markdown("---")
+        st.markdown("### ASD by Program")
+        
+        if 'program' in asd_df.columns and 'Flag_ASD' in asd_df.columns:
+            program_asd = asd_df.groupby('program').apply(
+                lambda x: pd.Series({
+                    'ASD': ((x['Flag_ASD'] == 'Yes') | (x['Flag_ASD'] == 'YES')).sum(),
+                    'Non-ASD': ((x['Flag_ASD'] != 'Yes') & (x['Flag_ASD'] != 'YES')).sum()
+                })
+            ).fillna(0)
+            
+            program_asd = program_asd[program_asd.sum(axis=1) > 0]
+            
+            if len(program_asd) > 0:
+                fig = px.bar(
+                    program_asd,
+                    barmode='group',
+                    color_discrete_map={'ASD': '#FF6B6B', 'Non-ASD': '#4ECDC4'},
+                    title='ASD Distribution by Program',
+                    labels={'value': 'Students', 'index': 'Program'}
+                )
+                fig.update_layout(
+                    plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                    paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                    font=dict(color='#e8e8e8'),
+                    hovermode='x unified',
+                    height=400
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Stats by program
+                st.markdown("**ASD % by Program:**")
+                for prog in program_asd.index:
+                    asd = int(program_asd.loc[prog, 'ASD'])
+                    total = int(program_asd.loc[prog, 'ASD'] + program_asd.loc[prog, 'Non-ASD'])
+                    pct = (asd / total * 100) if total > 0 else 0
+                    st.write(f"**{prog}:** {asd}/{total} ({pct:.1f}%)")
+        
+        st.markdown("---")
+        st.markdown("### ASD by Year Level")
+        
+        if 'year_level' in asd_df.columns and 'Flag_ASD' in asd_df.columns:
+            year_order = ['F', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+            
+            year_asd = asd_df.groupby('year_level').apply(
+                lambda x: pd.Series({
+                    'ASD': ((x['Flag_ASD'] == 'Yes') | (x['Flag_ASD'] == 'YES')).sum(),
+                    'Non-ASD': ((x['Flag_ASD'] != 'Yes') & (x['Flag_ASD'] != 'YES')).sum()
+                })
+            ).fillna(0)
+            
+            # Reindex to include all year levels
+            year_asd = year_asd.reindex([y for y in year_order if y in year_asd.index], fill_value=0)
+            
+            if len(year_asd) > 0:
+                fig = px.bar(
+                    year_asd,
+                    barmode='stack',
+                    color_discrete_map={'ASD': '#FF6B6B', 'Non-ASD': '#4ECDC4'},
+                    title='ASD Distribution by Year Level',
+                    labels={'value': 'Students', 'index': 'Year Level'}
+                )
+                fig.update_layout(
+                    plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                    paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                    font=dict(color='#e8e8e8'),
+                    hovermode='x unified',
+                    height=400
+                )
+                st.plotly_chart(fig, use_container_width=True)
+        
+        st.markdown("---")
+        st.markdown("### ASD by Partnership Area")
+        
+        if 'partnership_area' in asd_df.columns and 'Flag_ASD' in asd_df.columns:
+            partnership_asd = asd_df.groupby('partnership_area').apply(
+                lambda x: pd.Series({
+                    'ASD': ((x['Flag_ASD'] == 'Yes') | (x['Flag_ASD'] == 'YES')).sum(),
+                    'Non-ASD': ((x['Flag_ASD'] != 'Yes') & (x['Flag_ASD'] != 'YES')).sum()
+                })
+            ).fillna(0)
+            
+            partnership_asd = partnership_asd[partnership_asd.sum(axis=1) > 0]
+            
+            if len(partnership_asd) > 0:
+                fig = px.bar(
+                    partnership_asd,
+                    barmode='group',
+                    color_discrete_map={'ASD': '#FF6B6B', 'Non-ASD': '#4ECDC4'},
+                    title='ASD Distribution by Partnership Area',
+                    labels={'value': 'Students', 'index': 'Partnership Area'}
+                )
+                fig.update_layout(
+                    plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                    paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                    font=dict(color='#e8e8e8'),
+                    hovermode='x unified',
+                    height=400
+                )
+                st.plotly_chart(fig, use_container_width=True)
+        
+        st.markdown("---")
+        st.markdown("### ASD by School (Top 10)")
+        
+        if 'school' in asd_df.columns and 'Flag_ASD' in asd_df.columns:
+            school_asd = asd_df.groupby('school').apply(
+                lambda x: pd.Series({
+                    'ASD': ((x['Flag_ASD'] == 'Yes') | (x['Flag_ASD'] == 'YES')).sum(),
+                    'Non-ASD': ((x['Flag_ASD'] != 'Yes') & (x['Flag_ASD'] != 'YES')).sum()
+                })
+            ).fillna(0)
+            
+            school_asd = school_asd[school_asd.sum(axis=1) > 0].sort_values('ASD', ascending=False).head(10)
+            
+            if len(school_asd) > 0:
+                fig = px.bar(
+                    school_asd,
+                    y='ASD',
+                    x=school_asd.index,
+                    text='ASD',
+                    color='ASD',
+                    color_continuous_scale='Reds',
+                    title='Top 10 Schools by ASD Student Count'
+                )
+                fig.update_yaxes(dtick=1)
+                fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                fig.update_layout(
+                    plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                    paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                    font=dict(color='#e8e8e8'),
+                    showlegend=False,
+                    height=400
+                )
+                st.plotly_chart(fig, use_container_width=True)
+        
+        st.markdown("---")
+        st.markdown("### Returning vs New ASD Students")
+        
+        if 'previous_clc_placement' in asd_df.columns and 'Flag_ASD' in asd_df.columns:
+            asd_only = asd_df[(asd_df['Flag_ASD'] == 'Yes') | (asd_df['Flag_ASD'] == 'YES')]
+            
+            if len(asd_only) > 0:
+                returning = ((asd_only['previous_clc_placement'] == 'Yes') | (asd_only['previous_clc_placement'] == 'YES')).sum()
+                new_students = len(asd_only) - returning
+                
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Returning ASD Students", returning)
+                col2.metric("New ASD Students", new_students)
+                col3.metric("% Returning", f"{(returning/len(asd_only)*100):.1f}%" if len(asd_only) > 0 else "0%")
+                
+                st.markdown("---")
+                
+                # Chart
+                returner_data = pd.DataFrame({
+                    'Status': ['Returning', 'New'],
+                    'Count': [returning, new_students]
+                })
+                
+                fig = px.bar(
+                    returner_data,
+                    x='Status',
+                    y='Count',
+                    text='Count',
+                    color='Status',
+                    color_discrete_map={'Returning': '#9B59B6', 'New': '#3498DB'},
+                    title='ASD Students: Returning vs New'
+                )
+                fig.update_yaxes(dtick=1)
+                fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                fig.update_layout(
+                    plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                    paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                    font=dict(color='#e8e8e8'),
+                    showlegend=False,
+                    height=350
+                )
+                st.plotly_chart(fig, use_container_width=True)
 
     elif section == "Critical Incidents":
         st.markdown("## Critical Incidents Tracking")
