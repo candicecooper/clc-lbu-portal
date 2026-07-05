@@ -521,9 +521,9 @@ else:
                                         st.cache_data.clear()
                                         
                                     except Exception as e:
-                                    st.error(f"Failed: {str(e)[:150]}")
+                                        st.error(f"Failed: {str(e)[:150]}")
                 
-                except Exception as e:
+                    except Exception as e:
                         st.error(f"Error: {e}")
         else:
             if upload_password:  # Only show if they entered something
