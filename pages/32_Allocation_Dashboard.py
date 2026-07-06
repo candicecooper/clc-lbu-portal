@@ -256,6 +256,23 @@ def load_allocation_data():
         return None
 
 @st.cache_data
+def load_assessment_data():
+    """Load assessment data from Supabase - auto-updates when new data is entered"""
+    if not supabase:
+        return None
+    try:
+        response = supabase.table('assessment_data').select('*').execute()
+        if response.data:
+            assessment_df = pd.DataFrame(response.data)
+            # Clean up column names to lowercase
+            assessment_df.columns = assessment_df.columns.str.lower()
+            return assessment_df
+        return None
+    except Exception as e:
+        st.warning(f"Could not load assessment data: {str(e)[:100]}")
+        return None
+
+@st.cache_data
 def load_flag_data_from_excel():
     """Load flag columns from Excel file - cached for performance"""
     try:
@@ -626,6 +643,22 @@ else:
     # Apply program filter
     if selected_program != 'All':
         filtered = filtered[filtered['program_clean'] == selected_program]
+    
+    # === MERGE ASSESSMENT DATA BY PROGRAM + TERM ===
+    assessment_df = load_assessment_data()
+    if assessment_df is not None and not assessment_df.empty:
+        # Create program + term key for matching
+        filtered['assessment_key'] = filtered['program_clean'].astype(str).str.strip() + '_' + filtered['term_clean'].astype(str).str.strip()
+        assessment_df['assessment_key'] = assessment_df['program'].astype(str).str.strip() + '_' + assessment_df['term'].astype(str).str.strip()
+        
+        # Merge assessment data
+        filtered = filtered.merge(
+            assessment_df[['assessment_key', 'sounds_write_data', 'word_aware_data', 'smartar_data', 'date_submitted']],
+            on='assessment_key',
+            how='left',
+            suffixes=('', '_assessment')
+        )
+        filtered = filtered.drop('assessment_key', axis=1)
     
     st.markdown(f"""
     <div style='background: rgba(0,229,255,0.1); border-left: 4px solid #00e5ff; 
