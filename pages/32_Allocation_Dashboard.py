@@ -261,7 +261,7 @@ def load_assessment_data():
     if not supabase:
         return None
     try:
-        response = supabase.table('assessment_data').select('*').execute()
+        response = supabase.table('term_assessments').select('*').execute()
         if response.data:
             assessment_df = pd.DataFrame(response.data)
             # Clean up column names to lowercase
