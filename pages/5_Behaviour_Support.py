@@ -1,5 +1,16 @@
 from theme import apply_clc_theme
 import streamlit as st
+
+# ── Document Archive integration (fails silently if unavailable) ──────────
+try:
+    from archive_utils import archive_once, initials_from_name
+except Exception:
+    def archive_once(*_a, **_k):
+        pass
+    def initials_from_name(name):
+        parts = [p for p in str(name or "").replace("_", " ").split() if p]
+        return "".join(p[0].upper() for p in parts[:2]) or None
+
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -5904,10 +5915,22 @@ def render_student_analysis_page():
             docx_file = generate_behaviour_analysis_plan_docx(
                 student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level)
         if docx_file:
+            _ini = initials_from_name(student['name'])
             st.download_button("📄 Behaviour Summary (Word)", docx_file,
                 file_name=f"BehaviourSummary_{student['name'].replace(" ", "_")}_{datetime.now().strftime("%Y%m%d")}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True)
+                use_container_width=True,
+                on_click=archive_once,
+                args=(f"behsum_{student.get('id','x')}_{datetime.now():%Y%m%d}",),
+                kwargs=dict(
+                    source_tool="Behaviour Support Tool",
+                    doc_type="Behaviour Report",
+                    title=f"Behaviour Summary — {_ini} — {datetime.now():%d %b %Y}",
+                    file_bytes=docx_file.getvalue() if hasattr(docx_file, "getvalue") else docx_file,
+                    filename=f"BehaviourSummary_{_ini}_{datetime.now():%Y%m%d}.docx",
+                    student_initials=_ini,
+                    created_by=st.session_state.get("user_email", "unknown"),
+                ))
 
     st.markdown("---")
     col1, col2 = st.columns(2)
