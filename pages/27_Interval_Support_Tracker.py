@@ -3,6 +3,17 @@
 # Window of Tolerance interval tracker — regulation state + support per slot
 # ════════════════════════════════════════════════════════════════════════════
 import streamlit as st
+
+# ── Document Archive integration (fails silently if unavailable) ──────────
+try:
+    from archive_utils import archive_once, initials_from_name
+except Exception:
+    def archive_once(*_a, **_k):
+        pass
+    def initials_from_name(name):
+        parts = [p for p in str(name or "").replace("_", " ").split() if p]
+        return "".join(p[0].upper() for p in parts[:2]) or None
+
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -2548,6 +2559,17 @@ with t_analysis:
 </body>
 </html>"""
 
+            _ini = initials_from_name(student_name)
+            archive_once(
+                f"ist_report_{student_name}_{date.today()}",
+                source_tool="Interval Support Tracker",
+                doc_type="Interval Support Report",
+                title=f"Interval Support Report — {_ini} — {date.today():%d %b %Y}",
+                file_bytes=html_report.encode("utf-8"),
+                filename=f"IST_Report_{_ini}_{date.today()}.html",
+                student_initials=_ini,
+                created_by=st.session_state.get("user_email", "unknown"),
+            )
             st.download_button(
                 "⬇️ Download report (HTML — opens in any browser)",
                 html_report,
