@@ -1,4 +1,15 @@
 import streamlit as st
+
+# ── Document Archive integration (fails silently if unavailable) ──────────
+try:
+    from archive_utils import archive_once, initials_from_name
+except Exception:
+    def archive_once(*_a, **_k):
+        pass
+    def initials_from_name(name):
+        parts = [p for p in str(name or "").replace("_", " ").split() if p]
+        return "".join(p[0].upper() for p in parts[:2]) or None
+
 import json
 import matplotlib
 matplotlib.use("Agg")
@@ -1799,6 +1810,17 @@ Use trauma-informed, strengths-based language referencing the BSEM framework (Re
         if st.button("Generate PDF Report", type="primary", key="gen_pdf"):
             with st.spinner("Building PDF…"):
                 pdf_bytes = make_student_pdf(selected_name, goal_chart_list)
+            _ini = initials_from_name(selected_name)
+            archive_once(
+                f"smartar_pdf_{selected_name}_{datetime.now():%Y%m%d}",
+                source_tool="SMARTAR Goal Builder",
+                doc_type="SMARTAR Goals",
+                title=f"SMARTAR Progress Report — {_ini} — {datetime.now():%d %b %Y}",
+                file_bytes=pdf_bytes,
+                filename=f"{_ini}_SMARTAR_Progress_Report_{datetime.now():%Y%m%d}.pdf",
+                student_initials=_ini,
+                created_by=st.session_state.get("user_email", "unknown"),
+            )
             st.download_button(
                 "⬇️ Download PDF",
                 data=pdf_bytes,
