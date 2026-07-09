@@ -33,6 +33,17 @@ import uuid
 from datetime import datetime, date, time, timezone
 
 import streamlit as st
+
+# ── Document Archive integration (fails silently if unavailable) ──────────
+try:
+    from archive_utils import archive_once, initials_from_name
+except Exception:
+    def archive_once(*_a, **_k):
+        pass
+    def initials_from_name(name):
+        parts = [p for p in str(name or "").replace("_", " ").split() if p]
+        return "".join(p[0].upper() for p in parts[:2]) or None
+
 import pandas as pd
 from supabase import create_client
 
@@ -874,6 +885,20 @@ with tab_export:
                           help="Add 'reportlab' to requirements.txt to enable PDF export.")
         with d3:
             st.toggle("Show printable list", key="show_print")
+        if st.button("🗄️ Archive this export (initials-only)", key="arch_export"):
+            _rows_priv = records_to_rows(records, roster=None,
+                                         att_map=att_labels if has_att else None)
+            _xls = build_excel(_rows_priv, False, has_att)
+            archive_once(
+                f"commlog_{code_filter or 'all'}_{datetime.now():%Y%m%d%H%M}",
+                source_tool="Communication Log",
+                doc_type="Communication Log Export",
+                title=f"Communication Log Export — {code_filter or 'All students'} — {datetime.now():%d %b %Y}",
+                file_bytes=_xls.getvalue() if hasattr(_xls, "getvalue") else _xls,
+                filename=f"communication_log_{(code_filter or 'all').lower()}_{datetime.now():%Y%m%d_%H%M}.xlsx",
+                student_initials=code_filter or None,
+                created_by=st.session_state.get("user_email", "unknown"),
+            )
         if has_att:
             st.caption("Attachment labels are listed in the Excel and the printable list "
                        "(the PDF stays a compact summary). The files themselves stay in the secure bucket.")
