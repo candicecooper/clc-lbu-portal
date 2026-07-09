@@ -154,6 +154,13 @@ with tab_browse:
 # STUDENT FOLDERS — everything for one student, grouped by document type
 # ===========================================================================
 with tab_student:
+    # Apply a pending folder-button selection BEFORE the widget is created
+    # (Streamlit forbids setting a widget's key after it's instantiated).
+    if "_sf_pending" in st.session_state:
+        st.session_state["student_folder_initials"] = st.session_state.pop(
+            "_sf_pending"
+        )
+
     st.write(
         "Enter a student's initials to open their folder — every archived "
         "document for that student, grouped by type."
@@ -228,7 +235,7 @@ with tab_student:
                         f"📁 {ini} ({counts[ini]})", key=f"open_{ini}",
                         use_container_width=True,
                     ):
-                        st.session_state["student_folder_initials"] = ini
+                        st.session_state["_sf_pending"] = ini
                         st.rerun()
         else:
             st.info("No student-linked documents archived yet.")
