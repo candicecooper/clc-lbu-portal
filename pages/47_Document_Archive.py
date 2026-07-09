@@ -21,6 +21,7 @@ from archive_utils import (
     download_bytes,
     download_link_html,
     fetch_archive,
+    rename_student,
     restore,
     soft_delete,
 )
@@ -302,6 +303,39 @@ with tab_admin:
     if not _confidential_unlocked():
         st.info("Unlock the confidential section (Browse tab) to manage the archive.")
     else:
+        st.subheader("📁 Rename / merge student folder")
+        st.caption(
+            "Moves every document from one set of initials to another. "
+            "Renaming onto initials that already exist merges the two folders."
+        )
+        _all = fetch_archive(include_confidential=True, limit=1000)
+        _folders = sorted({r["student_initials"] for r in _all if r.get("student_initials")})
+        rn1, rn2, rn3 = st.columns([2, 2, 1])
+        with rn1:
+            rn_from = st.selectbox(
+                "Current folder", ["—"] + _folders, key="rn_from"
+            )
+        with rn2:
+            rn_to = st.text_input(
+                "New initials", max_chars=4, key="rn_to", placeholder="e.g. JT"
+            )
+        with rn3:
+            st.write("")
+            st.write("")
+            if st.button("Rename", type="primary", key="rn_go"):
+                if rn_from == "—" or not rn_to.strip():
+                    st.warning("Choose a folder and enter the new initials.")
+                elif rn_from == rn_to.strip().upper():
+                    st.info("Those are already the folder's initials.")
+                else:
+                    moved = rename_student(rn_from, rn_to)
+                    if moved:
+                        st.success(
+                            f"Moved {moved} document(s): {rn_from} → {rn_to.strip().upper()}"
+                        )
+                        st.rerun()
+
+        st.divider()
         st.subheader("Manage documents")
         all_recs = fetch_archive(include_confidential=True, include_deleted=True)
 
