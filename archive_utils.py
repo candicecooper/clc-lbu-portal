@@ -183,10 +183,18 @@ def archive_document(
         year = year or default_year
 
         clean_name = _safe_filename(filename)
-        storage_path = (
-            f"{year}/{_slugify(term)}/{_slugify(source_tool)}/"
-            f"{uuid.uuid4().hex[:8]}_{clean_name}"
-        )
+        _ini = (student_initials or "").strip().upper()
+        if _ini:
+            # Student-linked documents live in that student's folder
+            storage_path = (
+                f"students/{_ini}/{year}/{_slugify(source_tool)}/"
+                f"{uuid.uuid4().hex[:8]}_{clean_name}"
+            )
+        else:
+            storage_path = (
+                f"{year}/{_slugify(term)}/{_slugify(source_tool)}/"
+                f"{uuid.uuid4().hex[:8]}_{clean_name}"
+            )
 
         content_type = (
             mimetypes.guess_type(clean_name)[0] or "application/octet-stream"
