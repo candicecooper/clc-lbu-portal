@@ -19,6 +19,17 @@ Steps:
 """
 
 import streamlit as st
+
+# ── Document Archive integration (fails silently if unavailable) ──────────
+try:
+    from archive_utils import archive_once, initials_from_name
+except Exception:
+    def archive_once(*_a, **_k):
+        pass
+    def initials_from_name(name):
+        parts = [p for p in str(name or "").replace("_", " ").split() if p]
+        return "".join(p[0].upper() for p in parts[:2]) or None
+
 from groq import Groq
 import json, os, io, time
 from datetime import date, datetime
@@ -2109,10 +2120,22 @@ elif st.session_state.step == 7:
 
     safe = student['name'].replace(" ","_").replace("/","")
     fname = f"Safety_Risk_Plan_{safe}_CLC_{student['plan_date'].replace('/','')}.docx"
+    _ini = initials_from_name(student['name'])
     st.download_button("⬇️  Download Safety & Risk Plan (.docx)",
                        data=buf, file_name=fname,
                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                       type="primary", use_container_width=True)
+                       type="primary", use_container_width=True,
+                       on_click=archive_once,
+                       args=(f"srp_{_ini}_{student['plan_date']}",),
+                       kwargs=dict(
+                           source_tool="Safety & Risk Plan Builder",
+                           doc_type="Safety & Risk Plan",
+                           title=f"Safety & Risk Plan — {_ini} — {student['plan_date']}",
+                           file_bytes=buf.getvalue() if hasattr(buf, "getvalue") else buf,
+                           filename=f"Safety_Risk_Plan_{_ini}_CLC_{student['plan_date'].replace('/','')}.docx",
+                           student_initials=_ini,
+                           created_by=st.session_state.get("user_email", "unknown"),
+                       ))
 
     st.markdown("<br>", unsafe_allow_html=True)
     col_a, col_b = st.columns(2)
@@ -2623,10 +2646,22 @@ elif st.session_state.step == 7:
     # ── Download ──────────────────────────────────────────────────────────────
     safe  = student['name'].replace(" ","_").replace("/","")
     fname = f"Safety_Risk_Plan_{safe}_CLC_{student['plan_date'].replace('/','')}.docx"
+    _ini = initials_from_name(student['name'])
     st.download_button("⬇️  Download Safety & Risk Plan (.docx)",
                        data=buf, file_name=fname,
                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                       type="primary", use_container_width=True)
+                       type="primary", use_container_width=True,
+                       on_click=archive_once,
+                       args=(f"srp_{_ini}_{student['plan_date']}",),
+                       kwargs=dict(
+                           source_tool="Safety & Risk Plan Builder",
+                           doc_type="Safety & Risk Plan",
+                           title=f"Safety & Risk Plan — {_ini} — {student['plan_date']}",
+                           file_bytes=buf.getvalue() if hasattr(buf, "getvalue") else buf,
+                           filename=f"Safety_Risk_Plan_{_ini}_CLC_{student['plan_date'].replace('/','')}.docx",
+                           student_initials=_ini,
+                           created_by=st.session_state.get("user_email", "unknown"),
+                       ))
 
     st.markdown("<br>", unsafe_allow_html=True)
     col_a, col_b, col_c = st.columns(3)
