@@ -1,4 +1,15 @@
 import streamlit as st
+
+# ── Document Archive integration (fails silently if unavailable) ──────────
+try:
+    from archive_utils import archive_once, initials_from_name
+except Exception:
+    def archive_once(*_a, **_k):
+        pass
+    def initials_from_name(name):
+        parts = [p for p in str(name or "").replace("_", " ").split() if p]
+        return "".join(p[0].upper() for p in parts[:2]) or None
+
 from supabase import create_client
 import json
 from datetime import date
@@ -979,6 +990,7 @@ with tab_past:
                     try:
                         doc_bytes = generate_word_report(rec)
                         fname = f"sensory_{sname.replace(' ','_')}_{ov_date}.docx"
+                        _ini = initials_from_name(sname)
                         st.download_button(
                             "📄 Download Word Report",
                             data=doc_bytes,
@@ -986,6 +998,17 @@ with tab_past:
                             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                             use_container_width=True,
                             key=f"dl_{rec['id']}",
+                            on_click=archive_once,
+                            args=(f"sensory_{rec['id']}",),
+                            kwargs=dict(
+                                source_tool="Sensory Overview",
+                                doc_type="Sensory Overview",
+                                title=f"Sensory Overview — {_ini} — {ov_date}",
+                                file_bytes=doc_bytes.getvalue() if hasattr(doc_bytes, "getvalue") else doc_bytes,
+                                filename=f"sensory_{_ini}_{ov_date}.docx",
+                                student_initials=_ini,
+                                created_by=st.session_state.get("user_email", "unknown"),
+                            ),
                         )
                     except Exception as e:
                         st.error(f"Report generation failed: {e}")
