@@ -40,21 +40,28 @@ TABLE = "document_archive"
 
 # Document types for the first wave (student docs) + general categories.
 DOC_TYPES = [
-    "PDP",
-    "Behaviour Summary",
+    "SMARTAR Goals",
+    "Behaviour Report",
     "BAP",
+    "Sensory Overview",
+    "Interval Support Report",
     "Safety & Risk Plan",
+    "Communication Log Export",
+    "PDP",
     "Meeting Summary",
-    "Meeting Minutes",
     "Term Report",
     "Bulletin",
     "Other",
 ]
 
 SOURCE_TOOLS = [
-    "PDP Builder",
+    "SMARTAR Goal Builder",
     "Behaviour Support Tool",
+    "Sensory Overview",
+    "Interval Support Tracker",
     "Safety & Risk Plan Builder",
+    "Communication Log",
+    "PDP Builder",
     "LC Meeting Summariser",
     "Team Meetings",
     "Manual Upload",
