@@ -64,8 +64,8 @@ st.caption(
 
 user_email = st.session_state.get("user_email", "unknown")
 
-tab_browse, tab_add, tab_admin = st.tabs(
-    ["🔍 Browse", "➕ Add Document", "🛠️ Admin"]
+tab_browse, tab_student, tab_add, tab_admin = st.tabs(
+    ["🔍 Browse", "👤 Student Folders", "➕ Add Document", "🛠️ Admin"]
 )
 
 # ===========================================================================
@@ -149,6 +149,89 @@ with tab_browse:
                         ),
                         unsafe_allow_html=True,
                     )
+
+# ===========================================================================
+# STUDENT FOLDERS — everything for one student, grouped by document type
+# ===========================================================================
+with tab_student:
+    st.write(
+        "Enter a student's initials to open their folder — every archived "
+        "document for that student, grouped by type."
+    )
+
+    sc1, sc2 = st.columns([1, 3])
+    with sc1:
+        sf_initials = st.text_input(
+            "Student initials", max_chars=4, placeholder="e.g. JT",
+            key="student_folder_initials",
+        )
+
+    _conf_ok = _confidential_unlocked()
+
+    if sf_initials.strip():
+        ini = sf_initials.strip().upper()
+        recs = fetch_archive(
+            include_confidential=_conf_ok,
+            student_initials=ini,
+            limit=500,
+        )
+        if not recs:
+            st.info(f"No archived documents found for **{ini}**.")
+        else:
+            st.markdown(f"### 📁 {ini} — {len(recs)} document(s)")
+            by_type: dict[str, list] = {}
+            for r in recs:
+                by_type.setdefault(r["doc_type"], []).append(r)
+
+            for dtype in sorted(by_type):
+                with st.expander(
+                    f"{dtype} ({len(by_type[dtype])})", expanded=True
+                ):
+                    for rec in by_type[dtype]:
+                        rid = rec["id"]
+                        lock = "🔒 " if rec.get("confidential") else ""
+                        l, r_ = st.columns([4, 1])
+                        with l:
+                            st.markdown(f"**{lock}{rec['title']}**")
+                            st.caption(
+                                f"{rec['source_tool']} · "
+                                f"{rec.get('term', '')} {rec.get('year', '')} · "
+                                f"added {str(rec.get('created_at', ''))[:10]} "
+                                f"by {rec.get('created_by', 'unknown')}"
+                            )
+                        with r_:
+                            if st.button("Prepare download", key=f"sf_dl_{rid}"):
+                                st.session_state[f"bytes_{rid}"] = download_bytes(
+                                    rec["storage_path"]
+                                )
+                            if st.session_state.get(f"bytes_{rid}"):
+                                st.markdown(
+                                    download_link_html(
+                                        st.session_state[f"bytes_{rid}"],
+                                        rec["file_name"],
+                                    ),
+                                    unsafe_allow_html=True,
+                                )
+    else:
+        # Directory of all students with archived documents
+        all_recs = fetch_archive(include_confidential=_conf_ok, limit=1000)
+        counts: dict[str, int] = {}
+        for r in all_recs:
+            if r.get("student_initials"):
+                counts[r["student_initials"]] = counts.get(r["student_initials"], 0) + 1
+        if counts:
+            st.markdown("**Students with archived documents:**")
+            cols = st.columns(6)
+            for i, ini in enumerate(sorted(counts)):
+                with cols[i % 6]:
+                    if st.button(
+                        f"📁 {ini} ({counts[ini]})", key=f"open_{ini}",
+                        use_container_width=True,
+                    ):
+                        st.session_state["student_folder_initials"] = ini
+                        st.rerun()
+        else:
+            st.info("No student-linked documents archived yet.")
 
 # ===========================================================================
 # ADD DOCUMENT (manual upload — for docs created outside the portal)
