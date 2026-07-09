@@ -77,23 +77,50 @@ TERMS = ["Term 1", "Term 2", "Term 3", "Term 4"]
 
 @st.cache_resource
 def _get_client():
-    """Return a Supabase client.
+    """Return a Supabase client for the project that holds the archive.
 
-    Tries the portal's shared database module first; falls back to
-    creating a client directly from st.secrets.
-
-    >>> ADJUST the import below if your helper in database.py has a
-    >>> different name (e.g. get_client / init_supabase).
+    The portal has multiple Supabase projects (students/behaviour,
+    meetings). The archive lives in the STUDENTS project, so candidate
+    credentials are tried in that order and each is verified by checking
+    the document_archive table actually exists before being accepted.
     """
-    try:
-        from database import get_supabase_client  # noqa: WPS433
-        return get_supabase_client()
-    except Exception:
-        from supabase import create_client
-        return create_client(
-            st.secrets["SUPABASE_URL"],
-            st.secrets["SUPABASE_KEY"],
+    import os
+    from supabase import create_client
+
+    def _cred(name):
+        val = os.environ.get(name)
+        if val:
+            return val
+        try:
+            return st.secrets[name]
+        except Exception:
+            return None
+
+    candidates = []
+    for suffix in ("_STUDENTS", "", "_MEETINGS"):
+        url = _cred(f"SUPABASE_URL{suffix}")
+        key = (
+            _cred(f"SUPABASE_KEY{suffix}")
+            or _cred(f"SUPABASE_SERVICE_KEY{suffix}")
+            or _cred(f"SUPABASE_ANON_KEY{suffix}")
         )
+        if url and key:
+            candidates.append((suffix or "(default)", url, key))
+
+    last_err = None
+    for label, url, key in candidates:
+        try:
+            client = create_client(url, key)
+            client.table(TABLE).select("id").limit(1).execute()
+            return client  # table found — this is the right project
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            continue
+
+    raise RuntimeError(
+        "No Supabase project with a document_archive table was found. "
+        f"Tried: {[c[0] for c in candidates]}. Last error: {last_err}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +282,32 @@ def download_link_html(file_bytes: bytes, filename: str, label: str = "⬇️ Do
         f'<a href="data:{mime};base64,{b64}" download="{filename}" '
         f'style="text-decoration:none;font-weight:600;">{label}</a>'
     )
+
+
+def initials_from_name(name) -> str | None:
+    """Privacy helper: derive initials from a student name for archive
+    metadata (the archive stores initials only, never full names)."""
+    parts = [p for p in str(name or "").replace("_", " ").split() if p]
+    return "".join(p[0].upper() for p in parts[:2]) or None
+
+
+def archive_once(guard_key: str, **kwargs):
+    """Archive a document once per session.
+
+    Safe to use as a download_button on_click callback or after inline
+    generation — repeat reruns/clicks with the same guard_key won't
+    create duplicates. All kwargs pass through to archive_document().
+    """
+    flag = f"_archived_{guard_key}"
+    if st.session_state.get(flag):
+        return
+    rec = archive_document(**kwargs)
+    if rec:
+        st.session_state[flag] = True
+        try:
+            st.toast("🗄️ Saved to Document Archive")
+        except Exception:
+            pass
 
 
 def soft_delete(record_id: str, deleted_by: str) -> bool:
