@@ -294,9 +294,16 @@ def download_link_html(file_bytes: bytes, filename: str, label: str = "⬇️ Do
 
 def initials_from_name(name) -> str | None:
     """Privacy helper: derive initials from a student name for archive
-    metadata (the archive stores initials only, never full names)."""
+    metadata (the archive stores initials only, never full names).
+    Two or more words -> first letter of the first two words (JT).
+    Single word -> first two letters (JA), so folders never collapse
+    to one letter."""
     parts = [p for p in str(name or "").replace("_", " ").split() if p]
-    return "".join(p[0].upper() for p in parts[:2]) or None
+    if not parts:
+        return None
+    if len(parts) == 1:
+        return parts[0][:2].upper()
+    return "".join(p[0].upper() for p in parts[:2])
 
 
 def archive_once(guard_key: str, **kwargs):
@@ -316,6 +323,24 @@ def archive_once(guard_key: str, **kwargs):
             st.toast("🗄️ Saved to Document Archive")
         except Exception:
             pass
+
+
+def rename_student(old_initials: str, new_initials: str) -> int:
+    """Move every record from one student-initials folder to another.
+    Returns the number of documents moved. Also used to merge folders
+    (renaming onto existing initials combines them)."""
+    try:
+        client = _get_client()
+        res = (
+            client.table(TABLE)
+            .update({"student_initials": new_initials.strip().upper()})
+            .eq("student_initials", old_initials.strip().upper())
+            .execute()
+        )
+        return len(res.data or [])
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Could not rename folder: {exc}")
+        return 0
 
 
 def soft_delete(record_id: str, deleted_by: str) -> bool:
