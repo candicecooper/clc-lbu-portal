@@ -42,19 +42,46 @@ except Exception:
     pass
 
 
-# --- Confidential gate ------------------------------------------------------
-def _confidential_unlocked() -> bool:
-    """Return True if this session has passed the confidential gate.
+# --- Confidential gate (wired to the portal's shared confidential_auth) ----
+try:
+    from confidential_auth import (
+        SESSION_KEY as _CONF_KEY,
+        _get_confidential_password,
+        is_confidential_unlocked,
+    )
+    _CONF_AVAILABLE = True
+except Exception:
+    _CONF_AVAILABLE = False
+    _CONF_KEY = "clc_confidential_ok"
 
-    >>> ADJUST: wire this to your confidential_auth.py. If it exposes a
-    check function like `check_confidential_access()` that renders its
-    own password prompt and returns True/False, just call it here.
-    """
-    try:
-        from confidential_auth import check_confidential_access
-        return bool(check_confidential_access())
-    except Exception:
-        return bool(st.session_state.get("confidential_authenticated", False))
+    def is_confidential_unlocked():
+        return bool(st.session_state.get(_CONF_KEY, False))
+
+
+def _confidential_unlocked() -> bool:
+    """True if the shared confidential section is unlocked this session."""
+    return is_confidential_unlocked()
+
+
+def _render_confidential_unlock():
+    """Inline unlock for the confidential section (same shared password
+    and session flag as Leadership / PDP Builder / LC Meeting Summariser,
+    so unlocking here unlocks those too for this session)."""
+    if not _CONF_AVAILABLE:
+        st.warning(
+            "confidential_auth.py was not found in the repo root, so "
+            "confidential documents cannot be unlocked on this page."
+        )
+        return
+    pwd = st.text_input(
+        "Confidential password", type="password", key="arch_conf_pwd"
+    )
+    if st.button("🔓 Unlock confidential documents", key="arch_conf_btn"):
+        if pwd and pwd == _get_confidential_password():
+            st.session_state[_CONF_KEY] = True
+            st.rerun()
+        else:
+            st.error("🚫 Incorrect password. This area is for CLC Leadership only.")
 
 
 st.title("🗄️ Document Archive")
@@ -81,7 +108,12 @@ with tab_browse:
         )
         if _confidential_unlocked():
             show_confidential = True
-            st.success("Confidential section unlocked for this session.")
+            st.success(
+                "Confidential section unlocked for this session "
+                "(also unlocks Leadership, PDP Builder and LC Meeting Summariser)."
+            )
+        else:
+            _render_confidential_unlock()
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -220,6 +252,34 @@ with tab_student:
                                     ),
                                     unsafe_allow_html=True,
                                 )
+                            if st.button("🗑️ Delete", key=f"sf_del_{rid}"):
+                                st.session_state["_confirm_del"] = rid
+
+                        if st.session_state.get("_confirm_del") == rid:
+                            st.error(
+                                f"⚠️ **You are about to delete:** {rec['title']} "
+                                f"({rec['doc_type']}, added {str(rec.get('created_at',''))[:10]}). "
+                                "**Before confirming, check you are keeping the right "
+                                "version** — open both documents if unsure. Deleted "
+                                "documents move to Admin → Deleted, where they can be "
+                                "restored."
+                            )
+                            dc1, dc2, _sp = st.columns([1, 1, 3])
+                            with dc1:
+                                if st.button(
+                                    "Yes, delete this document",
+                                    key=f"sf_del_yes_{rid}", type="primary",
+                                ):
+                                    if soft_delete(
+                                        rid,
+                                        st.session_state.get("user_email", "unknown"),
+                                    ):
+                                        st.session_state.pop("_confirm_del", None)
+                                        st.rerun()
+                            with dc2:
+                                if st.button("Cancel", key=f"sf_del_no_{rid}"):
+                                    st.session_state.pop("_confirm_del", None)
+                                    st.rerun()
     else:
         # Directory of all students with archived documents
         all_recs = fetch_archive(include_confidential=_conf_ok, limit=1000)
@@ -350,8 +410,26 @@ with tab_admin:
                 f"({rec['doc_type']}, {rec.get('term','')} {rec.get('year','')})"
             )
             if c2.button("Delete", key=f"del_{rec['id']}"):
-                if soft_delete(rec["id"], user_email):
-                    st.rerun()
+                st.session_state["_confirm_del"] = rec["id"]
+            if st.session_state.get("_confirm_del") == rec["id"]:
+                st.error(
+                    f"⚠️ **You are about to delete:** {rec['title']}. "
+                    "**Check you are keeping the right version before "
+                    "confirming.** Deleted documents can be restored from "
+                    "the Deleted list below."
+                )
+                a1, a2, _ = st.columns([1, 1, 3])
+                with a1:
+                    if st.button(
+                        "Yes, delete", key=f"del_yes_{rec['id']}", type="primary"
+                    ):
+                        if soft_delete(rec["id"], user_email):
+                            st.session_state.pop("_confirm_del", None)
+                            st.rerun()
+                with a2:
+                    if st.button("Cancel", key=f"del_no_{rec['id']}"):
+                        st.session_state.pop("_confirm_del", None)
+                        st.rerun()
 
         if deleted:
             st.divider()
