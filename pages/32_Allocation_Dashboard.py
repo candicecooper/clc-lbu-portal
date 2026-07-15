@@ -688,6 +688,11 @@ else:
         # Default program to "All"
         selected_program = st.selectbox("Program", progs, index=0)
     
+    with col1:
+        # Add allocation status filter
+        allocation_status_options = ['Allocated Only', 'All Students (Inc. Referrals)']
+        selected_allocation_view = st.selectbox("View", allocation_status_options, index=0, help="Allocated Only = funded placements. All Students = includes pending referrals")
+    
     # FILTER DATA - handle "All" selections
     allocation_df['year_clean'] = pd.to_numeric(allocation_df['year'], errors='coerce')
     allocation_df['term_clean'] = pd.to_numeric(allocation_df['term'], errors='coerce')
@@ -722,6 +727,12 @@ else:
     # Apply program filter
     if selected_program != 'All':
         filtered = filtered[filtered['program_clean'] == selected_program]
+    
+    # === APPLY ALLOCATION STATUS FILTER ===
+    if selected_allocation_view == 'Allocated Only':
+        # Only show students with "Allocated" status
+        filtered = filtered[(filtered['allocation_status'].fillna('').str.lower() == 'allocated') | 
+                           (filtered['current_status'].fillna('').str.lower() == 'active')]
     
     # === MERGE ASSESSMENT DATA BY PROGRAM + TERM ===
     assessment_df = load_assessment_data()
@@ -760,8 +771,26 @@ else:
         year_display = st.session_state.auto_year if selected_year == 'All' else selected_year
         term_display = st.session_state.auto_term if selected_term == 'All' else selected_term
         
-        st.markdown(f"## Active Students Overview")
+        st.markdown(f"## Allocated Students Overview")
         st.markdown(f"**Year {year_display} | Term {term_display}** - Current enrollment and placement status")
+        
+        # === REFERRALS VS ALLOCATED COMPARISON ===
+        st.markdown("---")
+        st.markdown("### Referral & Allocation Status")
+        
+        # Count referrals vs allocated across full allocation_df for context
+        total_referrals = len(allocation_df)
+        total_allocated = len(allocation_df[(allocation_df['allocation_status'].fillna('').str.lower() == 'allocated') | 
+                                           (allocation_df['current_status'].fillna('').str.lower() == 'active')])
+        pending = total_referrals - total_allocated
+        
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total Referrals (All Time)", total_referrals)
+        col2.metric("Allocated", total_allocated)
+        col3.metric("Pending/Not Allocated", pending)
+        col4.metric("Allocation Rate", f"{(total_allocated/total_referrals*100):.1f}%" if total_referrals > 0 else "0%")
+        
+        st.markdown("---")
         
         # Debug expander
         
@@ -1566,9 +1595,18 @@ else:
 
     elif section == "Equity":
         st.markdown("## Equity Deep Dive Analysis")
-        st.markdown("Separate analysis of ATSI, EALD, and DCP cohorts with school socioeconomic context")
+        st.markdown("Separate analysis of ATSI, EALD, and DCP cohorts across all terms in the selected year")
         
-        equity_df = filtered.copy()
+        # For Equity, use the year-filtered data but IGNORE term/program filters for broader view
+        equity_df = allocation_df.copy()
+        
+        # Only apply year filter
+        if selected_year != 'All':
+            equity_df = equity_df[equity_df['year_clean'] == selected_year]
+        
+        # Apply program filter only if not 'All'
+        if selected_program != 'All':
+            equity_df = equity_df[equity_df['program_clean'] == selected_program]
         
         # Use flag data from session state, cached data, or show instructions
         flag_df_to_use = None
