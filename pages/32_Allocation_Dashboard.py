@@ -243,8 +243,8 @@ def init_supabase():
 
 supabase = init_supabase()
 
-@st.cache_data
 def load_allocation_data():
+    """Load allocation data from Supabase - fetches fresh data every time"""
     if not supabase:
         return None
     try:
@@ -255,9 +255,8 @@ def load_allocation_data():
     except:
         return None
 
-@st.cache_data
 def load_assessment_data():
-    """Load assessment data from Supabase - auto-updates when new data is entered"""
+    """Load assessment data from Supabase - fetches fresh data every time"""
     if not supabase:
         return None
     try:
@@ -2780,3 +2779,68 @@ else:
                                 st.plotly_chart(fig, use_container_width=True)
                         else:
                             st.info("No Word Aware data")
+                    
+    elif section == "Waitlist":
+        st.markdown("## Waitlist Management")
+        st.markdown("Track students on the waitlist and their allocation status")
+        
+        waitlist_students = filtered[filtered['waitlist_status'] == 'Yes']
+        
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Waitlisted", len(waitlist_students))
+        col2.metric("Allocated from Waitlist", ((waitlist_students['allocated_from_waitlist'] == 'Yes').sum()))
+        col3.metric("Still Waiting", len(waitlist_students) - ((waitlist_students['allocated_from_waitlist'] == 'Yes').sum()))
+        
+        st.markdown("---")
+        
+        if len(waitlist_students) > 0:
+            st.markdown("**Waitlist by Program:**")
+            waitlist_by_prog = waitlist_students['program'].value_counts()
+            for prog, count in waitlist_by_prog.items():
+                st.write(f"**{prog}:** {count} students")
+        else:
+            st.info("No students on waitlist")
+    
+    elif section == "Diagnostics":
+        st.markdown("## Dashboard Diagnostics")
+        st.markdown("System health and data status checks")
+        
+        st.markdown("---")
+        st.markdown("### Data Status")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Allocation Records", len(allocation_df))
+        col2.metric("Filtered Records", len(filtered))
+        col3.metric("With Assessment Data", len(filtered[filtered['smartar_data'].notna()]) if 'smartar_data' in filtered.columns else 0)
+        col4.metric("Flag Data Loaded", "✅ Yes" if 'flag_df' in st.session_state else "❌ No")
+        
+        st.markdown("---")
+        st.markdown("### Supabase Connection")
+        
+        if supabase:
+            st.success("✅ Supabase connected")
+            try:
+                test_response = supabase.table('allocation_students').select('id').limit(1).execute()
+                st.write(f"✅ allocation_students table: {len(test_response.data)} record(s)")
+            except:
+                st.error("❌ Cannot access allocation_students table")
+            
+            try:
+                test_response = supabase.table('term_assessments').select('id').limit(1).execute()
+                st.write(f"✅ term_assessments table: {len(test_response.data)} record(s)")
+            except:
+                st.error("❌ Cannot access term_assessments table")
+        else:
+            st.error("❌ Supabase not connected")
+        
+        st.markdown("---")
+        st.markdown("### Session State")
+        
+        with st.expander("View session state"):
+            session_keys = [k for k in st.session_state.keys() if not k.startswith('_')]
+            for key in session_keys:
+                val = st.session_state[key]
+                if hasattr(val, '__len__') and not isinstance(val, str):
+                    st.write(f"**{key}:** {type(val).__name__} ({len(val)} items)")
+                else:
+                    st.write(f"**{key}:** {type(val).__name__}")
