@@ -354,12 +354,6 @@ def load_disability_data_from_excel():
         return None
     except:
         return None
-                
-                if len(flag_cols) > 1:
-                    return excel_data[flag_cols].drop_duplicates('name_match')
-    except:
-        pass
-    return None
 
 # Pre-load flags at startup
 cached_flag_df = load_flag_data_from_excel()
