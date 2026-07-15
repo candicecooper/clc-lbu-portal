@@ -731,8 +731,8 @@ else:
     # === APPLY ALLOCATION STATUS FILTER ===
     if selected_allocation_view == 'Allocated Only':
         # Only show students with "Allocated" status
-        filtered = filtered[(filtered['allocation_status'].fillna('').str.lower() == 'allocated') | 
-                           (filtered['current_status'].fillna('').str.lower() == 'active')]
+        filtered = filtered[(filtered['Allocation_Status'].fillna('').str.lower() == 'allocated') | 
+                           (filtered['Current_Status'].fillna('').str.lower() == 'active')]
     
     # === MERGE ASSESSMENT DATA BY PROGRAM + TERM ===
     assessment_df = load_assessment_data()
@@ -780,8 +780,8 @@ else:
         
         # Count referrals vs allocated across full allocation_df for context
         total_referrals = len(allocation_df)
-        total_allocated = len(allocation_df[(allocation_df['allocation_status'].fillna('').str.lower() == 'allocated') | 
-                                           (allocation_df['current_status'].fillna('').str.lower() == 'active')])
+        total_allocated = len(allocation_df[(allocation_df['Allocation_Status'].fillna('').str.lower() == 'allocated') | 
+                                           (allocation_df['Current_Status'].fillna('').str.lower() == 'active')])
         pending = total_referrals - total_allocated
         
         col1, col2, col3, col4 = st.columns(4)
