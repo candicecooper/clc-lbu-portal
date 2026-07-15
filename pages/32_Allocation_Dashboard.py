@@ -284,10 +284,76 @@ def load_flag_data_from_excel():
             if 'Student_Name' in excel_data.columns:
                 excel_data['name_match'] = excel_data['Student_Name'].str.strip().str.lower()
                 
+                # === EXTRACT FLAG DATA ===
                 flag_cols = ['name_match']
-                for col in ['Flag_ATSI', 'Flag_EALD', 'Flag_DCP_involvement']:
+                for col in ['Flag_ATSI', 'Flag_EALD', 'Flag_DCP_involvement', 'Flag_9plusRAAP']:
                     if col in excel_data.columns:
                         flag_cols.append(col)
+                
+                if len(flag_cols) > 1:
+                    flag_df = excel_data[flag_cols].drop_duplicates('name_match')
+                    return flag_df
+        
+        return None
+    except:
+        return None
+
+@st.cache_data
+def load_funding_data_from_excel():
+    """Load funding category columns from Excel"""
+    try:
+        import os
+        excel_path = '/mnt/user-data/uploads/CLC_Allocation_Dashboard_2026_WithNames_1.xlsx'
+        
+        if os.path.exists(excel_path):
+            excel_data = pd.read_excel(excel_path)
+            
+            if 'Student_Name' in excel_data.columns:
+                excel_data['name_match'] = excel_data['Student_Name'].str.strip().str.lower()
+                
+                # === EXTRACT FUNDING DATA ===
+                funding_cols = ['name_match']
+                for i in range(1, 10):
+                    col = f'Flag_Category_{i}'
+                    if col in excel_data.columns:
+                        funding_cols.append(col)
+                
+                if len(funding_cols) > 1:
+                    funding_df = excel_data[funding_cols].drop_duplicates('name_match')
+                    return funding_df
+        
+        return None
+    except:
+        return None
+
+@st.cache_data
+def load_disability_data_from_excel():
+    """Load disability flag columns from Excel"""
+    try:
+        import os
+        excel_path = '/mnt/user-data/uploads/CLC_Allocation_Dashboard_2026_WithNames_1.xlsx'
+        
+        if os.path.exists(excel_path):
+            excel_data = pd.read_excel(excel_path)
+            
+            if 'Student_Name' in excel_data.columns:
+                excel_data['name_match'] = excel_data['Student_Name'].str.strip().str.lower()
+                
+                # === EXTRACT DISABILITY DATA ===
+                disability_cols = ['name_match']
+                for col in ['Flag_SWD', 'Flag_ASD', 'Flag_Intellectual', 'Flag_Learning_Difficulty',
+                           'Flag_Sensory_Processing', 'Flag_ADHD', 'Flag_ODD', 'Flag_PDA',
+                           'Medical_Condition_Details']:
+                    if col in excel_data.columns:
+                        disability_cols.append(col)
+                
+                if len(disability_cols) > 1:
+                    disability_df = excel_data[disability_cols].drop_duplicates('name_match')
+                    return disability_df
+        
+        return None
+    except:
+        return None
                 
                 if len(flag_cols) > 1:
                     return excel_data[flag_cols].drop_duplicates('name_match')
@@ -312,6 +378,26 @@ def update_chart_layout(fig):
     return fig
 
 allocation_df = load_allocation_data()
+
+# === AUTO-LOAD EXCEL DATA INTO SESSION STATE ===
+if allocation_df is not None:
+    # Load flag data
+    if 'flag_df' not in st.session_state or st.session_state.flag_df is None:
+        flag_df_loaded = load_flag_data_from_excel()
+        if flag_df_loaded is not None:
+            st.session_state.flag_df = flag_df_loaded
+    
+    # Load funding data
+    if 'funding_df' not in st.session_state or st.session_state.funding_df is None:
+        funding_df_loaded = load_funding_data_from_excel()
+        if funding_df_loaded is not None:
+            st.session_state.funding_df = funding_df_loaded
+    
+    # Load disability data
+    if 'disability_df' not in st.session_state or st.session_state.disability_df is None:
+        disability_df_loaded = load_disability_data_from_excel()
+        if disability_df_loaded is not None:
+            st.session_state.disability_df = disability_df_loaded
 
 # Load flag columns from Excel 
 flag_df = None
