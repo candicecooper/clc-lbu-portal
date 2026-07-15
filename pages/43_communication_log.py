@@ -154,6 +154,14 @@ def get_codes(client):
         return []
 
 
+def check_table(client, table):
+    try:
+        client.table(table).select("*").limit(1).execute()
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
 def insert_record(client, payload):
     return client.table(TABLE_NAME).insert(payload).execute()
 
@@ -588,6 +596,23 @@ client = get_client()
 if client is None:
     st.error("No Supabase connection. Check SUPABASE_URL / SUPABASE_KEY in the app secrets.")
     st.stop()
+
+# --- Connection & setup check ------------------------------------------------
+_req_tables = [TABLE_NAME, ARCHIVE_TABLE, ATTACH_TABLE]
+_checks = {t: check_table(client, t) for t in _req_tables}
+_missing = [t for t, (ok, _) in _checks.items() if not ok]
+with st.expander("🔧 Connection & setup check" + ("  ⚠️ action needed" if _missing else "  ✅ all good"),
+                 expanded=bool(_missing)):
+    _url = _get_secret("SUPABASE_URL", "supabase_url") or "(SUPABASE_URL not set)"
+    st.write(f"**This app is connected to:** `{_url}`")
+    st.caption("The setup SQL MUST run in this exact project. Its Table Editor should also "
+               "list your other portal tables (e.g. student_transitions, student_placements).")
+    for t, (ok, err) in _checks.items():
+        st.write(f"{'✅' if ok else '❌'} `{t}` — {'found' if ok else 'NOT in this project'}")
+    if _missing:
+        st.warning("Open the project shown above → SQL editor → run the CREATE TABLE block, "
+                   "then refresh this page. If that project does NOT contain your other portal "
+                   "tables, you're in the wrong project — match it to the URL shown above.")
 
 smartar = get_smartar_client()
 active_options, smartar_status = build_active_students(client, smartar)
