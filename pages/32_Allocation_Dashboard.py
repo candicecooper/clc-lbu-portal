@@ -730,9 +730,15 @@ else:
     
     # === APPLY ALLOCATION STATUS FILTER ===
     if selected_allocation_view == 'Allocated Only':
-        # Only show students with "Allocated" status
-        filtered = filtered[(filtered['Allocation_Status'].fillna('').str.lower() == 'allocated') | 
-                           (filtered['Current_Status'].fillna('').str.lower() == 'active')]
+        # Try to filter by allocation status if column exists
+        if 'Allocation_Status' in filtered.columns:
+            filtered = filtered[(filtered['Allocation_Status'].fillna('').str.lower() == 'allocated')]
+        elif 'allocation_status' in filtered.columns:
+            filtered = filtered[(filtered['allocation_status'].fillna('').str.lower() == 'allocated')]
+        elif 'current_status' in filtered.columns:
+            filtered = filtered[(filtered['current_status'].fillna('').str.lower() == 'active')]
+        elif 'Current_Status' in filtered.columns:
+            filtered = filtered[(filtered['Current_Status'].fillna('').str.lower() == 'active')]
     
     # === MERGE ASSESSMENT DATA BY PROGRAM + TERM ===
     assessment_df = load_assessment_data()
@@ -780,8 +786,19 @@ else:
         
         # Count referrals vs allocated across full allocation_df for context
         total_referrals = len(allocation_df)
-        total_allocated = len(allocation_df[(allocation_df['Allocation_Status'].fillna('').str.lower() == 'allocated') | 
-                                           (allocation_df['Current_Status'].fillna('').str.lower() == 'active')])
+        
+        # Try different column names for allocation status
+        allocated_mask = pd.Series(False, index=allocation_df.index)
+        if 'Allocation_Status' in allocation_df.columns:
+            allocated_mask = (allocation_df['Allocation_Status'].fillna('').str.lower() == 'allocated')
+        elif 'allocation_status' in allocation_df.columns:
+            allocated_mask = (allocation_df['allocation_status'].fillna('').str.lower() == 'allocated')
+        elif 'Current_Status' in allocation_df.columns:
+            allocated_mask = (allocation_df['Current_Status'].fillna('').str.lower() == 'active')
+        elif 'current_status' in allocation_df.columns:
+            allocated_mask = (allocation_df['current_status'].fillna('').str.lower() == 'active')
+        
+        total_allocated = allocated_mask.sum()
         pending = total_referrals - total_allocated
         
         col1, col2, col3, col4 = st.columns(4)
