@@ -818,22 +818,30 @@ else:
     # Apply term filter - using placement date overlap instead of just the Term column
     if selected_term != 'All':
         # Calculate which terms each student is active in based on placement dates
-        filtered['placement_terms'] = filtered.apply(
-            lambda row: get_terms_for_placement(row.get('placement_start') or row.get('Placement_Start'), 
-                                               row.get('actual_finish_date') or row.get('Actual_Finish_Date')),
-            axis=1
-        )
+        def get_placement_dates(row):
+            # Try different column name variations
+            start = row.get('placement_start') or row.get('Placement_Start') or row.get('Placement_Strt')
+            end = row.get('actual_finish_date') or row.get('Actual_Finish_Date') or row.get('Actual_Fin_Date')
+            return get_terms_for_placement(start, end)
+        
+        filtered['placement_terms'] = filtered.apply(get_placement_dates, axis=1)
         
         # Filter to students who are active in the selected term
         # Convert selected_term to int and year
         selected_term_int = int(selected_term)
         selected_year_int = int(selected_year) if selected_year != 'All' else st.session_state.auto_year
         
-        filtered = filtered[
+        placement_filtered = filtered[
             filtered['placement_terms'].apply(
-                lambda terms: (selected_year_int, selected_term_int) in terms
+                lambda terms: (selected_year_int, selected_term_int) in terms if isinstance(terms, list) else False
             )
         ]
+        
+        # If placement-based filtering returns no results, fall back to term_clean column
+        if len(placement_filtered) == 0:
+            filtered = filtered[filtered['term_clean'] == selected_term]
+        else:
+            filtered = placement_filtered
     
     # Apply program filter
     if selected_program != 'All':
