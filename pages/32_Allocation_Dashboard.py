@@ -255,6 +255,101 @@ def load_allocation_data():
     except:
         return None
 
+# === TERM DATE CONFIGURATION ===
+TERM_DATES = {
+    2020: {
+        1: ('2020-01-28', '2020-04-09'),
+        2: ('2020-04-27', '2020-07-03'),
+        3: ('2020-07-20', '2020-09-25'),
+        4: ('2020-10-11', '2020-12-11'),
+    },
+    2021: {
+        1: ('2021-01-27', '2021-04-09'),
+        2: ('2021-04-27', '2021-07-02'),
+        3: ('2021-07-19', '2021-09-24'),
+        4: ('2021-10-11', '2021-12-10'),
+    },
+    2022: {
+        1: ('2022-01-31', '2022-04-14'),
+        2: ('2022-05-02', '2022-07-08'),
+        3: ('2022-07-25', '2022-09-30'),
+        4: ('2022-10-17', '2022-12-16'),
+    },
+    2023: {
+        1: ('2023-01-30', '2023-04-14'),
+        2: ('2023-05-01', '2023-07-07'),
+        3: ('2023-07-24', '2023-09-29'),
+        4: ('2023-10-16', '2023-12-15'),
+    },
+    2024: {
+        1: ('2024-01-29', '2024-04-12'),
+        2: ('2024-04-29', '2024-07-05'),
+        3: ('2024-07-22', '2024-09-27'),
+        4: ('2024-10-14', '2024-12-13'),
+    },
+    2025: {
+        1: ('2025-01-28', '2025-04-11'),
+        2: ('2025-04-28', '2025-07-04'),
+        3: ('2025-07-21', '2025-09-26'),
+        4: ('2025-10-13', '2025-12-12'),
+    },
+    2026: {
+        1: ('2026-01-27', '2026-04-10'),
+        2: ('2026-04-27', '2026-07-03'),
+        3: ('2026-07-20', '2026-09-25'),
+        4: ('2026-10-12', '2026-12-11'),
+    },
+    2027: {
+        1: ('2027-01-27', '2027-04-09'),
+        2: ('2027-04-26', '2027-07-02'),
+        3: ('2027-07-19', '2027-09-24'),
+        4: ('2027-10-11', '2027-12-10'),
+    },
+    2028: {
+        1: ('2028-01-31', '2028-04-13'),
+        2: ('2028-05-01', '2028-07-07'),
+        3: ('2028-07-24', '2028-09-29'),
+        4: ('2028-10-16', '2028-12-15'),
+    },
+    2029: {
+        1: ('2029-01-29', '2029-04-13'),
+        2: ('2029-04-30', '2029-07-06'),
+        3: ('2029-07-23', '2029-09-28'),
+        4: ('2029-10-15', '2029-12-14'),
+    },
+    2030: {
+        1: ('2030-01-29', '2030-04-12'),
+        2: ('2030-04-29', '2030-07-05'),
+        3: ('2030-07-22', '2030-09-27'),
+        4: ('2030-10-14', '2030-12-13'),
+    },
+}
+
+def get_terms_for_placement(placement_start, placement_end):
+    """Calculate which terms a placement spans"""
+    if pd.isna(placement_start) or pd.isna(placement_end):
+        return []
+    
+    placement_start = pd.to_datetime(placement_start, errors='coerce')
+    placement_end = pd.to_datetime(placement_end, errors='coerce')
+    
+    if pd.isna(placement_start) or pd.isna(placement_end):
+        return []
+    
+    terms_list = []
+    
+    # Check each year and term in TERM_DATES
+    for year, terms in TERM_DATES.items():
+        for term_num, (term_start, term_end) in terms.items():
+            term_start = pd.to_datetime(term_start)
+            term_end = pd.to_datetime(term_end)
+            
+            # Check if placement overlaps with this term
+            if placement_start <= term_end and placement_end >= term_start:
+                terms_list.append((year, term_num))
+    
+    return terms_list
+
 def load_assessment_data():
     """Load assessment data from Supabase - fetches fresh data every time"""
     if not supabase:
@@ -720,9 +815,25 @@ else:
     if selected_year != 'All':
         filtered = filtered[filtered['year_clean'] == selected_year]
     
-    # Apply term filter
+    # Apply term filter - using placement date overlap instead of just the Term column
     if selected_term != 'All':
-        filtered = filtered[filtered['term_clean'] == selected_term]
+        # Calculate which terms each student is active in based on placement dates
+        filtered['placement_terms'] = filtered.apply(
+            lambda row: get_terms_for_placement(row.get('placement_start') or row.get('Placement_Start'), 
+                                               row.get('actual_finish_date') or row.get('Actual_Finish_Date')),
+            axis=1
+        )
+        
+        # Filter to students who are active in the selected term
+        # Convert selected_term to int and year
+        selected_term_int = int(selected_term)
+        selected_year_int = int(selected_year) if selected_year != 'All' else st.session_state.auto_year
+        
+        filtered = filtered[
+            filtered['placement_terms'].apply(
+                lambda terms: (selected_year_int, selected_term_int) in terms
+            )
+        ]
     
     # Apply program filter
     if selected_program != 'All':
