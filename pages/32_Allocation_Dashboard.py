@@ -890,7 +890,30 @@ else:
     """, unsafe_allow_html=True)
     st.markdown("---")
     
-    # CONTENT BY SECTION
+    # === DEBUG SECTION ===
+    with st.expander("🔍 Debug - Term & Data Calculations"):
+        st.write(f"**Selected Year:** {selected_year} | **Selected Term:** {selected_term} | **Selected Program:** {selected_program}")
+        st.write(f"**Allocation View:** {selected_allocation_view}")
+        st.write(f"**Filtered students (after all filters):** {len(filtered)}")
+        
+        # Show sample of filtered data
+        if len(filtered) > 0:
+            st.write(f"**Sample of filtered data ({min(5, len(filtered))} rows):**")
+            display_cols = ['student_name', 'program', 'year_level', 'Placement_Start', 'Actual_Finish_Date', 
+                          'Placement_Start', 'Allocation_Status', 'placement_terms']
+            available_cols = [c for c in display_cols if c in filtered.columns]
+            st.dataframe(filtered[available_cols].head())
+        
+        # Show allocation_df totals by term
+        st.write(f"**Total allocation_df rows:** {len(allocation_df)}")
+        if 'term_clean' in allocation_df.columns:
+            st.write("**allocation_df by term_clean:**")
+            st.write(allocation_df['term_clean'].value_counts().sort_index())
+        
+        # Show what columns exist
+        st.write(f"**Columns in allocation_df:** {list(allocation_df.columns)[:10]}...")
+    
+    st.markdown("---")
     if section == "Overview":
         # Display year/term context in title
         year_display = st.session_state.auto_year if selected_year == 'All' else selected_year
