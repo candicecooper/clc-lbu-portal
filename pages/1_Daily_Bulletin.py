@@ -102,7 +102,7 @@ def init_state():
             st.session_state[k] = v
 
 init_state()
-ADMIN_PASSWORD = "clcstaff2026"  # staff password, matches the staff PIN
+ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "clcstaff2026")
 
 TRANSPORT_OPTIONS = ["Taxi","Parent/Carer","Other"]
 CHANGE_TYPE_OPTIONS = ["Early Departure","Late Arrival","No Show","Alternative Pickup","Alternative Drop-off","Absent - not attending","Other"]
@@ -363,7 +363,7 @@ def load_todays_nit_bookings(for_date):
         sb = _get_sb()
         response = sb.table("nit_bookings").select("*").eq("status", "booked").eq("booking_date", str(for_date)).execute()
         if response.data:
-            slot_order = {"Monday 1:45pm": 1, "Tuesday 1:45pm": 2, "Thursday 2:15pm": 3}
+            slot_order = {"Tuesday 9:00-10:15am": 1, "Monday 1:45-3:00pm": 2, "Thursday 1:45-3:00pm": 3, "Monday 1:45pm": 4, "Tuesday 1:45pm": 5, "Thursday 2:15pm": 6}
             return sorted(response.data, key=lambda x: slot_order.get(x.get('time_slot', ''), 99))
         return []
     except Exception:
@@ -529,53 +529,39 @@ if params.get("display") == "true":
     st.markdown('<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">', unsafe_allow_html=True)
     sr = d_data.get("staff_responsibilities", {}); fun = d_data.get("fun_fact","")
     st.markdown("""<style>
-    body{font-family:'Inter','Segoe UI',sans-serif}
-    .dp{background:#ffffff;border:none;border-radius:12px;overflow:hidden;margin-bottom:8px;box-shadow:0 2px 8px rgba(0,0,0,0.08)}
-    .dp-header{padding:.7rem 1rem;font-size:1.1rem;font-weight:800;letter-spacing:0;color:white;border-bottom:2px solid rgba(255,255,255,0.2)}
-    .dp-header.green{background:linear-gradient(135deg,#4a8f33,#5ca744)}
-    .dp-header.navy{background:linear-gradient(135deg,#1a2e44,#2a4564)}
-    .dp-header.brown{background:linear-gradient(135deg,#7a5c4a,#8a6c5a)}
-    .dp-header.amber{background:linear-gradient(135deg,#c97b1a,#d98b2a);color:#1a2e44}
-    .dp-header.blue{background:linear-gradient(135deg,#3a6a9a,#4a7aaa)}
-    .dp-header.purple{background:linear-gradient(135deg,#6a4a9a,#7a5aaa)}
-    .dp-header.slate{background:linear-gradient(135deg,#4a5a6a,#5a6a7a)}
-    .dp-header.red{background:linear-gradient(135deg,#c0392b,#d0493b)}
-    .dp-body{padding:.7rem .9rem;background:#fafbfc}
-    .dt{width:100%;border-collapse:collapse;font-size:1.05rem;color:#1a2e44;font-family:'Inter',sans-serif;font-weight:500}
-    .dt th{color:#6BBF4E;font-weight:700;font-size:.85rem;text-transform:uppercase;letter-spacing:.05em;padding:.4rem .4rem;border-bottom:2px solid #e1e8ed;text-align:left}
-    .dt td{padding:.45rem .4rem;border-bottom:1px solid #f0f3f5;vertical-align:middle;line-height:1.3}
+    .dp{background:#ffffff;border:1px solid #e0e8e0;border-radius:4px;overflow:hidden;margin-bottom:3px;box-shadow:0 1px 2px rgba(0,0,0,0.04)}
+    .dp-header{padding:.25rem .5rem;font-size:.7rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:white}
+    .dp-header.green{background:#4a8f33}.dp-header.navy{background:#1a2e44}.dp-header.brown{background:#7a5c4a}
+    .dp-header.amber{background:#c97b1a;color:#1a2e44}.dp-header.blue{background:#3a6a9a}
+    .dp-header.purple{background:#6a4a9a}.dp-header.slate{background:#4a5a6a}.dp-header.red{background:#c0392b}
+    .dp-body{padding:.3rem .4rem;background:white}
+    .dt{width:100%;border-collapse:collapse;font-size:.75rem;color:#1a2e44;font-family:'Segoe UI',Arial,sans-serif}
+    .dt th{color:#4a8f33;font-weight:600;font-size:.65rem;text-transform:uppercase;letter-spacing:.03em;padding:.2rem .3rem;border-bottom:1px solid #ddd;text-align:left}
+    .dt td{padding:.18rem .3rem;border-bottom:1px solid #f0f0f0;vertical-align:top;line-height:1.25}
     .dt tr:last-child td{border-bottom:none}
-    .dt tr:hover{background:#f8faf9}
-    .dt-em{color:#95a5a6;font-style:italic;font-size:.9rem}
-    .vb-tag{background:#d4edda;color:#155724;padding:.2rem .5rem;border-radius:6px;font-size:.9rem;font-weight:700;display:inline-block}
-    .kitchen-val{background:linear-gradient(135deg,#e8a125,#f0b135);border-radius:8px;padding:.3rem .6rem;color:#1a2e44;font-weight:800;font-size:1.1rem;display:inline-block;box-shadow:0 2px 4px rgba(232,161,37,0.3)}
-    .resp-label{font-size:.85rem;color:#6BBF4E;font-weight:700;text-transform:uppercase;letter-spacing:.05em}.resp-val{font-size:1rem;color:#2c3e50;font-weight:600;margin-top:.15rem}
-    .tc-badge{background:#f8d7da;color:#721c24;padding:.25rem .5rem;border-radius:6px;font-size:.9rem;font-weight:700}
-    .notice-box{background:#fff9e6;border-left:4px solid #f0b135;padding:.7rem 1rem;margin:.4rem 0;border-radius:6px}
-    .notice-cat{background:#e8a125;color:#1a2e44;padding:.2rem .5rem;border-radius:4px;font-size:.8rem;font-weight:700;margin-right:.5rem}
-    .notice-title{color:#1a2e44;font-size:1rem;font-weight:700}
-    .notice-body{color:#4a5a6a;font-size:.95rem;margin-top:.2rem}
-    .notice-by{color:#7a8a9a;font-size:.8rem;font-style:italic;margin-top:.2rem}
+    .dt-em{color:#999;font-style:italic;font-size:.7rem}
+    .vb-tag{background:#e8f5e1;color:#2d6b1a;padding:.1rem .35rem;border-radius:3px;font-size:.7rem;font-weight:600}
+    .kitchen-val{background:#e8a125;border-radius:4px;padding:.15rem .4rem;color:#1a2e44;font-weight:800;font-size:.75rem;display:inline-block}
+    .resp-label{font-size:.65rem;color:#4a8f33;font-weight:600;text-transform:uppercase}.resp-val{font-size:.75rem;color:#2a3a2a;margin-top:.1rem}
+    .tc-badge{background:#fdd;color:#c00;padding:.1rem .35rem;border-radius:3px;font-size:.7rem;font-weight:700}
     </style>""", unsafe_allow_html=True)
     import streamlit.components.v1 as _components
     _date_str = today.strftime("%A %-d %B %Y").upper()
-    _components.html(f"""<div style="background:#1a2e44;padding:.9rem 1.8rem;display:flex;align-items:center;justify-content:space-between;box-shadow:0 4px 12px rgba(0,0,0,0.15);">
+    _components.html(f"""<div style="background:#1a2e44;padding:.5rem 1rem;display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #6BBF4E;">
       <div>
-        <div style="font-size:1.8rem;color:white;font-weight:800;letter-spacing:-0.02em;">Daily Bulletin</div>
-        <div style="font-size:1.3rem;color:#6BBF4E;font-weight:600;margin-top:.2rem;">{_date_str}</div>
+        <div style="font-size:1.1rem;color:white;font-weight:700;">CLC Daily Bulletin</div>
+        <div style="font-size:.9rem;color:#6BBF4E;font-weight:600;">{_date_str}</div>
       </div>
-      <div style="display:flex;align-items:center;gap:2rem;">
-        <div style="font-size:2.2rem;color:#6BBF4E;font-weight:800;font-family:monospace;letter-spacing:.05em;" id="live-clock">--:-- --</div>
-        <div style="display:flex;gap:.8rem;">
-          <a href="/Daily_Bulletin?quickadd=true" style="background:#6BBF4E;color:#1a2e44;font-size:.95rem;font-weight:700;padding:.5rem 1rem;border-radius:8px;text-decoration:none;box-shadow:0 2px 6px rgba(107,191,78,0.3);">+ Quick Add</a>
-          <a href="/Daily_Bulletin?from_display=true" style="background:rgba(255,255,255,0.1);color:white;font-size:.95rem;font-weight:600;padding:.5rem 1rem;border-radius:8px;text-decoration:none;border:1px solid rgba(255,255,255,0.2);">Staff Access</a>
-        </div>
+      <div style="display:flex;align-items:center;gap:1rem;">
+        <div style="font-size:1.3rem;color:#e8a125;font-weight:700;font-family:monospace;" id="live-clock">--:-- --</div>
+        <a href="/Daily_Bulletin?quickadd=true" style="background:#6BBF4E;color:#1a2e44;font-size:.7rem;font-weight:700;padding:.3rem .6rem;border-radius:4px;text-decoration:none;">+ Add</a>
+        <a href="/Daily_Bulletin?from_display=true" style="background:rgba(255,255,255,0.1);color:white;font-size:.7rem;font-weight:600;padding:.3rem .6rem;border-radius:4px;text-decoration:none;">Staff</a>
       </div>
     </div>
     <script>
     function updateClock(){{var n=new Date();var h=n.getHours();var m=n.getMinutes();var ap=h>=12?'PM':'AM';h=h%12||12;document.getElementById('live-clock').textContent=h+':'+(m<10?'0':'')+m+' '+ap;}}
     updateClock();setInterval(updateClock,30000);
-    </script>""", height=90, scrolling=False)
+    </script>""", height=60, scrolling=False)
 
     prev_day = today - timedelta(days=1); next_day = today + timedelta(days=1)
     dn1, dn2, dn3, dn4 = st.columns([1,4,1,1])
@@ -598,8 +584,8 @@ if params.get("display") == "true":
         n_parts = []
         for n in d_notices:
             cat = n.get("category","General"); nc = NOTICE_CATS.get(cat, NOTICE_CATS["General"])
-            n_parts.append(f'<div class="notice-box"><div><span class="notice-cat">{cat}</span><span class="notice-title">{n.get("title","")}</span></div><div class="notice-body">{n.get("body","")}</div><div class="notice-by">— {n.get("submitted_by","")}</div></div>')
-        st.markdown(f'<div class="dp"><div class="dp-header green">📢 Staff Notices</div><div class="dp-body" style="padding:.5rem;">{"".join(n_parts)}</div></div>', unsafe_allow_html=True)
+            n_parts.append(f'<span style="background:{nc["bg"]};color:{nc["color"]};font-size:.65rem;font-weight:700;text-transform:uppercase;padding:.08rem .3rem;border-radius:3px;">{cat}</span> <strong style="color:#1a2e44;font-size:.75rem;">{n.get("title","")}</strong> <span style="color:#4a6a4a;font-size:.72rem;">{n.get("body","")}</span> <span style="color:#999;font-size:.65rem;">({n.get("submitted_by","")})</span>')
+        st.markdown(f'<div class="dp"><div class="dp-header green">📋 Notices</div><div class="dp-body"><div style="line-height:1.6;">{"<br>".join(n_parts)}</div></div></div>', unsafe_allow_html=True)
 
     r1c1, r1c2, r1c3, r1c4, r1c5 = st.columns([2,2,2.5,1.5,2])
     with r1c1:
@@ -619,8 +605,8 @@ if params.get("display") == "true":
 
     _vis_rows = [r for r in d_data.get("visitors_on_site", []) if any(r.get(k,"") for k in ["Visitor Name","Reason","Staff Responsible"])]
     if _vis_rows:
-        _vis_html = "".join([f'<tr><td><strong style="color:#1a2e44;">{r.get("Visitor Name","")}</strong></td><td style="font-size:.85rem;">{r.get("Reason","")}</td><td style="font-size:.85rem;">{r.get("Staff Responsible","")}</td><td style="font-size:.85rem;">{r.get("Arriving","")}</td><td style="font-size:.85rem;">{r.get("Departing","")}</td><td style="font-size:.85rem;">{r.get("Location","")}</td></tr>' for r in _vis_rows])
-        st.markdown(f'<div class="dp"><div class="dp-header green">\U0001f465 Visitors on Site</div><div class="dp-body"><table class="dt"><tr><th>Visitor</th><th>Reason</th><th>Staff</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>{_vis_html}</table></div></div>', unsafe_allow_html=True)
+        _vis_html = "".join([f'<tr><td><strong style="color:#1a2e44;">{r.get("Visitor Name","")}</strong></td><td style="font-size:.7rem;">{r.get("Reason","")}</td><td style="font-size:.7rem;">{r.get("Staff Responsible","")}</td><td style="font-size:.7rem;">{r.get("Arriving","")}</td><td style="font-size:.7rem;">{r.get("Departing","")}</td><td style="font-size:.7rem;">{r.get("Location","")}</td></tr>' for r in _vis_rows])
+        st.markdown(f'<div class="dp"><div class="dp-header green">👥 Visitors</div><div class="dp-body"><table class="dt"><tr><th>Visitor</th><th>Reason</th><th>Staff</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>{_vis_html}</table></div></div>', unsafe_allow_html=True)
 
     r2c1, r2c2, r2c3, r2c4, r2c5 = st.columns([2,2,2,1.5,1])
     with r2c1:
@@ -634,13 +620,13 @@ if params.get("display") == "true":
         if isinstance(vb, dict): vb = []
         if vb:
             def _dm_vb_time_d(b): return "All day" if b.get("whole_day",True) else f"{b.get('start_time','?')}\u2013{b.get('end_time','?')}"
-            vb_html = "".join([f'<tr><td style="font-size:.8rem;color:#5a7a5a;">{"🚐 Van" if b.get("vehicle")=="Van" else "🚙 Kia"}</td><td><span class="vb-tag">{b.get("booker","")}</span></td><td style="font-size:.8rem;color:#6BBF4E;">{_dm_vb_time_d(b)}</td></tr>' for b in vb if b.get("booker","")])
+            vb_html = "".join([f'<tr><td style="font-size:.7rem;color:#666;">{"🚐 Van" if b.get("vehicle")=="Van" else "🚙 Kia"}</td><td><span class="vb-tag">{b.get("booker","")}</span></td><td style="font-size:.7rem;color:#4a8f33;">{_dm_vb_time_d(b)}</td></tr>' for b in vb if b.get("booker","")])
         else:
-            vb_html = '<tr><td colspan="3" class="dt-em">No bookings today</td></tr>'
-        st.markdown(f'<div class="dp"><div class="dp-header navy">\U0001f697 Vehicles</div><div class="dp-body"><table class="dt"><tr><th>Vehicle</th><th>Booked By</th><th>Time</th></tr>{vb_html}</table></div></div>', unsafe_allow_html=True)
+            vb_html = '<tr><td colspan="3" class="dt-em">No bookings</td></tr>'
+        st.markdown(f'<div class="dp"><div class="dp-header navy">🚗 Vehicles</div><div class="dp-body"><table class="dt"><tr><th>Vehicle</th><th>Booked By</th><th>Time</th></tr>{vb_html}</table></div></div>', unsafe_allow_html=True)
     with r2c5:
-        nit = d_data.get("nit_booking","") or '<span class="dt-em">None today</span>'
-        st.markdown(f'<div class="dp"><div class="dp-header green">\U0001f4cb NIT</div><div class="dp-body"><p style="font-size:.88rem;color:#2d3d2d;margin:0;line-height:1.3;">{nit}</p></div></div>', unsafe_allow_html=True)
+        nit = d_data.get("nit_booking","") or '<span class="dt-em">None</span>'
+        st.markdown(f'<div class="dp"><div class="dp-header green">📅 NIT</div><div class="dp-body"><p style="font-size:.75rem;color:#2a3a2a;margin:0;line-height:1.3;">{nit}</p></div></div>', unsafe_allow_html=True)
 
     # Travel Changes — highlighted red if anything entered
     tc_today = d_data.get("travel_changes", [])
@@ -648,14 +634,14 @@ if params.get("display") == "true":
     if tc_filtered:
         tc_rows_html = "".join([
             f'<tr><td><strong style="color:#1a2e44;">{r.get("Student","")}</strong></td>'
-            f'<td style="font-size:.85rem;">{r.get("Program","")}</td>'
+            f'<td style="font-size:.7rem;">{r.get("Program","")}</td>'
             f'<td><span class="tc-badge">{r.get("Change Type","")}</span></td>'
-            f'<td style="font-size:.85rem;color:#4a2a2a;">{r.get("Reason","")}</td>'
-            f'<td style="font-family:DM Mono,monospace;font-size:.85rem;color:#c0392b;font-weight:700;">{r.get("Time","")}</td>'
-            f'<td style="font-size:.85rem;">{r.get("How Departed","")}</td></tr>'
+            f'<td style="font-size:.7rem;color:#666;">{r.get("Reason","")}</td>'
+            f'<td style="font-family:monospace;font-size:.7rem;color:#c00;font-weight:700;">{r.get("Time","")}</td>'
+            f'<td style="font-size:.7rem;">{r.get("How Departed","")}</td></tr>'
             for r in tc_filtered
         ])
-        st.markdown(f'<div class="dp" style="border-left:4px solid #c0392b;"><div class="dp-header red">\U0001f504 Travel Plan Changes</div><div class="dp-body"><table class="dt"><tr><th style="color:#e87878;">Student</th><th style="color:#e87878;">Program</th><th style="color:#e87878;">Change</th><th style="color:#e87878;">Reason</th><th style="color:#e87878;">Time</th><th style="color:#e87878;">How Departed</th></tr>{tc_rows_html}</table></div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="dp" style="border-left:3px solid #c00;"><div class="dp-header red">🔄 Travel Changes</div><div class="dp-body"><table class="dt"><tr><th>Student</th><th>Program</th><th>Change</th><th>Reason</th><th>Time</th><th>How Departed</th></tr>{tc_rows_html}</table></div></div>', unsafe_allow_html=True)
 
     bc_today = load_bulletin_changes(today)
     if bc_today:
