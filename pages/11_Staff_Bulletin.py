@@ -1,1332 +1,1368 @@
-from theme import apply_clc_theme
 import streamlit as st
-import re
-import time
-import pandas as pd
-import hashlib
-from io import BytesIO
-from datetime import datetime, date, timedelta, timezone
+from datetime import date, timedelta, datetime
+import database as db
+import json
+import time as _time
 
-try:
-    from email_utils import send_edition_notification
-except ImportError:
-    def send_edition_notification(*args, **kwargs):
-        return False, "Email not configured"
+st.set_page_config(
+    page_title="CLC Daily Bulletin",
+    page_icon="📋",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
-st.set_page_config(page_title="CLC Staff Bulletin", page_icon="📋",
-                   layout="wide", initial_sidebar_state="collapsed")
-apply_clc_theme()
+from auth import logout_button, get_staff_name
+logout_button("sidebar")
 
-# ══════════════════════════════════════════════════════════════════════════════
-# SUPABASE — direct client only, no database.py
-# ══════════════════════════════════════════════════════════════════════════════
-@st.cache_resource
-def get_sb():
-    from supabase import create_client
-    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+# ── DESIGN SYSTEM ─────────────────────────────────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
+*,*::before,*::after{box-sizing:border-box}
+html,body,[data-testid="stAppViewContainer"]{background:#f0f4f0!important;font-family:'DM Sans',sans-serif}
+[data-testid="stAppViewContainer"]{padding:0}
+[data-testid="stHeader"]{display:none}
+[data-testid="stSidebar"]{display:none}
+#MainMenu,footer,.stDeployButton{display:none}
+.main .block-container{padding:0!important;max-width:100%!important}
+.top-nav{background:#1a2e44;padding:0 2rem;height:56px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:1000;box-shadow:0 2px 12px rgba(0,0,0,0.2)}
+.top-nav-left{display:flex;align-items:center;gap:.75rem}
+.top-nav-logo{width:32px;height:32px;background:linear-gradient(135deg,#6BBF4E,#4a8f33);border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:800;color:white;font-size:.85rem}
+.top-nav-title{font-family:'DM Sans',sans-serif;font-weight:700;font-size:.95rem;color:white;letter-spacing:.02em}
+.top-nav-sub{font-size:.72rem;color:rgba(255,255,255,0.5);letter-spacing:.06em;text-transform:uppercase}
+.nav-badge{background:rgba(107,191,78,0.2);border:1px solid rgba(107,191,78,0.4);color:#6BBF4E;font-size:.72rem;font-weight:600;padding:.2rem .6rem;border-radius:20px;letter-spacing:.05em}
+.nav-badge.edit{background:rgba(232,161,37,0.2);border-color:rgba(232,161,37,0.4);color:#e8a125}
+.bulletin-hero{background:linear-gradient(135deg,#3d7a28 0%,#6BBF4E 60%,#8fd468 100%);padding:1.75rem 2rem 1.5rem;position:relative;overflow:hidden}
+.bulletin-hero::before{content:'';position:absolute;top:-40px;right:-40px;width:200px;height:200px;background:rgba(255,255,255,0.06);border-radius:50%}
+.bulletin-hero-inner{display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem;position:relative;z-index:1}
+.bulletin-date-label{font-family:'DM Mono',monospace;font-size:.7rem;color:rgba(255,255,255,0.7);letter-spacing:.12em;text-transform:uppercase;margin-bottom:.3rem}
+.bulletin-date-main{font-family:'Playfair Display',serif;font-size:2rem;color:white;font-weight:700;line-height:1.1}
+.bulletin-date-sub{font-size:.85rem;color:rgba(255,255,255,0.75);margin-top:.25rem;font-weight:400}
+.content-area{padding:1.5rem 2rem 3rem;max-width:1600px;margin:0 auto}
+.section-card{background:white;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.06);overflow:hidden;margin-bottom:1.25rem}
+.section-card-header{padding:.6rem 1rem;display:flex;align-items:center;gap:.5rem}
+.section-card-header.green{background:#6BBF4E}
+.section-card-header.navy{background:#1a2e44}
+.section-card-header.brown{background:#A67C6A}
+.section-card-header.amber{background:#e8a125}
+.section-card-header.blue{background:#4a7fb5}
+.section-card-header.purple{background:#7a5bb5}
+.section-card-header.slate{background:#6a7f8a}
+.section-card-header.red{background:#c0392b}
+.section-card-header h3{font-size:.72rem;font-weight:700;color:white;text-transform:uppercase;letter-spacing:.1em;margin:0}
+.section-card-header.amber h3{color:#1a2e44}
+.section-card-body{padding:.75rem}
+.data-table{width:100%;border-collapse:collapse;font-size:.78rem}
+.data-table th{background:#f4f8f2;color:#4a6640;font-weight:600;font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;padding:.4rem .6rem;text-align:left;border-bottom:2px solid #d8ead2}
+.data-table td{padding:.4rem .6rem;border-bottom:1px solid #f0f4ee;color:#2a3a2a;vertical-align:top}
+.data-table tr:last-child td{border-bottom:none}
+.data-table tr:hover td{background:#fafcf9}
+.change-badge{background:#fee2e2;color:#b91c1c;padding:.1rem .45rem;border-radius:4px;font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+.kitchen-row td{background:#fff8e6!important;font-weight:600}
+.kitchen-badge{background:#e8a125;color:#1a2e44;padding:.15rem .5rem;border-radius:4px;font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+.vehicle-time{font-family:'DM Mono',monospace;font-size:.72rem;color:#888}
+.vehicle-booking{background:#e8f5e1;color:#2d6b1a;padding:.1rem .4rem;border-radius:4px;font-size:.75rem;font-weight:500}
+[data-baseweb="tab-list"]{background:transparent!important;gap:.25rem!important;border-bottom:2px solid #e0e8dc!important;padding:0!important}
+[data-baseweb="tab"]{background:transparent!important;border-radius:8px 8px 0 0!important;padding:.5rem 1rem!important;font-family:'DM Sans',sans-serif!important;font-size:.82rem!important;font-weight:600!important;color:#7a907a!important;border:none!important}
+[aria-selected="true"][data-baseweb="tab"]{background:white!important;color:#4a8f33!important;border-bottom:2px solid #6BBF4E!important}
+[data-baseweb="tab-panel"]{padding:1rem 0 0!important}
+.stTextInput input,.stTextArea textarea,.stSelectbox select{border:1.5px solid #d8e8d4!important;border-radius:8px!important;font-family:'DM Sans',sans-serif!important;font-size:.82rem!important;background:white!important}
+.stTextInput input:focus,.stTextArea textarea:focus{border-color:#6BBF4E!important;box-shadow:0 0 0 3px rgba(107,191,78,0.15)!important}
+label[data-testid="stWidgetLabel"] p{font-size:.72rem!important;font-weight:600!important;color:#5a7a5a!important;text-transform:uppercase!important;letter-spacing:.06em!important}
+.stButton button{border-radius:8px!important;font-family:'DM Sans',sans-serif!important;font-weight:600!important;font-size:.85rem!important}
+.stButton button[kind="primary"]{background:#4a8f33!important;border:none!important}
+.stButton button[kind="primary"]:hover{background:#3d7a28!important}
+[data-testid="stDataEditor"]{border:1.5px solid #d8e8d4!important;border-radius:10px!important;overflow:hidden}
+.arch-card{background:white;border:1.5px solid #e0e8dc;border-left:4px solid #6BBF4E;border-radius:10px;padding:.85rem 1rem;margin-bottom:.6rem}
+.arch-card-date{font-weight:700;font-size:.9rem;color:#1a2e44}
+.arch-card-fact{font-size:.78rem;color:#7a907a;margin-top:.2rem}
+.empty-state{text-align:center;padding:2rem;color:#9ab09a;font-size:.85rem}
+.empty-state .icon{font-size:2rem;margin-bottom:.5rem}
+.auth-gate{max-width:400px;margin:4rem auto;background:white;border-radius:16px;padding:2.5rem;box-shadow:0 8px 32px rgba(0,0,0,0.1);text-align:center}
+@media(max-width:768px){.bulletin-date-main{font-size:1.4rem}.content-area{padding:1rem}}
+</style>
+""", unsafe_allow_html=True)
 
-@st.cache_resource
-def get_sb_mtg():
-    """Client for the meetings DB — auto-creates staff meeting records."""
-    from supabase import create_client
-    url = st.secrets.get("SUPABASE_URL_MEETINGS", st.secrets["SUPABASE_URL"])
-    key = st.secrets.get("SUPABASE_SERVICE_KEY_MEETINGS",
-          st.secrets.get("SUPABASE_KEY_MEETINGS", st.secrets["SUPABASE_KEY"]))
-    return create_client(url, key)
+# ── SESSION STATE ─────────────────────────────────────────────
+def _default_date():
+    d = date.today()
+    if d.weekday() == 5: return d - timedelta(days=1)
+    if d.weekday() == 6: return d + timedelta(days=1)
+    return d
 
-# ══════════════════════════════════════════════════════════════════════════════
-# STAFF FUNCTIONS
-# ══════════════════════════════════════════════════════════════════════════════
-def _hash_pin(pin: str) -> str:
-    return hashlib.sha256(pin.strip().encode()).hexdigest()
+def init_state():
+    defaults = {
+        "authenticated": False, "edit_mode": False,
+        "selected_date": _default_date(), "page": "bulletin",
+        "show_login": False, "show_inline_login": False,
+        "_pc_form_id": 0,
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
 
-def db_get_staff_names():
-    try:
-        res = get_sb().table("staff").select("name").order("name").execute()
-        return [r["name"] for r in res.data] if res.data else []
-    except Exception:
-        return []
+init_state()
+ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "clcstaff2026")
 
-def db_get_staff_list():
-    try:
-        res = get_sb().table("staff").select("*").order("name").execute()
-        return res.data or []
-    except Exception:
-        return []
+TRANSPORT_OPTIONS = ["Taxi","Parent/Carer","Other"]
+CHANGE_TYPE_OPTIONS = ["Early Departure","Late Arrival","No Show","Alternative Pickup","Alternative Drop-off","Absent - not attending","Other"]
+VISITOR_REASON_OPTIONS = ["Student Observation","Meeting with Leadership","Meeting with Teacher","TAC","Review/Transition Meeting","Support","Other"]
 
-def db_verify_pin(name: str, pin: str):
-    try:
-        res = get_sb().table("staff").select("*").eq("name", name).execute()
-        if not res.data:
-            return None
-        row = res.data[0]
-        stored = row.get("pin_hash") or row.get("pin") or ""
-        if stored == _hash_pin(pin) or stored == pin.strip():
-            return row
-        return None
-    except Exception:
-        return None
+def _migrate_travel_rows(rows):
+    migrated = []
+    for r in rows:
+        if "Transport To" in r or "Transport From" in r or "Times" in r:
+            migrated.append({
+                "Student": r.get("Student",""),
+                "Arrival Time": r.get("Times",""),
+                "Departure Time": "",
+                "Transport": r.get("Transport To","") or r.get("Transport From",""),
+            })
+        else:
+            migrated.append(r)
+    return migrated
 
-def db_set_pin(staff_id, new_pin: str):
-    try:
-        get_sb().table("staff").update(
-            {"pin_hash": _hash_pin(new_pin)}
-        ).eq("id", staff_id).execute()
-        return True
-    except Exception:
-        return False
-
-def db_add_staff(name: str, email: str, pin: str, role: str):
-    try:
-        get_sb().table("staff").insert({
-            "name": name, "email": email,
-            "pin_hash": _hash_pin(pin), "role": role,
-        }).execute()
-        return True
-    except Exception:
-        return False
-
-def db_remove_staff(staff_id):
-    try:
-        get_sb().table("staff").delete().eq("id", staff_id).execute()
-        return True
-    except Exception:
-        return False
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ADELAIDE TIME HELPERS
-# ══════════════════════════════════════════════════════════════════════════════
-ADELAIDE = timezone(timedelta(hours=9, minutes=30))
-
-def adl_now() -> datetime:
-    return datetime.now(tz=ADELAIDE)
-
-def adl_today() -> date:
-    return adl_now().date()
-
-def target_monday() -> date:
-    today       = adl_today()
-    weekday     = today.weekday()
-    this_monday = today - timedelta(days=weekday)
-    if weekday >= 4:
-        return this_monday + timedelta(weeks=1)
-    return this_monday
-
-def edition_week_label(monday: date) -> str:
-    return monday.strftime("Week of %-d %B %Y")
-
-def is_entry_open(edition) -> bool:
-    try:
-        monday   = date.fromisoformat(str(edition["week_start"]))
-        deadline = datetime(monday.year, monday.month, monday.day,
-                            tzinfo=ADELAIDE) + timedelta(days=1, hours=15)
-        return adl_now() < deadline
-    except Exception:
-        return True
-
-def should_send_reminder(edition) -> bool:
-    if edition.get("reminder_sent"):
-        return False
-    return not is_entry_open(edition)
-
-def get_sa_term(d: date) -> str:
-    y = d.year
-    ranges = [
-        (date(y, 1, 27),  date(y, 4, 11),  "Term 1"),
-        (date(y, 4, 27),  date(y, 7, 4),   "Term 2"),
-        (date(y, 7, 20),  date(y, 9, 26),  "Term 3"),
-        (date(y, 10, 12), date(y, 12, 12), "Term 4"),
-    ]
-    for start, end, label in ranges:
-        if start <= d <= end:
-            return label
-    return "Term 2"
-
-# Term 2 2026 starts Mon 27 Apr — week number calculated from first Monday of each term
-_SA_TERM_STARTS = {
-    "Term 1": date(2026, 1, 27),
-    "Term 2": date(2026, 4, 27),
-    "Term 3": date(2026, 7, 20),
-    "Term 4": date(2026, 10, 12),
-}
-
-def get_sa_week(d: date) -> int:
-    """Return the SA school week number (1-based) for a given date."""
-    term = get_sa_term(d)
-    term_start = _SA_TERM_STARTS.get(term)
-    if not term_start:
-        return 1
-    # Find the Monday of the given date's week
+# ── HELPERS ───────────────────────────────────────────────────
+def week_dates(d):
     monday = d - timedelta(days=d.weekday())
-    week_num = (monday - term_start).days // 7 + 1
-    return max(1, week_num)
+    return [monday + timedelta(days=i) for i in range(5)]
 
-# ══════════════════════════════════════════════════════════════════════════════
-# EDITIONS
-# ══════════════════════════════════════════════════════════════════════════════
-def db_get_or_create_edition(monday: date = None):
+def term_label(d):
+    y = d.year
+    terms = {1:(date(y,1,28),date(y,4,11)), 2:(date(y,4,28),date(y,7,4)),
+              3:(date(y,7,21),date(y,9,26)), 4:(date(y,10,13),date(y,12,12))}
+    for t,(s,e) in terms.items():
+        if s <= d <= e: return f"Term {t} \u00b7 {y}"
+    return str(y)
+
+def default_bulletin():
+    return {
+        "fun_fact": "",
+        "staff_absent": [{"Staff Member":"","TRT":""} for _ in range(4)],
+        "student_absent": [{"Student":"","Program":"","Reason":""} for _ in range(4)],
+        "excursions": [{"Program":"","Staff Member":"","Time Departing":"","Time Returning":"","Location":""} for _ in range(4)],
+        "staff_meetings": [{"Type":"","Staff Member":"","Location":"","Time Departing":"","Time Returning":"","Student":""} for _ in range(4)],
+        "entry_meetings": [{"Time":"","Program":"","Student":""} for _ in range(4)],
+        "additional_messages": [{"Staff Member":"","Information":""} for _ in range(4)],
+        "visitors_on_site": [{"Visitor Name":"","Reason":"","Staff Responsible":"","Arriving":"","Departing":"","Location":""} for _ in range(4)],
+        "travel_jp": [{"Student":"","Arrival Time":"","Departure Time":"","Transport":""} for _ in range(5)],
+        "travel_py": [{"Student":"","Arrival Time":"","Departure Time":"","Transport":""} for _ in range(5)],
+        "travel_sy": [{"Student":"","Arrival Time":"","Departure Time":"","Transport":""} for _ in range(5)],
+        "travel_changes": [{"Student":"","Program":"","Change Type":"","Reason":"","Time":"","How Departed":""} for _ in range(3)],
+        "vehicle_bookings": [],
+        "staff_responsibilities": {"kitchen_duties":"","meeting_pd_focus":"","chair":"","minutes":""},
+        "nit_booking": "",
+        "program_changes": []
+    }
+
+def load_bulletin(d):
+    data = db.get_bulletin(d)
+    defaults = default_bulletin()
+    if not data:
+        data = defaults.copy()
+    else:
+        for k, v in defaults.items():
+            if k not in data: data[k] = v
+    vb = data.get("vehicle_bookings", [])
+    if isinstance(vb, dict):
+        converted = []
+        for t, v in vb.items():
+            if v.get("van",""): converted.append({"vehicle":"Van","booker":v["van"],"whole_day":True,"start_time":"","end_time":""})
+            if v.get("kia",""): converted.append({"vehicle":"Kia","booker":v["kia"],"whole_day":True,"start_time":"","end_time":""})
+        data["vehicle_bookings"] = converted
+    for tk in ("travel_jp","travel_py","travel_sy"):
+        data[tk] = _migrate_travel_rows(data.get(tk, []))
+    # Migrate old combined staff_absent → separate staff_absent + student_absent
+    old_sa = data.get("staff_absent", [])
+    if old_sa and isinstance(old_sa[0], dict) and "Staff Absence" in old_sa[0]:
+        data["staff_absent"]   = [{"Staff Member": r.get("Staff Absence",""), "TRT": r.get("TRT","")} for r in old_sa if (r.get("Staff Absence") or "").strip()]
+        data["student_absent"] = [{"Student": r.get("Student Absence",""), "Program": r.get("Program",""), "Reason": r.get("Reason","")} for r in old_sa if (r.get("Student Absence") or "").strip()]
+        if not data["staff_absent"]:   data["staff_absent"]   = [{"Staff Member":"","TRT":""} for _ in range(4)]
+        if not data["student_absent"]: data["student_absent"] = [{"Student":"","Program":"","Reason":""} for _ in range(4)]
+    # Migrate old additional_messages → Staff Member / Information
+    old_am = data.get("additional_messages", [])
+    if old_am and isinstance(old_am[0], dict) and any(k in old_am[0] for k in ("Visitor","Reason","Arriving/Departing","Staff Name","Details")):
+        migrated_am = []
+        for r in old_am:
+            staff = r.get("Staff Member","") or r.get("Staff Name","")
+            info_parts = [v for k,v in r.items() if k not in ("Staff Member","Staff Name") and (v or "").strip()]
+            migrated_am.append({"Staff Member": staff, "Information": " — ".join(info_parts)})
+        data["additional_messages"] = migrated_am if migrated_am else [{"Staff Member":"","Information":""} for _ in range(4)]
+    sr = data.get("staff_responsibilities", {})
+    resp_keys = ["kitchen_duties", "meeting_pd_focus", "chair", "minutes"]
+    is_empty = not any((sr.get(k) or "").strip() for k in resp_keys)
+    monday = d - timedelta(days=d.weekday())
+    if is_empty and d != monday:
+        monday_data = db.get_bulletin(monday)
+        if monday_data:
+            monday_sr = monday_data.get("staff_responsibilities", {})
+            if any((monday_sr.get(k) or "").strip() for k in resp_keys):
+                data["staff_responsibilities"] = monday_sr
+    if not (data.get("fun_fact") or "").strip():
+        data["fun_fact"] = daily_fun_fact(d)
+    return data
+
+# ── NOTICE HELPERS ────────────────────────────────────────────
+NOTICE_CATS = {
+    "General":      {"color":"#4a8f33","bg":"#e8f5e1","emoji":"\U0001f4e2"},
+    "Reminder":     {"color":"#c97b1a","bg":"#fff3e0","emoji":"\u23f0"},
+    "Urgent":       {"color":"#b91c1c","bg":"#fee2e2","emoji":"\U0001f6a8"},
+    "Student Info": {"color":"#1d4ed8","bg":"#dbeafe","emoji":"\U0001f468\u200d\U0001f393"},
+    "Facilities":   {"color":"#6d28d9","bg":"#ede9fe","emoji":"\U0001f3eb"},
+    "Wellbeing":    {"color":"#0e7490","bg":"#cffafe","emoji":"\U0001f49a"},
+}
+
+# ── PROGRAM CHANGES ───────────────────────────────────────────
+PC_TIME_SLOTS = [
+    "9:00","9:15","9:30","9:45",
+    "10:00","10:15","10:30","10:45",
+    "11:00","11:15","11:30","11:45",
+    "12:00","12:15","12:30","12:45",
+    "1:00","1:15","1:30","1:45",
+    "2:00","2:15","2:30","2:45",
+]
+PC_TIME_SLOTS_30 = [s for s in PC_TIME_SLOTS if s.endswith(":00") or s.endswith(":30")]
+
+ROLE_OPTIONS = ["", "JP", "PY", "SY", "NIT", "Lunch Cover", "Lunch Break",
+                "Release", "Planning", "Meeting", "Other"]
+
+ROLE_COLORS = {
+    "JP":"#dbeafe","PY":"#ede9fe","SY":"#fef3c7","NIT":"#f1f5f9",
+    "Lunch Cover":"#fef9c3","Lunch Break":"#cffafe","Release":"#dcfce7",
+    "Planning":"#fce7f3","Meeting":"#fef3c7","Other":"#f3f4f6",
+}
+ROLE_COLORS_DARK = {
+    "JP":"#1d4ed8","PY":"#6d28d9","SY":"#92400e","NIT":"#374151",
+    "Lunch Cover":"#856404","Lunch Break":"#004085","Release":"#166534",
+    "Planning":"#9d174d","Meeting":"#78350f","Other":"#4b5563",
+}
+
+def _slot_color_bg(val): return ROLE_COLORS.get(val, "#f9fafb")
+def _slot_color_fg(val): return ROLE_COLORS_DARK.get(val, "#374151")
+
+def _t2m(ts):
     try:
-        sb     = get_sb()
-        if monday is None:
-            monday = target_monday()
-        label  = edition_week_label(monday)
-        res    = sb.table("weekly_editions").select("*").eq("week_start", monday.isoformat()).execute()
-        if res.data:
-            return res.data[0]
-        ins = sb.table("weekly_editions").insert({
-            "week_start": monday.isoformat(),
-            "week_label": label,
-            "status":     "draft"
-        }).execute()
-        return ins.data[0] if ins.data else None
+        h, m = str(ts).strip().split(":")
+        h, m = int(h), int(m)
+        if h < 9: h += 12
+        return h * 60 + m
+    except Exception:
+        return -1
+
+def blocks_to_slots(blocks, slot_list=None):
+    if slot_list is None: slot_list = PC_TIME_SLOTS
+    result = {s: {"value":"","person":""} for s in slot_list}
+    for slot in slot_list:
+        sm = _t2m(slot)
+        best = None; best_bs = -1
+        for block in (blocks or []):
+            bs = _t2m(block.get("start","")); be = _t2m(block.get("end",""))
+            if bs >= 0 and be > bs and bs <= sm < be:
+                result[slot] = {"value": block.get("role",""), "person": block.get("person","")}
+                break
+            if bs < 0 or be <= bs: continue
+            if bs <= sm <= be and bs > best_bs: best = block; best_bs = bs
+        if best: result[slot] = {"value": best.get("role",""), "person": best.get("person","")}
+    return result
+
+def _pc_row_html(label, normal_prog, ts, slot_list=None, dark=False):
+    if slot_list is None: slot_list = PC_TIME_SLOTS
+    text = "#1a2e44" if not dark else "#c8d8c8"
+    fs = "0.56rem" if dark else "0.62rem"
+    lbl_c = "#1a2e44" if not dark else "#6BBF4E"
+    bdr = "#e0e8dc" if not dark else "#2a3d2a"
+    td_cells = ""
+    for slot in slot_list:
+        raw = ts.get(slot, {})
+        val = raw.get("value","") if isinstance(raw,dict) else str(raw)
+        person = raw.get("person","") if isinstance(raw,dict) else ""
+        bg = _slot_color_bg(val); fg = _slot_color_fg(val) if val else text
+        disp = val if val else ("\u00b7" if not dark else "")
+        inner = f'<span style="font-weight:700;font-size:{fs};">{disp}</span>'
+        if person:
+            arrow = "\u2192" if val == "Lunch Cover" else ("\u21a9" if val == "Lunch Break" else "")
+            inner += f'<br><span style="font-size:0.85em;opacity:0.75;">{arrow} {person}</span>'
+        td_cells += f'<td style="background:{bg};color:{fg};text-align:center;padding:2px 1px;min-width:30px;vertical-align:top;border-right:1px solid {bdr};">{inner}</td>'
+    lbl_html = (f'<td style="white-space:nowrap;padding:3px 8px 3px 4px;color:{lbl_c};font-weight:700;font-size:{fs};vertical-align:middle;border-right:2px solid {"#6BBF4E" if not dark else "#4a8f33"};">'
+                f'{label}' + (f'<br><span style="font-weight:400;opacity:0.65;font-size:0.9em;">{normal_prog}</span>' if normal_prog else "") + f'</td>')
+    return f'<tr>{lbl_html}{td_cells}</tr>'
+
+def _timetable_grid_html(staff_rows, slot_list=None, dark=False):
+    if slot_list is None: slot_list = PC_TIME_SLOTS
+    if not staff_rows: return ""
+    th_bg = "#f4f8f2" if not dark else "#111e11"
+    hdr = "#4a6640" if not dark else "#6BBF4E"
+    bdr = "#e0e8dc" if not dark else "#2a3d2a"
+    bdr2 = "#6BBF4E" if not dark else "#4a8f33"
+    th_cells = (f'<th style="white-space:nowrap;padding:3px 8px 3px 4px;background:{th_bg};color:{hdr};font-size:0.5rem;border-right:2px solid {bdr2};">Staff / Role</th>'
+                + "".join([f'<th style="background:{th_bg};color:{hdr};font-size:0.48rem;padding:1px 2px;text-align:center;white-space:nowrap;border-right:1px solid {bdr};">{s}</th>' for s in slot_list]))
+    rows_html = ""
+    for row in staff_rows:
+        name = row.get("name",""); normal = row.get("normal_prog",""); blocks = row.get("blocks",[])
+        ts = row.get("time_slots")
+        if ts is None: ts = blocks_to_slots(blocks, slot_list)
+        if any((v.get("value","") if isinstance(v,dict) else v) for v in ts.values()):
+            rows_html += _pc_row_html(name, normal, ts, slot_list, dark)
+    if not rows_html: return ""
+    return (f'<div style="overflow-x:auto;margin-top:6px;"><table style="border-collapse:collapse;width:auto;">'
+            f'<thead><tr>{th_cells}</tr></thead><tbody>{rows_html}</tbody></table></div>')
+
+# ── SUPABASE / FACTS ──────────────────────────────────────────
+_AUS_FACTS = [
+    "Australia is the only continent that is also a single country \u2014 and somehow still can\u2019t decide where to put its capital.",
+    "Kangaroos can\u2019t walk backwards, which is why they\u2019re on the Australian coat of arms \u2014 always moving forward, mate.",
+    "Australia has more kangaroos than people. The roos are winning.",
+    "The Box Jellyfish has 24 eyes. It still can\u2019t see why Australians swim anywhere near it.",
+    "A group of kangaroos is called a mob. Very on-brand for Australia.",
+    "Wombats produce cube-shaped poo \u2014 the only animal in the world that does. Science still hasn\u2019t fully explained why.",
+    "Australia has 10 of the world\u2019s 15 most venomous snakes. They\u2019re very proud of this.",
+    "The Great Barrier Reef is the largest living structure on Earth \u2014 visible from space, yet invisible to politicians.",
+    "Australian Rules Football was invented to keep cricketers fit during winter. Cricket: unintentionally very useful.",
+    "The platypus is venomous, lays eggs, and has a bill like a duck. It looks like Australia designed it after a big night.",
+    "Australians consume more than 1.9 billion Tim Tams per year \u2014 roughly 80 per person. This tracks.",
+    "The Sydney Funnel-web Spider is considered the world\u2019s most dangerous spider. Sydney has strong opinions about everything.",
+    "Australia once fought a war against emus. The emus won. This is true. Look it up.",
+    "The Dingo Fence is 5,614 km long \u2014 built to keep dingoes out of southern Australia. The dingoes are biding their time.",
+    "Eucalyptus leaves are mildly toxic to most animals. Koalas eat almost nothing else and sleep 22 hours a day. Icon behaviour.",
+    "Australia has the longest straight stretch of railway in the world \u2014 478 km of perfectly straight track through the Nullarbor.",
+    "Canberra was purpose-built as the capital because Sydney and Melbourne couldn\u2019t agree on which city deserved it. Classic.",
+    "Australia has pink lakes. Lake Hillier on Middle Island is bubblegum pink year-round, and scientists still argue about why.",
+    "The Thorny Devil lizard can drink through its feet by standing in water. Useful at a BBQ.",
+    "Australia\u2019s first police force was made up of the most well-behaved convicts. Starting as you mean to go on.",
+    "Australians invented WiFi. Also the black box flight recorder. And the bionic ear. But mostly WiFi.",
+    "Drop bears are not real. Probably.",
+    "The laughing kookaburra\u2019s call sounds exactly like a human laughing manically. Nobody finds this unsettling.",
+    "Vegemite was invented in 1922 as a way to use leftover brewer\u2019s yeast. You\u2019re welcome, or sorry, depending on your position.",
+    "Australians use the word \u2018reckon\u2019 as a sophisticated intellectual agreement mechanism. Fully reckon this is true.",
+    "A baby kangaroo (joey) is about the size of a jellybean when born. It then spends six months in a pouch.",
+    "The Australian dollar is made from polymer plastic, making it waterproof. Essential for a country surrounded by water.",
+    "The Melbourne Cup is a public holiday in Victoria. Only Australians would make a horse race a reason to stop work.",
+    "Quokkas are considered the happiest animal on Earth. They live on Rottnest Island. No predators, good weather \u2014 honestly same.",
+    "Australian magpies remember human faces and will swoop people they dislike. They hold grudges. Do not underestimate them.",
+    "South Australia was the first place in the world to give women the right to stand for parliament, back in 1894.",
+    "The echidna and platypus are the only two mammals in the world that lay eggs. Both live in Australia, naturally.",
+    "Australians say \u2018arvo\u2019 for afternoon, \u2018servo\u2019 for service station, and \u2018bottle-o\u2019 for bottle shop.",
+    "There are more than 10,000 beaches in Australia. Visiting a new one every day would take 27 years.",
+    "A mob of emus will methodically destroy a fence to get to crops. They have a system. They are organised.",
+    "The Royal Flying Doctor Service covers 7.69 million square kilometres \u2014 the world\u2019s largest GP practice.",
+    "Uluru extends 2.5 km underground \u2014 what you see is only a fraction of the full rock.",
+    "Australians invented the Hills Hoist rotary clothesline. A genuine contribution to civilisation.",
+    "The Australian Alps receive more snowfall than Switzerland in a good year. Nobody ever believes this.",
+]
+
+def daily_fun_fact(d):
+    import hashlib
+    seed = int(hashlib.md5(str(d).encode()).hexdigest(), 16)
+    return _AUS_FACTS[seed % len(_AUS_FACTS)]
+
+def _get_sb(): return db.get_supabase()
+
+def load_todays_nit_bookings(for_date):
+    """Load NIT bookings for today from the database"""
+    try:
+        sb = _get_sb()
+        response = sb.table("nit_bookings").select("*").eq("status", "booked").eq("booking_date", str(for_date)).execute()
+        if response.data:
+            slot_order = {"Tuesday 9:00-10:15am": 1, "Monday 1:45-3:00pm": 2, "Thursday 1:45-3:00pm": 3, "Monday 1:45pm": 4, "Tuesday 1:45pm": 5, "Thursday 2:15pm": 6}
+            return sorted(response.data, key=lambda x: slot_order.get(x.get('time_slot', ''), 99))
+        return []
+    except Exception:
+        return []
+
+def load_notices(for_date=None):
+    try:
+        q = _get_sb().table("daily_notices").select("*").order("created_at", desc=False)
+        if for_date: q = q.eq("notice_date", str(for_date))
+        return q.execute().data or []
     except Exception as e:
-        st.error(f"Supabase error in db_get_or_create_edition: {e}")
-        return None
+        st.warning(f"\u26a0\ufe0f Could not load notices: {e}"); return []
 
-def _auto_link_edition(edition):
-    """Calculate term/week from edition date, link edition, and ensure staff meeting exists."""
-    import json
+def save_notice(row):
+    try: _get_sb().table("daily_notices").insert(row).execute()
+    except Exception as e: st.error(f"Could not save notice: {e}")
+
+def load_scheduled_meetings(for_date=None):
+    _DAY_NAMES = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
     try:
-        monday   = date.fromisoformat(str(edition["week_start"]))
-        term_lng = get_sa_term(monday)    # "Term 2"
-        week_num = get_sa_week(monday)    # 3
-        # Normalise to short form for staff_meetings table ("T2")
-        import re as _re
-        m = _re.search(r'(\d)', term_lng)
-        term_sht = f"T{m.group(1)}" if m else "T2"
+        d = for_date or date.today()
+        day_name = _DAY_NAMES[d.weekday()]
+        res = _get_sb().table("tm_schedules").select("*").eq("show_in_bulletin", True).execute()
+        meetings = []
+        for r in (res.data or []):
+            if (r.get("day_of_week") or "").strip().lower() == day_name.lower():
+                prog = r.get("program","")
+                prog_label = {"JP":"Junior Primary","PY":"Primary Years","SY":"Senior Years","STAFF":"All Staff","ADMIN":"Admin"}.get(prog, prog)
+                meetings.append({"Type": r.get("schedule_name","Team Meeting"),"Staff Member": prog_label,"Location": r.get("location",""),"Time Departing": r.get("meeting_time",""),"Time Returning": "","Student": ""})
+        return meetings
+    except Exception: return []
 
-        # 1. Mark edition as linked in bulletin DB
-        get_sb().table("weekly_editions").update({
-            "meeting_linked": True,
-            "meeting_term":   term_lng,
-            "meeting_week":   week_num,
-        }).eq("id", edition["id"]).execute()
+def delete_notice(nid):
+    try: _get_sb().table("daily_notices").delete().eq("id", nid).execute()
+    except Exception as e: st.error(f"Could not delete notice: {e}")
 
-        # 2. Ensure a staff meeting record exists in meetings DB
-        try:
-            sb_mtg = get_sb_mtg()
-            existing = sb_mtg.table("staff_meetings").select("id") \
-                             .eq("term", term_sht).eq("week_number", week_num).execute()
-            if not existing.data:
-                sb_mtg.table("staff_meetings").insert({
-                    "meeting_date": str(monday),
-                    "term":         term_sht,
-                    "week_number":  week_num,
-                    "minute_taker": "",
-                    "attendees":    "",
-                    "apologies":    "",
-                    "agenda_items": json.dumps({"additional_agenda": []}),
-                    "minutes":      "",
-                    "actions":      "[]",
-                }).execute()
-        except Exception:
-            pass  # meetings DB unavailable — edition still linked
-    except Exception:
-        pass
-
-def db_get_current_published():
+def load_bulletin_changes(d):
     try:
-        res = get_sb().table("weekly_editions").select("*").eq("status", "published").order("week_start", desc=True).limit(1).execute()
+        res = _get_sb().table("daily_changes").select("*").eq("bulletin_date", str(d)).order("created_at").execute()
+        rows = res.data or []; result = []
+        for r in rows:
+            sr = r.get("staff_rows", [])
+            if isinstance(sr, str):
+                try: sr = json.loads(sr)
+                except: sr = []
+            result.append({**r, "staff_rows": sr})
+        return result
+    except Exception: return []
+
+def save_bulletin_change(d, entry):
+    try:
+        data = {"bulletin_date": str(d),"reason": entry.get("reason",""),"staff_absent": entry.get("staff_absent",""),"has_trt": entry.get("has_trt", False),"trt_name": entry.get("trt_name",""),"staff_rows": json.dumps(entry.get("staff_rows",[])),}
+        if entry.get("id"): res = _get_sb().table("daily_changes").update(data).eq("id", entry["id"]).execute()
+        else: res = _get_sb().table("daily_changes").insert(data).execute()
         return res.data[0] if res.data else None
-    except Exception:
-        return None
+    except Exception as e: st.error(f"Could not save change: {e}"); return None
 
-def db_get_edition(edition_id):
-    try:
-        res = get_sb().table("weekly_editions").select("*").eq("id", edition_id).execute()
-        return res.data[0] if res.data else None
-    except Exception:
-        return None
+def delete_bulletin_change(cid):
+    try: _get_sb().table("daily_changes").delete().eq("id", cid).execute(); return True
+    except Exception as e: st.error(f"Delete failed: {e}"); return False
 
-def db_get_all_editions():
+def load_pc_manager_changes(d):
+    """Load entries saved by the Program Changes Manager tool (program_changes table).
+    Creates its own Supabase connection so it always hits the right project.
+    Surfaces any error visibly rather than silently returning empty.
+    """
+    import os
+    from supabase import create_client as _create_client
     try:
-        res = get_sb().table("weekly_editions").select("*").order("week_start", desc=True).execute()
-        return res.data or []
-    except Exception:
-        return []
-
-def db_publish_edition(edition_id, published_by):
-    try:
-        get_sb().table("weekly_editions").update({
-            "status": "published",
-            "published_at": datetime.utcnow().isoformat(),
-            "published_by": published_by
-        }).eq("id", edition_id).execute()
-        return True
-    except Exception:
-        return False
-
-def db_link_to_meeting(edition_id, term: str, week_num: int):
-    """Flag this bulletin to appear in the corresponding staff meeting."""
-    try:
-        get_sb().table("weekly_editions").update({
-            "meeting_linked": True,
-            "meeting_term":   term,
-            "meeting_week":   week_num,
-        }).eq("id", edition_id).execute()
-        return True
-    except Exception:
-        return False
-
-def db_unlink_from_meeting(edition_id):
-    """Remove this bulletin from the staff meeting (can be re-linked later)."""
-    try:
-        get_sb().table("weekly_editions").update({
-            "meeting_linked": False,
-            "meeting_term":   None,
-            "meeting_week":   None,
-        }).eq("id", edition_id).execute()
-        return True
-    except Exception:
-        return False
-
-# ══════════════════════════════════════════════════════════════════════════════
-# NOTICES
-# ══════════════════════════════════════════════════════════════════════════════
-def db_get_notices(edition_id):
-    try:
-        res = get_sb().table("notices").select("*").eq("edition_id", edition_id).order("created_at").execute()
-        return res.data or []
-    except Exception:
-        return []
-
-def db_create_notice(edition_id, title, content, category, author):
-    try:
-        get_sb().table("notices").insert({
-            "edition_id": edition_id, "title": title,
-            "content": content, "category": category, "author": author,
-            "audience": "All Staff", "has_actions": False,
-            "has_poll": False, "has_comments": False,
-        }).execute()
-        return True
-    except Exception:
-        return False
-
-def db_delete_notice(notice_id):
-    try:
-        get_sb().table("notices").delete().eq("id", notice_id).execute()
-        return True
-    except Exception:
-        return False
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ACKNOWLEDGEMENTS
-# ══════════════════════════════════════════════════════════════════════════════
-def db_has_acknowledged(notice_id, staff_name):
-    try:
-        res = (get_sb().table("notice_responses")
-               .select("id").eq("notice_id", notice_id)
-               .eq("staff_name", staff_name)
-               .not_.is_("acknowledged_at", "null").execute())
-        return bool(res.data)
-    except Exception:
-        return False
-
-def db_acknowledge(notice_id, staff_name):
-    try:
-        sb  = get_sb()
-        now = datetime.utcnow().isoformat()
-        existing = sb.table("notice_responses").select("id").eq("notice_id", notice_id).eq("staff_name", staff_name).execute()
-        if existing.data:
-            sb.table("notice_responses").update({"acknowledged_at": now, "read_at": now}).eq("notice_id", notice_id).eq("staff_name", staff_name).execute()
-        else:
-            sb.table("notice_responses").insert({"notice_id": notice_id, "staff_name": staff_name, "read_at": now, "acknowledged_at": now}).execute()
-        return True
-    except Exception:
-        return False
-
-def db_get_ack_summary(edition_id):
-    try:
-        notices = db_get_notices(edition_id)
-        staff   = db_get_staff_list()
-        rows = []
-        for s in staff:
-            acked = bool(notices) and all(db_has_acknowledged(n["id"], s["name"]) for n in notices)
-            rows.append({"Staff Member": s["name"], "Acknowledged": "Yes" if acked else "Pending"})
+        _url = os.environ.get("SUPABASE_URL", "")
+        _key = os.environ.get("SUPABASE_KEY", "")
+        if not _url or not _key:
+            st.warning("⚠️ Program Changes Manager: SUPABASE_URL / SUPABASE_KEY env vars not set.")
+            return []
+        _sb = _create_client(_url, _key)
+        res = _sb.table("program_changes").select("*").eq("change_date", str(d)).order("created_at").execute()
+        rows = res.data or []
+        for row in rows:
+            if isinstance(row.get("time_blocks"), str):
+                try: row["time_blocks"] = json.loads(row["time_blocks"])
+                except: row["time_blocks"] = []
         return rows
-    except Exception:
+    except Exception as e:
+        st.warning(f"⚠️ Could not load Program Changes Manager entries: {e}")
         return []
 
-def has_acked_edition(edition_id, staff_name):
-    notices = db_get_notices(edition_id)
-    if not notices:
-        return False
-    return all(db_has_acknowledged(n["id"], staff_name) for n in notices)
+def _fmt_pc_time(ts):
+    try: return datetime.strptime(str(ts), "%H:%M:%S").strftime("%I:%M %p").lstrip("0")
+    except: return str(ts)
 
-def ack_all(edition_id, staff_name):
-    for n in db_get_notices(edition_id):
-        db_acknowledge(n["id"], staff_name)
+def _build_plain_text_bc(changes, for_date):
+    lines = [f"CLC PROGRAM CHANGES \u2014 {for_date.strftime('%A %-d %B %Y').upper()}", "="*52]
+    for idx, ch in enumerate(changes, 1):
+        reason = ch.get("reason",""); absent = ch.get("staff_absent",""); has_trt = ch.get("has_trt", False); trt_name = ch.get("trt_name","")
+        lines.append(f"\n[{idx}] {reason.upper()}")
+        if absent: lines.append(f"    Absent staff: {absent}")
+        if has_trt: lines.append(f"    TRT on site:  {trt_name or '(name not recorded)'}")
+        else: lines.append(f"    No TRT \u2014 internal staff adjustment")
+        for row in ch.get("staff_rows",[]):
+            name = row.get("name",""); normal = row.get("normal_prog",""); blocks = row.get("blocks",[])
+            if not blocks: continue
+            norm_str = f" [normally: {normal}]" if normal else ""
+            lines.append(f"\n    {name}{norm_str}:")
+            for block in sorted(blocks, key=lambda b: b.get("start","")):
+                role = block.get("role",""); start = block.get("start",""); end = block.get("end",""); person = block.get("person","")
+                if not role: continue
+                detail = ""
+                if role == "Lunch Cover" and person: detail = f" (releasing {person})"
+                elif role == "Lunch Break" and person: detail = f" (covered by {person})"
+                elif person: detail = f" \u2014 {person}"
+                lines.append(f"      {start} \u2013 {end}: {role}{detail}")
+    lines += ["", "="*52, "Cowandilla Learning Centre \u00b7 LBU Daily Bulletin"]
+    return "\n".join(lines)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# PDF GENERATION
-# ══════════════════════════════════════════════════════════════════════════════
-CAT_PDF_COLOURS = {
-    "action":   ("#991b1b", "#fee2e2", "#dc2626"),
-    "whs":      ("#065f46", "#d1fae5", "#059669"),
-    "policy":   ("#1e40af", "#dbeafe", "#2563eb"),
-    "reminder": ("#92400e", "#fef3c7", "#d97706"),
-    "info":     ("#5b21b6", "#ede9fe", "#7c3aed"),
-    "general":  ("#374151", "#f3f4f6", "#9ca3af"),
-}
-CAT_NAMES = {
-    "action": "Action Required", "whs": "WHS", "policy": "Policy Update",
-    "reminder": "Reminder", "info": "Information", "general": "General",
-}
+def _build_html_sheet_bc(changes, for_date):
+    slot_list = PC_TIME_SLOTS_30
+    def slot_td(val, person):
+        bg = _slot_color_bg(val); fg = _slot_color_fg(val) if val else "#9ca3af"; disp = val if val else ""; arrow = ""
+        if val == "Lunch Cover" and person: arrow = f'<br><small style="font-size:0.75em;opacity:0.75;">\u2192{person}</small>'
+        elif val == "Lunch Break" and person: arrow = f'<br><small style="font-size:0.75em;opacity:0.75;">\u21a9{person}</small>'
+        elif person: arrow = f'<br><small style="font-size:0.75em;opacity:0.75;">{person}</small>'
+        return (f'<td style="background:{bg};color:{fg};text-align:center;padding:2px 1px;font-size:0.5rem;font-weight:600;border:1px solid #e5e7eb;min-width:38px;">{disp}{arrow}</td>')
+    def tt_block(staff_rows):
+        if not staff_rows: return ""
+        header = "".join([f'<th style="background:#1a2e44;color:rgba(255,255,255,0.85);font-size:0.42rem;padding:2px 1px;text-align:center;border:1px solid #374151;white-space:nowrap;">{s}</th>' for s in slot_list])
+        rows_html = ""
+        for row in staff_rows:
+            name = row.get("name","(Staff)"); normal = row.get("normal_prog",""); blocks = row.get("blocks",[]); ts = blocks_to_slots(blocks, slot_list)
+            if not any(v.get("value","") for v in ts.values()): continue
+            norm_str = f'<span style="font-weight:400;color:#6b7280;font-size:0.75em;"> ({normal})</span>' if normal else ""
+            cells = "".join([slot_td(ts[s].get("value",""), ts[s].get("person","")) for s in slot_list])
+            rows_html += f'<tr><td style="white-space:nowrap;padding:3px 8px;color:#1a2e44;font-weight:700;font-size:0.6rem;border:1px solid #e5e7eb;border-right:2px solid #6BBF4E;">{name}{norm_str}</td>{cells}</tr>'
+        if not rows_html: return ""
+        return (f'<table style="border-collapse:collapse;width:100%;table-layout:fixed;margin-top:8px;"><thead><tr><th style="background:#1a2e44;color:rgba(255,255,255,0.85);font-size:0.42rem;padding:2px 8px;border:1px solid #374151;text-align:left;">Staff / Role</th>{header}</tr></thead><tbody>{rows_html}</tbody></table>')
+    changes_html = ""
+    for idx, ch in enumerate(changes, 1):
+        reason = ch.get("reason",""); absent = ch.get("staff_absent",""); has_trt = ch.get("has_trt", False); trt_name = ch.get("trt_name",""); staff_rows = ch.get("staff_rows",[])
+        color = "#dc2626" if reason == "Staff Absence" else "#0e7490"
+        meta = []
+        if absent: meta.append(f"<strong>Absent:</strong> {absent}")
+        if has_trt: meta.append(f"<strong>TRT on site:</strong> {trt_name or 'Name TBC'}")
+        else: meta.append("<strong>No TRT \u2014 internal adjustment</strong>")
+        changes_html += (f'<div style="background:white;border:1.5px solid #e5e7eb;border-left:5px solid {color};border-radius:8px;padding:12px 14px;margin-bottom:14px;page-break-inside:avoid;"><div style="font-size:0.85rem;font-weight:800;color:{color};margin-bottom:4px;">Change {idx} \u2014 {reason}</div><div style="font-size:0.78rem;color:#374151;margin-bottom:6px;">{" &nbsp;\u00b7&nbsp; ".join(meta)}</div>{tt_block(staff_rows)}</div>')
+    legend = "".join([f'<span style="background:{_slot_color_bg(v)};color:{_slot_color_fg(v)};padding:2px 8px;border-radius:10px;font-size:0.62rem;font-weight:600;">{v}</span>' for v in ["JP","PY","SY","NIT","Lunch Cover","Lunch Break","Release","Planning"]])
+    return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>CLC Program Changes</title><style>@page{{size:A4 landscape;margin:10mm 12mm}}body{{font-family:'Segoe UI',Arial,sans-serif;background:#f9fafb;margin:0;padding:14px;color:#1a2e44}}@media print{{body{{background:white;padding:0}}.no-print{{display:none!important}}}}.page{{background:white;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,0.08);padding:18px 22px}}</style></head><body><div class="page"><div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;border-bottom:2px solid #e5e7eb;padding-bottom:10px;"><div><div style="font-size:1rem;font-weight:800;color:#1a2e44;">\U0001f4ca CLC Program Changes</div><div style="font-size:0.75rem;color:#6b7280;">{for_date.strftime('%A %-d %B %Y')} &nbsp;\u00b7&nbsp; Cowandilla Learning Centre LBU</div></div><button class="no-print" onclick="window.print()" style="background:#1a2e44;color:white;border:none;padding:7px 14px;border-radius:6px;font-size:0.78rem;cursor:pointer;">\U0001f5a8\ufe0f Print / Save PDF</button></div><div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:12px;">{legend}</div>{changes_html}<div style="font-size:0.6rem;color:#9ca3af;margin-top:16px;text-align:center;border-top:1px solid #f3f4f6;padding-top:8px;">Cowandilla Learning Centre \u00b7 LBU Daily Bulletin \u00b7 Printed {date.today().strftime('%-d %B %Y')}</div></div></body></html>"""
 
-def generate_bulletin_pdf(edition, notices, term: str, week_num: int) -> bytes:
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.units import mm, cm
-    from reportlab.lib.colors import HexColor, white, black, Color
-    from reportlab.lib.styles import ParagraphStyle
-    from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
-    from reportlab.platypus import (
-        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-        HRFlowable, KeepTogether
-    )
-    from reportlab.lib import colors
 
-    buf = BytesIO()
+# ══════════════════════════════════════════════════════════════
+# DISPLAY MODE
+# ══════════════════════════════════════════════════════════════
+params = st.query_params
+if params.get("display") == "true":
+    import time
+    if "display_date" not in st.session_state: st.session_state.display_date = date.today()
+    if st.session_state.display_date < date.today(): st.session_state.display_date = date.today()
+    today = st.session_state.display_date
+    d_data = load_bulletin(today)
+    if "display_last_refresh" not in st.session_state: st.session_state.display_last_refresh = time.time()
+    if time.time() - st.session_state.display_last_refresh > 60:
+        st.session_state.display_last_refresh = time.time(); st.session_state.display_date = date.today(); st.rerun()
 
-    NAVY      = HexColor("#0f3460")
-    TEAL      = HexColor("#0e9f8e")
-    TEAL_DARK = HexColor("#0a7a6e")
-    INK       = HexColor("#111827")
-    INK_MID   = HexColor("#374151")
-    INK_LIGHT = HexColor("#6b7280")
-    BORDER    = HexColor("#e5e7eb")
-    BG_LIGHT  = HexColor("#f9fafb")
-    WHITE     = white
+    st.markdown("""<style>[data-testid="stAppViewContainer"]{background:#f4f8f2!important}.main .block-container{padding:0!important;max-width:100%!important}[data-testid="stHeader"]{display:none}#MainMenu,footer,.stDeployButton{display:none}[data-baseweb="tab-list"]{display:none!important}</style>""", unsafe_allow_html=True)
+    st.markdown('<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">', unsafe_allow_html=True)
+    sr = d_data.get("staff_responsibilities", {}); fun = d_data.get("fun_fact","")
+    st.markdown("""<style>
+    .dp{background:#ffffff;border:1px solid #e0e8e0;border-radius:4px;overflow:hidden;margin-bottom:3px;box-shadow:0 1px 2px rgba(0,0,0,0.04)}
+    .dp-header{padding:.25rem .5rem;font-size:.7rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:white}
+    .dp-header.green{background:#4a8f33}.dp-header.navy{background:#1a2e44}.dp-header.brown{background:#7a5c4a}
+    .dp-header.amber{background:#c97b1a;color:#1a2e44}.dp-header.blue{background:#3a6a9a}
+    .dp-header.purple{background:#6a4a9a}.dp-header.slate{background:#4a5a6a}.dp-header.red{background:#c0392b}
+    .dp-body{padding:.3rem .4rem;background:white}
+    .dt{width:100%;border-collapse:collapse;font-size:.75rem;color:#1a2e44;font-family:'Segoe UI',Arial,sans-serif}
+    .dt th{color:#4a8f33;font-weight:600;font-size:.65rem;text-transform:uppercase;letter-spacing:.03em;padding:.2rem .3rem;border-bottom:1px solid #ddd;text-align:left}
+    .dt td{padding:.18rem .3rem;border-bottom:1px solid #f0f0f0;vertical-align:top;line-height:1.25}
+    .dt tr:last-child td{border-bottom:none}
+    .dt-em{color:#999;font-style:italic;font-size:.7rem}
+    .vb-tag{background:#e8f5e1;color:#2d6b1a;padding:.1rem .35rem;border-radius:3px;font-size:.7rem;font-weight:600}
+    .kitchen-val{background:#e8a125;border-radius:4px;padding:.15rem .4rem;color:#1a2e44;font-weight:800;font-size:.75rem;display:inline-block}
+    .resp-label{font-size:.65rem;color:#4a8f33;font-weight:600;text-transform:uppercase}.resp-val{font-size:.75rem;color:#2a3a2a;margin-top:.1rem}
+    .tc-badge{background:#fdd;color:#c00;padding:.1rem .35rem;border-radius:3px;font-size:.7rem;font-weight:700}
+    </style>""", unsafe_allow_html=True)
+    import streamlit.components.v1 as _components
+    _date_str = today.strftime("%A %-d %B %Y").upper()
+    _components.html(f"""<div style="background:#1a2e44;padding:.5rem 1rem;display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #6BBF4E;">
+      <div>
+        <div style="font-size:1.1rem;color:white;font-weight:700;">CLC Daily Bulletin</div>
+        <div style="font-size:.9rem;color:#6BBF4E;font-weight:600;">{_date_str}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:1rem;">
+        <div style="font-size:1.3rem;color:#e8a125;font-weight:700;font-family:monospace;" id="live-clock">--:-- --</div>
+        <a href="/Daily_Bulletin?quickadd=true" style="background:#6BBF4E;color:#1a2e44;font-size:.7rem;font-weight:700;padding:.3rem .6rem;border-radius:4px;text-decoration:none;">+ Add</a>
+        <a href="/Daily_Bulletin?from_display=true" style="background:rgba(255,255,255,0.1);color:white;font-size:.7rem;font-weight:600;padding:.3rem .6rem;border-radius:4px;text-decoration:none;">Staff</a>
+      </div>
+    </div>
+    <script>
+    function updateClock(){{var n=new Date();var h=n.getHours();var m=n.getMinutes();var ap=h>=12?'PM':'AM';h=h%12||12;document.getElementById('live-clock').textContent=h+':'+(m<10?'0':'')+m+' '+ap;}}
+    updateClock();setInterval(updateClock,30000);
+    </script>""", height=60, scrolling=False)
 
-    W, H = A4
-    ML = MR = 2*cm
-    MT = MB = 2*cm
-    CONTENT_W = W - ML - MR
+    prev_day = today - timedelta(days=1); next_day = today + timedelta(days=1)
+    dn1, dn2, dn3, dn4 = st.columns([1,4,1,1])
+    with dn1:
+        if st.button(f"\u2190 {prev_day.strftime('%a %-d %b')}", key="dn_prev", use_container_width=True): st.session_state.display_date = prev_day; st.rerun()
+    with dn2:
+        st.markdown(f'<div style="text-align:center;color:#2d7d4f;font-size:.75rem;font-weight:700;font-family:DM Mono,monospace;letter-spacing:.08em;padding:.45rem 0;">VIEWING: {today.strftime("%A %-d %B %Y").upper()}</div>', unsafe_allow_html=True)
+    with dn3:
+        if st.button(f"{next_day.strftime('%a %-d %b')} \u2192", key="dn_next", use_container_width=True): st.session_state.display_date = next_day; st.rerun()
+    with dn4:
+        if st.button("Today", key="dn_today", use_container_width=True): st.session_state.display_date = date.today(); st.rerun()
 
-    monday   = date.fromisoformat(str(edition["week_start"]))
-    pub_date = edition.get("published_at", "")
-    if pub_date:
-        try:
-            pub_date = datetime.fromisoformat(str(pub_date).replace("Z", "+00:00")).strftime("%-d %B %Y")
-        except Exception:
-            pub_date = str(pub_date)[:10]
+    def tbl_rows(rows, keys):
+        filtered = [r for r in rows if any(r.get(k,"") for k in keys)]
+        if not filtered: return '<tr><td colspan="20" class="dt-em">None today</td></tr>'
+        return "".join(["<tr>"+"".join([f"<td>{r.get(k,'')}</td>" for k in keys])+"</tr>" for r in filtered])
+
+    d_notices = load_notices(for_date=today)
+    if d_notices:
+        n_parts = []
+        for n in d_notices:
+            cat = n.get("category","General"); nc = NOTICE_CATS.get(cat, NOTICE_CATS["General"])
+            n_parts.append(f'<span style="background:{nc["bg"]};color:{nc["color"]};font-size:.65rem;font-weight:700;text-transform:uppercase;padding:.08rem .3rem;border-radius:3px;">{cat}</span> <strong style="color:#1a2e44;font-size:.75rem;">{n.get("title","")}</strong> <span style="color:#4a6a4a;font-size:.72rem;">{n.get("body","")}</span> <span style="color:#999;font-size:.65rem;">({n.get("submitted_by","")})</span>')
+        st.markdown(f'<div class="dp"><div class="dp-header green">📋 Notices</div><div class="dp-body"><div style="line-height:1.6;">{"<br>".join(n_parts)}</div></div></div>', unsafe_allow_html=True)
+
+    r1c1, r1c2, r1c3, r1c4, r1c5 = st.columns([2,2,2.5,1.5,2])
+    with r1c1:
+        _staff_rows   = [r for r in d_data.get("staff_absent",  []) if (r.get("Staff Member") or "").strip()]
+        _student_rows = [r for r in d_data.get("student_absent", []) if (r.get("Student") or "").strip()]
+        st.markdown(f'<div class="dp"><div class="dp-header green">\U0001f645 Staff Absent</div><div class="dp-body"><table class="dt"><tr><th>Staff</th><th>TRT</th></tr>{tbl_rows(_staff_rows, ["Staff Member","TRT"])}</table></div></div><div style="height:6px;"></div><div class="dp"><div class="dp-header blue">\U0001f392 Student Absent</div><div class="dp-body"><table class="dt"><tr><th>Student</th><th>Program</th><th>Reason</th></tr>{tbl_rows(_student_rows, ["Student","Program","Reason"])}</table></div></div>', unsafe_allow_html=True)
+    with r1c2:
+        st.markdown(f'<div class="dp"><div class="dp-header blue">\U0001f68c Excursions</div><div class="dp-body"><table class="dt"><tr><th>Program</th><th>Staff</th><th>Depart</th><th>Return</th><th>Location</th></tr>{tbl_rows(d_data.get("excursions",[]), ["Program","Staff Member","Time Departing","Time Returning","Location"])}</table></div></div>', unsafe_allow_html=True)
+    with r1c3:
+        _sched = load_scheduled_meetings(today); _all_mtgs = list(d_data.get("staff_meetings") or []) + _sched
+        st.markdown(f'<div class="dp"><div class="dp-header navy">\U0001f91d Staff Meetings</div><div class="dp-body"><table class="dt"><tr><th>Type</th><th>Staff</th><th>Location</th><th>Depart</th><th>Return</th><th>Student</th></tr>{tbl_rows(_all_mtgs, ["Type","Staff Member","Location","Time Departing","Time Returning","Student"])}</table></div></div>', unsafe_allow_html=True)
+    with r1c4:
+        st.markdown(f'<div class="dp"><div class="dp-header brown">\U0001f4e5 Entry Meetings</div><div class="dp-body"><table class="dt"><tr><th>Time</th><th>Program</th><th>Student</th></tr>{tbl_rows(d_data.get("entry_meetings",[]), ["Time","Program","Student"])}</table></div></div>', unsafe_allow_html=True)
+    with r1c5:
+        kitchen = sr.get("kitchen_duties","") or "\u2014"
+        st.markdown(f'<div class="dp"><div class="dp-header amber">\u2b50 Staff Responsibilities</div><div class="dp-body"><div style="margin-bottom:.35rem;"><span class="kitchen-val">\U0001f373 Kitchen: {kitchen}</span></div><div style="margin-bottom:.2rem;"><span class="resp-label">\U0001f4cc PD Focus</span><br><span class="resp-val">{sr.get("meeting_pd_focus","") or "\u2014"}</span></div><div style="margin-bottom:.2rem;"><span class="resp-label">\U0001fa91 Chair</span><br><span class="resp-val">{sr.get("chair","") or "\u2014"}</span></div><div><span class="resp-label">\U0001f4dd Minutes</span><br><span class="resp-val">{sr.get("minutes","") or "\u2014"}</span></div></div></div>', unsafe_allow_html=True)
+
+    _vis_rows = [r for r in d_data.get("visitors_on_site", []) if any(r.get(k,"") for k in ["Visitor Name","Reason","Staff Responsible"])]
+    if _vis_rows:
+        _vis_html = "".join([f'<tr><td><strong style="color:#1a2e44;">{r.get("Visitor Name","")}</strong></td><td style="font-size:.7rem;">{r.get("Reason","")}</td><td style="font-size:.7rem;">{r.get("Staff Responsible","")}</td><td style="font-size:.7rem;">{r.get("Arriving","")}</td><td style="font-size:.7rem;">{r.get("Departing","")}</td><td style="font-size:.7rem;">{r.get("Location","")}</td></tr>' for r in _vis_rows])
+        st.markdown(f'<div class="dp"><div class="dp-header green">👥 Visitors</div><div class="dp-body"><table class="dt"><tr><th>Visitor</th><th>Reason</th><th>Staff</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>{_vis_html}</table></div></div>', unsafe_allow_html=True)
+
+    r2c1, r2c2, r2c3, r2c4, r2c5 = st.columns([2,2,2,1.5,1])
+    with r2c1:
+        st.markdown(f'<div class="dp"><div class="dp-header blue">\U0001f7e6 JP \u2013 Travel</div><div class="dp-body"><table class="dt"><tr><th>Student</th><th>Arrives</th><th>Departs</th><th>Transport</th></tr>{tbl_rows(d_data.get("travel_jp",[]), ["Student","Arrival Time","Departure Time","Transport"])}</table></div></div>', unsafe_allow_html=True)
+    with r2c2:
+        st.markdown(f'<div class="dp"><div class="dp-header purple">\U0001f7e3 PY \u2013 Travel</div><div class="dp-body"><table class="dt"><tr><th>Student</th><th>Arrives</th><th>Departs</th><th>Transport</th></tr>{tbl_rows(d_data.get("travel_py",[]), ["Student","Arrival Time","Departure Time","Transport"])}</table></div></div>', unsafe_allow_html=True)
+    with r2c3:
+        st.markdown(f'<div class="dp"><div class="dp-header slate">\U0001f7eb SY \u2013 Travel</div><div class="dp-body"><table class="dt"><tr><th>Student</th><th>Arrives</th><th>Departs</th><th>Transport</th></tr>{tbl_rows(d_data.get("travel_sy",[]), ["Student","Arrival Time","Departure Time","Transport"])}</table></div></div>', unsafe_allow_html=True)
+    with r2c4:
+        vb = d_data.get("vehicle_bookings",[]); 
+        if isinstance(vb, dict): vb = []
+        if vb:
+            def _dm_vb_time_d(b): return "All day" if b.get("whole_day",True) else f"{b.get('start_time','?')}\u2013{b.get('end_time','?')}"
+            vb_html = "".join([f'<tr><td style="font-size:.7rem;color:#666;">{"🚐 Van" if b.get("vehicle")=="Van" else "🚙 Kia"}</td><td><span class="vb-tag">{b.get("booker","")}</span></td><td style="font-size:.7rem;color:#4a8f33;">{_dm_vb_time_d(b)}</td></tr>' for b in vb if b.get("booker","")])
+        else:
+            vb_html = '<tr><td colspan="3" class="dt-em">No bookings</td></tr>'
+        st.markdown(f'<div class="dp"><div class="dp-header navy">🚗 Vehicles</div><div class="dp-body"><table class="dt"><tr><th>Vehicle</th><th>Booked By</th><th>Time</th></tr>{vb_html}</table></div></div>', unsafe_allow_html=True)
+    with r2c5:
+        nit = d_data.get("nit_booking","") or '<span class="dt-em">None</span>'
+        st.markdown(f'<div class="dp"><div class="dp-header green">📅 NIT</div><div class="dp-body"><p style="font-size:.75rem;color:#2a3a2a;margin:0;line-height:1.3;">{nit}</p></div></div>', unsafe_allow_html=True)
+
+    # Travel Changes — highlighted red if anything entered
+    tc_today = d_data.get("travel_changes", [])
+    tc_filtered = [r for r in tc_today if any(r.get(k,"") for k in ["Student","Change Type","Reason","Time","How Departed"])]
+    if tc_filtered:
+        tc_rows_html = "".join([
+            f'<tr><td><strong style="color:#1a2e44;">{r.get("Student","")}</strong></td>'
+            f'<td style="font-size:.7rem;">{r.get("Program","")}</td>'
+            f'<td><span class="tc-badge">{r.get("Change Type","")}</span></td>'
+            f'<td style="font-size:.7rem;color:#666;">{r.get("Reason","")}</td>'
+            f'<td style="font-family:monospace;font-size:.7rem;color:#c00;font-weight:700;">{r.get("Time","")}</td>'
+            f'<td style="font-size:.7rem;">{r.get("How Departed","")}</td></tr>'
+            for r in tc_filtered
+        ])
+        st.markdown(f'<div class="dp" style="border-left:3px solid #c00;"><div class="dp-header red">🔄 Travel Changes</div><div class="dp-body"><table class="dt"><tr><th>Student</th><th>Program</th><th>Change</th><th>Reason</th><th>Time</th><th>How Departed</th></tr>{tc_rows_html}</table></div></div>', unsafe_allow_html=True)
+
+    bc_today = load_bulletin_changes(today)
+    if bc_today:
+        pc_parts = []
+        for ch in bc_today:
+            reason = ch.get("reason",""); absent = ch.get("staff_absent",""); has_trt = ch.get("has_trt",False); trt_name = ch.get("trt_name",""); staff_rows = ch.get("staff_rows",[])
+            color = "#dc2626" if reason == "Staff Absence" else "#0e7490"
+            meta = []
+            if absent: meta.append(f"Absent: <strong>{absent}</strong>")
+            if has_trt: meta.append(f"TRT: {trt_name or 'On site'}")
+            tt_html = _timetable_grid_html(staff_rows, PC_TIME_SLOTS_30, dark=True)
+            pc_parts.append(f'<div style="margin-bottom:10px;border-left:3px solid {color};padding-left:8px;"><div style="font-size:.6rem;color:#a8c8a8;margin-bottom:3px;font-weight:700;">{reason.upper()}{(" \u00b7 " + " \u00b7 ".join(meta)) if meta else ""}</div>{tt_html or "<span style=\'color:#3a5a3a;font-size:.6rem;\'>No timetable entered</span>"}</div>')
+        st.markdown(f'<div class="dp"><div class="dp-header green">\U0001f4ca Program Changes</div><div class="dp-body">{"".join(pc_parts)}</div></div>', unsafe_allow_html=True)
     else:
-        pub_date = adl_today().strftime("%-d %B %Y")
+        st.markdown('<div class="dp"><div class="dp-header green">\U0001f4ca Program Changes</div><div class="dp-body"><span class="dt-em">No program changes today</span></div></div>', unsafe_allow_html=True)
 
-    week_label = edition["week_label"]
-    title_str  = f"CLC Staff Bulletin  ·  {term}  ·  Week {week_num}"
-    subtitle   = week_label
-
-    # ── Page template callbacks ───────────────────────────────────────────────
-    def on_page(canvas, doc):
-        canvas.saveState()
-        # Navy header band
-        canvas.setFillColor(NAVY)
-        canvas.rect(0, H - 68*mm, W, 68*mm, fill=1, stroke=0)
-
-        # Teal accent strip
-        canvas.setFillColor(TEAL)
-        canvas.rect(0, H - 70*mm, W, 2*mm, fill=1, stroke=0)
-
-        # Organisation label
-        canvas.setFillColor(HexColor("#ffffff80") if True else WHITE)
-        canvas.setFillColorRGB(1, 1, 1, alpha=0.5)
-        canvas.setFont("Helvetica", 8)
-        canvas.setFillColor(HexColor("#aaaacc"))
-        canvas.drawString(ML, H - 14*mm,
-                          "COWANDILLA LEARNING CENTRE  ·  LEARNING AND BEHAVIOUR UNIT")
-
-        # Main title
-        canvas.setFont("Helvetica-Bold", 22)
-        canvas.setFillColor(WHITE)
-        canvas.drawString(ML, H - 27*mm, "📋  CLC Staff Bulletin")
-
-        # Term · Week badge line
-        canvas.setFont("Helvetica-Bold", 13)
-        canvas.setFillColor(TEAL)
-        canvas.drawString(ML, H - 39*mm, f"{term}  ·  Week {week_num}")
-
-        # Week label and date right-aligned
-        canvas.setFont("Helvetica", 10)
-        canvas.setFillColor(HexColor("#d1d5db"))
-        canvas.drawRightString(W - MR, H - 39*mm, week_label)
-
-        # Meta row
-        canvas.setFont("Helvetica", 9)
-        canvas.setFillColor(HexColor("#9ca3af"))
-        canvas.drawString(ML, H - 51*mm, f"Issued: {pub_date}")
-        canvas.drawString(ML + 60*mm, H - 51*mm,
-                          f"{len(notices)} item{'s' if len(notices) != 1 else ''}")
-
-        # Footer
-        canvas.setFillColor(BG_LIGHT)
-        canvas.rect(0, 0, W, 14*mm, fill=1, stroke=0)
-        canvas.setStrokeColor(BORDER)
-        canvas.line(0, 14*mm, W, 14*mm)
-        canvas.setFont("Helvetica", 8)
-        canvas.setFillColor(INK_LIGHT)
-        canvas.drawString(ML, 5*mm,
-                          f"CLC–LBU Staff Bulletin  ·  {term}  ·  Week {week_num}  ·  {week_label}")
-        canvas.drawRightString(W - MR, 5*mm, "Cowandilla Learning Centre")
-
-        canvas.restoreState()
-
-    doc = SimpleDocTemplate(
-        buf, pagesize=A4,
-        leftMargin=ML, rightMargin=MR,
-        topMargin=70*mm + 6*mm,   # below header band
-        bottomMargin=14*mm + 6*mm,
-        title=title_str,
-        author="CLC–LBU",
-    )
-
-    # ── Styles ────────────────────────────────────────────────────────────────
-    intro_style = ParagraphStyle("intro",
-        fontName="Helvetica", fontSize=9, textColor=INK_LIGHT,
-        spaceAfter=4*mm, leading=14,
-        borderPad=(0, 0, 3*mm, 0),
-    )
-    cat_style = ParagraphStyle("cat",
-        fontName="Helvetica-Bold", fontSize=8, textColor=INK,
-        leading=10,
-    )
-    author_style = ParagraphStyle("author",
-        fontName="Helvetica", fontSize=8, textColor=INK_LIGHT, leading=10,
-    )
-    title_style = ParagraphStyle("ntitle",
-        fontName="Helvetica-Bold", fontSize=13, textColor=INK,
-        spaceAfter=2*mm, leading=16,
-    )
-    body_style = ParagraphStyle("body",
-        fontName="Helvetica", fontSize=10, textColor=INK_MID,
-        leading=15, spaceAfter=0,
-    )
-
-    # ── Story ─────────────────────────────────────────────────────────────────
-    story = []
-
-    story.append(Paragraph(
-        "Please read all items below and acknowledge receipt via the CLC Staff Portal.",
-        intro_style
-    ))
-    story.append(HRFlowable(width="100%", thickness=0.5, color=BORDER, spaceAfter=5*mm))
-
-    if not notices:
-        story.append(Paragraph("No items this week.", body_style))
-    else:
-        for n in notices:
-            cat    = n.get("category", "general")
-            fg_hex, bg_hex, border_hex = CAT_PDF_COLOURS.get(cat, CAT_PDF_COLOURS["general"])
-            label  = CAT_NAMES.get(cat, cat.title())
-            author = n.get("author", "")
-            body   = re.sub('<[^<]+?>', '', n.get("content", "")).strip()
-            body   = body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            body   = body.replace("\n", "<br/>")
-
-            FG     = HexColor(fg_hex)
-            BG     = HexColor(bg_hex)
-            BORDER_COL = HexColor(border_hex)
-
-            # Badge + author row
-            badge_cell = Table(
-                [[Paragraph(f'<font color="{fg_hex}"><b>{label}</b></font>', cat_style),
-                  Paragraph(f'<font color="#6b7280">from {author}</font>', author_style)]],
-                colWidths=[None, None],
+    # ── Program Changes Manager entries (from standalone tool) ──
+    _pcm_today = load_pc_manager_changes(today)
+    if _pcm_today:
+        _pcm_parts = []
+        for _pcm in _pcm_today:
+            _pcm_staff = _pcm.get("staff_name","N/A"); _pcm_reason = _pcm.get("reason","")
+            _pcm_covered = _pcm.get("covered_by",""); _pcm_blocks = _pcm.get("time_blocks",[]) or []
+            _block_rows = "".join([
+                f'<tr><td style="color:#C8760A;font-weight:600;white-space:nowrap;font-size:.58rem;">'
+                f'{_fmt_pc_time(b.get("start_time",""))} \u2192 {_fmt_pc_time(b.get("end_time",""))}</td>'
+                f'<td style="font-size:.58rem;">{b.get("modified_program","")}'
+                f'{"<br><span style=\'color:#6BBF4E;font-size:0.9em;\'>Release: "+b["released_by"]+"</span>" if b.get("released_by") else ""}'
+                f'</td></tr>'
+                for b in _pcm_blocks
+            ])
+            _cov_html = f'<div style="font-size:.58rem;color:#6BBF4E;font-weight:600;margin:.2rem 0;">Covered by: {_pcm_covered}</div>' if _pcm_covered else ""
+            _pcm_parts.append(
+                f'<div style="margin-bottom:8px;border-left:3px solid #C8760A;padding-left:7px;">'
+                f'<div style="font-size:.62rem;font-weight:700;color:#6BBF4E;">{_pcm_staff}</div>'
+                f'<div style="font-size:.58rem;color:#a8c8a8;margin-bottom:3px;">{_pcm_reason}</div>'
+                f'{_cov_html}'
+                f'{"<table style=\'border-collapse:collapse;width:100%;\'>" + _block_rows + "</table>" if _block_rows else ""}'
+                f'</div>'
             )
-            badge_cell.setStyle(TableStyle([
-                ("BACKGROUND", (0,0), (0,0), BG),
-                ("ROUNDEDCORNERS", [4], ),
-                ("LEFTPADDING",  (0,0), (0,0), 6),
-                ("RIGHTPADDING", (0,0), (0,0), 6),
-                ("TOPPADDING",   (0,0), (0,0), 2),
-                ("BOTTOMPADDING",(0,0), (0,0), 2),
-                ("LEFTPADDING",  (1,0), (1,0), 6),
-                ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-            ]))
-
-            inner_content = [
-                [badge_cell],
-                [Paragraph(n["title"], title_style)],
-                [Paragraph(body, body_style)],
-            ]
-            inner_table = Table(inner_content, colWidths=[CONTENT_W - 8*mm])
-            inner_table.setStyle(TableStyle([
-                ("TOPPADDING",    (0,0), (-1,-1), 3),
-                ("BOTTOMPADDING", (0,0), (-1,-1), 3),
-                ("LEFTPADDING",   (0,0), (-1,-1), 0),
-                ("RIGHTPADDING",  (0,0), (-1,-1), 0),
-            ]))
-
-            # Left-border card: narrow colour strip + content
-            card_data = [[
-                "",           # left colour bar
-                inner_table,  # content
-            ]]
-            card = Table(card_data, colWidths=[4, CONTENT_W - 8*mm],
-                         rowHeights=None)
-            card.setStyle(TableStyle([
-                ("BACKGROUND",    (0,0), (0,-1), BORDER_COL),
-                ("BACKGROUND",    (1,0), (1,-1), WHITE),
-                ("BOX",           (0,0), (-1,-1), 0.5, BORDER),
-                ("LEFTPADDING",   (1,0), (1,-1), 8),
-                ("RIGHTPADDING",  (1,0), (1,-1), 10),
-                ("TOPPADDING",    (0,0), (-1,-1), 8),
-                ("BOTTOMPADDING", (0,0), (-1,-1), 10),
-                ("TOPPADDING",    (0,0), (0,-1), 0),
-                ("BOTTOMPADDING", (0,0), (0,-1), 0),
-                ("LEFTPADDING",   (0,0), (0,-1), 0),
-                ("RIGHTPADDING",  (0,0), (0,-1), 0),
-                ("VALIGN",        (0,0), (-1,-1), "TOP"),
-            ]))
-
-            story.append(KeepTogether(card))
-            story.append(Spacer(1, 4*mm))
-
-    doc.build(story, onFirstPage=on_page, onLaterPages=on_page)
-    return buf.getvalue()
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# HELPERS
-# ══════════════════════════════════════════════════════════════════════════════
-def fmt_date(d):
-    if not d:
-        return ""
-    try:
-        return datetime.fromisoformat(str(d).replace("Z", "+00:00")).strftime("%-d %b %Y")
-    except Exception:
-        return str(d)[:10]
-
-def nav(view, edition_id=None):
-    st.session_state.view = view
-    if edition_id is not None:
-        st.session_state.viewing_edition_id = edition_id
-    st.rerun()
-
-# ══════════════════════════════════════════════════════════════════════════════
-# CONSTANTS
-# ══════════════════════════════════════════════════════════════════════════════
-CAT_LABELS = {
-    "action": "Action Required", "whs": "WHS", "policy": "Policy Update",
-    "reminder": "Reminder", "info": "Information", "general": "General",
-}
-CAT_BADGE = {
-    "action":   "background:#fee2e2;color:#991b1b;",
-    "whs":      "background:#d1fae5;color:#065f46;",
-    "policy":   "background:#dbeafe;color:#1e40af;",
-    "reminder": "background:#fef3c7;color:#92400e;",
-    "info":     "background:#ede9fe;color:#5b21b6;",
-    "general":  "background:#f3f4f6;color:#374151;",
-}
-CAT_BORDER = {
-    "action": "#dc2626", "whs": "#059669", "policy": "#2563eb",
-    "reminder": "#d97706", "info": "#7c3aed", "general": "#9ca3af",
-}
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SESSION STATE
-# ══════════════════════════════════════════════════════════════════════════════
-for k, v in {
-    "staff_name": "", "staff_id": None, "is_admin": False,
-    "view": "bulletin", "viewing_edition_id": None,
-}.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SHARED UI
-# ══════════════════════════════════════════════════════════════════════════════
-def app_header():
-    ab = '<span class="admin-badge">Admin</span>' if st.session_state.is_admin else ""
-    st.markdown(
-        '<div class="site-header">'
-        + '<div style="display:flex;align-items:center;">'
-        + '<div class="site-logo">📋</div>'
-        + '<div><div class="site-title">CLC Staff Bulletin</div>'
-        + '<div class="site-sub">Cowandilla Learning Centre</div></div></div>'
-        + '<div style="display:flex;align-items:center;gap:10px;">'
-        + ab + '<div class="user-chip">👤 ' + st.session_state.staff_name + '</div>'
-        + '</div></div>',
-        unsafe_allow_html=True
-    )
-    _, so = st.columns([11, 1])
-    with so:
-        if st.button("Sign out", key="signout"):
-            for k in ["staff_name", "staff_id", "is_admin"]:
-                st.session_state[k] = ("" if k == "staff_name" else
-                                       None if k == "staff_id" else False)
-            st.rerun()
-
-def nav_bar(active):
-    tabs = [("bulletin", "📖 This Week")]
-    if st.session_state.is_admin:
-        tabs += [("compose", "Compose and Send"), ("staff", "👥 Staff")]
-    tabs.append(("archive", "🗂 Past Bulletins"))
-    cols = st.columns(len(tabs))
-    for i, (view, label) in enumerate(tabs):
-        with cols[i]:
-            if st.button(label, key="nav_" + view,
-                         type="primary" if active == view else "secondary",
-                         use_container_width=True):
-                nav(view)
-    st.write("")
-
-def render_bulletin(edition, show_ack=True):
-    notices = db_get_notices(edition["id"])
-    acked   = has_acked_edition(edition["id"], st.session_state.staff_name)
-    n_items = len(notices)
-
-    ack_pill = ""
-    if show_ack:
-        if acked:
-            ack_pill = ('<span style="background:#d1fae5;color:#065f46;border-radius:20px;'
-                        'padding:3px 12px;font-size:12px;font-weight:700;">Acknowledged</span>')
-        else:
-            ack_pill = ('<span style="background:#fef3c7;color:#b45309;border-radius:20px;'
-                        'padding:3px 12px;font-size:12px;font-weight:700;">Awaiting acknowledgement</span>')
-
-    st.markdown(
-        '<div style="background:linear-gradient(135deg,var(--navy),var(--navy-mid));'
-        'border-radius:var(--radius-lg);padding:22px 28px;margin-bottom:24px;">'
-        '<div style="font-size:11px;font-weight:700;text-transform:uppercase;'
-        'letter-spacing:0.1em;color:rgba(255,255,255,0.5);margin-bottom:6px;">CLC Staff Bulletin</div>'
-        '<div style="font-size:26px;font-weight:800;color:white;margin-bottom:8px;">'
-        + edition["week_label"]
-        + '</div><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">'
-        + '<span style="font-size:13px;color:rgba(255,255,255,0.6);">Sent '
-        + fmt_date(edition.get("published_at"))
-        + " · " + str(n_items) + (" items" if n_items != 1 else " item")
-        + "</span>" + ack_pill + "</div></div>",
-        unsafe_allow_html=True
-    )
-
-    if not notices:
-        st.info("No items in this bulletin.")
-        return
-
-    for n in notices:
-        cat    = n.get("category", "general")
-        label  = CAT_LABELS.get(cat, cat.title())
-        badge  = CAT_BADGE.get(cat, CAT_BADGE["general"])
-        border = CAT_BORDER.get(cat, CAT_BORDER["general"])
-        body   = re.sub('<[^<]+?>', '', n.get("content", ""))
         st.markdown(
-            '<div style="background:var(--white);border:1px solid var(--border);'
-            'border-radius:var(--radius);padding:18px 22px;margin-bottom:10px;'
-            'border-left:4px solid ' + border + ';">'
-            '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">'
-            '<span style="padding:2px 10px;border-radius:20px;font-size:11px;font-weight:700;'
-            + badge + '">' + label + '</span>'
-            '<span style="font-size:12px;color:var(--ink-faint);">from '
-            + n.get("author", "Admin") + '</span></div>'
-            '<div style="font-size:16px;font-weight:700;color:var(--ink);margin-bottom:8px;">'
-            + n["title"] + '</div>'
-            '<div style="font-size:14px;color:var(--ink);line-height:1.7;white-space:pre-wrap;">'
-            + body + '</div></div>',
+            f'<div class="dp"><div class="dp-header amber">\U0001f4cb Staff Timetable Changes</div>'
+            f'<div class="dp-body">{"".join(_pcm_parts)}</div></div>',
             unsafe_allow_html=True
         )
 
-    if show_ack:
-        st.write("")
-        if acked:
-            st.success("You have acknowledged this bulletin.")
-        else:
-            if st.button("Mark as Read and Acknowledge", type="primary", use_container_width=True):
-                ack_all(edition["id"], st.session_state.staff_name)
-                st.success("Acknowledged — thank you!")
-                time.sleep(1)
-                st.rerun()
-
-# ── Download + Meeting panel (reused in compose and archive views) ─────────────
-def _on_download_click(eid):
-    """Called when the Download PDF button is clicked — flags that we should show the meeting prompt."""
-    st.session_state[f"dl_clicked_{eid}"] = True
+    import streamlit.components.v1 as components
+    components.html("""<script>(function(){function u(){var o={timeZone:'Australia/Adelaide',hour:'numeric',minute:'2-digit',hour12:true};var t=new Date().toLocaleTimeString('en-AU',o).toUpperCase();var e=window.parent.document.getElementById('live-clock');if(e)e.textContent=t}u();setInterval(u,1000)})();</script>""", height=0)
+    st.markdown(f'<div class="fact-bar"><span class="fact-label">\U0001f4a1 Fun Fact</span><span>{fun or "No fun fact for today"}</span></div>', unsafe_allow_html=True)
+    st.stop()
 
 
-def render_download_meeting_panel(edition, notices):
-    """Renders the PDF download and (post-download) Publish to Staff Meeting flow."""
-    monday     = date.fromisoformat(str(edition["week_start"]))
-    auto_term  = get_sa_term(monday)
-    auto_week  = get_sa_week(monday)          # ← calculated from date, not defaulting to 1
-    term_opts  = ["Term 1", "Term 2", "Term 3", "Term 4"]
-    auto_idx   = term_opts.index(auto_term) if auto_term in term_opts else 1
-    already_linked = edition.get("meeting_linked", False)
-    eid        = str(edition["id"])
-
-    st.markdown("#### 📥 Download & Distribute")
-
-    # ── Term / Week selectors ─────────────────────────────────────────────────
-    c1, c2 = st.columns([2, 1])
-    with c1:
-        term_sel = st.selectbox("Term", term_opts, index=auto_idx, key="dl_term_" + eid)
-    with c2:
-        week_num = st.number_input("Week #", min_value=1, max_value=11, value=auto_week,
-                                   key="dl_week_" + eid)
-
-    # ── PDF download button ───────────────────────────────────────────────────
-    try:
-        pdf_bytes = generate_bulletin_pdf(edition, notices, term=term_sel, week_num=int(week_num))
-        fname = f"CLC_Bulletin_{term_sel.replace(' ','')}_Wk{int(week_num)}_{edition['week_start']}.pdf"
-        st.download_button(
-            "⬇️ Download PDF  (then email to staff)",
-            data=pdf_bytes,
-            file_name=fname,
-            mime="application/pdf",
-            use_container_width=True,
-            key="dl_btn_" + eid,
-            on_click=_on_download_click,
-            args=(eid,),
-        )
-    except Exception as e:
-        st.error(f"PDF error: {e}")
-
-    st.write("")
-
-    # ── Already linked badge ──────────────────────────────────────────────────
-    if already_linked:
-        met_term = edition.get("meeting_term", term_sel)
-        met_week = edition.get("meeting_week", int(week_num))
-        st.markdown(
-            '<div style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:8px;'
-            'padding:14px 18px;display:flex;align-items:center;gap:10px;">'
-            '<span style="font-size:20px;">✅</span>'
-            '<div><div style="font-weight:700;color:#065f46;font-size:14px;">'
-            f'Bulletin is in Staff Meeting — {met_term} Week {met_week}</div>'
-            '<div style="font-size:12px;color:#047857;margin-top:2px;">'
-            'Bulletin items will appear under this week\'s staff meeting agenda.</div></div></div>',
-            unsafe_allow_html=True,
-        )
-        st.write("")
-        # Allow unlinking so the bulletin can be re-published to a different week
-        if not st.session_state.get(f"confirm_unlink_{eid}"):
-            if st.button("🔗 Remove from Staff Meeting", key=f"unlink_{eid}",
-                         help="Detach this bulletin from the meeting so it can be re-linked"):
-                st.session_state[f"confirm_unlink_{eid}"] = True
-                st.rerun()
-        else:
-            st.warning("This will remove the bulletin from the staff meeting. You can re-link it at any time.")
-            ua, ub = st.columns(2)
-            with ua:
-                if st.button("Yes, remove it", key=f"unlink_yes_{eid}", type="primary"):
-                    if db_unlink_from_meeting(edition["id"]):
-                        st.session_state.pop(f"confirm_unlink_{eid}", None)
-                        st.session_state.pop(f"dl_clicked_{eid}", None)
-                        st.success("Bulletin removed from staff meeting.")
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.error("Could not unlink — check Supabase.")
-            with ub:
-                if st.button("Cancel", key=f"unlink_cancel_{eid}"):
-                    st.session_state.pop(f"confirm_unlink_{eid}", None)
-                    st.rerun()
-        return
-
-    # ── Post-download meeting prompt ──────────────────────────────────────────
-    dl_was_clicked = st.session_state.get(f"dl_clicked_{eid}", False)
-
-    if dl_was_clicked:
-        # Prominent prompt appears after download
-        st.markdown(
-            '<div style="background:#eff6ff;border:2px solid #3b82f6;border-radius:10px;'
-            'padding:18px 22px;margin-top:4px;">'
-            '<div style="font-size:15px;font-weight:700;color:#1e40af;margin-bottom:6px;">'
-            '📅 Push this bulletin to Staff Meeting minutes?</div>'
-            '<div style="font-size:13px;color:#1d4ed8;line-height:1.5;">'
-            f'This will add the <strong>{edition["week_label"]}</strong> bulletin items directly '
-            f'into the <strong>{term_sel} Week {int(week_num)}</strong> staff meeting agenda — '
-            'so you don\'t need to copy anything across manually.'
-            '</div></div>',
-            unsafe_allow_html=True,
-        )
-        st.write("")
-        pa, pb, pc = st.columns([2, 2, 3])
-        with pa:
-            if st.button("✅ Yes, add to meeting", type="primary",
-                         use_container_width=True, key="mtg_yes_" + eid):
-                if db_link_to_meeting(edition["id"], term_sel, int(week_num)):
-                    st.session_state[f"dl_clicked_{eid}"] = False
-                    st.success(f"Bulletin added to {term_sel} Week {int(week_num)} staff meeting.")
-                    time.sleep(1)
-                    st.rerun()
-                else:
-                    st.error("Could not link — check Supabase.")
-        with pb:
-            if st.button("Maybe later", use_container_width=True, key="mtg_no_" + eid):
-                st.session_state[f"dl_clicked_{eid}"] = False
-                st.rerun()
-    else:
-        # Subtle manual option for before/without downloading
-        st.markdown(
-            '<div style="font-size:12px;color:#9ca3af;margin-top:2px;">'
-            '💡 After downloading, you\'ll be prompted to add the bulletin to Staff Meeting minutes.</div>',
-            unsafe_allow_html=True,
-        )
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# LOGIN
-# ══════════════════════════════════════════════════════════════════════════════
-def show_login():
-    st.markdown("## 📋 CLC Staff Bulletin")
-    st.markdown("**Cowandilla Learning Centre — LBU**")
-    st.write("")
-    staff_names = db_get_staff_names()
-    if not staff_names:
-        st.warning("No staff set up yet. Please contact your administrator.")
-        return
-    name = st.selectbox("Your name", ["Select your name"] + staff_names)
-    pin  = st.text_input("PIN", type="password", placeholder="Enter your PIN")
-    if st.button("Sign In", type="primary"):
-        if name == "Select your name":
-            st.error("Please select your name.")
-        elif not pin.strip():
-            st.error("Please enter your PIN.")
-        else:
-            staff = db_verify_pin(name, pin)
-            if not staff and pin.strip() == "CLCbulletin2026":
-                all_staff = db_get_staff_list()
-                staff = next((s for s in all_staff if s["name"] == name), None)
-                if staff:
-                    staff = dict(staff)
-                    staff["role"] = "admin"
-            if staff:
-                st.session_state.staff_name = staff["name"]
-                st.session_state.staff_id   = staff.get("id")
-                st.session_state.is_admin   = staff.get("role") == "admin"
-                st.rerun()
+# ══════════════════════════════════════════════════════════════
+# QUICK ADD MODE
+# ══════════════════════════════════════════════════════════════
+if params.get("quickadd") == "true":
+    st.markdown("""<style>[data-testid="stAppViewContainer"]{background:#f0f7eb!important}.main .block-container{padding:2rem 2rem 3rem!important;max-width:620px!important;margin:0 auto!important}[data-testid="stHeader"]{display:none}#MainMenu,footer,.stDeployButton{display:none}</style>""", unsafe_allow_html=True)
+    st.markdown("""<div style="background:linear-gradient(135deg,#3d7a28,#6BBF4E);border-radius:14px;padding:1.5rem 2rem;margin-bottom:1.5rem;text-align:center;color:white;"><div style="font-size:2rem;margin-bottom:.3rem;">\U0001f4dd</div><div style="font-size:1.3rem;font-weight:700;margin-bottom:.25rem;">Staff Quick Notice</div><div style="font-size:.85rem;opacity:.85;">Cowandilla Learning Centre \u00b7 Daily Bulletin</div></div>""", unsafe_allow_html=True)
+    with st.form("qa_standalone_form", clear_on_submit=True):
+        qa_name = st.text_input("Your name *", placeholder="e.g. Sarah")
+        qa_cat = st.selectbox("Category *", list(NOTICE_CATS.keys()), format_func=lambda x: f"{NOTICE_CATS[x]['emoji']} {x}")
+        qa_title = st.text_input("Title *", placeholder="e.g. Staff meeting moved to Room 3")
+        qa_body = st.text_area("Details (optional)", height=110)
+        qa_date = st.date_input("For which day?", value=date.today())
+        if st.form_submit_button("\U0001f4e2 Post Notice to Bulletin", type="primary", use_container_width=True):
+            if not qa_name.strip(): st.warning("Please enter your name.")
+            elif not qa_title.strip(): st.warning("Please enter a title.")
             else:
-                st.error("Incorrect PIN. Please try again.")
-    st.caption("Forgotten your PIN? Contact your administrator.")
+                save_notice({"submitted_by": qa_name.strip(), "category": qa_cat, "title": qa_title.strip(), "body": qa_body.strip(), "notice_date": str(qa_date)})
+                st.success(f"\u2705 Notice posted for {qa_date.strftime('%-d %B')}!"); st.balloons()
+    st.markdown('<div style="text-align:center;"><a href="/Daily_Bulletin" style="font-size:.82rem;color:#4a8f33;font-weight:600;text-decoration:none;">\u2190 Back to full bulletin</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="/Daily_Bulletin?display=true" style="font-size:.82rem;color:#4a8f33;font-weight:600;text-decoration:none;">Staff room display \u2192</a></div>', unsafe_allow_html=True)
+    st.stop()
 
-# ══════════════════════════════════════════════════════════════════════════════
-# THIS WEEK'S BULLETIN
-# ══════════════════════════════════════════════════════════════════════════════
-def show_bulletin():
-    app_header()
-    nav_bar("bulletin")
-    published = db_get_current_published()
-    if not published:
-        st.markdown(
-            '<div style="text-align:center;padding:60px 20px;">'
-            '<div style="font-size:40px;margin-bottom:16px;">📭</div>'
-            '<div style="font-size:18px;font-weight:700;color:var(--ink);margin-bottom:8px;">'
-            'No bulletin this week yet</div>'
-            '<div style="font-size:14px;color:var(--ink-light);">'
-            'The weekly bulletin is usually sent on Wednesday morning.</div></div>',
-            unsafe_allow_html=True
-        )
-        return
-    render_bulletin(published, show_ack=True)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# COMPOSE AND SEND
-# ══════════════════════════════════════════════════════════════════════════════
-def send_reminder_email(edition):
-    try:
-        staff_list   = db_get_staff_list()
-        admin_emails = [s["email"] for s in staff_list if s.get("role") == "admin" and s.get("email")]
-        if not admin_emails:
-            admin_emails = [s["email"] for s in staff_list if s.get("email")][:1]
-        notices = db_get_notices(edition["id"])
-        week    = edition.get("week_label", "this week")
-        n       = len(notices)
-        for email in admin_emails:
-            try:
-                import smtplib
-                from email.mime.text import MIMEText
-                from email.mime.multipart import MIMEMultipart
-                msg = MIMEMultipart("alternative")
-                msg["Subject"] = f"CLC Staff Bulletin — {week} ready to review"
-                msg["From"]    = st.secrets.get("SMTP_FROM", st.secrets.get("SMTP_USER", ""))
-                msg["To"]      = email
-                body = f"""
-<h2>📋 CLC Staff Bulletin — Entries Closed</h2>
-<p>Staff submissions for <strong>{week}</strong> are now closed (Tuesday 3pm).</p>
-<p><strong>{n} item{"s" if n != 1 else ""}</strong> {"have" if n != 1 else "has"} been submitted.</p>
-<p>Please review and send the bulletin when ready:</p>
-<p><a href="{st.secrets.get('APP_URL', 'https://clc-lbu-portal.onrender.com')}/Staff_Bulletin">
-Open Staff Bulletin →</a></p>
-"""
-                msg.attach(MIMEText(body, "html"))
-                with smtplib.SMTP(st.secrets["SMTP_HOST"], int(st.secrets.get("SMTP_PORT", 587))) as s:
-                    s.starttls()
-                    s.login(st.secrets["SMTP_USER"], st.secrets["SMTP_PASSWORD"])
-                    s.sendmail(msg["From"], email, msg.as_string())
-            except Exception:
-                pass
-        get_sb().table("weekly_editions").update({"reminder_sent": True}).eq("id", edition["id"]).execute()
-        return True
-    except Exception:
-        return False
+# ── TOP NAV ───────────────────────────────────────────────────
+edit = st.session_state.edit_mode and st.session_state.authenticated
+auth_badge = ('<span class="nav-badge edit">\u270f\ufe0f Edit Mode</span>' if edit else '<span class="nav-badge">\u2705 Staff</span>') if st.session_state.authenticated else ''
+st.markdown(f'<div class="top-nav"><div class="top-nav-left"><div class="top-nav-logo">CLC</div><div><div class="top-nav-title">Daily Bulletin</div><div class="top-nav-sub">Cowandilla Learning Centre</div></div></div><div class="top-nav-right">{auth_badge}</div></div>', unsafe_allow_html=True)
 
-def show_compose():
-    app_header()
-    nav_bar("compose")
-    if not st.session_state.is_admin:
-        st.error("Admin access only.")
-        return
+current_date = st.session_state.selected_date
+bulletin_data = load_bulletin(current_date)
 
-    # ── Week navigator ────────────────────────────────────────────────────────
-    # Default to current/upcoming Monday, but admin can move to any week
-    if "compose_monday" not in st.session_state:
-        st.session_state.compose_monday = target_monday()
+page_tab, quickadd_tab, archive_tab, login_tab = st.tabs(["\U0001f4cb Bulletin", "\U0001f4dd Quick Add", "\U0001f5c2\ufe0f Archive", "\U0001f510 Staff"])
 
-    current = st.session_state.compose_monday
-    nav_l, nav_mid, nav_r = st.columns([1, 4, 1])
+with page_tab:
+    if st.query_params.get("from_display") == "true" and not st.session_state.authenticated:
+        st.markdown("""<div style="background:#1a2e44;border-left:4px solid #6BBF4E;padding:.75rem 1rem;border-radius:0 8px 8px 0;margin-bottom:1rem;"><span style="color:white;font-size:.85rem;">\U0001f510 Enter your staff password to edit today's bulletin, then save to return to the display screen.</span></div>""", unsafe_allow_html=True)
+        pw_col, btn_col, back_col = st.columns([2,1,1])
+        with pw_col:
+            quick_pw = st.text_input("Staff Password", type="password", key="quick_pw", label_visibility="collapsed", placeholder="Enter staff password...")
+        with btn_col:
+            if st.button("\U0001f513 Login", type="primary", use_container_width=True):
+                if quick_pw == ADMIN_PASSWORD: st.session_state.authenticated = True; st.session_state.edit_mode = True; st.rerun()
+                else: st.error("Incorrect password")
+        with back_col:
+            st.markdown('<a href="/Daily_Bulletin?display=true" style="display:block;text-align:center;background:#eef1f4;color:#1a2e44;font-weight:600;font-size:.85rem;padding:.5rem;border-radius:8px;text-decoration:none;">\u21a9\ufe0f Back to Display</a>', unsafe_allow_html=True)
+        st.markdown("---")
+
+    week = week_dates(current_date)
+    import html as _html, re as _re
+    fact = bulletin_data.get("fun_fact","")
+    fact_clean = _html.escape(_re.sub(r'<[^>]+>', '', fact)).strip()
+    fun_fact_html = (f'<div style="background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.2);border-radius:12px;padding:.65rem 1rem;max-width:480px;"><div style="font-size:.65rem;color:rgba(255,255,255,0.6);letter-spacing:.1em;text-transform:uppercase;margin-bottom:.2rem;">\U0001f4a1 Fun Fact</div><div style="font-size:.85rem;color:white;font-weight:500;line-height:1.4;">{fact_clean}</div></div>') if fact_clean else ""
+    st.markdown(f"""<div class="bulletin-hero"><div class="bulletin-hero-inner"><div><div class="bulletin-date-label">{term_label(current_date)}</div><div class="bulletin-date-main">{current_date.strftime("%A %-d %B")}</div><div class="bulletin-date-sub">{current_date.strftime("%Y")}</div></div>{fun_fact_html}</div></div>""", unsafe_allow_html=True)
+
+    st.markdown('<div style="background:white;border-bottom:2px solid #e8f0e3;padding:.4rem 1rem 0;">', unsafe_allow_html=True)
+    nav_l, nav_m, nav_r = st.columns([1,4,1])
     with nav_l:
-        if st.button("◀ Prev week", use_container_width=True):
-            st.session_state.compose_monday = current - timedelta(weeks=1)
-            st.rerun()
-    with nav_mid:
-        st.markdown(
-            f'<div style="text-align:center;font-weight:600;font-size:15px;'
-            f'padding:6px 0;color:var(--teal);">'
-            f'{edition_week_label(current)}</div>',
-            unsafe_allow_html=True
-        )
+        if st.button("\u2190 Prev Week", key="prev_week", use_container_width=True): st.session_state.selected_date = week[0] - timedelta(days=7); st.rerun()
+    with nav_m:
+        wls = f"Week of {week[0].strftime('%-d %b')} \u2013 {week[-1].strftime('%-d %b %Y')}"
+        if date.today() in week: wls += " \u00b7 This Week"
+        st.markdown(f'<div style="text-align:center;padding:.45rem 0;font-size:.78rem;font-weight:600;color:{"#4a8f33" if date.today() in week else "#5a6e5a"};">{wls}</div>', unsafe_allow_html=True)
     with nav_r:
-        if st.button("Next week ▶", use_container_width=True):
-            st.session_state.compose_monday = current + timedelta(weeks=1)
-            st.rerun()
-    # Jump-to picker
-    with st.expander("📅 Jump to a specific week", expanded=False):
-        picked = st.date_input("Pick any date in that week", value=current, key="week_jump")
-        if st.button("Go to this week", key="week_jump_btn"):
-            # Snap to Monday of picked week
-            st.session_state.compose_monday = picked - timedelta(days=picked.weekday())
-            st.rerun()
-    st.markdown("---")
+        if st.button("Next Week \u2192", key="next_week", use_container_width=True): st.session_state.selected_date = week[0] + timedelta(days=7); st.rerun()
+    day_cols = st.columns(5)
+    for i, d in enumerate(week):
+        with day_cols[i]:
+            lbl = d.strftime("%a %-d %b") + (" \u25c9" if d == date.today() else "")
+            if st.button(lbl, key=f"day_{d}", use_container_width=True, type="primary" if d==current_date else "secondary"): st.session_state.selected_date = d; st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    edition = db_get_or_create_edition(st.session_state.compose_monday)
-    if not edition:
-        st.error("Could not load edition. Check Supabase connection.")
-        return
+    st.markdown('<div style="background:#f8fdf6;border:1.5px solid #d8ead2;border-radius:10px;padding:.6rem 1rem;margin:.75rem 0;">', unsafe_allow_html=True)
+    jump_col1, jump_col2, jump_col3 = st.columns([1,2,1])
+    with jump_col1: st.markdown('<div style="font-size:.8rem;font-weight:600;color:#4a8f33;padding-top:.5rem;">\U0001f4c5 Jump to Date:</div>', unsafe_allow_html=True)
+    with jump_col2: jump_date = st.date_input("Select date", value=current_date, key="jump_date_picker", label_visibility="collapsed")
+    with jump_col3:
+        if st.button("\u2192 Go", key="jump_to_date", use_container_width=True, type="primary"): st.session_state.selected_date = jump_date; st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    notices  = db_get_notices(edition["id"])
-    is_sent  = edition.get("status") == "published"
-    # Admins can always edit regardless of sent status
-    can_edit = st.session_state.is_admin
-    locked   = not is_entry_open(edition) and not is_sent and not can_edit
+    if st.session_state.pop("_save_ok", False):
+        st.success("\u2705 Bulletin saved successfully!")
 
-    if locked and should_send_reminder(edition) and st.session_state.is_admin:
-        if send_reminder_email(edition):
-            st.toast("📧 Reminder email sent — entries are now closed for this week.")
-
-    if is_sent:
-        st.markdown(
-            '<div style="background:#d1fae5;border:1px solid #6ee7b7;'
-            'border-radius:var(--radius);padding:14px 20px;margin-bottom:20px;">'
-            '<div style="font-weight:700;color:#065f46;font-size:15px;">✅ Sent — '
-            + edition["week_label"] + '</div>'
-            '<div style="font-size:13px;color:#047857;margin-top:2px;">Published '
-            + fmt_date(edition.get("published_at")) + " · " + str(len(notices))
-            + (" items" if len(notices) != 1 else " item") + "</div></div>",
-            unsafe_allow_html=True
-        )
-    elif locked and not st.session_state.is_admin:
-        monday = date.fromisoformat(str(edition["week_start"]))
-        deadline_str = (monday + timedelta(days=1)).strftime("Tuesday %-d %B") + " at 3:00pm"
-        st.markdown(
-            '<div style="background:#fee2e2;border:2px solid #dc2626;'
-            'border-radius:var(--radius);padding:14px 20px;margin-bottom:20px;">'
-            '<div style="font-weight:700;color:#991b1b;font-size:15px;">🔒 Entries closed — '
-            + edition["week_label"] + '</div>'
-            '<div style="font-size:13px;color:#7f1d1d;margin-top:2px;">Submissions closed '
-            + deadline_str + ". Review items below and send when ready.</div></div>",
-            unsafe_allow_html=True
-        )
+    ctrl_cols = st.columns([1,1,1,3,1])
+    if st.session_state.authenticated:
+        with ctrl_cols[0]:
+            if st.button("\u270f\ufe0f Edit" if not edit else "\U0001f441\ufe0f View", type="primary" if not edit else "secondary", use_container_width=True): st.session_state.edit_mode = not st.session_state.edit_mode; st.rerun()
+        with ctrl_cols[1]:
+            if edit and st.button("\U0001f4be Save", type="primary", use_container_width=True): st.session_state["_pending_save"] = True
+        with ctrl_cols[2]:
+            if st.button("\U0001f6aa Logout", type="secondary", use_container_width=True): st.session_state.authenticated = False; st.session_state.edit_mode = False; st.rerun()
     else:
-        monday = date.fromisoformat(str(edition["week_start"]))
-        deadline_str = (monday + timedelta(days=1)).strftime("Tuesday %-d %B") + " at 3:00pm"
+        with ctrl_cols[0]:
+            if st.button("\U0001f510 Staff Login", type="secondary", use_container_width=True): st.session_state.show_inline_login = not st.session_state.get("show_inline_login", False); st.rerun()
+    with ctrl_cols[4]:
+        st.markdown('<a href="/Daily_Bulletin?display=true" target="_blank" style="display:block;text-align:center;background:#1a2e44;color:white;font-weight:600;font-size:.8rem;padding:.45rem .75rem;border-radius:8px;text-decoration:none;white-space:nowrap;">\U0001f4fa Staff Room</a>', unsafe_allow_html=True)
+
+    if not st.session_state.authenticated and st.session_state.get("show_inline_login", False):
+        with st.container():
+            st.markdown('<div style="background:#f0f7eb;border:1.5px solid #6BBF4E;border-radius:10px;padding:1rem 1.25rem;margin:.5rem 0 .75rem;">', unsafe_allow_html=True)
+            lc1, lc2, lc3 = st.columns([3,1,1])
+            with lc1: quick_pw = st.text_input("Staff password", type="password", key="inline_pw", label_visibility="collapsed", placeholder="Enter staff password\u2026")
+            with lc2:
+                if st.button("\U0001f513 Login", type="primary", use_container_width=True, key="inline_login_btn"):
+                    if quick_pw == ADMIN_PASSWORD: st.session_state.authenticated = True; st.session_state.edit_mode = True; st.session_state.show_inline_login = False; st.rerun()
+                    else: st.error("Incorrect password")
+            with lc3:
+                if st.button("Cancel", type="secondary", use_container_width=True, key="inline_cancel"): st.session_state.show_inline_login = False; st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="content-area">', unsafe_allow_html=True)
+
+    _admin_notices = load_notices(for_date=current_date)
+    if _admin_notices or edit:
+        st.markdown('<div class="section-card"><div class="section-card-header green"><h3>\U0001f4dd Staff Notices</h3></div><div class="section-card-body">', unsafe_allow_html=True)
+        if _admin_notices:
+            for _n in _admin_notices:
+                _cat = _n.get("category","General"); _nc = NOTICE_CATS.get(_cat, NOTICE_CATS["General"]); _nid = _n.get("id","")
+                _nc1, _nc2 = st.columns([9,1])
+                with _nc1:
+                    st.markdown(f'<div style="background:white;border-radius:10px;border-left:4px solid {_nc["color"]};padding:.75rem 1rem;margin-bottom:.5rem;box-shadow:0 1px 4px rgba(0,0,0,0.06);"><div style="margin-bottom:.2rem;"><span style="background:{_nc["bg"]};color:{_nc["color"]};font-size:.65rem;font-weight:700;text-transform:uppercase;padding:.15rem .5rem;border-radius:20px;">{_nc["emoji"]} {_cat}</span><span style="font-size:.7rem;color:#9ab09a;margin-left:.5rem;">from {_n.get("submitted_by","")}</span></div><div style="font-size:.9rem;font-weight:700;color:#1a2e44;margin:.3rem 0 .2rem;">{_n.get("title","")}</div><div style="font-size:.82rem;color:#3a4a3a;line-height:1.5;">{_n.get("body","")}</div></div>', unsafe_allow_html=True)
+                with _nc2:
+                    if edit:
+                        st.write("")
+                        if st.button("\U0001f5d1\ufe0f", key=f"top_del_n_{_nid}", help="Delete notice"): delete_notice(_nid); st.rerun()
+        else:
+            st.markdown('<div style="text-align:center;padding:1rem;color:#9ab09a;font-size:.85rem;">No notices today \u2014 staff can add via the \U0001f4dd Quick Add tab</div>', unsafe_allow_html=True)
+        st.markdown('</div></div>', unsafe_allow_html=True)
+
+    s1, s2, s3, s4 = st.tabs(["\U0001f465 Staff & Meetings","\U0001f68c Travel & Vehicles","\U0001f4cc Responsibilities & NIT","\U0001f4ca Program Changes"])
+
+    with s1:
+        import pandas as pd
+        if edit:
+            auto_fact = daily_fun_fact(current_date); current_fact = (bulletin_data.get("fun_fact") or "").strip()
+            fc1, fc2 = st.columns([5,1])
+            with fc1: new_fact = st.text_input("\U0001f4a1 Fun Fact of the Day", value=current_fact if current_fact else auto_fact, key="fun_fact_input")
+            with fc2:
+                st.markdown("<div style='padding-top:1.85rem;'>", unsafe_allow_html=True)
+                if st.button("\U0001f3b2 New", key="new_fact", use_container_width=True): bulletin_data["fun_fact"] = auto_fact; st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
+            bulletin_data["fun_fact"] = new_fact
+
+        col_left, col_right = st.columns(2)
+        with col_left:
+            st.markdown('<div class="section-card"><div class="section-card-header green"><h3>\U0001f645 Staff Absent</h3></div><div class="section-card-body">', unsafe_allow_html=True)
+            if edit:
+                sa_df = pd.DataFrame(bulletin_data["staff_absent"])
+                sa_edited = st.data_editor(sa_df, key="sa_editor", hide_index=True, use_container_width=True, num_rows="dynamic")
+                bulletin_data["staff_absent"] = sa_edited.to_dict("records")
+            else:
+                _s_rows = [r for r in bulletin_data["staff_absent"] if (r.get("Staff Member") or "").strip()]
+                if _s_rows: st.markdown('<table class="data-table"><tr><th>Staff Member</th><th>TRT</th></tr>'+"".join([f"<tr><td><strong>{r.get('Staff Member','')}</strong></td><td>{r.get('TRT','')}</td></tr>" for r in _s_rows])+"</table>", unsafe_allow_html=True)
+                else: st.markdown('<div class="empty-state"><div class="icon">\u2705</div>No staff absent today</div>', unsafe_allow_html=True)
+            st.markdown('</div></div>', unsafe_allow_html=True)
+
+            st.markdown('<div class="section-card"><div class="section-card-header blue"><h3>\U0001f392 Student Absent</h3></div><div class="section-card-body">', unsafe_allow_html=True)
+            if edit:
+                st_df = pd.DataFrame(bulletin_data["student_absent"])
+                st_edited = st.data_editor(st_df, key="st_editor", hide_index=True, use_container_width=True, num_rows="dynamic")
+                bulletin_data["student_absent"] = st_edited.to_dict("records")
+            else:
+                _st_rows = [r for r in bulletin_data["student_absent"] if (r.get("Student") or "").strip()]
+                if _st_rows: st.markdown('<table class="data-table"><tr><th>Student</th><th>Program</th><th>Reason</th></tr>'+"".join([f"<tr><td><strong>{r.get('Student','')}</strong></td><td>{r.get('Program','')}</td><td>{r.get('Reason','')}</td></tr>" for r in _st_rows])+"</table>", unsafe_allow_html=True)
+                else: st.markdown('<div class="empty-state"><div class="icon">\u2705</div>No students absent today</div>', unsafe_allow_html=True)
+            st.markdown('</div></div>', unsafe_allow_html=True)
+
+            st.markdown('<div class="section-card"><div class="section-card-header blue"><h3>\U0001f68c Excursions</h3></div><div class="section-card-body">', unsafe_allow_html=True)
+            if edit:
+                df = pd.DataFrame(bulletin_data["excursions"]); edited = st.data_editor(df, key="ex_editor", hide_index=True, use_container_width=True, num_rows="dynamic"); bulletin_data["excursions"] = edited.to_dict("records")
+            else:
+                rows = bulletin_data["excursions"]; has_data = any(any(v for v in r.values()) for r in rows)
+                if has_data: st.markdown('<table class="data-table"><tr><th>Program</th><th>Staff</th><th>Departing</th><th>Returning</th><th>Location</th></tr>'+"".join([f"<tr><td>{r.get('Program','')}</td><td>{r.get('Staff Member','')}</td><td>{r.get('Time Departing','')}</td><td>{r.get('Time Returning','')}</td><td>{r.get('Location','')}</td></tr>" for r in rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
+                else: st.markdown('<div class="empty-state"><div class="icon">\U0001f5fa\ufe0f</div>No excursions today</div>', unsafe_allow_html=True)
+            st.markdown('</div></div>', unsafe_allow_html=True)
+
+            st.markdown('<div class="section-card"><div class="section-card-header brown"><h3>\U0001f4e5 Entry Meetings \u2013 Annette</h3></div><div class="section-card-body">', unsafe_allow_html=True)
+            if edit:
+                df = pd.DataFrame(bulletin_data["entry_meetings"]); edited = st.data_editor(df, key="em_editor", hide_index=True, use_container_width=True, num_rows="dynamic"); bulletin_data["entry_meetings"] = edited.to_dict("records")
+            else:
+                rows = bulletin_data["entry_meetings"]; has_data = any(any(v for v in r.values()) for r in rows)
+                if has_data: st.markdown('<table class="data-table"><tr><th>Time</th><th>Program</th><th>Student</th></tr>'+"".join([f"<tr><td>{r.get('Time','')}</td><td>{r.get('Program','')}</td><td>{r.get('Student','')}</td></tr>" for r in rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
+                else: st.markdown('<div class="empty-state"><div class="icon">\U0001f4ed</div>No entry meetings today</div>', unsafe_allow_html=True)
+            st.markdown('</div></div>', unsafe_allow_html=True)
+
+        with col_right:
+            st.markdown('<div class="section-card"><div class="section-card-header navy"><h3>\U0001f91d Staff Meetings</h3></div><div class="section-card-body">', unsafe_allow_html=True)
+            if edit:
+                df = pd.DataFrame(bulletin_data["staff_meetings"]); edited = st.data_editor(df, key="sm_editor", hide_index=True, use_container_width=True, num_rows="dynamic"); bulletin_data["staff_meetings"] = edited.to_dict("records")
+            else:
+                all_mtgs = list(bulletin_data["staff_meetings"] or []) + load_scheduled_meetings(current_date); has_data = any(any(v for v in r.values()) for r in all_mtgs)
+                if has_data: st.markdown('<table class="data-table"><tr><th>Type</th><th>Staff</th><th>Location</th><th>Depart</th><th>Return</th><th>Student</th></tr>'+"".join([f"<tr><td>{r.get('Type','')}</td><td>{r.get('Staff Member','')}</td><td>{r.get('Location','')}</td><td>{r.get('Time Departing','')}</td><td>{r.get('Time Returning','')}</td><td>{r.get('Student','')}</td></tr>" for r in all_mtgs if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
+                else: st.markdown('<div class="empty-state"><div class="icon">\U0001f4c5</div>No staff meetings today</div>', unsafe_allow_html=True)
+            st.markdown('</div></div>', unsafe_allow_html=True)
+
+            st.markdown('<div class="section-card"><div class="section-card-header slate"><h3>\U0001f4ac Additional Staff Messages</h3></div><div class="section-card-body">', unsafe_allow_html=True)
+            if edit:
+                df = pd.DataFrame(bulletin_data["additional_messages"]); edited = st.data_editor(df, key="msg_editor", hide_index=True, use_container_width=True, num_rows="dynamic"); bulletin_data["additional_messages"] = edited.to_dict("records")
+            else:
+                rows = bulletin_data["additional_messages"]; has_data = any(any(v for v in r.values()) for r in rows)
+                if has_data: st.markdown('<table class="data-table"><tr><th>Staff Member</th><th>Information</th></tr>'+"".join([f"<tr><td><strong>{r.get('Staff Member','')}</strong></td><td>{r.get('Information','')}</td></tr>" for r in rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
+                else: st.markdown('<div class="empty-state"><div class="icon">\U0001f4ad</div>No additional messages</div>', unsafe_allow_html=True)
+            st.markdown('</div></div>', unsafe_allow_html=True)
+
+            st.markdown('<div class="section-card"><div class="section-card-header green"><h3>\U0001f465 Visitors on Site</h3></div><div class="section-card-body">', unsafe_allow_html=True)
+            if edit:
+                _vis_raw = bulletin_data.get("visitors_on_site") or []
+                if not _vis_raw:
+                    _vis_raw = [{"Visitor Name":"","Reason":"","Staff Responsible":"","Arriving":"","Departing":"","Location":""} for _ in range(4)]
+                vis_df = pd.DataFrame(_vis_raw)
+                vis_edited = st.data_editor(vis_df, key="vis_editor", hide_index=True, use_container_width=True, num_rows="dynamic",
+                    column_config={"Reason": st.column_config.SelectboxColumn("Reason", options=VISITOR_REASON_OPTIONS, required=False)})
+                bulletin_data["visitors_on_site"] = vis_edited.to_dict("records")
+            else:
+                vis_rows = bulletin_data.get("visitors_on_site", []); has_vis = any(any(v for v in r.values()) for r in vis_rows)
+                if has_vis: st.markdown('<table class="data-table"><tr><th>Visitor</th><th>Reason</th><th>Staff Responsible</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>'+"".join([f"<tr><td><strong>{r.get('Visitor Name','')}</strong></td><td>{r.get('Reason','')}</td><td>{r.get('Staff Responsible','')}</td><td>{r.get('Arriving','')}</td><td>{r.get('Departing','')}</td><td>{r.get('Location','')}</td></tr>" for r in vis_rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
+                else: st.markdown('<div class="empty-state"><div class="icon">\U0001f6b6</div>No visitors today</div>', unsafe_allow_html=True)
+            st.markdown('</div></div>', unsafe_allow_html=True)
+
+    with s2:
+        import pandas as pd
+        st.markdown('<div style="font-size:.8rem;font-weight:600;color:#4a6640;margin-bottom:.5rem;">\U0001f4c5 Planned Travel \u2014 expected arrivals &amp; departures</div>', unsafe_allow_html=True)
+        jp_col, py_col, sy_col = st.columns(3)
+
+        def render_travel_card(col, key, label, color):
+            with col:
+                st.markdown(f'<div class="section-card"><div class="section-card-header" style="background:{color};"><h3>{label}</h3></div><div class="section-card-body">', unsafe_allow_html=True)
+                rows = bulletin_data[key]
+                if edit:
+                    df = pd.DataFrame(rows)
+                    edited = st.data_editor(df, key=f"{key}_editor", hide_index=True, use_container_width=True, num_rows="dynamic",
+                        column_config={"Transport": st.column_config.SelectboxColumn("Transport", options=TRANSPORT_OPTIONS, required=False)})
+                    bulletin_data[key] = edited.to_dict("records")
+                else:
+                    has_data = any(any(v for v in r.values()) for r in rows)
+                    if has_data:
+                        st.markdown('<table class="data-table"><tr><th>Student</th><th>Arrives</th><th>Departs</th><th>Transport</th></tr>'+"".join([f"<tr><td>{r.get('Student','')}</td><td>{r.get('Arrival Time','')}</td><td>{r.get('Departure Time','')}</td><td>{r.get('Transport','')}</td></tr>" for r in rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
+                    else: st.markdown('<div class="empty-state"><div class="icon">\U0001f690</div>No travel today</div>', unsafe_allow_html=True)
+                st.markdown('</div></div>', unsafe_allow_html=True)
+
+        render_travel_card(jp_col, "travel_jp", "\U0001f7e6 Junior Primary \u2013 Travel", "#4a7fb5")
+        render_travel_card(py_col, "travel_py", "\U0001f7e3 Primary Years \u2013 Travel", "#7a5bb5")
+        render_travel_card(sy_col, "travel_sy", "\U0001f7eb Senior Years \u2013 Travel", "#8c6a4f")
+
+        st.markdown('<div style="font-size:.8rem;font-weight:600;color:#c0392b;margin:.75rem 0 .5rem;">\U0001f504 Travel Plan Changes \u2014 update if a student\u2019s plan changes during the day</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-card"><div class="section-card-header red"><h3>\U0001f504 Travel Plan Changes</h3></div><div class="section-card-body">', unsafe_allow_html=True)
+        tc_rows = bulletin_data.get("travel_changes") or []
+        if edit:
+            if not tc_rows:
+                tc_rows = [{"Student":"","Program":"","Change Type":"","Reason":"","Time":"","How Departed":""} for _ in range(3)]
+            tc_df = pd.DataFrame(tc_rows)
+            tc_edited = st.data_editor(tc_df, key="tc_editor", hide_index=True, use_container_width=True, num_rows="dynamic",
+                column_config={
+                    "Program": st.column_config.SelectboxColumn("Program", options=["JP","PY","SY"], required=False),
+                    "Change Type": st.column_config.SelectboxColumn("Change Type", options=CHANGE_TYPE_OPTIONS, required=False),
+                    "How Departed": st.column_config.SelectboxColumn("How Departed", options=TRANSPORT_OPTIONS, required=False),
+                })
+            bulletin_data["travel_changes"] = tc_edited.to_dict("records")
+            st.markdown('<div style="background:#fff8f7;border:1px solid #f5c6c0;border-radius:8px;padding:.5rem .75rem;margin-top:.5rem;font-size:.75rem;color:#7a2a2a;">\U0001f4a1 <strong>Tip:</strong> Fill in whenever a student\u2019s travel plan changes \u2014 e.g. early departure, parent collecting instead of taxi. Appears highlighted on the staff room display so staff notice it immediately.</div>', unsafe_allow_html=True)
+        else:
+            has_tc = any(any(v for v in r.values()) for r in tc_rows)
+            if has_tc:
+                st.markdown('<table class="data-table"><tr><th>Student</th><th>Program</th><th>Change</th><th>Reason</th><th>Time</th><th>How Departed</th></tr>'+"".join([f"<tr><td><strong>{r.get('Student','')}</strong></td><td>{r.get('Program','')}</td><td><span class='change-badge'>{r.get('Change Type','')}</span></td><td>{r.get('Reason','')}</td><td><strong style='color:#c0392b;'>{r.get('Time','')}</strong></td><td>{r.get('How Departed','')}</td></tr>" for r in tc_rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
+            else: st.markdown('<div class="empty-state"><div class="icon">\u2705</div>No travel changes today</div>', unsafe_allow_html=True)
+        st.markdown('</div></div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="section-card"><div class="section-card-header navy"><h3>\U0001f697 Vehicle Bookings \u2014 Van &amp; Kia</h3></div><div class="section-card-body">', unsafe_allow_html=True)
+        vb_list = bulletin_data.get("vehicle_bookings",[])
+        if isinstance(vb_list, dict): vb_list = []
+        if edit:
+            if vb_list:
+                st.markdown("**Current bookings:**")
+                for _bi, _bk in enumerate(vb_list):
+                    _bc1, _bc2, _bc3, _bc4 = st.columns([1,2,2,1])
+                    with _bc1: st.markdown(f"**{'\U0001f690 Van' if _bk.get('vehicle','')=='Van' else '\U0001f699 Kia'}**")
+                    with _bc2: st.markdown(f"**{_bk.get('booker','\u2014')}**")
+                    with _bc3: st.markdown("\U0001f550 Whole day" if _bk.get("whole_day",True) else f"\U0001f550 {_bk.get('start_time','?')} \u2013 {_bk.get('end_time','?')}")
+                    with _bc4:
+                        if st.button("\U0001f5d1\ufe0f", key=f"vb_del_{_bi}"): vb_list.pop(_bi); bulletin_data["vehicle_bookings"] = vb_list; st.rerun()
+                st.markdown("---")
+            st.markdown("**Add a booking:**")
+            _av1, _av2, _av3 = st.columns([1,2,2])
+            with _av1: _new_vehicle = st.selectbox("Vehicle", ["Van","Kia"], key="vb_new_vehicle")
+            with _av2: _new_booker = st.text_input("Booked by", key="vb_new_booker", placeholder="e.g. Sarah")
+            with _av3: _new_whole = st.checkbox("Whole day", value=True, key="vb_new_whole")
+            if not _new_whole:
+                _at1, _at2 = st.columns(2)
+                with _at1: _new_start = st.text_input("Start time", key="vb_new_start", placeholder="e.g. 9:30")
+                with _at2: _new_end = st.text_input("End time", key="vb_new_end", placeholder="e.g. 12:00")
+            else: _new_start = _new_end = ""
+            if st.button("\u2795 Add Booking", type="primary", key="vb_add_btn"):
+                if _new_booker.strip(): vb_list.append({"vehicle":_new_vehicle,"booker":_new_booker.strip(),"whole_day":_new_whole,"start_time":_new_start.strip(),"end_time":_new_end.strip()}); bulletin_data["vehicle_bookings"] = vb_list; st.rerun()
+                else: st.warning("Please enter a name.")
+        else:
+            if vb_list and any(b.get("booker","") for b in vb_list):
+                def _vbt(b): return "Whole day" if b.get("whole_day",True) else f"{b.get('start_time','?')} \u2013 {b.get('end_time','?')}"
+                st.markdown('<table class="data-table"><tr><th>Vehicle</th><th>Booked By</th><th>Time</th></tr>'+"".join([f'<tr><td>{"🚐 Van" if b.get("vehicle","")=="Van" else "🚙 Kia"}</td><td><span class="vehicle-booking">{b.get("booker","")}</span></td><td class="vehicle-time">{_vbt(b)}</td></tr>' for b in vb_list if b.get("booker","")])+"</table>", unsafe_allow_html=True)
+            else: st.markdown('<div class="empty-state"><div class="icon">\U0001f697</div>No vehicle bookings today</div>', unsafe_allow_html=True)
+        st.markdown('</div></div>', unsafe_allow_html=True)
+
+    with s3:
+        resp_col, nit_col = st.columns(2)
+        with resp_col:
+            st.markdown('<div class="section-card"><div class="section-card-header amber"><h3>\u2b50 Staff Responsibilities</h3></div><div class="section-card-body">', unsafe_allow_html=True)
+            sr = bulletin_data["staff_responsibilities"]
+            if edit:
+                bulletin_data["staff_responsibilities"] = {"kitchen_duties": st.text_input("\U0001f373 Kitchen Duties", sr.get("kitchen_duties",""), key="sr_k"),"meeting_pd_focus": st.text_input("\U0001f4cc Staff Meeting PD Focus", sr.get("meeting_pd_focus",""), key="sr_pd"),"chair": st.text_input("\U0001fa91 Meeting Chair", sr.get("chair",""), key="sr_c"),"minutes": st.text_input("\U0001f4dd Meeting Minutes", sr.get("minutes",""), key="sr_m"),}
+            else:
+                kitchen = sr.get("kitchen_duties","")
+                st.markdown(f'<table class="data-table"><tr class="kitchen-row"><td><span class="kitchen-badge">\U0001f373 Kitchen</span></td><td><strong>{kitchen or "\u2014"}</strong></td></tr><tr><td>\U0001f4cc PD Focus</td><td>{sr.get("meeting_pd_focus","") or "\u2014"}</td></tr><tr><td>\U0001fa91 Chair</td><td>{sr.get("chair","") or "\u2014"}</td></tr><tr><td>\U0001f4dd Minutes</td><td>{sr.get("minutes","") or "\u2014"}</td></tr></table>', unsafe_allow_html=True)
+            st.markdown('</div></div>', unsafe_allow_html=True)
+        with nit_col:
+            st.markdown('<div class="section-card"><div class="section-card-header green"><h3>📅 Additional NIT Bookings</h3></div><div class="section-card-body">', unsafe_allow_html=True)
+            
+            nit_bookings = load_todays_nit_bookings(current_date)
+            
+            if nit_bookings:
+                for booking in nit_bookings:
+                    time_slot = booking.get('time_slot', '')
+                    staff_name = booking.get('staff_name', '')
+                    st.markdown(f'<div style="background:#E8F5E9;padding:0.75rem;margin:0.5rem 0;border-radius:8px;border-left:4px solid #1A7A6E;"><div style="font-weight:700;color:#1A7A6E;font-size:0.9rem;">🕐 {time_slot}</div><div style="font-size:0.85rem;color:#2d6b1a;margin-top:0.2rem;">{staff_name}</div></div>', unsafe_allow_html=True)
+                st.markdown('<div style="margin-top:0.75rem;font-size:0.75rem;color:#6b7280;">📌 <a href="/NIT_Bookings" target="_self" style="color:#1A7A6E;text-decoration:none;font-weight:600;">Manage NIT Bookings →</a></div>', unsafe_allow_html=True)
+            else:
+                st.markdown('<div class="empty-state"><div class="icon">📅</div>No NIT bookings today</div>', unsafe_allow_html=True)
+                st.markdown('<div style="margin-top:0.5rem;font-size:0.75rem;color:#6b7280;">📌 <a href="/NIT_Bookings" target="_self" style="color:#1A7A6E;text-decoration:none;font-weight:600;">Book NIT Time →</a></div>', unsafe_allow_html=True)
+            
+            st.markdown('</div></div>', unsafe_allow_html=True)
+
+    with s4:
+        _changes = load_bulletin_changes(current_date)
+
+        def _render_change_view(ch, ci, total):
+            reason = ch.get("reason",""); absent = ch.get("staff_absent",""); has_trt = ch.get("has_trt",False); trt_name = ch.get("trt_name",""); staff_rows = ch.get("staff_rows",[])
+            color = "#dc2626" if reason == "Staff Absence" else "#0e7490"; bg_tint = "#fff5f5" if reason == "Staff Absence" else "#f0f9ff"; icon = "\U0001f645" if reason == "Staff Absence" else "\U0001f4cc"
+            st.markdown(f'<div style="display:flex;align-items:center;gap:.75rem;margin:1rem 0 .4rem;"><div style="background:{color};color:white;font-weight:800;font-size:.75rem;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;">{ci+1}</div><div style="font-size:.9rem;font-weight:700;color:{color};">{icon} {reason}' + (f' \u2014 <span style="color:#1a2e44;">{absent}</span>' if absent else "") + (f' &nbsp;<span style="background:{color}22;color:{color};font-size:.72rem;font-weight:600;padding:.1rem .5rem;border-radius:10px;">TRT: {trt_name or "on site"}</span>' if has_trt else "") + f'</div>' + (f'<div style="flex:1;height:1px;background:{color}33;"></div>' if ci < total - 1 else "") + f'</div>', unsafe_allow_html=True)
+            with st.container():
+                st.markdown(f'<div style="background:{bg_tint};border:1.5px solid {color}44;border-left:5px solid {color};border-radius:10px;padding:.85rem 1rem;margin-bottom:.5rem;">', unsafe_allow_html=True)
+                tt_html = _timetable_grid_html(staff_rows, PC_TIME_SLOTS)
+                if tt_html: st.markdown(tt_html, unsafe_allow_html=True)
+                else:
+                    for row in staff_rows:
+                        name = row.get("name",""); blocks = row.get("blocks",[])
+                        if blocks:
+                            badges = " ".join([f'<span style="background:{_slot_color_bg(b.get("role",""))};color:{_slot_color_fg(b.get("role",""))};padding:1px 7px;border-radius:8px;font-size:.72rem;font-weight:600;">{b.get("start","")}&ndash;{b.get("end","")} {b.get("role","")}{(" \u2192 "+b["person"]) if b.get("person") and b.get("role")=="Lunch Cover" else ""}{(" \u21a9 "+b["person"]) if b.get("person") and b.get("role")=="Lunch Break" else ""}</span>' for b in blocks if b.get("role") or b.get("start")])
+                            if badges: st.markdown(f'<div style="margin:3px 0;font-size:.82rem;"><b>{name}:</b> {badges}</div>', unsafe_allow_html=True)
+                    if not any(row.get("blocks") for row in staff_rows): st.markdown('<div style="color:#9ab09a;font-size:.82rem;font-style:italic;">No timetable blocks recorded.</div>', unsafe_allow_html=True)
+                st.markdown("</div>", unsafe_allow_html=True)
+                if edit:
+                    dc1, dc2, dc3 = st.columns([2, 2, 6])
+                    with dc1:
+                        if st.button("\u270f\ufe0f Edit this change", key=f"ch_edit_{ch.get('id',ci)}_{ci}", use_container_width=True):
+                            st.session_state["_pc_form_id"] = int(_time.time() * 1000); st.session_state["_pc_editing"] = dict(ch); st.session_state["_pc_adding"] = False; st.rerun()
+                    with dc2:
+                        if st.button("\U0001f5d1\ufe0f Delete", key=f"ch_del_{ch.get('id',ci)}_{ci}", use_container_width=True): delete_bulletin_change(ch["id"]); st.rerun()
+                    with dc3: st.markdown(f'<div style="padding-top:.45rem;font-size:.72rem;color:#9ab09a;">Saved to database \u00b7 click \u270f\ufe0f to reopen and modify timetable</div>', unsafe_allow_html=True)
+            if ci < total - 1: st.markdown('<div style="border-top:2px dashed #e0e8dc;margin:1rem 0;"></div>', unsafe_allow_html=True)
+
+        if not _changes:
+            st.markdown('<div style="text-align:center;padding:1.5rem;color:#9ab09a;font-size:.85rem;background:#f8fdf6;border-radius:10px;">\U0001f4ed No program changes recorded for this day.</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div style="font-size:.82rem;font-weight:600;color:#4a8f33;margin-bottom:.25rem;">\U0001f4ca {len(_changes)} change{"s" if len(_changes)!=1 else ""} recorded for {current_date.strftime("%-d %B")}:</div>', unsafe_allow_html=True)
+            for _ci, _ch in enumerate(_changes): _render_change_view(_ch, _ci, len(_changes))
+
+        if edit:
+            st.markdown("---")
+
+            def _render_change_form(d, existing=None):
+                is_edit = existing is not None; form_id = st.session_state.get("_pc_form_id", 0); pfx = f"_pcf_{form_id}"; rows_key = f"{pfx}_rows"
+                existing_rows = []
+                if existing:
+                    rr = existing.get("staff_rows",[]); existing_rows = json.loads(rr) if isinstance(rr,str) else (rr or [])
+                if rows_key not in st.session_state:
+                    st.session_state[rows_key] = existing_rows if existing_rows else [{"name":"","normal_prog":"","blocks":[]}]
+                st.markdown(f'<div style="background:#f8fdf6;border:2px solid {"#c97b1a" if is_edit else "#6BBF4E"};border-radius:12px;padding:1rem 1.25rem;margin-bottom:1rem;">', unsafe_allow_html=True)
+                st.markdown(f"#### {'✏️ Editing' if is_edit else '➕ New'} Program Change")
+                reason_opts = ["Staff Absence","Site Need / Other"]; r_idx = 1 if (existing or {}).get("reason","") == "Site Need / Other" else 0
+                reason = st.radio("Reason for change", reason_opts, index=r_idx, key=f"{pfx}_reason", horizontal=True)
+                staff_absent = ""; has_trt = False; trt_name = ""
+                if reason == "Staff Absence":
+                    c1, c2 = st.columns(2)
+                    with c1: staff_absent = st.text_input("Absent staff member *", value=(existing or {}).get("staff_absent",""), key=f"{pfx}_absent", placeholder="e.g. Sarah Jones")
+                    with c2: has_trt = st.checkbox("TRT coming in today?", value=bool((existing or {}).get("has_trt",False)), key=f"{pfx}_trt")
+                    if has_trt: trt_name = st.text_input("TRT name", value=(existing or {}).get("trt_name",""), key=f"{pfx}_trt_name", placeholder="e.g. Michael Brown")
+                else:
+                    c1, c2 = st.columns(2)
+                    with c1: staff_absent = st.text_input("Who / what is the change for?", value=(existing or {}).get("staff_absent",""), key=f"{pfx}_absent2", placeholder="e.g. PY program, Caitie")
+                    with c2: has_trt = st.checkbox("TRT / relief staff involved?", value=bool((existing or {}).get("has_trt",False)), key=f"{pfx}_trt2")
+                    if has_trt: trt_name = st.text_input("Relief staff name", value=(existing or {}).get("trt_name",""), key=f"{pfx}_trt_name2")
+                st.markdown("---")
+                st.markdown('<div style="background:#e8f5e1;border-radius:8px;padding:.6rem .9rem;margin-bottom:.75rem;font-size:.82rem;color:#1a2e44;"><strong>\U0001f4cb Timetable rows</strong> \u2014 add one row per staff member whose day is affected. Fill in time blocks for the changed part of their day. Click <strong>\U0001f4be Save Program Change</strong> when done.</div>', unsafe_allow_html=True)
+                rows = st.session_state[rows_key]
+                for ri, row in enumerate(rows):
+                    st.markdown(f'<div style="background:white;border:1.5px solid #d8ead2;border-radius:10px;padding:.85rem;margin-bottom:.6rem;">', unsafe_allow_html=True)
+                    rc1, rc2, rc3 = st.columns([3,2,1])
+                    with rc1: row["name"] = st.text_input("Staff / SSO name *", value=row.get("name",""), placeholder="e.g. Sarah Jones", key=f"{pfx}_r{ri}_name")
+                    with rc2: row["normal_prog"] = st.text_input("Normal program/role (optional)", value=row.get("normal_prog",""), placeholder="e.g. JP teacher", key=f"{pfx}_r{ri}_norm")
+                    with rc3:
+                        st.markdown("<div style='padding-top:1.7rem;'>", unsafe_allow_html=True)
+                        if ri > 0 and st.button("\U0001f5d1 Row", key=f"{pfx}_r{ri}_dr"): rows.pop(ri); st.rerun()
+                        st.markdown("</div>", unsafe_allow_html=True)
+                    blocks = row.setdefault("blocks",[])
+                    qp_cols = st.columns([3,1])
+                    with qp_cols[0]: preset = st.selectbox("\u26a1 Quick fill \u2014 cover the whole day as:", ["--- or enter blocks below ---","JP Cover (full day)","PY Cover (full day)","SY Cover (full day)","NIT (full day)"], key=f"{pfx}_r{ri}_preset")
+                    with qp_cols[1]:
+                        st.markdown("<div style='padding-top:1.7rem;'>", unsafe_allow_html=True)
+                        if st.button("\u25b6 Apply", key=f"{pfx}_r{ri}_apply_preset"):
+                            role_map = {"JP Cover (full day)":"JP","PY Cover (full day)":"PY","SY Cover (full day)":"SY","NIT (full day)":"NIT"}
+                            if preset in role_map:
+                                row["blocks"] = [{"start":"9:00","end":"2:45","role":role_map[preset],"person":""}]
+                                for k,v in [("s","9:00"),("e","2:45"),("r",role_map[preset]),("p","")]: st.session_state[f"{pfx}_r{ri}_b0_{k}"] = v
+                                st.rerun()
+                        st.markdown("</div>", unsafe_allow_html=True)
+                    if blocks: st.markdown("**Time blocks:**")
+                    for bi, block in enumerate(blocks):
+                        s_key = f"{pfx}_r{ri}_b{bi}_s"; e_key = f"{pfx}_r{ri}_b{bi}_e"; r_key = f"{pfx}_r{ri}_b{bi}_r"; p_key = f"{pfx}_r{ri}_b{bi}_p"
+                        for key2, val2 in [(s_key, block.get("start","")), (e_key, block.get("end","")), (r_key, block.get("role","")), (p_key, block.get("person",""))]:
+                            if key2 not in st.session_state: st.session_state[key2] = val2
+                        bc1, bc2, bc3, bc4, bc5, bc6 = st.columns([1.5,1.5,2,2,0.5,0.5])
+                        with bc1: block["start"] = st.selectbox("Start", [""] + PC_TIME_SLOTS, key=s_key)
+                        with bc2: block["end"] = st.selectbox("End", [""] + PC_TIME_SLOTS, key=e_key)
+                        with bc3: block["role"] = st.selectbox("Role", ROLE_OPTIONS, key=r_key)
+                        with bc4:
+                            live_role = st.session_state.get(r_key, "")
+                            if live_role == "Lunch Cover": block["person"] = st.text_input("Releasing (who)", key=p_key, placeholder="Staff member getting lunch break")
+                            elif live_role == "Lunch Break": block["person"] = st.text_input("Covered by (who)", key=p_key, placeholder="Staff member providing cover")
+                            else: block["person"] = st.text_input("Detail (optional)", key=p_key, placeholder="e.g. covering Annette")
+                        with bc5:
+                            st.markdown("<div style='padding-top:1.7rem;'>", unsafe_allow_html=True)
+                            if st.button("\u2715", key=f"{pfx}_r{ri}_b{bi}_del"):
+                                blocks.pop(bi)
+                                for old_bi in range(bi, len(blocks)+1):
+                                    for sfx in ("_s","_e","_r","_p"): st.session_state.pop(f"{pfx}_r{ri}_b{old_bi}{sfx}", None)
+                                st.rerun()
+                            st.markdown("</div>", unsafe_allow_html=True)
+                        with bc6:
+                            if bi < len(blocks)-1:
+                                st.markdown("<div style='padding-top:1.7rem;'>", unsafe_allow_html=True)
+                                if st.button("\u2193", key=f"{pfx}_r{ri}_b{bi}_dn"):
+                                    blocks[bi], blocks[bi+1] = blocks[bi+1], blocks[bi]
+                                    for sfx in ("_s","_e","_r","_p"):
+                                        ka = f"{pfx}_r{ri}_b{bi}{sfx}"; kb = f"{pfx}_r{ri}_b{bi+1}{sfx}"
+                                        va = st.session_state.get(ka); vb_val = st.session_state.get(kb)
+                                        if va is not None: st.session_state[kb] = va
+                                        if vb_val is not None: st.session_state[ka] = vb_val
+                                    st.rerun()
+                                st.markdown("</div>", unsafe_allow_html=True)
+                        live_s = st.session_state.get(s_key, ""); live_e = st.session_state.get(e_key, ""); live_r = st.session_state.get(r_key, "")
+                        if live_s and live_e and live_r and _t2m(live_s) >= _t2m(live_e):
+                            st.markdown(f'<div style="background:#fee2e2;border:1.5px solid #fca5a5;border-radius:6px;padding:.35rem .75rem;margin:.2rem 0 .4rem;font-size:.75rem;color:#991b1b;">\u26d4 Block {bi+1}: <strong>Start ({live_s}) is the same as or after End ({live_e})</strong> \u2014 this block will be skipped. Swap the times or delete this block.</div>', unsafe_allow_html=True)
+                    if blocks:
+                        broken = [bi2+1 for bi2, block2 in enumerate(blocks) if _t2m(st.session_state.get(f"{pfx}_r{ri}_b{bi2}_s", block2.get("start",""))) >= _t2m(st.session_state.get(f"{pfx}_r{ri}_b{bi2}_e", block2.get("end",""))) and st.session_state.get(f"{pfx}_r{ri}_b{bi2}_s") and st.session_state.get(f"{pfx}_r{ri}_b{bi2}_e") and st.session_state.get(f"{pfx}_r{ri}_b{bi2}_r")]
+                        if broken: st.markdown(f'<div style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:6px;padding:.4rem .85rem;margin:.3rem 0;">\u26a0\ufe0f <strong>Block{"s" if len(broken)>1 else ""} {", ".join(str(b) for b in broken)} {"have" if len(broken)>1 else "has"} start \u2265 end</strong> and will not appear on the timetable.</div>', unsafe_allow_html=True)
+                        ts_preview = blocks_to_slots(blocks)
+                        if any(v.get("value","") for v in ts_preview.values()):
+                            preview_html = _timetable_grid_html([{"name": st.session_state.get(f"{pfx}_r{ri}_name", row.get("name","(Preview)")),"normal_prog": st.session_state.get(f"{pfx}_r{ri}_norm", row.get("normal_prog","")),"time_slots": ts_preview}], PC_TIME_SLOTS)
+                            if preview_html:
+                                st.markdown('<div style="background:#f0f7eb;border-radius:8px;padding:.5rem .75rem;margin:.4rem 0;border:1px solid #c8e0c8;"><div style="font-size:.68rem;font-weight:600;color:#4a8f33;margin-bottom:3px;">\U0001f441\ufe0f Live timetable preview</div>', unsafe_allow_html=True)
+                                st.markdown(preview_html, unsafe_allow_html=True); st.markdown("</div>", unsafe_allow_html=True)
+                        else: st.markdown('<div style="font-size:.72rem;color:#c97b1a;padding:.3rem 0;">\u26a0\ufe0f Select a Role for each block to see the timetable preview.</div>', unsafe_allow_html=True)
+                    ba1, ba2 = st.columns(2)
+                    with ba1:
+                        if st.button("\u2795 Add time block", key=f"{pfx}_r{ri}_ab", use_container_width=True):
+                            last_bi = len(blocks)-1; last_end = st.session_state.get(f"{pfx}_r{ri}_b{last_bi}_e","") or (blocks[last_bi].get("end","") if last_bi >= 0 else "9:00"); new_bi = len(blocks)
+                            blocks.append({"start":last_end,"end":"","role":"","person":""})
+                            for k,v in [(f"{pfx}_r{ri}_b{new_bi}_s",last_end),(f"{pfx}_r{ri}_b{new_bi}_e",""),(f"{pfx}_r{ri}_b{new_bi}_r",""),(f"{pfx}_r{ri}_b{new_bi}_p","")]: st.session_state[k] = v
+                            st.rerun()
+                    with ba2:
+                        if st.button("\U0001f37d\ufe0f Add lunch block", key=f"{pfx}_r{ri}_add_lunch", use_container_width=True):
+                            bi_new = len(blocks); blocks.append({"start":"12:00","end":"12:30","role":"Lunch Break","person":""})
+                            for k,v in [(f"{pfx}_r{ri}_b{bi_new}_s","12:00"),(f"{pfx}_r{ri}_b{bi_new}_e","12:30"),(f"{pfx}_r{ri}_b{bi_new}_r","Lunch Break"),(f"{pfx}_r{ri}_b{bi_new}_p","")]: st.session_state[k] = v
+                            st.rerun()
+                    st.markdown("</div>", unsafe_allow_html=True)
+                if st.button("\u2795 Add another staff member", key=f"{pfx}_ar", use_container_width=True): rows.append({"name":"","normal_prog":"","blocks":[]}); st.rerun()
+                st.markdown("---")
+                all_broken = [f"{st.session_state.get(f'{pfx}_r{ri2}_name','') or f'Row {ri2+1}'} \u2014 Block {bi2+1} ({st.session_state.get(f'{pfx}_r{ri2}_b{bi2}_s','')}\u2192{st.session_state.get(f'{pfx}_r{ri2}_b{bi2}_e','')})" for ri2, row2 in enumerate(st.session_state[rows_key]) for bi2 in range(len(row2.get("blocks",[]))) if st.session_state.get(f"{pfx}_r{ri2}_b{bi2}_s") and st.session_state.get(f"{pfx}_r{ri2}_b{bi2}_e") and st.session_state.get(f"{pfx}_r{ri2}_b{bi2}_r") and _t2m(st.session_state.get(f"{pfx}_r{ri2}_b{bi2}_s","")) >= _t2m(st.session_state.get(f"{pfx}_r{ri2}_b{bi2}_e",""))]
+                if all_broken: st.error("\u26d4 **Cannot save \u2014 fix blocks with Start \u2265 End:**\n\n" + "\n".join(f"- {b}" for b in all_broken))
+                sa1, sa2 = st.columns(2)
+                with sa1:
+                    if st.button("\U0001f4be Save Program Change", type="primary", key=f"{pfx}_save", use_container_width=True, disabled=bool(all_broken)):
+                        if reason == "Staff Absence" and not staff_absent.strip(): st.warning("Please enter the absent staff member's name.")
+                        else:
+                            valid_rows = []
+                            for ri, row in enumerate(st.session_state[rows_key]):
+                                name = st.session_state.get(f"{pfx}_r{ri}_name", row.get("name","")).strip(); norm = st.session_state.get(f"{pfx}_r{ri}_norm", row.get("normal_prog",""))
+                                fresh_blocks = [{"start": st.session_state.get(f"{pfx}_r{ri}_b{bi}_s",""),"end": st.session_state.get(f"{pfx}_r{ri}_b{bi}_e",""),"role": st.session_state.get(f"{pfx}_r{ri}_b{bi}_r",""),"person": st.session_state.get(f"{pfx}_r{ri}_b{bi}_p","")} for bi in range(len(row.get("blocks",[])))]
+                                if name or fresh_blocks: valid_rows.append({"name": name, "normal_prog": norm, "blocks": fresh_blocks})
+                            entry = {"id": (existing or {}).get("id"),"reason": reason,"staff_absent": staff_absent.strip(),"has_trt": has_trt,"trt_name": trt_name.strip() if has_trt else "","staff_rows": valid_rows}
+                            saved = save_bulletin_change(d, entry)
+                            if saved:
+                                st.success("\u2705 Saved!")
+                                for k in [k for k in st.session_state if k.startswith(pfx)]: del st.session_state[k]
+                                st.session_state["_pc_editing"] = None; st.session_state["_pc_adding"] = False; st.rerun()
+                with sa2:
+                    if st.button("Cancel", key=f"{pfx}_cancel", use_container_width=True):
+                        for k in [k for k in st.session_state if k.startswith(pfx)]: del st.session_state[k]
+                        st.session_state["_pc_editing"] = None; st.session_state["_pc_adding"] = False; st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            _editing = st.session_state.get("_pc_editing"); _adding = st.session_state.get("_pc_adding", False)
+            if not _editing and not _adding:
+                if st.button("\u2795 Add Program Change", type="primary", key="pc_add_new", use_container_width=True):
+                    st.session_state["_pc_form_id"] = int(_time.time() * 1000); st.session_state["_pc_adding"] = True; st.session_state["_pc_editing"] = None; st.rerun()
+            if _adding and not _editing: _render_change_form(current_date, existing=None)
+            elif _editing: _render_change_form(current_date, existing=_editing)
+
+        if _changes:
+            st.markdown("---")
+            st.markdown('<div style="background:white;border-radius:12px;border:1.5px solid #d8e8d4;padding:1.25rem 1.5rem;margin-bottom:1rem;"><div style="font-size:1rem;font-weight:700;color:#1a2e44;margin-bottom:.2rem;">\U0001f4e4 Share / Download Program Changes</div><div style="font-size:.8rem;color:#7a907a;">Plain text for SMS \u00b7 Printable/PDF sheet for email or TRT</div></div>', unsafe_allow_html=True)
+            _plain = _build_plain_text_bc(_changes, current_date); _html_export = _build_html_sheet_bc(_changes, current_date)
+            ex1, ex2, ex3 = st.columns([1,1,2])
+            with ex1: st.download_button("\U0001f4f1 Download text (SMS/email)", data=_plain, file_name=f"CLC_ProgramChanges_{current_date.strftime('%Y-%m-%d')}.txt", mime="text/plain", use_container_width=True, type="secondary")
+            with ex2: st.download_button("\U0001f5a8\ufe0f Download printable sheet", data=_html_export, file_name=f"CLC_ProgramChanges_{current_date.strftime('%Y-%m-%d')}.html", mime="text/html", use_container_width=True, type="secondary")
+            with ex3: st.markdown('<div style="font-size:.75rem;color:#7a907a;padding-top:.5rem;">\U0001f4a1 <strong>Text file</strong> \u2014 paste into SMS or email &nbsp;\u00b7&nbsp; <strong>Printable sheet</strong> \u2014 open in browser then Print or Save as PDF</div>', unsafe_allow_html=True)
+            with st.expander("\U0001f441\ufe0f Preview plain text"): st.code(_plain, language=None)
+
+        # ── Program Changes Manager entries ─────────────────────────────
+        st.markdown("---")
         st.markdown(
-            '<div style="background:var(--amber-light);border:2px solid #F59E0B;'
-            'border-radius:var(--radius);padding:14px 20px;margin-bottom:20px;">'
-            '<div style="font-weight:700;color:var(--amber);font-size:15px;">Draft — '
-            + edition["week_label"] + '</div>'
-            '<div style="font-size:13px;color:var(--amber);margin-top:2px;">'
-            + str(len(notices)) + (" items" if len(notices) != 1 else " item")
-            + " · Open for entry until " + deadline_str + "</div></div>",
+            '<div style="background:#fff8f0;border:1.5px solid #e8c090;border-radius:10px;'
+            'padding:.75rem 1rem;margin-bottom:.75rem;">'
+            '<div style="font-size:.9rem;font-weight:700;color:#1a2e44;margin-bottom:.15rem;">'
+            '\U0001f4cb Staff Timetable Changes '
+            '<span style="font-size:.72rem;font-weight:400;color:#7a907a;">'
+            '(from Program Changes Manager)</span></div>'
+            '<div style="font-size:.78rem;color:#7a907a;">Managed via the '
+            '<strong>Program Changes Manager</strong> tool — changes appear here automatically.</div>'
+            '</div>',
             unsafe_allow_html=True
         )
-
-    if notices:
-        st.markdown("#### Items")
-        for n in notices:
-            cat     = n.get("category", "general")
-            label   = CAT_LABELS.get(cat, cat.title())
-            badge   = CAT_BADGE.get(cat, CAT_BADGE["general"])
-            body    = re.sub('<[^<]+?>', '', n.get("content", ""))
-            preview = body[:120] + ("..." if len(body) > 120 else "")
-            c1, c2  = st.columns([11, 1])
-            with c1:
+        _pcm_changes = load_pc_manager_changes(current_date)
+        if not _pcm_changes:
+            st.markdown(
+                '<div style="text-align:center;padding:1.25rem;color:#9ab09a;font-size:.85rem;'
+                'background:#f8fdf6;border-radius:10px;">'
+                '\U0001f4ed No staff timetable changes entered via Program Changes Manager for this day.</div>',
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                f'<div style="font-size:.82rem;font-weight:600;color:#C8760A;margin-bottom:.5rem;">'
+                f'\U0001f4cb {len(_pcm_changes)} timetable change{"s" if len(_pcm_changes)!=1 else ""} '
+                f'for {current_date.strftime("%-d %B")}:</div>',
+                unsafe_allow_html=True
+            )
+            for _pcm in _pcm_changes:
+                _pcm_staff   = _pcm.get("staff_name","N/A")
+                _pcm_reason  = _pcm.get("reason","")
+                _pcm_covered = _pcm.get("covered_by","")
+                _pcm_notes   = _pcm.get("notes","")
+                _pcm_blocks  = _pcm.get("time_blocks",[]) or []
+                _pcm_updated = " *(edited)*" if _pcm.get("updated_at") else ""
                 st.markdown(
-                    '<div style="background:var(--white);border:1px solid var(--border);'
-                    'border-radius:var(--radius);padding:12px 18px;margin-bottom:6px;">'
-                    '<span style="padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700;'
-                    + badge + '">' + label + '</span>'
-                    '<span style="font-size:15px;font-weight:700;color:var(--ink);margin-left:10px;">'
-                    + n["title"] + '</span>'
-                    '<div style="font-size:13px;color:var(--ink-light);margin-top:5px;">'
-                    + preview + '</div></div>',
+                    f'<div style="background:white;border:1.5px solid #e8d0b0;border-left:5px solid #C8760A;'
+                    f'border-radius:10px;padding:.85rem 1rem;margin-bottom:.6rem;">'
+                    f'<div style="font-size:.95rem;font-weight:700;color:#1a2e44;">{_pcm_staff}{_pcm_updated}</div>'
+                    f'<div style="font-size:.82rem;color:#7a907a;margin:.2rem 0 .4rem;">{_pcm_reason}</div>'
+                    + (f'<div style="font-size:.78rem;color:#1A7A6E;font-weight:600;margin-bottom:.35rem;">Covered by: {_pcm_covered}</div>' if _pcm_covered else "")
+                    + (f'<div style="font-size:.75rem;color:#888;font-style:italic;margin-bottom:.35rem;">{_pcm_notes}</div>' if _pcm_notes else "")
+                    + "</div>",
                     unsafe_allow_html=True
                 )
-            with c2:
-                if can_edit:
-                    st.write("")
-                    if st.button("✕", key="del_" + str(n["id"]), help="Remove"):
-                        db_delete_notice(n["id"])
-                        st.rerun()
-    elif not is_sent:
-        st.info("No items yet — add your first item below.")
+                for _b in _pcm_blocks:
+                    _bstart = _fmt_pc_time(_b.get("start_time",""))
+                    _bend   = _fmt_pc_time(_b.get("end_time",""))
+                    _bprog  = _b.get("modified_program","N/A")
+                    _brb    = _b.get("released_by","")
+                    _rb_txt = f" *(Release: {_brb})*" if _brb else ""
+                    st.markdown(f"&nbsp;&nbsp;&nbsp;- **{_bstart} → {_bend}**: {_bprog}{_rb_txt}")
 
-    st.write("")
+    if edit:
+        st.markdown('<div style="background:white;border-top:2px solid #e8f0e3;padding:1rem 2rem;position:sticky;bottom:0;z-index:100;display:flex;gap:1rem;align-items:center;">', unsafe_allow_html=True)
+        bsv1, bsv2, bsv3 = st.columns([2,2,6])
+        with bsv1:
+            if st.button("\U0001f4be Save Bulletin", type="primary", use_container_width=True, key="bottom_save"): st.session_state["_pending_save"] = True
+        with bsv2:
+            if st.button("\U0001f6aa Discard & Exit", type="secondary", use_container_width=True, key="bottom_discard"): st.session_state.edit_mode = False; st.rerun()
+        with bsv3: st.markdown('<span style="font-size:.78rem;color:#9ab09a;">\U0001f4a1 Changes are saved to the database and appear on the staff room display immediately.</span>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── Auto-link to staff meeting (safe, non-blocking) ──────────────────────
-    if not edition.get("meeting_linked"):
+    if st.session_state.get("_pending_save"):
+        st.session_state["_pending_save"] = False
+        import math as _math
+        def _sane(o):
+            if isinstance(o, dict): return {k2: _sane(v2) for k2, v2 in o.items()}
+            if isinstance(o, list): return [_sane(i) for i in o]
+            if isinstance(o, float) and _math.isnan(o): return ""
+            return o
+        save_data = _sane({k: v for k, v in bulletin_data.items() if k != "id"})
         try:
-            _auto_link_edition(edition)
-            edition = db_get_or_create_edition() or edition
-        except Exception:
-            pass
+            db.save_bulletin(current_date, save_data)
+            st.session_state.edit_mode = False
+            st.session_state["_save_ok"] = True
+            if st.query_params.get("from_display") == "true":
+                st.markdown('<meta http-equiv="refresh" content="2;url=/Daily_Bulletin?display=true">', unsafe_allow_html=True); st.info("\u21a9\ufe0f Returning to staff room display in 2 seconds...")
+            st.rerun()
+        except Exception as _save_err:
+            st.error(f"\u26a0\ufe0f Bulletin could not be saved \u2014 {_save_err}")
 
-    # Admin can always add and edit items
-    if can_edit:
-        st.markdown("#### ➕ Add Item")
-        with st.form("add_item", clear_on_submit=True):
-            cat     = st.selectbox("Category", list(CAT_LABELS.keys()),
-                                   format_func=lambda x: CAT_LABELS[x])
-            title   = st.text_input("Subject / Title",
-                                    placeholder="e.g. Reminder: Staff PD next Friday")
-            content = st.text_area("Body", height=140,
-                                   placeholder="Write your message here...")
-            if st.form_submit_button("Add to Bulletin", type="primary", use_container_width=True):
-                if not title.strip():
-                    st.error("Please enter a title.")
-                elif not content.strip():
-                    st.error("Please enter a body.")
-                else:
-                    db_create_notice(edition["id"], title.strip(), content.strip(),
-                                     cat, st.session_state.staff_name)
-                    st.success("Added ✅")
-                    time.sleep(0.3)
-                    st.rerun()
 
-    if notices and can_edit and not is_sent:
-        st.markdown("---")
-        if not st.session_state.get("confirm_send"):
-            if st.button("📤 Send to All Staff", type="primary", use_container_width=True):
-                st.session_state["confirm_send"] = True
-                st.rerun()
+with quickadd_tab:
+    st.markdown("""<div style="background:linear-gradient(135deg,#3d7a28,#6BBF4E);border-radius:14px;padding:1.5rem 2rem;margin-bottom:1.5rem;color:white;"><div style="font-size:1.3rem;font-weight:700;margin-bottom:.3rem;">\U0001f4dd Add a Staff Notice</div><div style="font-size:.85rem;opacity:.85;">No password needed. Your notice will appear on today's bulletin and the staff room display straight away.</div></div>""", unsafe_allow_html=True)
+    qa_col, preview_col = st.columns(2)
+    with qa_col:
+        with st.form("quick_add_form", clear_on_submit=True):
+            qa_name = st.text_input("Your name *", placeholder="e.g. Sarah"); qa_cat = st.selectbox("Category *", list(NOTICE_CATS.keys()))
+            qa_title = st.text_input("Title *", placeholder="e.g. Staff meeting moved to Room 3"); qa_body = st.text_area("Details", height=120); qa_date = st.date_input("For which day?", value=date.today())
+            if st.form_submit_button("\U0001f4e2 Post Notice", type="primary", use_container_width=True):
+                if not qa_name.strip(): st.warning("Please enter your name.")
+                elif not qa_title.strip(): st.warning("Please enter a title.")
+                else: save_notice({"submitted_by":qa_name.strip(),"category":qa_cat,"title":qa_title.strip(),"body":qa_body.strip(),"notice_date":str(qa_date)}); st.success(f"\u2705 Notice posted for {qa_date.strftime('%-d %B')}!"); st.balloons()
+    with preview_col:
+        st.markdown("**Category guide:**")
+        for cat, cfg in NOTICE_CATS.items(): st.markdown(f'<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.4rem;"><span style="background:{cfg["bg"]};color:{cfg["color"]};font-size:.72rem;font-weight:700;padding:.2rem .6rem;border-radius:20px;min-width:90px;text-align:center;">{cfg["emoji"]} {cat}</span></div>', unsafe_allow_html=True)
+    st.markdown("---"); st.markdown(f"**Notices posted for {date.today().strftime('%A %-d %B')}:**")
+    listed = load_notices(for_date=date.today())
+    if not listed: st.markdown('<div style="text-align:center;padding:2rem;color:#9ab09a;font-size:.85rem;">No notices yet today \u2014 be the first!</div>', unsafe_allow_html=True)
+    else:
+        for n in listed:
+            cat = n.get("category","General"); nc = NOTICE_CATS.get(cat, NOTICE_CATS["General"]); nid = n.get("id","")
+            nl1, nl2 = st.columns([9,1])
+            with nl1: st.markdown(f'<div style="background:white;border-radius:10px;border-left:4px solid {nc["color"]};padding:.75rem 1rem;margin-bottom:.5rem;"><span style="background:{nc["bg"]};color:{nc["color"]};font-size:.65rem;font-weight:700;text-transform:uppercase;padding:.15rem .5rem;border-radius:20px;">{nc["emoji"]} {cat}</span><span style="font-size:.7rem;color:#9ab09a;margin-left:.5rem;">from {n.get("submitted_by","")}</span><div style="font-size:.9rem;font-weight:700;color:#1a2e44;margin:.3rem 0 .2rem;">{n.get("title","")}</div><div style="font-size:.82rem;color:#3a4a3a;line-height:1.5;">{n.get("body","") or ""}</div></div>', unsafe_allow_html=True)
+            with nl2:
+                st.write("")
+                if st.session_state.authenticated:
+                    if st.button("\U0001f5d1\ufe0f", key=f"qa_del_{nid}"): delete_notice(nid); st.rerun()
+
+
+with archive_tab:
+    st.markdown("### \U0001f5c2\ufe0f Bulletin Archive")
+    a1, a2 = st.tabs(["Browse by Week / Term","Search"])
+    with a1:
+        c1, c2 = st.columns(2)
+        with c1: browse_date = st.date_input("Select a date", value=date.today(), key="archive_date")
+        with c2: browse_mode = st.selectbox("Browse by", ["Week","Term"])
+        y = browse_date.year; terms_map = {1:(date(y,1,28),date(y,4,11)),2:(date(y,4,28),date(y,7,4)),3:(date(y,7,21),date(y,9,26)),4:(date(y,10,13),date(y,12,12))}
+        if browse_mode == "Week":
+            wk = week_dates(browse_date); results = db.get_bulletins_range(wk[0], wk[-1]); st.markdown(f"**Week of {wk[0].strftime('%-d %b %Y')}**")
         else:
-            staff_list = db_get_staff_list()
-            emails     = [s["email"] for s in staff_list if s.get("email")]
-            st.warning("This will publish the bulletin for all staff to read. Confirm?")
-            s1, s2 = st.columns(2)
-            with s1:
-                if st.button("Yes, Send Now", type="primary", use_container_width=True):
-                    if db_publish_edition(edition["id"], st.session_state.staff_name):
-                        send_edition_notification(
-                            edition["week_label"], len(notices), emails,
-                            st.secrets.get("APP_URL", "")
-                        )
-                        st.session_state["confirm_send"] = False
-                        st.success("Bulletin sent!")
-                        time.sleep(1.5)
-                        st.rerun()
-            with s2:
-                if st.button("Cancel", use_container_width=True):
-                    st.session_state["confirm_send"] = False
-                    st.rerun()
+            t_start = t_end = None
+            for t,(s,e) in terms_map.items():
+                if s <= browse_date <= e: t_start, t_end = s, e; st.markdown(f"**Term {t}, {y}**"); break
+            results = db.get_bulletins_range(t_start, t_end) if t_start else []
+            if not t_start: st.info("Date is outside term dates.")
+        if results:
+            for row in results:
+                d = datetime.strptime(row["date"], "%Y-%m-%d").date()
+                st.markdown(f'<div class="arch-card"><div class="arch-card-date">{d.strftime("%A %-d %B %Y")}</div><div class="arch-card-fact">\U0001f4a1 {row.get("fun_fact","") or "No fun fact recorded"}</div></div>', unsafe_allow_html=True)
+                if st.button(f"Open \u2192", key=f"arch_{row['date']}"): st.session_state.selected_date = d; st.rerun()
+        else: st.markdown('<div class="empty-state"><div class="icon">\U0001f4ed</div>No bulletins found for this period</div>', unsafe_allow_html=True)
+    with a2:
+        keyword = st.text_input("\U0001f50d Search all bulletins", placeholder="Enter staff name, student, excursion, note...")
+        if keyword and len(keyword) >= 2:
+            results = db.search_bulletins(keyword)
+            if results:
+                st.markdown(f"**{len(results)} result(s) found for '{keyword}'**")
+                for row in results:
+                    d = datetime.strptime(row["date"], "%Y-%m-%d").date()
+                    st.markdown(f'<div class="arch-card"><div class="arch-card-date">{d.strftime("%A %-d %B %Y")}</div></div>', unsafe_allow_html=True)
+                    if st.button(f"Open \u2192", key=f"search_{row['date']}"): st.session_state.selected_date = d; st.rerun()
+            else: st.markdown(f'<div class="empty-state"><div class="icon">\U0001f50d</div>No results for "{keyword}"</div>', unsafe_allow_html=True)
 
-    # ── Download & Meeting panel — always visible ─────────────────────────────
-    st.markdown("---")
-    if not is_sent and notices:
-        met_term = edition.get("meeting_term", "")
-        met_week = edition.get("meeting_week", "")
-        if edition.get("meeting_linked") and met_term and met_week:
-            st.markdown(
-                f'<div style="background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;'
-                f'padding:12px 16px;font-size:13px;color:#1e40af;margin-bottom:12px;">'
-                f'🔴 <strong>Live in Staff Meeting</strong> — {met_term} Week {met_week}. '
-                f'Items you add here appear in real time in the staff meeting bulletin section.</div>',
-                unsafe_allow_html=True
-            )
-    render_download_meeting_panel(edition, notices)
 
-    if is_sent:
-        st.markdown("---")
-        st.markdown("#### Acknowledgements")
-        rows    = db_get_ack_summary(edition["id"])
-        n_acked = sum(1 for r in rows if r["Acknowledged"] == "Yes")
-        st.caption(str(n_acked) + " of " + str(len(rows)) + " staff acknowledged")
-        if rows:
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-# ══════════════════════════════════════════════════════════════════════════════
-# PAST BULLETINS
-# ══════════════════════════════════════════════════════════════════════════════
-def show_archive():
-    app_header()
-    nav_bar("archive")
-    st.markdown('<div class="page-heading">Past <span class="accent">Bulletins</span></div>',
-                unsafe_allow_html=True)
-    editions = [e for e in db_get_all_editions() if e.get("status") == "published"]
-    if not editions:
-        st.info("No bulletins sent yet.")
-        return
-    for ed in editions:
-        notices = db_get_notices(ed["id"])
-        acked   = has_acked_edition(ed["id"], st.session_state.staff_name)
-        c1, c2  = st.columns([5, 1])
-        with c1:
-            linked_badge = " · 📅 In Staff Meeting" if ed.get("meeting_linked") else ""
-            st.markdown(
-                '<div style="background:var(--white);border:1px solid var(--border);'
-                'border-radius:var(--radius);padding:14px 20px;margin-bottom:4px;">'
-                '<div style="font-size:15px;font-weight:700;color:var(--ink);">'
-                + ed["week_label"] + '</div>'
-                '<div style="font-size:12px;color:var(--ink-faint);margin-top:3px;">Sent '
-                + fmt_date(ed.get("published_at")) + " · " + str(len(notices))
-                + (" items" if len(notices) != 1 else " item")
-                + " · " + ("Acknowledged" if acked else "Pending")
-                + linked_badge + "</div></div>",
-                unsafe_allow_html=True
-            )
-        with c2:
-            st.write("")
-            if st.button("View", key="arch_" + str(ed["id"]), use_container_width=True):
-                nav("archive_week", edition_id=ed["id"])
-        st.write("")
-
-def show_archive_week():
-    app_header()
-    ed = db_get_edition(st.session_state.viewing_edition_id)
-    if not ed:
-        nav("archive")
-        return
-    if st.button("← Back to Past Bulletins"):
-        nav("archive")
-    render_bulletin(ed, show_ack=True)
-    if st.session_state.is_admin:
-        st.markdown("---")
-        notices = db_get_notices(ed["id"])
-        render_download_meeting_panel(ed, notices)
-
-# ══════════════════════════════════════════════════════════════════════════════
-# STAFF MANAGEMENT
-# ══════════════════════════════════════════════════════════════════════════════
-def show_staff():
-    app_header()
-    nav_bar("staff")
-    if not st.session_state.is_admin:
-        st.error("Admin access only.")
-        return
-    st.markdown('<div class="page-heading">Staff <span class="accent">Management</span></div>',
-                unsafe_allow_html=True)
-    staff = db_get_staff_list()
-
-    with st.expander("Add New Staff Member", expanded=len(staff) == 0):
-        with st.form("add_staff"):
-            c1, c2 = st.columns(2)
-            with c1:
-                nn = st.text_input("Full Name")
-                nr = st.selectbox("Role", ["staff", "admin"])
-            with c2:
-                ne = st.text_input("School Email")
-                np = st.text_input("Initial PIN", type="password", help="Min 4 characters")
-            if st.form_submit_button("Add Staff Member", type="primary"):
-                if not nn.strip():
-                    st.error("Name required.")
-                elif not ne.strip() or "@" not in ne:
-                    st.error("Valid email required.")
-                elif len(np.strip()) < 4:
-                    st.error("PIN must be at least 4 characters.")
-                else:
-                    if db_add_staff(nn.strip(), ne.strip(), np.strip(), nr):
-                        st.success(nn + " added.")
-                        time.sleep(0.8)
-                        st.rerun()
-
-    st.write("")
-    st.markdown("### Active Staff (" + str(len(staff)) + ")")
-    if not staff:
-        st.info("No staff added yet.")
-        return
-
-    for s in staff:
-        c1, c2, c3, c4 = st.columns([3, 3, 1, 1])
-        with c1:
-            role_note = " (Admin)" if s.get("role") == "admin" else ""
-            st.markdown("**" + s["name"] + "**" + role_note)
-        with c2:
-            st.caption(s.get("email", ""))
-        with c3:
-            if st.button("Reset PIN", key="reset_" + str(s["id"])):
-                st.session_state["resetting_" + str(s["id"])] = True
-        with c4:
-            if st.button("Remove", key="rm_" + str(s["id"])):
-                st.session_state["confirm_remove_" + str(s["id"])] = True
-
-        if st.session_state.get("confirm_remove_" + str(s["id"])):
-            st.warning("Remove " + s["name"] + "? Their history is kept.")
-            rc1, rc2 = st.columns(2)
-            with rc1:
-                if st.button("Yes, remove", key="crm_" + str(s["id"]), type="primary"):
-                    db_remove_staff(s["id"])
-                    st.session_state.pop("confirm_remove_" + str(s["id"]), None)
-                    st.rerun()
-            with rc2:
-                if st.button("Cancel", key="cncrm_" + str(s["id"])):
-                    st.session_state.pop("confirm_remove_" + str(s["id"]), None)
-                    st.rerun()
-
-        if st.session_state.get("resetting_" + str(s["id"])):
-            with st.form("pf_" + str(s["id"])):
-                np2 = st.text_input("New PIN for " + s["name"], type="password")
-                pf1, pf2 = st.columns(2)
-                with pf1:
-                    if st.form_submit_button("Set PIN", type="primary"):
-                        if len(np2.strip()) < 4:
-                            st.error("Min 4 characters.")
-                        else:
-                            db_set_pin(s["id"], np2.strip())
-                            st.success("PIN updated for " + s["name"] + ".")
-                            st.session_state.pop("resetting_" + str(s["id"]), None)
-                            time.sleep(0.8)
-                            st.rerun()
-                with pf2:
-                    if st.form_submit_button("Cancel"):
-                        st.session_state.pop("resetting_" + str(s["id"]), None)
-                        st.rerun()
-        st.divider()
-
-    st.markdown("---")
-    st.markdown("### Change Your Own PIN")
-    with st.form("own_pin"):
-        op1, op2 = st.columns(2)
-        with op1:
-            cur_pin = st.text_input("Current PIN", type="password")
-        with op2:
-            new_pin = st.text_input("New PIN", type="password")
-        if st.form_submit_button("Update My PIN"):
-            if not db_verify_pin(st.session_state.staff_name, cur_pin):
-                st.error("Current PIN is incorrect.")
-            elif len(new_pin.strip()) < 4:
-                st.error("New PIN must be at least 4 characters.")
-            else:
-                if db_set_pin(st.session_state.staff_id, new_pin.strip()):
-                    st.success("PIN updated.")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ROUTER
-# ══════════════════════════════════════════════════════════════════════════════
-if not st.session_state.staff_name:
-    show_login()
-else:
-    v = st.session_state.view
-    if   v == "bulletin":     show_bulletin()
-    elif v == "compose":      show_compose()
-    elif v == "archive":      show_archive()
-    elif v == "archive_week": show_archive_week()
-    elif v == "staff":        show_staff()
-    else:                     show_bulletin()
+with login_tab:
+    if st.session_state.authenticated:
+        st.success("\u2705 You are logged in as Staff")
+        st.markdown("You can now edit bulletins \u2014 head to the **\U0001f4cb Bulletin** tab and click **\u270f\ufe0f Edit**.")
+        if st.button("\U0001f6aa Logout", type="secondary"): st.session_state.authenticated = False; st.session_state.edit_mode = False; st.rerun()
+    else:
+        st.markdown('<div class="auth-gate"><h2>\U0001f510 Staff Login</h2><p>Login to create and edit daily bulletins.</p>', unsafe_allow_html=True)
+        pw = st.text_input("Password", type="password", placeholder="Enter staff password")
+        if st.button("Login", type="primary", use_container_width=True):
+            if pw == ADMIN_PASSWORD: st.session_state.authenticated = True; st.success("\u2705 Logged in! Go to the Bulletin tab to start editing."); st.rerun()
+            else: st.error("Incorrect password.")
+        st.markdown('</div>', unsafe_allow_html=True)
