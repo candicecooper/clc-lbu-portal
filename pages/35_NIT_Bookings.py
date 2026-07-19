@@ -117,16 +117,32 @@ def load_bookings():
         st.error(f"Error loading bookings: {e}")
         return pd.DataFrame()
 
+# Staff no longer active for NIT bookings (kept in database for historical records)
+EXCLUDED_STAFF = ["Tom"]
+
+# Staff to always include in the dropdown, even if not yet in the staff table
+ADDITIONAL_STAFF = ["Roisin"]
+
 def load_staff_names():
-    """Load staff names from database for admin dropdown"""
+    """Load staff names from database for dropdowns, applying NIT-specific filters"""
     try:
         response = supabase.table("staff").select("name").order("name").execute()
-        if response.data:
-            return [r["name"] for r in response.data]
-        return []
+        names = [r["name"] for r in response.data] if response.data else []
+        
+        # Exclude inactive staff (match on first word so "Tom Smith" is also excluded)
+        excluded_lower = [e.lower() for e in EXCLUDED_STAFF]
+        names = [n for n in names if n.lower() not in excluded_lower 
+                 and n.split()[0].lower() not in excluded_lower]
+        
+        # Add any additional staff not already present (partial match check)
+        for extra in ADDITIONAL_STAFF:
+            if not any(extra.lower() in n.lower() for n in names):
+                names.append(extra)
+        
+        return sorted(names)
     except Exception as e:
         st.warning(f"Could not load staff names: {e}")
-        return []
+        return sorted(ADDITIONAL_STAFF)
 
 def create_booking(booking_date, time_slot, staff_name):
     """Create a new booking"""
