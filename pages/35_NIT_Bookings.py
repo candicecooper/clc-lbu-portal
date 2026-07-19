@@ -40,9 +40,9 @@ ACCENT_COLOR = "#C8760A"  # Amber
 
 # Time slots configuration
 TIME_SLOTS = {
-    "Monday": "Monday 1:45pm",
-    "Tuesday": "Tuesday 1:45pm",
-    "Thursday": "Thursday 2:15pm"
+    "Monday": "Monday 1:45-3:00pm",
+    "Tuesday": "Tuesday 9:00-10:15am",
+    "Thursday": "Thursday 1:45-3:00pm"
 }
 
 # Term dates for 2026 (South Australia)
@@ -178,7 +178,7 @@ else:
 st.info(f"""
 **Current Period**: {period_text}  
 **Available Slots**: {', '.join(TIME_SLOTS.values())}  
-**Duration**: 60 minutes additional NIT per booking
+**Duration**: 75 minutes additional NIT per booking (provided by Roisin)
 """)
 
 # My Bookings Section
