@@ -594,9 +594,11 @@ else:
                             from docx.shared import Pt, RGBColor
                             from docx.enum.text import WD_ALIGN_PARAGRAPH
                             
-                            # Define display variables
+                            # Define display variables from session state with defaults
                             year_display = st.session_state.get('auto_year', 'All')
                             term_display = st.session_state.get('auto_term', 'All')
+                            program_display = st.session_state.get('selected_program', 'All')
+                            view_display = 'Allocated Only'  # Default view
                             
                             # Get current filtered data
                             report_data = filtered.copy() if 'filtered' in dir() else allocation_df.copy()
@@ -636,9 +638,9 @@ else:
                             filters_table.rows[1].cells[0].text = "Term"
                             filters_table.rows[1].cells[1].text = str(term_display)
                             filters_table.rows[2].cells[0].text = "Program"
-                            filters_table.rows[2].cells[1].text = str(selected_program)
+                            filters_table.rows[2].cells[1].text = str(program_display)
                             filters_table.rows[3].cells[0].text = "View"
-                            filters_table.rows[3].cells[1].text = str(selected_allocation_view)
+                            filters_table.rows[3].cells[1].text = str(view_display)
                             filters_table.rows[4].cells[0].text = "Sections"
                             filters_table.rows[4].cells[1].text = ", ".join(selected_report_sections)
                             
