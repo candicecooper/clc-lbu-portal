@@ -554,10 +554,6 @@ else:
         
         st.markdown("---")
         
-        # === DEFINE DISPLAY VARIABLES FOR SIDEBAR ===
-        year_display = st.session_state.auto_year if selected_year == 'All' else selected_year
-        term_display = st.session_state.auto_term if selected_term == 'All' else selected_term
-        
         # === REPORT BUILDER ===
         with st.expander("📋 Build Custom Report", expanded=False):
             st.markdown("**Select sections to include in your report:**")
@@ -597,6 +593,10 @@ else:
                             from docx import Document
                             from docx.shared import Pt, RGBColor
                             from docx.enum.text import WD_ALIGN_PARAGRAPH
+                            
+                            # Define display variables
+                            year_display = st.session_state.get('auto_year', 'All')
+                            term_display = st.session_state.get('auto_term', 'All')
                             
                             # Get current filtered data
                             report_data = filtered.copy() if 'filtered' in dir() else allocation_df.copy()
