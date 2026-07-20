@@ -548,7 +548,8 @@ def staff_view():
             )
     with col1:
         if doc.get("intro"):
-            st.markdown(f"<div class='ref-intro'>{re.sub(r'\\*\\*(.+?)\\*\\*', r'<b>\\1</b>', doc['intro'])}</div>", unsafe_allow_html=True)
+            intro_html = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", doc["intro"])
+            st.markdown(f"<div class='ref-intro'>{intro_html}</div>", unsafe_allow_html=True)
 
     if not sections:
         st.info("This document has no sections yet.")
