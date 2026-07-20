@@ -391,6 +391,29 @@ def archive_student(client, code, by):
     }, on_conflict="student_initials").execute()
 
 
+def hide_students(client, codes):
+    """Hide students from this tool (no records to archive). Marked in the archive
+    table with the three confirmations FALSE so they're distinguishable from
+    properly archived students."""
+    now = datetime.now(timezone.utc).isoformat()
+    payload = [{"student_initials": c, "archived": True,
+                "record_downloaded": False, "record_printed": False,
+                "record_digitally_archived": False, "archived_at": now,
+                "archived_by": "(removed — no entries)", "updated_at": now}
+               for c in codes]
+    return client.table(ARCHIVE_TABLE).upsert(payload, on_conflict="student_initials").execute()
+
+
+def delete_all_records_for(client, code):
+    recs = fetch_records(client, code=code)
+    for r in recs:
+        try:
+            delete_record(client, r["id"])
+        except Exception:
+            pass
+    return len(recs)
+
+
 def unarchive_student(client, code):
     return (client.table(ARCHIVE_TABLE)
             .update({"archived": False, "updated_at": datetime.now(timezone.utc).isoformat()})
@@ -890,6 +913,63 @@ with tab_students:
                     st.rerun()
 
     st.divider()
+    with st.expander("🧹 Clean up — remove test students or ones with no entries"):
+        _empty = [(lbl, code) for lbl, code in active_options
+                  if code not in _archived and _counts_by_code.get(code, 0) == 0]
+        st.markdown("**Students with no entries**")
+        st.caption("These have nothing logged — usually test entries, or students who "
+                   "finished before this tool existed. Removing them hides them from this "
+                   "tool only; their SMARTAR record is untouched, and you can bring them "
+                   "back from the Archive tab.")
+        if not _empty:
+            st.caption("✅ None — every active student has at least one entry.")
+        else:
+            picks = st.multiselect(f"Select from {len(_empty)} student(s) with no entries",
+                                   [c for _, c in _empty],
+                                   format_func=lambda c: code_to_label.get(c, c),
+                                   key="cl_picks")
+            cc1, cc2 = st.columns([1, 1])
+            with cc1:
+                if st.button("Select all", key="cl_all"):
+                    st.session_state["cl_picks"] = [c for _, c in _empty]
+                    st.rerun()
+            with cc2:
+                ok_hide = st.checkbox(f"Confirm removal of {len(picks)} student(s)",
+                                      key="cl_ok", disabled=not picks)
+            if st.button("🧹 Remove selected", type="primary",
+                         disabled=not (picks and ok_hide), key="cl_go"):
+                try:
+                    hide_students(client, picks)
+                    st.success(f"Removed {len(picks)} student(s) from the active lists.")
+                    st.session_state.pop("cl_picks", None)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Could not remove: {e}")
+
+        st.divider()
+        st.markdown("**Delete test entries (permanent)**")
+        st.caption("⚠️ This permanently deletes every communication and attachment for the "
+                   "selected student. Use only for test data — it cannot be undone.")
+        _withrecs = sorted([c for c in get_codes(client)])
+        if not _withrecs:
+            st.caption("No records yet.")
+        else:
+            dcode = st.selectbox("Student", _withrecs,
+                                 format_func=lambda c: code_to_label.get(c, c), key="dl_code")
+            dn = _counts_by_code.get(dcode, 0)
+            st.caption(f"**{dn}** record(s) would be permanently deleted.")
+            typed = st.text_input(f"Type DELETE to confirm removing all records for {dcode}",
+                                  key="dl_txt")
+            if st.button("🗑️ Permanently delete these records",
+                         disabled=(typed.strip().upper() != "DELETE"), key="dl_go"):
+                try:
+                    n = delete_all_records_for(client, dcode)
+                    st.success(f"Deleted {n} record(s) for {dcode}.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Could not delete: {e}")
+
+    st.divider()
     if not _sel:
         st.info("Select a student above to see their communication history.")
     else:
@@ -1216,6 +1296,16 @@ with tab_archive:
             r["_yr"] = year_of(r.get("archived_at"))
             r["_tm"] = term_of(r.get("archived_at"))
             r["_pg"] = program_of(r.get("student_initials")) or "Unassigned"
+            r["_complete"] = bool(r.get("record_downloaded")) and \
+                bool(r.get("record_printed")) and bool(r.get("record_digitally_archived"))
+
+        view_mode = st.radio(
+            "Show", ["Archived (record complete)", "Removed (no entries)"],
+            horizontal=True, key="ar_mode")
+        rows = [r for r in rows
+                if r["_complete"] == (view_mode == "Archived (record complete)")]
+        if not rows:
+            st.caption("None in this category.")
 
         f1, f2 = st.columns(2)
         with f1:
@@ -1241,9 +1331,10 @@ with tab_archive:
                 ts = (r.get("archived_at") or "")[:10]
                 col1, col2 = st.columns([4, 1])
                 with col1:
-                    st.markdown(f"• **{code_to_label.get(code, code)}** — archived {ts} "
-                                f"({r['_tm']} {r['_yr']}) by {r.get('archived_by') or '—'}  ·  "
-                                "✓ downloaded ✓ printed ✓ digitally archived")
+                    st.markdown(f"• **{code_to_label.get(code, code)}** — {'archived' if r['_complete'] else 'removed'} {ts} "
+                                f"({r['_tm']} {r['_yr']}) by {r.get('archived_by') or '—'}"
+                                + ("  ·  ✓ downloaded ✓ printed ✓ digitally archived"
+                                   if r["_complete"] else "  ·  no entries logged"))
                 with col2:
                     if st.button("Unarchive", key=f"un_{code}"):
                         try:
