@@ -42,8 +42,9 @@ def _get_confidential_password():
             val = os.environ.get(name, "")
         if val:
             return val
-    # Last-resort placeholder so the page never hard-locks before setup.
-    return "clcstaff2026"
+    # Last-resort fallback — confidential/admin tools only.
+    # Set CONFIDENTIAL_PASSWORD in Render/secrets to override without a code change.
+    return "secret2026"
 
 
 def is_confidential_unlocked():
