@@ -752,11 +752,23 @@ with st.expander("🔧 Connection & setup check" + ("  ⚠️ action needed" if 
     for t, (ok, err) in _checks.items():
         st.write(f"{'✅' if ok else '❌'} `{t}` — {'found' if ok else 'NOT in this project'}")
     try:
-        client.storage.from_(BUCKET).list()
-        st.write(f"✅ storage bucket `{BUCKET}` — found")
+        _bl = client.storage.list_buckets()
+        _names = []
+        for b in (_bl or []):
+            n = b.get("name") if isinstance(b, dict) else getattr(b, "name", None)
+            if n:
+                _names.append(n)
+        if BUCKET in _names:
+            st.write(f"✅ storage bucket `{BUCKET}` — found")
+        else:
+            st.write(f"❌ storage bucket `{BUCKET}` — NOT found in this project.")
+            st.warning(
+                f"Buckets that DO exist here: {', '.join(f'`{n}`' for n in _names) or '(none)'}. "
+                f"Create a bucket named exactly `{BUCKET}` (lowercase, hyphen — not an "
+                f"underscore) in **this** project, with Public OFF, then add its storage "
+                f"policies. Bucket names are case-sensitive.")
     except Exception as _be:
-        st.write(f"❌ storage bucket `{BUCKET}` — not reachable. Attachments won't work "
-                 f"until it exists (private) with its storage policies. Detail: `{_be}`")
+        st.write(f"⚠️ could not list storage buckets — detail: `{_be}`")
     if _missing:
         st.warning("Open the project shown above → SQL editor → run the CREATE TABLE block, "
                    "then refresh this page. If that project does NOT contain your other portal "
