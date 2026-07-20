@@ -247,10 +247,24 @@ def signed_url(client, path, expires=3600):
     try:
         res = client.storage.from_(BUCKET).create_signed_url(path, expires)
         if isinstance(res, dict):
-            return res.get("signedURL") or res.get("signedUrl") or res.get("signed_url")
+            return (res.get("signedURL") or res.get("signedUrl")
+                    or res.get("signed_url") or res.get("data", {}).get("signedUrl")
+                    if isinstance(res.get("data"), dict) else
+                    res.get("signedURL") or res.get("signedUrl") or res.get("signed_url"))
+        if isinstance(res, str):
+            return res
         return None
     except Exception:
         return None
+
+
+def download_bytes(client, path):
+    """Fetch the file's raw bytes — the most reliable way to display a private
+    attachment (doesn't depend on signed-URL response shape)."""
+    try:
+        return client.storage.from_(BUCKET).download(path), None
+    except Exception as e:
+        return None, str(e)
 
 
 def delete_attachment(client, att):
@@ -268,23 +282,35 @@ def render_attachments(client, comm_id, key_prefix):
     """Show existing attachments + an uploader to add more, for one record."""
     atts = get_attachments(client, comm_id)
     if atts:
-        st.markdown("**Attachments**")
+        st.markdown(f"**Attachments ({len(atts)})**")
         for a in atts:
-            url = signed_url(client, a["storage_path"])
             label = a.get("label") or a.get("file_name") or "attachment"
-            is_img = (a.get("mime_type") or "").startswith("image/")
+            fname = a.get("file_name") or "file"
+            mime = (a.get("mime_type") or "")
+            is_img = mime.startswith("image/") or fname.lower().endswith(
+                (".png", ".jpg", ".jpeg", ".gif", ".webp"))
+            data, err = download_bytes(client, a["storage_path"])
             col1, col2 = st.columns([4, 1])
             with col1:
-                if is_img and url:
-                    st.image(url, caption=label, width=240)
-                elif url:
-                    st.markdown(f"📄 **{label}** — [{a.get('file_name')}]({url})")
+                if data and is_img:
+                    st.image(data, caption=label, width=320)
+                    st.download_button("⬇️ Download", data=data, file_name=fname,
+                                       key=f"{key_prefix}_dl_{a['id']}")
+                elif data:
+                    st.markdown(f"📄 **{label}** — {fname}")
+                    st.download_button("⬇️ Download", data=data, file_name=fname,
+                                       mime=mime or "application/octet-stream",
+                                       key=f"{key_prefix}_dl_{a['id']}")
                 else:
-                    st.write(f"📎 {label} (preview unavailable)")
+                    st.error(f"📎 {label} — could not load this file. "
+                             f"Check the '{BUCKET}' bucket exists and its storage policies "
+                             f"are in place. Detail: `{err}`")
             with col2:
                 if st.button("Remove", key=f"{key_prefix}_del_{a['id']}"):
                     delete_attachment(client, a)
                     st.rerun()
+    else:
+        st.caption("No attachments on this record yet.")
 
     st.warning(ATTACH_WARNING)
     add_files = st.file_uploader("Add image(s) / PDF(s) to this record",
@@ -609,6 +635,12 @@ with st.expander("🔧 Connection & setup check" + ("  ⚠️ action needed" if 
                "list your other portal tables (e.g. student_transitions, student_placements).")
     for t, (ok, err) in _checks.items():
         st.write(f"{'✅' if ok else '❌'} `{t}` — {'found' if ok else 'NOT in this project'}")
+    try:
+        client.storage.from_(BUCKET).list()
+        st.write(f"✅ storage bucket `{BUCKET}` — found")
+    except Exception as _be:
+        st.write(f"❌ storage bucket `{BUCKET}` — not reachable. Attachments won't work "
+                 f"until it exists (private) with its storage policies. Detail: `{_be}`")
     if _missing:
         st.warning("Open the project shown above → SQL editor → run the CREATE TABLE block, "
                    "then refresh this page. If that project does NOT contain your other portal "
@@ -751,7 +783,11 @@ with tab_view:
     with fc1:
         inc_arch = st.checkbox("Include archived students", key="view_inc_arch")
         pool = record_codes if inc_arch else [c for c in record_codes if c not in archived]
-        view_code = st.selectbox("Filter by student", ["All students"] + pool, key="view_code")
+        _opts = ["All students"] + pool
+        view_code = st.selectbox(
+            "Filter by student", _opts,
+            format_func=lambda c: c if c == "All students" else code_to_label.get(c, c),
+            key="view_code")
     with fc2:
         use_dates = st.checkbox("Filter by date range", key="view_use_dates")
     with fc3:
@@ -771,14 +807,32 @@ with tab_view:
     else:
         counts = get_attachment_counts(client, [r["id"] for r in records])
         df = pd.DataFrame(records_to_rows(records)).drop(columns=["Full name"], errors="ignore")
+        df.insert(0, "Student", [code_to_label.get(r.get("student_initials"),
+                                                  r.get("student_initials")) for r in records])
         df["📎"] = [counts.get(r["id"], 0) for r in records]
-        df = df.drop(columns=["id"], errors="ignore")
-        st.dataframe(df, use_container_width=True, hide_index=True)
-        st.caption(f"{len(records)} record(s). 📎 = attachments. Full names appear only in Export.")
+        df = df.drop(columns=["id", "Code"], errors="ignore")
+        st.dataframe(
+            df, use_container_width=True, hide_index=True,
+            column_config={
+                "Student": st.column_config.TextColumn("Student", width="medium"),
+                "Date": st.column_config.TextColumn("Date", width="small"),
+                "Time": st.column_config.TextColumn("Time", width="small"),
+                "Direction": st.column_config.TextColumn("In / Out", width="small"),
+                "Type": st.column_config.TextColumn("Type", width="small"),
+                "Who": st.column_config.TextColumn("Who", width="medium"),
+                "Role": st.column_config.TextColumn("Category", width="small"),
+                "Summary": st.column_config.TextColumn("Summary", width="large"),
+                "Recorded by": st.column_config.TextColumn("By", width="small"),
+                "📎": st.column_config.NumberColumn("📎", width="small",
+                                                    help="Number of attachments"),
+            })
+        st.caption(f"{len(records)} record(s). 📎 = attachments. Student names are read live "
+                   "from SMARTAR and are never stored in this database.")
 
         st.markdown("##### Edit a record / manage its attachments")
         def _label(r):
-            return f"{r.get('comm_date','')} · {r.get('student_initials','')} · " \
+            who = code_to_label.get(r.get("student_initials"), r.get("student_initials", ""))
+            return f"{r.get('comm_date','')} · {who} · " \
                    f"{r.get('comm_type','')} · {(r.get('summary','') or '')[:50]}"
         idx = st.selectbox("Select a record", list(range(len(records))),
                            format_func=lambda i: _label(records[i]), key="edit_pick")
