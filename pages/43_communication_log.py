@@ -391,6 +391,26 @@ def archive_student(client, code, by):
     }, on_conflict="student_initials").execute()
 
 
+LABEL_TABLE = "comm_student_labels"
+
+
+def get_labels(client):
+    """Local display labels for codes. Returns {} if the table isn't set up."""
+    try:
+        res = client.table(LABEL_TABLE).select("*").execute().data or []
+        return {r["student_initials"]: r.get("display_label") or "" for r in res
+                if r.get("display_label")}
+    except Exception:
+        return {}
+
+
+def set_label(client, code, label):
+    now = datetime.now(timezone.utc).isoformat()
+    return client.table(LABEL_TABLE).upsert(
+        {"student_initials": code, "display_label": label or None, "updated_at": now},
+        on_conflict="student_initials").execute()
+
+
 def hide_students(client, codes):
     """Hide students from this tool (no records to archive). Marked in the archive
     table with the three confirmations FALSE so they're distinguishable from
@@ -720,7 +740,7 @@ if client is None:
     st.stop()
 
 # --- Connection & setup check ------------------------------------------------
-_req_tables = [TABLE_NAME, ARCHIVE_TABLE, ATTACH_TABLE]
+_req_tables = [TABLE_NAME, ARCHIVE_TABLE, ATTACH_TABLE, LABEL_TABLE]
 _checks = {t: check_table(client, t) for t in _req_tables}
 _missing = [t for t, (ok, _) in _checks.items() if not ok]
 with st.expander("🔧 Connection & setup check" + ("  ⚠️ action needed" if _missing else "  ✅ all good"),
@@ -747,6 +767,12 @@ active_options, smartar_status = build_active_students(client, smartar)
 code_to_label = {}
 for lbl, code in active_options:
     code_to_label.setdefault(code, lbl)
+
+# local display labels override the SMARTAR-derived label everywhere
+_local_labels = get_labels(client)
+for _c, _l in _local_labels.items():
+    if _l:
+        code_to_label[_c] = _l
 
 if "up_seed" not in st.session_state:
     st.session_state.up_seed = 0
@@ -908,7 +934,8 @@ with tab_students:
                 st.caption("_No students_")
             for lbl, code in grp:
                 n = _counts_by_code.get(code, 0)
-                if st.button(f"{lbl}  ({n})", key=f"stu_{code}", use_container_width=True):
+                _shown = code_to_label.get(code, lbl)
+                if st.button(f"{_shown}  ({n})", key=f"stu_{code}", use_container_width=True):
                     st.session_state["sel_student"] = code
                     st.rerun()
 
@@ -984,6 +1011,59 @@ with tab_students:
 
         _recs = fetch_records(client, code=_sel)
         st.caption(f"{len(_recs)} communication(s) on record.")
+
+        with st.expander("✏️ Edit this student's label or code"):
+            st.markdown("**Display label**")
+            st.caption("What this tool shows for this student. Names come live from SMARTAR — "
+                       "set a label here to override it. ⚠️ Keep it non-identifying "
+                       "(e.g. `AD-PY`, `AD-PY Yr4`); a label IS stored in Supabase, so don't "
+                       "put a full name here. To correct the real name, change it in SMARTAR.")
+            _cur = _local_labels.get(_sel, "")
+            _lab = st.text_input("Label", value=_cur, key=f"lab_{_sel}",
+                                 placeholder=f"e.g. {_sel} Yr4")
+            lc1, lc2 = st.columns([1, 1])
+            with lc1:
+                if st.button("Save label", key=f"lab_save_{_sel}"):
+                    try:
+                        set_label(client, _sel, _lab.strip())
+                        st.success("Label saved.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Could not save the label — the `{LABEL_TABLE}` table may "
+                                 f"not exist yet (SQL is in the setup panel). Detail: {e}")
+            with lc2:
+                if _cur and st.button("Clear label", key=f"lab_clr_{_sel}"):
+                    try:
+                        set_label(client, _sel, "")
+                        st.success("Label cleared — back to the SMARTAR name.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Could not clear: {e}")
+
+            st.divider()
+            st.markdown("**Change the code**")
+            st.caption(f"Moves every record from **{_sel}** onto a new code "
+                       "(e.g. tidying `AD2` to `AD-PY`).")
+            _newc = st.text_input("New code", key=f"nc_{_sel}",
+                                  placeholder="e.g. AD-PY").strip().upper()
+            _okc = st.checkbox(f"Confirm moving {len(_recs)} record(s) from {_sel} to "
+                               f"{_newc or '…'}", key=f"nc_ok_{_sel}")
+            if st.button("Apply code change", key=f"nc_go_{_sel}",
+                         disabled=not (_newc and _okc)):
+                try:
+                    client.table(TABLE_NAME).update(
+                        {"student_initials": _newc}).eq("student_initials", _sel).execute()
+                    for _t in (ARCHIVE_TABLE, LABEL_TABLE):
+                        try:
+                            client.table(_t).update(
+                                {"student_initials": _newc}).eq("student_initials", _sel).execute()
+                        except Exception:
+                            pass
+                    st.session_state["sel_student"] = _newc
+                    st.success(f"Moved {len(_recs)} record(s) to {_newc}.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Could not change the code: {e}")
 
         with st.expander("➕ Add an entry for this student", expanded=not _recs):
             q1, q2, q3 = st.columns(3)
