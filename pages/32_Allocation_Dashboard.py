@@ -682,21 +682,27 @@ else:
                             footer_run.font.size = Pt(9)
                             footer_run.font.italic = True
                             
-                            # Save
-                            filename = f"CLC_Report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.docx"
-                            filepath = f'/mnt/user-data/outputs/{filename}'
-                            doc.save(filepath)
-                            
-                            # Download
-                            with open(filepath, 'rb') as f:
+                            # Save to memory buffer instead of disk
+                            try:
+                                from io import BytesIO
+                                
+                                # Save document to bytes buffer
+                                buffer = BytesIO()
+                                doc.save(buffer)
+                                buffer.seek(0)  # Reset to beginning
+                                
+                                filename = f"CLC_Report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.docx"
+                                
                                 st.download_button(
                                     label="⬇️ Download Report",
-                                    data=f,
+                                    data=buffer,
                                     file_name=filename,
                                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                                     key="dl_custom_report"
                                 )
-                            st.success(f"✅ {len(selected_report_sections)} sections ready!")
+                                st.success(f"✅ Report with {len(selected_report_sections)} sections ready to download!")
+                            except Exception as file_error:
+                                st.error(f"Error: {str(file_error)[:100]}")
                         
                         except Exception as e:
                             st.error(f"Error: {str(e)[:150]}")
