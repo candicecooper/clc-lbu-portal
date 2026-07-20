@@ -911,54 +911,116 @@ else:
         st.markdown(f"**Year {year_display} | Term {term_display}** - Current enrollment and placement status")
         
         # === EXPORT BUTTONS ===
-        col_export1, col_export2, col_export3 = st.columns([3, 1, 1])
-        with col_export3:
-            if st.button("📥 Export Report"):
-                with st.spinner("Generating report..."):
-                    try:
-                        import sys
-                        sys.path.append('/mnt/user-data/outputs')
-                        from export_dashboard_report import export_section_data
-                        
-                        # Prepare metrics for export
-                        metrics = {
-                            'Total Referrals': len(allocation_df),
-                            'Allocated Students': int(total_allocated),
-                            'Pending/Not Allocated': int(pending),
-                        }
-                        
-                        # Prepare filters info
-                        filters_info = {
-                            'year': year_display,
-                            'term': term_display,
-                            'program': selected_program,
-                            'view': selected_allocation_view
-                        }
-                        
-                        report_path = export_section_data(
-                            "Overview",
-                            filtered,
-                            metrics=metrics,
-                            filters_applied=filters_info
-                        )
-                        
-                        # Provide download button
-                        with open(report_path, 'rb') as f:
-                            st.download_button(
-                                label="⬇️ Download Word Document",
-                                data=f,
-                                file_name=report_path.split('/')[-1],
-                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                key="download_overview"
-                            )
-                        st.success("✅ Report ready for download!")
-                        
-                    except Exception as e:
-                        st.error(f"Error: {str(e)[:150]}")
-        
-        # === REFERRALS VS ALLOCATED COMPARISON ===
         st.markdown("---")
-        st.markdown("### Referral & Allocation Status")
+        st.markdown("### 📥 Export This View")
+        
+        col_exp1, col_exp2 = st.columns([2, 1])
+        
+        with col_exp1:
+            export_button = st.button("Generate Word Document", key="export_overview_btn")
+        
+        if export_button:
+            try:
+                from docx import Document
+                from docx.shared import Pt, RGBColor
+                from docx.enum.text import WD_ALIGN_PARAGRAPH
+                
+                doc = Document()
+                
+                # Title
+                title = doc.add_paragraph()
+                title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                title_run = title.add_run("CLC-LBU Allocation Dashboard Report")
+                title_run.font.size = Pt(24)
+                title_run.font.bold = True
+                title_run.font.color.rgb = RGBColor(0, 150, 136)
+                
+                # Section
+                section = doc.add_paragraph()
+                section.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                section_run = section.add_run("Overview - Referral & Allocation Status")
+                section_run.font.size = Pt(16)
+                
+                # Date
+                date_para = doc.add_paragraph()
+                date_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                date_run = date_para.add_run(f"Generated: {pd.Timestamp.now().strftime('%d %B %Y at %H:%M')}")
+                date_run.font.size = Pt(10)
+                date_run.font.italic = True
+                
+                # Filters
+                doc.add_heading("Filters Applied", level=2)
+                filters_text = f"Year: {year_display} | Term: {term_display} | Program: {selected_program} | View: {selected_allocation_view}"
+                doc.add_paragraph(filters_text)
+                
+                # Metrics
+                doc.add_heading("Key Metrics", level=2)
+                metrics_table = doc.add_table(rows=2, cols=4)
+                metrics_table.style = 'Light Grid Accent 1'
+                
+                metrics_headers = metrics_table.rows[0].cells
+                metrics_headers[0].text = "Total Referrals"
+                metrics_headers[1].text = "Allocated"
+                metrics_headers[2].text = "Pending"
+                metrics_headers[3].text = "Allocation Rate"
+                
+                metrics_data = metrics_table.rows[1].cells
+                metrics_data[0].text = str(total_referrals)
+                metrics_data[1].text = str(int(total_allocated))
+                metrics_data[2].text = str(int(pending))
+                metrics_data[3].text = f"{(total_allocated/total_referrals*100):.1f}%"
+                
+                # Data summary
+                if len(filtered) > 0:
+                    doc.add_heading("Student Data Summary", level=2)
+                    doc.add_paragraph(f"Total Filtered Students: {len(filtered)}")
+                    
+                    # Add sample data table
+                    display_cols = ['student_name', 'program', 'year_level', 'school']
+                    available_cols = [c for c in display_cols if c in filtered.columns]
+                    
+                    if len(available_cols) > 0:
+                        data_table = doc.add_table(rows=1, cols=len(available_cols))
+                        data_table.style = 'Light Grid Accent 1'
+                        
+                        header_cells = data_table.rows[0].cells
+                        for i, col in enumerate(available_cols):
+                            header_cells[i].text = col.replace('_', ' ').title()
+                        
+                        # Add first 10 students
+                        for _, row in filtered.head(10).iterrows():
+                            row_cells = data_table.add_row().cells
+                            for i, col in enumerate(available_cols):
+                                row_cells[i].text = str(row.get(col, ''))
+                
+                # Footer
+                doc.add_paragraph()
+                footer = doc.add_paragraph()
+                footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                footer_run = footer.add_run("Cowandilla Learning Centre - Learning & Behaviour Unit")
+                footer_run.font.size = Pt(9)
+                footer_run.font.italic = True
+                
+                # Save to outputs
+                filename = f"CLC_Report_Overview_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.docx"
+                filepath = f'/mnt/user-data/outputs/{filename}'
+                doc.save(filepath)
+                
+                # Show download button
+                with open(filepath, 'rb') as f:
+                    st.download_button(
+                        label="⬇️ Download Word Document",
+                        data=f,
+                        file_name=filename,
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key="download_doc"
+                    )
+                st.success("✅ Report generated successfully!")
+                
+            except Exception as e:
+                st.error(f"Error generating report: {str(e)}")
+        
+        st.markdown("---")
         
         # Count referrals vs allocated across full allocation_df for context
         total_referrals = len(allocation_df)
