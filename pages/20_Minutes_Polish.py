@@ -70,19 +70,63 @@ label[data-testid="stWidgetLabel"] p{font-size:.72rem!important;font-weight:600!
 def groq_call(prompt: str, max_tokens: int = 3000, system: str = "") -> str:
     try:
         from groq import Groq
-        client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+        client = Groq(api_key=st.secrets["GROQ_API_KEY"], timeout=120.0)
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
-        resp = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            max_tokens=max_tokens,
-            messages=messages
-        )
-        return resp.choices[0].message.content.strip()
+        last_err = None
+        for attempt in range(2):  # one automatic retry on transient failure
+            try:
+                resp = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    max_tokens=max_tokens,
+                    temperature=0.1,  # low temperature — factual fidelity over creativity
+                    messages=messages
+                )
+                return resp.choices[0].message.content.strip()
+            except Exception as e:
+                last_err = e
+        return f"[AI error: {last_err}]"
     except Exception as e:
         return f"[AI error: {e}]"
+
+# ── ROBUST JSON PARSING ───────────────────────────────────────
+def parse_ai_json(raw: str) -> dict:
+    """Parse JSON from an AI response, tolerating common LLM quirks:
+    - markdown code fences
+    - text before/after the JSON object
+    - literal newlines/tabs inside string values (invalid control chars)
+    - trailing commas
+    """
+    import re
+    raw = raw.replace("```json", "").replace("```", "").strip()
+    # Trim to outermost { ... }
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        raise ValueError("No JSON object found in AI response")
+    raw = raw[start:end+1]
+    # 1) Straight parse
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+    # 2) strict=False allows literal control characters inside strings
+    try:
+        return json.loads(raw, strict=False)
+    except json.JSONDecodeError:
+        pass
+    # 3) Escape raw control characters that appear inside string values,
+    #    then remove trailing commas, and retry
+    def _escape_ctrl(match):
+        s = match.group(0)
+        return (s.replace("\n", "\\n").replace("\r", "\\r")
+                 .replace("\t", "\\t"))
+    # Match JSON string literals (handles escaped quotes) incl. any raw ctrl chars inside
+    fixed = re.sub(r'"(?:[^"\\]|\\.)*"', _escape_ctrl, raw, flags=re.DOTALL)
+    fixed = re.sub(r",\s*([}\]])", r"\1", fixed)  # trailing commas
+    return json.loads(fixed, strict=False)
 
 # ── FILE TEXT EXTRACTION ──────────────────────────────────────
 def extract_text(uploaded_file) -> str:
@@ -139,6 +183,62 @@ def init():
 init()
 m  = st.session_state.mp_meeting
 
+# ── DRAFT SAVE / RESTORE (protects against timeouts & disconnects) ──
+def export_draft_bytes() -> bytes:
+    draft = {
+        "mp_meeting":  st.session_state.mp_meeting,
+        "mp_raw_text": st.session_state.mp_raw_text,
+        "mp_style":    st.session_state.mp_style,
+        "mp_sections": st.session_state.mp_sections,
+        "mp_actions":  st.session_state.mp_actions,
+        "mp_opening":  st.session_state.get("mp_opening",""),
+        "mp_closing":  st.session_state.get("mp_closing",""),
+        "mp_step":     st.session_state.mp_step,
+        "saved":       str(date.today()),
+    }
+    return json.dumps(draft, indent=2, ensure_ascii=False).encode("utf-8")
+
+def restore_draft(uploaded_file) -> bool:
+    try:
+        draft = json.loads(uploaded_file.read().decode("utf-8"))
+        for k in ["mp_meeting","mp_raw_text","mp_style","mp_sections","mp_actions"]:
+            if k in draft:
+                st.session_state[k] = draft[k]
+        st.session_state["mp_opening"] = draft.get("mp_opening","")
+        st.session_state["mp_closing"] = draft.get("mp_closing","")
+        try:
+            st.session_state.mp_step = max(1, min(int(draft.get("mp_step", 2)), 4))
+        except (TypeError, ValueError):
+            st.session_state.mp_step = 2
+        return True
+    except Exception as e:
+        st.error(f"Could not restore draft: {e}")
+        return False
+
+def draft_toolbar():
+    with st.expander("💾 Save / restore progress — protects your work if the app times out"):
+        st.caption(
+            "Download a draft at any point (especially before polishing and after reviewing). "
+            "If the app disconnects or times out, upload the draft here and you'll be back exactly where you left off."
+        )
+        dc1, dc2 = st.columns([1, 2])
+        with dc1:
+            st.download_button(
+                "⬇️ Download draft",
+                data=export_draft_bytes(),
+                file_name=f"minutes_draft_{m.get('type','meeting').replace(' ','_')}_{date.today()}.json",
+                mime="application/json",
+                use_container_width=True,
+                key="draft_dl",
+            )
+        with dc2:
+            up = st.file_uploader("Restore a saved draft (.json)", type=["json"], key="draft_up")
+            if up is not None:
+                if st.button("♻️ Restore this draft", type="primary", use_container_width=True, key="draft_rs"):
+                    if restore_draft(up):
+                        st.success("Draft restored.")
+                        st.rerun()
+
 MEETING_TYPES = [
     "Staff Meeting",
     "Team Meeting — JP",
@@ -176,6 +276,9 @@ for i, label in enumerate(STEPS, 1):
     bar += f'<div class="step-item {cls}">{label}</div>'
 bar += "</div>"
 st.markdown(bar, unsafe_allow_html=True)
+
+# Draft save/restore available on every step
+draft_toolbar()
 
 # ══════════════════════════════════════════════════════════════
 # STEP 1 — MEETING DETAILS
@@ -331,11 +434,8 @@ Extract only what is explicitly stated. For present/apologies, include EVERY per
 If a field is not mentioned, return an empty string or empty array."""
 
                 raw = groq_call(detect_prompt, 1500)
-                raw = raw.replace("```json","").replace("```","").strip()
-                if not raw.startswith("{"): 
-                    idx = raw.find("{"); raw = raw[idx:] if idx != -1 else raw
                 try:
-                    detected = json.loads(raw)
+                    detected = parse_ai_json(raw)
                     changed = []
                     if detected.get("date","").strip() and not m.get("date","").strip():
                         m["date"] = detected["date"]; changed.append("date")
@@ -419,37 +519,39 @@ elif st.session_state.mp_step == 3:
 
     SYSTEM_PROMPT = """You are a professional minute-taker producing formal meeting minutes for Cowandilla Learning Centre (CLC) LBU, Adelaide SA.
 
-These minutes are the OFFICIAL RECORD of the meeting, distributed to ALL attendees including external parties — DCP workers, parents/carers, BSE, allied health professionals, and other agencies.
+These minutes are the OFFICIAL RECORD of the meeting, distributed to ALL attendees including external parties — DCP workers, parents/carers, BSE, allied health professionals, and other agencies. Because they are an official record, ACCURACY OVERRIDES EVERYTHING ELSE. A vague but accurate record is acceptable; a detailed but invented one is not.
 
-YOUR JOB IS TO BE EXHAUSTIVE AND ATTRIBUTIVE:
+FIDELITY — the absolute rule:
+- Every statement in the minutes must be directly traceable to the transcript
+- NEVER invent, guess, or infer who said something. NEVER assign a statement to a named person unless the transcript clearly identifies them as the speaker (a speaker label like "Annette:", or wording like "Sarah said/asked/raised…", or an unmistakable first-person context)
+- NEVER invent names, roles, quotes, figures, dates, locations, or events that are not in the transcript
+- NEVER embellish or extrapolate — do not add plausible-sounding detail the transcript does not contain
+- If the transcript is ambiguous about a detail, either omit it or record it at the level of certainty the transcript supports
 
-ATTRIBUTION — always name who said what:
-- Never write "it was discussed" or "it was noted" without naming who said it
-- Use: "Ms Smith advised that…", "Mr Brown stated that…", "The Principal, Ms Jones, reported that…"
-- When multiple people contributed to a topic, record each person's contribution separately
-- If someone asked a question, record who asked it and who answered
-- If someone expressed a concern, record who raised it and the exact substance of the concern
+ATTRIBUTION — use it only when it is genuinely in the transcript:
+- When the speaker IS clearly identified: attribute precisely — "Ms Smith advised that…", "The Principal, Ms Jones, reported that…"
+- When the speaker is NOT clearly identified: use neutral minute-taking language — "It was noted that…", "Discussion was held regarding…", "The group agreed that…", "A concern was raised that…". This is CORRECT professional practice, not a failure
+- When multiple people contributed and each is identifiable, record each contribution separately with its speaker
+- If someone asked a question and the transcript shows who asked and who answered, record both; if not, record the question and response neutrally
 
-THOROUGHNESS — capture everything of substance:
-- Do NOT summarise away important detail — if someone explained a situation in 4 sentences, capture those 4 sentences worth of content
-- Record specific figures, dates, names, and details mentioned (e.g. "the incident on 19 March 2026", "funding of approximately $15,000", "the fence on the eastern boundary")
-- If evidence was presented, record what the evidence showed and who presented it
-- If a position or recommendation was made, record it in full
+THOROUGHNESS — within the bounds of fidelity:
+- Capture everything of substance from the transcript — do not summarise away important detail
+- Record specific figures, dates, names, and details exactly as stated in the transcript
 - Capture concerns raised, questions asked, and responses given
-- Note where there was agreement, disagreement, or uncertainty
+- Note where there was agreement, disagreement, or uncertainty — as the transcript shows it
 
 STRUCTURE:
 - One section per distinct topic — never merge two topics
-- Within each section: (1) context/background, (2) discussion with attribution, (3) resolution or outcome
-- Every Resolution must be explicitly labelled "Resolution:" and state exactly what was agreed
-- Every action must name the responsible person, the specific task, and the due date
-- Write for an external reader who was not present and may have no background on the situation"""
+- Within each section: (1) context/background as given in the transcript, (2) discussion, (3) resolution or outcome
+- A Resolution must be labelled "Resolution:" ONLY where the transcript shows a decision was actually made; otherwise state "Discussion only — no resolution reached at this meeting"
+- Every action must record the responsible person, task, and due date as stated; if the transcript does not name a responsible person or date, write "Not specified" rather than guessing
+- Write for an external reader who was not present"""
 
     def build_prompt():
         style_instruction = {
-            "formal": "Write in complete formal sentences. Within each section write full paragraphs — one for context/background, one or more for the discussion (attributing each point to the speaker by name), and one clearly labelled Resolution or Outcome. Do not use dot points as the primary format.",
-            "concise": "Use bullet points, but each bullet must be a complete, attributed statement — e.g. '• Ms Smith (BSE) advised that the current ISP funding allocation is unclear and may not be directly benefiting the student.' Never use vague or unattributed bullets.",
-            "narrative": "Write in flowing formal prose. Narrate the discussion as it unfolded, attributing each contribution to its speaker. The reader should be able to follow the conversation and understand exactly what was said, by whom, and what was decided.",
+            "formal": "Write in complete formal sentences. Within each section write full paragraphs — one for context/background, one or more for the discussion (attributing points to speakers by name only where the transcript identifies them; otherwise using neutral formal wording), and a clearly labelled Resolution or Outcome where one was actually reached. Do not use dot points as the primary format.",
+            "concise": "Use bullet points. Each bullet must be a complete statement — attributed by name where the transcript identifies the speaker (e.g. '• Ms Smith (BSE) advised that the current ISP funding allocation is unclear.'), or neutrally worded where it does not (e.g. '• It was agreed the timetable requires updating.'). Never invent an attribution to avoid neutral wording.",
+            "narrative": "Write in flowing formal prose. Narrate the discussion as it unfolded, attributing contributions to speakers only where the transcript identifies them, and otherwise describing the discussion neutrally. The reader should be able to follow what was discussed and decided — with every detail traceable to the transcript.",
         }.get(st.session_state.mp_style, "")
 
         present_list = m.get("present","").strip()
@@ -457,11 +559,12 @@ STRUCTURE:
         next_mtg     = m.get("next_meeting","").strip()
         subject      = m.get("subject","").strip()
 
-        return f"""Produce THOROUGH, ATTRIBUTED, formal meeting minutes from the transcript below.
+        return f"""Produce THOROUGH, ACCURATE, formal meeting minutes from the transcript below.
 
-CRITICAL: These minutes must capture EVERYTHING of substance from the transcript.
+CRITICAL: These minutes must capture everything of substance from the transcript — and NOTHING that is not in it.
 Do not summarise away detail. Do not omit concerns, questions, or explanations.
-Name who said EVERY significant thing. If you are not sure who said something, write "A participant noted that…"
+Attribute statements by name ONLY where the transcript clearly identifies the speaker.
+Where the speaker is not clearly identified, use neutral wording ("It was noted that…", "Discussion was held regarding…") — do NOT guess or assign a name.
 
 MEETING DETAILS:
 - Meeting type: {m['type']}
@@ -500,31 +603,32 @@ Return as JSON only (no markdown fences):
   "sections": [
     {{
       "heading": "Specific topic heading — be descriptive e.g. 'Safety & Risk Plan Review' not just 'Safety'",
-      "content": "THOROUGH content for this section. Must include: (1) Who introduced this topic and why. (2) Each contribution attributed by name — e.g. 'Ms Cromer (BSE) stated that...', 'The kinship carer advised that...', 'Ms Smith (CLC) reported that...'. (3) Any concerns raised and by whom. (4) Any evidence or information presented and by whom. (5) The outcome — labelled Resolution: [what was agreed] OR Discussion only — no resolution reached at this meeting. Use \\n for new paragraphs. Use \\n• for bullet points within a section.",
+      "content": "THOROUGH content for this section, drawn ONLY from the transcript. Include: (1) How the topic arose. (2) Contributions attributed by name ONLY where the transcript clearly identifies the speaker — e.g. 'Ms Cromer (BSE) stated that...'; where the speaker is unclear, use neutral wording — 'It was noted that...', 'Discussion was held regarding...'. (3) Concerns raised (with the person's name only if the transcript identifies them). (4) Evidence or information presented. (5) The outcome — labelled Resolution: [what was agreed] ONLY if the transcript shows a decision was made, otherwise 'Discussion only — no resolution reached at this meeting'. Use \\n for new paragraphs. Use \\n• for bullet points within a section.",
       "is_actions": false
     }}
   ],
   "actions": [
     {{
-      "who": "Full name of person responsible",
-      "action": "Specific action — written so someone not at the meeting understands exactly what is required",
-      "due": "Specific due date, or 'Prior to next meeting'"
+      "who": "Full name of person responsible AS STATED in the transcript, or 'Not specified'",
+      "action": "Specific action as stated in the transcript — written so someone not at the meeting understands what is required. Do not add detail the transcript does not contain.",
+      "due": "Due date as stated in the transcript, or 'Not specified'"
     }}
   ],
-  "closing": "Formal closing: time meeting closed, who closed it, thanks if given, next meeting date/time.",
+  "closing": "Formal closing: time meeting closed, who closed it, thanks if given, next meeting date/time — only details actually in the transcript.",
   "next_meeting": "Full next meeting details if mentioned"
 }}
 
 MANDATORY RULES — failure to follow these is not acceptable:
-1. EVERY section must attribute statements to named individuals — never anonymous "it was noted"
-2. Each section must be long enough to fully capture the discussion — if the topic took 5 minutes to discuss, the section should reflect that depth
-3. Capture specific details: dates, names, figures, locations, document names mentioned in the transcript
-4. If someone raised a question or concern, record the question AND the response
-5. One section per topic — create as many sections as needed, never merge unrelated topics
-6. Resolution: must be stated explicitly in every section where a decision was made
-7. Actions: every action mentioned in the transcript must appear in the actions array
-8. Do NOT omit content because it seems minor — if it was discussed, it belongs in the minutes
-9. Write for an external reader (e.g. a DCP worker reading these 6 months later) who needs full context"""
+1. FIDELITY FIRST: never attribute a statement to a named person unless the transcript clearly identifies them as the speaker. Where the speaker is unclear, neutral wording ("It was noted that…") is REQUIRED — this is correct minute-taking practice, not a shortcoming
+2. Never invent names, roles, quotes, figures, dates, or events. Every sentence must be traceable to the transcript
+3. Each section must be long enough to fully capture the discussion — but depth comes from the transcript, never from invention
+4. Capture specific details: dates, names, figures, locations, document names — exactly as stated in the transcript
+5. If someone raised a question or concern, record the question AND the response as the transcript gives them
+6. One section per topic — create as many sections as needed, never merge unrelated topics
+7. "Resolution:" appears ONLY where the transcript shows a decision was actually made
+8. Actions: every action mentioned in the transcript must appear in the actions array — with "Not specified" for any missing person or due date, never a guess
+9. Do NOT omit content because it seems minor — if it was discussed, it belongs in the minutes
+10. Write for an external reader (e.g. a DCP worker reading these 6 months later) — which is exactly why nothing can be invented"""
 
     st.markdown("""
     <div class="hero" style="text-align:center;padding:2rem;">
@@ -555,12 +659,8 @@ MANDATORY RULES — failure to follow these is not acceptable:
         if st.button("✨ Polish Minutes Now", type="primary", use_container_width=True):
             with st.spinner("Reading transcript and writing detailed minutes — this may take 30–60 seconds…"):
                 raw = groq_call(build_prompt(), 6000, SYSTEM_PROMPT)
-                raw = raw.replace("```json","").replace("```","").strip()
-                if not raw.startswith("{"):
-                    idx = raw.find("{")
-                    if idx != -1: raw = raw[idx:]
                 try:
-                    parsed = json.loads(raw)
+                    parsed = parse_ai_json(raw)
                     st.session_state.mp_sections  = parsed.get("sections", [])
                     st.session_state.mp_actions    = parsed.get("actions", [])
                     st.session_state["mp_opening"] = parsed.get("opening", "")
@@ -597,6 +697,8 @@ MANDATORY RULES — failure to follow these is not acceptable:
                     st.rerun()
                 except Exception as e:
                     st.error(f"Could not parse AI response ({e}). Please try again.")
+                    with st.expander("Show raw AI response (for troubleshooting)"):
+                        st.code(raw)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -764,9 +866,10 @@ elif st.session_state.mp_step == 4:
 These minutes are an official record distributed to all attendees including external parties.
 
 STANDARDS TO MAINTAIN:
-- Every statement must be attributed to a named person (e.g. "Ms Smith advised that...")
-- Sections must be thorough — capture full substance, not brief summaries
-- Decisions must be labelled "Resolution:" explicitly
+- NEVER invent who said something. Attribute a statement to a named person only if the current minutes or the user's instruction already identify that person as the speaker — otherwise keep or use neutral wording ("It was noted that…")
+- NEVER add names, figures, dates, or events that are not in the current minutes or the user's instruction
+- Sections must remain thorough — never delete substance the user did not ask you to remove
+- "Resolution:" labels stay only where a decision was actually recorded
 - Write in formal third person throughout
 
 CURRENT MINUTES:
@@ -790,20 +893,16 @@ Apply the instruction precisely and return the complete updated minutes as JSON 
 
 RULES:
 - Only make the change the user asked for — preserve everything else exactly as written
-- If adding new content, ensure it follows the same attribution and thoroughness standards
+- New content may only come from the user's instruction — do not fabricate supporting detail
 - If the instruction adds a new action, add it to the actions array
 - Maintain {st.session_state.mp_style} style throughout
 - Return ALL sections, even unchanged ones"""
 
             with st.spinner("Applying changes…"):
                 raw = groq_call(refine_prompt, 3000,
-                    "You are a professional minute-taker refining meeting minutes. Apply changes precisely as instructed. Preserve all other content exactly.")
-                raw = raw.replace("```json","").replace("```","").strip()
-                if not raw.startswith("{"): 
-                    idx = raw.find("{")
-                    if idx != -1: raw = raw[idx:]
+                    "You are a professional minute-taker refining meeting minutes. Apply changes precisely as instructed. Preserve all other content exactly. Never invent attribution — never assign a statement to a named person unless the current minutes or the instruction identify them as the speaker. Never fabricate names, figures, dates, or events.")
                 try:
-                    updated = json.loads(raw)
+                    updated = parse_ai_json(raw)
                     # Apply updates
                     if updated.get("opening","").strip():
                         st.session_state["mp_opening"] = updated["opening"]
@@ -827,10 +926,10 @@ RULES:
     st.markdown("**Quick actions:**")
     qa_cols = st.columns(4)
     quick_actions = [
-        ("📏 More concise",        "Make all sections more concise — remove unnecessary words but keep all attributed statements and specific details"),
-        ("🎩 More formal",         "Rewrite all sections in a more formal professional tone, ensuring every statement is attributed to a named person"),
-        ("✅ Extract all actions", "Find any action items mentioned in the minutes text that are not yet in the action register and add them with the responsible person's name"),
-        ("🔍 Check thoroughness",  "Review every section and expand any that are too brief — add missing attribution (who said what), specific details mentioned, and ensure every Resolution is clearly labelled. Do not remove any existing content."),
+        ("📏 More concise",        "Make all sections more concise — remove unnecessary words but keep all existing attributions and specific details exactly as they are. Do not add or change any attribution."),
+        ("🎩 More formal",         "Rewrite all sections in a more formal professional tone. Keep every attribution exactly as it currently stands — do not add names to statements that are currently unattributed."),
+        ("✅ Extract all actions", "Find any action items mentioned in the minutes text that are not yet in the action register and add them. Use the responsible person's name only if the minutes state it; otherwise use 'Not specified'."),
+        ("🔍 Check thoroughness",  "Review every section and expand any that are too brief — using ONLY content already present in the minutes. Do not add new attributions, names, or details that are not already there. Ensure every genuine decision is labelled Resolution:. Do not remove any existing content."),
     ]
     for i, (label, instruction) in enumerate(quick_actions):
         with qa_cols[i]:
@@ -843,12 +942,9 @@ RULES:
                 current += f"CLOSING:\n{st.session_state.get('mp_closing','')}\n"
                 refine_p = f"""Current minutes:\n{current}\n\nInstruction: {instruction}\n\nReturn updated JSON only:\n{{"opening":"...","sections":[{{"heading":"...","content":"..."}}],"actions":[{{"who":"...","action":"...","due":"..."}}],"closing":"...","change_summary":"one sentence"}}"""
                 with st.spinner("Applying…"):
-                    raw = groq_call(refine_p, 3000, "You are a professional minute-taker. Apply changes precisely.")
-                    raw = raw.replace("```json","").replace("```","").strip()
-                    if not raw.startswith("{"): 
-                        idx = raw.find("{"); raw = raw[idx:] if idx != -1 else raw
+                    raw = groq_call(refine_p, 3000, "You are a professional minute-taker. Apply changes precisely. Never invent attribution or fabricate details — only use content already in the minutes or the instruction.")
                     try:
-                        upd = json.loads(raw)
+                        upd = parse_ai_json(raw)
                         if upd.get("opening","").strip(): st.session_state["mp_opening"] = upd["opening"]
                         if upd.get("sections"): st.session_state.mp_sections = upd["sections"]
                         if upd.get("actions") is not None: st.session_state.mp_actions = upd["actions"]
