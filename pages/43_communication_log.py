@@ -996,18 +996,46 @@ with tab_students:
             q_who = st.text_input("Who", key="q_who")
             q_sum = st.text_area("Summary", height=90, key="q_sum")
             q_by = st.text_input("Recorded by", key="q_by", placeholder="Your initials")
+
+            if "q_seed" not in st.session_state:
+                st.session_state.q_seed = 0
+            st.markdown("**Attachments (optional)**")
+            st.warning(ATTACH_WARNING)
+            q_files = st.file_uploader("Attach image(s) / PDF(s)", type=ALLOWED_EXT,
+                                       accept_multiple_files=True,
+                                       key=f"q_files_{st.session_state.q_seed}")
+            q_lbl = st.text_input("Label for the attachment(s) (optional)",
+                                  key=f"q_lbl_{st.session_state.q_seed}",
+                                  placeholder="e.g. Newsletter or info sheet")
+            q_ack = st.checkbox(ATTACH_ACK, key=f"q_ack_{st.session_state.q_seed}") if q_files else False
+
             if st.button("💾 Save entry", type="primary", key="q_save"):
                 if not q_sum.strip():
                     st.error("Please add a summary.")
+                elif q_files and not q_ack:
+                    st.error("Tick the confirmation under Attachments to upload these file(s) — "
+                             "or remove them to save without attachments.")
                 else:
                     try:
-                        insert_record(client, {
+                        _res = insert_record(client, {
                             "student_initials": _sel, "comm_date": q_date.isoformat(),
                             "comm_time": None, "direction": q_dir, "comm_type": q_type,
                             "contact_name": q_who.strip() or None, "contact_role": None,
                             "summary": q_sum.strip(), "recorded_by": q_by.strip() or None,
                         })
-                        st.success("Saved.")
+                        _new_id = _res.data[0]["id"] if _res.data else None
+                        _errs = []
+                        if _new_id and q_files:
+                            for f in q_files:
+                                okk, err = upload_attachment(client, _new_id, f, q_lbl)
+                                if not okk:
+                                    _errs.append(f"{f.name}: {err}")
+                        if _errs:
+                            st.warning("Entry saved, but attachment(s) failed:\n" + "\n".join(_errs))
+                        else:
+                            st.success("Saved." + (f" {len(q_files)} attachment(s) uploaded."
+                                                   if q_files else ""))
+                        st.session_state.q_seed += 1
                         st.rerun()
                     except Exception as e:
                         st.error(f"Could not save: {e}")
@@ -1022,6 +1050,8 @@ with tab_students:
                     f"{' · 📎' + str(a) if a else ''}  \n"
                     f"{('**' + r['contact_name'] + '** — ') if r.get('contact_name') else ''}"
                     f"{r.get('summary','')}")
+                with st.expander(f"📎 Attachments ({a})" if a else "📎 Add an attachment"):
+                    render_attachments(client, r["id"], key_prefix=f"stu_att_{r['id']}")
                 st.divider()
 
 
