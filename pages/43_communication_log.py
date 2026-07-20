@@ -168,6 +168,14 @@ def program_of(code):
     return ""
 
 
+def fmt_date(d):
+    """ISO date -> Australian display format, e.g. 20 Jun 2026."""
+    try:
+        return date.fromisoformat(str(d)[:10]).strftime("%d %b %Y")
+    except Exception:
+        return str(d or "")
+
+
 def term_of(d):
     """Approximate SA school term from a date (by month)."""
     try:
@@ -508,8 +516,14 @@ def fetch_smartar_names(sb):
     return uniq, None
 
 
+def base_of(code):
+    """Strip the program suffix and any clash number: AD-PY-2 -> AD."""
+    return str(code or "").upper().split("-")[0].strip()
+
+
 def build_active_students(op_client, smartar_client):
     archived = set(get_archived_codes(op_client))
+    archived_bases = {base_of(c) for c in archived}
     comm_codes = set(get_codes(op_client))
     smartar_students, err = fetch_smartar_names(smartar_client)
     status = {"connected": smartar_client is not None and err is None,
@@ -525,14 +539,15 @@ def build_active_students(op_client, smartar_client):
         used[code] = used.get(code, 0) + 1
         if used[code] > 1:                      # genuine clash within same program
             code = f"{code}-{used[code]}"
-        if code in archived:
+        # hide if this code — or its base — has been archived/removed
+        if code in archived or base_of(code) in archived_bases:
             continue
         options.append((f"{nm} — {code}", code))
         seen_codes.add(code)
 
     # codes already in the log that SMARTAR didn't supply (incl. older-style codes)
     for c in sorted(comm_codes):
-        if c in archived or c in seen_codes:
+        if c in archived or base_of(c) in archived_bases or c in seen_codes:
             continue
         options.append((f"{c}  (existing entry)", c))
         seen_codes.add(c)
@@ -594,7 +609,7 @@ def records_to_rows(records, roster=None, att_map=None):
             "id": r.get("id"),
             "Full name": full if full else ("" if roster else None),
             "Code": code,
-            "Date": r.get("comm_date", ""),
+            "Date": fmt_date(r.get("comm_date", "")),
             "Time": r.get("comm_time") or "",
             "Direction": r.get("direction", ""),
             "Type": r.get("comm_type", ""),
@@ -632,7 +647,16 @@ def build_excel(rows, roster_used, with_attachments=False):
         cell.border = border
     for i, row in enumerate(rows, start=2):
         for c, h in enumerate(headers, start=1):
-            cell = ws.cell(row=i, column=c, value=row.get(h, ""))
+            val = row.get(h, "")
+            cell = ws.cell(row=i, column=c)
+            if h == "Date" and val:
+                try:                       # store a real date so sorting still works
+                    cell.value = datetime.strptime(str(val), "%d %b %Y").date()
+                    cell.number_format = "dd/mm/yyyy"
+                except Exception:
+                    cell.value = val
+            else:
+                cell.value = val
             cell.alignment = Alignment(vertical="top", wrap_text=(h in ("Summary", "Attachments")))
             cell.border = border
     widths = {"Full name": 26, "Code": 8, "Date": 12, "Time": 8, "Direction": 11,
@@ -646,6 +670,135 @@ def build_excel(rows, roster_used, with_attachments=False):
     wb.save(buf)
     buf.seek(0)
     return buf
+
+
+def build_student_pdf(records, att_by_comm, student_label, files_bytes):
+    """Full chronological record for one student, with images embedded so a
+    printed copy contains the correspondence itself."""
+    if not HAS_REPORTLAB:
+        return None
+    from reportlab.platypus import Image as RLImage
+    from reportlab.lib.utils import ImageReader
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=16*mm, rightMargin=16*mm,
+                            topMargin=14*mm, bottomMargin=14*mm)
+    styles = getSampleStyleSheet()
+    h_style = ParagraphStyle("h", parent=styles["Title"], fontSize=16)
+    sub = ParagraphStyle("sub", parent=styles["Normal"], fontSize=9, textColor=colors.grey)
+    ent = ParagraphStyle("ent", parent=styles["Normal"], fontSize=10, leading=13)
+    small = ParagraphStyle("sm", parent=styles["Normal"], fontSize=8,
+                           leading=10, textColor=colors.grey)
+
+    story = [Paragraph("Communication Record", h_style),
+             Paragraph(f"{student_label} &nbsp;|&nbsp; {len(records)} entries &nbsp;|&nbsp; "
+                       f"Generated {datetime.now().strftime('%d %b %Y, %H:%M')}", sub),
+             Spacer(1, 6*mm)]
+
+    ordered = sorted(records, key=lambda r: (r.get("comm_date") or "", r.get("created_at") or ""))
+    for r in ordered:
+        when = fmt_date(r.get("comm_date", ""))
+        if r.get("comm_time"):
+            when += f" {r['comm_time']}"
+        head = f"<b>{when}</b> — {r.get('direction','')} · {r.get('comm_type','')}"
+        if r.get("contact_name"):
+            head += f" · {r['contact_name']}"
+        if r.get("contact_role"):
+            head += f" ({r['contact_role']})"
+        story.append(Paragraph(head, ent))
+        story.append(Paragraph(str(r.get("summary", "")).replace("\n", "<br/>"), ent))
+        if r.get("recorded_by"):
+            story.append(Paragraph(f"Recorded by {r['recorded_by']}", small))
+
+        for a in att_by_comm.get(r["id"], []):
+            lab = a.get("label") or a.get("file_name") or "attachment"
+            data = files_bytes.get(a["storage_path"])
+            mime = (a.get("mime_type") or "")
+            fname = a.get("file_name") or ""
+            is_img = mime.startswith("image/") or fname.lower().endswith(
+                (".png", ".jpg", ".jpeg", ".gif", ".webp"))
+            story.append(Paragraph(f"📎 {lab} — {fname}", small))
+            if data and is_img:
+                try:
+                    ir = ImageReader(io.BytesIO(data))
+                    iw, ih = ir.getSize()
+                    maxw = 150 * mm
+                    w = min(maxw, iw)
+                    h = ih * (w / iw)
+                    maxh = 170 * mm
+                    if h > maxh:
+                        h = maxh
+                        w = iw * (h / ih)
+                    story.append(Spacer(1, 2*mm))
+                    story.append(RLImage(io.BytesIO(data), width=w, height=h))
+                except Exception:
+                    story.append(Paragraph("(image could not be rendered — see the "
+                                           "attachments folder)", small))
+            elif data:
+                story.append(Paragraph("(PDF attachment — included in the attachments folder)",
+                                       small))
+        story.append(Spacer(1, 3*mm))
+        story.append(Table([[""]], colWidths=[doc.width],
+                           style=TableStyle([("LINEBELOW", (0, 0), (-1, -1), 0.4,
+                                              colors.HexColor("#CCCCCC"))])))
+        story.append(Spacer(1, 3*mm))
+
+    doc.build(story)
+    buf.seek(0)
+    return buf
+
+
+def build_full_record_zip(client, code, student_label, records):
+    """ZIP: printable PDF (images embedded) + Excel + every attachment file."""
+    import zipfile
+    ids = [r["id"] for r in records]
+    att_by_comm, files_bytes = {}, {}
+    try:
+        res = client.table(ATTACH_TABLE).select("*").in_("comm_id", ids).execute().data or [] \
+            if ids else []
+        for a in res:
+            att_by_comm.setdefault(a["comm_id"], []).append(a)
+            data, _ = download_bytes(client, a["storage_path"])
+            if data:
+                files_bytes[a["storage_path"]] = data
+    except Exception:
+        pass
+
+    rows = records_to_rows(records)
+    for row, r in zip(rows, records):
+        labs = [a.get("label") or a.get("file_name") or "attachment"
+                for a in att_by_comm.get(r["id"], [])]
+        row["Attachments"] = "; ".join(labs)
+
+    zbuf = io.BytesIO()
+    stamp = datetime.now().strftime("%Y%m%d")
+    safe = _safe_name(code)
+    with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as z:
+        pdf = build_student_pdf(records, att_by_comm, student_label, files_bytes)
+        if pdf:
+            z.writestr(f"{safe}_communication_record_{stamp}.pdf", pdf.getvalue())
+        z.writestr(f"{safe}_communication_log_{stamp}.xlsx",
+                   build_excel(rows, False, True).getvalue())
+        for r in records:
+            for a in att_by_comm.get(r["id"], []):
+                data = files_bytes.get(a["storage_path"])
+                if not data:
+                    continue
+                lab = _safe_name(a.get("label") or "")
+                nm = f"attachments/{r.get('comm_date','')}_{lab + '_' if lab else ''}" \
+                     f"{_safe_name(a.get('file_name') or 'file')}"
+                z.writestr(nm, data)
+        lines = [f"Communication record — {student_label}",
+                 f"Generated {datetime.now().strftime('%d %b %Y %H:%M')}",
+                 f"{len(records)} entries",
+                 f"{sum(len(v) for v in att_by_comm.values())} attachment(s)", "",
+                 "Contents:",
+                 "  * PDF — full dated record, images embedded (for printing)",
+                 "  * XLSX — the same entries as a spreadsheet",
+                 "  * attachments/ — original files, prefixed with their entry date"]
+        z.writestr("README.txt", "\n".join(lines))
+    zbuf.seek(0)
+    return zbuf
 
 
 def build_pdf(rows, roster_used, scope_label):
@@ -789,8 +942,8 @@ for _c, _l in _local_labels.items():
 if "up_seed" not in st.session_state:
     st.session_state.up_seed = 0
 
-tab_log, tab_students, tab_view, tab_export, tab_archive = st.tabs(
-    ["➕ Log a communication", "👥 Students", "📋 View / edit",
+tab_students, tab_log, tab_view, tab_export, tab_archive = st.tabs(
+    ["👥 Students", "➕ Log a communication", "📋 View / edit",
      "⬇️ Export & print", "🗄️ Archive"])
 
 # ---- TAB 1: LOG ------------------------------------------------------------
@@ -1024,6 +1177,27 @@ with tab_students:
         _recs = fetch_records(client, code=_sel)
         st.caption(f"{len(_recs)} communication(s) on record.")
 
+        if _recs:
+            with st.expander("📦 End of placement — download the full record", expanded=False):
+                st.caption("A single ZIP containing: a printable PDF of every entry in date "
+                           "order with images embedded, the same entries as Excel, and every "
+                           "attachment file. Use this before archiving the student.")
+                if st.button("Build full record", key=f"fr_{_sel}"):
+                    with st.spinner("Gathering entries and attachments…"):
+                        try:
+                            z = build_full_record_zip(client, _sel, _lbl, _recs)
+                            st.session_state[f"fr_data_{_sel}"] = z.getvalue()
+                        except Exception as e:
+                            st.error(f"Could not build the record: {e}")
+                _fd = st.session_state.get(f"fr_data_{_sel}")
+                if _fd:
+                    st.download_button(
+                        "⬇️ Download full record (.zip)", data=_fd,
+                        file_name=f"{_safe_name(_sel)}_full_record_"
+                                  f"{datetime.now():%Y%m%d}.zip",
+                        mime="application/zip", key=f"frdl_{_sel}")
+                    st.caption("Open the PDF inside and print it for the paper file.")
+
         with st.expander("✏️ Edit this student's label or code"):
             st.markdown("**Display label**")
             st.caption("What this tool shows for this student. Names come live from SMARTAR — "
@@ -1137,7 +1311,7 @@ with tab_students:
             for r in _recs:
                 a = _cnt.get(r["id"], 0)
                 st.markdown(
-                    f"**{r.get('comm_date','')}** {r.get('comm_time') or ''} · "
+                    f"**{fmt_date(r.get('comm_date',''))}** {r.get('comm_time') or ''} · "
                     f"{r.get('direction','')} · {r.get('comm_type','')}"
                     f"{' · 📎' + str(a) if a else ''}  \n"
                     f"{('**' + r['contact_name'] + '** — ') if r.get('contact_name') else ''}"
@@ -1244,7 +1418,7 @@ with tab_view:
         st.markdown("##### Edit a record / manage its attachments")
         def _label(r):
             who = code_to_label.get(r.get("student_initials"), r.get("student_initials", ""))
-            return f"{r.get('comm_date','')} · {who} · " \
+            return f"{fmt_date(r.get('comm_date',''))} · {who} · " \
                    f"{r.get('comm_type','')} · {(r.get('summary','') or '')[:50]}"
         idx = st.selectbox("Select a record", list(range(len(records))),
                            format_func=lambda i: _label(records[i]), key="edit_pick")
@@ -1391,7 +1565,25 @@ with tab_archive:
         pick = st.selectbox("Student to archive", candidates,
                             format_func=lambda c: code_to_label.get(c, c), key="arch_pick")
         n = len(fetch_records(client, code=pick))
-        st.caption(f"**{n}** record(s) for {pick}. Download & print them from the Export tab first.")
+        st.caption(f"**{n}** record(s) for {pick}.")
+        if n:
+            if st.button("📦 Build the full record (PDF + Excel + attachments)", key="ar_build"):
+                with st.spinner("Gathering entries and attachments…"):
+                    try:
+                        _z = build_full_record_zip(client, pick,
+                                                   code_to_label.get(pick, pick),
+                                                   fetch_records(client, code=pick))
+                        st.session_state[f"ar_zip_{pick}"] = _z.getvalue()
+                    except Exception as e:
+                        st.error(f"Could not build the record: {e}")
+            _azd = st.session_state.get(f"ar_zip_{pick}")
+            if _azd:
+                st.download_button("⬇️ Download full record (.zip)", data=_azd,
+                                   file_name=f"{_safe_name(pick)}_full_record_"
+                                             f"{datetime.now():%Y%m%d}.zip",
+                                   mime="application/zip", key="ar_dl")
+                st.caption("Print the PDF inside for the paper file, then tick the "
+                           "confirmations below.")
         st.markdown("**Confirm the record lifecycle is complete:**")
         a1 = st.checkbox("✅ Record downloaded (Excel / PDF)", key="arch_dl")
         a2 = st.checkbox("✅ Record printed", key="arch_pr")
@@ -1450,7 +1642,7 @@ with tab_archive:
             st.markdown(f"**{_nm.get(pg, pg)}** ({len(grp)})")
             for r in grp:
                 code = r["student_initials"]
-                ts = (r.get("archived_at") or "")[:10]
+                ts = fmt_date((r.get("archived_at") or "")[:10])
                 col1, col2 = st.columns([4, 1])
                 with col1:
                     st.markdown(f"• **{code_to_label.get(code, code)}** — {'archived' if r['_complete'] else 'removed'} {ts} "
