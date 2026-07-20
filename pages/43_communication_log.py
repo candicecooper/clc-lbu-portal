@@ -375,7 +375,36 @@ def initials_from_name(name):
     return "".join(p[0] for p in parts[:3]).upper()
 
 
+SMARTAR_PROG_COLS = ["program", "programme", "sub_school", "subschool", "cohort",
+                     "group", "class", "class_group", "team", "setting", "year_level",
+                     "level", "unit", "area"]
+
+
+def normalise_program(val):
+    """Map whatever SMARTAR stores to JP / PY / SY (or '' if unclear)."""
+    s = str(val or "").strip().upper()
+    if not s or s == "NONE":
+        return ""
+    if "JP" in s or "JUNIOR" in s:
+        return "JP"
+    if "PY" in s or "PRIMARY" in s:
+        return "PY"
+    if "SY" in s or "SENIOR" in s:
+        return "SY"
+    # bare year levels as a fallback
+    m = re.search(r"\b(\d{1,2})\b", s)
+    if m:
+        y = int(m.group(1))
+        if y <= 2:
+            return "JP"
+        if y <= 6:
+            return "PY"
+        return "SY"
+    return ""
+
+
 def fetch_smartar_names(sb):
+    """Return (list of (name, program), error). Program is JP/PY/SY or ''."""
     if sb is None:
         return [], "not connected"
     try:
@@ -388,39 +417,53 @@ def fetch_smartar_names(sb):
     name_col = next((c for c in SMARTAR_NAME_COLS if c in sample), None)
     if name_col is None:
         return [], f"no name column found (columns: {list(sample.keys())})"
-    names = []
+    prog_col = next((c for c in SMARTAR_PROG_COLS if c in sample), None)
+    out = []
     for r in rows:
         if r.get("placement_ended") is True or r.get("archived") is True:
             continue
         nm = (r.get(name_col) or "").strip()
-        if nm:
-            names.append(nm)
-    return sorted(set(names)), None
+        if not nm:
+            continue
+        prog = normalise_program(r.get(prog_col)) if prog_col else ""
+        out.append((nm, prog))
+    seen, uniq = set(), []
+    for nm, pg in sorted(out):
+        if (nm, pg) not in seen:
+            seen.add((nm, pg))
+            uniq.append((nm, pg))
+    return uniq, None
 
 
 def build_active_students(op_client, smartar_client):
     archived = set(get_archived_codes(op_client))
     comm_codes = set(get_codes(op_client))
-    smartar_names, err = fetch_smartar_names(smartar_client)
+    smartar_students, err = fetch_smartar_names(smartar_client)
     status = {"connected": smartar_client is not None and err is None,
-              "count": len(smartar_names), "error": err}
+              "count": len(smartar_students), "error": err,
+              "with_program": sum(1 for _, p in smartar_students if p)}
 
-    options, seen_codes, base_seen = [], set(), {}
-    for nm in smartar_names:
+    options, seen_codes, used = [], set(), {}
+    for nm, prog in smartar_students:
         base = initials_from_name(nm)
         if not base:
             continue
-        base_seen[base] = base_seen.get(base, 0) + 1
-        code = base if base_seen[base] == 1 else f"{base}{base_seen[base]}"
+        code = f"{base}-{prog}" if prog else base
+        used[code] = used.get(code, 0) + 1
+        if used[code] > 1:                      # genuine clash within same program
+            code = f"{code}-{used[code]}"
         if code in archived:
             continue
         options.append((f"{nm} — {code}", code))
         seen_codes.add(code)
+
+    # codes already in the log that SMARTAR didn't supply (incl. older-style codes)
     for c in sorted(comm_codes):
         if c in archived or c in seen_codes:
             continue
-        options.append((c, c))
+        options.append((f"{c}  (existing entry)", c))
         seen_codes.add(c)
+
     options.sort(key=lambda x: x[0].lower())
     return options, status
 
@@ -673,6 +716,12 @@ with tab_log:
                      f"Detail: `{smartar_status['error'] or 'no SMARTAR secrets found'}`")
         else:
             st.write(f"✅ Pulled **{smartar_status['count']}** student(s) from `{SMARTAR_TABLE}`.")
+            _wp = smartar_status.get("with_program", 0)
+            if _wp:
+                st.write(f"🏷️ **{_wp}** have a program (JP/PY/SY), so their code reads like `AD-PY`.")
+            else:
+                st.write("🏷️ No program (JP/PY/SY) found in SMARTAR, so codes are initials only. "
+                         "If SMARTAR does store this, tell me the column name and I'll map it.")
 
     mode = st.radio("Student", ["Choose existing", "Add new"], horizontal=True, key="student_mode")
     student_code = None
@@ -828,6 +877,40 @@ with tab_view:
             })
         st.caption(f"{len(records)} record(s). 📎 = attachments. Student names are read live "
                    "from SMARTAR and are never stored in this database.")
+
+        with st.expander("🏷️ Rename / tidy a student code (e.g. AD2 → AD-PY)"):
+            st.caption("Codes now read as initials + program, e.g. **AD-PY**. Use this to move "
+                       "older entries onto a clearer code. Every record on the old code moves "
+                       "to the new one.")
+            all_codes = get_codes(client)
+            if not all_codes:
+                st.caption("No codes to rename yet.")
+            else:
+                old = st.selectbox("Existing code", all_codes, key="rc_old")
+                _n = len([r for r in fetch_records(client, code=old)])
+                st.caption(f"{_n} record(s) currently on **{old}**.")
+                sug = [c for (_, c) in active_options if c != old]
+                pick_new = st.selectbox("Move to", ["(type a new code)"] + sug,
+                                        format_func=lambda c: c if c.startswith("(") else
+                                        code_to_label.get(c, c), key="rc_new_pick")
+                typed = st.text_input("Or type the new code", key="rc_new_txt",
+                                      placeholder="e.g. AD-PY").strip().upper()
+                new_code = typed or (pick_new if not pick_new.startswith("(") else "")
+                ok = st.checkbox(f"Confirm: move all records from {old} to {new_code or '…'}",
+                                 key="rc_ok")
+                if st.button("Apply rename", key="rc_go", disabled=not (new_code and ok)):
+                    try:
+                        client.table(TABLE_NAME).update(
+                            {"student_initials": new_code}).eq("student_initials", old).execute()
+                        try:
+                            client.table(ARCHIVE_TABLE).update(
+                                {"student_initials": new_code}).eq("student_initials", old).execute()
+                        except Exception:
+                            pass
+                        st.success(f"Moved {_n} record(s) from {old} to {new_code}.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Could not rename: {e}")
 
         st.markdown("##### Edit a record / manage its attachments")
         def _label(r):
