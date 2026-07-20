@@ -12,7 +12,13 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-from auth import logout_button, get_staff_name
+try:
+    from auth import logout_button
+except ImportError:
+    # auth.py doesn't provide logout_button in this deployment —
+    # the page has its own logout controls, so fall back to a no-op.
+    def logout_button(*_args, **_kwargs):
+        return None
 logout_button("sidebar")
 
 # ── DESIGN SYSTEM ─────────────────────────────────────────────
