@@ -553,6 +553,146 @@ else:
         )
         
         st.markdown("---")
+        
+        # === REPORT BUILDER ===
+        with st.expander("📋 Build Custom Report", expanded=False):
+            st.markdown("**Select sections to include in your report:**")
+            
+            # Checkboxes for each section
+            col1, col2 = st.columns(2)
+            with col1:
+                rep_overview = st.checkbox("Overview - Referral & Allocation", value=True)
+                rep_trends = st.checkbox("Trends - Historical Data", value=False)
+                rep_complexity = st.checkbox("Program Allocation", value=False)
+                rep_equity = st.checkbox("Equity - ATSI/EALD/DCP", value=False)
+            
+            with col2:
+                rep_cat_support = st.checkbox("Category of Support - Funding", value=False)
+                rep_disability = st.checkbox("Disability & Support Needs", value=False)
+                rep_asd = st.checkbox("ASD Deep Dive Analysis", value=False)
+                rep_cohort = st.checkbox("Cohort Analysis", value=False)
+            
+            selected_report_sections = []
+            if rep_overview: selected_report_sections.append("Overview")
+            if rep_trends: selected_report_sections.append("Trends")
+            if rep_complexity: selected_report_sections.append("Program Allocation")
+            if rep_cat_support: selected_report_sections.append("Category of Support")
+            if rep_cohort: selected_report_sections.append("Cohort Analysis")
+            if rep_equity: selected_report_sections.append("Equity")
+            if rep_disability: selected_report_sections.append("Disability & Support Needs")
+            if rep_asd: selected_report_sections.append("ASD Deep Dive")
+            
+            st.markdown("---")
+            
+            if st.button("🔄 Generate Multi-Section Report", key="gen_report"):
+                if len(selected_report_sections) == 0:
+                    st.error("Please select at least one section")
+                else:
+                    with st.spinner(f"Generating report with {len(selected_report_sections)} sections..."):
+                        try:
+                            from docx import Document
+                            from docx.shared import Pt, RGBColor
+                            from docx.enum.text import WD_ALIGN_PARAGRAPH
+                            
+                            doc = Document()
+                            
+                            # Title
+                            title = doc.add_paragraph()
+                            title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                            title_run = title.add_run("CLC-LBU Allocation Dashboard Report")
+                            title_run.font.size = Pt(28)
+                            title_run.font.bold = True
+                            title_run.font.color.rgb = RGBColor(0, 150, 136)
+                            
+                            # Subtitle
+                            subtitle = doc.add_paragraph()
+                            subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                            subtitle_run = subtitle.add_run("Custom Multi-Section Report")
+                            subtitle_run.font.size = Pt(16)
+                            
+                            # Date
+                            date_para = doc.add_paragraph()
+                            date_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                            date_run = date_para.add_run(f"Generated: {pd.Timestamp.now().strftime('%d %B %Y at %H:%M')}")
+                            date_run.font.size = Pt(10)
+                            date_run.font.italic = True
+                            
+                            # Filters
+                            doc.add_page_break()
+                            doc.add_heading("Report Parameters", level=1)
+                            
+                            filters_table = doc.add_table(rows=5, cols=2)
+                            filters_table.style = 'Light Grid Accent 1'
+                            
+                            filters_table.rows[0].cells[0].text = "Year"
+                            filters_table.rows[0].cells[1].text = str(year_display)
+                            filters_table.rows[1].cells[0].text = "Term"
+                            filters_table.rows[1].cells[1].text = str(term_display)
+                            filters_table.rows[2].cells[0].text = "Program"
+                            filters_table.rows[2].cells[1].text = str(selected_program)
+                            filters_table.rows[3].cells[0].text = "View"
+                            filters_table.rows[3].cells[1].text = str(selected_allocation_view)
+                            filters_table.rows[4].cells[0].text = "Sections"
+                            filters_table.rows[4].cells[1].text = ", ".join(selected_report_sections)
+                            
+                            # TOC
+                            doc.add_page_break()
+                            doc.add_heading("Contents", level=1)
+                            for i, sec in enumerate(selected_report_sections, 1):
+                                doc.add_paragraph(f"{i}. {sec}", style='List Number')
+                            
+                            # Sections
+                            for idx, section in enumerate(selected_report_sections, 1):
+                                doc.add_page_break()
+                                doc.add_heading(f"{idx}. {section}", level=1)
+                                doc.add_paragraph(f"Filtered Records: {len(filtered)}")
+                                
+                                # Add sample data
+                                if len(filtered) > 0:
+                                    display_cols = ['student_name', 'program', 'year_level']
+                                    available_cols = [c for c in display_cols if c in filtered.columns]
+                                    
+                                    if available_cols:
+                                        doc.add_paragraph("Sample Data (first 5):")
+                                        table = doc.add_table(rows=1, cols=len(available_cols))
+                                        table.style = 'Light Grid Accent 1'
+                                        
+                                        for i, col in enumerate(available_cols):
+                                            table.rows[0].cells[i].text = col.replace('_', ' ').title()
+                                        
+                                        for _, row in filtered.head(5).iterrows():
+                                            cells = table.add_row().cells
+                                            for i, col in enumerate(available_cols):
+                                                cells[i].text = str(row.get(col, ''))
+                            
+                            # Footer
+                            doc.add_page_break()
+                            footer = doc.add_paragraph()
+                            footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                            footer_run = footer.add_run("Cowandilla Learning Centre - Learning & Behaviour Unit")
+                            footer_run.font.size = Pt(9)
+                            footer_run.font.italic = True
+                            
+                            # Save
+                            filename = f"CLC_Report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.docx"
+                            filepath = f'/mnt/user-data/outputs/{filename}'
+                            doc.save(filepath)
+                            
+                            # Download
+                            with open(filepath, 'rb') as f:
+                                st.download_button(
+                                    label="⬇️ Download Report",
+                                    data=f,
+                                    file_name=filename,
+                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                    key="dl_custom_report"
+                                )
+                            st.success(f"✅ {len(selected_report_sections)} sections ready!")
+                        
+                        except Exception as e:
+                            st.error(f"Error: {str(e)[:150]}")
+        
+        st.markdown("---")
         st.markdown("**Data Management**")
         
         # Password gate for upload
