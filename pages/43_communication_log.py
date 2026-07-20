@@ -154,6 +154,36 @@ def get_codes(client):
         return []
 
 
+PROGRAMS = ["JP", "PY", "SY"]
+
+
+def program_of(code):
+    """Derive JP/PY/SY from a code like AD-PY. Returns '' if not encoded."""
+    if not code:
+        return ""
+    parts = str(code).upper().split("-")
+    for p in parts[1:]:
+        if p in PROGRAMS:
+            return p
+    return ""
+
+
+def term_of(d):
+    """Approximate SA school term from a date (by month)."""
+    try:
+        m = date.fromisoformat(str(d)[:10]).month
+    except Exception:
+        return ""
+    return "T1" if m <= 3 else "T2" if m <= 6 else "T3" if m <= 9 else "T4"
+
+
+def year_of(d):
+    try:
+        return str(date.fromisoformat(str(d)[:10]).year)
+    except Exception:
+        return ""
+
+
 def check_table(client, table):
     try:
         client.table(table).select("*").limit(1).execute()
@@ -698,8 +728,9 @@ for lbl, code in active_options:
 if "up_seed" not in st.session_state:
     st.session_state.up_seed = 0
 
-tab_log, tab_view, tab_export, tab_archive = st.tabs(
-    ["➕ Log a communication", "📋 View / edit", "⬇️ Export & print", "🗄️ Archive"])
+tab_log, tab_students, tab_view, tab_export, tab_archive = st.tabs(
+    ["➕ Log a communication", "👥 Students", "📋 View / edit",
+     "⬇️ Export & print", "🗄️ Archive"])
 
 # ---- TAB 1: LOG ------------------------------------------------------------
 with tab_log:
@@ -818,8 +849,138 @@ with tab_log:
                 st.error(f"Could not save: {e}")
 
 # ---- TAB 2: VIEW / EDIT ----------------------------------------------------
+# ---- TAB 2: STUDENTS BY PROGRAM --------------------------------------------
+with tab_students:
+    st.subheader("Students by program")
+    st.caption("Pick a program, click a student, then read or add their entries.")
+
+    _archived = set(get_archived_codes(client))
+    _groups = {p: [] for p in PROGRAMS}
+    _groups["Unassigned"] = []
+    for lbl, code in active_options:
+        if code in _archived:
+            continue
+        p = program_of(code) or "Unassigned"
+        _groups.setdefault(p, []).append((lbl, code))
+
+    _counts_by_code = {}
+    try:
+        _all = client.table(TABLE_NAME).select("student_initials").execute().data or []
+        for r in _all:
+            k = r.get("student_initials")
+            _counts_by_code[k] = _counts_by_code.get(k, 0) + 1
+    except Exception:
+        pass
+
+    _names = {"JP": "Junior Primary", "PY": "Primary Years",
+              "SY": "Senior Years", "Unassigned": "Unassigned / older codes"}
+    _sel = st.session_state.get("sel_student")
+
+    cols = st.columns(len(PROGRAMS) + (1 if _groups.get("Unassigned") else 0))
+    for i, p in enumerate(PROGRAMS + (["Unassigned"] if _groups.get("Unassigned") else [])):
+        with cols[i]:
+            st.markdown(f"**{_names.get(p, p)}**")
+            grp = sorted(_groups.get(p, []), key=lambda x: x[0].lower())
+            if not grp:
+                st.caption("_No students_")
+            for lbl, code in grp:
+                n = _counts_by_code.get(code, 0)
+                if st.button(f"{lbl}  ({n})", key=f"stu_{code}", use_container_width=True):
+                    st.session_state["sel_student"] = code
+                    st.rerun()
+
+    st.divider()
+    if not _sel:
+        st.info("Select a student above to see their communication history.")
+    else:
+        _lbl = code_to_label.get(_sel, _sel)
+        c1, c2 = st.columns([4, 1])
+        with c1:
+            st.markdown(f"### {_lbl}")
+        with c2:
+            if st.button("Clear selection"):
+                st.session_state.pop("sel_student", None)
+                st.rerun()
+
+        _recs = fetch_records(client, code=_sel)
+        st.caption(f"{len(_recs)} communication(s) on record.")
+
+        with st.expander("➕ Add an entry for this student", expanded=not _recs):
+            q1, q2, q3 = st.columns(3)
+            with q1:
+                q_date = st.date_input("Date", value=date.today(), key="q_date")
+            with q2:
+                q_dir = st.radio("Direction", DIRECTIONS, horizontal=True, key="q_dir")
+            with q3:
+                q_type = st.selectbox("Type", COMM_TYPES, key="q_type")
+            q_who = st.text_input("Who", key="q_who")
+            q_sum = st.text_area("Summary", height=90, key="q_sum")
+            q_by = st.text_input("Recorded by", key="q_by", placeholder="Your initials")
+            if st.button("💾 Save entry", type="primary", key="q_save"):
+                if not q_sum.strip():
+                    st.error("Please add a summary.")
+                else:
+                    try:
+                        insert_record(client, {
+                            "student_initials": _sel, "comm_date": q_date.isoformat(),
+                            "comm_time": None, "direction": q_dir, "comm_type": q_type,
+                            "contact_name": q_who.strip() or None, "contact_role": None,
+                            "summary": q_sum.strip(), "recorded_by": q_by.strip() or None,
+                        })
+                        st.success("Saved.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Could not save: {e}")
+
+        if _recs:
+            _cnt = get_attachment_counts(client, [r["id"] for r in _recs])
+            for r in _recs:
+                a = _cnt.get(r["id"], 0)
+                st.markdown(
+                    f"**{r.get('comm_date','')}** {r.get('comm_time') or ''} · "
+                    f"{r.get('direction','')} · {r.get('comm_type','')}"
+                    f"{' · 📎' + str(a) if a else ''}  \n"
+                    f"{('**' + r['contact_name'] + '** — ') if r.get('contact_name') else ''}"
+                    f"{r.get('summary','')}")
+                st.divider()
+
+
 with tab_view:
     st.subheader("View / edit log")
+    with st.expander("🏷️ Rename / tidy a student code (e.g. AD2 → AD-PY)"):
+        st.caption("Codes now read as initials + program, e.g. **AD-PY**. Use this to move "
+                   "older entries onto a clearer code. Every record on the old code moves "
+                   "to the new one.")
+        all_codes = get_codes(client)
+        if not all_codes:
+            st.caption("No codes to rename yet.")
+        else:
+            old = st.selectbox("Existing code", all_codes, key="rc_old")
+            _n = len([r for r in fetch_records(client, code=old)])
+            st.caption(f"{_n} record(s) currently on **{old}**.")
+            sug = [c for (_, c) in active_options if c != old]
+            pick_new = st.selectbox("Move to", ["(type a new code)"] + sug,
+                                    format_func=lambda c: c if c.startswith("(") else
+                                    code_to_label.get(c, c), key="rc_new_pick")
+            typed = st.text_input("Or type the new code", key="rc_new_txt",
+                                  placeholder="e.g. AD-PY").strip().upper()
+            new_code = typed or (pick_new if not pick_new.startswith("(") else "")
+            ok = st.checkbox(f"Confirm: move all records from {old} to {new_code or '…'}",
+                             key="rc_ok")
+            if st.button("Apply rename", key="rc_go", disabled=not (new_code and ok)):
+                try:
+                    client.table(TABLE_NAME).update(
+                        {"student_initials": new_code}).eq("student_initials", old).execute()
+                    try:
+                        client.table(ARCHIVE_TABLE).update(
+                            {"student_initials": new_code}).eq("student_initials", old).execute()
+                    except Exception:
+                        pass
+                    st.success(f"Moved {_n} record(s) from {old} to {new_code}.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Could not rename: {e}")
+
     try:
         _total = len(fetch_records(client))
         st.caption(f"📁 {_total} communication(s) saved in total. This is the live record — "
@@ -877,40 +1038,6 @@ with tab_view:
             })
         st.caption(f"{len(records)} record(s). 📎 = attachments. Student names are read live "
                    "from SMARTAR and are never stored in this database.")
-
-        with st.expander("🏷️ Rename / tidy a student code (e.g. AD2 → AD-PY)"):
-            st.caption("Codes now read as initials + program, e.g. **AD-PY**. Use this to move "
-                       "older entries onto a clearer code. Every record on the old code moves "
-                       "to the new one.")
-            all_codes = get_codes(client)
-            if not all_codes:
-                st.caption("No codes to rename yet.")
-            else:
-                old = st.selectbox("Existing code", all_codes, key="rc_old")
-                _n = len([r for r in fetch_records(client, code=old)])
-                st.caption(f"{_n} record(s) currently on **{old}**.")
-                sug = [c for (_, c) in active_options if c != old]
-                pick_new = st.selectbox("Move to", ["(type a new code)"] + sug,
-                                        format_func=lambda c: c if c.startswith("(") else
-                                        code_to_label.get(c, c), key="rc_new_pick")
-                typed = st.text_input("Or type the new code", key="rc_new_txt",
-                                      placeholder="e.g. AD-PY").strip().upper()
-                new_code = typed or (pick_new if not pick_new.startswith("(") else "")
-                ok = st.checkbox(f"Confirm: move all records from {old} to {new_code or '…'}",
-                                 key="rc_ok")
-                if st.button("Apply rename", key="rc_go", disabled=not (new_code and ok)):
-                    try:
-                        client.table(TABLE_NAME).update(
-                            {"student_initials": new_code}).eq("student_initials", old).execute()
-                        try:
-                            client.table(ARCHIVE_TABLE).update(
-                                {"student_initials": new_code}).eq("student_initials", old).execute()
-                        except Exception:
-                            pass
-                        st.success(f"Moved {_n} record(s) from {old} to {new_code}.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Could not rename: {e}")
 
         st.markdown("##### Edit a record / manage its attachments")
         def _label(r):
@@ -1086,19 +1213,45 @@ with tab_archive:
         st.caption("None yet.")
     else:
         for r in rows:
-            code = r["student_initials"]
-            ts = (r.get("archived_at") or "")[:10]
-            col1, col2 = st.columns([4, 1])
-            with col1:
-                st.markdown(f"**{code}** — archived {ts} by {r.get('archived_by') or '—'}  ·  "
-                            "✓ downloaded ✓ printed ✓ digitally archived")
-            with col2:
-                if st.button("Unarchive", key=f"un_{code}"):
-                    try:
-                        unarchive_student(client, code)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Could not unarchive: {e}")
+            r["_yr"] = year_of(r.get("archived_at"))
+            r["_tm"] = term_of(r.get("archived_at"))
+            r["_pg"] = program_of(r.get("student_initials")) or "Unassigned"
+
+        f1, f2 = st.columns(2)
+        with f1:
+            yrs = sorted({r["_yr"] for r in rows if r["_yr"]}, reverse=True)
+            yr_pick = st.selectbox("Year archived", ["All years"] + yrs, key="ar_yr")
+        with f2:
+            tm_pick = st.selectbox("Term archived", ["All terms", "T1", "T2", "T3", "T4"],
+                                   key="ar_tm")
+        shown = [r for r in rows
+                 if (yr_pick == "All years" or r["_yr"] == yr_pick)
+                 and (tm_pick == "All terms" or r["_tm"] == tm_pick)]
+        st.caption(f"{len(shown)} archived student(s). Terms are approximate (by month).")
+
+        _nm = {"JP": "Junior Primary", "PY": "Primary Years",
+               "SY": "Senior Years", "Unassigned": "Unassigned / older codes"}
+        for pg in PROGRAMS + ["Unassigned"]:
+            grp = [r for r in shown if r["_pg"] == pg]
+            if not grp:
+                continue
+            st.markdown(f"**{_nm.get(pg, pg)}** ({len(grp)})")
+            for r in grp:
+                code = r["student_initials"]
+                ts = (r.get("archived_at") or "")[:10]
+                col1, col2 = st.columns([4, 1])
+                with col1:
+                    st.markdown(f"• **{code_to_label.get(code, code)}** — archived {ts} "
+                                f"({r['_tm']} {r['_yr']}) by {r.get('archived_by') or '—'}  ·  "
+                                "✓ downloaded ✓ printed ✓ digitally archived")
+                with col2:
+                    if st.button("Unarchive", key=f"un_{code}"):
+                        try:
+                            unarchive_student(client, code)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Could not unarchive: {e}")
+            st.divider()
 
 
 # ============================================================================
