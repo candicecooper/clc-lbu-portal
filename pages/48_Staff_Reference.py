@@ -234,15 +234,54 @@ def build_docx(doc_row, sections) -> bytes:
         add_runs(p, doc_row["intro"])
         shade(p, "E0F2F1")
 
+    def add_table(block_lines):
+        rows = []
+        for ln in block_lines:
+            cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+            if all(re.fullmatch(r":?-{2,}:?", c) for c in cells if c):
+                continue  # separator row
+            rows.append(cells)
+        if not rows:
+            return
+        ncols = max(len(r) for r in rows)
+        t = d.add_table(rows=0, cols=ncols)
+        t.style = "Table Grid"
+        for ri, row in enumerate(rows):
+            cells = t.add_row().cells
+            for ci in range(ncols):
+                text = row[ci] if ci < len(row) else ""
+                par = cells[ci].paragraphs[0]
+                add_runs(par, text)
+                for run in par.runs:
+                    run.font.size = Pt(9.5)
+                    if ri == 0:
+                        run.font.bold = True
+                        run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+                tcPr = cells[ci]._tc.get_or_add_tcPr()
+                shd = OxmlElement("w:shd")
+                shd.set(qn("w:val"), "clear")
+                shd.set(qn("w:fill"), "00695C" if ri == 0 else ("F2F2F2" if ri % 2 == 0 else "FFFFFF"))
+                tcPr.append(shd)
+        d.add_paragraph()
+
     for sec in sections:
         h = d.add_paragraph()
         r = h.add_run(sec["title"])
         r.font.size = Pt(13); r.font.bold = True; r.font.color.rgb = TEAL_DARK_RGB
         h.paragraph_format.space_before = Pt(10)
         h.paragraph_format.space_after = Pt(4)
-        for raw in (sec.get("content") or "").splitlines():
-            line = raw.rstrip()
+        lines = (sec.get("content") or "").splitlines()
+        i = 0
+        while i < len(lines):
+            line = lines[i].rstrip()
             if not line.strip():
+                i += 1
+                continue
+            if line.lstrip().startswith("|"):
+                block = []
+                while i < len(lines) and lines[i].lstrip().startswith("|"):
+                    block.append(lines[i]); i += 1
+                add_table(block)
                 continue
             if line.startswith("- "):
                 p = d.add_paragraph(style="List Bullet")
@@ -255,6 +294,7 @@ def build_docx(doc_row, sections) -> bytes:
                 p = d.add_paragraph()
                 add_runs(p, line)
             p.paragraph_format.space_after = Pt(3)
+            i += 1
 
     acst = datetime.now(timezone(timedelta(hours=9, minutes=30)))
     f = d.add_paragraph()
@@ -347,19 +387,128 @@ This applies to every staff member and every contact, however brief. **If it isn
     ("Student file boxes", """- Program teachers can expect student file boxes **within 24 hours of the entry meeting** — or, if the student is starting the next day, **by the end of the entry-meeting day**."""),
 ]
 
+SEED_DOC_CM = {
+    "slug": "teacher-case-management-process",
+    "doc_code": "",
+    "title": "Teacher Case Management Process",
+    "subtitle": "How to case manage a student placement end to end — and what each OneNote tab is for",
+    "intro": "As the allocated program teacher, **you are the case manager** for that student for the length of their placement — from before they arrive, through review, transition and exit, to archiving the file when they return to their home school. The **Checklist tab is your master to-do list**; everything here unpacks what each item means. Tick items off as you complete them so anyone picking up the file can see at a glance where the placement is up to.",
+    "sort_order": 2,
+    "is_published": True,
+}
 
-def seed_daily_work_expectations():
-    existing = sb.table("reference_documents").select("id").eq("slug", SEED_DOC["slug"]).execute().data
-    if existing:
-        return False, "Daily Work Expectations already exists — nothing seeded."
-    doc = sb.table("reference_documents").insert(SEED_DOC).execute().data[0]
-    rows = [
-        {"document_id": doc["id"], "title": t, "content": c, "sort_order": i + 1}
-        for i, (t, c) in enumerate(SEED_SECTIONS)
-    ]
-    sb.table("reference_sections").insert(rows).execute()
+SEED_SECTIONS_CM = [
+    ("How the student file is organised", """Each student's section contains the following pages. You move through them roughly top to bottom across the placement.
+| Tab | What it is for |
+| --- | --- |
+| Checklist | Your master sequence of tasks for the whole placement. Tick each item as it is done. |
+| Student Information | The entry meeting record — who the student is, background, strengths, risks, supports and the first-week attendance timetable. |
+| SMARTAR Goals | The student's goals, teaching/intervention plan and resources. Where goals are amended and converted into the GAS. |
+| Scheduled Meetings | A tracker confirming the Review and Exit meetings are set, reminded and confirmed by everyone in the team. |
+| Reporting | A tracker for the report-writing steps for both the Review Report and the Transition Report (draft, final, distribution). |
+| Transition Plan | The weekly transition timetable agreed at the review meeting (which days/times the student attends as they move back to home school). |
+| Extension Requested | The process and paperwork to follow only if the placement needs to continue beyond the original exclusion dates. |"""),
+    ("The placement at a glance", """The placement runs through seven phases. Detailed steps for each are in the next section.
+| Phase | Stage | Main tabs in play |
+| --- | --- | --- |
+| 1 | Before the student arrives | Student Information, SMARTAR Goals, Scheduled Meetings |
+| 2 | Settling in & assessment | SMARTAR Goals |
+| 3 | Review meeting | Reporting, Scheduled Meetings, Transition Plan |
+| 4 | Transition | Transition Plan |
+| 5 | Exit meeting | Reporting, Scheduled Meetings |
+| 6 | Conclusion & EMS upload | Reporting |
+| 7 | Archiving | Checklist |"""),
+    ("Phase 1 — Before the student arrives", """- Read the **Student Information** and the **Original SMARTAR Goals** (developed by the TC in the SMARTAR Goal Builder) so you know the student before day one.
+- Prepare resources and set up the classroom for the student's arrival.
+- Acknowledge the **start date**.
+- Confirm the **Review Meeting** with the TAC (Team Around the Child)."""),
+    ("Phase 2 — Settling in & assessment", """- Complete baseline assessments: **Sounds-Write**, **Word Aware**, and **Big Ideas in Number**.
+- Meet with **Leadership** to amend the SMARTAR Goals — do this in the SMARTAR Goal Builder, then copy the updated goals back into the student file.
+- Convert the SMARTAR Goal into the **GAS** (Goal Attainment Scale) using the SMARTAR Goal Builder."""),
+    ("Phase 3 — Review meeting", """- Follow the **Review Report** process: send the **draft** to Leadership first, then **print** the final to hand out at the meeting.
+- Hold the **Review Meeting**. At this meeting you: share the report, schedule the **Exit Meeting**, develop and share the **transition timetable**, and clarify the **extension process** (in case the placement needs to continue)."""),
+    ("Phase 4 — Transition", """- Distribute the **electronic Transition Timetable** to the **TAC** via email.
+- Distribute the **electronic Transition Timetable** to **Leadership and Admin** via email."""),
+    ("Phase 5 — Exit meeting", """- Confirm the **Exit Meeting** with all TAC members by email.
+- Follow the **Transition Report** process: send the **draft** first, then **print** the final to hand out at the meeting.
+- Hold the **Exit Meeting** and share the report."""),
+    ("Phase 6 — Conclusion & EMS upload", """- Organise a **conclusion gift** for the student.
+- Forward the **Transition Report** to **clc.admin281@schools.sa.edu.au** so admin can upload it to **EMS**."""),
+    ("Phase 7 — Archiving", """- Compile **all documents** collected during the placement and give them to **ADMIN** for archiving."""),
+    ("Branch — if an extension is needed", """- Only use the **Extension Requested** tab if the placement needs to continue **beyond the original exclusion dates**.
+- Follow the extension process and complete the paperwork held on this tab before the original dates lapse. The extension process is clarified with the TAC at the Review Meeting."""),
+    ("Decoding the tracker tabs", """**Reporting tab** — tracks each report through its writing steps:
+- **Draft** — report drafted and sent to Leadership for review.
+- **Final** — report finalised after Leadership feedback and printed for the meeting.
+- **Distribution** — report shared at the meeting and forwarded for EMS upload where required.
+
+This runs once for the **Review Report** and again for the **Transition Report**.
+
+**Scheduled Meetings tab** — confirms each meeting is locked in:
+- **Set** — meeting date/time arranged.
+- **Reminded** — TAC reminded ahead of the meeting.
+- **Confirmed** — all TAC members have confirmed attendance by email.
+
+This runs for both the **Review Meeting** and the **Exit Meeting**."""),
+    ("Quick-reference checklist", """This mirrors the **Checklist** tab — work through it top to bottom.
+- ☐ Read Information and Original SMARTAR Goals (developed by the TC in the SMARTAR Goal Builder)
+- ☐ Prepare resources for classroom for arrival
+- ☐ Start Date acknowledged
+- ☐ Review Meeting confirmed by TAC
+- ☐ Sounds-Write and Word Aware assessments completed
+- ☐ Big Ideas in Number assessment completed
+- ☐ Meet with Leadership to amend SMARTAR Goals (in the SMARTAR Goal Builder, then copy back into the student file)
+- ☐ Convert SMARTAR Goal into the GAS (using the SMARTAR Goal Builder)
+- ☐ Review Report process followed — draft sent, then printed to hand out at the meeting
+- ☐ Review Meeting held — report shared, exit meeting scheduled, transition timetable developed and shared, extension process clarified
+- ☐ Electronic Transition Timetable distributed to TAC via email
+- ☐ Electronic Transition Timetable distributed to Leadership and Admin via email
+- ☐ Exit Meeting confirmed by all TAC through email
+- ☐ Transition Report process followed — draft sent, then printed to hand out at the meeting
+- ☐ Exit Meeting held — report shared
+- ☐ Organise conclusion gift
+- ☐ Forward Transition Report to clc.admin281@schools.sa.edu.au for EMS upload
+- ☐ Compile all documents collected during placement and give to ADMIN for archiving"""),
+    ("Glossary", """| Term | Meaning |
+| --- | --- |
+| TAC | Team Around the Child — the support team coordinating a student's placement. |
+| SMARTAR goal | The student's goal format used at CLC, set in the SMARTAR Goal Builder. |
+| GAS | Goal Attainment Scale — the scaled version of the SMARTAR goal used to measure progress. |
+| TC | Transition Coordinator — develops the original SMARTAR Goals in the SMARTAR Goal Builder. |
+| BSC | Behaviour Support Educator. |
+| ISE | Inclusive Support Educator. |
+| EMS | The SA student management system that reports are uploaded to. |
+| Allocation meeting | The meeting where students are allocated to a program/teacher. |
+| Notice of Exclusion | The formal exclusion document setting the placement dates. |"""),
+]
+
+SEED_PACKS = [
+    (SEED_DOC, SEED_SECTIONS),
+    (SEED_DOC_CM, SEED_SECTIONS_CM),
+]
+
+
+def seed_starter_content():
+    seeded, skipped = [], []
+    for doc_meta, secs in SEED_PACKS:
+        existing = sb.table("reference_documents").select("id").eq("slug", doc_meta["slug"]).execute().data
+        if existing:
+            skipped.append(doc_meta["title"])
+            continue
+        doc = sb.table("reference_documents").insert(doc_meta).execute().data[0]
+        rows = [
+            {"document_id": doc["id"], "title": t, "content": c, "sort_order": i + 1}
+            for i, (t, c) in enumerate(secs)
+        ]
+        sb.table("reference_sections").insert(rows).execute()
+        seeded.append(f"{doc_meta['title']} ({len(rows)} sections)")
     clear_caches()
-    return True, f"Seeded '{SEED_DOC['title']}' with {len(rows)} sections."
+    msg = []
+    if seeded:
+        msg.append("Seeded: " + "; ".join(seeded) + ".")
+    if skipped:
+        msg.append("Already existed (untouched): " + "; ".join(skipped) + ".")
+    return bool(seeded), " ".join(msg)
 
 
 # ------------------------------------------------------------------
@@ -444,8 +593,8 @@ def admin_view():
                     st.error("Title required.")
         with c2:
             st.markdown("**Starter content**")
-            if st.button("Seed: Daily Work Expectations (CLC 2026.8)"):
-                ok, msg = seed_daily_work_expectations()
+            if st.button("Seed: Daily Work Expectations + Case Management Process"):
+                ok, msg = seed_starter_content()
                 (st.success if ok else st.info)(msg)
                 if ok:
                     st.rerun()
