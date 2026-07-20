@@ -1,4 +1,5 @@
 import streamlit as st
+import os as _os
 from datetime import date, timedelta, datetime
 import database as db
 import json
@@ -102,7 +103,21 @@ def init_state():
             st.session_state[k] = v
 
 init_state()
-ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "clcstaff2026")
+
+# Staff-tier password for editing the bulletin (viewing needs no password).
+# Reads STAFF_PASSWORD from secrets/env — do NOT use ADMIN_PASSWORD here:
+# that secret belongs to the confidential/admin tier (confidential_auth.py).
+def _get_staff_password():
+    val = ""
+    try:
+        val = st.secrets.get("STAFF_PASSWORD", "")
+    except Exception:
+        val = ""
+    if not val:
+        val = _os.environ.get("STAFF_PASSWORD", "")
+    return val or "clcstaff2026"
+
+ADMIN_PASSWORD = _get_staff_password()
 
 TRANSPORT_OPTIONS = ["Taxi","Parent/Carer","Other"]
 CHANGE_TYPE_OPTIONS = ["Early Departure","Late Arrival","No Show","Alternative Pickup","Alternative Drop-off","Absent - not attending","Other"]
