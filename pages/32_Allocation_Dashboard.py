@@ -872,22 +872,34 @@ else:
         st.write(f"**Allocation View:** {selected_allocation_view}")
         st.write(f"**Filtered students (after all filters):** {len(filtered)}")
         
-        # Show sample of filtered data
-        if len(filtered) > 0:
-            st.write(f"**Sample of filtered data ({min(5, len(filtered))} rows):**")
-            display_cols = ['student_name', 'program', 'year_level', 'Placement_Start', 'Actual_Finish_Date', 
-                          'Placement_Start', 'Allocation_Status', 'placement_terms']
-            available_cols = [c for c in display_cols if c in filtered.columns]
-            st.dataframe(filtered[available_cols].head())
-        
-        # Show allocation_df totals by term
         st.write(f"**Total allocation_df rows:** {len(allocation_df)}")
+        
+        # Show term_clean value counts
         if 'term_clean' in allocation_df.columns:
             st.write("**allocation_df by term_clean:**")
-            st.write(allocation_df['term_clean'].value_counts().sort_index())
+            term_counts = allocation_df['term_clean'].value_counts().sort_index()
+            for term, count in term_counts.items():
+                st.write(f"  Term {int(term) if not pd.isna(term) else 'NaN'}: {count} students")
         
-        # Show what columns exist
-        st.write(f"**Columns in allocation_df:** {list(allocation_df.columns)[:10]}...")
+        # Show program counts
+        if 'program' in allocation_df.columns:
+            st.write("**allocation_df by program:**")
+            prog_counts = allocation_df['program'].value_counts()
+            for prog, count in prog_counts.items():
+                st.write(f"  {prog}: {count} students")
+        
+        # Show filtered by program
+        if 'program' in filtered.columns:
+            st.write("**Filtered by program:**")
+            filtered_prog = filtered['program'].value_counts()
+            for prog, count in filtered_prog.items():
+                st.write(f"  {prog}: {count} students")
+        
+        # Show sample rows
+        if len(filtered) > 0:
+            st.write(f"**First 3 filtered students:**")
+            for idx, (_, row) in enumerate(filtered.head(3).iterrows()):
+                st.write(f"  {idx+1}. {row.get('student_name', 'N/A')} | Program: {row.get('program', 'N/A')} | Year Level: {row.get('year_level', 'N/A')}")
     
     st.markdown("---")
     if section == "Overview":
@@ -897,6 +909,52 @@ else:
         
         st.markdown(f"## Allocated Students Overview")
         st.markdown(f"**Year {year_display} | Term {term_display}** - Current enrollment and placement status")
+        
+        # === EXPORT BUTTONS ===
+        col_export1, col_export2, col_export3 = st.columns([3, 1, 1])
+        with col_export3:
+            if st.button("📥 Export Report"):
+                with st.spinner("Generating report..."):
+                    try:
+                        import sys
+                        sys.path.append('/mnt/user-data/outputs')
+                        from export_dashboard_report import export_section_data
+                        
+                        # Prepare metrics for export
+                        metrics = {
+                            'Total Referrals': len(allocation_df),
+                            'Allocated Students': int(total_allocated),
+                            'Pending/Not Allocated': int(pending),
+                        }
+                        
+                        # Prepare filters info
+                        filters_info = {
+                            'year': year_display,
+                            'term': term_display,
+                            'program': selected_program,
+                            'view': selected_allocation_view
+                        }
+                        
+                        report_path = export_section_data(
+                            "Overview",
+                            filtered,
+                            metrics=metrics,
+                            filters_applied=filters_info
+                        )
+                        
+                        # Provide download button
+                        with open(report_path, 'rb') as f:
+                            st.download_button(
+                                label="⬇️ Download Word Document",
+                                data=f,
+                                file_name=report_path.split('/')[-1],
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                key="download_overview"
+                            )
+                        st.success("✅ Report ready for download!")
+                        
+                    except Exception as e:
+                        st.error(f"Error: {str(e)[:150]}")
         
         # === REFERRALS VS ALLOCATED COMPARISON ===
         st.markdown("---")
