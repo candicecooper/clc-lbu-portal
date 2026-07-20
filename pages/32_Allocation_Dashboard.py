@@ -554,6 +554,10 @@ else:
         
         st.markdown("---")
         
+        # === DEFINE DISPLAY VARIABLES FOR SIDEBAR ===
+        year_display = st.session_state.auto_year if selected_year == 'All' else selected_year
+        term_display = st.session_state.auto_term if selected_term == 'All' else selected_term
+        
         # === REPORT BUILDER ===
         with st.expander("📋 Build Custom Report", expanded=False):
             st.markdown("**Select sections to include in your report:**")
@@ -593,6 +597,9 @@ else:
                             from docx import Document
                             from docx.shared import Pt, RGBColor
                             from docx.enum.text import WD_ALIGN_PARAGRAPH
+                            
+                            # Get current filtered data
+                            report_data = filtered.copy() if 'filtered' in dir() else allocation_df.copy()
                             
                             doc = Document()
                             
@@ -645,12 +652,12 @@ else:
                             for idx, section in enumerate(selected_report_sections, 1):
                                 doc.add_page_break()
                                 doc.add_heading(f"{idx}. {section}", level=1)
-                                doc.add_paragraph(f"Filtered Records: {len(filtered)}")
+                                doc.add_paragraph(f"Records in this view: {len(report_data)}")
                                 
                                 # Add sample data
-                                if len(filtered) > 0:
+                                if len(report_data) > 0:
                                     display_cols = ['student_name', 'program', 'year_level']
-                                    available_cols = [c for c in display_cols if c in filtered.columns]
+                                    available_cols = [c for c in display_cols if c in report_data.columns]
                                     
                                     if available_cols:
                                         doc.add_paragraph("Sample Data (first 5):")
@@ -660,7 +667,7 @@ else:
                                         for i, col in enumerate(available_cols):
                                             table.rows[0].cells[i].text = col.replace('_', ' ').title()
                                         
-                                        for _, row in filtered.head(5).iterrows():
+                                        for _, row in report_data.head(5).iterrows():
                                             cells = table.add_row().cells
                                             for i, col in enumerate(available_cols):
                                                 cells[i].text = str(row.get(col, ''))
