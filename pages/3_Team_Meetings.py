@@ -2373,24 +2373,126 @@ Only include sections that have content. Be concise and professional."""
                 elif current_section and line.strip() and not line.startswith('==='):
                     sections_data[current_section].append(line.strip())
             
+            st.markdown("---")
+            st.markdown("#### ✅ Auto-Fill Summary")
+            
+            # Display what will be filled
+            col_a1, col_a2, col_a3 = st.columns(3)
+            
+            with col_a1:
+                if 'checkin' in sections_data and sections_data['checkin']:
+                    st.success(f"✅ Check-in: {len(sections_data['checkin'])} item(s)")
+                else:
+                    st.info("⚪ Check-in: None found")
+            
+            with col_a2:
+                if 'concerns' in sections_data and sections_data['concerns']:
+                    st.warning(f"⚠️ Concerns: {len(sections_data['concerns'])} item(s)")
+                else:
+                    st.info("⚪ Concerns: None found")
+            
+            with col_a3:
+                if 'actions' in sections_data and sections_data['actions']:
+                    st.success(f"✅ Actions: {len(sections_data['actions'])} item(s)")
+                else:
+                    st.info("⚪ Actions: None found")
+            
+            # ── DISPLAY EXTRACTED ACTIONS (PRIMARY) ──
+            if 'actions' in sections_data and sections_data['actions']:
+                st.markdown("---")
+                st.markdown("#### ✋ Extracted Action Items")
+                
+                actions_text = "\n".join(sections_data['actions'])
+                st.success("📋 Actions detected in your transcript:")
+                
+                st.text_area(
+                    "Review and copy these actions:",
+                    value=actions_text,
+                    height=120,
+                    disabled=True,
+                    key=f"actions_display_{program}"
+                )
+                
+                st.info("""
+**Next Step:** 
+Scroll down to the **✋ ACTIONS** section and paste/review these action items there.
+Make sure each action is formatted as:
+- **Who:** Name of person
+- **What:** Specific task
+- **By When:** Date/timeline
+                """)
+            
+            # ── DISPLAY OTHER SECTIONS ──
+            st.markdown("---")
+            st.markdown("#### 📋 Other Extracted Content")
+            
+            if 'checkin' in sections_data and sections_data['checkin']:
+                with st.expander("✅ Check-in Content", expanded=True):
+                    st.text_area(
+                        "Copy to Check-in section:",
+                        value="\n".join(sections_data['checkin']),
+                        height=80,
+                        disabled=True,
+                        key=f"checkin_display_{program}"
+                    )
+            
+            if 'concerns' in sections_data and sections_data['concerns']:
+                with st.expander("👤 Student Concerns Content", expanded=True):
+                    st.text_area(
+                        "Copy to Student Concerns section:",
+                        value="\n".join(sections_data['concerns']),
+                        height=100,
+                        disabled=True,
+                        key=f"concerns_display_{program}"
+                    )
+            
+            if 'smartar' in sections_data and sections_data['smartar']:
+                with st.expander("🎯 SMARTAR Goals Content", expanded=True):
+                    st.text_area(
+                        "Copy to SMARTAR section:",
+                        value="\n".join(sections_data['smartar']),
+                        height=100,
+                        disabled=True,
+                        key=f"smartar_display_{program}"
+                    )
+            
+            if 'report' in sections_data and sections_data['report']:
+                with st.expander("📊 Report Content", expanded=True):
+                    st.text_area(
+                        "Copy to Report section:",
+                        value="\n".join(sections_data['report']),
+                        height=100,
+                        disabled=True,
+                        key=f"report_display_{program}"
+                    )
+            
+            if 'tac' in sections_data and sections_data['tac']:
+                with st.expander("🔗 TAC Content", expanded=True):
+                    st.text_area(
+                        "Copy to TAC section:",
+                        value="\n".join(sections_data['tac']),
+                        height=100,
+                        disabled=True,
+                        key=f"tac_display_{program}"
+                    )
+            
+            if 'transitions' in sections_data and sections_data['transitions']:
+                with st.expander("🚀 Transitions Content", expanded=True):
+                    st.text_area(
+                        "Copy to Transitions section:",
+                        value="\n".join(sections_data['transitions']),
+                        height=100,
+                        disabled=True,
+                        key=f"transitions_display_{program}"
+                    )
+            
             # Auto-fill form fields
             if 'checkin' in sections_data:
                 st.session_state[f"pm_checkin_{program}"] = "\n".join(sections_data['checkin'])
             
-            if 'concerns' in sections_data:
-                # Will need manual entry for multi-student concerns
-                st.info("💡 Student Concerns detected - review manually below")
-            
-            if 'smartar' in sections_data:
-                st.info("💡 SMARTAR Goals detected - review the SMARTAR Spotlight section")
-            
-            if 'actions' in sections_data:
-                st.info("💡 Action items detected - scroll to Actions section to review")
-            
-            st.success("✅ Form fields prepared! Scroll down to review and adjust.")
+            st.markdown("---")
+            st.success("✅ Form fields have been prepared! Scroll down to review.")
         
-        st.markdown("---")
-        st.caption("💡 Review organized content above, adjust as needed, then auto-fill will populate the form fields below.")
         st.markdown("---")
 
     elif f"show_manual_org_{program}" in st.session_state:
