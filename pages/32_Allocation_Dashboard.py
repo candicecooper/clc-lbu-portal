@@ -656,23 +656,53 @@ else:
                                 doc.add_heading(f"{idx}. {section}", level=1)
                                 doc.add_paragraph(f"Records in this view: {len(report_data)}")
                                 
-                                # Add sample data
-                                if len(report_data) > 0:
-                                    display_cols = ['student_name', 'program', 'year_level']
-                                    available_cols = [c for c in display_cols if c in report_data.columns]
-                                    
-                                    if available_cols:
-                                        doc.add_paragraph("Sample Data (first 5):")
-                                        table = doc.add_table(rows=1, cols=len(available_cols))
-                                        table.style = 'Light Grid Accent 1'
-                                        
-                                        for i, col in enumerate(available_cols):
-                                            table.rows[0].cells[i].text = col.replace('_', ' ').title()
-                                        
-                                        for _, row in report_data.head(5).iterrows():
-                                            cells = table.add_row().cells
-                                            for i, col in enumerate(available_cols):
-                                                cells[i].text = str(row.get(col, ''))
+                                # Add section-specific analysis (no names)
+                                if section == "Overview":
+                                    doc.add_paragraph("Referral & Allocation Summary:")
+                                    if len(report_data) > 0:
+                                        # Program breakdown
+                                        if 'program' in report_data.columns:
+                                            prog_breakdown = report_data['program'].value_counts()
+                                            doc.add_paragraph("Students by Program:")
+                                            for prog, count in prog_breakdown.items():
+                                                doc.add_paragraph(f"  {prog}: {count} students", style='List Bullet')
+                                
+                                elif section == "Program Allocation":
+                                    if 'program' in report_data.columns and 'year_level' in report_data.columns:
+                                        doc.add_paragraph("Program and Year Level Breakdown:")
+                                        for prog in report_data['program'].unique():
+                                            prog_data = report_data[report_data['program'] == prog]
+                                            doc.add_paragraph(f"{prog}:", style='List Bullet')
+                                            year_breakdown = prog_data['year_level'].value_counts()
+                                            for year, count in year_breakdown.items():
+                                                doc.add_paragraph(f"  Year {year}: {count}", style='List Bullet 2')
+                                
+                                elif section == "Equity - ATSI/EALD/DCP":
+                                    doc.add_paragraph("Equity Group Analysis (aggregated data):")
+                                    doc.add_paragraph("  ATSI students: tracked", style='List Bullet')
+                                    doc.add_paragraph("  EALD students: tracked", style='List Bullet')
+                                    doc.add_paragraph("  DCP students: tracked", style='List Bullet')
+                                
+                                elif section == "Disability & Support Needs":
+                                    doc.add_paragraph("Disability Type Analysis:")
+                                    doc.add_paragraph("  SWD (Speech & Language)", style='List Bullet')
+                                    doc.add_paragraph("  ASD (Autism Spectrum Disorder)", style='List Bullet')
+                                    doc.add_paragraph("  Intellectual Disability", style='List Bullet')
+                                    doc.add_paragraph("  Learning Difficulty", style='List Bullet')
+                                    doc.add_paragraph("  Other support needs tracked", style='List Bullet')
+                                
+                                elif section == "ASD Deep Dive Analysis":
+                                    if len(report_data) > 0:
+                                        doc.add_paragraph("ASD Student Analysis:")
+                                        doc.add_paragraph(f"  Total students in view: {len(report_data)}", style='List Bullet')
+                                        if 'program' in report_data.columns:
+                                            doc.add_paragraph("  Distribution by program:", style='List Bullet')
+                                            prog_breakdown = report_data['program'].value_counts()
+                                            for prog, count in prog_breakdown.items():
+                                                doc.add_paragraph(f"    {prog}: {count}", style='List Bullet 2')
+                                
+                                else:
+                                    doc.add_paragraph(f"{section} - Overview of data in current filters")
                             
                             # Footer
                             doc.add_page_break()
