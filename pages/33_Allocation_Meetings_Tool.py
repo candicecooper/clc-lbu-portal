@@ -222,9 +222,9 @@ def get_current_term_week():
 def get_meeting_weeks(term, year):
     return [f"Week {i} {term}" for i in range(1, 11)]
 
-def get_thursday_date(week_number, term, year):
+def get_wednesday_date(week_number, term, year):
     term_2_start = datetime(2026, 4, 27).date()
-    days_to_add = (week_number - 1) * 7 + 3
+    days_to_add = (week_number - 1) * 7 + 2
     return term_2_start + timedelta(days=days_to_add)
 
 def get_partnership_from_school(school_name):
@@ -409,7 +409,7 @@ with st.sidebar:
     selected_week = st.selectbox("Week", meeting_weeks, index=st.session_state.current_week - 1)
     week_number = int(selected_week.split()[1])
 
-    meeting_date = get_thursday_date(week_number, st.session_state.current_term, st.session_state.current_year)
+    meeting_date = get_wednesday_date(week_number, st.session_state.current_term, st.session_state.current_year)
     st.info(f"**Meeting Date:** {meeting_date.strftime('%A, %B %d, %Y')}")
     st.caption(f"📚 {len(ALL_SCHOOLS)} schools loaded across {len(PARTNERSHIP_AREAS)} partnership areas")
 
