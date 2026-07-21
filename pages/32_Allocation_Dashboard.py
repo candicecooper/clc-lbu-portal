@@ -584,24 +584,151 @@ else:
             
             st.markdown("---")
             
+            # Export format selection
+            export_format = st.radio("Export Format", ["Word (.docx)", "PDF (.pdf)"], horizontal=True, key="export_fmt")
+            
             if st.button("🔄 Generate Multi-Section Report", key="gen_report"):
                 if len(selected_report_sections) == 0:
                     st.error("Please select at least one section")
                 else:
-                    with st.spinner(f"Generating report with {len(selected_report_sections)} sections..."):
+                    with st.spinner(f"Generating {export_format} report..."):
                         try:
-                            from docx import Document
-                            from docx.shared import Pt, RGBColor
-                            from docx.enum.text import WD_ALIGN_PARAGRAPH
+                            if export_format == "PDF (.pdf)":
+                                # PDF generation
+                                from reportlab.lib.pagesizes import letter, A4
+                                from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                                from reportlab.lib.units import inch
+                                from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Table, TableStyle
+                                from reportlab.lib import colors
+                                from datetime import datetime
+                                
+                                # Create PDF buffer
+                                from io import BytesIO
+                                buffer = BytesIO()
+                                
+                                # Create PDF
+                                pdf = SimpleDocTemplate(buffer, pagesize=letter)
+                                story = []
+                                styles = getSampleStyleSheet()
+                                
+                                # Title
+                                title_style = ParagraphStyle(
+                                    'CustomTitle',
+                                    parent=styles['Heading1'],
+                                    fontSize=24,
+                                    textColor=colors.HexColor('009688'),
+                                    spaceAfter=10,
+                                    alignment=1  # Center
+                                )
+                                story.append(Paragraph("CLC-LBU Allocation Dashboard Report", title_style))
+                                story.append(Spacer(1, 0.3*inch))
+                                
+                                # Subtitle
+                                subtitle_style = ParagraphStyle(
+                                    'CustomSubtitle',
+                                    parent=styles['Heading2'],
+                                    fontSize=14,
+                                    alignment=1
+                                )
+                                story.append(Paragraph("Multi-Section Report", subtitle_style))
+                                story.append(Spacer(1, 0.2*inch))
+                                
+                                # Date
+                                date_text = f"Generated: {pd.Timestamp.now().strftime('%d %B %Y at %H:%M')}"
+                                story.append(Paragraph(date_text, ParagraphStyle('date', parent=styles['Normal'], fontSize=10, alignment=1)))
+                                story.append(Spacer(1, 0.3*inch))
+                                
+                                # Report Parameters
+                                year_display = st.session_state.get('auto_year', 'All')
+                                term_display = st.session_state.get('auto_term', 'All')
+                                program_display = st.session_state.get('selected_program', 'All')
+                                
+                                params_data = [
+                                    ['Parameter', 'Value'],
+                                    ['Year', str(year_display)],
+                                    ['Term', str(term_display)],
+                                    ['Program', str(program_display)],
+                                    ['Sections', ', '.join(selected_report_sections)]
+                                ]
+                                
+                                params_table = Table(params_data)
+                                params_table.setStyle(TableStyle([
+                                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('009688')),
+                                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                                    ('FONTSIZE', (0, 0), (-1, 0), 12),
+                                    ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                                    ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                                    ('GRID', (0, 0), (-1, -1), 1, colors.black)
+                                ]))
+                                story.append(params_table)
+                                story.append(Spacer(1, 0.3*inch))
+                                
+                                # Sections
+                                for idx, section in enumerate(selected_report_sections, 1):
+                                    story.append(PageBreak())
+                                    story.append(Paragraph(f"{idx}. {section}", styles['Heading1']))
+                                    story.append(Paragraph(f"Records in view: {len(report_data)}", styles['Normal']))
+                                    story.append(Spacer(1, 0.2*inch))
+                                    
+                                    # Add section content
+                                    if section == "Overview":
+                                        if len(report_data) > 0 and 'program' in report_data.columns:
+                                            prog_breakdown = report_data['program'].value_counts()
+                                            data = [['Program', 'Count']]
+                                            for prog, count in prog_breakdown.items():
+                                                data.append([str(prog), str(count)])
+                                            table = Table(data)
+                                            table.setStyle(TableStyle([
+                                                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('009688')),
+                                                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                                                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                                                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                                                ('FONTSIZE', (0, 0), (-1, 0), 11),
+                                                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                                                ('BACKGROUND', (0, 1), (-1, -1), colors.lightgrey),
+                                                ('GRID', (0, 0), (-1, -1), 1, colors.black)
+                                            ]))
+                                            story.append(table)
+                                    else:
+                                        story.append(Paragraph(f"{section} - Data summary", styles['Normal']))
+                                    
+                                    story.append(Spacer(1, 0.2*inch))
+                                
+                                # Footer
+                                story.append(Spacer(1, 0.3*inch))
+                                story.append(Paragraph("Cowandilla Learning Centre - Learning & Behaviour Unit", ParagraphStyle('footer', parent=styles['Normal'], fontSize=9, alignment=1)))
+                                
+                                # Build PDF
+                                pdf.build(story)
+                                buffer.seek(0)
+                                
+                                filename = f"CLC_Report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+                                st.download_button(
+                                    label="⬇️ Download PDF Report",
+                                    data=buffer,
+                                    file_name=filename,
+                                    mime="application/pdf",
+                                    key="dl_pdf_report"
+                                )
+                                st.success(f"✅ PDF Report with {len(selected_report_sections)} sections ready!")
                             
-                            # Define display variables from session state with defaults
-                            year_display = st.session_state.get('auto_year', 'All')
-                            term_display = st.session_state.get('auto_term', 'All')
-                            program_display = st.session_state.get('selected_program', 'All')
-                            view_display = 'Allocated Only'  # Default view
-                            
-                            # Get current filtered data
-                            report_data = filtered.copy() if 'filtered' in dir() else allocation_df.copy()
+                            else:
+                                # Word (.docx) generation (existing code)
+                                from docx import Document
+                                from docx.shared import Pt, RGBColor
+                                from docx.enum.text import WD_ALIGN_PARAGRAPH
+                                from io import BytesIO
+                                
+                                # Define display variables from session state with defaults
+                                year_display = st.session_state.get('auto_year', 'All')
+                                term_display = st.session_state.get('auto_term', 'All')
+                                program_display = st.session_state.get('selected_program', 'All')
+                                view_display = 'Allocated Only'
+                                
+                                # Get current filtered data
+                                report_data = filtered.copy() if 'filtered' in dir() else allocation_df.copy()
                             
                             doc = Document()
                             
