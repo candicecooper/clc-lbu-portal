@@ -305,10 +305,15 @@ def export_new_workbook(records):
 
 def sync_into_master_workbook(uploaded_bytes, records):
     """
-    Append new records directly onto the user's real master Excel file, matching
-    whatever column order that file already uses (read from its own header row).
+    Upsert records directly onto the user's real master Excel file, matching whatever
+    column order that file already uses (read from its own header row).
+    - A student not already in the file (by name) is appended as a new row.
+    - A student already in the file has their EXISTING row updated in place — only
+      cells where the incoming record has a non-blank value are overwritten, so this
+      is how extension/waitlist changes made after the original allocation reach the
+      Excel file without wiping out anything already there for that row.
     Returns (updated_workbook_bytes, sheet_name, appended_count, appended_names,
-             skipped_duplicates, unmatched_export_columns).
+             updated_count, updated_names, unmatched_export_columns, name_column_found).
     """
     wb = openpyxl.load_workbook(BytesIO(uploaded_bytes))
 
@@ -324,44 +329,61 @@ def sync_into_master_workbook(uploaded_bytes, records):
     existing_headers = [c.value for c in ws[1]]
     header_index = {str(h).strip(): idx for idx, h in enumerate(existing_headers) if h}
 
-    # Find the Student_Name column (if present) for duplicate detection
+    # Find the Student_Name column (required for matching existing rows)
     name_col_idx = header_index.get("Student_Name")
     name_column_found = name_col_idx is not None
-    existing_names = set()
+    existing_row_by_name = {}
     if name_col_idx is not None:
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            if len(row) > name_col_idx and row[name_col_idx]:
-                existing_names.add(str(row[name_col_idx]).strip().lower())
+        for row_num in range(2, ws.max_row + 1):
+            val = ws.cell(row=row_num, column=name_col_idx + 1).value
+            if val:
+                existing_row_by_name[str(val).strip().lower()] = row_num
 
     unmatched_columns = [col for col in EXPORT_COLUMNS if col not in header_index]
 
-    appended = 0
-    appended_names = []
-    skipped = []
+    appended, appended_names = 0, []
+    updated, updated_names = 0, []
+
     for record in records:
         student_name = str(record.get("student_name", "")).strip()
-        if student_name and student_name.lower() in existing_names:
-            skipped.append(student_name)
-            continue
+        match_row = existing_row_by_name.get(student_name.lower()) if student_name else None
 
-        new_row = [""] * len(existing_headers)
-        for col in EXPORT_COLUMNS:
-            if col not in header_index:
-                continue
-            db_field = FIELD_MAP.get(col)
-            value = clean_value(record.get(db_field, "")) if db_field else ""
-            new_row[header_index[col]] = value
+        if match_row:
+            changed = False
+            for col in EXPORT_COLUMNS:
+                if col not in header_index:
+                    continue
+                db_field = FIELD_MAP.get(col)
+                if not db_field:
+                    continue
+                value = clean_value(record.get(db_field, ""))
+                if value in ("", None):
+                    continue  # never blank out existing data — only fill in real values
+                ws.cell(row=match_row, column=header_index[col] + 1, value=value)
+                changed = True
+            if changed:
+                updated += 1
+                updated_names.append(student_name)
+        else:
+            new_row = [""] * len(existing_headers)
+            for col in EXPORT_COLUMNS:
+                if col not in header_index:
+                    continue
+                db_field = FIELD_MAP.get(col)
+                value = clean_value(record.get(db_field, "")) if db_field else ""
+                new_row[header_index[col]] = value
 
-        ws.append(new_row)
-        appended += 1
-        appended_names.append(student_name or "(no name)")
-        if student_name:
-            existing_names.add(student_name.lower())
+            ws.append(new_row)
+            appended += 1
+            appended_names.append(student_name or "(no name)")
+            if student_name:
+                existing_row_by_name[student_name.lower()] = ws.max_row
 
     output = BytesIO()
     wb.save(output)
     output.seek(0)
-    return output, sheet_name, appended, appended_names, skipped, unmatched_columns, name_column_found
+    return (output, sheet_name, appended, appended_names, updated, updated_names,
+            unmatched_columns, name_column_found)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN APP
@@ -881,9 +903,18 @@ with tab3:
 with tab4:
     st.header("📊 View & Export Completed Allocations")
 
+    scope = st.radio(
+        "Show:", ["This meeting week only", "All allocated & completed records"],
+        horizontal=True, index=1,
+        help="Extensions and waitlist changes on students allocated in earlier weeks won't show under "
+             "'this week only' — switch to 'All records' to include them for export/sync."
+    )
+
     try:
-        full_data = supabase.table("allocation_students").select("*") \
-            .eq("meeting_week", selected_week).not_.is_("outcome", "null").execute()
+        query = supabase.table("allocation_students").select("*").not_.is_("outcome", "null")
+        if scope == "This meeting week only":
+            query = query.eq("meeting_week", selected_week)
+        full_data = query.execute()
 
         if full_data.data:
             allocated = [r for r in full_data.data if r.get('outcome') == 'Allocated']
@@ -927,6 +958,8 @@ with tab4:
                     "Student": r.get('student_name', ''), "Year": r.get('year_level', ''),
                     "Program": r.get('program', ''), "School": r.get('school', ''),
                     "Outcome": r.get('outcome', ''), "Action Owner": r.get('actioned_by', ''),
+                    "Extension": r.get('extension_status', ''), "Ext. Weeks": r.get('extension_weeks', ''),
+                    "Meeting Week": r.get('meeting_week', ''),
                 } for r in export_records]
                 st.dataframe(pd.DataFrame(preview_data), use_container_width=True, hide_index=True)
                 st.caption(f"📊 {len(export_records)} record(s) ready for export")
@@ -952,60 +985,58 @@ with tab4:
             )
 
             if master_file is not None and not validation_issues:
-                if st.button("🔄 Append & Download Updated Master File", type="primary", use_container_width=True):
+                if st.button("🔄 Sync & Download Updated Master File", type="primary", use_container_width=True):
                     try:
-                        (updated_bytes, sheet_used, appended, appended_names,
-                         skipped, unmatched, name_column_found) = sync_into_master_workbook(
+                        (updated_bytes, sheet_used, appended, appended_names, updated,
+                         updated_names, unmatched, name_column_found) = sync_into_master_workbook(
                             master_file.getvalue(), export_records
                         )
 
                         if not name_column_found:
                             st.error(
                                 "⚠️ No `Student_Name` column was found in your uploaded file's "
-                                f"**{sheet_used}** sheet — duplicate checking was skipped, and this may "
-                                "mean the wrong sheet or file was used. Double-check this is the right file."
+                                f"**{sheet_used}** sheet — matching against existing students was skipped, "
+                                "and every record was appended as new. This may mean the wrong sheet or file "
+                                "was used. Double-check this is the right file."
                             )
 
-                        if appended == 0:
-                            st.error(
-                                f"❌ Nothing was appended. All {len(skipped)} record(s) were treated as "
-                                "already present in the file (matched by student name)."
-                            )
-                        else:
-                            st.success(f"✅ Appended {appended} new record(s) to the **{sheet_used}** sheet:")
+                        if appended == 0 and updated == 0:
+                            st.error("❌ Nothing changed — no records had new data to write.")
+                        if appended:
+                            st.success(f"✅ Added {appended} new student row(s) to **{sheet_used}**:")
                             st.write(", ".join(appended_names))
-
-                        if skipped:
-                            st.warning(
-                                f"🔄 Skipped {len(skipped)} record(s) already found in the file by name match: "
-                                f"{', '.join(skipped)}. If one of these should have been added, check for a "
-                                "name spelling difference between the two, or a leftover record from a "
-                                "previous entry."
+                        if updated:
+                            st.success(
+                                f"✅ Updated {updated} existing student row(s) in **{sheet_used}** "
+                                f"(e.g. new extension or waitlist info):"
                             )
+                            st.write(", ".join(updated_names))
                         if unmatched:
                             st.info(
                                 f"ℹ️ {len(unmatched)} field(s) had no matching column in your file and were left blank: "
                                 f"{', '.join(unmatched)}"
                             )
 
-                        if appended > 0:
-                            st.markdown("**🔍 Verify — this is read directly from the file about to be downloaded:**")
+                        if appended or updated:
+                            st.markdown("**🔍 Verify — read directly from the file about to be downloaded:**")
                             verify_wb = openpyxl.load_workbook(BytesIO(updated_bytes.getvalue()))
                             verify_ws = verify_wb[sheet_used]
                             verify_headers = [str(c.value) for c in verify_ws[1]]
-                            verify_rows = list(verify_ws.iter_rows(min_row=2, values_only=True))
-                            last_rows = verify_rows[-appended:]
+                            name_idx = verify_headers.index("Student_Name") if "Student_Name" in verify_headers else None
+                            changed_names = set(n.lower() for n in appended_names + updated_names)
+                            verify_rows = [
+                                row for row in verify_ws.iter_rows(min_row=2, values_only=True)
+                                if name_idx is not None and row[name_idx] and str(row[name_idx]).strip().lower() in changed_names
+                            ]
                             st.dataframe(
-                                pd.DataFrame(last_rows, columns=verify_headers),
+                                pd.DataFrame(verify_rows, columns=verify_headers),
                                 use_container_width=True, hide_index=True
                             )
                             st.caption(
-                                f"Sheet **{sheet_used}** now has {len(verify_rows)} data rows total "
-                                f"(was {len(verify_rows) - appended} before this sync). If the row above "
-                                "is correct but still doesn't show in Excel, the file you open afterwards "
-                                "isn't this downloaded copy — check you're opening the freshly downloaded "
-                                "file (not a cached tab, and not the original still open in Excel/SharePoint, "
-                                "which won't update unless you close and reopen it)."
+                                "If these rows look right here but still don't show up when you open the "
+                                "downloaded file in Excel, check you're opening the file you just downloaded "
+                                "(not a cached tab) and that the original isn't still open elsewhere — Excel "
+                                "won't show changes to a file that's already open until it's closed and reopened."
                             )
 
                         st.download_button(
@@ -1058,22 +1089,51 @@ with tab5:
         if records:
             for r in records:
                 with st.container(border=True):
-                    c1, c2, c3 = st.columns([3, 2, 2])
+                    st.markdown(f"**{r.get('student_name', 'Unknown')}** — {r.get('school', '')} • Year {r.get('year_level', '')}")
+                    st.caption(f"Current status: {r.get('waitlist_status', '')}")
+
+                    c1, c2 = st.columns([2, 1])
                     with c1:
-                        st.markdown(f"**{r.get('student_name', 'Unknown')}** — {r.get('school', '')}")
-                        st.caption(f"Status: {r.get('waitlist_status', '')} • Year {r.get('year_level', '')}")
+                        status_options = ["On Waitlist", "Declined", "Site Decision", "Site Withdraw"]
+                        current = r.get('waitlist_status')
+                        new_status = st.selectbox(
+                            "Set status", status_options,
+                            index=status_options.index(current) if current in status_options else 0,
+                            key=f"status_{r['id']}"
+                        )
                     with c2:
-                        if st.button("Move to Waitlist", key=f"wl_{r['id']}", use_container_width=True):
+                        st.write("")
+                        st.write("")
+                        if st.button("💾 Update Status", key=f"update_{r['id']}", use_container_width=True):
                             supabase.table("allocation_students").update(
-                                {"waitlist_status": "On Waitlist"}
+                                {"waitlist_status": new_status}
                             ).eq("id", r["id"]).execute()
+                            st.success(f"Status updated to {new_status}")
                             st.rerun()
-                    with c3:
-                        if st.button("Site Withdraw", key=f"sw_{r['id']}", use_container_width=True):
-                            supabase.table("allocation_students").update(
-                                {"waitlist_status": "Site Withdraw"}
-                            ).eq("id", r["id"]).execute()
-                            st.rerun()
+
+                    with st.expander(f"🎓 Allocate {r.get('student_name', 'this student')} now"):
+                        with st.form(f"allocate_from_waitlist_{r['id']}"):
+                            acol1, acol2, acol3 = st.columns(3)
+                            with acol1:
+                                alloc_program = st.selectbox("Program *", PROGRAMS, key=f"prog_{r['id']}")
+                            with acol2:
+                                alloc_start = st.date_input("Start Date", value=None, key=f"start_{r['id']}")
+                            with acol3:
+                                alloc_worker = st.selectbox("Action Owner", [""] + STAFF_NAMES, key=f"worker_{r['id']}")
+
+                            if st.form_submit_button("✅ Allocate Now", type="primary", use_container_width=True):
+                                supabase.table("allocation_students").update({
+                                    "outcome": "Allocated",
+                                    "program": alloc_program,
+                                    "start_after": alloc_start.isoformat() if alloc_start else None,
+                                    "case_worker": alloc_worker or None,
+                                    "actioned_by": alloc_worker or None,
+                                    "waitlist_status": "Not Applicable",
+                                    "allocated_from_waitlist": "Yes",
+                                }).eq("id", r["id"]).execute()
+                                st.success(f"✅ {r.get('student_name')} allocated!")
+                                st.balloons()
+                                st.rerun()
         else:
             st.info("No students currently on the waitlist.")
     except Exception as e:
