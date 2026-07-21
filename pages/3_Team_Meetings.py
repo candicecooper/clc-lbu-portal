@@ -18,19 +18,12 @@ from docx.oxml import OxmlElement
 st.set_page_config(page_title="CLC Team Meetings", page_icon="👥", layout="wide")
 apply_clc_theme()
 
-from auth import require_auth, logout_button, get_staff_name
-# Password gate removed by request — returning here from the Goal Builder (which
-# itself has no login) no longer prompts for a password. To re-enable the portal
-# login on this page, un-comment the two lines below.
-# require_auth("Team Meetings", "👥")
-# logout_button("sidebar")
+# Auth/login removed - portal now open to all staff
+# (To re-enable: uncomment require_auth and logout_button calls below)
 
 def _safe_staff_name():
-    """Facilitator default — works whether or not a portal login has happened."""
-    try:
-        return get_staff_name() or ""
-    except Exception:
-        return ""
+    """Facilitator default — returns empty string (auth removed)."""
+    return ""
 
 # ── Auto-save session state initialization ───────────────────────────────────
 if 'last_autosave_time' not in st.session_state:
