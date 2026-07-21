@@ -308,6 +308,164 @@ def build_docx(doc_row, sections) -> bytes:
 
 
 # ------------------------------------------------------------------
+# Word upload -> sections parser (admin "upload a document" flow)
+#
+# Walks the .docx body in document order (paragraphs + tables
+# interleaved), and:
+#   - splits into sections on the chosen heading level
+#   - converts bulleted paragraphs to '- ' lines
+#   - converts bold runs to '**bold**'
+#   - converts tables to '| a | b |' pipe rows (single-cell tables,
+#     e.g. callout boxes, become '> ' highlighted notes instead)
+# Works well on .docx files that use Word's built-in Heading styles;
+# for documents formatted with plain bold lines instead of Styles,
+# the "Bold standalone lines" option is offered as a fallback.
+# ------------------------------------------------------------------
+def _run_to_md(run):
+    text = run.text
+    if not text:
+        return ""
+    return f"**{text}**" if run.bold else text
+
+
+def _para_to_md(paragraph):
+    return "".join(_run_to_md(r) for r in paragraph.runs).strip() or paragraph.text.strip()
+
+
+def _is_bullet_para(paragraph):
+    style_name = (paragraph.style.name or "").lower() if paragraph.style else ""
+    if any(k in style_name for k in ("list bullet", "list paragraph", "bullet")):
+        return True
+    pPr = paragraph._p.pPr
+    return pPr is not None and pPr.numPr is not None
+
+
+def _is_split_heading(paragraph, split_level):
+    text = paragraph.text.strip()
+    if not text:
+        return False
+    style_name = (paragraph.style.name or "") if paragraph.style else ""
+    if split_level == "Heading 1":
+        return style_name == "Heading 1"
+    if split_level == "Heading 2":
+        return style_name in ("Heading 1", "Heading 2")
+    if split_level == "Bold standalone lines":
+        runs = [r for r in paragraph.runs if r.text.strip()]
+        return bool(runs) and all(r.bold for r in runs) and len(text) <= 120
+    return False
+
+
+def _table_block_to_md(table):
+    rows = table.rows
+    if not rows:
+        return ""
+    if len(rows) == 1 and len(rows[0].cells) == 1:
+        text = rows[0].cells[0].text.strip()
+        return f"> {text}" if text else ""
+    header = [c.text.strip().replace("\n", " ") for c in rows[0].cells]
+    lines = ["| " + " | ".join(header) + " |", "| " + " | ".join(["---"] * len(header)) + " |"]
+    for row in rows[1:]:
+        cells = [c.text.strip().replace("\n", " ") for c in row.cells]
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
+def parse_docx_to_sections(file_bytes: bytes, split_level: str):
+    """Returns (intro_text, [(section_title, section_content), ...])."""
+    from docx import Document as DocxDocument
+    from docx.oxml.ns import qn
+    from docx.table import Table as DocxTable
+    from docx.text.paragraph import Paragraph as DocxParagraph
+
+    doc = DocxDocument(io.BytesIO(file_bytes))
+
+    def iter_block_items(parent):
+        for child in parent.element.body.iterchildren():
+            if child.tag == qn("w:p"):
+                yield DocxParagraph(child, parent)
+            elif child.tag == qn("w:tbl"):
+                yield DocxTable(child, parent)
+
+    sections, intro_lines = [], []
+    current_title, current_lines = None, []
+
+    def flush():
+        nonlocal current_title, current_lines
+        if current_title:
+            sections.append((current_title, "\n".join(current_lines).strip()))
+        current_title, current_lines = None, []
+
+    for block in iter_block_items(doc):
+        target = current_lines if current_title else intro_lines
+        if isinstance(block, DocxTable):
+            md = _table_block_to_md(block)
+            if md:
+                target.append(md)
+            continue
+        if _is_split_heading(block, split_level):
+            flush()
+            current_title = block.text.strip()
+            continue
+        text = _para_to_md(block)
+        style_name = (block.style.name or "") if block.style else ""
+        if style_name.startswith("Heading") and text:
+            line = f"**{text}**"
+        elif _is_bullet_para(block):
+            line = f"- {text}" if text else ""
+        else:
+            line = text
+        if line:
+            target.append(line)
+
+    flush()
+    intro = "\n".join(intro_lines).strip()
+    sections = [(t, c) for t, c in sections if t.strip()]
+    return intro, sections
+
+
+def _upload_parse_widget(prefix):
+    """Renders an uploader + split-level choice + Parse button + preview.
+    Returns the parsed {"intro", "sections", "filename"} dict once a
+    parse has run this session, else None."""
+    f = st.file_uploader("Upload a Word document (.docx)", type=["docx"], key=f"{prefix}_file")
+    split_level = st.radio(
+        "How should sections be detected?",
+        ["Heading 2", "Heading 1", "Bold standalone lines"],
+        horizontal=True, key=f"{prefix}_split",
+        help="Heading 1/2 use Word's built-in heading styles (most CLC documents use Heading 2 for section titles). "
+             "'Bold standalone lines' treats any short, fully-bold line as a section title instead — use this if the "
+             "document wasn't formatted with Word Styles.",
+    )
+    if f is not None and st.button("🔍 Parse document", key=f"{prefix}_parsebtn"):
+        try:
+            intro, sections = parse_docx_to_sections(f.getvalue(), split_level)
+            if not sections:
+                st.warning("No sections were detected with that setting — try a different option above.")
+                st.session_state.pop(f"{prefix}_parsed", None)
+            else:
+                st.session_state[f"{prefix}_parsed"] = {"intro": intro, "sections": sections, "filename": f.name}
+        except Exception as e:
+            st.error(f"Couldn't read that file ({e}). Make sure it's a .docx (Word 'Save As' if it's a .doc).")
+            st.session_state.pop(f"{prefix}_parsed", None)
+
+    parsed = st.session_state.get(f"{prefix}_parsed")
+    if parsed:
+        st.success(f"Found {len(parsed['sections'])} section(s) in {parsed['filename']}.")
+        with st.expander("Preview parsed sections", expanded=True):
+            if parsed["intro"]:
+                st.caption("Text before the first section heading:")
+                preview = parsed["intro"][:400] + ("…" if len(parsed["intro"]) > 400 else "")
+                st.markdown(preview)
+                st.divider()
+            for t, c in parsed["sections"]:
+                st.markdown(f"**{t}**")
+                preview = (c[:220] + "…") if len(c) > 220 else c
+                st.caption(preview or "_(empty)_")
+        return parsed
+    return None
+
+
+# ------------------------------------------------------------------
 # Seed content — CLC 2026.8 Daily Work Expectations (current as of
 # 20 July 2026). Loaded via the admin "Seed" button when empty.
 # ------------------------------------------------------------------
@@ -638,6 +796,42 @@ def admin_view():
                 if ok:
                     st.rerun()
 
+    with st.expander("📤 Create a document from a Word upload"):
+        st.caption(
+            "Works best on .docx files that use Word's Heading styles for section titles — including every CLC "
+            "document built for this portal. Bullet lists, bold text and tables convert automatically. You can "
+            "edit anything afterwards."
+        )
+        parsed = _upload_parse_widget("up_new")
+        if parsed:
+            u_code = st.text_input("Doc code (optional, e.g. CLC 2026.1)", key="up_new_code")
+            default_title = re.sub(r"[_\-]+", " ", parsed["filename"].rsplit(".", 1)[0]).strip()
+            u_title = st.text_input("Title", value=default_title, key="up_new_title")
+            u_sub = st.text_input("Subtitle", key="up_new_sub")
+            u_cat_choice = st.selectbox("Category", existing_cats + ["+ New category…"], key="up_new_cat_choice")
+            u_cat = st.text_input("New category name", key="up_new_cat_new", placeholder="e.g. Role Expectations") \
+                if u_cat_choice == "+ New category…" else u_cat_choice
+            u_intro = st.text_area("Intro / highlighted note (edit or clear the auto-detected text)",
+                                    value=parsed["intro"], key="up_new_intro", height=100)
+            if st.button("✅ Create document from upload", key="up_new_create"):
+                if u_title.strip() and u_cat.strip():
+                    slug = re.sub(r"[^a-z0-9]+", "-", u_title.lower()).strip("-")
+                    docrow = sb.table("reference_documents").insert(
+                        {"slug": slug, "doc_code": u_code, "title": u_title.strip(), "subtitle": u_sub,
+                         "category": u_cat.strip(), "intro": u_intro, "sort_order": len(docs) + 1, "is_published": False}
+                    ).execute().data[0]
+                    rows = [
+                        {"document_id": docrow["id"], "title": t, "content": c, "sort_order": i + 1}
+                        for i, (t, c) in enumerate(parsed["sections"])
+                    ]
+                    sb.table("reference_sections").insert(rows).execute()
+                    st.session_state.pop("up_new_parsed", None)
+                    clear_caches()
+                    st.success(f"Created '{u_title}' with {len(rows)} sections — unpublished. Review it below, then publish when ready.")
+                    st.rerun()
+                else:
+                    st.error("Title and category are required.")
+
     if not docs:
         return
 
@@ -675,6 +869,22 @@ def admin_view():
 
     st.markdown("### Sections")
     sections = fetch_sections(doc["id"])
+
+    with st.expander("📤 Add sections from a Word upload"):
+        st.caption("Parses a Word document and appends the detected sections to the end of this document.")
+        parsed2 = _upload_parse_widget(f"up_add_{doc['id']}")
+        if parsed2 and st.button("✅ Append parsed sections to this document", key=f"up_add_btn_{doc['id']}"):
+            start = (sections[-1]["sort_order"] + 1) if sections else 1
+            rows = [
+                {"document_id": doc["id"], "title": t, "content": c, "sort_order": start + i}
+                for i, (t, c) in enumerate(parsed2["sections"])
+            ]
+            sb.table("reference_sections").insert(rows).execute()
+            sb.table("reference_documents").update({"updated_at": _now()}).eq("id", doc["id"]).execute()
+            st.session_state.pop(f"up_add_{doc['id']}_parsed", None)
+            clear_caches()
+            st.success(f"Added {len(rows)} section(s).")
+            st.rerun()
 
     for idx, sec in enumerate(sections):
         with st.expander(f"{idx+1}. {sec['title']}"):
