@@ -2233,6 +2233,97 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
         st.success(f"✅ Meeting Active (ID: {st.session_state.current_meeting_id}) - SMARTAR integration ready")
     
     st.markdown("---")
+    
+    # ── TRANSCRIPT INPUT & ORGANIZATION (NEW FEATURE) ──
+    st.markdown("#### 📝 Meeting Transcript Input (Optional)")
+    st.caption("Paste your meeting transcript or notes below, then organize into meeting sections")
+    
+    transcript_input = st.text_area(
+        "Paste meeting transcript or raw notes:",
+        height=120,
+        key=f"pm_transcript_{program}",
+        label_visibility="collapsed",
+        placeholder="Paste your meeting transcript here. You can then organize it into Check-in, Student Concerns, SMARTAR Goals, Report, TAC, Transitions, and Actions..."
+    )
+    
+    if transcript_input.strip():
+        col_org1, col_org2 = st.columns([1, 3])
+        
+        with col_org1:
+            if st.button("🤖 Organize Transcript", key=f"organize_transcript_{program}", type="primary"):
+                st.info("""
+**How to use organized transcript:**
+
+1. Copy text from each section below
+2. Paste into the corresponding meeting section
+3. Edit as needed to refine and clarify
+
+**Sections:**
+- **Check-in** → Team Check-in section
+- **Student Concerns** → Student Concerns section  
+- **SMARTAR** → SMARTAR Goals section
+- **Report** → Report section
+- **TAC** → TAC section
+- **Transitions** → Transitions section
+- **Actions** → Actions section
+                """)
+                
+                # Display organized sections
+                st.markdown("---")
+                st.markdown("#### 📋 Organized Transcript Sections")
+                
+                sections = {
+                    "✅ Check-in": [],
+                    "👤 Student Concerns": [],
+                    "🎯 SMARTAR Goals": [],
+                    "📊 Report": [],
+                    "🔗 TAC (Transition Advisory Committee)": [],
+                    "🚀 Transitions": [],
+                    "✋ Actions & Clarifications": []
+                }
+                
+                lines = transcript_input.split('\n')
+                current_section = None
+                
+                for line in lines:
+                    line_lower = line.lower()
+                    
+                    if any(word in line_lower for word in ['check', 'check-in', 'checkin']):
+                        current_section = "✅ Check-in"
+                    elif any(word in line_lower for word in ['concern', 'student concern']):
+                        current_section = "👤 Student Concerns"
+                    elif any(word in line_lower for word in ['smartar', 'goal', 'learning target']):
+                        current_section = "🎯 SMARTAR Goals"
+                    elif any(word in line_lower for word in ['report', 'progress']):
+                        current_section = "📊 Report"
+                    elif any(word in line_lower for word in ['tac', 'transition advisory']):
+                        current_section = "🔗 TAC (Transition Advisory Committee)"
+                    elif any(word in line_lower for word in ['transition']):
+                        current_section = "🚀 Transitions"
+                    elif any(word in line_lower for word in ['action', 'who', 'what', 'by when', 'clarif']):
+                        current_section = "✋ Actions & Clarifications"
+                    
+                    if current_section and line.strip() and not any(word in line_lower for word in ['check', 'concern', 'smartar', 'goal', 'report', 'progress', 'tac', 'transition', 'action']):
+                        sections[current_section].append(line.strip())
+                
+                # Display organized sections with copy buttons
+                for section_name, content in sections.items():
+                    if content:
+                        with st.expander(section_name, expanded=True):
+                            section_text = "\n".join(content)
+                            st.markdown(section_text)
+                            
+                            st.caption(f"📋 {len(content)} line(s) in this section")
+                            
+                            st.text_area(
+                                f"Copy this {section_name} content:",
+                                value=section_text,
+                                height=100,
+                                disabled=True,
+                                key=f"copy_{section_name}_{program}"
+                            )
+    
+    st.markdown("---")
 
     checkin_label  = "TEAM CHECK-IN — Regulation Before Reaction" if is_week_a else "TEAM CHECK-IN"
     checkin_prompt = "What do we need to know to support students effectively today?" if is_week_a else "Quick updates impacting program delivery"
