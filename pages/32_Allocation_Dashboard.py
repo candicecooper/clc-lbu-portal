@@ -691,7 +691,31 @@ else:
                                     doc.add_paragraph("  Learning Difficulty", style='List Bullet')
                                     doc.add_paragraph("  Other support needs tracked", style='List Bullet')
                                 
-                                elif section == "ASD Deep Dive Analysis":
+                                elif section == "Category of Support":
+                                    doc.add_paragraph("Funding Category Distribution:")
+                                    if 'cat_funding' in report_data.columns or 'Funding_Category' in report_data.columns:
+                                        funding_col = 'cat_funding' if 'cat_funding' in report_data.columns else 'Funding_Category'
+                                        funding_breakdown = report_data[funding_col].value_counts()
+                                        for cat, count in funding_breakdown.items():
+                                            doc.add_paragraph(f"  {cat}: {count} students", style='List Bullet')
+                                    else:
+                                        doc.add_paragraph("  Category breakdown from current allocation data", style='List Bullet')
+                                
+                                elif section == "Cohort Analysis":
+                                    doc.add_paragraph("Cohort Breakdown:")
+                                    if 'program' in report_data.columns:
+                                        for prog in sorted(report_data['program'].unique()):
+                                            prog_count = len(report_data[report_data['program'] == prog])
+                                            pct = (prog_count / len(report_data) * 100) if len(report_data) > 0 else 0
+                                            doc.add_paragraph(f"  {prog}: {prog_count} students ({pct:.1f}%)", style='List Bullet')
+                                
+                                elif section == "Trends - Historical Data":
+                                    doc.add_paragraph("Enrollment Trends:")
+                                    doc.add_paragraph("  Historical data from current filtered view", style='List Bullet')
+                                    if 'term' in report_data.columns:
+                                        term_breakdown = report_data['term'].value_counts().sort_index()
+                                        for term, count in term_breakdown.items():
+                                            doc.add_paragraph(f"  Term {int(term) if not pd.isna(term) else 'Unknown'}: {count}", style='List Bullet 2')
                                     if len(report_data) > 0:
                                         doc.add_paragraph("ASD Student Analysis:")
                                         doc.add_paragraph(f"  Total students in view: {len(report_data)}", style='List Bullet')
