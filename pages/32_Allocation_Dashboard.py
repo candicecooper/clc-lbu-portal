@@ -681,6 +681,10 @@ else:
                                 import matplotlib
                                 matplotlib.use('Agg')
                                 
+                                # Debug: show what we're working with
+                                st.write(f"DEBUG: report_data shape = {report_data.shape}")
+                                st.write(f"DEBUG: report_data columns = {list(report_data.columns)[:10]}")
+                                
                                 # Sections with charts
                                 for idx, section in enumerate(selected_report_sections, 1):
                                     story.append(PageBreak())
@@ -689,27 +693,34 @@ else:
                                     story.append(Spacer(1, 0.2*inch))
                                     
                                     try:
-                                        if section == "Overview" and len(report_data) > 0 and 'program' in report_data.columns:
-                                            prog_breakdown = report_data['program'].value_counts()
-                                            
-                                            # Create matplotlib chart
-                                            fig, ax = plt.subplots(figsize=(6, 4))
-                                            prog_breakdown.plot(kind='bar', ax=ax, color='#009688')
-                                            ax.set_title("Students by Program", fontsize=14, fontweight='bold')
-                                            ax.set_xlabel("Program")
-                                            ax.set_ylabel("Count")
-                                            plt.tight_layout()
-                                            
-                                            # Save to buffer
-                                            chart_buffer = BytesIO()
-                                            fig.savefig(chart_buffer, format='png', dpi=100, bbox_inches='tight')
-                                            chart_buffer.seek(0)
-                                            plt.close(fig)
-                                            
-                                            # Add to PDF
-                                            chart_img = Image(chart_buffer, width=5.5*inch, height=3.5*inch)
-                                            story.append(chart_img)
-                                            story.append(Spacer(1, 0.1*inch))
+                                        if section == "Overview" and len(report_data) > 0:
+                                            st.write(f"DEBUG: Overview section - checking program column")
+                                            if 'program' in report_data.columns:
+                                                prog_breakdown = report_data['program'].value_counts()
+                                                st.write(f"DEBUG: prog_breakdown = {prog_breakdown.to_dict()}")
+                                                
+                                                # Create matplotlib chart
+                                                fig, ax = plt.subplots(figsize=(6, 4))
+                                                prog_breakdown.plot(kind='bar', ax=ax, color='#009688')
+                                                ax.set_title("Students by Program", fontsize=14, fontweight='bold')
+                                                ax.set_xlabel("Program")
+                                                ax.set_ylabel("Count")
+                                                plt.tight_layout()
+                                                
+                                                # Save to buffer
+                                                chart_buffer = BytesIO()
+                                                fig.savefig(chart_buffer, format='png', dpi=100, bbox_inches='tight')
+                                                chart_buffer.seek(0)
+                                                st.write(f"DEBUG: Chart saved, buffer size = {len(chart_buffer.getvalue())} bytes")
+                                                plt.close(fig)
+                                                
+                                                # Add to PDF
+                                                chart_img = Image(chart_buffer, width=5.5*inch, height=3.5*inch)
+                                                story.append(chart_img)
+                                                st.write(f"DEBUG: Image added to story")
+                                                story.append(Spacer(1, 0.1*inch))
+                                            else:
+                                                st.write(f"DEBUG: No 'program' column found. Available: {list(report_data.columns)}")
                                         
                                         elif section == "Program Allocation" and len(report_data) > 0:
                                             if 'program' in report_data.columns and 'year_level' in report_data.columns:
@@ -756,8 +767,10 @@ else:
                                             story.append(Paragraph(f"{section} - Analysis available in dashboard", styles['Normal']))
                                     
                                     except Exception as e:
-                                        st.write(f"Chart error for {section}: {str(e)}")
-                                        story.append(Paragraph(f"{section} - Error generating chart", styles['Normal']))
+                                        st.error(f"ERROR in {section}: {str(e)}")
+                                        import traceback
+                                        st.error(traceback.format_exc())
+                                        story.append(Paragraph(f"{section} - Error: {str(e)[:50]}", styles['Normal']))
                                     
                                     story.append(Spacer(1, 0.2*inch))
                                 
