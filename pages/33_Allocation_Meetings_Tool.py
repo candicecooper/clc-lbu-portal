@@ -972,102 +972,102 @@ with tab4:
                 )
 
             st.markdown("---")
-            st.subheader("🔄 Sync Directly Into Your Master Excel File")
+            st.subheader("📥 Download Records for Your Master Excel File")
             st.caption(
-                "Upload your live CLC_Allocation_Dashboard file below — the tool matches its "
-                "existing columns, skips students already in it, appends the rest, and gives you "
-                "back the updated file ready to save over the SharePoint copy. No manual copy/paste."
+                "Download the records below as a ready-formatted Excel file, matching your master "
+                "file's column layout exactly. Open it alongside your master file and paste the rows "
+                "in — this is the most reliable option right now."
             )
-
-            master_file = st.file_uploader(
-                "Upload master Excel file (e.g. CLC_Allocation_Dashboard_2026_WithNames.xlsx)",
-                type=['xlsx'], key="master_upload"
-            )
-
-            if master_file is not None and not validation_issues:
-                if st.button("🔄 Sync & Download Updated Master File", type="primary", use_container_width=True):
-                    try:
-                        (updated_bytes, sheet_used, appended, appended_names, updated,
-                         updated_names, unmatched, name_column_found) = sync_into_master_workbook(
-                            master_file.getvalue(), export_records
-                        )
-
-                        if not name_column_found:
-                            st.error(
-                                "⚠️ No `Student_Name` column was found in your uploaded file's "
-                                f"**{sheet_used}** sheet — matching against existing students was skipped, "
-                                "and every record was appended as new. This may mean the wrong sheet or file "
-                                "was used. Double-check this is the right file."
-                            )
-
-                        if appended == 0 and updated == 0:
-                            st.error("❌ Nothing changed — no records had new data to write.")
-                        if appended:
-                            st.success(f"✅ Added {appended} new student row(s) to **{sheet_used}**:")
-                            st.write(", ".join(appended_names))
-                        if updated:
-                            st.success(
-                                f"✅ Updated {updated} existing student row(s) in **{sheet_used}** "
-                                f"(e.g. new extension or waitlist info):"
-                            )
-                            st.write(", ".join(updated_names))
-                        if unmatched:
-                            st.info(
-                                f"ℹ️ {len(unmatched)} field(s) had no matching column in your file and were left blank: "
-                                f"{', '.join(unmatched)}"
-                            )
-
-                        if appended or updated:
-                            st.markdown("**🔍 Verify — read directly from the file about to be downloaded:**")
-                            verify_wb = openpyxl.load_workbook(BytesIO(updated_bytes.getvalue()))
-                            verify_ws = verify_wb[sheet_used]
-                            verify_headers = [str(c.value) for c in verify_ws[1]]
-                            name_idx = verify_headers.index("Student_Name") if "Student_Name" in verify_headers else None
-                            changed_names = set(n.lower() for n in appended_names + updated_names)
-                            verify_rows = [
-                                row for row in verify_ws.iter_rows(min_row=2, values_only=True)
-                                if name_idx is not None and row[name_idx] and str(row[name_idx]).strip().lower() in changed_names
-                            ]
-                            st.dataframe(
-                                pd.DataFrame(verify_rows, columns=verify_headers),
-                                use_container_width=True, hide_index=True
-                            )
-                            st.caption(
-                                "If these rows look right here but still don't show up when you open the "
-                                "downloaded file in Excel, check you're opening the file you just downloaded "
-                                "(not a cached tab) and that the original isn't still open elsewhere — Excel "
-                                "won't show changes to a file that's already open until it's closed and reopened."
-                            )
-
-                        st.download_button(
-                            label="💾 Download Updated Master Excel",
-                            data=updated_bytes.getvalue(),
-                            file_name=master_file.name,
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            use_container_width=True
-                        )
-                        st.caption("Save this file over your SharePoint copy to complete the sync.")
-                    except Exception as e:
-                        st.error(f"Sync error: {e}")
-                        import traceback
-                        st.code(traceback.format_exc())
-            elif validation_issues:
-                st.error("❌ Fix the validation issues above before syncing")
+            if st.button("📥 Download Records", type="primary", use_container_width=True):
+                try:
+                    excel_bytes = export_new_workbook(export_records)
+                    st.download_button(
+                        label=f"💾 Save Excel ({len(export_records)} rows)",
+                        data=excel_bytes.getvalue(),
+                        file_name=f"CLC_Allocations_{selected_week.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+                except Exception as e:
+                    st.error(f"Export error: {e}")
 
             st.markdown("---")
-            with st.expander("📥 Alternative: download new rows only (for manual paste)"):
-                if st.button("📥 Download New Rows Only", use_container_width=True):
-                    try:
-                        excel_bytes = export_new_workbook(export_records)
-                        st.download_button(
-                            label=f"💾 Save Excel ({len(export_records)} rows)",
-                            data=excel_bytes.getvalue(),
-                            file_name=f"CLC_Allocations_{selected_week.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            use_container_width=True
-                        )
-                    except Exception as e:
-                        st.error(f"Export error: {e}")
+            with st.expander("🧪 Experimental: sync directly into your master file (still being debugged)"):
+                st.caption(
+                    "Upload your live CLC_Allocation_Dashboard file below — the tool matches its "
+                    "existing columns, updates students already in it (e.g. with new extension info), "
+                    "appends new students, and gives you back the updated file. This hasn't been "
+                    "reliably showing changes in Excel yet — use the download option above instead "
+                    "for now."
+                )
+
+                master_file = st.file_uploader(
+                    "Upload master Excel file (e.g. CLC_Allocation_Dashboard_2026_WithNames.xlsx)",
+                    type=['xlsx'], key="master_upload"
+                )
+
+                if master_file is not None and not validation_issues:
+                    if st.button("🔄 Sync & Download Updated Master File", use_container_width=True):
+                        try:
+                            (updated_bytes, sheet_used, appended, appended_names, updated,
+                             updated_names, unmatched, name_column_found) = sync_into_master_workbook(
+                                master_file.getvalue(), export_records
+                            )
+
+                            if not name_column_found:
+                                st.error(
+                                    "⚠️ No `Student_Name` column was found in your uploaded file's "
+                                    f"**{sheet_used}** sheet — matching against existing students was skipped, "
+                                    "and every record was appended as new. This may mean the wrong sheet or file "
+                                    "was used. Double-check this is the right file."
+                                )
+
+                            if appended == 0 and updated == 0:
+                                st.error("❌ Nothing changed — no records had new data to write.")
+                            if appended:
+                                st.success(f"✅ Added {appended} new student row(s) to **{sheet_used}**:")
+                                st.write(", ".join(appended_names))
+                            if updated:
+                                st.success(
+                                    f"✅ Updated {updated} existing student row(s) in **{sheet_used}** "
+                                    f"(e.g. new extension or waitlist info):"
+                                )
+                                st.write(", ".join(updated_names))
+                            if unmatched:
+                                st.info(
+                                    f"ℹ️ {len(unmatched)} field(s) had no matching column in your file and were left blank: "
+                                    f"{', '.join(unmatched)}"
+                                )
+
+                            if appended or updated:
+                                st.markdown("**🔍 Verify — read directly from the file about to be downloaded:**")
+                                verify_wb = openpyxl.load_workbook(BytesIO(updated_bytes.getvalue()))
+                                verify_ws = verify_wb[sheet_used]
+                                verify_headers = [str(c.value) for c in verify_ws[1]]
+                                name_idx = verify_headers.index("Student_Name") if "Student_Name" in verify_headers else None
+                                changed_names = set(n.lower() for n in appended_names + updated_names)
+                                verify_rows = [
+                                    row for row in verify_ws.iter_rows(min_row=2, values_only=True)
+                                    if name_idx is not None and row[name_idx] and str(row[name_idx]).strip().lower() in changed_names
+                                ]
+                                st.dataframe(
+                                    pd.DataFrame(verify_rows, columns=verify_headers),
+                                    use_container_width=True, hide_index=True
+                                )
+
+                            st.download_button(
+                                label="💾 Download Updated Master Excel",
+                                data=updated_bytes.getvalue(),
+                                file_name=master_file.name,
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                use_container_width=True
+                            )
+                        except Exception as e:
+                            st.error(f"Sync error: {e}")
+                            import traceback
+                            st.code(traceback.format_exc())
+                elif validation_issues:
+                    st.error("❌ Fix the validation issues above before syncing")
         else:
             st.info("📭 No completed records for this week")
 
