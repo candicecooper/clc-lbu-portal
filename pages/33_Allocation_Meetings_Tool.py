@@ -234,6 +234,14 @@ def yn(value):
     """Normalise a checkbox/bool into the Yes/'' convention used in the master Excel."""
     return "Yes" if value else ""
 
+def num_or_none(value):
+    """Some Supabase columns (previous_referrals, total_previous_placements,
+    extension_weeks) are integer-typed. An empty string fails there — send NULL instead."""
+    if value is None:
+        return None
+    value = str(value).strip()
+    return value if value else None
+
 def clean_value(v):
     if v is None:
         return ""
@@ -571,11 +579,11 @@ with tab1:
                             "priority_level": priority_level if priority_level else None,
                             "referral_date": referral_date.isoformat() if referral_date else None,
                             "previously_referred": previously_referred,
-                            "previous_referrals": previous_referrals,
+                            "previous_referrals": num_or_none(previous_referrals),
                             "previous_clc_placement": previous_clc_placement,
                             "previous_other_lc": previous_other_lc,
                             "other_lc_name": other_lc_name,
-                            "total_previous_placements": total_previous_placements,
+                            "total_previous_placements": num_or_none(total_previous_placements),
                             "placement_history_notes": placement_history_notes,
                             "flag_attendance_fulltime": yn(attendance == "Full-time"),
                             "flag_attendance_parttime": yn(attendance == "Part-time"),
@@ -638,7 +646,7 @@ with tab2:
                             "extension": yn(ext_outcome == "Approved"),
                             "extension_status": ext_outcome,
                             "extension_date": ext_date.isoformat() if ext_date else None,
-                            "extension_weeks": ext_weeks,
+                            "extension_weeks": num_or_none(ext_weeks),
                             "proposed_extension_finish_date": proposed_finish.isoformat() if proposed_finish else None,
                             "information": ext_comm or record.get("information"),
                             "actioned_by": ext_owner or record.get("actioned_by"),
