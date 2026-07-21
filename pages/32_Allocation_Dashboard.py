@@ -676,73 +676,23 @@ else:
                                 story.append(params_table)
                                 story.append(Spacer(1, 0.3*inch))
                                 
-                                # Sections with charts
+                                # Sections with data tables
                                 for idx, section in enumerate(selected_report_sections, 1):
                                     story.append(PageBreak())
                                     story.append(Paragraph(f"{idx}. {section}", styles['Heading1']))
                                     story.append(Paragraph(f"Records in view: {len(report_data)}", styles['Normal']))
                                     story.append(Spacer(1, 0.2*inch))
                                     
-                                    # Generate and add charts for each section
+                                    # Add data tables for each section
                                     try:
                                         if section == "Overview" and len(report_data) > 0 and 'program' in report_data.columns:
-                                            # Program breakdown chart
                                             prog_breakdown = report_data['program'].value_counts()
-                                            fig = px.bar(
-                                                x=prog_breakdown.index,
-                                                y=prog_breakdown.values,
-                                                title="Students by Program",
-                                                labels={'x': 'Program', 'y': 'Count'},
-                                                color=prog_breakdown.values,
-                                                color_continuous_scale='Blues'
-                                            )
-                                            
-                                            # Convert to image
-                                            img_bytes = pio.to_image(fig, format="png", width=600, height=400)
-                                            img_buffer = BytesIO(img_bytes)
-                                            chart_img = Image(img_buffer, width=5.5*inch, height=3.5*inch)
-                                            story.append(chart_img)
-                                            story.append(Spacer(1, 0.1*inch))
-                                        
-                                        elif section == "Program Allocation" and len(report_data) > 0 and 'program' in report_data.columns:
-                                            # Program and year level breakdown
-                                            prog_year = report_data.groupby(['program', 'year_level']).size().unstack(fill_value=0)
-                                            fig = px.bar(
-                                                prog_year,
-                                                title="Program Distribution by Year Level",
-                                                barmode='stack',
-                                                labels={'index': 'Program', 'value': 'Count'}
-                                            )
-                                            
-                                            img_bytes = pio.to_image(fig, format="png", width=600, height=400)
-                                            img_buffer = BytesIO(img_bytes)
-                                            chart_img = Image(img_buffer, width=5.5*inch, height=3.5*inch)
-                                            story.append(chart_img)
-                                            story.append(Spacer(1, 0.1*inch))
-                                        
-                                        elif section == "ASD Deep Dive Analysis" and len(report_data) > 0:
-                                            # ASD breakdown
-                                            if 'program' in report_data.columns:
-                                                prog_counts = report_data['program'].value_counts()
-                                                fig = px.pie(
-                                                    values=prog_counts.values,
-                                                    names=prog_counts.index,
-                                                    title="ASD Students by Program"
-                                                )
-                                                
-                                                img_bytes = pio.to_image(fig, format="png", width=600, height=400)
-                                                img_buffer = BytesIO(img_bytes)
-                                                chart_img = Image(img_buffer, width=5.5*inch, height=3.5*inch)
-                                                story.append(chart_img)
-                                                story.append(Spacer(1, 0.1*inch))
-                                        
-                                        # Data summary table
-                                        if section == "Overview" and len(report_data) > 0 and 'program' in report_data.columns:
-                                            prog_breakdown = report_data['program'].value_counts()
-                                            data = [['Program', 'Count']]
+                                            data = [['Program', 'Count', 'Percentage']]
+                                            total = prog_breakdown.sum()
                                             for prog, count in prog_breakdown.items():
-                                                data.append([str(prog), str(count)])
-                                            table = Table(data, colWidths=[3*inch, 1.5*inch])
+                                                pct = f"{(count/total*100):.1f}%"
+                                                data.append([str(prog), str(count), pct])
+                                            table = Table(data, colWidths=[2*inch, 1.5*inch, 1.5*inch])
                                             table.setStyle(TableStyle([
                                                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('009688')),
                                                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
@@ -753,10 +703,52 @@ else:
                                                 ('GRID', (0, 0), (-1, -1), 1, colors.black)
                                             ]))
                                             story.append(table)
+                                            story.append(Spacer(1, 0.1*inch))
+                                        
+                                        elif section == "Program Allocation" and len(report_data) > 0 and 'program' in report_data.columns:
+                                            prog_year = report_data.groupby(['program', 'year_level']).size().unstack(fill_value=0)
+                                            data = [['Program'] + list(prog_year.columns)]
+                                            for prog in prog_year.index:
+                                                row = [str(prog)]
+                                                for col in prog_year.columns:
+                                                    row.append(str(int(prog_year.loc[prog, col])))
+                                                data.append(row)
+                                            table = Table(data)
+                                            table.setStyle(TableStyle([
+                                                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('009688')),
+                                                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                                                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                                                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                                                ('BACKGROUND', (0, 1), (-1, -1), colors.lightgrey),
+                                                ('GRID', (0, 0), (-1, -1), 1, colors.black)
+                                            ]))
+                                            story.append(table)
+                                            story.append(Spacer(1, 0.1*inch))
+                                        
+                                        elif section == "ASD Deep Dive Analysis" and len(report_data) > 0:
+                                            story.append(Paragraph("ASD Student Distribution:", styles['Heading2']))
+                                            if 'program' in report_data.columns:
+                                                prog_counts = report_data['program'].value_counts()
+                                                data = [['Program', 'ASD Students']]
+                                                for prog, count in prog_counts.items():
+                                                    data.append([str(prog), str(count)])
+                                                table = Table(data, colWidths=[3*inch, 2*inch])
+                                                table.setStyle(TableStyle([
+                                                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('009688')),
+                                                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                                                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                                                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                                                    ('BACKGROUND', (0, 1), (-1, -1), colors.lightgrey),
+                                                    ('GRID', (0, 0), (-1, -1), 1, colors.black)
+                                                ]))
+                                                story.append(table)
+                                                story.append(Spacer(1, 0.1*inch))
+                                        
+                                        else:
+                                            story.append(Paragraph(f"{section} - Data analysis available in dashboard", styles['Normal']))
                                     
-                                    except Exception as chart_error:
-                                        # Fallback if chart generation fails
-                                        story.append(Paragraph(f"{section} - Data summary (chart generation failed)", styles['Normal']))
+                                    except Exception as section_error:
+                                        story.append(Paragraph(f"{section} - Data summary (processing)", styles['Normal']))
                                     
                                     story.append(Spacer(1, 0.2*inch))
                                 
