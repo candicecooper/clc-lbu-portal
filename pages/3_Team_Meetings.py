@@ -2234,96 +2234,217 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
     
     st.markdown("---")
     
-    # ── TRANSCRIPT INPUT & ORGANIZATION (NEW FEATURE) ──
-    st.markdown("#### 📝 Meeting Transcript Input (Optional)")
-    st.caption("Paste your meeting transcript or notes below, then organize into meeting sections")
+    # ── TRANSCRIPT INPUT & AI ORGANIZATION (ENHANCED) ──
+    st.markdown("#### 📝 Meeting Transcript Input & Auto-Organization")
+    st.caption("Paste raw meeting transcript - AI will organize it into meeting sections & auto-fill the form")
     
     transcript_input = st.text_area(
         "Paste meeting transcript or raw notes:",
         height=120,
         key=f"pm_transcript_{program}",
         label_visibility="collapsed",
-        placeholder="Paste your meeting transcript here. You can then organize it into Check-in, Student Concerns, SMARTAR Goals, Report, TAC, Transitions, and Actions..."
+        placeholder="Paste your raw meeting transcript here. The AI will organize it and auto-fill your meeting form..."
     )
     
     if transcript_input.strip():
-        col_org1, col_org2 = st.columns([1, 3])
+        col_org1, col_org2, col_org3 = st.columns([1, 1, 2])
         
         with col_org1:
-            if st.button("🤖 Organize Transcript", key=f"organize_transcript_{program}", type="primary"):
-                st.info("""
-**How to use organized transcript:**
+            if st.button("🤖 AI Organize & Refine", key=f"organize_transcript_{program}", type="primary"):
+                with st.spinner("🤖 AI is organizing your transcript..."):
+                    try:
+                        groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
+                        
+                        if groq_client:
+                            response = groq_client.chat.completions.create(
+                                model="llama-3.3-70b-versatile",
+                                messages=[
+                                    {
+                                        "role": "system",
+                                        "content": """You are an expert at organizing educational meeting transcripts for {program} team meetings.
 
-1. Copy text from each section below
-2. Paste into the corresponding meeting section
-3. Edit as needed to refine and clarify
+Your job is to:
+1. Read the raw meeting transcript
+2. Organize content into these CLC LBU meeting sections:
+   - CHECK-IN: Team updates, regulatory/wellbeing info needed today
+   - STUDENT CONCERNS: Behavior, learning, wellbeing issues discussed
+   - SMARTAR GOALS: Student learning targets, goal-setting discussions
+   - REPORT: Progress reports, assessment data, outcomes
+   - TAC: Transition Advisory Committee items, transition planning
+   - TRANSITIONS: Specific transition strategies and visual supports
+   - ACTIONS: Who is doing what by when - clarified action items
 
-**Sections:**
-- **Check-in** → Team Check-in section
-- **Student Concerns** → Student Concerns section  
-- **SMARTAR** → SMARTAR Goals section
-- **Report** → Report section
-- **TAC** → TAC section
-- **Transitions** → Transitions section
-- **Actions** → Actions section
-                """)
-                
-                # Display organized sections
-                st.markdown("---")
-                st.markdown("#### 📋 Organized Transcript Sections")
-                
-                sections = {
-                    "✅ Check-in": [],
-                    "👤 Student Concerns": [],
-                    "🎯 SMARTAR Goals": [],
-                    "📊 Report": [],
-                    "🔗 TAC (Transition Advisory Committee)": [],
-                    "🚀 Transitions": [],
-                    "✋ Actions & Clarifications": []
-                }
-                
-                lines = transcript_input.split('\n')
-                current_section = None
-                
-                for line in lines:
-                    line_lower = line.lower()
-                    
-                    if any(word in line_lower for word in ['check', 'check-in', 'checkin']):
-                        current_section = "✅ Check-in"
-                    elif any(word in line_lower for word in ['concern', 'student concern']):
-                        current_section = "👤 Student Concerns"
-                    elif any(word in line_lower for word in ['smartar', 'goal', 'learning target']):
-                        current_section = "🎯 SMARTAR Goals"
-                    elif any(word in line_lower for word in ['report', 'progress']):
-                        current_section = "📊 Report"
-                    elif any(word in line_lower for word in ['tac', 'transition advisory']):
-                        current_section = "🔗 TAC (Transition Advisory Committee)"
-                    elif any(word in line_lower for word in ['transition']):
-                        current_section = "🚀 Transitions"
-                    elif any(word in line_lower for word in ['action', 'who', 'what', 'by when', 'clarif']):
-                        current_section = "✋ Actions & Clarifications"
-                    
-                    if current_section and line.strip() and not any(word in line_lower for word in ['check', 'concern', 'smartar', 'goal', 'report', 'progress', 'tac', 'transition', 'action']):
-                        sections[current_section].append(line.strip())
-                
-                # Display organized sections with copy buttons
-                for section_name, content in sections.items():
-                    if content:
-                        with st.expander(section_name, expanded=True):
-                            section_text = "\n".join(content)
-                            st.markdown(section_text)
-                            
-                            st.caption(f"📋 {len(content)} line(s) in this section")
-                            
-                            st.text_area(
-                                f"Copy this {section_name} content:",
-                                value=section_text,
-                                height=100,
-                                disabled=True,
-                                key=f"copy_{section_name}_{program}"
+3. Clean up and refine each section for clarity
+4. Use professional educational language
+5. Make action items specific (Who/What/By When)
+
+Output format:
+===CHECK-IN===
+[content here, 2-3 sentences max]
+
+===STUDENT CONCERNS===
+[organized by student if mentioned, 2-3 sentences each]
+
+===SMARTAR GOALS===
+[specific learning targets with dates/metrics]
+
+===REPORT===
+[progress data and outcomes]
+
+===TAC===
+[transition planning items]
+
+===TRANSITIONS===
+[specific visual/sensory strategies]
+
+===ACTIONS===
+- Who: What by When
+- Who: What by When
+
+Only include sections that have content. Be concise and professional."""
+                                    },
+                                    {
+                                        "role": "user",
+                                        "content": f"Here is the meeting transcript to organize:\n\n{transcript_input}"
+                                    }
+                                ],
+                                max_tokens=2000
                             )
+                            
+                            organized = response.choices[0].message.content
+                            st.session_state[f"organized_transcript_{program}"] = organized
+                            st.success("✅ Transcript organized and refined!")
+                        else:
+                            st.warning("Groq API not configured - basic organization only")
+                            
+                    except Exception as e:
+                        if "rate_limit" in str(e).lower():
+                            st.warning("⚠️ AI rate limit hit - try again in ~1 hour")
+                        else:
+                            st.error(f"Error organizing: {e}")
+        
+        with col_org2:
+            if st.button("📋 Manual Organize", key=f"manual_organize_{program}"):
+                st.session_state[f"show_manual_org_{program}"] = True
+        
+        with col_org3:
+            st.caption("AI Organize: Groq refines content • Manual: Keyword-based grouping")
     
-    st.markdown("---")
+    # ── DISPLAY ORGANIZED TRANSCRIPT ──
+    if f"organized_transcript_{program}" in st.session_state:
+        org_content = st.session_state[f"organized_transcript_{program}"]
+        
+        st.markdown("---")
+        st.markdown("#### 📋 Organized Meeting Transcript")
+        
+        # Display organized content
+        with st.expander("📖 View Organized Content", expanded=True):
+            st.markdown(org_content)
+        
+        # ── AUTO-FILL FORM BUTTON ──
+        if st.button("✅ Auto-Fill Meeting Form from This Transcript", key=f"autofill_form_{program}", type="primary", use_container_width=True):
+            # Parse sections and auto-fill
+            lines = org_content.split('\n')
+            current_section = None
+            sections_data = {}
+            
+            for line in lines:
+                if '===CHECK-IN===' in line:
+                    current_section = 'checkin'
+                    sections_data['checkin'] = []
+                elif '===STUDENT CONCERNS===' in line:
+                    current_section = 'concerns'
+                    sections_data['concerns'] = []
+                elif '===SMARTAR GOALS===' in line:
+                    current_section = 'smartar'
+                    sections_data['smartar'] = []
+                elif '===REPORT===' in line:
+                    current_section = 'report'
+                    sections_data['report'] = []
+                elif '===TAC===' in line:
+                    current_section = 'tac'
+                    sections_data['tac'] = []
+                elif '===TRANSITIONS===' in line:
+                    current_section = 'transitions'
+                    sections_data['transitions'] = []
+                elif '===ACTIONS===' in line:
+                    current_section = 'actions'
+                    sections_data['actions'] = []
+                elif current_section and line.strip() and not line.startswith('==='):
+                    sections_data[current_section].append(line.strip())
+            
+            # Auto-fill form fields
+            if 'checkin' in sections_data:
+                st.session_state[f"pm_checkin_{program}"] = "\n".join(sections_data['checkin'])
+            
+            if 'concerns' in sections_data:
+                # Will need manual entry for multi-student concerns
+                st.info("💡 Student Concerns detected - review manually below")
+            
+            if 'smartar' in sections_data:
+                st.info("💡 SMARTAR Goals detected - review the SMARTAR Spotlight section")
+            
+            if 'actions' in sections_data:
+                st.info("💡 Action items detected - scroll to Actions section to review")
+            
+            st.success("✅ Form fields prepared! Scroll down to review and adjust.")
+        
+        st.markdown("---")
+        st.caption("💡 Review organized content above, adjust as needed, then auto-fill will populate the form fields below.")
+        st.markdown("---")
+
+    elif f"show_manual_org_{program}" in st.session_state:
+        # Basic keyword-based organization (fallback)
+        st.markdown("---")
+        st.markdown("#### 📋 Keyword-Based Organization")
+        
+        sections = {
+            "✅ Check-in": [],
+            "👤 Student Concerns": [],
+            "🎯 SMARTAR Goals": [],
+            "📊 Report": [],
+            "🔗 TAC (Transition Advisory Committee)": [],
+            "🚀 Transitions": [],
+            "✋ Actions & Clarifications": []
+        }
+        
+        lines = transcript_input.split('\n')
+        current_section = None
+        
+        for line in lines:
+            line_lower = line.lower()
+            
+            if any(word in line_lower for word in ['check', 'check-in', 'checkin', 'update']):
+                current_section = "✅ Check-in"
+            elif any(word in line_lower for word in ['concern', 'student concern', 'behavior', 'wellbeing']):
+                current_section = "👤 Student Concerns"
+            elif any(word in line_lower for word in ['smartar', 'goal', 'learning target', 'objective']):
+                current_section = "🎯 SMARTAR Goals"
+            elif any(word in line_lower for word in ['report', 'progress', 'assessment', 'data']):
+                current_section = "📊 Report"
+            elif any(word in line_lower for word in ['tac', 'transition advisory', 'planning']):
+                current_section = "🔗 TAC (Transition Advisory Committee)"
+            elif any(word in line_lower for word in ['transition', 'visual', 'support']):
+                current_section = "🚀 Transitions"
+            elif any(word in line_lower for word in ['action', 'who', 'what', 'by when', 'clarif']):
+                current_section = "✋ Actions & Clarifications"
+            
+            if current_section and line.strip():
+                sections[current_section].append(line.strip())
+        
+        for section_name, content in sections.items():
+            if content:
+                with st.expander(section_name, expanded=True):
+                    section_text = "\n".join(content)
+                    st.text_area(
+                        "Copy this content:",
+                        value=section_text,
+                        height=100,
+                        disabled=True,
+                        key=f"copy_{section_name}_{program}"
+                    )
+        
+        st.markdown("---")
 
     checkin_label  = "TEAM CHECK-IN — Regulation Before Reaction" if is_week_a else "TEAM CHECK-IN"
     checkin_prompt = "What do we need to know to support students effectively today?" if is_week_a else "Quick updates impacting program delivery"
