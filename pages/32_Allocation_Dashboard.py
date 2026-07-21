@@ -606,8 +606,13 @@ else:
                             program_display = st.session_state.get('selected_program', 'All')
                             view_display = 'Allocated Only'
                             
-                            # Get current filtered data
-                            report_data = filtered.copy() if 'filtered' in dir() else allocation_df.copy()
+                            # Get current filtered data - use allocation_df if filtered is empty
+                            if 'filtered' in dir() and len(filtered) > 0:
+                                report_data = filtered.copy()
+                                st.write(f"DEBUG: Using filtered data ({len(filtered)} records)")
+                            else:
+                                report_data = allocation_df.copy()
+                                st.write(f"DEBUG: Using allocation_df ({len(allocation_df)} records) - filtered was empty")
                             
                             if export_format == "PDF (.pdf)":
                                 # PDF generation with charts
@@ -1220,6 +1225,9 @@ else:
     # Apply term filter
     if selected_term != 'All':
         filtered = filtered[filtered['term_clean'] == selected_term]
+    
+    # Filter out term 0 (invalid term)
+    filtered = filtered[(filtered['term_clean'].fillna(0) >= 1) | (filtered['term_clean'].isna())]
     
     # Apply program filter
     if selected_program != 'All':
