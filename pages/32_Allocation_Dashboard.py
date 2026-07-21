@@ -593,6 +593,13 @@ else:
                 else:
                     with st.spinner(f"Generating {export_format} report..."):
                         try:
+                            # Import all required libraries first
+                            from docx import Document
+                            from docx.shared import Pt, RGBColor
+                            from docx.enum.text import WD_ALIGN_PARAGRAPH
+                            from io import BytesIO
+                            import plotly.io as pio
+                            
                             # Define display variables and data first
                             year_display = st.session_state.get('auto_year', 'All')
                             term_display = st.session_state.get('auto_term', 'All')
@@ -610,10 +617,8 @@ else:
                                 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Table, TableStyle, Image
                                 from reportlab.lib import colors
                                 from datetime import datetime
-                                import plotly.io as pio
                                 
                                 # Create PDF buffer
-                                from io import BytesIO
                                 buffer = BytesIO()
                                 
                                 # Create PDF
@@ -775,9 +780,6 @@ else:
                             
                             else:
                                 # Word (.docx) generation
-                                from docx import Document
-                                from docx.shared import Pt, RGBColor
-                                from docx.enum.text import WD_ALIGN_PARAGRAPH
                                 from io import BytesIO
                             
                             doc = Document()
