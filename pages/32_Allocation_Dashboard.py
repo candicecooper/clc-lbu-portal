@@ -676,79 +676,88 @@ else:
                                 story.append(params_table)
                                 story.append(Spacer(1, 0.3*inch))
                                 
-                                # Sections with data tables
+                                # Add matplotlib import at top
+                                import matplotlib.pyplot as plt
+                                import matplotlib
+                                matplotlib.use('Agg')
+                                
+                                # Sections with charts
                                 for idx, section in enumerate(selected_report_sections, 1):
                                     story.append(PageBreak())
                                     story.append(Paragraph(f"{idx}. {section}", styles['Heading1']))
                                     story.append(Paragraph(f"Records in view: {len(report_data)}", styles['Normal']))
                                     story.append(Spacer(1, 0.2*inch))
                                     
-                                    # Add data tables for each section
                                     try:
                                         if section == "Overview" and len(report_data) > 0 and 'program' in report_data.columns:
                                             prog_breakdown = report_data['program'].value_counts()
-                                            data = [['Program', 'Count', 'Percentage']]
-                                            total = prog_breakdown.sum()
-                                            for prog, count in prog_breakdown.items():
-                                                pct = f"{(count/total*100):.1f}%"
-                                                data.append([str(prog), str(count), pct])
-                                            table = Table(data, colWidths=[2*inch, 1.5*inch, 1.5*inch])
-                                            table.setStyle(TableStyle([
-                                                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('009688')),
-                                                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                                                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                                                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                                                ('FONTSIZE', (0, 0), (-1, 0), 11),
-                                                ('BACKGROUND', (0, 1), (-1, -1), colors.lightgrey),
-                                                ('GRID', (0, 0), (-1, -1), 1, colors.black)
-                                            ]))
-                                            story.append(table)
+                                            
+                                            # Create matplotlib chart
+                                            fig, ax = plt.subplots(figsize=(6, 4))
+                                            prog_breakdown.plot(kind='bar', ax=ax, color='#009688')
+                                            ax.set_title("Students by Program", fontsize=14, fontweight='bold')
+                                            ax.set_xlabel("Program")
+                                            ax.set_ylabel("Count")
+                                            plt.tight_layout()
+                                            
+                                            # Save to buffer
+                                            chart_buffer = BytesIO()
+                                            fig.savefig(chart_buffer, format='png', dpi=100, bbox_inches='tight')
+                                            chart_buffer.seek(0)
+                                            plt.close(fig)
+                                            
+                                            # Add to PDF
+                                            chart_img = Image(chart_buffer, width=5.5*inch, height=3.5*inch)
+                                            story.append(chart_img)
                                             story.append(Spacer(1, 0.1*inch))
                                         
-                                        elif section == "Program Allocation" and len(report_data) > 0 and 'program' in report_data.columns:
-                                            prog_year = report_data.groupby(['program', 'year_level']).size().unstack(fill_value=0)
-                                            data = [['Program'] + list(prog_year.columns)]
-                                            for prog in prog_year.index:
-                                                row = [str(prog)]
-                                                for col in prog_year.columns:
-                                                    row.append(str(int(prog_year.loc[prog, col])))
-                                                data.append(row)
-                                            table = Table(data)
-                                            table.setStyle(TableStyle([
-                                                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('009688')),
-                                                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                                                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                                                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                                                ('BACKGROUND', (0, 1), (-1, -1), colors.lightgrey),
-                                                ('GRID', (0, 0), (-1, -1), 1, colors.black)
-                                            ]))
-                                            story.append(table)
-                                            story.append(Spacer(1, 0.1*inch))
+                                        elif section == "Program Allocation" and len(report_data) > 0:
+                                            if 'program' in report_data.columns and 'year_level' in report_data.columns:
+                                                prog_year = report_data.groupby(['program', 'year_level']).size().unstack(fill_value=0)
+                                                
+                                                fig, ax = plt.subplots(figsize=(6, 4))
+                                                prog_year.plot(kind='bar', stacked=True, ax=ax, color=['#009688', '#00897B', '#00695C', '#004D40'])
+                                                ax.set_title("Program Distribution by Year Level", fontsize=14, fontweight='bold')
+                                                ax.set_xlabel("Program")
+                                                ax.set_ylabel("Count")
+                                                ax.legend(title="Year", bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
+                                                plt.tight_layout()
+                                                
+                                                chart_buffer = BytesIO()
+                                                fig.savefig(chart_buffer, format='png', dpi=100, bbox_inches='tight')
+                                                chart_buffer.seek(0)
+                                                plt.close(fig)
+                                                
+                                                chart_img = Image(chart_buffer, width=5.5*inch, height=3.5*inch)
+                                                story.append(chart_img)
+                                                story.append(Spacer(1, 0.1*inch))
                                         
                                         elif section == "ASD Deep Dive Analysis" and len(report_data) > 0:
-                                            story.append(Paragraph("ASD Student Distribution:", styles['Heading2']))
                                             if 'program' in report_data.columns:
                                                 prog_counts = report_data['program'].value_counts()
-                                                data = [['Program', 'ASD Students']]
-                                                for prog, count in prog_counts.items():
-                                                    data.append([str(prog), str(count)])
-                                                table = Table(data, colWidths=[3*inch, 2*inch])
-                                                table.setStyle(TableStyle([
-                                                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('009688')),
-                                                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                                                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                                                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                                                    ('BACKGROUND', (0, 1), (-1, -1), colors.lightgrey),
-                                                    ('GRID', (0, 0), (-1, -1), 1, colors.black)
-                                                ]))
-                                                story.append(table)
+                                                
+                                                fig, ax = plt.subplots(figsize=(6, 4))
+                                                colors_pie = ['#009688', '#00897B', '#00695C']
+                                                prog_counts.plot(kind='pie', ax=ax, autopct='%1.1f%%', startangle=90, colors=colors_pie[:len(prog_counts)])
+                                                ax.set_title("ASD Students by Program", fontsize=14, fontweight='bold')
+                                                ax.set_ylabel("")
+                                                plt.tight_layout()
+                                                
+                                                chart_buffer = BytesIO()
+                                                fig.savefig(chart_buffer, format='png', dpi=100, bbox_inches='tight')
+                                                chart_buffer.seek(0)
+                                                plt.close(fig)
+                                                
+                                                chart_img = Image(chart_buffer, width=5.5*inch, height=3.5*inch)
+                                                story.append(chart_img)
                                                 story.append(Spacer(1, 0.1*inch))
                                         
                                         else:
-                                            story.append(Paragraph(f"{section} - Data analysis available in dashboard", styles['Normal']))
+                                            story.append(Paragraph(f"{section} - Analysis available in dashboard", styles['Normal']))
                                     
-                                    except Exception as section_error:
-                                        story.append(Paragraph(f"{section} - Data summary (processing)", styles['Normal']))
+                                    except Exception as e:
+                                        st.write(f"Chart error for {section}: {str(e)}")
+                                        story.append(Paragraph(f"{section} - Error generating chart", styles['Normal']))
                                     
                                     story.append(Spacer(1, 0.2*inch))
                                 
