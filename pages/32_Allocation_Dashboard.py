@@ -466,7 +466,17 @@ def update_chart_layout(fig):
     fig.update_yaxes(showgrid=True, gridcolor='rgba(100,100,100,0.2)', tickfont=dict(color='#ffffff'))
     return fig
 
-allocation_df = load_allocation_data()
+# Try to load from Excel first (main data source)
+try:
+    excel_file = '/mnt/user-data/uploads/CLC_Allocation_Dashboard_2026_WithNames_1.xlsx'
+    allocation_df = pd.read_excel(excel_file, sheet_name='Allocation')
+except:
+    # Fallback to Supabase if Excel not available
+    allocation_df = load_allocation_data()
+
+# If still no data, try Supabase
+if allocation_df is None or len(allocation_df) == 0:
+    allocation_df = load_allocation_data()
 
 # === AUTO-LOAD EXCEL DATA INTO SESSION STATE ===
 if allocation_df is not None:
