@@ -242,6 +242,18 @@ def num_or_none(value):
     value = str(value).strip()
     return value if value else None
 
+def parse_stored_date(value):
+    """Turn a stored ISO date string back into a date object for a date_input default."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value)[:10]).date()
+    except Exception:
+        return None
+
+def is_yes(value):
+    return str(value).strip().lower() == "yes"
+
 def clean_value(v):
     if v is None:
         return ""
@@ -295,8 +307,8 @@ def sync_into_master_workbook(uploaded_bytes, records):
     """
     Append new records directly onto the user's real master Excel file, matching
     whatever column order that file already uses (read from its own header row).
-    Returns (updated_workbook_bytes, sheet_name, appended_count, skipped_duplicates,
-             unmatched_export_columns).
+    Returns (updated_workbook_bytes, sheet_name, appended_count, appended_names,
+             skipped_duplicates, unmatched_export_columns).
     """
     wb = openpyxl.load_workbook(BytesIO(uploaded_bytes))
 
@@ -314,6 +326,7 @@ def sync_into_master_workbook(uploaded_bytes, records):
 
     # Find the Student_Name column (if present) for duplicate detection
     name_col_idx = header_index.get("Student_Name")
+    name_column_found = name_col_idx is not None
     existing_names = set()
     if name_col_idx is not None:
         for row in ws.iter_rows(min_row=2, values_only=True):
@@ -323,6 +336,7 @@ def sync_into_master_workbook(uploaded_bytes, records):
     unmatched_columns = [col for col in EXPORT_COLUMNS if col not in header_index]
 
     appended = 0
+    appended_names = []
     skipped = []
     for record in records:
         student_name = str(record.get("student_name", "")).strip()
@@ -340,13 +354,14 @@ def sync_into_master_workbook(uploaded_bytes, records):
 
         ws.append(new_row)
         appended += 1
+        appended_names.append(student_name or "(no name)")
         if student_name:
             existing_names.add(student_name.lower())
 
     output = BytesIO()
     wb.save(output)
     output.seek(0)
-    return output, sheet_name, appended, skipped, unmatched_columns
+    return output, sheet_name, appended, appended_names, skipped, unmatched_columns, name_column_found
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN APP
@@ -401,6 +416,140 @@ with tab1:
                 st.success(f"✅ Loaded: **{draft['student_name']}**")
 
                 with st.form("complete_allocation"):
+                    st.markdown("#### 📋 Stage 1 Details — review and edit if needed")
+
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        student_name = st.text_input("Name *", value=draft.get('student_name') or "")
+                    with col2:
+                        dob = st.date_input("DOB", value=parse_stored_date(draft.get('date_of_birth')))
+                    with col3:
+                        gender = st.selectbox(
+                            "Gender", [""] + GENDER_OPTIONS,
+                            index=([""] + GENDER_OPTIONS).index(draft.get('gender')) if draft.get('gender') in GENDER_OPTIONS else 0
+                        )
+
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        school = st.selectbox(
+                            "School *", [""] + ALL_SCHOOLS,
+                            index=([""] + ALL_SCHOOLS).index(draft.get('school')) if draft.get('school') in ALL_SCHOOLS else 0
+                        )
+                    with col2:
+                        edit_auto_partnership = get_partnership_from_school(school) if school else ""
+                        st.text_input("Partnership", value=edit_auto_partnership, disabled=True)
+                    with col3:
+                        year_level = st.selectbox(
+                            "Year Level *", [""] + YEAR_LEVELS,
+                            index=([""] + YEAR_LEVELS).index(draft.get('year_level')) if draft.get('year_level') in YEAR_LEVELS else 0
+                        )
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        referral_date = st.date_input("Referral Date", value=parse_stored_date(draft.get('referral_date')))
+                    with col2:
+                        previously_referred = st.selectbox(
+                            "Previously Referred?", YES_NO,
+                            index=YES_NO.index(draft.get('previously_referred')) if draft.get('previously_referred') in YES_NO else 0
+                        )
+                    previous_referrals = st.text_input("Number of Previous Referrals", value=draft.get('previous_referrals') or "")
+
+                    edit_needs_priority = st.checkbox(
+                        "Needs prioritising against other waiting referrals",
+                        value=bool(draft.get('priority_level'))
+                    )
+                    if edit_needs_priority:
+                        priority_level = st.selectbox(
+                            "Priority Level *", [""] + PRIORITY_OPTIONS,
+                            index=([""] + PRIORITY_OPTIONS).index(draft.get('priority_level')) if draft.get('priority_level') in PRIORITY_OPTIONS else 0
+                        )
+                    else:
+                        priority_level = ""
+
+                    with st.expander("🏠 Placement History"):
+                        pcol1, pcol2, pcol3 = st.columns(3)
+                        with pcol1:
+                            previous_clc_placement = st.selectbox(
+                                "Previous CLC Placement?", YES_NO,
+                                index=YES_NO.index(draft.get('previous_clc_placement')) if draft.get('previous_clc_placement') in YES_NO else 0
+                            )
+                        with pcol2:
+                            previous_other_lc = st.selectbox(
+                                "Previous Other LC?", YES_NO,
+                                index=YES_NO.index(draft.get('previous_other_lc')) if draft.get('previous_other_lc') in YES_NO else 0
+                            )
+                        with pcol3:
+                            other_lc_name = st.text_input("Other LC Name", value=draft.get('other_lc_name') or "")
+                        total_previous_placements = st.text_input(
+                            "Total Previous Placements", value=draft.get('total_previous_placements') or ""
+                        )
+                        placement_history_notes = st.text_area(
+                            "Placement History Notes", value=draft.get('placement_history_notes') or ""
+                        )
+
+                    with st.expander("🏷️ Support Flags & Funding"):
+                        edit_flag_values = {}
+                        cols = st.columns(3)
+                        for i, (label, excel_col, db_col) in enumerate(BOOL_FLAGS):
+                            with cols[i % 3]:
+                                edit_flag_values[db_col] = st.checkbox(
+                                    label, value=is_yes(draft.get(db_col)), key=f"edit_{db_col}"
+                                )
+
+                        st.markdown("**Funding Categories**")
+                        st.caption("Ticking any category here automatically sets IESP Funding to Yes.")
+                        fcols = st.columns(3)
+                        edit_funding_values = {}
+                        for i, (label, excel_col, db_col) in enumerate(FUNDING_CATEGORIES):
+                            with fcols[i % 3]:
+                                edit_funding_values[db_col] = st.checkbox(
+                                    label, value=is_yes(draft.get(db_col)), key=f"edit_{db_col}"
+                                )
+
+                        acol1, acol2 = st.columns(2)
+                        with acol1:
+                            attendance_options = ["", "Full-time", "Part-time"]
+                            current_attendance = (
+                                "Full-time" if is_yes(draft.get('flag_attendance_fulltime'))
+                                else "Part-time" if is_yes(draft.get('flag_attendance_parttime')) else ""
+                            )
+                            attendance = st.selectbox("Attendance", attendance_options, index=attendance_options.index(current_attendance))
+                        with acol2:
+                            iesp_options = ["", "No", "Currently Being Reviewed"]
+                            current_iesp = draft.get('flag_iesp_funding_no') or ""
+                            iesp_status_if_no_category = st.selectbox(
+                                "IESP Funding (if no category ticked above)", iesp_options,
+                                index=iesp_options.index(current_iesp) if current_iesp in iesp_options else 0,
+                                help="Ignored if any funding category above is ticked — that automatically means Yes."
+                            )
+
+                    with st.expander("💊 Medical & Medication"):
+                        mcol1, mcol2 = st.columns(2)
+                        with mcol1:
+                            has_medical = st.checkbox("Medical Condition", value=is_yes(draft.get('flag_medical_condition')))
+                            stored_medical = draft.get('medical_condition_details') or ""
+                            stored_medical_type = stored_medical.split(":")[0] if ":" in stored_medical else stored_medical
+                            medical_type = st.selectbox(
+                                "Condition Type *", [""] + MEDICAL_CONDITION_TYPES,
+                                index=([""] + MEDICAL_CONDITION_TYPES).index(stored_medical_type) if stored_medical_type in MEDICAL_CONDITION_TYPES else 0,
+                                disabled=not has_medical
+                            )
+                            medical_details = st.text_area(
+                                "Medical Condition Details",
+                                value=stored_medical.split(":", 1)[1].strip() if ":" in stored_medical else "",
+                                disabled=not has_medical
+                            )
+                        with mcol2:
+                            has_medication = st.checkbox("Medication", value=is_yes(draft.get('flag_medication')))
+                            medication_details = st.text_area(
+                                "Medication Details", value=draft.get('medication_details') or "", disabled=not has_medication
+                            )
+
+                    queries = st.text_area("Queries/Notes for Meeting", value=draft.get('queries') or "")
+
+                    st.markdown("---")
+                    st.markdown("#### ✅ Stage 2 — Allocation Outcome")
+
                     col1, col2, col3 = st.columns(3)
                     with col1:
                         program = st.selectbox("Program *", PROGRAMS)
@@ -429,27 +578,74 @@ with tab1:
                     notes = st.text_area("Additional Notes")
 
                     if st.form_submit_button("✅ Save Allocation", type="primary", use_container_width=True):
-                        try:
-                            supabase.table("allocation_students").update({
-                                "program": program,
-                                "outcome": outcome,
-                                "case_worker": case_worker or None,
-                                "actioned_by": case_worker or None,
-                                "start_after": start_date.isoformat() if start_date else None,
-                                "finishing_date": end_date.isoformat() if end_date else None,
-                                "bespoke_placement": yn(bespoke),
-                                "information": information or None,
-                                "waitlist_status": waitlist_status if outcome == "Not Allocated" else "Not Applicable",
-                                "waitlist_date": waitlist_date.isoformat() if waitlist_date else None,
-                                "exit_reason": exit_reason or None,
-                                "transition_plan": transition_plan or None,
-                                "notes": notes or None,
-                            }).eq("id", draft['id']).execute()
+                        if not student_name or not school or not year_level:
+                            st.error("Please fill required fields (Name, School, Year Level)")
+                        elif has_medical and not medical_type:
+                            st.error("Please select a Medical Condition Type — required when Medical Condition is checked")
+                        elif edit_needs_priority and not priority_level:
+                            st.error("Please select a Priority Level — required when prioritisation is needed")
+                        else:
+                            try:
+                                edit_any_category_selected = any(edit_funding_values.values())
+                                if edit_any_category_selected:
+                                    edit_iesp_yes, edit_iesp_no = "Yes", ""
+                                else:
+                                    edit_iesp_yes = ""
+                                    edit_iesp_no = iesp_status_if_no_category
 
-                            st.success(f"✅ Allocation saved for {draft['student_name']}!")
-                            st.balloons()
-                        except Exception as e:
-                            st.error(f"Error: {e}")
+                                update_payload = {
+                                    "student_name": student_name,
+                                    "date_of_birth": dob.isoformat() if dob else None,
+                                    "gender": gender,
+                                    "school": school,
+                                    "year_level": year_level,
+                                    "partnership_area": edit_auto_partnership,
+                                    "referral_date": referral_date.isoformat() if referral_date else None,
+                                    "previously_referred": previously_referred,
+                                    "previous_referrals": num_or_none(previous_referrals),
+                                    "priority_level": priority_level if priority_level else None,
+                                    "previous_clc_placement": previous_clc_placement,
+                                    "previous_other_lc": previous_other_lc,
+                                    "other_lc_name": other_lc_name,
+                                    "total_previous_placements": num_or_none(total_previous_placements),
+                                    "placement_history_notes": placement_history_notes,
+                                    "flag_attendance_fulltime": yn(attendance == "Full-time"),
+                                    "flag_attendance_parttime": yn(attendance == "Part-time"),
+                                    "flag_iesp_funding_yes": edit_iesp_yes,
+                                    "flag_iesp_funding_no": edit_iesp_no,
+                                    "flag_medication": yn(has_medication),
+                                    "medication_details": medication_details if has_medication else None,
+                                    "flag_medical_condition": yn(has_medical),
+                                    "medical_condition_details": (
+                                        f"{medical_type}: {medical_details}" if has_medical and medical_details
+                                        else medical_type if has_medical else None
+                                    ),
+                                    "queries": queries,
+                                    "program": program,
+                                    "outcome": outcome,
+                                    "case_worker": case_worker or None,
+                                    "actioned_by": case_worker or None,
+                                    "start_after": start_date.isoformat() if start_date else None,
+                                    "finishing_date": end_date.isoformat() if end_date else None,
+                                    "bespoke_placement": yn(bespoke),
+                                    "information": information or None,
+                                    "waitlist_status": waitlist_status if outcome == "Not Allocated" else "Not Applicable",
+                                    "waitlist_date": waitlist_date.isoformat() if waitlist_date else None,
+                                    "exit_reason": exit_reason or None,
+                                    "transition_plan": transition_plan or None,
+                                    "notes": notes or None,
+                                }
+                                for db_col, val in edit_flag_values.items():
+                                    update_payload[db_col] = yn(val)
+                                for db_col, val in edit_funding_values.items():
+                                    update_payload[db_col] = yn(val)
+
+                                supabase.table("allocation_students").update(update_payload).eq("id", draft['id']).execute()
+
+                                st.success(f"✅ Allocation saved for {student_name}!")
+                                st.balloons()
+                            except Exception as e:
+                                st.error(f"Error: {e}")
             else:
                 st.info("✅ No drafts to complete. Create one in Stage 1.")
         except Exception as e:
@@ -735,6 +931,13 @@ with tab4:
                 st.dataframe(pd.DataFrame(preview_data), use_container_width=True, hide_index=True)
                 st.caption(f"📊 {len(export_records)} record(s) ready for export")
 
+            with st.expander("🔎 View all captured data (every field, per student)"):
+                full_rows = build_export_rows(export_records)
+                st.dataframe(
+                    pd.DataFrame(full_rows, columns=EXPORT_COLUMNS),
+                    use_container_width=True, hide_index=True
+                )
+
             st.markdown("---")
             st.subheader("🔄 Sync Directly Into Your Master Excel File")
             st.caption(
@@ -751,17 +954,60 @@ with tab4:
             if master_file is not None and not validation_issues:
                 if st.button("🔄 Append & Download Updated Master File", type="primary", use_container_width=True):
                     try:
-                        updated_bytes, sheet_used, appended, skipped, unmatched = sync_into_master_workbook(
+                        (updated_bytes, sheet_used, appended, appended_names,
+                         skipped, unmatched, name_column_found) = sync_into_master_workbook(
                             master_file.getvalue(), export_records
                         )
-                        st.success(f"✅ Appended {appended} new record(s) to the **{sheet_used}** sheet.")
+
+                        if not name_column_found:
+                            st.error(
+                                "⚠️ No `Student_Name` column was found in your uploaded file's "
+                                f"**{sheet_used}** sheet — duplicate checking was skipped, and this may "
+                                "mean the wrong sheet or file was used. Double-check this is the right file."
+                            )
+
+                        if appended == 0:
+                            st.error(
+                                f"❌ Nothing was appended. All {len(skipped)} record(s) were treated as "
+                                "already present in the file (matched by student name)."
+                            )
+                        else:
+                            st.success(f"✅ Appended {appended} new record(s) to the **{sheet_used}** sheet:")
+                            st.write(", ".join(appended_names))
+
                         if skipped:
-                            st.warning(f"🔄 Skipped {len(skipped)} already-present student(s): {', '.join(skipped)}")
+                            st.warning(
+                                f"🔄 Skipped {len(skipped)} record(s) already found in the file by name match: "
+                                f"{', '.join(skipped)}. If one of these should have been added, check for a "
+                                "name spelling difference between the two, or a leftover record from a "
+                                "previous entry."
+                            )
                         if unmatched:
                             st.info(
                                 f"ℹ️ {len(unmatched)} field(s) had no matching column in your file and were left blank: "
                                 f"{', '.join(unmatched)}"
                             )
+
+                        if appended > 0:
+                            st.markdown("**🔍 Verify — this is read directly from the file about to be downloaded:**")
+                            verify_wb = openpyxl.load_workbook(BytesIO(updated_bytes.getvalue()))
+                            verify_ws = verify_wb[sheet_used]
+                            verify_headers = [str(c.value) for c in verify_ws[1]]
+                            verify_rows = list(verify_ws.iter_rows(min_row=2, values_only=True))
+                            last_rows = verify_rows[-appended:]
+                            st.dataframe(
+                                pd.DataFrame(last_rows, columns=verify_headers),
+                                use_container_width=True, hide_index=True
+                            )
+                            st.caption(
+                                f"Sheet **{sheet_used}** now has {len(verify_rows)} data rows total "
+                                f"(was {len(verify_rows) - appended} before this sync). If the row above "
+                                "is correct but still doesn't show in Excel, the file you open afterwards "
+                                "isn't this downloaded copy — check you're opening the freshly downloaded "
+                                "file (not a cached tab, and not the original still open in Excel/SharePoint, "
+                                "which won't update unless you close and reopen it)."
+                            )
+
                         st.download_button(
                             label="💾 Download Updated Master Excel",
                             data=updated_bytes.getvalue(),
