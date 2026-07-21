@@ -82,7 +82,7 @@ EXPORT_COLUMNS = [
     'Extension', 'Extension_Date', 'Exit_Reason', 'Transition_Plan', 'Notes', 'Placement_End',
     'Exclusion_End_Date', 'Proposed_Extension_Finish_Date', 'Extension_Weeks', 'Action_owner',
     'Actual_Finish_Date', 'Extended_Placement', 'Referral_Year', 'Term', 'Extension_Status',
-    'Referral_Occurrence', 'Referral_ID'
+    'Referral_Occurrence', 'Referral_ID', 'BSE'
 ]
 
 # Excel column -> Supabase field. None means the column is left blank on export
@@ -122,7 +122,7 @@ FIELD_MAP = {
     'Extension_Weeks': 'extension_weeks', 'Action_owner': 'actioned_by',
     'Actual_Finish_Date': 'actual_finish_date', 'Extended_Placement': 'extended_placement',
     'Referral_Year': 'year', 'Term': 'term', 'Extension_Status': 'extension_status',
-    'Referral_Occurrence': None, 'Referral_ID': None,
+    'Referral_Occurrence': None, 'Referral_ID': None, 'BSE': 'bse',
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -567,6 +567,7 @@ with tab1:
                                 "Medication Details", value=draft.get('medication_details') or "", disabled=not has_medication
                             )
 
+                    bse = st.text_input("BSE", value=draft.get('bse') or "")
                     queries = st.text_area("Queries/Notes for Meeting", value=draft.get('queries') or "")
 
                     st.markdown("---")
@@ -643,6 +644,7 @@ with tab1:
                                         else medical_type if has_medical else None
                                     ),
                                     "queries": queries,
+                                    "bse": bse or None,
                                     "program": program,
                                     "outcome": outcome,
                                     "case_worker": case_worker or None,
@@ -764,6 +766,7 @@ with tab1:
                     has_medication = st.checkbox("Medication")
                     medication_details = st.text_area("Medication Details", disabled=not has_medication)
 
+            bse = st.text_input("BSE")
             queries = st.text_area("Queries/Notes for Meeting")
 
             submitted = st.form_submit_button("💾 Save Draft", type="primary", use_container_width=True)
@@ -815,6 +818,7 @@ with tab1:
                                 else medical_type if has_medical else None
                             ),
                             "queries": queries,
+                            "bse": bse or None,
                             "outcome": None,
                         }
                         for db_col, val in flag_values.items():
@@ -959,7 +963,7 @@ with tab4:
                     "Program": r.get('program', ''), "School": r.get('school', ''),
                     "Outcome": r.get('outcome', ''), "Action Owner": r.get('actioned_by', ''),
                     "Extension": r.get('extension_status', ''), "Ext. Weeks": r.get('extension_weeks', ''),
-                    "Meeting Week": r.get('meeting_week', ''),
+                    "Meeting Week": r.get('meeting_week', ''), "BSE": r.get('bse', ''),
                 } for r in export_records]
                 st.dataframe(pd.DataFrame(preview_data), use_container_width=True, hide_index=True)
                 st.caption(f"📊 {len(export_records)} record(s) ready for export")
