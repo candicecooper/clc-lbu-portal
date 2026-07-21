@@ -59,10 +59,10 @@ BOOL_FLAGS = [
     ("ADHD", "Flag_ADHD", "flag_adhd"),
     ("ODD", "Flag_ODD", "flag_odd"),
     ("PDA", "Flag_PDA", "flag_pda"),
-    ("9+ RAAP", "Flag_9plusRAAP", "flag_9plusraap"),
 ]
 
 FUNDING_CATEGORIES = [(f"Category {i}", f"Flag_Category_{i}", f"flag_category_{i}") for i in range(1, 10)]
+FUNDING_CATEGORIES.append(("9+ RAAP", "Flag_9plusRAAP", "flag_9plusraap"))
 
 # Full 74-column export order — must match the real Sheet1 layout exactly
 EXPORT_COLUMNS = [
@@ -140,28 +140,71 @@ _FALLBACK_SCHOOLS = {
     "Prospect High School": "Adelaide Prospect",
 }
 
+def _parse_school_csv(source):
+    df = pd.read_csv(source, encoding="utf-8-sig")
+    df.columns = [str(c).strip() for c in df.columns]
+    if "School" not in df.columns or "Partnership_Area" not in df.columns:
+        raise ValueError(f"CSV missing School/Partnership_Area columns — found {list(df.columns)}")
+    df = df.dropna(subset=["School"])
+    mapping = dict(zip(df["School"].astype(str).str.strip(), df["Partnership_Area"].fillna("").astype(str).str.strip()))
+    mapping = {k: v for k, v in mapping.items() if k}
+    if not mapping:
+        raise ValueError("CSV parsed but produced no rows")
+    return mapping
+
 @st.cache_data
 def load_school_partnerships():
-    csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "school_partnerships.csv")
-    try:
-        df = pd.read_csv(csv_path)
-        df = df.dropna(subset=["School"])
-        mapping = dict(zip(df["School"].str.strip(), df["Partnership_Area"].fillna("").str.strip()))
-        if mapping:
-            return mapping
-    except Exception:
-        pass
-    return _FALLBACK_SCHOOLS
+    """Search several likely locations for school_partnerships.csv so this
+    doesn't depend on one exact folder layout. Returns (mapping, path_used)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(here, "school_partnerships.csv"),
+        os.path.join(os.getcwd(), "school_partnerships.csv"),
+        os.path.join(os.getcwd(), "pages", "school_partnerships.csv"),
+        os.path.join(here, "..", "school_partnerships.csv"),
+        os.path.join(here, "pages", "school_partnerships.csv"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                return _parse_school_csv(path), path
+            except Exception:
+                continue
 
-SCHOOL_PARTNERSHIP_MAP = load_school_partnerships()
+    # Last resort: search recursively under the current working directory
+    for root, _dirs, files in os.walk(os.getcwd()):
+        if "school_partnerships.csv" in files:
+            path = os.path.join(root, "school_partnerships.csv")
+            try:
+                return _parse_school_csv(path), path
+            except Exception:
+                continue
+
+    return _FALLBACK_SCHOOLS, None
+
+SCHOOL_PARTNERSHIP_MAP, _schools_csv_path = load_school_partnerships()
+
+# Manual override: if auto-detection failed, let a staff member upload the CSV
+# directly for this session so the tool works today regardless of repo layout.
+if _schools_csv_path is None:
+    st.sidebar.warning(
+        f"⚠️ Full school list not found on disk (checked script folder, working "
+        f"directory `{os.getcwd()}`, and a recursive search). Showing a short "
+        f"fallback list."
+    )
+    manual_csv = st.sidebar.file_uploader(
+        "Upload school_partnerships.csv for this session", type=["csv"], key="manual_school_csv"
+    )
+    if manual_csv is not None:
+        try:
+            SCHOOL_PARTNERSHIP_MAP = _parse_school_csv(manual_csv)
+            st.sidebar.success(f"✅ Loaded {len(SCHOOL_PARTNERSHIP_MAP)} schools for this session")
+        except Exception as e:
+            st.sidebar.error(f"Couldn't read that file: {e}")
+
 ALL_SCHOOLS = sorted(SCHOOL_PARTNERSHIP_MAP.keys())
 PARTNERSHIP_AREAS = sorted(set(SCHOOL_PARTNERSHIP_MAP.values()))
 
-if len(SCHOOL_PARTNERSHIP_MAP) <= len(_FALLBACK_SCHOOLS):
-    st.sidebar.warning(
-        "⚠️ Full school list not found — showing a short fallback list. "
-        "Upload `school_partnerships.csv` to the same portal folder as this page to load all schools."
-    )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HELPERS
@@ -425,15 +468,25 @@ with tab1:
             with col3:
                 year_level = st.selectbox("Year Level *", [""] + YEAR_LEVELS)
 
-            col1, col2, col3 = st.columns(3)
+            col1, col2 = st.columns(2)
             with col1:
-                priority_level = st.selectbox("Priority Level", [""] + PRIORITY_OPTIONS)
-            with col2:
                 referral_date = st.date_input("Referral Date", value=None)
-            with col3:
+            with col2:
                 previously_referred = st.selectbox("Previously Referred?", YES_NO)
 
             previous_referrals = st.text_input("Number of Previous Referrals")
+
+            needs_priority = st.checkbox(
+                "Needs prioritising against other waiting referrals",
+                help="Only tick this if there are multiple referrals waiting and this student needs "
+                     "to be ordered against them for placement. Leave unticked if the student is "
+                     "going straight in — Priority Level isn't needed in that case."
+            )
+            if needs_priority:
+                priority_level = st.selectbox("Priority Level *", [""] + PRIORITY_OPTIONS)
+            else:
+                priority_level = ""
+                st.caption("Straight in — no priority ordering needed.")
 
             with st.expander("🏠 Placement History"):
                 pcol1, pcol2, pcol3 = st.columns(3)
@@ -455,6 +508,7 @@ with tab1:
                         flag_values[db_col] = st.checkbox(label, key=f"draft_{db_col}")
 
                 st.markdown("**Funding Categories**")
+                st.caption("Ticking any category here automatically sets IESP Funding to Yes.")
                 fcols = st.columns(3)
                 funding_values = {}
                 for i, (label, excel_col, db_col) in enumerate(FUNDING_CATEGORIES):
@@ -465,7 +519,11 @@ with tab1:
                 with acol1:
                     attendance = st.selectbox("Attendance", ["", "Full-time", "Part-time"])
                 with acol2:
-                    iesp_funding = st.selectbox("IESP Funding", YES_NO)
+                    iesp_status_if_no_category = st.selectbox(
+                        "IESP Funding (if no category ticked above)",
+                        ["", "No", "Currently Being Reviewed"],
+                        help="Ignored if any funding category above is ticked — that automatically means Yes."
+                    )
 
             with st.expander("💊 Medical & Medication"):
                 mcol1, mcol2 = st.columns(2)
@@ -488,8 +546,17 @@ with tab1:
                     st.error("Please fill required fields (Name, School, Year Level)")
                 elif has_medical and not medical_type:
                     st.error("Please select a Medical Condition Type — required when Medical Condition is checked")
+                elif needs_priority and not priority_level:
+                    st.error("Please select a Priority Level — required when prioritisation is needed")
                 else:
                     try:
+                        any_category_selected = any(funding_values.values())
+                        if any_category_selected:
+                            iesp_yes, iesp_no = "Yes", ""
+                        else:
+                            iesp_yes = ""
+                            iesp_no = iesp_status_if_no_category
+
                         record = {
                             "meeting_week": selected_week,
                             "meeting_date": meeting_date.isoformat(),
@@ -501,7 +568,7 @@ with tab1:
                             "gender": gender,
                             "year_level": year_level,
                             "partnership_area": auto_partnership,
-                            "priority_level": priority_level if priority_level else "3",
+                            "priority_level": priority_level if priority_level else None,
                             "referral_date": referral_date.isoformat() if referral_date else None,
                             "previously_referred": previously_referred,
                             "previous_referrals": previous_referrals,
@@ -512,8 +579,8 @@ with tab1:
                             "placement_history_notes": placement_history_notes,
                             "flag_attendance_fulltime": yn(attendance == "Full-time"),
                             "flag_attendance_parttime": yn(attendance == "Part-time"),
-                            "flag_iesp_funding_yes": yn(iesp_funding == "Yes"),
-                            "flag_iesp_funding_no": yn(iesp_funding == "No"),
+                            "flag_iesp_funding_yes": iesp_yes,
+                            "flag_iesp_funding_no": iesp_no,
                             "flag_medication": yn(has_medication),
                             "medication_details": medication_details if has_medication else None,
                             "flag_medical_condition": yn(has_medical),
