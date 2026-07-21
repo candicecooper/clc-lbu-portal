@@ -21,6 +21,7 @@ create table if not exists reference_documents (
     title text not null,
     subtitle text default '',
     intro text default '',
+    category text default 'Policies & Expectations',
     sort_order int default 0,
     is_published boolean default true,
     updated_at timestamptz default now()
@@ -316,6 +317,7 @@ SEED_DOC = {
     "title": "Daily Work Expectations",
     "subtitle": "Norms for every working day at CLC",
     "intro": "**Staff Portal:** Daily processes run through the CLC-LBU Staff Portal — absence procedures, Staff Bulletin, CLC Calendar, NIT Bookings, Communication Log and hazard reporting. Bookmark it.",
+    "category": "Policies & Expectations",
     "sort_order": 1,
     "is_published": True,
 }
@@ -393,6 +395,7 @@ SEED_DOC_CM = {
     "title": "Teacher Case Management Process",
     "subtitle": "How to case manage a student placement end to end — and what each OneNote tab is for",
     "intro": "As the allocated program teacher, **you are the case manager** for that student for the length of their placement — from before they arrive, through review, transition and exit, to archiving the file when they return to their home school. The **Checklist tab is your master to-do list**; everything here unpacks what each item means. Tick items off as you complete them so anyone picking up the file can see at a glance where the placement is up to.",
+    "category": "Policies & Expectations",
     "sort_order": 2,
     "is_published": True,
 }
@@ -514,19 +517,18 @@ def seed_starter_content():
 # ------------------------------------------------------------------
 # STAFF VIEW
 # ------------------------------------------------------------------
-def staff_view():
-    docs = fetch_documents()
-    if not docs:
-        st.info("No documents published yet. An administrator can seed or add documents in the Admin tab.")
-        return
+def _group_by_category(docs):
+    order, grouped = [], {}
+    for d in docs:
+        cat = d.get("category") or "Policies & Expectations"
+        if cat not in grouped:
+            grouped[cat] = []
+            order.append(cat)
+        grouped[cat].append(d)
+    return order, grouped
 
-    if len(docs) == 1:
-        doc = docs[0]
-    else:
-        labels = {f"{d.get('doc_code','')} {d['title']}".strip(): d for d in docs}
-        pick = st.selectbox("Document", list(labels.keys()))
-        doc = labels[pick]
 
+def _render_document(doc):
     st.markdown(
         f"""<div class="ref-header">
         <h1>{doc.get('doc_code','')}&nbsp; {doc['title']}</h1>
@@ -545,6 +547,7 @@ def staff_view():
                 file_name=f"{(doc.get('doc_code','') + '_' + doc['title']).strip('_').replace(' ', '_')}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True,
+                key=f"dl_{doc['id']}",
             )
     with col1:
         if doc.get("intro"):
@@ -555,7 +558,7 @@ def staff_view():
         st.info("This document has no sections yet.")
         return
 
-    expand_all = st.toggle("Expand all sections", value=False)
+    expand_all = st.toggle("Expand all sections", value=False, key=f"exp_{doc['id']}")
     for sec in sections:
         with st.expander(sec["title"], expanded=expand_all):
             st.markdown(sec.get("content") or "_(empty)_")
@@ -563,6 +566,34 @@ def staff_view():
     upd = doc.get("updated_at", "")
     if upd:
         st.caption(f"Portal version is the current version. Last updated: {upd[:10]}")
+
+
+def staff_view():
+    docs = fetch_documents()
+    if not docs:
+        st.info("No documents published yet. An administrator can seed or add documents in the Admin tab.")
+        return
+
+    cat_order, grouped = _group_by_category(docs)
+
+    if len(cat_order) == 1:
+        _pick_and_render(grouped[cat_order[0]], key_prefix="only")
+        return
+
+    cat_tabs = st.tabs(cat_order)
+    for cat, tab in zip(cat_order, cat_tabs):
+        with tab:
+            _pick_and_render(grouped[cat], key_prefix=re.sub(r"[^a-z0-9]+", "_", cat.lower()))
+
+
+def _pick_and_render(docs_in_cat, key_prefix):
+    if len(docs_in_cat) == 1:
+        doc = docs_in_cat[0]
+    else:
+        labels = {f"{d.get('doc_code','')} {d['title']}".strip(): d for d in docs_in_cat}
+        pick = st.selectbox("Document", list(labels.keys()), key=f"pick_{key_prefix}")
+        doc = labels[pick]
+    _render_document(doc)
 
 
 # ------------------------------------------------------------------
@@ -575,6 +606,7 @@ def admin_view():
     st.success("Admin unlocked — changes save straight to the portal for all staff.")
 
     docs = fetch_documents(include_unpublished=True)
+    existing_cats = sorted({d.get("category") or "Policies & Expectations" for d in docs}) or ["Policies & Expectations"]
 
     with st.expander("➕ Add a new document / seed starter content"):
         c1, c2 = st.columns(2)
@@ -582,16 +614,22 @@ def admin_view():
             new_code = st.text_input("Doc code (e.g. CLC 2026.8)", key="nd_code")
             new_title = st.text_input("Title", key="nd_title")
             new_sub = st.text_input("Subtitle", key="nd_sub")
+            cat_choice = st.selectbox("Category", existing_cats + ["+ New category…"], key="nd_cat_choice")
+            if cat_choice == "+ New category…":
+                new_cat = st.text_input("New category name", key="nd_cat_new", placeholder="e.g. Role Expectations")
+            else:
+                new_cat = cat_choice
             if st.button("Create document"):
-                if new_title.strip():
+                if new_title.strip() and new_cat.strip():
                     slug = re.sub(r"[^a-z0-9]+", "-", new_title.lower()).strip("-")
                     sb.table("reference_documents").insert(
                         {"slug": slug, "doc_code": new_code, "title": new_title.strip(),
-                         "subtitle": new_sub, "sort_order": len(docs) + 1, "is_published": False}
+                         "subtitle": new_sub, "category": new_cat.strip(),
+                         "sort_order": len(docs) + 1, "is_published": False}
                     ).execute()
                     clear_caches(); st.rerun()
                 else:
-                    st.error("Title required.")
+                    st.error("Title and category are required.")
         with c2:
             st.markdown("**Starter content**")
             if st.button("Seed: Daily Work Expectations + Case Management Process"):
@@ -603,7 +641,12 @@ def admin_view():
     if not docs:
         return
 
-    labels = {f"{d.get('doc_code','')} {d['title']}".strip() + ("" if d.get("is_published") else "  (unpublished)"): d for d in docs}
+    labels = {}
+    for cat in sorted({d.get("category") or "Policies & Expectations" for d in docs}):
+        for d in [x for x in docs if (x.get("category") or "Policies & Expectations") == cat]:
+            label = f"[{cat}]  {d.get('doc_code','')} {d['title']}".replace("  ", " ").strip()
+            label += "" if d.get("is_published") else "  (unpublished)"
+            labels[label] = d
     pick = st.selectbox("Edit document", list(labels.keys()), key="adm_doc")
     doc = labels[pick]
 
@@ -611,13 +654,17 @@ def admin_view():
         d_code = st.text_input("Doc code", value=doc.get("doc_code", ""), key=f"dc_{doc['id']}")
         d_title = st.text_input("Title", value=doc["title"], key=f"dt_{doc['id']}")
         d_sub = st.text_input("Subtitle", value=doc.get("subtitle", ""), key=f"ds_{doc['id']}")
+        d_cat = st.text_input(
+            "Category", value=doc.get("category") or "Policies & Expectations", key=f"dcat_{doc['id']}",
+            help="Existing categories: " + ", ".join(existing_cats),
+        )
         d_intro = st.text_area("Intro / highlighted note (optional, **bold** supported)", value=doc.get("intro", ""), key=f"di_{doc['id']}")
         d_pub = st.checkbox("Published (visible to staff)", value=bool(doc.get("is_published")), key=f"dp_{doc['id']}")
         cA, cB = st.columns(2)
         with cA:
             if st.button("Save document settings", key=f"dsave_{doc['id']}"):
                 sb.table("reference_documents").update(
-                    {"doc_code": d_code, "title": d_title, "subtitle": d_sub,
+                    {"doc_code": d_code, "title": d_title, "subtitle": d_sub, "category": d_cat.strip() or "Policies & Expectations",
                      "intro": d_intro, "is_published": d_pub, "updated_at": _now()}
                 ).eq("id", doc["id"]).execute()
                 clear_caches(); st.success("Saved."); st.rerun()
