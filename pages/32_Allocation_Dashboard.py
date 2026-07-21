@@ -593,6 +593,15 @@ else:
                 else:
                     with st.spinner(f"Generating {export_format} report..."):
                         try:
+                            # Define display variables and data first
+                            year_display = st.session_state.get('auto_year', 'All')
+                            term_display = st.session_state.get('auto_term', 'All')
+                            program_display = st.session_state.get('selected_program', 'All')
+                            view_display = 'Allocated Only'
+                            
+                            # Get current filtered data
+                            report_data = filtered.copy() if 'filtered' in dir() else allocation_df.copy()
+                            
                             if export_format == "PDF (.pdf)":
                                 # PDF generation
                                 from reportlab.lib.pagesizes import letter, A4
@@ -715,20 +724,11 @@ else:
                                 st.success(f"✅ PDF Report with {len(selected_report_sections)} sections ready!")
                             
                             else:
-                                # Word (.docx) generation (existing code)
+                                # Word (.docx) generation
                                 from docx import Document
                                 from docx.shared import Pt, RGBColor
                                 from docx.enum.text import WD_ALIGN_PARAGRAPH
                                 from io import BytesIO
-                                
-                                # Define display variables from session state with defaults
-                                year_display = st.session_state.get('auto_year', 'All')
-                                term_display = st.session_state.get('auto_term', 'All')
-                                program_display = st.session_state.get('selected_program', 'All')
-                                view_display = 'Allocated Only'
-                                
-                                # Get current filtered data
-                                report_data = filtered.copy() if 'filtered' in dir() else allocation_df.copy()
                             
                             doc = Document()
                             
