@@ -894,7 +894,7 @@ else:
         # Password gate for upload
         upload_password = st.text_input("🔐 Enter password to access data upload", type="password", help="Only authorized staff have this password")
         
-        if upload_password == "clcstaff2026":
+        if upload_password == "secret2026":
             with st.expander("📤 Update Data", expanded=False):
                 st.info("This upload updates the dataset for all dashboard users. The most recent upload is the active dataset.")
                 
