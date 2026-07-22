@@ -26,7 +26,23 @@ supabase = init_supabase()
 # ══════════════════════════════════════════════════════════════════════════════
 
 PROGRAMS = ["Junior Primary (JP)", "Primary Years (PY)", "Senior Years (SY)"]
-STAFF_NAMES = ["Candice", "Annette", "Naomi", "Cheryl", "Caitie", "Ben Selga", "Ben Sutton", "Jacqui", "Brenton", "Vinnie", "Tom"]
+DEFAULT_STAFF_NAMES = ["Ben Sutton", "Jacqui Simpson", "Caitie Hook", "Ben Selga", "Brenton McGorman", "Roisin McIlduff"]
+
+def load_dropdown_list(list_name, default_list):
+    """Load an editable dropdown list from Supabase (managed via the Admin tab).
+    Falls back to the hardcoded default if the table doesn't exist yet or is empty
+    for this list — so the tool never breaks even before the admin table is set up."""
+    try:
+        result = supabase.table("dropdown_options").select("*") \
+            .eq("list_name", list_name).order("sort_order").execute()
+        values = [r["option_value"] for r in result.data if r.get("option_value")]
+        if values:
+            return values
+    except Exception:
+        pass
+    return default_list
+
+STAFF_NAMES = load_dropdown_list("focus_teacher", DEFAULT_STAFF_NAMES)
 OUTCOMES = ["Allocated", "Not Allocated"]
 EXTENSION_OUTCOMES = ["Approved", "Not Approved"]
 GENDER_OPTIONS = ["Male", "Female", "Other", "Prefer not to say"]
@@ -437,8 +453,8 @@ with st.sidebar:
     st.info(f"**Meeting Date:** {meeting_date.strftime('%A, %B %d, %Y')}")
     st.caption(f"📚 {len(ALL_SCHOOLS)} schools loaded across {len(PARTNERSHIP_AREAS)} partnership areas")
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["📝 New Allocations", "🔄 Extensions", "⏸️ Not Placed", "📊 View & Export", "⏳ Waitlist"]
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+    ["📝 New Allocations", "🔄 Extensions", "⏸️ Not Placed", "📊 View & Export", "⏳ Waitlist", "⚙️ Admin"]
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -648,11 +664,11 @@ with tab1:
                     with col2:
                         outcome = st.selectbox("Outcome *", OUTCOMES)
                     with col3:
-                        case_worker = st.selectbox("Action Owner", [""] + STAFF_NAMES)
+                        case_worker = st.selectbox("Focus Teacher", [""] + STAFF_NAMES)
 
                     col1, col2 = st.columns(2)
                     with col1:
-                        start_date = st.date_input("Start Date", value=None)
+                        start_date = st.date_input("Allocation Date", value=None)
                     with col2:
                         end_date = st.date_input("End Date", value=None)
 
@@ -747,7 +763,7 @@ with tab1:
     else:
         st.subheader("➕ Create New Draft")
 
-        with st.form("new_draft"):
+        with st.form("new_draft", clear_on_submit=True):
             col1, col2, col3 = st.columns(3)
             with col1:
                 student_name = st.text_input("Name *")
@@ -929,7 +945,7 @@ with tab2:
                     proposed_finish = st.date_input("Proposed Extension Finish Date", value=None)
 
                 ext_comm = st.text_area("Communication to School")
-                ext_owner = st.selectbox("Action Owner", [""] + STAFF_NAMES)
+                ext_owner = st.selectbox("Focus Teacher", [""] + STAFF_NAMES)
 
                 if st.form_submit_button("✅ Save Extension", type="primary", use_container_width=True):
                     try:
@@ -1030,7 +1046,7 @@ with tab4:
                 preview_data = [{
                     "Student": r.get('student_name', ''), "Year": r.get('year_level', ''),
                     "Program": r.get('program', ''), "School": r.get('school', ''),
-                    "Outcome": r.get('outcome', ''), "Action Owner": r.get('actioned_by', ''),
+                    "Outcome": r.get('outcome', ''), "Focus Teacher": r.get('actioned_by', ''),
                     "Extension": r.get('extension_status', ''), "Ext. Weeks": r.get('extension_weeks', ''),
                     "Meeting Week": r.get('meeting_week', ''), "BSE": r.get('bse', ''),
                 } for r in export_records]
@@ -1217,9 +1233,9 @@ with tab5:
                             with acol1:
                                 alloc_program = st.selectbox("Program *", PROGRAMS, key=f"prog_{r['id']}")
                             with acol2:
-                                alloc_start = st.date_input("Start Date", value=None, key=f"start_{r['id']}")
+                                alloc_start = st.date_input("Allocation Date", value=None, key=f"start_{r['id']}")
                             with acol3:
-                                alloc_worker = st.selectbox("Action Owner", [""] + STAFF_NAMES, key=f"worker_{r['id']}")
+                                alloc_worker = st.selectbox("Focus Teacher", [""] + STAFF_NAMES, key=f"worker_{r['id']}")
 
                             if st.form_submit_button("✅ Allocate Now", type="primary", use_container_width=True):
                                 supabase.table("allocation_students").update({
@@ -1238,5 +1254,85 @@ with tab5:
             st.info("No students currently on the waitlist.")
     except Exception as e:
         st.error(f"Error: {e}")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 6 — ADMIN
+# ══════════════════════════════════════════════════════════════════════════════
+with tab6:
+    st.header("⚙️ Admin — Manage Dropdown Lists")
+    st.caption(
+        "Add or remove options for the tool's dropdowns without needing a code change. "
+        "Changes here take effect the next time the tool loads."
+    )
+
+    admin_password = st.text_input("🔐 Enter admin password", type="password", key="admin_pw")
+    if admin_password != "secret2026":
+        if admin_password:
+            st.error("❌ Incorrect password.")
+        st.stop()
+
+    st.success("✅ Access granted")
+
+    MANAGED_LISTS = {
+        "Focus Teacher": ("focus_teacher", DEFAULT_STAFF_NAMES),
+    }
+
+    list_label = st.selectbox("Which list do you want to manage?", list(MANAGED_LISTS.keys()))
+    list_name, default_values = MANAGED_LISTS[list_label]
+
+    try:
+        supabase.table("dropdown_options").select("id").limit(1).execute()
+        table_exists = True
+    except Exception:
+        table_exists = False
+
+    if not table_exists:
+        st.error(
+            "The `dropdown_options` table doesn't exist in Supabase yet. Run this once in the "
+            "Supabase SQL editor, then refresh this page:"
+        )
+        st.code(
+            "CREATE TABLE dropdown_options (\n"
+            "    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n"
+            "    list_name TEXT NOT NULL,\n"
+            "    option_value TEXT NOT NULL,\n"
+            "    sort_order INTEGER DEFAULT 0\n"
+            ");",
+            language="sql"
+        )
+        st.stop()
+
+    current = supabase.table("dropdown_options").select("*") \
+        .eq("list_name", list_name).order("sort_order").execute().data
+
+    if not current:
+        st.info(f"No custom options saved yet for **{list_label}** — currently using the built-in defaults below.")
+        st.write(", ".join(default_values))
+        if st.button(f"📋 Load these {len(default_values)} defaults into the editable list"):
+            for i, val in enumerate(default_values):
+                supabase.table("dropdown_options").insert(
+                    {"list_name": list_name, "option_value": val, "sort_order": i}
+                ).execute()
+            st.rerun()
+    else:
+        st.markdown(f"**Current {list_label} options:**")
+        for item in current:
+            ccol1, ccol2 = st.columns([4, 1])
+            with ccol1:
+                st.write(item["option_value"])
+            with ccol2:
+                if st.button("🗑️ Remove", key=f"rm_{item['id']}"):
+                    supabase.table("dropdown_options").delete().eq("id", item["id"]).execute()
+                    st.rerun()
+
+        st.markdown("---")
+        with st.form(f"add_option_{list_name}", clear_on_submit=True):
+            new_value = st.text_input(f"Add a new {list_label}")
+            if st.form_submit_button("➕ Add") and new_value.strip():
+                next_order = max([c.get("sort_order", 0) for c in current], default=-1) + 1
+                supabase.table("dropdown_options").insert(
+                    {"list_name": list_name, "option_value": new_value.strip(), "sort_order": next_order}
+                ).execute()
+                st.rerun()
 
 st.caption("CLC-LBU Allocation Meetings Tool")
