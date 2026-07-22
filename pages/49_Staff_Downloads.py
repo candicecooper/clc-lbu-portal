@@ -72,18 +72,20 @@ DOWNLOADS = {
             "url": "https://get.adobe.com/reader/",
         },
     ],
-"Tools": [
+    "Tools": [
         {
-            "name": "j5create",
-            "desc": "360 All Around Webcam-install for Manager's Webcam Firmware and Webcam Companion App",
+            "name": "j5create 360 All Around Webcam",
+            "desc": "Install for Manager's Webcam firmware and Webcam Companion app.",
             "url": "https://en.j5create.com/pages/drivers#jvcu360-show",
         },
         {
-            "name": "j5create",
-            "desc": "360 AI-Powered Webcam with Speakerphone-install for Meetings Webcam Firmware and Webcam Companion App",
+            "name": "j5create 360 AI-Powered Webcam with Speakerphone",
+            "desc": "Install for Meetings Webcam firmware and Webcam Companion app.",
             "url": "https://en.j5create.com/pages/drivers#jvu368-show",
         },
     ],
+}
+
 # --------------------------------------------------------------------------
 # Display — nothing below this line needs editing to add a new link
 # --------------------------------------------------------------------------
@@ -115,6 +117,6 @@ for category, items in DOWNLOADS.items():
 
 st.divider()
 st.caption(
-    "Maintained by editing the `DOWNLOADS` dictionary at the top of `47_Staff_Downloads.py` "
+    "Maintained by editing the `DOWNLOADS` dictionary at the top of `49_Staff_Downloads.py` "
     "directly in GitHub — no redeploy steps or database changes required."
 )
