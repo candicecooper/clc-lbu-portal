@@ -437,6 +437,25 @@ with tab1:
                 draft = draft_options[selected]
                 st.success(f"✅ Loaded: **{draft['student_name']}**")
 
+                dcol1, dcol2 = st.columns([3, 1])
+                with dcol2:
+                    if st.button("🗑️ Delete This Draft", key=f"del_draft_{draft['id']}", use_container_width=True):
+                        st.session_state[f"confirm_delete_{draft['id']}"] = True
+
+                if st.session_state.get(f"confirm_delete_{draft['id']}"):
+                    st.warning(f"⚠️ Delete **{draft['student_name']}**'s draft permanently? This can't be undone.")
+                    ccol1, ccol2 = st.columns(2)
+                    with ccol1:
+                        if st.button("✅ Yes, delete it", key=f"confirm_del_{draft['id']}", type="primary", use_container_width=True):
+                            supabase.table("allocation_students").delete().eq("id", draft["id"]).execute()
+                            st.session_state.pop(f"confirm_delete_{draft['id']}", None)
+                            st.success(f"Deleted {draft['student_name']}")
+                            st.rerun()
+                    with ccol2:
+                        if st.button("Cancel", key=f"cancel_del_{draft['id']}", use_container_width=True):
+                            st.session_state.pop(f"confirm_delete_{draft['id']}", None)
+                            st.rerun()
+
                 with st.form("complete_allocation"):
                     st.markdown("#### 📋 Stage 1 Details — review and edit if needed")
 
@@ -974,6 +993,33 @@ with tab4:
                     pd.DataFrame(full_rows, columns=EXPORT_COLUMNS),
                     use_container_width=True, hide_index=True
                 )
+
+            st.markdown("---")
+            with st.expander("🗑️ Delete a Record"):
+                del_options = {r['student_name']: r for r in export_records}
+                del_selected = st.selectbox("Select student to delete:", list(del_options.keys()), key="del_record_select")
+                del_record = del_options[del_selected]
+
+                if st.button("🗑️ Delete This Record", key=f"del_rec_{del_record['id']}"):
+                    st.session_state[f"confirm_del_rec_{del_record['id']}"] = True
+
+                if st.session_state.get(f"confirm_del_rec_{del_record['id']}"):
+                    st.warning(
+                        f"⚠️ Permanently delete **{del_record['student_name']}**'s record "
+                        f"(outcome: {del_record.get('outcome', '')})? This can't be undone and won't "
+                        "affect anything already in your Excel file."
+                    )
+                    dccol1, dccol2 = st.columns(2)
+                    with dccol1:
+                        if st.button("✅ Yes, delete it", key=f"confirm_del_rec_{del_record['id']}", type="primary", use_container_width=True):
+                            supabase.table("allocation_students").delete().eq("id", del_record["id"]).execute()
+                            st.session_state.pop(f"confirm_del_rec_{del_record['id']}", None)
+                            st.success(f"Deleted {del_record['student_name']}")
+                            st.rerun()
+                    with dccol2:
+                        if st.button("Cancel", key=f"cancel_del_rec_{del_record['id']}", use_container_width=True):
+                            st.session_state.pop(f"confirm_del_rec_{del_record['id']}", None)
+                            st.rerun()
 
             st.markdown("---")
             st.subheader("📥 Download Records for Your Master Excel File")
