@@ -2335,11 +2335,24 @@ Only include sections that have content. Be concise and professional."""
         org_content = st.session_state[f"organized_transcript_{program}"]
         
         st.markdown("---")
-        st.markdown("#### 📋 Organized Meeting Transcript")
+        st.markdown("#### 📋 Organized Meeting Transcript (Edit as Needed)")
         
-        # Display organized content
-        with st.expander("📖 View Organized Content", expanded=True):
-            st.markdown(org_content)
+        # Make organized content EDITABLE
+        edited_org_content = st.text_area(
+            "Edit organized content here (you can add, delete, or change anything):",
+            value=org_content,
+            height=200,
+            key=f"edited_org_content_{program}",
+            label_visibility="collapsed"
+        )
+        
+        # Update session state with edited version
+        st.session_state[f"organized_transcript_{program}"] = edited_org_content
+        
+        st.info("✏️ You can edit the organized content above - delete sections, reword, add details, etc.")
+        
+        # Use the edited version for auto-fill
+        org_content = edited_org_content
         
         # ── AUTO-FILL FORM BUTTON ──
         if st.button("✅ Auto-Fill Meeting Form from This Transcript", key=f"autofill_form_{program}", type="primary", use_container_width=True):
@@ -2400,18 +2413,22 @@ Only include sections that have content. Be concise and professional."""
             # ── DISPLAY EXTRACTED ACTIONS (PRIMARY) ──
             if 'actions' in sections_data and sections_data['actions']:
                 st.markdown("---")
-                st.markdown("#### ✋ Extracted Action Items")
+                st.markdown("#### ✋ Extracted Action Items (From This Meeting)")
                 
                 actions_text = "\n".join(sections_data['actions'])
-                st.success("📋 Actions detected in your transcript:")
+                st.success("✅ Actions from THIS meeting:")
                 
-                st.text_area(
-                    "Review and copy these actions:",
+                # EDITABLE action items
+                edited_actions = st.text_area(
+                    "Edit/refine these actions:",
                     value=actions_text,
                     height=120,
-                    disabled=True,
-                    key=f"actions_display_{program}"
+                    key=f"actions_display_editable_{program}",
+                    label_visibility="collapsed"
                 )
+                
+                # Store edited actions
+                st.session_state[f"current_meeting_actions_{program}"] = edited_actions
                 
                 st.info("""
 **Next Step:** 
@@ -2421,72 +2438,86 @@ Make sure each action is formatted as:
 - **What:** Specific task
 - **By When:** Date/timeline
                 """)
+            else:
+                st.warning("⚠️ No action items found in this transcript. Add them manually below.")
             
-            # ── DISPLAY OTHER SECTIONS ──
+            # ── DISPLAY OTHER SECTIONS (ALL EDITABLE) ──
             st.markdown("---")
-            st.markdown("#### 📋 Other Extracted Content")
+            st.markdown("#### 📋 Other Extracted Content (Edit as Needed)")
             
             if 'checkin' in sections_data and sections_data['checkin']:
                 with st.expander("✅ Check-in Content", expanded=True):
-                    st.text_area(
-                        "Copy to Check-in section:",
-                        value="\n".join(sections_data['checkin']),
+                    checkin_text = "\n".join(sections_data['checkin'])
+                    edited_checkin = st.text_area(
+                        "Edit Check-in:",
+                        value=checkin_text,
                         height=80,
-                        disabled=True,
-                        key=f"checkin_display_{program}"
+                        key=f"checkin_display_editable_{program}",
+                        label_visibility="collapsed"
                     )
+                    st.session_state[f"current_meeting_checkin_{program}"] = edited_checkin
             
             if 'concerns' in sections_data and sections_data['concerns']:
                 with st.expander("👤 Student Concerns Content", expanded=True):
-                    st.text_area(
-                        "Copy to Student Concerns section:",
-                        value="\n".join(sections_data['concerns']),
+                    concerns_text = "\n".join(sections_data['concerns'])
+                    edited_concerns = st.text_area(
+                        "Edit Student Concerns:",
+                        value=concerns_text,
                         height=100,
-                        disabled=True,
-                        key=f"concerns_display_{program}"
+                        key=f"concerns_display_editable_{program}",
+                        label_visibility="collapsed"
                     )
+                    st.session_state[f"current_meeting_concerns_{program}"] = edited_concerns
             
             if 'smartar' in sections_data and sections_data['smartar']:
                 with st.expander("🎯 SMARTAR Goals Content", expanded=True):
-                    st.text_area(
-                        "Copy to SMARTAR section:",
-                        value="\n".join(sections_data['smartar']),
+                    smartar_text = "\n".join(sections_data['smartar'])
+                    edited_smartar = st.text_area(
+                        "Edit SMARTAR Goals:",
+                        value=smartar_text,
                         height=100,
-                        disabled=True,
-                        key=f"smartar_display_{program}"
+                        key=f"smartar_display_editable_{program}",
+                        label_visibility="collapsed"
                     )
+                    st.session_state[f"current_meeting_smartar_{program}"] = edited_smartar
             
             if 'report' in sections_data and sections_data['report']:
                 with st.expander("📊 Report Content", expanded=True):
-                    st.text_area(
-                        "Copy to Report section:",
-                        value="\n".join(sections_data['report']),
+                    report_text = "\n".join(sections_data['report'])
+                    edited_report = st.text_area(
+                        "Edit Report:",
+                        value=report_text,
                         height=100,
-                        disabled=True,
-                        key=f"report_display_{program}"
+                        key=f"report_display_editable_{program}",
+                        label_visibility="collapsed"
                     )
+                    st.session_state[f"current_meeting_report_{program}"] = edited_report
             
             if 'tac' in sections_data and sections_data['tac']:
                 with st.expander("🔗 TAC Content", expanded=True):
-                    st.text_area(
-                        "Copy to TAC section:",
-                        value="\n".join(sections_data['tac']),
+                    tac_text = "\n".join(sections_data['tac'])
+                    edited_tac = st.text_area(
+                        "Edit TAC:",
+                        value=tac_text,
                         height=100,
-                        disabled=True,
-                        key=f"tac_display_{program}"
+                        key=f"tac_display_editable_{program}",
+                        label_visibility="collapsed"
                     )
+                    st.session_state[f"current_meeting_tac_{program}"] = edited_tac
             
             if 'transitions' in sections_data and sections_data['transitions']:
                 with st.expander("🚀 Transitions Content", expanded=True):
-                    st.text_area(
-                        "Copy to Transitions section:",
-                        value="\n".join(sections_data['transitions']),
+                    transitions_text = "\n".join(sections_data['transitions'])
+                    edited_transitions = st.text_area(
+                        "Edit Transitions:",
+                        value=transitions_text,
                         height=100,
-                        disabled=True,
-                        key=f"transitions_display_{program}"
+                        key=f"transitions_display_editable_{program}",
+                        label_visibility="collapsed"
                     )
+                    st.session_state[f"current_meeting_transitions_{program}"] = edited_transitions
             
-            # Auto-fill form fields
+            # Auto-fill form fields with current meeting data
             if 'checkin' in sections_data:
                 st.session_state[f"pm_checkin_{program}"] = "\n".join(sections_data['checkin'])
             
