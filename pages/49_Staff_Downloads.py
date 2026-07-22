@@ -72,8 +72,18 @@ DOWNLOADS = {
             "url": "https://get.adobe.com/reader/",
         },
     ],
-}
-
+"Tools": [
+        {
+            "name": "j5create",
+            "desc": "360 All Around Webcam-install for Manager's Webcam Firmware and Webcam Companion App",
+            "url": "https://en.j5create.com/pages/drivers#jvcu360-show",
+        },
+        {
+            "name": "j5create",
+            "desc": "360 AI-Powered Webcam with Speakerphone-install for Meetings Webcam Firmware and Webcam Companion App",
+            "url": "https://en.j5create.com/pages/drivers#jvu368-show",
+        },
+    ],
 # --------------------------------------------------------------------------
 # Display — nothing below this line needs editing to add a new link
 # --------------------------------------------------------------------------
