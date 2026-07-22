@@ -451,15 +451,41 @@ with tab1:
 
     if stage_choice == "📝 Complete Draft (Stage 2)":
         st.subheader("📂 Select Draft to Complete")
+
+        show_all_weeks = st.checkbox(
+            "🔍 Show drafts from all weeks",
+            help="Use this if a draft you created isn't showing up under the current week — earlier "
+                 "versions of this tool sometimes defaulted to the wrong week, so drafts may be filed "
+                 "under a different Term/Year/Week than you expect."
+        )
+
         try:
-            drafts = supabase.table("allocation_students").select("*") \
-                .eq("meeting_week", selected_week).is_("outcome", "null").execute()
+            query = supabase.table("allocation_students").select("*").is_("outcome", "null")
+            if not show_all_weeks:
+                query = query.eq("meeting_week", selected_week)
+            drafts = query.execute()
 
             if drafts.data:
-                draft_options = {d['student_name']: d for d in drafts.data}
+                label_for = lambda d: f"{d['student_name']} ({d.get('meeting_week', 'no week set')})" if show_all_weeks else d['student_name']
+                draft_options = {label_for(d): d for d in drafts.data}
                 selected = st.selectbox("Select draft:", list(draft_options.keys()))
                 draft = draft_options[selected]
                 st.success(f"✅ Loaded: **{draft['student_name']}**")
+
+                if draft.get('meeting_week') != selected_week:
+                    st.info(
+                        f"This draft was filed under **{draft.get('meeting_week', 'an earlier week')}**, "
+                        f"not the currently selected **{selected_week}**."
+                    )
+                    if st.button("📌 Reassign this draft to the currently selected week", key=f"reassign_{draft['id']}"):
+                        supabase.table("allocation_students").update({
+                            "meeting_week": selected_week,
+                            "meeting_date": meeting_date.isoformat(),
+                            "term": st.session_state.current_term,
+                            "year": st.session_state.current_year,
+                        }).eq("id", draft["id"]).execute()
+                        st.success("Reassigned — reload this draft to continue.")
+                        st.rerun()
 
                 dcol1, dcol2 = st.columns([3, 1])
                 with dcol2:
