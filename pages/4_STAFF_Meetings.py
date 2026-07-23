@@ -13,6 +13,22 @@ try:
 except:
     DOCX_AVAILABLE = False
 
+# ── Groq token-budget guard ────────────────────────────────────────────────
+# The Groq account is on the on_demand tier: 12,000 tokens/minute total,
+# shared across prompt + requested output. Long transcripts can blow past
+# that in a single call ("Request too large" / 413 rate_limit_exceeded).
+# This trims input text to fit before sending, and tells the user if it did.
+def _fit_to_groq_budget(text: str, max_tokens: int, prompt_overhead_tokens: int = 400,
+                         tpm_limit: int = 12000) -> tuple[str, bool]:
+    """Truncate text so prompt_overhead + text + max_tokens stays under the
+    account's TPM limit. Returns (possibly-truncated text, was_truncated)."""
+    CHARS_PER_TOKEN = 4  # rough estimate for English text
+    input_token_budget = tpm_limit - max_tokens - prompt_overhead_tokens
+    char_budget = max(0, input_token_budget) * CHARS_PER_TOKEN
+    if len(text) <= char_budget:
+        return text, False
+    return text[:char_budget], True
+
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(page_title="STAFF Meetings | CLC-LBU", page_icon="👥", layout="wide")
 apply_clc_theme()
@@ -744,6 +760,18 @@ with tab1:
                             from groq import Groq
                             client = Groq(api_key=GROQ_KEY)
 
+                            transcript_for_ai, was_truncated = _fit_to_groq_budget(
+                                transcript_text, max_tokens=4000, prompt_overhead_tokens=600
+                            )
+                            if was_truncated:
+                                st.warning(
+                                    "⚠️ This transcript is longer than the AI can process in one go "
+                                    "(Groq's 12,000 tokens/minute limit on the current plan). "
+                                    "Only the first part was sent — review the generated minutes "
+                                    "carefully and add anything from later in the meeting by hand, "
+                                    "or split the transcript into two parts and run each separately."
+                                )
+
                             prompt = f"""You are producing formal school staff meeting minutes.
 
 MEETING DETAILS (use exactly as provided):
@@ -823,7 +851,7 @@ After all standing items, include any additional topics from the transcript that
 ---
 
 TRANSCRIPT:
-{transcript_text}
+{transcript_for_ai}
 
 Return ONLY the formatted minutes above. No preamble, no commentary, no extra headings."""
 
@@ -895,7 +923,18 @@ if minutes and minutes.strip() and GROQ_KEY:
                 try:
                     from groq import Groq
                     client = Groq(api_key=GROQ_KEY)
-                    
+
+                    minutes_for_ai, was_truncated = _fit_to_groq_budget(
+                        minutes, max_tokens=2000, prompt_overhead_tokens=250
+                    )
+                    if was_truncated:
+                        st.warning(
+                            "⚠️ These minutes are longer than the AI can process in one go "
+                            "(Groq's 12,000 tokens/minute limit on the current plan). "
+                            "Only the first part was sent — check for any actions later in "
+                            "the minutes and add them manually if missed."
+                        )
+
                     action_prompt = f"""From these meeting minutes, extract all action items.
 
 For each action, identify:
@@ -912,7 +951,7 @@ Return ONLY a JSON array in this exact format:
 If no actions found, return: []
 
 Meeting Minutes:
-{minutes}
+{minutes_for_ai}
 
 JSON array of actions:"""
 
@@ -1134,7 +1173,19 @@ with st.expander("📚 PD Session Details", expanded=True):
                         try:
                             from groq import Groq
                             client = Groq(api_key=GROQ_KEY)
-                            
+
+                            pd_transcript_for_ai, was_truncated = _fit_to_groq_budget(
+                                pd_transcript_text, max_tokens=3000, prompt_overhead_tokens=250
+                            )
+                            if was_truncated:
+                                st.warning(
+                                    "⚠️ This PD transcript is longer than the AI can process in one go "
+                                    "(Groq's 12,000 tokens/minute limit on the current plan). "
+                                    "Only the first part was sent — review the extracted notes and "
+                                    "add anything from later in the session by hand, or split the "
+                                    "transcript into parts and run each separately."
+                                )
+
                             prompt = f"""Extract the main points and key learnings from this professional development session transcript.
 
 Structure the output with:
@@ -1144,7 +1195,7 @@ Structure the output with:
 - Any action items or next steps
 
 Transcript:
-{pd_transcript_text}
+{pd_transcript_for_ai}
 
 Format as clear, structured notes."""
 
