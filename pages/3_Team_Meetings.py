@@ -1579,14 +1579,11 @@ def render_program_meeting(program):
 
     last_records = fetch("tm_program_meetings", {"program": program}, "meeting_date")
     last_week_type = None
-    last_actions = []
+    # REMOVED: last_actions = [] - no more carrying forward old actions
     if last_records:
         last = last_records[-1]
         last_week_type = last.get("week_type")
-        try:
-            last_actions = _json.loads(last.get("actions", "[]") or "[]")
-        except Exception:
-            last_actions = []
+        # Old actions are NOT carried forward anymore - each meeting starts fresh
 
     suggested_type = "B" if last_week_type == "A" else "A"
 
@@ -2205,8 +2202,9 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
     default_week = selected_record.get('week_number', 1) if selected_record else 1
     default_facilitator = selected_record.get('facilitator', _safe_staff_name()) if selected_record else _safe_staff_name()
     default_attendees = selected_record.get('attendees', '') if selected_record else ''
-    default_checkin = selected_record.get('checkin_notes', '') if selected_record else ''
-    default_reports = selected_record.get('reports_tac_notes', '') if selected_record else ''
+    # Check session state first (for transcript auto-fill), then selected_record
+    default_checkin = st.session_state.get(f"pm_checkin_{program}") or (selected_record.get('checkin_notes', '') if selected_record else '')
+    default_reports = st.session_state.get(f"pm_reports_{program}") or (selected_record.get('reports_tac_notes', '') if selected_record else '')
     
     with mc1: pm_date        = st.date_input("Date", value=default_date, key=f"pm_date_{program}")
     with mc2: pm_term        = st.text_input("Term", value=default_term, placeholder="T1", key=f"pm_term_{program}")
@@ -2517,12 +2515,63 @@ Make sure each action is formatted as:
                     )
                     st.session_state[f"current_meeting_transitions_{program}"] = edited_transitions
             
-            # Auto-fill form fields with current meeting data
-            if 'checkin' in sections_data:
+            # Auto-fill form fields with extracted content - ALL SECTIONS
+            if 'checkin' in sections_data and sections_data['checkin']:
                 st.session_state[f"pm_checkin_{program}"] = "\n".join(sections_data['checkin'])
+                st.info("✅ Check-in field will be pre-filled below")
+            
+            # Student Concerns
+            if 'concerns' in sections_data and sections_data['concerns']:
+                concerns_list = []
+                for concern_line in sections_data['concerns']:
+                    if concern_line.strip():
+                        concerns_list.append({"notes": concern_line.strip()})
+                st.session_state[f"pm_concerns_{program}"] = concerns_list
+                st.info("✅ Student Concerns will be pre-filled below")
+            
+            # SMARTAR Goals
+            if 'smartar' in sections_data and sections_data['smartar']:
+                smartar_list = []
+                for smartar_line in sections_data['smartar']:
+                    if smartar_line.strip():
+                        smartar_list.append({"student_name": "", "notes": smartar_line.strip()})
+                st.session_state[f"pm_smartar_{program}"] = smartar_list
+                st.info("✅ SMARTAR Goals will be pre-filled below")
+            
+            # TAC/Reports
+            if 'tac' in sections_data or 'report' in sections_data:
+                tac_content = []
+                if 'tac' in sections_data:
+                    tac_content.extend(sections_data['tac'])
+                if 'report' in sections_data:
+                    tac_content.extend(sections_data['report'])
+                if tac_content:
+                    st.session_state[f"pm_reports_{program}"] = "\n".join(tac_content)
+                    st.info("✅ TAC/Reports/Transitions will be pre-filled below")
+            
+            # Add new actions from this meeting only
+            if 'actions' in sections_data and sections_data['actions']:
+                new_actions = []
+                for action_line in sections_data['actions']:
+                    if action_line.strip():
+                        action_text = action_line.strip()
+                        new_actions.append({
+                            "action": action_text,
+                            "who": "",
+                            "by_when": "",
+                            "priority": "Medium",
+                            "notes": "",
+                            "done": False
+                        })
+                st.session_state[f"pm_actions_{program}"] = new_actions
+                
+                st.success(f"✅ {len(new_actions)} action(s) from THIS meeting extracted and ready")
+                st.info("✅ Scroll down to Actions section - only these new actions will show")
+            else:
+                st.warning("⚠️ No specific actions found - you can add them manually below")
             
             st.markdown("---")
-            st.success("✅ Form fields have been prepared! Scroll down to review.")
+            st.success("✅ Meeting form has been prepared! Scroll down to review and save.")
         
         st.markdown("---")
 
@@ -2606,7 +2655,8 @@ Make sure each action is formatted as:
                     st.session_state[concerns_key] = [{"notes": ""}]
             else:
                 st.session_state[concerns_key] = [{"notes": ""}]
-
+        # If auto-filled from transcript, it's already in session_state, so use it
+        
         concerns = st.session_state[concerns_key]
 
         # Give every row a STABLE id. Widget keys are tied to the id (not the list
@@ -3167,15 +3217,14 @@ RAW TRANSCRIPT:
     st.caption("Each action must have: specific task, responsible person, and due date")
     
     actions_key = f"pm_actions_{program}"
+    
+    # No button needed - each meeting starts with fresh actions
     if actions_key not in st.session_state:
-        carried = [a for a in last_actions if not a.get("done", False)]
-        st.session_state[actions_key] = carried if carried else [{"action":"","who":"","by_when":"","priority":"Medium","notes":"","done":False}]
+        # Only carry forward actions if NOT coming from transcript auto-fill
+        st.session_state[actions_key] = [{"action":"","who":"","by_when":"","priority":"Medium","notes":"","done":False}]
 
     actions = st.session_state[actions_key]
-    if last_actions:
-        incomplete = [a for a in last_actions if not a.get("done", False)]
-        if incomplete:
-            st.caption(f"⬆️ {len(incomplete)} action(s) carried forward from last meeting")
+    # No more carried-forward actions - each meeting starts fresh
     
     # AI-suggested actions review
     if st.session_state.get(f'_ai_actions_{program}'):
