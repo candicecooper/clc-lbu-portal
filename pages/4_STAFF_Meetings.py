@@ -17,9 +17,9 @@ except:
 st.set_page_config(page_title="STAFF Meetings | CLC-LBU", page_icon="👥", layout="wide")
 apply_clc_theme()
 
-from auth import require_auth, logout_button, get_staff_name
-require_auth("STAFF Meetings", "👥")
-logout_button("sidebar")
+from staff_auth import require_staff_auth, staff_logout_button
+require_staff_auth("STAFF Meetings", "👥")
+staff_logout_button("sidebar")
 
 # ── Back to Portal ─────────────────────────────────────────────────────────────
 st.sidebar.markdown(
@@ -333,7 +333,7 @@ with tab1:
     with col3:
         week_number = st.number_input("Week Number", min_value=1, max_value=11, value=default_week, key="staff_week")
     
-    default_minute_taker = selected_record.get('minute_taker', get_staff_name()) if selected_record else get_staff_name()
+    default_minute_taker = selected_record.get('minute_taker', '') if selected_record else ''
     minute_taker = st.text_input("Minute Taker", value=default_minute_taker, key="minute_taker")
     
     st.markdown("---")
