@@ -680,9 +680,11 @@ def build_student_pdf(records, att_by_comm, student_label, files_bytes):
     from reportlab.platypus import Image as RLImage
     from reportlab.lib.utils import ImageReader
 
+    _mm = 72.0 / 25.4
+    pw, ph = float(A4[0]), float(A4[1])
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=16*mm, rightMargin=16*mm,
-                            topMargin=14*mm, bottomMargin=14*mm)
+    doc = SimpleDocTemplate(buf, pagesize=(pw, ph), leftMargin=16*_mm, rightMargin=16*_mm,
+                            topMargin=14*_mm, bottomMargin=14*_mm)
     styles = getSampleStyleSheet()
     h_style = ParagraphStyle("h", parent=styles["Title"], fontSize=16)
     sub = ParagraphStyle("sub", parent=styles["Normal"], fontSize=9, textColor=colors.grey)
@@ -693,7 +695,7 @@ def build_student_pdf(records, att_by_comm, student_label, files_bytes):
     story = [Paragraph("Communication Record", h_style),
              Paragraph(f"{student_label} &nbsp;|&nbsp; {len(records)} entries &nbsp;|&nbsp; "
                        f"Generated {datetime.now().strftime('%d %b %Y, %H:%M')}", sub),
-             Spacer(1, 6*mm)]
+             Spacer(1, 6*_mm)]
 
     ordered = sorted(records, key=lambda r: (r.get("comm_date") or "", r.get("created_at") or ""))
     for r in ordered:
@@ -729,7 +731,7 @@ def build_student_pdf(records, att_by_comm, student_label, files_bytes):
                     if h > maxh:
                         h = maxh
                         w = iw * (h / ih)
-                    story.append(Spacer(1, 2*mm))
+                    story.append(Spacer(1, 2*_mm))
                     story.append(RLImage(io.BytesIO(data), width=w, height=h))
                 except Exception:
                     story.append(Paragraph("(image could not be rendered — see the "
@@ -737,11 +739,11 @@ def build_student_pdf(records, att_by_comm, student_label, files_bytes):
             elif data:
                 story.append(Paragraph("(PDF attachment — included in the attachments folder)",
                                        small))
-        story.append(Spacer(1, 3*mm))
+        story.append(Spacer(1, 3*_mm))
         story.append(Table([[""]], colWidths=[doc.width],
                            style=TableStyle([("LINEBELOW", (0, 0), (-1, -1), 0.4,
                                               colors.HexColor("#CCCCCC"))])))
-        story.append(Spacer(1, 3*mm))
+        story.append(Spacer(1, 3*_mm))
 
     doc.build(story)
     buf.seek(0)
@@ -804,48 +806,53 @@ def build_full_record_zip(client, code, student_label, records):
 def build_pdf(rows, roster_used, scope_label):
     if not HAS_REPORTLAB:
         return None
-    buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=landscape(A4), leftMargin=12*mm,
-                            rightMargin=12*mm, topMargin=12*mm, bottomMargin=12*mm)
-    styles = getSampleStyleSheet()
-    cell_style = ParagraphStyle("cell", parent=styles["Normal"], fontSize=8, leading=10)
-    head_style = ParagraphStyle("head", parent=styles["Normal"], fontSize=8, leading=10,
-                                textColor=colors.white, fontName="Helvetica-Bold")
-    title_style = ParagraphStyle("title", parent=styles["Title"], fontSize=15)
-    sub_style = ParagraphStyle("sub", parent=styles["Normal"], fontSize=9, textColor=colors.grey)
-    story = [Paragraph("Communication Log", title_style),
-             Paragraph(f"{scope_label} &nbsp;&nbsp;|&nbsp;&nbsp; Generated "
-                       f"{datetime.now().strftime('%d %b %Y, %H:%M')}", sub_style),
-             Spacer(1, 6*mm)]
-    if roster_used:
-        headers = ["Student", "Date", "Time", "Dir.", "Type", "Who", "Summary"]
-        col_widths = [42, 20, 13, 16, 24, 34, 124]
-    else:
-        headers = ["Code", "Date", "Time", "Dir.", "Type", "Who", "Summary"]
-        col_widths = [18, 20, 13, 16, 24, 46, 136]
-    data = [[Paragraph(h, head_style) for h in headers]]
-    for r in rows:
-        student = (r.get("Full name") or r.get("Code")) if roster_used else r.get("Code")
-        data.append([Paragraph(str(student or ""), cell_style),
-                     Paragraph(str(r.get("Date", "")), cell_style),
-                     Paragraph(str(r.get("Time", "")), cell_style),
-                     Paragraph(str(r.get("Direction", "")), cell_style),
-                     Paragraph(str(r.get("Type", "")), cell_style),
-                     Paragraph(str(r.get("Who", "")), cell_style),
-                     Paragraph(str(r.get("Summary", "")).replace("\n", "<br/>"), cell_style)])
-    table = Table(data, colWidths=[w*mm for w in col_widths], repeatRows=1)
-    table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E5F")),
-        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#C9C9C9")),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F4F7F8")]),
-        ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-    ]))
-    story.append(table)
-    doc.build(story)
-    buf.seek(0)
-    return buf
+    try:
+        _mm = 72.0 / 25.4
+        pw, ph = float(A4[1]), float(A4[0])          # landscape A4, computed explicitly
+        buf = io.BytesIO()
+        doc = SimpleDocTemplate(buf, pagesize=(pw, ph), leftMargin=12*_mm,
+                                rightMargin=12*_mm, topMargin=12*_mm, bottomMargin=12*_mm)
+        styles = getSampleStyleSheet()
+        cell_style = ParagraphStyle("cell", parent=styles["Normal"], fontSize=8, leading=10)
+        head_style = ParagraphStyle("head", parent=styles["Normal"], fontSize=8, leading=10,
+                                    textColor=colors.white, fontName="Helvetica-Bold")
+        title_style = ParagraphStyle("title", parent=styles["Title"], fontSize=15)
+        sub_style = ParagraphStyle("sub", parent=styles["Normal"], fontSize=9, textColor=colors.grey)
+        story = [Paragraph("Communication Log", title_style),
+                 Paragraph(f"{scope_label} &nbsp;&nbsp;|&nbsp;&nbsp; Generated "
+                           f"{datetime.now().strftime('%d %b %Y, %H:%M')}", sub_style),
+                 Spacer(1, 6*_mm)]
+        if roster_used:
+            headers = ["Student", "Date", "Time", "Dir.", "Type", "Who", "Summary"]
+            col_widths = [42, 20, 13, 16, 24, 34, 124]
+        else:
+            headers = ["Code", "Date", "Time", "Dir.", "Type", "Who", "Summary"]
+            col_widths = [18, 20, 13, 16, 24, 46, 136]
+        data = [[Paragraph(h, head_style) for h in headers]]
+        for r in rows:
+            student = (r.get("Full name") or r.get("Code")) if roster_used else r.get("Code")
+            data.append([Paragraph(str(student or ""), cell_style),
+                         Paragraph(str(r.get("Date", "")), cell_style),
+                         Paragraph(str(r.get("Time", "")), cell_style),
+                         Paragraph(str(r.get("Direction", "")), cell_style),
+                         Paragraph(str(r.get("Type", "")), cell_style),
+                         Paragraph(str(r.get("Who", "")), cell_style),
+                         Paragraph(str(r.get("Summary", "")).replace("\n", "<br/>"), cell_style)])
+        table = Table(data, colWidths=[w*_mm for w in col_widths], repeatRows=1)
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E5F")),
+            ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#C9C9C9")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F4F7F8")]),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ]))
+        story.append(table)
+        doc.build(story)
+        buf.seek(0)
+        return buf
+    except Exception:
+        return None
 
 
 def build_print_html(rows, roster_used, scope_label, with_attachments=False):
@@ -1434,8 +1441,8 @@ with tab_view:
                 default_t = time(9, 0)
                 if rec.get("comm_time"):
                     try:
-                        hh, mm = rec["comm_time"].split(":")
-                        default_t = time(int(hh), int(mm))
+                        hh, mn = rec["comm_time"].split(":")
+                        default_t = time(int(hh), int(mn))
                     except Exception:
                         pass
                 e_time = st.time_input("Time", value=default_t, key="e_time") if e_inc_time else None
@@ -1530,13 +1537,14 @@ with tab_export:
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                use_container_width=True)
         with d2:
-            if HAS_REPORTLAB:
-                st.download_button("⬇️ PDF list", data=build_pdf(rows, roster_used, scope_label),
+            _pdf = build_pdf(rows, roster_used, scope_label) if HAS_REPORTLAB else None
+            if _pdf is not None:
+                st.download_button("⬇️ PDF list", data=_pdf,
                                    file_name=f"communication_log_{datetime.now():%Y%m%d_%H%M}.pdf",
                                    mime="application/pdf", use_container_width=True)
             else:
-                st.button("PDF unavailable", disabled=True, use_container_width=True,
-                          help="Add 'reportlab' to requirements.txt to enable PDF export.")
+                st.button("PDF list unavailable", disabled=True, use_container_width=True,
+                          help="Use the Excel download, or the full-record ZIP on the Students tab.")
         with d3:
             st.toggle("Show printable list", key="show_print")
         if has_att:
