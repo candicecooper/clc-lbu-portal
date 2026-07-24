@@ -86,6 +86,63 @@ def _render_minutes_section_fields(seed: dict, key_prefix: str) -> dict:
         )
     return values
 
+
+def _build_minutes_docx_bytes(meeting: dict):
+    """Build a Word document from a meeting record (or the in-progress form
+    data) for download. Returns None if python-docx isn't available."""
+    if not DOCX_AVAILABLE:
+        return None
+    from io import BytesIO
+    doc = docx.Document()
+    doc.add_heading("CLC Staff Meeting Minutes", level=1)
+    doc.add_paragraph(
+        f"Date: {meeting.get('meeting_date', '')}    "
+        f"Term: {meeting.get('term', '')}  Week: {meeting.get('week_number', '')}"
+    )
+    doc.add_paragraph(f"Minute Taker: {meeting.get('minute_taker', '')}")
+    doc.add_paragraph(f"Attendees: {meeting.get('attendees', '') or 'Not recorded'}")
+    doc.add_paragraph(f"Apologies: {meeting.get('apologies', '') or 'None'}")
+    if meeting.get('acknowledgement_done'):
+        doc.add_paragraph(f"Acknowledgement of Country: completed, led by {meeting.get('acknowledgement_by', '') or 'not recorded'}")
+
+    minutes_text = meeting.get('minutes', '') or ''
+    for block in minutes_text.split('\n\n---\n\n'):
+        block = block.strip()
+        if not block:
+            continue
+        if block.startswith('## '):
+            lines = block.split('\n', 1)
+            heading = lines[0][3:].strip()
+            body = lines[1].strip() if len(lines) > 1 else ''
+            doc.add_heading(heading, level=2)
+            for para in body.split('\n'):
+                if para.strip():
+                    doc.add_paragraph(para.strip())
+        else:
+            doc.add_paragraph(block)
+
+    raw_actions = meeting.get('actions')
+    try:
+        actions_list = json.loads(raw_actions) if isinstance(raw_actions, str) else (raw_actions or [])
+    except Exception:
+        actions_list = []
+    if actions_list:
+        doc.add_heading("Actions", level=2)
+        table = doc.add_table(rows=1, cols=3)
+        table.style = 'Light Grid Accent 1'
+        hdr = table.rows[0].cells
+        hdr[0].text, hdr[1].text, hdr[2].text = "Action", "Owner", "Due Date"
+        for a in actions_list:
+            row = table.add_row().cells
+            row[0].text = a.get('action', '')
+            row[1].text = a.get('owner', '')
+            row[2].text = a.get('due_date', '')
+
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(page_title="STAFF Meetings | CLC-LBU", page_icon="👥", layout="wide")
 apply_clc_theme()
@@ -370,6 +427,46 @@ with tab2:
                                     st.write(f"📎 {att.get('name', '')} - {att.get('description', '')}")
                         except:
                             pass
+
+                # ── Download + delete this archived meeting ────────────────────
+                st.markdown("---")
+                col_arc_dl, col_arc_del = st.columns([1, 1])
+                with col_arc_dl:
+                    if DOCX_AVAILABLE and (meeting.get('minutes') or '').strip():
+                        st.download_button(
+                            "📥 Download Minutes (.docx)",
+                            data=_build_minutes_docx_bytes(meeting),
+                            file_name=f"Staff_Meeting_Minutes_{meeting.get('meeting_date', '')}.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            use_container_width=True,
+                            key=f"download_archived_{meeting['id']}"
+                        )
+                    else:
+                        st.button("📥 Download Minutes (.docx)", disabled=True,
+                                  use_container_width=True, key=f"download_archived_disabled_{meeting['id']}")
+
+                with col_arc_del:
+                    confirm_key = f"confirm_delete_archived_{meeting['id']}"
+                    if st.session_state.get(confirm_key):
+                        col_yes, col_no = st.columns(2)
+                        with col_yes:
+                            if st.button("⚠️ Confirm delete", key=f"confirm_del_{meeting['id']}",
+                                        type="secondary", use_container_width=True):
+                                try:
+                                    supabase.table('staff_meetings').delete().eq('id', meeting['id']).execute()
+                                    st.success("✅ Deleted.")
+                                    st.session_state[confirm_key] = False
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"⚠️ Could not delete: {e}")
+                        with col_no:
+                            if st.button("Cancel", key=f"cancel_del_{meeting['id']}", use_container_width=True):
+                                st.session_state[confirm_key] = False
+                                st.rerun()
+                    else:
+                        if st.button("🗑️ Delete this meeting", key=f"del_{meeting['id']}", use_container_width=True):
+                            st.session_state[confirm_key] = True
+                            st.rerun()
     else:
         st.info("No archived meetings yet.")
 
@@ -1315,52 +1412,67 @@ Format as clear, structured notes."""
 st.markdown("---")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SAVE BUTTON
+# DOWNLOAD + SAVE
 # ══════════════════════════════════════════════════════════════════════════════
 
-if st.button("💾 Save Meeting", type="primary", use_container_width=True, key="save_meeting"):
-    
-    meeting_data = {
-        "meeting_date": str(meeting_date),
-        "term": term.strip(),
-        "week_number": int(week_number),
-        "minute_taker": minute_taker.strip(),
-        "attendees": attendees.strip(),
-        "apologies": apologies.strip(),
-        "acknowledgement_done": acknowledgement_done,
-        "acknowledgement_by": acknowledgement_by.strip(),
-        "icebreaker": icebreaker_notes.strip(),
-        "agenda_items": json.dumps(agenda_data),
-        "minutes": minutes.strip() if minutes else '',
-        "actions": json.dumps(actions) if actions else '[]',
-        "meeting_attachments": json.dumps(meeting_attachments) if meeting_attachments else '[]',
-        "pd_attendees": pd_attendees.strip(),
-        "pd_absent": pd_absent.strip(),
-        "pd_notes": pd_notes.strip() if pd_notes else '',
-        "pd_title": pd_title.strip() if pd_title else '',
-        "pd_attachments": json.dumps(pd_attachments) if pd_attachments else '[]'
-    }
-    
-    try:
-        if st.session_state.current_staff_meeting_id:
-            # Update existing
-            result = supabase.table('staff_meetings').update(meeting_data).eq('id', st.session_state.current_staff_meeting_id).execute()
-            st.success("✅ **Meeting Saved Successfully!**")
-            st.info("📄 Minutes, agenda, and actions have been saved. The Minutes section will collapse on next page load.")
-            time.sleep(2)
-            st.rerun()
-        else:
-            # Create new
-            result = supabase.table('staff_meetings').insert(meeting_data).execute()
-            if result.data:
-                st.session_state.current_staff_meeting_id = result.data[0]['id']
-                st.success("✅ **New Meeting Created & Saved!**")
-                st.info("📄 All meeting details saved successfully.")
+meeting_data = {
+    "meeting_date": str(meeting_date),
+    "term": term.strip(),
+    "week_number": int(week_number),
+    "minute_taker": minute_taker.strip(),
+    "attendees": attendees.strip(),
+    "apologies": apologies.strip(),
+    "acknowledgement_done": acknowledgement_done,
+    "acknowledgement_by": acknowledgement_by.strip(),
+    "icebreaker": icebreaker_notes.strip(),
+    "agenda_items": json.dumps(agenda_data),
+    "minutes": minutes.strip() if minutes else '',
+    "actions": json.dumps(actions) if actions else '[]',
+    "meeting_attachments": json.dumps(meeting_attachments) if meeting_attachments else '[]',
+    "pd_attendees": pd_attendees.strip(),
+    "pd_absent": pd_absent.strip(),
+    "pd_notes": pd_notes.strip() if pd_notes else '',
+    "pd_title": pd_title.strip() if pd_title else '',
+    "pd_attachments": json.dumps(pd_attachments) if pd_attachments else '[]'
+}
+
+col_dl, col_save = st.columns([1, 2])
+with col_dl:
+    if DOCX_AVAILABLE and meeting_data["minutes"].strip():
+        st.download_button(
+            "📥 Download Minutes (.docx)",
+            data=_build_minutes_docx_bytes(meeting_data),
+            file_name=f"Staff_Meeting_Minutes_{meeting_data['meeting_date']}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True,
+            key="download_current_minutes"
+        )
+    else:
+        st.button("📥 Download Minutes (.docx)", disabled=True, use_container_width=True,
+                  help="Add some minutes content first" if DOCX_AVAILABLE else "python-docx not installed")
+
+with col_save:
+    if st.button("💾 Save Meeting", type="primary", use_container_width=True, key="save_meeting"):
+        try:
+            if st.session_state.current_staff_meeting_id:
+                # Update existing
+                result = supabase.table('staff_meetings').update(meeting_data).eq('id', st.session_state.current_staff_meeting_id).execute()
+                st.success("✅ **Meeting Saved Successfully!**")
+                st.info("📄 Minutes, agenda, and actions have been saved. The Minutes section will collapse on next page load.")
                 time.sleep(2)
                 st.rerun()
-    
-    except Exception as e:
-        st.error(f"⚠️ Could not save meeting: {e}")
+            else:
+                # Create new
+                result = supabase.table('staff_meetings').insert(meeting_data).execute()
+                if result.data:
+                    st.session_state.current_staff_meeting_id = result.data[0]['id']
+                    st.success("✅ **New Meeting Created & Saved!**")
+                    st.info("📄 All meeting details saved successfully.")
+                    time.sleep(2)
+                    st.rerun()
+
+        except Exception as e:
+            st.error(f"⚠️ Could not save meeting: {e}")
 
 st.markdown("---")
 st.caption("🏫 Cowandilla Learning Centre · LBU · STAFF Meetings")
