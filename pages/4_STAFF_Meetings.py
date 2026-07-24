@@ -4,6 +4,7 @@ from supabase import create_client
 import datetime
 import json
 import os
+import re
 import time
 
 # For transcript upload
@@ -28,6 +29,62 @@ def _fit_to_groq_budget(text: str, max_tokens: int, prompt_overhead_tokens: int 
     if len(text) <= char_budget:
         return text, False
     return text[:char_budget], True
+
+# ── Meeting Minutes fixed section structure ───────────────────────────────
+# Manual entry and AI-from-transcript both produce/edit the SAME six
+# sections, in this order, so the two entry methods are interchangeable.
+MEETING_SECTIONS = [
+    ("manager_business", "Manager's Business"),
+    ("transition_coordinator", "Transition Coordinator"),
+    ("finance", "Finance"),
+    ("whs", "WHS"),
+    ("pac", "PAC"),
+    ("other_business", "Other Business"),
+]
+_NIL_TEXT = "Nil discussed this meeting."
+
+
+def _parse_minutes_sections(minutes_text: str) -> dict:
+    """Split a combined minutes string back into per-section text, using the
+    '## Section Name' headers this tool writes. Missing/older-format minutes
+    return blank sections rather than erroring."""
+    result = {key: "" for key, _ in MEETING_SECTIONS}
+    if not minutes_text:
+        return result
+    for key, label in MEETING_SECTIONS:
+        pattern = rf"##\s*{re.escape(label)}\s*\n(.*?)(?=\n##\s|\Z)"
+        m = re.search(pattern, minutes_text, re.DOTALL)
+        if m:
+            val = m.group(1).strip()
+            result[key] = "" if val == _NIL_TEXT else val
+    return result
+
+
+def _build_minutes_from_sections(section_values: dict) -> str:
+    """Combine the six section fields into one markdown document for storage,
+    in a fixed order with consistent headers so it can be parsed back later."""
+    parts = []
+    for key, label in MEETING_SECTIONS:
+        content = (section_values.get(key) or "").strip() or _NIL_TEXT
+        parts.append(f"## {label}\n\n{content}")
+    return "\n\n---\n\n".join(parts)
+
+
+def _render_minutes_section_fields(seed: dict, key_prefix: str) -> dict:
+    """Render one editable text_area per standing section, seeded from `seed`.
+    Used identically by Manual Entry and by the AI-from-Transcript review step,
+    so both methods land in the same fields."""
+    values = {}
+    for key, label in MEETING_SECTIONS:
+        values[key] = st.text_area(
+            label,
+            value=seed.get(key, ""),
+            height=140,
+            key=f"{key_prefix}_{key}",
+            placeholder=f"What was discussed under {label}? Include any decisions "
+                        f"and actions (who's responsible, due date)."
+        )
+    return values
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(page_title="STAFF Meetings | CLC-LBU", page_icon="👥", layout="wide")
@@ -693,7 +750,8 @@ with tab1:
     st.markdown("---")
     
     # ══════════════════════════════════════════════════════════════════════════════
-    # 6. MINUTES (Manual OR AI Transcript)
+    # 6. MINUTES (Manual OR AI Transcript) — both land in the same six sections:
+    # Manager's Business, Transition Coordinator, Finance, WHS, PAC, Other Business
     # ══════════════════════════════════════════════════════════════════════════════
     
     minutes = selected_record.get('minutes', '') if selected_record else ''
@@ -703,11 +761,13 @@ with tab1:
         
         minutes_method = st.radio("Minutes Entry Method",
                                   options=["✍️ Manual Entry", "🤖 AI from Transcript"],
-                                  horizontal=True)
+                                  horizontal=True, key="minutes_entry_method")
         
         if minutes_method == "✍️ Manual Entry":
-            minutes = st.text_area("Minutes", value=minutes, height=400, key="minutes",
-                                   placeholder="Enter meeting minutes here...")
+            st.caption("Enter notes for each standing item. Leave a section blank if it wasn't discussed.")
+            seed = _parse_minutes_sections(minutes)
+            section_values = _render_minutes_section_fields(seed, key_prefix="manual_section")
+            minutes = _build_minutes_from_sections(section_values)
         
         else:  # AI from Transcript
             st.markdown("**Paste your transcript below, or upload a file (.txt / .docx)**")
@@ -747,123 +807,95 @@ with tab1:
             if transcript_text and GROQ_KEY:
                 if st.button("🤖 Generate Structured Minutes", type="primary"):
 
-                    # Pull meeting header fields already entered above
-                    _title   = st.session_state.get("staff_meeting_title", "CLC Staff Meeting")
-                    _date    = str(meeting_date)
-                    _chair   = st.session_state.get("chairperson_name", "")
-                    _taker   = st.session_state.get("minute_taker", "")
-
-                    standing_list = "\n".join(f"- {s}" for s in STANDING_AGENDA_ITEMS)
-
                     with st.spinner("Generating structured minutes…"):
                         try:
                             from groq import Groq
                             client = Groq(api_key=GROQ_KEY)
 
                             transcript_for_ai, was_truncated = _fit_to_groq_budget(
-                                transcript_text, max_tokens=4000, prompt_overhead_tokens=600
+                                transcript_text, max_tokens=1800, prompt_overhead_tokens=500
                             )
                             if was_truncated:
                                 st.warning(
                                     "⚠️ This transcript is longer than the AI can process in one go "
                                     "(Groq's 12,000 tokens/minute limit on the current plan). "
-                                    "Only the first part was sent — review the generated minutes "
-                                    "carefully and add anything from later in the meeting by hand, "
-                                    "or split the transcript into two parts and run each separately."
+                                    "Only the first part was sent. Paste the rest of the transcript "
+                                    "below and click **Generate Structured Minutes** again — the new "
+                                    "part will be merged into the sections below rather than replacing "
+                                    "them, so you can review everything before saving."
                                 )
 
-                            prompt = f"""You are producing formal school staff meeting minutes.
+                            section_list = "\n".join(f"- {label}" for _, label in MEETING_SECTIONS)
 
-MEETING DETAILS (use exactly as provided):
-- Title: {_title}
-- Date: {_date}
-- Chair: {_chair}
-- Minute Taker: {_taker}
-- Term: {term}, Week: {week_number}
+                            prompt = f"""Read the transcript of a school staff meeting below and sort what was
+discussed into EXACTLY these six standing sections, in this order:
+{section_list}
 
-STANDING AGENDA ITEMS for this organisation:
-{standing_list}
+For each section, summarise what was discussed, any decisions made, and any
+action items (what needs to be done, who's responsible, and the due date if
+mentioned). If a section was not discussed at all in the transcript, use
+exactly this text for it: "{_NIL_TEXT}"
 
-TASK:
-Read the transcript below and produce minutes using EXACTLY this structure and format. Do not deviate from it.
+Do not invent information that isn't in the transcript. If something doesn't
+clearly belong to one of the six sections, put it under "Other Business".
 
----
-
-**Meeting Title:** [from details above]
-**Date:** [from details above]
-**Time:** [extract from transcript, or leave blank]
-**Venue/Location:** [extract from transcript, or leave blank]
-**Chairperson:** [from details above]
-**Minute Taker:** [from details above]
-**Attendees:** [extract all names mentioned as present]
-**Apologies:** [extract any apologies mentioned]
-
----
-
-**1. Welcome and Apologies**
-[Who was welcomed; any apologies received]
-
-**2. Confirmation of Previous Minutes**
-[Were previous minutes accepted, amended, or are there matters arising]
-
-**3. Business Arising from Previous Minutes**
-[Any outstanding business from previous meeting]
-
-**4. Agenda Items**
-
-For EACH of the standing agenda items below, include a section ONLY if it was discussed in the transcript. If it was not discussed, omit it entirely.
-
-For each discussed item use this sub-format:
-
-**4.X [Item Title]**
-**Discussion:** [what was discussed]
-**Decisions/Outcomes:** [any decisions made]
-**Action(s) Required:** [specific actions, or "Nil"]
-**Responsible Person:** [who is responsible, or "Nil"]
-**Due Date:** [deadline if mentioned, or "Nil"]
-
-After all standing items, include any additional topics from the transcript that don't fit the standing items, using the same sub-format and continuing the numbering.
-
-**5. Other Business**
-[Any items raised under other business]
-
-**6. Next Meeting**
-**Date:** [if mentioned]
-**Time:** [if mentioned]
-**Location:** [if mentioned]
-
-**7. Meeting Closed**
-**Time:** [if mentioned]
-
----
-
-**Actions Summary**
-
-| Action Item | Responsible Person | Due Date | Status |
-|---|---|---|---|
-[one row per action — populate from all sections above]
-
----
-
-**Minute Taker:** {_taker}
-**Minutes Approved by:** [leave blank]
-
----
+Return ONLY a JSON object with exactly these keys, no preamble or commentary:
+{{
+  "manager_business": "...",
+  "transition_coordinator": "...",
+  "finance": "...",
+  "whs": "...",
+  "pac": "...",
+  "other_business": "..."
+}}
 
 TRANSCRIPT:
-{transcript_for_ai}
-
-Return ONLY the formatted minutes above. No preamble, no commentary, no extra headings."""
+{transcript_for_ai}"""
 
                             response = client.chat.completions.create(
                                 model="llama-3.3-70b-versatile",
                                 messages=[{"role": "user", "content": prompt}],
                                 temperature=0.2,
-                                max_tokens=4000
+                                max_tokens=1800
                             )
-                            extracted_minutes = response.choices[0].message.content
-                            st.session_state["ai_minutes_draft"] = extracted_minutes
-                            st.success("✅ Minutes generated!")
+                            raw = response.choices[0].message.content.strip()
+                            json_match = re.search(r'\{.*\}', raw, re.DOTALL)
+                            if not json_match:
+                                raise ValueError("AI did not return the expected structured format — try again.")
+                            new_sections = json.loads(json_match.group())
+                            new_sections = {
+                                key: str(new_sections.get(key, "")).strip()
+                                for key, _ in MEETING_SECTIONS
+                            }
+
+                            # If sections already exist (e.g. from an earlier part of a
+                            # split transcript), merge rather than overwrite — keeps any
+                            # edits already made instead of wiping them out.
+                            existing_sections = st.session_state.get("ai_section_values")
+                            if existing_sections:
+                                merged = {}
+                                for key, _ in MEETING_SECTIONS:
+                                    old_val = (existing_sections.get(key) or "").strip()
+                                    new_val = new_sections.get(key, "").strip()
+                                    old_has_content = old_val and old_val != _NIL_TEXT
+                                    new_has_content = new_val and new_val != _NIL_TEXT
+                                    if old_has_content and new_has_content:
+                                        merged[key] = old_val + "\n\n— continued —\n\n" + new_val
+                                    elif old_has_content:
+                                        merged[key] = old_val
+                                    else:
+                                        merged[key] = new_val
+                                st.success("✅ Minutes generated and merged into the sections below.")
+                            else:
+                                merged = new_sections
+                                st.success("✅ Minutes generated — review the sections below before saving.")
+
+                            st.session_state["ai_section_values"] = merged
+                            # Sync the edit widgets too — once a widget key exists in
+                            # session_state, its `value=` argument is ignored on rerun,
+                            # so this is what actually updates what's shown for editing.
+                            for key, _ in MEETING_SECTIONS:
+                                st.session_state[f"ai_section_manual_{key}"] = merged[key]
 
                         except Exception as e:
                             st.error(f"AI extraction failed: {e}")
@@ -871,33 +903,29 @@ Return ONLY the formatted minutes above. No preamble, no commentary, no extra he
             elif transcript_text and not GROQ_KEY:
                 st.warning("⚠️ GROQ_API_KEY not configured.")
 
-            # ── Preview + editable output ─────────────────────────────────────
-            draft = st.session_state.get("ai_minutes_draft", "")
-            if draft:
+            # ── Review and edit the generated sections before saving ──────────
+            if st.session_state.get("ai_section_values"):
                 st.markdown("---")
-                st.markdown("#### 👁️ Preview")
+                st.markdown("#### ✏️ Review and edit before saving")
+                col_edit, col_clear = st.columns([5, 1])
+                with col_clear:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if st.button("🗑️ Clear draft", key="clear_ai_sections"):
+                        st.session_state["ai_section_values"] = None
+                        for key, _ in MEETING_SECTIONS:
+                            st.session_state.pop(f"ai_section_manual_{key}", None)
+                        st.rerun()
+                seed = st.session_state.get("ai_section_values", {})
+                section_values = _render_minutes_section_fields(seed, key_prefix="ai_section_manual")
+                minutes = _build_minutes_from_sections(section_values)
+            else:
+                st.info("Paste or upload a transcript, then click **Generate Structured Minutes** "
+                         "to fill in the sections above.")
+                # minutes keeps whatever was previously saved until something is generated
 
-                # Styled preview — renders markdown with consistent font/size
-                st.markdown('''<style>
-.clc-minutes { font-family: "Segoe UI", Arial, sans-serif !important; font-size: 14px !important; line-height: 1.7 !important; color: #1a1a1a !important; }
-.clc-minutes p, .clc-minutes li, .clc-minutes td, .clc-minutes th, .clc-minutes strong, .clc-minutes em { font-family: "Segoe UI", Arial, sans-serif !important; font-size: 14px !important; }
-.clc-minutes h1,.clc-minutes h2,.clc-minutes h3,.clc-minutes h4 { font-family: "Segoe UI", Arial, sans-serif !important; font-size: 15px !important; font-weight: 700 !important; margin-top: 1em; }
-.clc-minutes table { border-collapse: collapse; width: 100%; }
-.clc-minutes th { background: #f0f0f0; padding: 6px 10px; border: 1px solid #ddd; }
-.clc-minutes td { padding: 6px 10px; border: 1px solid #ddd; }
-</style>''', unsafe_allow_html=True)
-                st.markdown(f'<div class="clc-minutes">' + draft + '</div>', unsafe_allow_html=True)
-
-                st.markdown("")
-                minutes = st.text_area(
-                    "Edit minutes before saving",
-                    value=draft,
-                    height=400,
-                    key="ai_minutes_edit"
-                )
-            elif not transcript_text:
-                st.info("Paste or upload a transcript, then click **Generate Structured Minutes**.")
-                minutes = minutes  # keep any existing saved minutes
+        if minutes and minutes.strip():
+            with st.expander("👁️ Preview combined minutes"):
+                st.markdown(minutes)
 
 st.subheader("✅ Actions")
 
