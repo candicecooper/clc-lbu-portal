@@ -386,6 +386,7 @@ def register_student(
     initials: str,
     program: str | None = None,
     start_date=None,
+    planned_exit_date=None,
     notes: str | None = None,
     created_by: str = "unknown",
 ) -> dict | None:
@@ -416,6 +417,8 @@ def register_student(
         }
         if start_date:
             record["start_date"] = str(start_date)
+        if planned_exit_date:
+            record["planned_exit_date"] = str(planned_exit_date)
 
         res = client.table(REGISTER_TABLE).insert(record).execute()
         return res.data[0] if res.data else None
@@ -434,6 +437,32 @@ def set_student_status(record_id: str, status: str, exit_date=None) -> bool:
         return True
     except Exception as exc:  # noqa: BLE001
         st.error(f"Could not update student: {exc}")
+        return False
+
+
+def extend_student(record_id: str, old_exit_date, new_exit_date) -> bool:
+    """Extend a student's placement: the planned exit date moves to the
+    new date, the previous date is kept for the record, and the
+    extension count increments."""
+    try:
+        client = _get_client()
+        current = (
+            client.table(REGISTER_TABLE)
+            .select("extension_count")
+            .eq("id", record_id)
+            .execute()
+        )
+        n = (current.data[0].get("extension_count") or 0) if current.data else 0
+        client.table(REGISTER_TABLE).update(
+            {
+                "planned_exit_date": str(new_exit_date),
+                "previous_exit_date": str(old_exit_date) if old_exit_date else None,
+                "extension_count": n + 1,
+            }
+        ).eq("id", record_id).execute()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Could not extend placement: {exc}")
         return False
 
 
