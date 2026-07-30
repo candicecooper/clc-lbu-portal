@@ -1,14 +1,11 @@
 """
-45_Document_Archive.py — CLC-LBU Portal Document Archive
+47_Document_Archive.py — CLC-LBU Portal Document Archive
 ==========================================================
 
-Central archive browser. Documents generated across the portal
-(PDPs, Behaviour Summaries/BAPs, Safety & Risk Plans, and later
-meeting docs, term reports and bulletins) land here and can be
-searched, downloaded, and (for admins) soft-deleted or restored.
-
-Rename to fit your page numbering. Requires archive_utils.py in the
-repo root alongside the other shared modules.
+Central archive browser: Browse (filters + confidential gate),
+Student Folders (per-student view fed by the Student Register),
+Add Document (manual upload), Admin (rename/merge folders,
+confirmed delete, restore).
 """
 
 import streamlit as st
@@ -21,6 +18,8 @@ from archive_utils import (
     download_bytes,
     download_link_html,
     fetch_archive,
+    fetch_register,
+    register_name_map,
     rename_student,
     restore,
     soft_delete,
@@ -28,7 +27,6 @@ from archive_utils import (
 
 st.set_page_config(page_title="Document Archive", page_icon="🗄️", layout="wide")
 
-# --- Portal theme & auth (match your other pages) -------------------------
 try:
     from theme import apply_theme
     apply_theme()
@@ -36,7 +34,7 @@ except Exception:
     pass
 
 try:
-    from auth import require_login  # >>> ADJUST to your actual auth helper
+    from auth import require_login
     require_login()
 except Exception:
     pass
@@ -132,7 +130,7 @@ with tab_browse:
         )
     with c6:
         f_keyword = st.text_input(
-            "Search titles", placeholder="e.g. safety plan, PDP, transition"
+            "Search titles", placeholder="e.g. safety plan, transition"
         )
 
     records = fetch_archive(
@@ -169,7 +167,6 @@ with tab_browse:
                 if rec.get("notes"):
                     st.caption(f"📝 {rec['notes']}")
             with right:
-                # Fetch bytes on demand, then render an iOS-safe link.
                 if st.button("Prepare download", key=f"dl_{rid}"):
                     st.session_state[f"bytes_{rid}"] = download_bytes(
                         rec["storage_path"]
@@ -199,6 +196,8 @@ with tab_student:
         "document for that student, grouped by type."
     )
 
+    _names = register_name_map()
+
     sc1, sc2 = st.columns([1, 3])
     with sc1:
         sf_initials = st.text_input(
@@ -215,10 +214,11 @@ with tab_student:
             student_initials=ini,
             limit=500,
         )
+        _display = f"{ini} — {_names[ini]}" if ini in _names else ini
         if not recs:
-            st.info(f"No archived documents found for **{ini}**.")
+            st.info(f"No archived documents found for **{_display}**.")
         else:
-            st.markdown(f"### 📁 {ini} — {len(recs)} document(s)")
+            st.markdown(f"### 📁 {_display} — {len(recs)} document(s)")
             by_type: dict[str, list] = {}
             for r in recs:
                 by_type.setdefault(r["doc_type"], []).append(r)
@@ -281,25 +281,42 @@ with tab_student:
                                     st.session_state.pop("_confirm_del", None)
                                     st.rerun()
     else:
-        # Directory of all students with archived documents
+        # Directory: every ACTIVE registered student (even with no docs
+        # yet), plus any folders that exist outside the register.
         all_recs = fetch_archive(include_confidential=_conf_ok, limit=1000)
         counts: dict[str, int] = {}
         for r in all_recs:
             if r.get("student_initials"):
                 counts[r["student_initials"]] = counts.get(r["student_initials"], 0) + 1
-        if counts:
-            st.markdown("**Students with archived documents:**")
-            cols = st.columns(6)
-            for i, ini in enumerate(sorted(counts)):
-                with cols[i % 6]:
-                    if st.button(
-                        f"📁 {ini} ({counts[ini]})", key=f"open_{ini}",
-                        use_container_width=True,
-                    ):
+
+        active = fetch_register("active")
+        directory = []  # (initials, label)
+        seen = set()
+        for s in active:
+            n = counts.get(s["initials"], 0)
+            directory.append((s["initials"], f"📁 {s['initials']} — {s['full_name'].split()[0]} ({n})"))
+            seen.add(s["initials"])
+        for ini in sorted(counts):
+            if ini not in seen:
+                directory.append((ini, f"📁 {ini} ({counts[ini]})"))
+
+        if directory:
+            st.markdown("**Student folders:**")
+            cols = st.columns(4)
+            for i, (ini, label) in enumerate(directory):
+                with cols[i % 4]:
+                    if st.button(label, key=f"open_{ini}", use_container_width=True):
                         st.session_state["_sf_pending"] = ini
                         st.rerun()
+            st.caption(
+                "Folders showing a first name come from the Student Register; "
+                "add new students there when they arrive at the centre."
+            )
         else:
-            st.info("No student-linked documents archived yet.")
+            st.info(
+                "No students yet — add them in the Student Register when "
+                "they arrive, and their folders will appear here."
+            )
 
 # ===========================================================================
 # ADD DOCUMENT (manual upload — for docs created outside the portal)
@@ -311,6 +328,11 @@ with tab_add:
         "(e.g. a term report or a scanned plan)."
     )
 
+    _active_students = fetch_register("active")
+    _student_options = ["— Not student-linked —"] + [
+        f"{s['initials']} — {s['full_name']}" for s in _active_students
+    ] + ["Other (type initials manually)"]
+
     with st.form("manual_archive", clear_on_submit=True):
         up = st.file_uploader(
             "Document",
@@ -320,8 +342,9 @@ with tab_add:
         with a1:
             m_title = st.text_input("Title *")
             m_doc_type = st.selectbox("Document type *", DOC_TYPES)
-            m_initials = st.text_input(
-                "Student initials (if student-linked)", max_chars=4
+            m_student = st.selectbox("Student", _student_options)
+            m_initials_manual = st.text_input(
+                "Initials (only if 'Other' chosen above)", max_chars=4
             )
         with a2:
             m_term = st.selectbox("Term *", TERMS, index=1)
@@ -332,6 +355,13 @@ with tab_add:
         submitted = st.form_submit_button("Archive document", type="primary")
 
     if submitted:
+        if m_student == "— Not student-linked —":
+            m_ini = None
+        elif m_student.startswith("Other"):
+            m_ini = m_initials_manual.strip().upper() or None
+        else:
+            m_ini = m_student.split(" — ")[0]
+
         if not up or not m_title.strip():
             st.warning("A file and a title are both required.")
         elif m_conf and not _confidential_unlocked():
@@ -346,7 +376,7 @@ with tab_add:
                 title=m_title.strip(),
                 file_bytes=up.getvalue(),
                 filename=up.name,
-                student_initials=m_initials or None,
+                student_initials=m_ini,
                 term=m_term,
                 year=int(m_year),
                 confidential=m_conf,
@@ -357,7 +387,7 @@ with tab_add:
                 st.success(f"Archived: {rec['title']}")
 
 # ===========================================================================
-# ADMIN — soft delete / restore (confidential gate required)
+# ADMIN — rename/merge folders, confirmed delete, restore
 # ===========================================================================
 with tab_admin:
     if not _confidential_unlocked():
@@ -366,7 +396,9 @@ with tab_admin:
         st.subheader("📁 Rename / merge student folder")
         st.caption(
             "Moves every document from one set of initials to another. "
-            "Renaming onto initials that already exist merges the two folders."
+            "Renaming onto initials that already exist merges the two folders. "
+            "(To change a registered student's initials, prefer the Student "
+            "Register — it updates both the register and the folder together.)"
         )
         _all = fetch_archive(include_confidential=True, limit=1000)
         _folders = sorted({r["student_initials"] for r in _all if r.get("student_initials")})
