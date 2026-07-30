@@ -42,8 +42,9 @@ except Exception:
 st.title("🧑‍🎓 Student Register")
 st.caption(
     "Add students when they arrive at the centre; archive them when they "
-    "transition out. The Document Archive builds each student's folder "
-    "from this register."
+    "transition out. Students are recorded by initials and program only — "
+    "no names are stored. The Document Archive builds each student's "
+    "folder from this register."
 )
 
 user_email = st.session_state.get("user_email", "unknown")
@@ -58,33 +59,28 @@ tab_current, tab_add, tab_archived = st.tabs(
 with tab_add:
     st.write(
         "Complete this when a student **first arrives** at the centre. "
-        "Initials are worked out from the name automatically — only change "
-        "them if two students would clash (add a third letter, e.g. first "
-        "two letters of the surname)."
+        "Enter their **initials** (first name + surname, e.g. JT) and "
+        "program. If two students would clash, add a third letter "
+        "(e.g. first two letters of the surname)."
     )
     with st.form("add_student", clear_on_submit=True):
-        a1, a2 = st.columns([2, 1])
+        a1, a2, a3 = st.columns(3)
         with a1:
-            ns_name = st.text_input("Student full name *")
+            ns_initials = st.text_input("Student initials *", max_chars=4,
+                                        placeholder="e.g. JT")
         with a2:
-            ns_initials = st.text_input(
-                "Initials (leave blank for automatic)", max_chars=4
-            )
-        b1, b2 = st.columns(2)
-        with b1:
             ns_program = st.selectbox("Program *", PROGRAMS)
-        with b2:
+        with a3:
             ns_start = st.date_input("Start date", value=date.today())
-        ns_notes = st.text_area("Notes (optional)", height=68)
+        ns_notes = st.text_area("Notes (optional — no student names)", height=68)
         add_submitted = st.form_submit_button("➕ Add student", type="primary")
 
     if add_submitted:
-        if not ns_name.strip():
-            st.warning("The student's name is required.")
+        if not ns_initials.strip():
+            st.warning("The student's initials are required.")
         else:
             rec = register_student(
-                full_name=ns_name,
-                initials=ns_initials or None,
+                initials=ns_initials,
                 program=ns_program,
                 start_date=ns_start,
                 notes=ns_notes,
@@ -92,10 +88,9 @@ with tab_add:
             )
             if rec:
                 st.success(
-                    f"✅ {rec['full_name']} added to the register as "
-                    f"**{rec['initials']}** ({rec['program']}). Their Document "
-                    "Archive folder is ready — documents from the tools will "
-                    "file there automatically."
+                    f"✅ Student **{rec['initials']}** ({rec['program']}) added "
+                    "to the register. Their Document Archive folder is ready — "
+                    "documents from the tools will file there automatically."
                 )
 
 # ===========================================================================
@@ -119,7 +114,7 @@ with tab_current:
             with st.container(border=True):
                 c1, c2, c3 = st.columns([3, 2, 2])
                 with c1:
-                    st.markdown(f"**{s['full_name']}**  ·  📁 {s['initials']}")
+                    st.markdown(f"📁 **{s['initials']}**  ·  {s.get('program') or '—'}")
                     st.caption(
                         f"{s.get('program') or '—'} · started "
                         f"{s.get('start_date') or '—'} · "
@@ -162,7 +157,7 @@ with tab_current:
 
                 if st.session_state.get("_confirm_arch") == sid:
                     st.warning(
-                        f"⚠️ Archive **{s['full_name']}**? Use this when a "
+                        f"⚠️ Archive student **{s['initials']}**? Use this when a "
                         "student transitions out of the centre. Their record "
                         "and all archived documents are **kept** — they move "
                         "to the Archived Students tab and can be reactivated "
@@ -202,7 +197,7 @@ with tab_archived:
         for s in archived:
             c1, c2 = st.columns([4, 1])
             with c1:
-                st.markdown(f"**{s['full_name']}** · 📁 {s['initials']}")
+                st.markdown(f"📁 **{s['initials']}** · {s.get('program') or '—'}")
                 st.caption(
                     f"{s.get('program') or '—'} · "
                     f"{s.get('start_date') or '—'} → {s.get('exit_date') or '—'}"
