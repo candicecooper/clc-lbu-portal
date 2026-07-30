@@ -368,13 +368,13 @@ def restore(record_id: str) -> bool:
 
 def fetch_register(status: str | None = "active") -> list[dict]:
     """List students on the register. status='active', 'archived', or
-    None for everyone. Sorted by name."""
+    None for everyone. Sorted by initials."""
     try:
         client = _get_client()
         q = client.table(REGISTER_TABLE).select("*")
         if status:
             q = q.eq("status", status)
-        res = q.order("full_name").execute()
+        res = q.order("initials").execute()
         return res.data or []
     except Exception as exc:  # noqa: BLE001
         st.error(f"Could not load student register: {exc}")
@@ -383,21 +383,20 @@ def fetch_register(status: str | None = "active") -> list[dict]:
 
 def register_student(
     *,
-    full_name: str,
-    initials: str | None = None,
+    initials: str,
     program: str | None = None,
     start_date=None,
     notes: str | None = None,
     created_by: str = "unknown",
 ) -> dict | None:
-    """Add a student on arrival. Initials auto-derive from the name if
-    not supplied. Refuses a duplicate of an ACTIVE student's initials
-    (returns None with an error shown) so folders never collide."""
+    """Add a student on arrival, identified by INITIALS + PROGRAM only
+    (no names are stored anywhere). Refuses a duplicate of an ACTIVE
+    student's initials so folders never collide."""
     try:
         client = _get_client()
-        ini = (initials or "").strip().upper() or initials_from_name(full_name)
-        if not full_name.strip() or not ini:
-            st.error("A student name is required.")
+        ini = (initials or "").strip().upper()
+        if not ini or len(ini) < 2:
+            st.error("Initials are required (at least 2 letters, e.g. JT).")
             return None
 
         active = fetch_register("active")
@@ -410,7 +409,6 @@ def register_student(
             return None
 
         record = {
-            "full_name": full_name.strip(),
             "initials": ini,
             "program": program,
             "notes": (notes or "").strip() or None,
@@ -453,9 +451,8 @@ def update_student_initials(record_id: str, old_initials: str, new_initials: str
         return 0
 
 
-def register_name_map() -> dict:
-    """{initials: full_name} for every registered student (active and
-    archived) — used by the Document Archive to display names next to
-    folders. Names are shown on screen only; the archive table itself
-    stays initials-only."""
-    return {s["initials"]: s["full_name"] for s in fetch_register(None)}
+def register_program_map() -> dict:
+    """{initials: program} for every registered student (active and
+    archived) — used by the Document Archive to display the program
+    next to each folder."""
+    return {s["initials"]: (s.get("program") or "") for s in fetch_register(None)}
