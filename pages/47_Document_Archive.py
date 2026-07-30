@@ -19,7 +19,7 @@ from archive_utils import (
     download_link_html,
     fetch_archive,
     fetch_register,
-    register_name_map,
+    register_program_map,
     rename_student,
     restore,
     soft_delete,
@@ -196,7 +196,7 @@ with tab_student:
         "document for that student, grouped by type."
     )
 
-    _names = register_name_map()
+    _programs = register_program_map()
 
     sc1, sc2 = st.columns([1, 3])
     with sc1:
@@ -214,7 +214,7 @@ with tab_student:
             student_initials=ini,
             limit=500,
         )
-        _display = f"{ini} — {_names[ini]}" if ini in _names else ini
+        _display = f"{ini} ({_programs[ini]})" if _programs.get(ini) else ini
         if not recs:
             st.info(f"No archived documents found for **{_display}**.")
         else:
@@ -294,7 +294,8 @@ with tab_student:
         seen = set()
         for s in active:
             n = counts.get(s["initials"], 0)
-            directory.append((s["initials"], f"📁 {s['initials']} — {s['full_name'].split()[0]} ({n})"))
+            prog = f" · {s['program']}" if s.get("program") else ""
+            directory.append((s["initials"], f"📁 {s['initials']}{prog} ({n})"))
             seen.add(s["initials"])
         for ini in sorted(counts):
             if ini not in seen:
@@ -309,7 +310,7 @@ with tab_student:
                         st.session_state["_sf_pending"] = ini
                         st.rerun()
             st.caption(
-                "Folders showing a first name come from the Student Register; "
+                "Folders showing a program come from the Student Register; "
                 "add new students there when they arrive at the centre."
             )
         else:
@@ -330,7 +331,7 @@ with tab_add:
 
     _active_students = fetch_register("active")
     _student_options = ["— Not student-linked —"] + [
-        f"{s['initials']} — {s['full_name']}" for s in _active_students
+        f"{s['initials']} — {s.get('program') or ''}".strip(" —") for s in _active_students
     ] + ["Other (type initials manually)"]
 
     with st.form("manual_archive", clear_on_submit=True):
