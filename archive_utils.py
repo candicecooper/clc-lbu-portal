@@ -332,6 +332,115 @@ def rename_student(old_initials: str, new_initials: str) -> int:
         return 0
 
 
+# ---------------------------------------------------------------------------
+# Behaviour Support tool sync (its `students` table, same project)
+# ---------------------------------------------------------------------------
+
+BEHAVIOUR_STUDENTS_TABLE = "students"
+
+
+def _behaviour_find(client, initials: str) -> list[dict]:
+    """Find Behaviour-tool student rows matching these initials
+    (matches rows the sync created and the tool's own naming style)."""
+    try:
+        res = (
+            client.table(BEHAVIOUR_STUDENTS_TABLE)
+            .select("id, name, first_name, archived")
+            .or_(f"first_name.eq.{initials},name.ilike.{initials}%")
+            .execute()
+        )
+        return res.data or []
+    except Exception:
+        return []
+
+
+def sync_behaviour_create(initials, program=None, start_date=None,
+                          planned_exit_date=None) -> str:
+    """Create the student in the Behaviour Support tool's students table.
+    Returns 'created', 'exists', or 'failed'. Never raises."""
+    try:
+        client = _get_client()
+        ini = initials.strip().upper()
+        if any(not r.get("archived") for r in _behaviour_find(client, ini)):
+            return "exists"
+        rec = {
+            "name": ini,
+            "first_name": ini,
+            "last_name": "-",
+            "program": program,
+            "status": "Active",
+            "risk_level": "Low",
+            "support_level": "Universal",
+            "archived": False,
+        }
+        if start_date:
+            rec["enrolled_date"] = str(start_date)
+            rec["placement_start"] = str(start_date)
+        if planned_exit_date:
+            rec["placement_end"] = str(planned_exit_date)
+        client.table(BEHAVIOUR_STUDENTS_TABLE).insert(rec).execute()
+        return "created"
+    except Exception as exc:  # noqa: BLE001
+        st.warning(
+            f"Added to the register, but could not create the student in the "
+            f"Behaviour Analysis tool ({exc}). Add them there via its Admin "
+            "Portal, or tell Claude."
+        )
+        return "failed"
+
+
+def sync_behaviour_archive(initials, exit_date=None) -> None:
+    """Mark matching Behaviour-tool students archived. Never raises."""
+    try:
+        client = _get_client()
+        payload = {"archived": True}
+        if exit_date:
+            payload["placement_end"] = str(exit_date)
+        for r in _behaviour_find(client, initials.strip().upper()):
+            client.table(BEHAVIOUR_STUDENTS_TABLE).update(payload).eq(
+                "id", r["id"]
+            ).execute()
+    except Exception:
+        pass
+
+
+def sync_behaviour_reactivate(initials) -> None:
+    """Un-archive matching Behaviour-tool students. Never raises."""
+    try:
+        client = _get_client()
+        for r in _behaviour_find(client, initials.strip().upper()):
+            client.table(BEHAVIOUR_STUDENTS_TABLE).update(
+                {"archived": False, "status": "Active"}
+            ).eq("id", r["id"]).execute()
+    except Exception:
+        pass
+
+
+def sync_behaviour_extend(initials, new_exit_date) -> None:
+    """Update placement_end for matching Behaviour-tool students."""
+    try:
+        client = _get_client()
+        for r in _behaviour_find(client, initials.strip().upper()):
+            client.table(BEHAVIOUR_STUDENTS_TABLE).update(
+                {"placement_end": str(new_exit_date)}
+            ).eq("id", r["id"]).execute()
+    except Exception:
+        pass
+
+
+def sync_behaviour_initials(old_initials, new_initials) -> None:
+    """Carry an initials change across to the Behaviour tool."""
+    try:
+        client = _get_client()
+        new = new_initials.strip().upper()
+        for r in _behaviour_find(client, old_initials.strip().upper()):
+            client.table(BEHAVIOUR_STUDENTS_TABLE).update(
+                {"name": new, "first_name": new}
+            ).eq("id", r["id"]).execute()
+    except Exception:
+        pass
+
+
 def soft_delete(record_id: str, deleted_by: str) -> bool:
     """Mark a record as deleted (file is retained for restore)."""
     try:
@@ -433,19 +542,35 @@ def register_student(
             record["planned_exit_date"] = str(planned_exit_date)
 
         res = client.table(REGISTER_TABLE).insert(record).execute()
-        return res.data[0] if res.data else None
+        created = res.data[0] if res.data else None
+        if created:
+            created["_behaviour_sync"] = sync_behaviour_create(
+                ini, program, start_date, planned_exit_date
+            )
+        return created
     except Exception as exc:  # noqa: BLE001
         st.error(f"Could not add student: {exc}")
         return None
 
 
 def set_student_status(record_id: str, status: str, exit_date=None) -> bool:
-    """Archive ('archived' + exit date) or reactivate ('active') a student."""
+    """Archive ('archived' + exit date) or reactivate ('active') a student.
+    Keeps the Behaviour Analysis tool's student list in step."""
     try:
         client = _get_client()
         payload = {"status": status}
         payload["exit_date"] = str(exit_date) if exit_date else None
         client.table(REGISTER_TABLE).update(payload).eq("id", record_id).execute()
+        row = (
+            client.table(REGISTER_TABLE).select("initials")
+            .eq("id", record_id).execute()
+        )
+        ini = row.data[0]["initials"] if row.data else None
+        if ini:
+            if status == "archived":
+                sync_behaviour_archive(ini, exit_date)
+            else:
+                sync_behaviour_reactivate(ini)
         return True
     except Exception as exc:  # noqa: BLE001
         st.error(f"Could not update student: {exc}")
@@ -472,6 +597,12 @@ def extend_student(record_id: str, old_exit_date, new_exit_date) -> bool:
                 "extension_count": n + 1,
             }
         ).eq("id", record_id).execute()
+        row = (
+            client.table(REGISTER_TABLE).select("initials")
+            .eq("id", record_id).execute()
+        )
+        if row.data:
+            sync_behaviour_extend(row.data[0]["initials"], new_exit_date)
         return True
     except Exception as exc:  # noqa: BLE001
         st.error(f"Could not extend placement: {exc}")
@@ -486,6 +617,7 @@ def update_student_initials(record_id: str, old_initials: str, new_initials: str
         client.table(REGISTER_TABLE).update(
             {"initials": new_initials.strip().upper()}
         ).eq("id", record_id).execute()
+        sync_behaviour_initials(old_initials, new_initials)
         return rename_student(old_initials, new_initials)
     except Exception as exc:  # noqa: BLE001
         st.error(f"Could not update initials: {exc}")
