@@ -714,6 +714,41 @@ def import_from_smartar(created_by: str = "unknown") -> tuple[int, int, list]:
     return imported, skipped, problems
 
 
+def update_student_details(record_id: str, program=None, year_level=None) -> bool:
+    """Update a register student's program / year level."""
+    try:
+        client = _get_client()
+        client.table(REGISTER_TABLE).update(
+            {"program": program, "year_level": year_level}
+        ).eq("id", record_id).execute()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Could not update details: {exc}")
+        return False
+
+
+def delete_register_entry(record_id: str) -> bool:
+    """TRUE delete of a register row — for bad imports/duplicates only.
+    (Archiving a student is the normal end-of-placement action.)"""
+    try:
+        client = _get_client()
+        client.table(REGISTER_TABLE).delete().eq("id", record_id).execute()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Could not remove entry: {exc}")
+        return False
+
+
+def merge_register_student(source_id: str, source_initials: str,
+                           target_initials: str) -> int:
+    """Merge a duplicate: move all of source's archived documents into
+    the target's folder, then delete the source register row.
+    Returns documents moved."""
+    moved = rename_student(source_initials, target_initials)
+    delete_register_entry(source_id)
+    return moved
+
+
 def register_program_map() -> dict:
     """{initials: program} for every registered student (active and
     archived) — used by the Document Archive to display the program
