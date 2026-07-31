@@ -199,6 +199,7 @@ def archive_document(
     confidential: bool = False,
     created_by: str = "unknown",
     notes: str | None = None,
+    supersede: bool | None = None,
 ) -> dict | None:
     """Upload a document to the archive. Returns the inserted record,
     or None on failure (errors are shown via st.error, never raised,
@@ -255,7 +256,11 @@ def archive_document(
 
         # Supersede: newer report replaces older ones of the same type
         # for the same student (older versions become restorable, not gone)
-        if inserted and _ini and doc_type in SUPERSEDE_DOC_TYPES:
+        _do_supersede = (
+            supersede if supersede is not None
+            else doc_type in SUPERSEDE_DOC_TYPES
+        )
+        if inserted and _ini and _do_supersede:
             try:
                 client.table(TABLE).update(
                     {
@@ -523,6 +528,58 @@ def sync_smartar_initials(old_initials, new_initials) -> None:
         pass
 
 
+def archive_commlog_export(initials, created_by: str = "auto (end of placement)"):
+    """Build an initials-only Excel of a student's full communication log
+    and file it in their archive folder. Called automatically when a
+    student is archived. Never raises."""
+    try:
+        client = _get_client()
+        ini = initials.strip().upper()
+        rows = (
+            client.table("student_communications").select("*")
+            .eq("student_initials", ini).order("comm_date").execute()
+        ).data or []
+        if not rows:
+            return None
+
+        from io import BytesIO
+        from openpyxl import Workbook
+
+        preferred = [
+            "comm_date", "comm_time", "direction", "comm_type",
+            "contact_name", "contact_role", "staff_member", "summary",
+            "outcome", "follow_up", "follow_up_date", "notes",
+        ]
+        keys = [k for k in preferred if k in rows[0]]
+        keys += [
+            k for k in rows[0]
+            if k not in keys and k not in ("id", "created_at", "updated_at",
+                                           "student_initials")
+        ]
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Communication Log"
+        ws.append([f"Communication Log — {ini} (end of placement)"])
+        ws.append([k.replace("_", " ").title() for k in keys])
+        for r in rows:
+            ws.append([str(r.get(k) or "") for k in keys])
+        buf = BytesIO()
+        wb.save(buf)
+
+        return archive_document(
+            source_tool="Communication Log",
+            doc_type="Communication Log Export",
+            title=f"Communication Log — {ini} — end of placement",
+            file_bytes=buf.getvalue(),
+            filename=f"communication_log_{ini}_final.xlsx",
+            student_initials=ini,
+            created_by=created_by,
+            supersede=True,  # a re-archive replaces the earlier final export
+        )
+    except Exception:
+        return None
+
+
 def soft_delete(record_id: str, deleted_by: str) -> bool:
     """Mark a record as deleted (file is retained for restore)."""
     try:
@@ -655,6 +712,11 @@ def set_student_status(record_id: str, status: str, exit_date=None) -> bool:
             if status == "archived":
                 sync_behaviour_archive(ini, exit_date)
                 sync_smartar_archive(ini)
+                if archive_commlog_export(ini):
+                    try:
+                        st.toast("🗄️ Communication log filed in the archive")
+                    except Exception:
+                        pass
             else:
                 sync_behaviour_reactivate(ini)
                 sync_smartar_reactivate(ini)
