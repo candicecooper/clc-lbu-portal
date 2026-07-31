@@ -21,6 +21,7 @@ from archive_utils import (
     extend_student,
     import_from_behaviour,
     import_from_smartar,
+    push_register_to_behaviour,
     delete_register_entry,
     merge_register_student,
     update_student_details,
@@ -115,6 +116,22 @@ with tab_add:
             "Imported students may be missing program/year details — add "
             "them with ✏️ on each student's card in Current Students."
         )
+        st.divider()
+        st.write(
+            "**📤 Push to Behaviour Analysis** — one-off backfill the other "
+            "way: creates a Behaviour Analysis student for every active "
+            "register student not already in its list, so data collection "
+            "can begin. Safe to run repeatedly."
+        )
+        if st.button("📤 Push register students to Behaviour Analysis",
+                     key="push_beh"):
+            _c, _e, _f = push_register_to_behaviour()
+            st.success(
+                f"Created {_c} student(s) in Behaviour Analysis; "
+                f"{_e} already there."
+            )
+            if _f:
+                st.warning("Could not create: " + ", ".join(_f))
 
     st.write(
         "Complete this when a student **first arrives** at the centre. "
