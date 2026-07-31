@@ -60,6 +60,17 @@ st.caption(
 
 user_email = st.session_state.get("user_email", "unknown")
 
+with st.expander("🔧 Connection info (for setup/troubleshooting)"):
+    from archive_utils import connected_project
+    _url = connected_project()
+    st.code(_url)
+    st.caption(
+        "This is the Supabase project the register reads from. If the "
+        "register table is missing, run register_setup.sql in **this** "
+        "project — the highlighted part of the URL matches the project "
+        "ref shown in the Supabase dashboard address bar."
+    )
+
 tab_current, tab_add, tab_archived = st.tabs(
     ["👥 Current Students", "➕ Add New Student", "📦 Archived Students"]
 )
