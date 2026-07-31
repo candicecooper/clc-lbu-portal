@@ -20,6 +20,7 @@ from archive_utils import (
     fetch_archive,
     fetch_register,
     rename_student,
+    set_student_status,
     restore,
     soft_delete,
 )
@@ -228,6 +229,54 @@ with tab_student:
             limit=500,
         )
         _display = _labels.get(ini, ini)
+
+        # Student status controls (register-linked students only)
+        from datetime import date as _date
+        _reg_active = {s["initials"]: s for s in fetch_register("active")}
+        _reg_archived = {s["initials"]: s for s in fetch_register("archived")}
+
+        if ini in _reg_active:
+            _s = _reg_active[ini]
+            sc_a, sc_b = st.columns([3, 1])
+            with sc_b:
+                if st.button("📦 Archive student", key=f"folder_arch_{ini}"):
+                    st.session_state["_folder_arch"] = ini
+            if st.session_state.get("_folder_arch") == ini:
+                st.warning(
+                    f"⚠️ Archive student **{_display}**? Use this when their "
+                    "placement has ended. Their folder and every document "
+                    "move to 📦 Archived students — nothing is deleted, and "
+                    "they can be reactivated if they return."
+                )
+                fa1, fa2, fa3 = st.columns([2, 1, 1])
+                with fa1:
+                    _fa_exit = st.date_input(
+                        "Exit date", value=_date.today(), key=f"fa_exit_{ini}"
+                    )
+                with fa2:
+                    st.write("")
+                    if st.button("Yes, archive", key=f"fa_yes_{ini}",
+                                 type="primary"):
+                        if set_student_status(_s["id"], "archived", _fa_exit):
+                            st.session_state.pop("_folder_arch", None)
+                            st.rerun()
+                with fa3:
+                    st.write("")
+                    if st.button("Cancel", key=f"fa_no_{ini}"):
+                        st.session_state.pop("_folder_arch", None)
+                        st.rerun()
+        elif ini in _reg_archived:
+            _s = _reg_archived[ini]
+            sc_a, sc_b = st.columns([3, 1])
+            with sc_a:
+                st.caption(
+                    f"📦 Archived student · exited {_s.get('exit_date') or '—'}"
+                )
+            with sc_b:
+                if st.button("↩️ Reactivate", key=f"folder_react_{ini}"):
+                    if set_student_status(_s["id"], "active", None):
+                        st.rerun()
+
         if not recs:
             st.info(f"No archived documents found for **{_display}**.")
         else:
