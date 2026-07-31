@@ -19,6 +19,7 @@ import streamlit as st
 from archive_utils import (
     PROGRAMS,
     extend_student,
+    import_from_behaviour,
     fetch_archive,
     fetch_register,
     register_student,
@@ -79,6 +80,23 @@ tab_current, tab_add, tab_archived = st.tabs(
 # ADD NEW STUDENT
 # ===========================================================================
 with tab_add:
+    with st.expander("📥 Import existing students from the Behaviour Analysis tool"):
+        st.write(
+            "One-off setup: creates a register entry (and archive folder) for "
+            "every **active** student already in the Behaviour Analysis tool — "
+            "initials, program, year level and placement dates come across "
+            "automatically. Students already on the register are skipped, so "
+            "it's safe to run more than once."
+        )
+        if st.button("📥 Import all active students", type="primary",
+                     key="import_beh"):
+            imported, skipped, problems = import_from_behaviour(user_email)
+            st.success(f"Imported {imported} student(s); skipped {skipped} already on the register.")
+            for p in problems:
+                st.warning(p)
+            if imported:
+                st.rerun()
+
     st.write(
         "Complete this when a student **first arrives** at the centre. "
         "Enter their **initials** (first name + surname, e.g. JT) and "
@@ -91,6 +109,8 @@ with tab_add:
             ns_initials = st.text_input("Student initials *", max_chars=4,
                                         placeholder="e.g. JT")
             ns_program = st.selectbox("Program *", PROGRAMS)
+            ns_year = st.number_input("Year level *", min_value=0, max_value=12,
+                                      value=0, help="Reception = 0")
         with a2:
             ns_start = st.date_input("Start date", value=date.today())
             ns_exit = st.date_input(
@@ -109,6 +129,7 @@ with tab_add:
             rec = register_student(
                 initials=ns_initials,
                 program=ns_program,
+                year_level=int(ns_year),
                 start_date=ns_start,
                 planned_exit_date=ns_exit,
                 notes=ns_notes,
@@ -176,7 +197,8 @@ with tab_current:
                 c1, c2, c3 = st.columns([3, 2, 2])
                 with c1:
                     _flag = " 🚨 **PAST EXIT DATE**" if _is_overdue else ""
-                    st.markdown(f"📁 **{s['initials']}**  ·  {s.get('program') or '—'}{_flag}")
+                    _yl = f" · Yr {s['year_level']}" if s.get("year_level") is not None else ""
+                    st.markdown(f"📁 **{s['initials']}**  ·  {s.get('program') or '—'}{_yl}{_flag}")
                     _ext = (
                         f" · extended ×{s['extension_count']}"
                         f" (was {_d(s.get('previous_exit_date')):%d %b %Y})"
