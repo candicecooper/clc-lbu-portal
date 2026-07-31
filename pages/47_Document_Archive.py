@@ -302,32 +302,62 @@ with tab_student:
             if r.get("student_initials"):
                 counts[r["student_initials"]] = counts.get(r["student_initials"], 0) + 1
 
-        active = fetch_register("active")
-        directory = []  # (initials, label)
+        def _folder_grid(entries, key_prefix):
+            cols = st.columns(4)
+            for i, (ini, label) in enumerate(entries):
+                with cols[i % 4]:
+                    if st.button(label, key=f"{key_prefix}_{i}_{ini}",
+                                 use_container_width=True):
+                        st.session_state["_sf_pending"] = ini
+                        st.rerun()
+
         seen = set()
-        for s in active:
+
+        current_entries = []
+        for s in fetch_register("active"):
             if s["initials"] in seen:
                 continue  # duplicate register entries — one folder button
             n = counts.get(s["initials"], 0)
-            directory.append((s["initials"], f"📁 {_labels.get(s['initials'], s['initials'])} ({n})"))
-            seen.add(s["initials"])
-        for ini in sorted(counts):
-            if ini not in seen:
-                directory.append((ini, f"📁 {_labels.get(ini, ini)} ({counts[ini]})"))
-
-        if directory:
-            st.markdown("**Student folders:**")
-            cols = st.columns(4)
-            for i, (ini, label) in enumerate(directory):
-                with cols[i % 4]:
-                    if st.button(label, key=f"open_{i}_{ini}", use_container_width=True):
-                        st.session_state["_sf_pending"] = ini
-                        st.rerun()
-            st.caption(
-                "Folders showing a program come from the Student Register; "
-                "add new students there when they arrive at the centre."
+            current_entries.append(
+                (s["initials"], f"📁 {_labels.get(s['initials'], s['initials'])} ({n})")
             )
-        else:
+            seen.add(s["initials"])
+
+        archived_entries = []
+        for s in fetch_register("archived"):
+            if s["initials"] in seen:
+                continue
+            n = counts.get(s["initials"], 0)
+            _exit = f" · exited {str(s['exit_date'])[:4]}" if s.get("exit_date") else ""
+            archived_entries.append(
+                (s["initials"], f"📦 {_labels.get(s['initials'], s['initials'])}{_exit} ({n})")
+            )
+            seen.add(s["initials"])
+
+        other_entries = [
+            (ini, f"📁 {_labels.get(ini, ini)} ({counts[ini]})")
+            for ini in sorted(counts) if ini not in seen
+        ]
+
+        if current_entries:
+            st.markdown("### 👥 Current students")
+            _folder_grid(current_entries, "cur")
+        if archived_entries:
+            st.markdown("### 📦 Archived students")
+            st.caption(
+                "Students who have transitioned out — every document remains "
+                "here, fully accessible."
+            )
+            _folder_grid(archived_entries, "arc")
+        if other_entries:
+            st.markdown("### 🗂️ Folders not linked to the register")
+            st.caption(
+                "Documents filed under initials with no register entry — "
+                "merge these into the right student via Admin, or add the "
+                "student to the register."
+            )
+            _folder_grid(other_entries, "oth")
+        if not (current_entries or archived_entries or other_entries):
             st.info(
                 "No students yet — add them in the Student Register when "
                 "they arrive, and their folders will appear here."
