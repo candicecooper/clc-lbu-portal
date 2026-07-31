@@ -276,6 +276,46 @@ with tab_student:
                 if st.button("↩️ Reactivate", key=f"folder_react_{ini}"):
                     if set_student_status(_s["id"], "active", None):
                         st.rerun()
+        else:
+            # Unlinked folder — offer to move its documents to a student
+            st.info(
+                "🗂️ **This folder isn't linked to the register** — usually a "
+                "document filed under mis-derived initials. Move everything "
+                "into the correct student's folder:"
+            )
+            _all_reg = fetch_register(None)
+            _mv_pairs = [
+                (_labels.get(s["initials"], s["initials"]), s["initials"])
+                for s in _all_reg
+            ]
+            _mv_seen = set()
+            _mv_pairs = [
+                p for p in _mv_pairs
+                if not (p[1] in _mv_seen or _mv_seen.add(p[1]))
+            ]
+            mv1, mv2 = st.columns([3, 1])
+            with mv1:
+                _mv_choice = st.selectbox(
+                    "Move all documents into",
+                    ["— choose student —"] + [p[0] for p in _mv_pairs],
+                    key=f"mv_to_{ini}",
+                )
+            with mv2:
+                st.write("")
+                if st.button("🔀 Move documents", key=f"mv_go_{ini}",
+                             type="primary"):
+                    _target = next(
+                        (p[1] for p in _mv_pairs if p[0] == _mv_choice), None
+                    )
+                    if not _target:
+                        st.warning("Choose the student to move them into.")
+                    else:
+                        _moved = rename_student(ini, _target)
+                        st.success(
+                            f"Moved {_moved} document(s) into {_mv_choice}."
+                        )
+                        st.session_state["_sf_pending"] = _target
+                        st.rerun()
 
         if not recs:
             st.info(f"No archived documents found for **{_display}**.")
