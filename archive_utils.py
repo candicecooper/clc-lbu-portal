@@ -675,6 +675,45 @@ def import_from_behaviour(created_by: str = "unknown") -> tuple[int, int, list]:
     return imported, skipped, problems
 
 
+def import_from_smartar(created_by: str = "unknown") -> tuple[int, int, list]:
+    """One-click import: create register entries (and thus archive folders)
+    for every ACTIVE student in the SMARTAR Goal tool who isn't on the
+    register yet. Returns (imported, skipped_existing, problems)."""
+    imported, skipped, problems = 0, 0, []
+    try:
+        client = _get_client()
+        rows = (
+            client.table("smartar_students")
+            .select("student_name, active")
+            .eq("active", True)
+            .execute()
+        ).data or []
+        existing = {s["initials"] for s in fetch_register(None)}
+
+        for r in rows:
+            raw = (r.get("student_name") or "").strip()
+            clean = re.sub(r"[^A-Za-z0-9]", "", raw).upper()
+            if 2 <= len(clean) <= 4:
+                ini = clean                      # already initials-style
+            else:
+                ini = initials_from_name(raw)    # full name -> initials
+            if not ini or len(re.sub(r"[^A-Za-z0-9]", "", ini)) < 2:
+                problems.append(f"'{raw}' — could not derive usable initials")
+                continue
+            ini = re.sub(r"[^A-Za-z0-9]", "", ini).upper()
+            if ini in existing:
+                skipped += 1
+                continue
+            client.table(REGISTER_TABLE).insert(
+                {"initials": ini, "created_by": created_by}
+            ).execute()
+            existing.add(ini)
+            imported += 1
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"SMARTAR import failed: {exc}")
+    return imported, skipped, problems
+
+
 def register_program_map() -> dict:
     """{initials: program} for every registered student (active and
     archived) — used by the Document Archive to display the program
