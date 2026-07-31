@@ -442,6 +442,62 @@ def sync_behaviour_initials(old_initials, new_initials) -> None:
         pass
 
 
+def sync_smartar_create(initials, program=None) -> str:
+    """Create the student in the SMARTAR Goal tool's list. Never raises."""
+    try:
+        client = _get_client()
+        ini = initials.strip().upper()
+        rows = (
+            client.table("smartar_students").select("id, student_name, active")
+            .eq("student_name", ini).execute()
+        ).data or []
+        if any(r.get("active") for r in rows):
+            return "exists"
+        if rows:  # existed but inactive — reactivate
+            client.table("smartar_students").update(
+                {"active": True, "program": program}
+            ).eq("id", rows[0]["id"]).execute()
+            return "created"
+        client.table("smartar_students").insert(
+            {"student_name": ini, "program": program, "active": True}
+        ).execute()
+        return "created"
+    except Exception as exc:  # noqa: BLE001
+        st.warning(f"Could not add student to SMARTAR Goal tool: {exc}")
+        return "failed"
+
+
+def sync_smartar_archive(initials) -> None:
+    """Deactivate the student in SMARTAR. Never raises."""
+    try:
+        client = _get_client()
+        client.table("smartar_students").update({"active": False}).eq(
+            "student_name", initials.strip().upper()
+        ).execute()
+    except Exception:
+        pass
+
+
+def sync_smartar_reactivate(initials) -> None:
+    try:
+        client = _get_client()
+        client.table("smartar_students").update({"active": True}).eq(
+            "student_name", initials.strip().upper()
+        ).execute()
+    except Exception:
+        pass
+
+
+def sync_smartar_initials(old_initials, new_initials) -> None:
+    try:
+        client = _get_client()
+        client.table("smartar_students").update(
+            {"student_name": new_initials.strip().upper()}
+        ).eq("student_name", old_initials.strip().upper()).execute()
+    except Exception:
+        pass
+
+
 def soft_delete(record_id: str, deleted_by: str) -> bool:
     """Mark a record as deleted (file is retained for restore)."""
     try:
@@ -550,6 +606,7 @@ def register_student(
             created["_behaviour_sync"] = sync_behaviour_create(
                 ini, program, start_date, planned_exit_date, year_level
             )
+            created["_smartar_sync"] = sync_smartar_create(ini, program)
         return created
     except Exception as exc:  # noqa: BLE001
         st.error(f"Could not add student: {exc}")
@@ -572,8 +629,10 @@ def set_student_status(record_id: str, status: str, exit_date=None) -> bool:
         if ini:
             if status == "archived":
                 sync_behaviour_archive(ini, exit_date)
+                sync_smartar_archive(ini)
             else:
                 sync_behaviour_reactivate(ini)
+                sync_smartar_reactivate(ini)
         return True
     except Exception as exc:  # noqa: BLE001
         st.error(f"Could not update student: {exc}")
@@ -621,6 +680,7 @@ def update_student_initials(record_id: str, old_initials: str, new_initials: str
             {"initials": new_initials.strip().upper()}
         ).eq("id", record_id).execute()
         sync_behaviour_initials(old_initials, new_initials)
+        sync_smartar_initials(old_initials, new_initials)
         return rename_student(old_initials, new_initials)
     except Exception as exc:  # noqa: BLE001
         st.error(f"Could not update initials: {exc}")
