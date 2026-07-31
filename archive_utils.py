@@ -59,6 +59,11 @@ SOURCE_TOOLS = [
 
 TERMS = ["Term 1", "Term 2", "Term 3", "Term 4"]
 
+# Doc types where a newer report REPLACES the older one in the student's
+# folder (the older version is auto-moved to the restorable Deleted list,
+# never destroyed).
+SUPERSEDE_DOC_TYPES = {"SMARTAR Goals", "Behaviour Report"}
+
 
 # ---------------------------------------------------------------------------
 # Supabase client — self-locating across the portal's credential sets
@@ -246,7 +251,25 @@ def archive_document(
         }
 
         res = client.table(TABLE).insert(record).execute()
-        return res.data[0] if res.data else None
+        inserted = res.data[0] if res.data else None
+
+        # Supersede: newer report replaces older ones of the same type
+        # for the same student (older versions become restorable, not gone)
+        if inserted and _ini and doc_type in SUPERSEDE_DOC_TYPES:
+            try:
+                client.table(TABLE).update(
+                    {
+                        "deleted": True,
+                        "deleted_by": "auto — superseded by newer report",
+                        "deleted_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                ).eq("student_initials", _ini).eq("doc_type", doc_type).eq(
+                    "deleted", False
+                ).neq("id", inserted["id"]).execute()
+            except Exception:
+                pass  # keeping both versions is the safe failure mode
+
+        return inserted
 
     except Exception as exc:  # noqa: BLE001
         st.error(f"Could not archive document: {exc}")
