@@ -21,6 +21,9 @@ from archive_utils import (
     extend_student,
     import_from_behaviour,
     import_from_smartar,
+    delete_register_entry,
+    merge_register_student,
+    update_student_details,
     fetch_archive,
     fetch_register,
     register_student,
@@ -231,8 +234,10 @@ with tab_current:
                 with c2:
                     if st.button("📅 Extend placement", key=f"ext_{sid}"):
                         st.session_state["_extend"] = sid
-                    if st.button("✏️ Change initials", key=f"ini_{sid}"):
+                    if st.button("✏️ Edit details", key=f"ini_{sid}"):
                         st.session_state["_edit_ini"] = sid
+                    if st.button("🔀 Merge / ❌ Remove", key=f"fix_{sid}"):
+                        st.session_state["_fix"] = sid
                 with c3:
                     if _is_overdue:
                         st.error("Archive or extend:")
@@ -268,29 +273,86 @@ with tab_current:
                             st.rerun()
 
                 if st.session_state.get("_edit_ini") == sid:
-                    e1, e2, e3 = st.columns([2, 1, 1])
+                    e1, e2, e3, e4, e5 = st.columns([1.5, 1.5, 1.5, 1, 1])
                     with e1:
                         new_ini = st.text_input(
-                            "New initials", value=s["initials"], max_chars=4,
+                            "Initials", value=s["initials"], max_chars=4,
                             key=f"new_ini_{sid}",
                         )
                     with e2:
+                        _prog_idx = PROGRAMS.index(s["program"]) if s.get("program") in PROGRAMS else 0
+                        new_prog = st.selectbox("Program", PROGRAMS,
+                                                index=_prog_idx, key=f"new_prog_{sid}")
+                    with e3:
+                        new_year = st.number_input(
+                            "Year level", min_value=0, max_value=12,
+                            value=int(s["year_level"]) if s.get("year_level") is not None else 0,
+                            key=f"new_year_{sid}",
+                        )
+                    with e4:
                         st.write("")
                         if st.button("Save", key=f"ini_save_{sid}", type="primary"):
+                            update_student_details(sid, new_prog, int(new_year))
                             if new_ini.strip() and new_ini.strip().upper() != s["initials"]:
                                 moved = update_student_initials(
                                     sid, s["initials"], new_ini
                                 )
                                 st.success(
-                                    f"Initials updated; {moved} archived "
+                                    f"Details updated; {moved} archived "
                                     "document(s) moved to the new folder."
                                 )
                             st.session_state.pop("_edit_ini", None)
                             st.rerun()
-                    with e3:
+                    with e5:
                         st.write("")
                         if st.button("Cancel", key=f"ini_cancel_{sid}"):
                             st.session_state.pop("_edit_ini", None)
+                            st.rerun()
+
+                if st.session_state.get("_fix") == sid:
+                    _docs_n = _counts.get(s["initials"], 0)
+                    st.info(
+                        f"**Fix duplicate / bad entry — {s['initials']}** "
+                        f"({_docs_n} archived document(s)). Merging moves their "
+                        "documents into another student's folder and removes "
+                        "this entry. Removing deletes just this register entry "
+                        "— any documents keep the old initials until merged."
+                    )
+                    _others = [
+                        x["initials"] for x in students if x["id"] != sid
+                    ]
+                    f1, f2, f3, f4 = st.columns([2, 1.2, 1.2, 1])
+                    with f1:
+                        merge_target = st.selectbox(
+                            "Merge documents into", ["—"] + _others,
+                            key=f"merge_to_{sid}",
+                        )
+                    with f2:
+                        st.write("")
+                        if st.button("🔀 Merge & remove", key=f"merge_go_{sid}",
+                                     type="primary"):
+                            if merge_target != "—":
+                                moved = merge_register_student(
+                                    sid, s["initials"], merge_target
+                                )
+                                st.success(
+                                    f"Merged: {moved} document(s) moved to "
+                                    f"{merge_target}; duplicate removed."
+                                )
+                                st.session_state.pop("_fix", None)
+                                st.rerun()
+                            else:
+                                st.warning("Choose who to merge into.")
+                    with f3:
+                        st.write("")
+                        if st.button("❌ Remove entry only", key=f"rm_go_{sid}"):
+                            if delete_register_entry(sid):
+                                st.session_state.pop("_fix", None)
+                                st.rerun()
+                    with f4:
+                        st.write("")
+                        if st.button("Cancel", key=f"fix_cancel_{sid}"):
+                            st.session_state.pop("_fix", None)
                             st.rerun()
 
                 if st.session_state.get("_confirm_arch") == sid:
