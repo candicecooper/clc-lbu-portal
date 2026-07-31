@@ -366,6 +366,18 @@ def restore(record_id: str) -> bool:
 # Student Register API
 # ---------------------------------------------------------------------------
 
+def connected_project() -> str:
+    """The Supabase project URL the archive is actually connected to —
+    for diagnostics, so SQL can be run in the matching project."""
+    try:
+        client = _get_client()
+        return getattr(client, "supabase_url", None) or getattr(
+            client, "rest_url", "unknown"
+        )
+    except Exception as exc:  # noqa: BLE001
+        return f"not connected ({exc})"
+
+
 def fetch_register(status: str | None = "active") -> list[dict]:
     """List students on the register. status='active', 'archived', or
     None for everyone. Sorted by initials."""
