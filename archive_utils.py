@@ -355,7 +355,7 @@ def _behaviour_find(client, initials: str) -> list[dict]:
 
 
 def sync_behaviour_create(initials, program=None, start_date=None,
-                          planned_exit_date=None) -> str:
+                          planned_exit_date=None, year_level=None) -> str:
     """Create the student in the Behaviour Support tool's students table.
     Returns 'created', 'exists', or 'failed'. Never raises."""
     try:
@@ -365,6 +365,7 @@ def sync_behaviour_create(initials, program=None, start_date=None,
             return "exists"
         rec = {
             "id": str(uuid.uuid4()),  # tool's table expects app-supplied IDs
+            "year_level": int(year_level) if year_level is not None else 0,
             "name": ini,
             "first_name": ini,
             "last_name": "-",
@@ -506,6 +507,7 @@ def register_student(
     *,
     initials: str,
     program: str | None = None,
+    year_level: int | None = None,
     start_date=None,
     planned_exit_date=None,
     notes: str | None = None,
@@ -516,7 +518,7 @@ def register_student(
     student's initials so folders never collide."""
     try:
         client = _get_client()
-        ini = (initials or "").strip().upper()
+        ini = re.sub(r"[^A-Za-z0-9]", "", (initials or "")).upper()
         if not ini or len(ini) < 2:
             st.error("Initials are required (at least 2 letters, e.g. JT).")
             return None
@@ -533,6 +535,7 @@ def register_student(
         record = {
             "initials": ini,
             "program": program,
+            "year_level": year_level,
             "notes": (notes or "").strip() or None,
             "created_by": created_by,
         }
@@ -545,7 +548,7 @@ def register_student(
         created = res.data[0] if res.data else None
         if created:
             created["_behaviour_sync"] = sync_behaviour_create(
-                ini, program, start_date, planned_exit_date
+                ini, program, start_date, planned_exit_date, year_level
             )
         return created
     except Exception as exc:  # noqa: BLE001
