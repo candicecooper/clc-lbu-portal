@@ -115,10 +115,16 @@ with tab_add:
                 created_by=user_email,
             )
             if rec:
+                _sync = rec.get("_behaviour_sync")
+                _sync_msg = {
+                    "created": " Also added to the Behaviour Analysis tool.",
+                    "exists": " (Already existed in the Behaviour Analysis tool — not duplicated.)",
+                }.get(_sync, "")
                 st.success(
                     f"✅ Student **{rec['initials']}** ({rec['program']}) added "
                     "to the register. Their Document Archive folder is ready — "
                     "documents from the tools will file there automatically."
+                    + _sync_msg
                 )
 
 # ===========================================================================
