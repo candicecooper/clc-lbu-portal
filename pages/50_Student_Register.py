@@ -20,6 +20,7 @@ from archive_utils import (
     PROGRAMS,
     extend_student,
     import_from_behaviour,
+    import_from_smartar,
     fetch_archive,
     fetch_register,
     register_student,
@@ -88,14 +89,29 @@ with tab_add:
             "automatically. Students already on the register are skipped, so "
             "it's safe to run more than once."
         )
-        if st.button("📥 Import all active students", type="primary",
-                     key="import_beh"):
-            imported, skipped, problems = import_from_behaviour(user_email)
-            st.success(f"Imported {imported} student(s); skipped {skipped} already on the register.")
-            for p in problems:
-                st.warning(p)
-            if imported:
-                st.rerun()
+        ib1, ib2 = st.columns(2)
+        with ib1:
+            if st.button("📥 Import from Behaviour tool", type="primary",
+                         key="import_beh"):
+                imported, skipped, problems = import_from_behaviour(user_email)
+                st.success(f"Imported {imported}; skipped {skipped} already on the register.")
+                for p in problems:
+                    st.warning(p)
+                if imported:
+                    st.rerun()
+        with ib2:
+            if st.button("📥 Import from SMARTAR Goal tool",
+                         key="import_smartar"):
+                imported, skipped, problems = import_from_smartar(user_email)
+                st.success(f"Imported {imported}; skipped {skipped} already on the register.")
+                for p in problems:
+                    st.warning(p)
+                if imported:
+                    st.rerun()
+        st.caption(
+            "Imported students may be missing program/year details — add "
+            "them with ✏️ on each student's card in Current Students."
+        )
 
     st.write(
         "Complete this when a student **first arrives** at the centre. "
