@@ -2,10 +2,12 @@ import streamlit as st
 
 # ── Document Archive integration (fails silently if unavailable) ──────────
 try:
-    from archive_utils import archive_once, initials_from_name
+    from archive_utils import archive_document, fetch_archive, initials_from_name
 except Exception:
-    def archive_once(*_a, **_k):
-        pass
+    def archive_document(**_k):
+        return None
+    def fetch_archive(**_k):
+        return []
     def initials_from_name(name):
         parts = [p for p in str(name or "").replace("_", " ").split() if p]
         return "".join(p[0].upper() for p in parts[:2]) or None
@@ -990,7 +992,6 @@ with tab_past:
                     try:
                         doc_bytes = generate_word_report(rec)
                         fname = f"sensory_{sname.replace(' ','_')}_{ov_date}.docx"
-                        _ini = initials_from_name(sname)
                         st.download_button(
                             "📄 Download Word Report",
                             data=doc_bytes,
@@ -998,9 +999,25 @@ with tab_past:
                             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                             use_container_width=True,
                             key=f"dl_{rec['id']}",
-                            on_click=archive_once,
-                            args=(f"sensory_{rec['id']}",),
-                            kwargs=dict(
+                        )
+                        _ini = initials_from_name(sname)
+                        _prev = fetch_archive(
+                            student_initials=_ini,
+                            doc_type="Sensory Overview",
+                            include_confidential=True,
+                        )
+                        if _prev:
+                            _mode = st.radio(
+                                "A Sensory Overview is already in this "
+                                "student's archive folder:",
+                                ["Replace previous version", "Keep both (add as separate file)"],
+                                key=f"arcmode_{rec['id']}", horizontal=True,
+                            )
+                        else:
+                            _mode = "new"
+                        if st.button("🗄️ Save to Document Archive",
+                                     key=f"arc_{rec['id']}"):
+                            _saved = archive_document(
                                 source_tool="Sensory Overview",
                                 doc_type="Sensory Overview",
                                 title=f"Sensory Overview — {_ini} — {ov_date}",
@@ -1008,8 +1025,12 @@ with tab_past:
                                 filename=f"sensory_{_ini}_{ov_date}.docx",
                                 student_initials=_ini,
                                 created_by=st.session_state.get("user_email", "unknown"),
-                            ),
-                        )
+                                supersede=(_mode == "Replace previous version"),
+                            )
+                            if _saved:
+                                st.success("Saved to the Document Archive"
+                                           + (" (previous version moved to restorable Deleted)"
+                                              if _mode == "Replace previous version" else ""))
                     except Exception as e:
                         st.error(f"Report generation failed: {e}")
 
