@@ -364,6 +364,7 @@ def sync_behaviour_create(initials, program=None, start_date=None,
         if any(not r.get("archived") for r in _behaviour_find(client, ini)):
             return "exists"
         rec = {
+            "id": str(uuid.uuid4()),  # tool's table expects app-supplied IDs
             "name": ini,
             "first_name": ini,
             "last_name": "-",
@@ -381,10 +382,9 @@ def sync_behaviour_create(initials, program=None, start_date=None,
         client.table(BEHAVIOUR_STUDENTS_TABLE).insert(rec).execute()
         return "created"
     except Exception as exc:  # noqa: BLE001
-        st.warning(
-            f"Added to the register, but could not create the student in the "
-            f"Behaviour Analysis tool ({exc}). Add them there via its Admin "
-            "Portal, or tell Claude."
+        st.error(
+            f"⚠️ Added to the register, but NOT to the Behaviour Analysis "
+            f"tool — sync error: {exc}"
         )
         return "failed"
 
