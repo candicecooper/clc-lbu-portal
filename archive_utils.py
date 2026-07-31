@@ -627,6 +627,54 @@ def update_student_initials(record_id: str, old_initials: str, new_initials: str
         return 0
 
 
+def import_from_behaviour(created_by: str = "unknown") -> tuple[int, int, list]:
+    """One-click import: create register entries for every ACTIVE student
+    in the Behaviour Analysis tool who isn't on the register yet.
+    Returns (imported, skipped_existing, problems)."""
+    imported, skipped, problems = 0, 0, []
+    try:
+        client = _get_client()
+        beh = (
+            client.table(BEHAVIOUR_STUDENTS_TABLE)
+            .select("first_name, last_name, name, program, year_level, "
+                    "placement_start, placement_end, enrolled_date, archived")
+            .execute()
+        ).data or []
+        existing = {s["initials"] for s in fetch_register(None)}
+
+        for b in beh:
+            if b.get("archived"):
+                continue
+            raw = f"{b.get('first_name') or ''}{b.get('last_name') or ''}" or (b.get("name") or "")
+            ini = re.sub(r"[^A-Za-z0-9]", "", raw).upper()
+            if len(ini) < 2:
+                problems.append(
+                    f"{b.get('name') or raw or '?'} — initials too short to import"
+                )
+                continue
+            if ini in existing:
+                skipped += 1
+                continue
+            record = {
+                "initials": ini,
+                "program": b.get("program"),
+                "year_level": b.get("year_level"),
+                "notes": None,
+                "created_by": created_by,
+            }
+            start = b.get("placement_start") or b.get("enrolled_date")
+            if start:
+                record["start_date"] = str(start)[:10]
+            if b.get("placement_end"):
+                record["planned_exit_date"] = str(b["placement_end"])[:10]
+            client.table(REGISTER_TABLE).insert(record).execute()
+            existing.add(ini)
+            imported += 1
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Import failed: {exc}")
+    return imported, skipped, problems
+
+
 def register_program_map() -> dict:
     """{initials: program} for every registered student (active and
     archived) — used by the Document Archive to display the program
