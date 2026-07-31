@@ -809,6 +809,28 @@ def merge_register_student(source_id: str, source_initials: str,
     return moved
 
 
+def push_register_to_behaviour() -> tuple[int, int, list]:
+    """Backfill: create a Behaviour Analysis student for every ACTIVE
+    register student not already in its list. Returns
+    (created, already_there, failures)."""
+    created, existed, failures = 0, 0, []
+    for s in fetch_register("active"):
+        result = sync_behaviour_create(
+            s["initials"],
+            s.get("program"),
+            s.get("start_date"),
+            s.get("planned_exit_date"),
+            s.get("year_level"),
+        )
+        if result == "created":
+            created += 1
+        elif result == "exists":
+            existed += 1
+        else:
+            failures.append(s["initials"])
+    return created, existed, failures
+
+
 def register_program_map() -> dict:
     """{initials: program} for every registered student (active and
     archived) — used by the Document Archive to display the program
