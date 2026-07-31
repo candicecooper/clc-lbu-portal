@@ -19,7 +19,6 @@ from archive_utils import (
     download_link_html,
     fetch_archive,
     fetch_register,
-    register_program_map,
     rename_student,
     restore,
     soft_delete,
@@ -80,6 +79,20 @@ def _render_confidential_unlock():
             st.rerun()
         else:
             st.error("🚫 Incorrect password. This area is for CLC Leadership only.")
+
+
+def _student_labels() -> dict:
+    """{initials: 'INI · PROGRAM · Yr N'} for every registered student,
+    so folders display identically everywhere."""
+    labels = {}
+    for s in fetch_register(None):
+        bits = [s["initials"]]
+        if s.get("program"):
+            bits.append(s["program"])
+        if s.get("year_level") is not None:
+            bits.append(f"Yr {s['year_level']}")
+        labels[s["initials"]] = " · ".join(bits)
+    return labels
 
 
 st.title("🗄️ Document Archive")
@@ -196,7 +209,7 @@ with tab_student:
         "document for that student, grouped by type."
     )
 
-    _programs = register_program_map()
+    _labels = _student_labels()
 
     sc1, sc2 = st.columns([1, 3])
     with sc1:
@@ -214,7 +227,7 @@ with tab_student:
             student_initials=ini,
             limit=500,
         )
-        _display = f"{ini} ({_programs[ini]})" if _programs.get(ini) else ini
+        _display = _labels.get(ini, ini)
         if not recs:
             st.info(f"No archived documents found for **{_display}**.")
         else:
@@ -293,20 +306,21 @@ with tab_student:
         directory = []  # (initials, label)
         seen = set()
         for s in active:
+            if s["initials"] in seen:
+                continue  # duplicate register entries — one folder button
             n = counts.get(s["initials"], 0)
-            prog = f" · {s['program']}" if s.get("program") else ""
-            directory.append((s["initials"], f"📁 {s['initials']}{prog} ({n})"))
+            directory.append((s["initials"], f"📁 {_labels.get(s['initials'], s['initials'])} ({n})"))
             seen.add(s["initials"])
         for ini in sorted(counts):
             if ini not in seen:
-                directory.append((ini, f"📁 {ini} ({counts[ini]})"))
+                directory.append((ini, f"📁 {_labels.get(ini, ini)} ({counts[ini]})"))
 
         if directory:
             st.markdown("**Student folders:**")
             cols = st.columns(4)
             for i, (ini, label) in enumerate(directory):
                 with cols[i % 4]:
-                    if st.button(label, key=f"open_{ini}", use_container_width=True):
+                    if st.button(label, key=f"open_{i}_{ini}", use_container_width=True):
                         st.session_state["_sf_pending"] = ini
                         st.rerun()
             st.caption(
@@ -330,8 +344,9 @@ with tab_add:
     )
 
     _active_students = fetch_register("active")
+    _add_labels = _student_labels()
     _student_options = ["— Not student-linked —"] + [
-        f"{s['initials']} — {s.get('program') or ''}".strip(" —") for s in _active_students
+        _add_labels.get(s["initials"], s["initials"]) for s in _active_students
     ] + ["Other (type initials manually)"]
 
     with st.form("manual_archive", clear_on_submit=True):
@@ -361,7 +376,7 @@ with tab_add:
         elif m_student.startswith("Other"):
             m_ini = m_initials_manual.strip().upper() or None
         else:
-            m_ini = m_student.split(" — ")[0]
+            m_ini = m_student.split(" · ")[0].strip()
 
         if not up or not m_title.strip():
             st.warning("A file and a title are both required.")
