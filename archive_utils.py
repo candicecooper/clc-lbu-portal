@@ -147,7 +147,9 @@ def initials_from_name(name) -> str | None:
     Two or more words -> first letter of the first two words (JT).
     Single word -> first two letters (JA), so folders never collapse
     to one letter."""
-    parts = [p for p in str(name or "").replace("_", " ").split() if p]
+    parts = [
+        p for p in re.sub(r"[^A-Za-z0-9 ]", " ", str(name or "")).split() if p
+    ]
     if not parts:
         return None
     if len(parts) == 1:
