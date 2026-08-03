@@ -6,10 +6,12 @@ import streamlit as st
 
 # ── Document Archive integration (fails silently if unavailable) ──────────
 try:
-    from archive_utils import archive_once, initials_from_name
+    from archive_utils import archive_document, fetch_archive, initials_from_name
 except Exception:
-    def archive_once(*_a, **_k):
-        pass
+    def archive_document(**_k):
+        return None
+    def fetch_archive(**_k):
+        return []
     def initials_from_name(name):
         parts = [p for p in str(name or "").replace("_", " ").split() if p]
         return "".join(p[0].upper() for p in parts[:2]) or None
@@ -19,9 +21,13 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import date, timedelta, datetime
 
-from auth import require_auth, logout_button, get_staff_name
-require_auth(app_title="CLC LBU Staff Portal", app_icon="🏫")
-logout_button()
+from auth import require_staff_auth, staff_logout_button
+require_staff_auth("CLC LBU Staff Portal", "🏫")
+staff_logout_button()
+
+def get_staff_name():
+    """Get the current staff member's name from session state (manual entry)."""
+    return st.session_state.get("ist_staff_name", "")
 
 TEAL  = "#1A6B8A"
 AMBER = "#D4860A"
@@ -115,61 +121,7 @@ OUTCOMES = {
     "passive_observation": {"label": "Passive observation", "short": "PO", "bg": "#dcfce7", "fg": "#16a34a"},
 }
 
-# ── Saves log vocabulary (prevention / de-escalation) ────────────────────────
-# A "save" = an early escalation sign was caught, a support applied, an outcome
-# followed. Lists below drive the tap-chips; edit freely to match site language.
-SAVE_SIGNS = [
-    "Pacing / restless", "Raised voice", "Fidgeting", "Verbal refusal",
-    "Withdrawing / quiet", "Seeking to leave", "Physical tension",
-    "Escalating language", "Sensory overwhelm",
-]
 
-SAVE_SUPPORTS = [
-    # Relational / co-regulation
-    "Co-regulation / calm presence", "Emotion coaching / PACE",
-    # Movement & body
-    "Movement break", "Walk and talk", "Food / drink",
-    # Task & demand
-    "Reduced demand", "Task paused", "Offered choice",
-    "Preferred activity", "Group task change",
-    # Environment & sensory
-    "Change of space", "Quiet / retreat space",
-    "Sensory tool", "Reduced sensory input", "Visual support / cue",
-    # People & staffing
-    "1:1 SSO", "1:1 Teacher", "Carer support",
-    "Intentional parent engagement", "Leadership support",
-]
-
-SAVE_OUTCOMES = {
-    "returned_to_window": {"label": "Returned to window", "emoji": "🟢", "bg": "#dcfce7", "fg": "#16a34a", "success": True},
-    "held_in_coping":     {"label": "Held in coping",     "emoji": "🟡", "bg": "#fef9c3", "fg": "#ca8a04", "success": True},
-    "escalated_anyway":   {"label": "Escalated anyway",   "emoji": "🔴", "bg": "#fee2e2", "fg": "#dc2626", "success": False},
-}
-
-
-def multi_select_widget(label, options, key, default=None):
-    """Tappable multi-select. Prefers st.pills, falls back to multiselect."""
-    default = default or []
-    if hasattr(st, "pills"):
-        return st.pills(label, options, selection_mode="multi", default=default,
-                        key=key, label_visibility="collapsed") or []
-    return st.multiselect(label, options, default=default, key=key, label_visibility="collapsed")
-
-
-def single_choice_widget(label, options, key, default=None):
-    """Tappable single-select. Prefers segmented_control, then pills, then radio."""
-    if hasattr(st, "segmented_control"):
-        return st.segmented_control(label, options, selection_mode="single", default=default,
-                                    key=key, label_visibility="collapsed")
-    if hasattr(st, "pills"):
-        return st.pills(label, options, selection_mode="single", default=default,
-                        key=key, label_visibility="collapsed")
-    idx = options.index(default) if default in options else None
-    return st.radio(label, options, index=idx, key=key,
-                    horizontal=True, label_visibility="collapsed")
-
-
-@st.cache_resource
 def get_sb():
     try:
         from supabase import create_client
@@ -178,7 +130,6 @@ def get_sb():
         return None
 
 
-@st.cache_data(ttl=60)
 def load_known_students():
     """Returns students with interval data, excluding archived ones."""
     sb = get_sb()
@@ -199,7 +150,6 @@ def load_known_students():
         return []
 
 
-@st.cache_data(ttl=60)
 def load_week_obs(student_name, week_start, week_end):
     sb = get_sb()
     if not sb: return pd.DataFrame()
@@ -217,7 +167,6 @@ def load_week_obs(student_name, week_start, week_end):
         st.error("Load error: " + str(e)); return pd.DataFrame()
 
 
-@st.cache_data(ttl=60)
 def load_all_obs(student_name):
     sb = get_sb()
     if not sb: return pd.DataFrame()
@@ -233,13 +182,6 @@ def load_all_obs(student_name):
         return df
     except Exception:
         return pd.DataFrame()
-
-
-def _bust_obs_caches():
-    """Clear caches affected by writes to interval_support_observations."""
-    for fn in (load_week_obs, load_all_obs, load_known_students, get_expected_intervals):
-        try: fn.clear()
-        except Exception: pass
 
 
 def upsert_field(student_name, sel_date, sel_day, sel_time, field, value):
@@ -263,7 +205,6 @@ def upsert_field(student_name, sel_date, sel_day, sel_time, field, value):
                 field:          value,
                 "created_by":   get_staff_name(),
             }).execute()
-        _bust_obs_caches()
         return True
     except Exception as e:
         st.error("Save failed: " + str(e)); return False
@@ -276,12 +217,10 @@ def clear_interval(student_name, sel_date, sel_time):
         sb.table("interval_support_observations").delete()\
           .eq("student_name", student_name).eq("obs_date", sel_date.isoformat())\
           .eq("time_slot", sel_time).execute()
-        _bust_obs_caches()
     except Exception:
         pass
 
 
-@st.cache_data(ttl=60)
 def get_student_time_window(student_name):
     """Get custom time window for student. Returns (start_time, end_time) or None."""
     sb = get_sb()
@@ -320,9 +259,6 @@ def set_student_time_window(student_name, start_time, end_time):
                 "start_time": start_time,
                 "end_time": end_time,
             }).execute()
-        try:
-            get_student_time_window.clear(); get_expected_intervals.clear()
-        except Exception: pass
         return True
     except Exception as e:
         error_msg = str(e)
@@ -333,7 +269,6 @@ def set_student_time_window(student_name, start_time, end_time):
         return False
 
 
-@st.cache_data(ttl=60)
 def get_day_status(student_name, obs_date):
     """Get status for a specific day (absent/holiday/etc). Returns status string or None."""
     sb = get_sb()
@@ -377,9 +312,6 @@ def set_day_status(student_name, obs_date, status):
                     "obs_date": obs_date.isoformat(),
                     "status": status,
                 }).execute()
-        try:
-            get_day_status.clear(); get_expected_intervals.clear()
-        except Exception: pass
         return True
     except Exception as e:
         error_msg = str(e)
@@ -410,7 +342,6 @@ def paste_interval_data(student_name, sel_date, sel_day, sel_time):
     return True
 
 
-@st.cache_data(ttl=60)
 def get_expected_intervals(student_name, date_from, date_to):
     """
     Calculate expected intervals based on:
@@ -448,7 +379,6 @@ def get_expected_intervals(student_name, date_from, date_to):
     return expected_intervals, attendance_days, total_days, non_attendance_info
 
 
-@st.cache_data(ttl=60)
 def get_daily_note(student_name, obs_date):
     """Get anecdotal note for a specific day. Returns note text or None."""
     sb = get_sb()
@@ -491,9 +421,6 @@ def set_daily_note(student_name, obs_date, note):
                     "obs_date": obs_date.isoformat(),
                     "note": note.strip(),
                 }).execute()
-        try:
-            get_daily_note.clear(); get_all_daily_notes.clear()
-        except Exception: pass
         return True
     except Exception as e:
         if "PGRST205" in str(e) or "schema cache" in str(e):
@@ -503,7 +430,6 @@ def set_daily_note(student_name, obs_date, note):
         return False
 
 
-@st.cache_data(ttl=60)
 def get_all_daily_notes(student_name, date_from, date_to):
     """Get all daily notes for a date range. Returns dict {date: note}."""
     sb = get_sb()
@@ -527,77 +453,6 @@ def get_all_daily_notes(student_name, date_from, date_to):
         return {}
 
 
-# ── Saves (prevention / de-escalation) ──────────────────────────────────────
-def insert_save(student_name, sel_date, save_time, time_slot, signs, supports, outcome, note):
-    sb = get_sb()
-    if not sb: return False
-    try:
-        sb.table("interval_saves").insert({
-            "student_name": student_name,
-            "obs_date":     sel_date.isoformat(),
-            "save_time":    save_time,
-            "time_slot":    time_slot,
-            "early_sign":   ", ".join(signs),
-            "support_used": ", ".join(supports),
-            "outcome":      outcome,
-            "notes":        note.strip() if note else "",
-            "created_by":   get_staff_name(),
-        }).execute()
-        try:
-            load_saves_day.clear(); load_all_saves.clear()
-        except Exception: pass
-        return True
-    except Exception as e:
-        es = str(e)
-        if "PGRST205" in es or "schema cache" in es:
-            st.error("Saves table not found — run interval_saves_table.sql in Supabase first.")
-        else:
-            st.error("Save failed: " + es)
-        return False
-
-
-@st.cache_data(ttl=60)
-def load_saves_day(student_name, sel_date):
-    sb = get_sb()
-    if not sb: return []
-    try:
-        res = (sb.table("interval_saves").select("*")
-               .eq("student_name", student_name)
-               .eq("obs_date", sel_date.isoformat())
-               .order("save_time").execute())
-        return res.data or []
-    except Exception:
-        return []
-
-
-@st.cache_data(ttl=60)
-def load_all_saves(student_name):
-    sb = get_sb()
-    if not sb: return pd.DataFrame()
-    try:
-        res = (sb.table("interval_saves").select("*")
-               .eq("student_name", student_name)
-               .order("obs_date").execute())
-        df = pd.DataFrame(res.data) if res.data else pd.DataFrame()
-        if not df.empty:
-            df["obs_date_dt"] = pd.to_datetime(df["obs_date"])
-        return df
-    except Exception:
-        return pd.DataFrame()
-
-
-def delete_save(save_id):
-    sb = get_sb()
-    if not sb: return
-    try:
-        sb.table("interval_saves").delete().eq("id", save_id).execute()
-        try:
-            load_saves_day.clear(); load_all_saves.clear()
-        except Exception: pass
-    except Exception:
-        pass
-
-
 # ── Session state ─────────────────────────────────────────────────────────────
 ss = st.session_state
 for k, v in [
@@ -612,15 +467,41 @@ for k, v in [
 
 st.markdown("""
 <div class="clc-header">
-  <h2>🔵 Interval Support Tracker
-    <span style="background:#16a34a;color:white;font-size:.6rem;font-weight:700;
-                 padding:.15rem .5rem;border-radius:10px;vertical-align:middle;
-                 margin-left:.5rem;">BUILD C · Quick + Grid entry</span>
-  </h2>
+  <h2>🔵 Interval Support Tracker</h2>
   <p>Window of Tolerance — regulation state &amp; support per 15-minute interval
   &nbsp;·&nbsp; CLC Learning &amp; Behaviour Unit</p>
 </div>
 """, unsafe_allow_html=True)
+
+# ── Staff name entry (session-based, once per browser session) ────────────────
+if "ist_staff_name" not in ss:
+    ss.ist_staff_name = ""
+
+if not ss.ist_staff_name:
+    name_col1, name_col2 = st.columns([3, 1])
+    with name_col1:
+        staff_name_input = st.text_input(
+            "👤 Your name (staff member recording this data)",
+            key="ist_staff_name_input",
+            placeholder="Enter your name to begin"
+        )
+    with name_col2:
+        st.markdown("<div style='margin-top:1.6rem;'></div>", unsafe_allow_html=True)
+        if st.button("✅ Continue", key="ist_staff_name_confirm", type="primary", use_container_width=True):
+            if staff_name_input.strip():
+                ss.ist_staff_name = staff_name_input.strip()
+                st.rerun()
+            else:
+                st.warning("Please enter your name to continue.")
+    st.stop()
+else:
+    name_bar_col1, name_bar_col2 = st.columns([5, 1])
+    with name_bar_col1:
+        st.caption(f"👤 Recording as: **{ss.ist_staff_name}**")
+    with name_bar_col2:
+        if st.button("Change", key="ist_staff_name_change"):
+            ss.ist_staff_name = ""
+            st.rerun()
 
 # ── Student selector ──────────────────────────────────────────────────────────
 known = load_known_students()
@@ -707,7 +588,6 @@ with st.expander("🗄️ Archive / manage student data", expanded=False):
                                 {"student_name": arch_name, "archived": True},
                                 on_conflict="student_name"
                             ).execute()
-                            _bust_obs_caches()
                             if ss.ist_name == arch_name:
                                 ss.ist_name = ""
                             st.success(f"✅ {arch_name} archived.")
@@ -736,7 +616,6 @@ with st.expander("🗄️ Archive / manage student data", expanded=False):
                                       .eq("student_name", arch_name).execute()
                                 except Exception:
                                     pass
-                                _bust_obs_caches()
                                 ss.pop("ist_confirm_del", None)
                                 if ss.ist_name == arch_name:
                                     ss.ist_name = ""
@@ -773,7 +652,6 @@ with st.expander("🗄️ Archive / manage student data", expanded=False):
                             sb.table("interval_archived_students").update(
                                 {"archived": False}
                             ).eq("student_name", aname).execute()
-                            _bust_obs_caches()
                             st.success(f"✅ {aname} restored.")
                             st.rerun()
                         except Exception as e:
@@ -910,205 +788,289 @@ with t_record:
     sel_day  = ss.ist_sel_day
     sel_date = week_start + timedelta(days=DAYS.index(sel_day))
 
-    # ── Field label/key maps ──────────────────────────────────────────────
-    REG_LABELS = [c["label"] for c in REG_STATES.values()]
-    REG_L2K    = {c["label"]: k for k, c in REG_STATES.items()}
-    REG_K2L    = {k: c["label"] for k, c in REG_STATES.items()}
-    GRP_LABELS = list(GROUPING_TYPES.values())
-    GRP_L2K    = {v: k for k, v in GROUPING_TYPES.items()}
-    GRP_K2L    = {k: v for k, v in GROUPING_TYPES.items()}
-    OUT_LABELS = [c["label"] for c in OUTCOMES.values()]
-    OUT_L2K    = {c["label"]: k for k, c in OUTCOMES.items()}
-    OUT_K2L    = {k: c["label"] for k, c in OUTCOMES.items()}
-
-    # Slots limited to the student's recording window
-    student_window = get_student_time_window(student_name)
-    if student_window and student_window[0] and student_window[1] \
-       and student_window[0] in SLOT_TIMES and student_window[1] in SLOT_TIMES:
-        s_i = SLOT_TIMES.index(student_window[0]); e_i = SLOT_TIMES.index(student_window[1])
-        display_slots = SLOT_TIMES[s_i:e_i + 1]
-    else:
-        display_slots = SLOT_TIMES
-    if ss.ist_sel_time not in display_slots:
-        ss.ist_sel_time = display_slots[0]
-    sel_time = ss.ist_sel_time
-
-    # Compact legend
+    # ── Legend ────────────────────────────────────────────────────────────
     leg_parts = " &nbsp;".join(
-        f'<span style="background:{v["bg"]};color:{v["fg"]};padding:.05rem .35rem;'
-        f'border-radius:5px;font-weight:700;font-size:.62rem;">{v["short"]}</span>'
-        f'<span style="font-size:.62rem;color:#475569;"> {v["label"]}</span>'
-        for v in REG_STATES.values())
-    st.markdown(f'<div style="margin:.1rem 0 .35rem;display:flex;flex-wrap:wrap;gap:.2rem;">'
+        f'<span style="background:{v["bg"]};color:{v["fg"]};padding:.1rem .4rem;'
+        f'border-radius:6px;font-weight:700;font-size:.68rem;">{v["short"]}</span>'
+        f'<span style="font-size:.68rem;color:#475569;"> {v["emoji"]} {v["label"]}</span>'
+        for v in REG_STATES.values()
+    )
+    st.markdown(f'<div style="margin:.15rem 0 .4rem;display:flex;flex-wrap:wrap;gap:.25rem;">'
                 f'{leg_parts}</div>', unsafe_allow_html=True)
 
-    # ── Day picker (stable options) ────────────────────────────────────────
-    day_short = [d[:3] for d in DAYS]
-    picked_day = single_choice_widget("Day", day_short, "ist_day_pick", default=sel_day[:3])
-    if picked_day and DAYS[day_short.index(picked_day)] != ss.ist_sel_day:
-        ss.ist_sel_day = DAYS[day_short.index(picked_day)]
-        st.rerun()
-    sel_day  = ss.ist_sel_day
-    sel_date = week_start + timedelta(days=DAYS.index(sel_day))
-
-    # ── Entry mode toggle ──────────────────────────────────────────────────
-    mode = single_choice_widget("Mode", ["⚡ Quick", "📋 Grid"], "ist_entry_mode",
-                                default="⚡ Quick") or "⚡ Quick"
-
-    # ════════════════════════════════════════════════════════════════════════
-    # GRID MODE — whole day in a table, save once
-    # ════════════════════════════════════════════════════════════════════════
-    if mode == "📋 Grid":
-        st.caption(f"Fill the day top to bottom, then **Save day** once — no reload between cells. "
-                   f"Editing **{sel_day} {sel_date.strftime('%-d %b')}**.")
-        rows = []
-        for t in display_slots:
-            c = cell_data.get(t, {}).get(sel_day, {})
-            acts = [a.strip() for a in (c.get("activity_types", "") or "").split(",") if a.strip()]
-            rows.append({
-                "Time":       t,
-                "Regulation": REG_K2L.get(c.get("regulated", "") or "", ""),
-                "Grouping":   GRP_K2L.get(c.get("grouping_type", "") or "", ""),
-                "Activity":   acts[0] if acts else "",
-                "Behaviour":  OUT_K2L.get(c.get("outcome", "") or "", ""),
-            })
-        grid_df = pd.DataFrame(rows)
-        edited = st.data_editor(
-            grid_df, key=f"ist_grid_{sel_day}_{sel_date}", hide_index=True,
-            use_container_width=True, num_rows="fixed",
-            column_config={
-                "Time":       st.column_config.TextColumn("Time", disabled=True, width="small"),
-                "Regulation": st.column_config.SelectboxColumn("Regulation", options=[""] + REG_LABELS, width="medium"),
-                "Grouping":   st.column_config.SelectboxColumn("Grouping", options=[""] + GRP_LABELS, width="medium"),
-                "Activity":   st.column_config.SelectboxColumn("Activity", options=[""] + ACTIVITY_TYPES, width="medium"),
-                "Behaviour":  st.column_config.SelectboxColumn("Behaviour", options=[""] + OUT_LABELS, width="medium"),
-            },
-        )
-        st.caption("Grid sets a single activity per slot; use Quick mode for multiple activities on one interval.")
-        if st.button("💾  Save day", key="ist_grid_save", type="primary", use_container_width=True):
-            n = 0
-            for i, t in enumerate(display_slots):
-                o = grid_df.iloc[i]; nw = edited.iloc[i]
-                if nw["Regulation"] != o["Regulation"]:
-                    upsert_field(student_name, sel_date, sel_day, t, "regulated", REG_L2K.get(nw["Regulation"], "")); n += 1
-                if nw["Grouping"] != o["Grouping"]:
-                    upsert_field(student_name, sel_date, sel_day, t, "grouping_type", GRP_L2K.get(nw["Grouping"], "")); n += 1
-                if nw["Activity"] != o["Activity"]:
-                    upsert_field(student_name, sel_date, sel_day, t, "activity_types", nw["Activity"] or ""); n += 1
-                if nw["Behaviour"] != o["Behaviour"]:
-                    upsert_field(student_name, sel_date, sel_day, t, "outcome", OUT_L2K.get(nw["Behaviour"], "")); n += 1
-            st.success(f"✅ Saved {n} change(s) for {sel_day}")
-            st.rerun()
-
-    # ════════════════════════════════════════════════════════════════════════
-    # QUICK MODE — one interval, big targets, save & next
-    # ════════════════════════════════════════════════════════════════════════
+    # ════════════════════════════════════════════════════════════════════
+    # INTERACTIVE GRID — each cell is a Streamlit button
+    # ════════════════════════════════════════════════════════════════════
+    
+    # Filter time slots based on student settings
+    student_window = get_student_time_window(student_name)
+    if student_window and student_window[0] and student_window[1]:
+        start_idx = SLOT_TIMES.index(student_window[0]) if student_window[0] in SLOT_TIMES else 0
+        end_idx = SLOT_TIMES.index(student_window[1]) if student_window[1] in SLOT_TIMES else len(SLOT_TIMES)-1
+        display_slots = SLOT_TIMES[start_idx:end_idx+1]
     else:
-        idx = display_slots.index(sel_time) if sel_time in display_slots else 0
-
-        def _fmt_slot(t):
-            return ("✓ " if cell_data.get(t, {}).get(sel_day, {}).get("regulated") else "") + t
-
-        sc1, sc2, sc3 = st.columns([1, 4, 1])
-        with sc1:
-            if st.button("◀", key="ist_slot_prev", use_container_width=True, disabled=(idx == 0)):
-                ss.ist_sel_time = display_slots[idx - 1]; st.rerun()
-        with sc2:
-            pick = st.selectbox("Slot", display_slots, index=idx, format_func=_fmt_slot,
-                                label_visibility="collapsed")
-            if pick != sel_time:
-                ss.ist_sel_time = pick; st.rerun()
-        with sc3:
-            if st.button("▶", key="ist_slot_next", use_container_width=True,
-                         disabled=(idx >= len(display_slots) - 1)):
-                ss.ist_sel_time = display_slots[idx + 1]; st.rerun()
-
-        cur = cell_data.get(sel_time, {}).get(sel_day, {})
-        cur_reg_l = REG_K2L.get(cur.get("regulated", "") or "", None)
-        cur_grp_l = GRP_K2L.get(cur.get("grouping_type", "") or "", None)
-        cur_out_l = OUT_K2L.get(cur.get("outcome", "") or "", None)
-        cur_acts  = [a.strip() for a in (cur.get("activity_types", "") or "").split(",") if a.strip()]
-        done = "✓ recorded" if cur.get("regulated") else "not yet recorded"
-        done_col = "#16a34a" if cur.get("regulated") else "#94a3b8"
+        display_slots = SLOT_TIMES
+    
+    hdr_cols = st.columns([1.2] + [1]*5)
+    with hdr_cols[0]:
         st.markdown(
-            f'<div style="font-weight:700;color:{TEAL};margin:.2rem 0 .1rem;">'
-            f'📍 {sel_time} · {sel_day} {sel_date.strftime("%-d %b")} '
-            f'<span style="font-weight:600;font-size:.72rem;color:{done_col};">— {done}</span></div>',
-            unsafe_allow_html=True)
+            '<div style="font-size:.68rem;font-weight:700;color:white;'
+            'background:#1A6B8A;border-radius:6px;padding:.3rem .4rem;'
+            'text-align:center;">Time</div>', unsafe_allow_html=True)
+    for di, d in enumerate(DAYS):
+        d_date   = week_start + timedelta(days=di)
+        day_status = get_day_status(student_name, d_date)
+        is_td    = (d == today_day and is_this)
+        is_sd    = (d == sel_day)
+        bg       = "#0f3d5c" if is_td else ("#1d5a7a" if is_sd else "#1A6B8A")
+        border   = "3px solid #fbbf24" if is_sd else "none"
+        
+        # Add status badge if day is marked
+        status_badge = ""
+        if day_status:
+            status_badge = f'<br><span style="background:#fbbf24;color:#78350f;font-size:.55rem;padding:.05rem .3rem;border-radius:3px;font-weight:600;">{day_status.upper()}</span>'
+        
+        with hdr_cols[di+1]:
+            st.markdown(
+                f'<div style="font-size:.68rem;font-weight:700;color:white;'
+                f'background:{bg};border-radius:6px;padding:.3rem .4rem;'
+                f'text-align:center;border:{border};">'
+                f'{d[:3]}<br><span style="font-weight:400;font-size:.6rem;">'
+                f'{d_date.strftime("%-d/%m")}</span>{status_badge}</div>',
+                unsafe_allow_html=True)
 
-        ks = f"{sel_time}_{sel_day}"
-        with st.form(f"ist_quick_{ks}", border=True):
-            st.markdown('<div style="font-size:.66rem;font-weight:700;color:#1A6B8A;">REGULATION STATE</div>', unsafe_allow_html=True)
-            q_reg = single_choice_widget("Regulation", REG_LABELS, f"ist_q_reg_{ks}", default=cur_reg_l)
-            st.markdown('<div style="font-size:.66rem;font-weight:700;color:#1A6B8A;margin-top:.35rem;">GROUPING</div>', unsafe_allow_html=True)
-            q_grp = single_choice_widget("Grouping", GRP_LABELS, f"ist_q_grp_{ks}", default=cur_grp_l)
-            st.markdown('<div style="font-size:.66rem;font-weight:700;color:#1A6B8A;margin-top:.35rem;">ACTIVITY <span style="font-weight:400;">(tap multiple)</span></div>', unsafe_allow_html=True)
-            q_act = multi_select_widget("Activity", ACTIVITY_TYPES, f"ist_q_act_{ks}", default=cur_acts)
-            st.markdown('<div style="font-size:.66rem;font-weight:700;color:#1A6B8A;margin-top:.35rem;">OBSERVABLE BEHAVIOUR</div>', unsafe_allow_html=True)
-            q_out = single_choice_widget("Behaviour", OUT_LABELS, f"ist_q_out_{ks}", default=cur_out_l)
-            bq1, bq2 = st.columns([3, 2])
-            with bq1:
-                save_next = st.form_submit_button("💾  Save & next ▶", use_container_width=True, type="primary")
-            with bq2:
-                save_stay = st.form_submit_button("💾  Save", use_container_width=True)
+    for t in display_slots:
+        row_cols = st.columns([1.2] + [1]*5)
 
-        if save_next or save_stay:
-            def _w(field, newval, oldval):
-                if (newval or "") != (oldval or ""):
-                    upsert_field(student_name, sel_date, sel_day, sel_time, field, newval or "")
-            _w("regulated",      REG_L2K.get(q_reg, ""),      cur.get("regulated", ""))
-            _w("grouping_type",  GRP_L2K.get(q_grp, ""),      cur.get("grouping_type", ""))
-            _w("activity_types", ",".join(q_act or []),       cur.get("activity_types", ""))
-            _w("outcome",        OUT_L2K.get(q_out, ""),      cur.get("outcome", ""))
-            if save_next and idx < len(display_slots) - 1:
-                ss.ist_sel_time = display_slots[idx + 1]
-            st.success("✅ Saved")
-            st.rerun()
+        is_sel_time = (t == sel_time)
+        with row_cols[0]:
+            st.markdown(
+                f'<div style="font-size:.72rem;font-weight:{"700" if is_sel_time else "500"};'
+                f'color:{TEAL if is_sel_time else "#475569"};'
+                f'background:{"#EBF4F9" if is_sel_time else "#f8fafc"};'
+                f'border-radius:6px;padding:.28rem .4rem;text-align:center;'
+                f'border:{"1.5px solid "+TEAL if is_sel_time else "1px solid #e2e8f0"};">'
+                f'{t}</div>', unsafe_allow_html=True)
 
-        # Copy / paste / clear (outside the form — buttons can't live in a form)
-        qc1, qc2, qc3 = st.columns(3)
-        with qc1:
-            if cur.get("regulated") and st.button("📋 Copy", key=f"ist_copy_{ks}", use_container_width=True):
-                copy_interval_data(cur); st.rerun()
-        with qc2:
-            if ss.ist_copied_interval and st.button("📥 Paste here", key=f"ist_paste_{ks}",
-                                                     use_container_width=True, type="primary"):
-                paste_interval_data(student_name, sel_date, sel_day, sel_time)
-                ss.ist_copied_interval = None; st.rerun()
-        with qc3:
-            if cur.get("regulated") and st.button("🗑️ Clear", key=f"ist_clear_{ks}", use_container_width=True):
-                clear_interval(student_name, sel_date, sel_time); st.rerun()
-        if ss.ist_copied_interval:
-            st.caption("📋 An interval is copied — open any slot and tap **Paste here**.")
-
-    # ── Week overview (read-only heatmap) ──────────────────────────────────
-    with st.expander("📅 Week overview (read-only)", expanded=False):
-        hc = st.columns([1.1] + [1] * 5)
-        with hc[0]:
-            st.markdown('<div style="font-size:.6rem;font-weight:700;color:white;background:#1A6B8A;'
-                        'border-radius:5px;padding:.2rem;text-align:center;">Time</div>', unsafe_allow_html=True)
         for di, d in enumerate(DAYS):
-            with hc[di + 1]:
-                is_sd = (d == sel_day)
-                st.markdown(f'<div style="font-size:.6rem;font-weight:700;color:white;'
-                            f'background:{"#0f3d5c" if is_sd else "#1A6B8A"};border-radius:5px;'
-                            f'padding:.2rem;text-align:center;">{d[:3]}<br>'
-                            f'<span style="font-weight:400;">{day_dates[d]}</span></div>', unsafe_allow_html=True)
-        for t in display_slots:
-            rc = st.columns([1.1] + [1] * 5)
-            with rc[0]:
-                st.markdown(f'<div style="font-size:.62rem;color:#475569;text-align:center;'
-                            f'padding:.15rem;">{t}</div>', unsafe_allow_html=True)
-            for di, d in enumerate(DAYS):
-                c = cell_data.get(t, {}).get(d, {})
-                reg = c.get("regulated", "") or ""
-                cfg = REG_STATES.get(reg, {})
-                bg = cfg.get("bg", "#f8fafc"); fg = cfg.get("fg", "#cbd5e1")
-                txt = cfg.get("short", "·") if reg else "·"
-                with rc[di + 1]:
-                    st.markdown(f'<div style="font-size:.62rem;font-weight:700;color:{fg};'
-                                f'background:{bg};border-radius:5px;padding:.15rem;text-align:center;">'
-                                f'{txt}</div>', unsafe_allow_html=True)
+            cell    = cell_data.get(t,{}).get(d,{})
+            reg     = cell.get("regulated","") or ""
+            grp     = cell.get("grouping_type","") or ""
+            cfg     = REG_STATES.get(reg,{})
+            is_this_cell = (t == sel_time and d == sel_day)
+
+            if reg:
+                bg_c   = cfg.get("bg","#f1f5f9")
+                fg_c   = cfg.get("fg","#334155")
+                sh     = cfg.get("short","·")
+                grp_lbl = GROUPING_TYPES.get(grp,"")[:3] if grp else ""
+                cell_txt = sh + ("\n" + grp_lbl if grp_lbl else "")
+            else:
+                bg_c   = "#f8fafc"
+                fg_c   = "#cbd5e1"
+                cell_txt = "·"
+
+            with row_cols[di+1]:
+                btn_clicked = st.button(
+                    cell_txt,
+                    key=f"gc_{t}_{d}",
+                    use_container_width=True,
+                    help=f"{t} {d} — {cfg.get('label','(empty)')} {GROUPING_TYPES.get(grp,'')}" if reg else f"{t} {d} — tap to record",
+                )
+                if btn_clicked:
+                    ss.ist_sel_time = t
+                    ss.ist_sel_day  = d
+                    st.rerun()
+
+    st.markdown("---")
+
+    # ════════════════════════════════════════════════════════════════════
+    # RECORDING CARD for selected cell
+    # ════════════════════════════════════════════════════════════════════
+    
+    # Show paste prompt if data is copied
+    if ss.ist_copied_interval:
+        paste_col1, paste_col2 = st.columns([3, 1])
+        with paste_col1:
+            copied_reg = ss.ist_copied_interval.get("regulated", "")
+            reg_cfg = REG_STATES.get(copied_reg, {})
+            st.markdown(
+                f'<div style="background:#dcfce7;border:2px solid #16a34a;'
+                f'border-radius:8px;padding:.4rem .8rem;margin-bottom:.5rem;font-size:.85rem;">'
+                f'<span style="font-weight:700;color:#16a34a;">📋 Ready to paste:</span> '
+                f'{reg_cfg.get("emoji", "")} {reg_cfg.get("label", "(data copied)")}'
+                f'</div>', unsafe_allow_html=True)
+        with paste_col2:
+            if st.button("❌ Cancel", key="paste_cancel", use_container_width=True, type="secondary"):
+                ss.ist_copied_interval = None
+                st.rerun()
+    
+    cur_cell = cell_data.get(sel_time,{}).get(sel_day,{})
+    cur_reg  = cur_cell.get("regulated","") or ""
+    cur_out  = cur_cell.get("outcome","") or ""
+    cur_grp  = cur_cell.get("grouping_type","") or ""
+    cur_acts = [a.strip() for a in (cur_cell.get("activity_types","") or "").split(",") if a.strip()]
+    cfg_cur  = REG_STATES.get(cur_reg,{})
+
+    banner_fg = cfg_cur.get("fg", TEAL) if cur_reg else TEAL
+    banner_bg = cfg_cur.get("bg", "#EBF4F9") if cur_reg else "#EBF4F9"
+
+    st.markdown(
+        f'<div style="background:{banner_fg if ss.ist_copied_interval else banner_bg};'
+        f'border:2px solid {banner_fg};'
+        f'border-radius:10px;padding:.5rem 1rem;margin-bottom:.5rem;">'
+        f'<span style="font-size:.95rem;font-weight:700;color:{"white" if ss.ist_copied_interval else banner_fg};">'
+        f'📍 {sel_time} · {sel_day} {sel_date.strftime("%-d %b")}'
+        + (f'</span> &nbsp;<span style="font-weight:600;color:{"white" if ss.ist_copied_interval else banner_fg};">'
+           f'{cfg_cur.get("emoji","")} {cfg_cur.get("label","")}</span>' if cur_reg else
+           '</span> <span style="color:#94a3b8;font-size:.8rem;">— tap a field to record</span>')
+        + '</div>', unsafe_allow_html=True)
+
+    st.markdown(
+        '<div style="background:white;border:1px solid #e2e8f0;border-radius:10px;padding:.6rem .9rem;">',
+        unsafe_allow_html=True)
+
+    fa1, fa2 = st.columns(2)
+    with fa1:
+        st.markdown('<div style="font-size:.65rem;font-weight:700;color:#1A6B8A;margin-bottom:.1rem;">'
+                    'REGULATION STATE</div>', unsafe_allow_html=True)
+        # Behaviour guide — shows on hover via CSS title, plus a compact visual reference
+        st.markdown("""
+<style>
+.reg-guide { display:flex; flex-direction:column; gap:3px; margin-bottom:.4rem; }
+.reg-tip {
+    font-size:.65rem; padding:.25rem .45rem; border-radius:5px;
+    cursor:default; line-height:1.4; position:relative;
+}
+.reg-tip .eg { color:#64748b; font-style:italic; }
+</style>
+<div class="reg-guide">
+  <div class="reg-tip" style="background:#dcfce7;border-left:3px solid #16a34a;" title="On task · Following instructions · Engaged · Calm body · Responding appropriately">
+    <span style="font-weight:700;color:#16a34a;">🟢 In window</span>
+    <span class="eg"> — on task, following instructions, engaged, calm body</span>
+  </div>
+  <div class="reg-tip" style="background:#fef9c3;border-left:3px solid #ca8a04;" title="Fidgeting · Tapping · Rocking · Making noises · Ignoring · Moving around · Avoiding · Restless">
+    <span style="font-weight:700;color:#ca8a04;">🟡 Coping</span>
+    <span class="eg"> — fidgeting, tapping, noises, ignoring, restless, avoiding</span>
+  </div>
+  <div class="reg-tip" style="background:#fee2e2;border-left:3px solid #dc2626;" title="Physiological: dilated pupils · dry mouth · shallow breathing · faster heartbeat · sweating · tensed muscles | Behavioural: agitated movement · unable to find stillness · hyper-vigilant · impulsive · emotionally flooded · reactive · defensive · self-destructive">
+    <span style="font-weight:700;color:#dc2626;">🔴 Hyperaroused</span>
+    <span class="eg"> — agitated, impulsive, reactive, hyper-vigilant, can't find stillness</span>
+  </div>
+  <div class="reg-tip" style="background:#dbeafe;border-left:3px solid #2563eb;" title="Staring blankly · Non-responsive · Slumped · Very slow · Head down · Zoned out · Mute · Shutdown">
+    <span style="font-weight:700;color:#2563eb;">🔵 Hypoaroused</span>
+    <span class="eg"> — staring, non-responsive, slumped, zoned out, shutdown</span>
+  </div>
+</div>
+<div style="font-size:.62rem;color:#94a3b8;margin-bottom:.35rem;">👆 Hover over each for more examples · then click a button to record</div>
+""", unsafe_allow_html=True)
+        for val, cfg in REG_STATES.items():
+            is_sel = (cur_reg == val)
+            col_a, col_b = st.columns([5,1]) if is_sel else [st.container(), None]
+            if col_b is None:
+                if st.button(cfg["emoji"]+" "+cfg["label"],
+                             key=f"rf_{val}_{sel_time}_{sel_day}",
+                             use_container_width=True,
+                             type="secondary", help=cfg["desc"]):
+                    upsert_field(student_name, sel_date, sel_day, sel_time,
+                                 "regulated", val); st.rerun()
+            else:
+                with col_a:
+                    if st.button(cfg["emoji"]+" "+cfg["label"],
+                                 key=f"rf_{val}_{sel_time}_{sel_day}",
+                                 use_container_width=True,
+                                 type="primary", help=cfg["desc"]):
+                        upsert_field(student_name, sel_date, sel_day, sel_time,
+                                     "regulated", ""); st.rerun()
+                with col_b:
+                    pass
+
+    with fa2:
+        st.markdown('<div style="font-size:.65rem;font-weight:700;color:#1A6B8A;margin-bottom:.1rem;">'
+                    'GROUPING</div>', unsafe_allow_html=True)
+        for val, lbl in GROUPING_TYPES.items():
+            is_sel = (cur_grp == val)
+            if st.button(lbl, key=f"gf_{val}_{sel_time}_{sel_day}",
+                         use_container_width=True,
+                         type="primary" if is_sel else "secondary"):
+                upsert_field(student_name, sel_date, sel_day, sel_time,
+                             "grouping_type", "" if is_sel else val); st.rerun()
+
+    st.markdown('<div style="border-top:1px solid #f1f5f9;margin:.4rem 0;"></div>',
+                unsafe_allow_html=True)
+
+    fb1, fb2 = st.columns(2)
+    with fb1:
+        st.markdown('<div style="font-size:.65rem;font-weight:700;color:#1A6B8A;margin-bottom:.1rem;">'
+                    'ACTIVITY <span style="font-weight:400;">(tap multiple)</span></div>',
+                    unsafe_allow_html=True)
+        for act in ACTIVITY_TYPES:
+            is_sel = (act in cur_acts)
+            if st.button(act, key=f"af_{act}_{sel_time}_{sel_day}",
+                         use_container_width=True,
+                         type="primary" if is_sel else "secondary"):
+                new_acts = list(cur_acts)
+                if is_sel: new_acts.remove(act)
+                else: new_acts.append(act)
+                upsert_field(student_name, sel_date, sel_day, sel_time,
+                             "activity_types", ",".join(new_acts)); st.rerun()
+
+    with fb2:
+        st.markdown('<div style="font-size:.65rem;font-weight:700;color:#1A6B8A;margin-bottom:.1rem;">'
+                    'OBSERVABLE BEHAVIOUR</div>', unsafe_allow_html=True)
+        for val, cfg in OUTCOMES.items():
+            is_sel = (cur_out == val)
+            if st.button(cfg["label"], key=f"of_{val}_{sel_time}_{sel_day}",
+                         use_container_width=True,
+                         type="primary" if is_sel else "secondary"):
+                upsert_field(student_name, sel_date, sel_day, sel_time,
+                             "outcome", "" if is_sel else val); st.rerun()
+
+        if cur_out or cur_reg or cur_grp or cur_acts or ss.ist_copied_interval:
+            st.markdown("")
+            
+            # If data is copied, show prominent PASTE button
+            if ss.ist_copied_interval:
+                paste_main, paste_copy, paste_clear = st.columns([2, 1, 1])
+                
+                with paste_main:
+                    if st.button("✅ PASTE DATA HERE", key=f"paste_big_{sel_time}_{sel_day}",
+                               use_container_width=True, type="primary"):
+                        paste_interval_data(student_name, sel_date, sel_day, sel_time)
+                        st.success("✅ Data pasted!")
+                        st.rerun()
+                
+                with paste_copy:
+                    if cur_reg:  # Only show copy if current cell has data
+                        if st.button("📋 Copy from here", key=f"copy_{sel_time}_{sel_day}",
+                                   use_container_width=True, type="secondary"):
+                            copy_interval_data(cur_cell)
+                            st.rerun()
+                
+                with paste_clear:
+                    if cur_reg:  # Only show clear if current cell has data
+                        if st.button("🗑️ Clear", key=f"clr_{sel_time}_{sel_day}",
+                                   use_container_width=True, type="secondary"):
+                            clear_interval(student_name, sel_date, sel_time)
+                            st.rerun()
+            
+            # If no data is copied, show copy and clear buttons
+            else:
+                if cur_reg:  # Only show if current cell has data
+                    btn_col1, btn_col2 = st.columns(2)
+                    
+                    with btn_col1:
+                        if st.button("📋 Copy this interval", key=f"copy_{sel_time}_{sel_day}",
+                                   use_container_width=True, type="primary"):
+                            copy_interval_data(cur_cell)
+                            st.success("✅ Copied! Now click any other cell to paste.")
+                            st.rerun()
+                    
+                    with btn_col2:
+                        if st.button("🗑️ Clear interval", key=f"clr_{sel_time}_{sel_day}",
+                                   use_container_width=True, type="secondary"):
+                            clear_interval(student_name, sel_date, sel_time)
+                            st.rerun()
 
     # ── Daily notes section ───────────────────────────────────────────────────
     st.markdown('<div style="border-top:1px solid #e2e8f0;margin:.6rem 0 .4rem;"></div>',
@@ -1149,79 +1111,9 @@ with t_record:
                     st.success("✅ Note cleared")
                     st.rerun()
 
-    # ════════════════════════════════════════════════════════════════════
-    # LOG A SAVE — early sign caught & turned around (form: no per-tap reruns)
-    # ════════════════════════════════════════════════════════════════════
-    st.markdown("<div style='margin:.7rem 0 .2rem;'></div>", unsafe_allow_html=True)
-    todays_saves = load_saves_day(student_name, sel_date)
-    save_count_lbl = f" · {len(todays_saves)} logged today" if todays_saves else ""
-    with st.expander(f"⚡  Log a SAVE — early sign caught & turned around{save_count_lbl}", expanded=False):
-        st.caption(
-            f"For **{sel_day} {sel_date.strftime('%-d %b')}** — log when an escalation was "
-            "starting and a support turned it around. Tap your selections, then Log once."
-        )
 
-        _outcome_labels = [ov["emoji"] + " " + ov["label"] for ov in SAVE_OUTCOMES.values()]
-        _label_to_key   = {ov["emoji"] + " " + ov["label"]: k for k, ov in SAVE_OUTCOMES.items()}
 
-        with st.form("ist_save_form", clear_on_submit=True, border=False):
-            st.markdown('<div style="font-size:.72rem;font-weight:700;color:#1A6B8A;'
-                        'margin:.2rem 0 .15rem;">⚠️ Early sign(s) observed</div>', unsafe_allow_html=True)
-            f_signs = multi_select_widget("Early signs", SAVE_SIGNS, "ist_f_signs")
-
-            st.markdown('<div style="font-size:.72rem;font-weight:700;color:#1A6B8A;'
-                        'margin:.5rem 0 .15rem;">🛟 Support(s) applied</div>', unsafe_allow_html=True)
-            f_supports = multi_select_widget("Supports", SAVE_SUPPORTS, "ist_f_supports")
-            f_other = st.text_input("Other support (if not listed)", key="ist_f_other",
-                                    placeholder="Other support used (optional)",
-                                    label_visibility="collapsed")
-
-            st.markdown('<div style="font-size:.72rem;font-weight:700;color:#1A6B8A;'
-                        'margin:.5rem 0 .15rem;">🎯 Outcome</div>', unsafe_allow_html=True)
-            f_outcome_label = single_choice_widget("Outcome", _outcome_labels, "ist_f_outcome")
-
-            f_note = st.text_input("Note (optional)", key="ist_f_note",
-                                   placeholder="e.g., flagged at task change — offered choice + movement break, settled within 5 min",
-                                   label_visibility="collapsed")
-
-            submitted = st.form_submit_button("💾  Log save", use_container_width=True, type="primary")
-
-        if submitted:
-            outcome_key = _label_to_key.get(f_outcome_label, "")
-            if not f_signs or not outcome_key:
-                st.warning("Pick at least one early sign and an outcome, then Log.")
-            else:
-                supports = list(f_supports)
-                if f_other and f_other.strip():
-                    supports.append(f_other.strip())
-                now_hhmm = datetime.now().strftime("%-H:%M")
-                _nm = datetime.now().hour * 60 + datetime.now().minute
-                nearest = min(SLOT_TIMES, key=lambda t: abs(int(t.split(":")[0]) * 60 + int(t.split(":")[1]) - _nm))
-                if insert_save(student_name, sel_date, now_hhmm, nearest,
-                               list(f_signs), supports, outcome_key, f_note):
-                    st.success("✅ Save logged")
-                    st.rerun()
-
-        # Today's saves (buttons must sit outside the form)
-        if todays_saves:
-            st.markdown("<div style='margin:.5rem 0 .2rem;font-size:.72rem;font-weight:700;"
-                        "color:#475569;'>Logged on this day</div>", unsafe_allow_html=True)
-            for sv in todays_saves:
-                ov = SAVE_OUTCOMES.get(sv.get("outcome", ""), {"emoji": "•", "label": sv.get("outcome", ""), "bg": "#f1f5f9", "fg": "#475569"})
-                sc1, sc2 = st.columns([6, 1])
-                with sc1:
-                    st.markdown(
-                        f'<div style="background:{ov["bg"]};border-radius:6px;padding:.35rem .6rem;'
-                        f'font-size:.74rem;color:#334155;margin-bottom:.25rem;">'
-                        f'<strong>{sv.get("save_time","")}</strong> &nbsp;'
-                        f'<span style="color:{ov["fg"]};font-weight:700;">{ov["emoji"]} {ov["label"]}</span><br>'
-                        f'<span style="font-size:.7rem;">⚠️ {sv.get("early_sign","—")} &nbsp;→&nbsp; '
-                        f'🛟 {sv.get("support_used","—")}</span>'
-                        + (f'<br><span style="font-size:.68rem;color:#64748b;">{sv.get("notes","")}</span>' if sv.get("notes") else "")
-                        + '</div>', unsafe_allow_html=True)
-                with sc2:
-                    if st.button("🗑️", key=f"del_save_{sv['id']}", use_container_width=True):
-                        delete_save(sv["id"]); st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════════════
 # ANALYSIS
@@ -1456,194 +1348,6 @@ with t_analysis:
         f'({attendance_days} days × time window)'
         f'</div>',
         unsafe_allow_html=True)
-
-    # ── Prevention & Regulation (the "what could have been" story) ────────────
-    st.markdown("<div style='margin:.8rem 0 .2rem;'></div>", unsafe_allow_html=True)
-    st.markdown('<div style="font-size:1rem;font-weight:800;color:#1A6B8A;">'
-                '🛡️ Prevention &amp; Regulation</div>', unsafe_allow_html=True)
-    st.caption("Regulation maintained through site modifications — and the escalations that were caught and turned around.")
-
-    _band_map = {"in_window": "In window", "coping": "Coping",
-                 "hyperaroused": "Outside window", "hypoaroused": "Outside window"}
-    _bands = filt["regulated"].map(_band_map)
-    total_int = int(len(filt))
-    n_win = int((_bands == "In window").sum())
-    n_cop = int((_bands == "Coping").sum())
-    n_out = int((_bands == "Outside window").sum())
-    pct_wincop = round(100 * (n_win + n_cop) / total_int) if total_int else 0
-    pct_out    = round(100 * n_out / total_int) if total_int else 0
-
-    # Saves in range
-    saves_all = load_all_saves(student_name)
-    if not saves_all.empty:
-        sv = saves_all[(saves_all["obs_date_dt"].dt.date >= date_from) &
-                       (saves_all["obs_date_dt"].dt.date <= date_to)].copy()
-    else:
-        sv = pd.DataFrame()
-    n_saves = int(len(sv))
-    n_succ  = int(sv["outcome"].isin(["returned_to_window", "held_in_coping"]).sum()) if n_saves else 0
-    succ_rate = round(100 * n_succ / n_saves) if n_saves else 0
-
-    # Proactive support dose (intervals with a support logged + saves)
-    mod_dose = 0
-    if "support_used" in filt.columns:
-        mod_dose = int(filt["support_used"].fillna("").apply(
-            lambda s: bool(str(s).strip()) and str(s).strip() not in ("None",)).sum())
-    mod_dose += n_saves
-
-    k1, k2, k3, k4 = st.columns(4)
-    with k1:
-        st.markdown(f'<div class="kpi kpi-g"><div class="val">{pct_wincop}%</div>'
-                    f'<div class="lbl">Intervals in window or coping</div></div>', unsafe_allow_html=True)
-    with k2:
-        st.markdown(f'<div class="kpi kpi-r"><div class="val">{pct_out}%</div>'
-                    f'<div class="lbl">Intervals outside window</div></div>', unsafe_allow_html=True)
-    with k3:
-        st.markdown(f'<div class="kpi kpi-b"><div class="val">{n_saves}</div>'
-                    f'<div class="lbl">Saves logged</div></div>', unsafe_allow_html=True)
-    with k4:
-        st.markdown(f'<div class="kpi kpi-g"><div class="val">{n_succ}</div>'
-                    f'<div class="lbl">Escalations turned around</div></div>', unsafe_allow_html=True)
-
-    st.markdown(
-        f'<div style="font-size:.76rem;color:#475569;margin:.1rem 0 .5rem;">'
-        f'<strong>{mod_dose}</strong> proactive supports recorded across this period'
-        + (f' &nbsp;·&nbsp; saves de-escalation rate <strong>{succ_rate}%</strong> '
-           f'({n_succ} of {n_saves} held in or returned to window)' if n_saves else '')
-        + '</div>', unsafe_allow_html=True)
-
-    # Regulation profile by week — shows the coping → in-window shift over time
-    fdf = filt.copy()
-    fdf["band"] = _bands.values
-    fdf["wkdt"] = fdf["obs_date_dt"].apply(lambda d: d - pd.Timedelta(days=d.weekday()))
-    fdf["wk"]   = fdf["wkdt"].dt.strftime("%-d %b")
-    wk_order = fdf.sort_values("wkdt")["wk"].unique().tolist()
-    if len(wk_order) >= 1:
-        tot_wk = fdf.groupby("wk").size().to_dict()
-        band_cols = {"In window": "#16a34a", "Coping": "#ca8a04", "Outside window": "#dc2626"}
-        figp = go.Figure()
-        for bname, bcol in band_cols.items():
-            yvals = []
-            for wk in wk_order:
-                sub = fdf[(fdf["wk"] == wk) & (fdf["band"] == bname)]
-                yvals.append(round(100 * len(sub) / tot_wk[wk], 1) if tot_wk.get(wk) else 0)
-            figp.add_trace(go.Bar(name=bname, x=wk_order, y=yvals, marker_color=bcol,
-                                  text=[f"{v:.0f}%" if v >= 8 else "" for v in yvals],
-                                  textposition="inside", insidetextanchor="middle"))
-        figp.update_layout(barmode="stack", height=330, margin=dict(l=45, r=20, t=30, b=40),
-                           yaxis_title="% of intervals", legend=dict(orientation="h", y=1.12),
-                           font=dict(size=12), plot_bgcolor="white")
-        figp.update_yaxes(range=[0, 100], gridcolor="#eef2f6")
-        st.markdown('<div style="font-size:.82rem;font-weight:700;color:#334155;margin:.3rem 0 .1rem;">'
-                    'Regulation profile by week</div>', unsafe_allow_html=True)
-        st.plotly_chart(figp, use_container_width=True)
-        st.caption("A shrinking amber band with a growing green band over time is the goal: "
-                   "less scaffolding needed to stay regulated.")
-
-    # Saves detail
-    if n_saves:
-        sv["wkdt"] = sv["obs_date_dt"].apply(lambda d: d - pd.Timedelta(days=d.weekday()))
-        sv["wk"]   = sv["wkdt"].dt.strftime("%-d %b")
-        sv["res"]  = sv["outcome"].map({k: v["label"] for k, v in SAVE_OUTCOMES.items()})
-        sv_wk_order = sv.sort_values("wkdt")["wk"].unique().tolist()
-        out_cols = {v["label"]: v["fg"] for v in SAVE_OUTCOMES.values()}
-        figs = go.Figure()
-        for lbl, col in out_cols.items():
-            yv = [int(((sv["wk"] == wk) & (sv["res"] == lbl)).sum()) for wk in sv_wk_order]
-            figs.add_trace(go.Bar(name=lbl, x=sv_wk_order, y=yv, marker_color=col))
-        figs.update_layout(barmode="stack", height=300, margin=dict(l=45, r=20, t=30, b=40),
-                           yaxis_title="saves", legend=dict(orientation="h", y=1.15),
-                           font=dict(size=12), plot_bgcolor="white")
-        figs.update_yaxes(gridcolor="#eef2f6")
-        st.markdown('<div style="font-size:.82rem;font-weight:700;color:#334155;margin:.5rem 0 .1rem;">'
-                    'Saves by week &amp; outcome</div>', unsafe_allow_html=True)
-        st.plotly_chart(figs, use_container_width=True)
-
-        # ── Support analysis: usage, effectiveness, repertoire ────────────────
-        # Explode supports across all saves, keeping each save's outcome alongside.
-        exp = sv[["support_used", "early_sign", "outcome"]].copy()
-        exp["support_used"] = exp["support_used"].fillna("")
-        exp["sup"] = exp["support_used"].str.split(", ")
-        exp = exp.explode("sup")
-        exp["sup"] = exp["sup"].str.strip()
-        exp = exp[exp["sup"] != ""]
-
-        if not exp.empty:
-            exp["ok"] = exp["outcome"].isin(["returned_to_window", "held_in_coping"])
-            eff = (exp.groupby("sup")
-                      .agg(used=("ok", "size"), turned=("ok", "sum"))
-                      .reset_index())
-            eff["rate"] = (100 * eff["turned"] / eff["used"]).round()
-            eff = eff.sort_values(["used", "rate"], ascending=[False, False])
-
-            st.markdown('<div style="font-size:.82rem;font-weight:700;color:#334155;margin:.6rem 0 .1rem;">'
-                        'Support effectiveness — what turns this student around</div>',
-                        unsafe_allow_html=True)
-            st.caption("How often each support was applied during a save, and how often that save ended in "
-                       "the student returning to window or being held in coping. Higher bars used more often; "
-                       "the % is the turn-around rate. ⚠️ Treat supports used fewer than 3 times as indicative only.")
-
-            # Horizontal bar: usage with success portion shaded, rate + n labelled
-            eff_plot = eff.sort_values("used")
-            fige = go.Figure()
-            fige.add_trace(go.Bar(
-                y=eff_plot["sup"], x=eff_plot["turned"], orientation="h",
-                name="Turned around", marker_color="#16a34a"))
-            fige.add_trace(go.Bar(
-                y=eff_plot["sup"], x=(eff_plot["used"] - eff_plot["turned"]), orientation="h",
-                name="Escalated anyway", marker_color="#dc2626"))
-            fige.update_layout(
-                barmode="stack", height=max(240, len(eff_plot) * 30 + 80),
-                margin=dict(l=10, r=20, t=30, b=35),
-                xaxis_title="times applied during saves",
-                legend=dict(orientation="h", y=1.08), font=dict(size=12), plot_bgcolor="white")
-            fige.update_xaxes(gridcolor="#eef2f6", tickformat="d")
-            st.plotly_chart(fige, use_container_width=True)
-
-            # Effectiveness table with low-n flag
-            tbl = eff.copy()
-            tbl["Support"] = tbl["sup"]
-            tbl["Times applied"] = tbl["used"].astype(int)
-            tbl["Turned around"] = tbl["turned"].astype(int)
-            tbl["Turn-around rate"] = tbl.apply(
-                lambda r: (f"{int(r['rate'])}%" + ("  ⚠️ low n" if r["used"] < 3 else "")), axis=1)
-            st.dataframe(
-                tbl[["Support", "Times applied", "Turned around", "Turn-around rate"]]
-                   .set_index("Support"),
-                use_container_width=True)
-
-            # ── Response repertoire: which supports for which early sign ───────
-            rep = sv[["early_sign", "support_used"]].copy()
-            rep["early_sign"] = rep["early_sign"].fillna("")
-            rep["support_used"] = rep["support_used"].fillna("")
-            rep["sign"] = rep["early_sign"].str.split(", ")
-            rep = rep.explode("sign")
-            rep["sign"] = rep["sign"].str.strip()
-            rep = rep[rep["sign"] != ""]
-            if not rep.empty:
-                st.markdown('<div style="font-size:.82rem;font-weight:700;color:#334155;margin:.7rem 0 .1rem;">'
-                            'Response repertoire — supports used for each early sign</div>',
-                            unsafe_allow_html=True)
-                st.caption("The go-to supports staff reach for when each warning sign appears. Useful for "
-                           "building a shared, consistent response plan.")
-                sign_order = rep["sign"].value_counts().index.tolist()
-                rep_rows = []
-                for sgn in sign_order:
-                    sub = rep[rep["sign"] == sgn]
-                    sup_counts = (sub["support_used"].str.split(", ").explode().str.strip())
-                    sup_counts = sup_counts[sup_counts != ""].value_counts().head(3)
-                    top_txt = ", ".join(f"{s} ({c})" for s, c in sup_counts.items()) or "—"
-                    rep_rows.append({"Early sign": f"{sgn}  ·  {len(sub)}×", "Most-used supports": top_txt})
-                st.dataframe(pd.DataFrame(rep_rows).set_index("Early sign"), use_container_width=True)
-
-            st.caption("Note: supports are often applied to the hardest moments, so a lower turn-around rate "
-                       "may reflect harder situations rather than a weaker support. Read alongside the regulation "
-                       "trend and anecdotal notes, not in isolation.")
-    else:
-        st.info("No saves logged in this period yet. Log saves from the **Record & View** tab "
-                "(⚡ Log a SAVE) to build the prevention picture.")
-
-    st.markdown("<hr style='border:none;border-top:1px solid #e2e8f0;margin:.7rem 0;'>", unsafe_allow_html=True)
 
     # ── Daily notes (anecdotal context) ───────────────────────────────────────
     daily_notes = get_all_daily_notes(student_name, date_from, date_to)
@@ -2559,17 +2263,6 @@ with t_analysis:
 </body>
 </html>"""
 
-            _ini = initials_from_name(student_name)
-            archive_once(
-                f"ist_report_{student_name}_{date.today()}",
-                source_tool="Interval Support Tracker",
-                doc_type="Interval Support Report",
-                title=f"Interval Support Report — {_ini} — {date.today():%d %b %Y}",
-                file_bytes=html_report.encode("utf-8"),
-                filename=f"IST_Report_{_ini}_{date.today()}.html",
-                student_initials=_ini,
-                created_by=st.session_state.get("user_email", "unknown"),
-            )
             st.download_button(
                 "⬇️ Download report (HTML — opens in any browser)",
                 html_report,
@@ -2578,6 +2271,37 @@ with t_analysis:
                 use_container_width=True,
             )
             st.success("✅ Report ready. Open in Chrome, Edge or Firefox to view interactive charts and print.")
+
+            _ini = initials_from_name(student_name)
+            _prev = fetch_archive(
+                student_initials=_ini,
+                doc_type="Interval Support Report",
+                include_confidential=True,
+            )
+            if _prev:
+                _mode = st.radio(
+                    "An Interval Support Report is already in this student's "
+                    "archive folder:",
+                    ["Replace previous version", "Keep both (add as separate file)"],
+                    key="ist_arcmode", horizontal=True,
+                )
+            else:
+                _mode = "new"
+            if st.button("🗄️ Save to Document Archive", key="ist_arc"):
+                _saved = archive_document(
+                    source_tool="Interval Support Tracker",
+                    doc_type="Interval Support Report",
+                    title=f"Interval Support Report — {_ini} — {date.today():%d %b %Y}",
+                    file_bytes=html_report.encode("utf-8"),
+                    filename=f"IST_Report_{_ini}_{date.today()}.html",
+                    student_initials=_ini,
+                    created_by=st.session_state.get("user_email", "unknown"),
+                    supersede=(_mode == "Replace previous version"),
+                )
+                if _saved:
+                    st.success("Saved to the Document Archive"
+                               + (" (previous version moved to restorable Deleted)"
+                                  if _mode == "Replace previous version" else ""))
 
     st.download_button("📥 Download raw data (CSV)", csv,
         file_name=f"IntervalSupport_{student_name.replace(' ','_')}_{date_from}_{date_to}.csv",
