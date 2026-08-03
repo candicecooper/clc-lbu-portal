@@ -1,5 +1,4 @@
 from theme import apply_clc_theme
-from auth import require_auth, logout_button, get_staff_name
 from confidential_auth import require_confidential_auth, confidential_logout_button
 import streamlit as st
 from supabase import create_client, Client
