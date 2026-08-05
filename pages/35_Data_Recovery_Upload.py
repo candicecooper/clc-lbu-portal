@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import os
+from datetime import datetime
 from supabase import create_client
 
 st.set_page_config(page_title="Data Recovery - CLC-LBU", page_icon="🛟", layout="wide")
@@ -40,93 +42,138 @@ except Exception as e:
 
 st.markdown("---")
 st.subheader("📤 Upload Master Excel File")
-uploaded_file = st.file_uploader(
-    "Choose your CLC_Allocation_Dashboard Excel or CSV file", type=['xlsx', 'csv']
-)
+
+# Full column mapping — identical to the Meetings Tool's own FIELD_MAP, so a
+# restore here produces exactly the same result as if it had been entered
+# through the tool directly. Critically, this includes Allocation_Status -> outcome,
+# which a previous version of this script was missing (that's why restored
+# students weren't showing up as "Allocated" anywhere).
+FIELD_MAP = {
+    'Current_Status': 'current_status', 'Previous_Referrals': 'previous_referrals',
+    'Student_Name': 'student_name', 'DOB': 'date_of_birth', 'Gender': 'gender', 'Year_Level': 'year_level',
+    'Referring_School': 'school', 'Referral_Date': 'referral_date', 'Meeting_Date': 'meeting_date',
+    'Meeting_Week': 'meeting_week', 'Previously_Referred': 'previously_referred',
+    'Allocation_Status': 'outcome', 'Allocated_Program': 'program', 'Placement_Start': 'start_after',
+    'Partnership_Area': 'partnership_area', 'Previous_CLC_Placement': 'previous_clc_placement',
+    'Previous_Other_LC': 'previous_other_lc', 'Other_LC_Name': 'other_lc_name',
+    'Total_Previous_Placements': 'total_previous_placements',
+    'Placement_History_Notes': 'placement_history_notes', 'Flag_EALD': 'flag_eald',
+    'Flag_ATSI': 'flag_atsi', 'Flag_Attendance_Fulltime': 'flag_attendance_fulltime',
+    'Flag_Attendance_Parttime': 'flag_attendance_parttime',
+    'Flag_Intervention_Custody_Order': 'flag_intervention_custody_order',
+    'Flag_DCP_involvement': 'flag_dcp_involvement', 'Flag_Child_in_care': 'flag_child_in_care',
+    'Flag_IESP_Funding_yes': 'flag_iesp_funding_yes', 'Flag_IESP_Funding_no': 'flag_iesp_funding_no',
+    'Flag_Category_1': 'flag_category_1', 'Flag_Category_2': 'flag_category_2',
+    'Flag_Category_3': 'flag_category_3', 'Flag_Category_4': 'flag_category_4',
+    'Flag_Category_5': 'flag_category_5', 'Flag_Category_6': 'flag_category_6',
+    'Flag_Category_7': 'flag_category_7', 'Flag_Category_8': 'flag_category_8',
+    'Flag_Category_9': 'flag_category_9', 'Flag_9plusRAAP': 'flag_9plusraap', 'Flag_SWD': 'flag_swd',
+    'Flag_Speech_and_Lang': 'flag_speech_and_lang', 'Flag_ASD': 'flag_asd',
+    'Flag_Intellectual': 'flag_intellectual', 'Flag_Learning_Difficulty': 'flag_learning_difficulty',
+    'Flag_Sensory_Processing': 'flag_sensory_processing', 'Flag_ADHD': 'flag_adhd',
+    'Flag_ODD': 'flag_odd', 'Flag_PDA': 'flag_pda', 'Flag_Medication': 'flag_medication',
+    'Flag_Medical_condition': 'flag_medical_condition',
+    'Medical_Condition_Details': 'medical_condition_details', 'Medication_Details': 'medication_details',
+    'Bespoke_Placement': 'bespoke_placement', 'Waitlist_Status': 'waitlist_status',
+    'Waitlist_Date': 'waitlist_date', 'Allocated_From_Waitlist': 'allocated_from_waitlist',
+    'Extension': 'extension', 'Extension_Date': 'extension_date', 'Exit_Reason': 'exit_reason',
+    'Transition_Plan': 'transition_plan', 'Notes': 'notes', 'Placement_End': 'finishing_date',
+    'Exclusion_End_Date': 'exclusion_end_date',
+    'Proposed_Extension_Finish_Date': 'proposed_extension_finish_date',
+    'Extension_Weeks': 'extension_weeks', 'Action_owner': 'actioned_by',
+    'Actual_Finish_Date': 'actual_finish_date', 'Extended_Placement': 'extended_placement',
+    'Referral_Year': 'year', 'Term': 'term', 'Extension_Status': 'extension_status', 'BSE': 'bse',
+}
+DATE_FIELDS = {
+    'date_of_birth', 'referral_date', 'meeting_date', 'start_after', 'waitlist_date',
+    'extension_date', 'exit_reason', 'finishing_date', 'exclusion_end_date',
+    'proposed_extension_finish_date', 'actual_finish_date',
+}
+NUMERIC_FIELDS = {'year', 'term', 'extension_weeks', 'total_previous_placements', 'previous_referrals'}
+
+uploaded_file = st.file_uploader("Choose your CLC_Allocation_Dashboard Excel or CSV file", type=['xlsx', 'csv'])
 
 if uploaded_file is not None:
     try:
         df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('.xlsx') else pd.read_csv(uploaded_file)
+        df.columns = [str(c).strip() for c in df.columns]
 
-        # Same column mapping as the Dashboard's own upload, so the result is identical
-        column_map = {
-            'Student_Name': 'student_name', 'Meeting_Week': 'meeting_week', 'Meeting_Date': 'meeting_date',
-            'Term': 'term', 'Referral_Year': 'year', 'Allocated_Program': 'program',
-            'DOB': 'date_of_birth', 'Gender': 'gender', 'Year_Level': 'year_level',
-            'Referring_School': 'school', 'Partnership_Area': 'partnership_area',
-            'Previous_CLC_Placement': 'previous_clc_placement', 'Previous_Other_LC': 'previous_other_lc',
-            'Other_LC_Name': 'other_lc_name', 'Total_Previous_Placements': 'total_previous_placements',
-            'Placement_History_Notes': 'placement_history_notes', 'Bespoke_Placement': 'bespoke_placement',
-            'Waitlist_Status': 'waitlist_status', 'Waitlist_Date': 'waitlist_date',
-            'Allocated_From_Waitlist': 'allocated_from_waitlist', 'Previously_Referred': 'previously_referred',
-            'Medical_Condition_Details': 'medical_condition_details', 'Extension_Weeks': 'extension_weeks',
-        }
+        matched_cols = [c for c in df.columns if c in FIELD_MAP]
+        st.caption(f"Matched {len(matched_cols)} of {len(df.columns)} columns in your file to known fields.")
 
-        df_mapped = df.copy()
-        for excel_col, supabase_col in column_map.items():
-            if excel_col in df_mapped.columns:
-                df_mapped = df_mapped.rename(columns={excel_col: supabase_col})
-        df_mapped = df_mapped[[col for col in df_mapped.columns if col in column_map.values()]]
+        parsed_records = []
+        for _, row in df.iterrows():
+            record = {}
+            for excel_col, db_field in FIELD_MAP.items():
+                if excel_col not in df.columns:
+                    continue
+                val = row[excel_col]
+                if pd.isna(val) or val == '':
+                    record[db_field] = None
+                    continue
+                if db_field in DATE_FIELDS:
+                    parsed = pd.to_datetime(val, errors='coerce')
+                    record[db_field] = parsed.strftime('%Y-%m-%d') if not pd.isna(parsed) else None
+                elif db_field in NUMERIC_FIELDS:
+                    num = pd.to_numeric(val, errors='coerce')
+                    record[db_field] = None if pd.isna(num) else str(int(num))
+                else:
+                    record[db_field] = str(val).strip()
+            if record.get('student_name'):
+                parsed_records.append(record)
 
-        date_cols = ['meeting_date', 'date_of_birth', 'waitlist_date']
-        for col in date_cols:
-            if col in df_mapped.columns:
-                df_mapped[col] = pd.to_datetime(df_mapped[col], errors='coerce')
-                df_mapped[col] = df_mapped[col].dt.strftime('%Y-%m-%d')
-                df_mapped[col] = df_mapped[col].replace('NaT', '')
-
-        numeric_cols = ['year', 'term', 'extension_weeks', 'total_previous_placements']
-        for col in numeric_cols:
-            if col in df_mapped.columns:
-                df_mapped[col] = pd.to_numeric(df_mapped[col], errors='coerce').fillna(0).astype(int)
-
-        df_mapped = df_mapped.astype(str)
-        df_mapped = df_mapped.replace('nan', '')
-        df_mapped = df_mapped.fillna('')
-        for col in df_mapped.columns:
-            if df_mapped[col].dtype == 'object':
-                df_mapped[col] = df_mapped[col].str.strip()
-
-        if 'meeting_date' in df_mapped.columns:
-            today = pd.Timestamp.now().strftime('%Y-%m-%d')
-            df_mapped['meeting_date'] = df_mapped['meeting_date'].replace('', today)
-
-        st.success(f"Ready: {len(df_mapped)} student records parsed from the file")
+        st.success(f"Ready: {len(parsed_records)} student records parsed from the file")
         with st.expander("Preview parsed data"):
-            st.dataframe(df_mapped, use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(parsed_records), use_container_width=True, hide_index=True)
 
-        clear_first = st.checkbox(
-            "Clear existing rows in allocation_students before uploading",
-            value=(existing_count == 0 if 'existing_count' in dir() else False),
-            help="Leave this on if you're restoring after a wipe. Turn it off if you want to add to what's already there."
+        st.markdown("---")
+        mode = st.radio(
+            "How should this be applied?",
+            [
+                "🔄 Update matching students, add new ones (safe — recommended)",
+                "🗑️ Wipe everything first, then import fresh",
+            ],
+            help="The safe option matches by student name: existing students get their info refreshed "
+                 "(fixing the missing outcome from before), students not already there get added. "
+                 "Nothing already correct in the database (like manually entered students) gets lost."
         )
 
-        if st.button("🚀 Upload Now", type="primary", use_container_width=True):
-            with st.spinner("Uploading..."):
+        if st.button("🚀 Apply", type="primary", use_container_width=True):
+            with st.spinner("Working..."):
                 try:
-                    if clear_first:
+                    if mode.startswith("🗑️"):
                         supabase.table('allocation_students').delete().gte(
                             'id', '00000000-0000-0000-0000-000000000000'
                         ).execute()
+                        for i in range(0, len(parsed_records), 50):
+                            supabase.table('allocation_students').insert(parsed_records[i:i + 50]).execute()
+                        st.success(f"✅ Wiped and re-imported {len(parsed_records)} records!")
+                    else:
+                        existing = supabase.table('allocation_students').select('id, student_name').execute().data
+                        existing_by_name = {str(r['student_name']).strip().lower(): r['id'] for r in existing if r.get('student_name')}
 
-                    records = []
-                    for idx, row in df_mapped.iterrows():
-                        record = {}
-                        for col in df_mapped.columns:
-                            val = row[col]
-                            if pd.isna(val) or val == 'nan' or val == '':
-                                record[col] = 0 if col in numeric_cols else (None if col in date_cols else '')
+                        updated, inserted = 0, 0
+                        to_insert = []
+                        for record in parsed_records:
+                            name_key = str(record['student_name']).strip().lower()
+                            if name_key in existing_by_name:
+                                supabase.table('allocation_students').update(record).eq(
+                                    'id', existing_by_name[name_key]
+                                ).execute()
+                                updated += 1
                             else:
-                                record[col] = str(val)
-                        records.append(record)
+                                to_insert.append(record)
 
-                    for i in range(0, len(records), 50):
-                        supabase.table('allocation_students').insert(records[i:i + 50]).execute()
+                        for i in range(0, len(to_insert), 50):
+                            supabase.table('allocation_students').insert(to_insert[i:i + 50]).execute()
+                        inserted = len(to_insert)
 
-                    st.success(f"✅ Uploaded {len(records)} records! Open the Allocation Dashboard to confirm.")
+                        st.success(f"✅ Updated {updated} existing student(s), added {inserted} new one(s).")
+
                     st.balloons()
+                    st.info("Open the Allocation Dashboard or Meetings Tool to confirm.")
                 except Exception as e:
-                    st.error(f"Failed: {str(e)[:300]}")
+                    st.error(f"Failed: {str(e)[:500]}")
     except Exception as e:
         st.error(f"Error reading file: {e}")
 
