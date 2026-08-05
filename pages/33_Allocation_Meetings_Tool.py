@@ -927,8 +927,15 @@ with tab2:
     try:
         allocated = supabase.table("allocation_students").select("*").eq("outcome", "Allocated").execute()
         if allocated.data:
-            options = {r['student_name']: r for r in allocated.data}
-            chosen = st.selectbox("Select allocated student", list(options.keys()))
+            sorted_students = sorted(allocated.data, key=lambda r: (r.get('student_name') or '').lower())
+            options = {
+                f"{r['student_name']} — {r.get('school', 'no school')} (Year {r.get('year_level', '?')})": r
+                for r in sorted_students
+            }
+            chosen = st.selectbox(
+                f"Select allocated student ({len(options)} total — type to search)",
+                list(options.keys())
+            )
             record = options[chosen]
 
             with st.form("extension_form"):
@@ -958,7 +965,7 @@ with tab2:
                             "information": ext_comm or record.get("information"),
                             "actioned_by": ext_owner or record.get("actioned_by"),
                         }).eq("id", record["id"]).execute()
-                        st.success(f"✅ Extension recorded for {chosen}!")
+                        st.success(f"✅ Extension recorded for {record['student_name']}!")
                         st.balloons()
                     except Exception as e:
                         st.error(f"Error: {e}")
@@ -1197,11 +1204,18 @@ with tab4:
 # ══════════════════════════════════════════════════════════════════════════════
 with tab5:
     st.header("⏳ Waitlist Management")
-    try:
-        waitlisted = supabase.table("allocation_students").select("*") \
-            .not_.in_("waitlist_status", ["Not Applicable", ""]).execute()
 
-        records = [r for r in waitlisted.data if r.get("waitlist_status")]
+    show_removed = st.checkbox(
+        "Show removed students too (Declined / Site Withdraw)",
+        help="Off by default — students disappear from this list once set to Declined or Site Withdraw."
+    )
+
+    try:
+        active_statuses = ["On Waitlist", "Site Decision", "Declined", "Site Withdraw"] if show_removed else ["On Waitlist", "Site Decision"]
+        waitlisted = supabase.table("allocation_students").select("*") \
+            .in_("waitlist_status", active_statuses).execute()
+
+        records = waitlisted.data
         if records:
             for r in records:
                 with st.container(border=True):
