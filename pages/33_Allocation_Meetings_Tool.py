@@ -925,7 +925,25 @@ with tab2:
     st.info("Record an extension decision for a currently allocated student.")
 
     try:
-        allocated = supabase.table("allocation_students").select("*").eq("outcome", "Allocated").execute()
+        all_students = supabase.table("allocation_students").select("*").execute()
+        allocated_data = [
+            r for r in all_students.data
+            if str(r.get("outcome", "")).strip().lower() == "allocated"
+        ]
+        class _Wrap:
+            pass
+        allocated = _Wrap()
+        allocated.data = allocated_data
+
+        with st.expander("🔍 Debug: what's actually in the database"):
+            st.write(f"Total rows in `allocation_students`: {len(all_students.data)}")
+            outcome_counts = {}
+            for r in all_students.data:
+                key = repr(r.get("outcome"))
+                outcome_counts[key] = outcome_counts.get(key, 0) + 1
+            st.write("Breakdown by `outcome` value (exact, including hidden spaces/case):")
+            st.write(outcome_counts)
+
         if allocated.data:
             sorted_students = sorted(allocated.data, key=lambda r: (r.get('student_name') or '').lower())
             options = {
@@ -1000,16 +1018,20 @@ with tab4:
     st.header("📊 View & Export Completed Allocations")
 
     scope = st.radio(
-        "Show:", ["This meeting week only", "All allocated & completed records"],
+        "Show:",
+        ["This meeting week only", "All allocated & completed records", "Only students with an extension decision"],
         horizontal=True, index=1,
         help="Extensions and waitlist changes on students allocated in earlier weeks won't show under "
-             "'this week only' — switch to 'All records' to include them for export/sync."
+             "'this week only' — switch to 'All records' to include them for export/sync. Use the "
+             "extension option to export just the students you've approved or declined an extension for."
     )
 
     try:
         query = supabase.table("allocation_students").select("*").not_.is_("outcome", "null")
         if scope == "This meeting week only":
             query = query.eq("meeting_week", selected_week)
+        elif scope == "Only students with an extension decision":
+            query = query.not_.is_("extension_status", "null")
         full_data = query.execute()
 
         if full_data.data:
@@ -1192,7 +1214,7 @@ with tab4:
                 elif validation_issues:
                     st.error("❌ Fix the validation issues above before syncing")
         else:
-            st.info("📭 No completed records for this week")
+            st.info("📭 No records match the selected scope above")
 
     except Exception as e:
         st.error(f"Error: {e}")
