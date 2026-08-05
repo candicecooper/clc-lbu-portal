@@ -11,6 +11,8 @@ import streamlit.components.v1 as components
 import io
 import json
 import uuid
+import os
+import copy
 
 # Page config
 st.set_page_config(page_title="Program Changes Manager", layout="wide")
@@ -36,25 +38,119 @@ st.markdown("""
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         margin-bottom: 1rem;
     }
+    .block-row {
+        background-color: #fafcfb;
+        border: 1px solid #e0e8e6;
+        border-radius: 8px;
+        padding: 0.75rem;
+        margin-bottom: 0.5rem;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+# ── STAFF LIST PERSISTENCE (Supabase, direct table calls only - no RPC) ──
+# Past issues were specifically with custom RPC functions and PostgREST's
+# schema cache. Plain table select/insert/delete (same pattern already used
+# elsewhere in this portal, e.g. daily_changes) has been reliable. If the
+# table isn't reachable for any reason, we fall back to session-only storage
+# so the tool keeps working - it just won't remember new staff next visit.
+
+DEFAULT_STAFF = [
+    "Candice", "Annette", "Ben Selga", "Ben Sutton", "Caitie",
+    "Jacqui", "Brenton", "New Teacher (TBD)", "Naomi", "Vinnie", "Cheryl"
+]
+
+STAFF_TABLE = "clc_staff_list"
+
+def _get_supabase():
+    """Create a Supabase client from env vars. Returns None if unavailable."""
+    try:
+        from supabase import create_client
+        url = os.environ.get("SUPABASE_URL", "")
+        key = os.environ.get("SUPABASE_KEY", "")
+        if not url or not key:
+            return None
+        return create_client(url, key)
+    except Exception:
+        return None
+
+def load_staff_from_db():
+    """Load staff names from Supabase. Returns list or None on failure."""
+    sb = _get_supabase()
+    if not sb:
+        return None
+    try:
+        res = sb.table(STAFF_TABLE).select("name").order("name").execute()
+        names = [r["name"] for r in (res.data or [])]
+        return names if names else None
+    except Exception:
+        return None
+
+def add_staff_to_db(name):
+    """Insert a staff name into Supabase. Returns True on success."""
+    sb = _get_supabase()
+    if not sb:
+        return False
+    try:
+        sb.table(STAFF_TABLE).insert({"name": name}).execute()
+        return True
+    except Exception:
+        return False
+
+def remove_staff_from_db(name):
+    """Delete a staff name from Supabase. Returns True on success."""
+    sb = _get_supabase()
+    if not sb:
+        return False
+    try:
+        sb.table(STAFF_TABLE).delete().eq("name", name).execute()
+        return True
+    except Exception:
+        return False
+
+# Initialize staff list: try DB first, fall back to session/default
+if 'staff_list' not in st.session_state:
+    db_staff = load_staff_from_db()
+    if db_staff:
+        st.session_state.staff_list = db_staff
+        st.session_state.staff_db_connected = True
+    else:
+        st.session_state.staff_list = DEFAULT_STAFF.copy()
+        st.session_state.staff_db_connected = (db_staff is not None)  # None means DB unreachable
+
+STAFF_LIST = st.session_state.staff_list
 
 # Initialize session state for storing changes
 if 'program_changes' not in st.session_state:
     st.session_state.program_changes = {}
 
-# Default staff list
-DEFAULT_STAFF = [
-    "Candice", "Annette", "Ben Selga", "Ben Sutton", "Caitie", 
-    "Jacqui", "Brenton", "New Teacher (TBD)", "Naomi", "Vinnie", "Cheryl"
-]
+# Draft state for add/edit form
+def new_draft():
+    return {
+        'id': None,
+        'staff_type': "Regular Staff",
+        'staff_member': "",
+        'reason': "",
+        'covered_by': "",
+        'notes': "",
+        'blocks': [new_block()],
+    }
 
-# Initialize editable staff list
-if 'staff_list' not in st.session_state:
-    st.session_state.staff_list = DEFAULT_STAFF.copy()
+def new_block():
+    return {
+        'start_time': time(9, 0),
+        'end_time': time(10, 0),
+        'program_type': "N/A",
+        'lunch_type': "N/A",
+        'release_direction': "N/A",
+        'release_person': "",
+    }
 
-# Reference for the rest of the app
-STAFF_LIST = st.session_state.staff_list
+if 'draft' not in st.session_state:
+    st.session_state.draft = new_draft()
+
+if 'draft_version' not in st.session_state:
+    st.session_state.draft_version = 0
 
 # Helper functions
 def format_time(t):
@@ -68,26 +164,63 @@ def format_time(t):
             return t
     return str(t)
 
+def parse_time_str(t):
+    """Parse HH:MM:SS string back to a time object for widget defaults"""
+    if isinstance(t, time):
+        return t
+    try:
+        return datetime.strptime(t, "%H:%M:%S").time()
+    except Exception:
+        return time(9, 0)
+
+def sort_blocks(blocks):
+    """Recalibrate block order by start time, regardless of entry order"""
+    return sorted(blocks, key=lambda b: b.get('start_time', ''))
+
 def get_changes_for_date(target_date_str):
     """Get changes for specific date from session state"""
     return st.session_state.program_changes.get(target_date_str, [])
 
 def save_program_change(target_date_str, change_data):
-    """Save a program change to session state"""
+    """Save a NEW program change to session state"""
     if target_date_str not in st.session_state.program_changes:
         st.session_state.program_changes[target_date_str] = []
-    
     change_data['id'] = str(uuid.uuid4())
     change_data['created_at'] = datetime.now().isoformat()
     st.session_state.program_changes[target_date_str].append(change_data)
+
+def update_program_change(target_date_str, change_id, new_data):
+    """Update an EXISTING program change in place"""
+    entries = st.session_state.program_changes.get(target_date_str, [])
+    for idx, entry in enumerate(entries):
+        if entry.get('id') == change_id:
+            new_data['id'] = change_id
+            new_data['created_at'] = entry.get('created_at')
+            new_data['updated_at'] = datetime.now().isoformat()
+            entries[idx] = new_data
+            break
+    st.session_state.program_changes[target_date_str] = entries
 
 def delete_program_change(target_date_str, change_id):
     """Delete a program change from session state"""
     if target_date_str in st.session_state.program_changes:
         st.session_state.program_changes[target_date_str] = [
-            c for c in st.session_state.program_changes[target_date_str] 
+            c for c in st.session_state.program_changes[target_date_str]
             if c['id'] != change_id
         ]
+
+def compute_modified_program(program_type, lunch_type):
+    if lunch_type != "N/A":
+        return f"{program_type} - {lunch_type}"
+    return program_type
+
+def compute_release_text(direction, person):
+    if direction == "N/A" or not person:
+        return ""
+    if direction == "Released by":
+        return f"Released by {person}"
+    else:  # "Releasing"
+        return f"Releasing {person}"
 
 def export_data():
     """Export all changes and staff list as JSON"""
@@ -101,13 +234,11 @@ def import_data(json_str):
     """Import changes and staff list from JSON"""
     try:
         data = json.loads(json_str)
-        # Handle both old format (just changes) and new format (with staff list)
         if 'program_changes' in data:
             st.session_state.program_changes = data['program_changes']
             if 'staff_list' in data:
                 st.session_state.staff_list = data['staff_list']
         else:
-            # Old format - entire JSON is the changes dict
             st.session_state.program_changes = data
         return True
     except:
@@ -116,13 +247,13 @@ def import_data(json_str):
 def generate_pdf(changes, target_date):
     """Generate one-page PDF of program changes"""
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), 
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4),
                            topMargin=1*cm, bottomMargin=1*cm,
                            leftMargin=1*cm, rightMargin=1*cm)
-    
+
     story = []
     styles = getSampleStyleSheet()
-    
+
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Heading1'],
@@ -131,11 +262,11 @@ def generate_pdf(changes, target_date):
         alignment=TA_CENTER,
         spaceAfter=12
     )
-    
+
     title_text = f"Program Changes - {datetime.strptime(target_date, '%Y-%m-%d').strftime('%A, %d %B %Y')}"
     story.append(Paragraph(title_text, title_style))
     story.append(Spacer(1, 0.3*cm))
-    
+
     if not changes:
         no_changes_style = ParagraphStyle(
             'NoChanges',
@@ -150,17 +281,17 @@ def generate_pdf(changes, target_date):
             staff_name = change.get('staff_name', 'N/A')
             reason = change.get('reason', 'Program Change')
             covered_by = change.get('covered_by', '')
-            
+
             header_text = f"<b>{staff_name}: {reason}</b>"
             if covered_by:
                 header_text += f"<br/><font size=9>Covered by: {covered_by}</font>"
-            
+
             header_data = [
-                [Paragraph(header_text, 
-                          ParagraphStyle('ChangeHeader', parent=styles['Normal'], 
+                [Paragraph(header_text,
+                          ParagraphStyle('ChangeHeader', parent=styles['Normal'],
                                        fontSize=11, textColor=colors.HexColor('#1A7A6E')))]
             ]
-            
+
             header_table = Table(header_data, colWidths=[25*cm])
             header_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#E8F4F2')),
@@ -169,19 +300,19 @@ def generate_pdf(changes, target_date):
             ]))
             story.append(header_table)
             story.append(Spacer(1, 0.2*cm))
-            
-            blocks = change.get('time_blocks', [])
+
+            blocks = sort_blocks(change.get('time_blocks', []))
             if blocks:
                 for block in blocks:
                     start = format_time(block.get('start_time', ''))
                     end = format_time(block.get('end_time', ''))
                     program = block.get('modified_program', 'N/A')
-                    released_by = block.get('released_by', '')
-                    
+                    release_text = block.get('released_by', '')
+
                     block_text = f"{start} → {end}: {program}"
-                    if released_by:
-                        block_text += f" (Released by: {released_by})"
-                    
+                    if release_text:
+                        block_text += f" ({release_text})"
+
                     details_data = [[block_text]]
                     details_table = Table(details_data, colWidths=[25*cm])
                     details_table.setStyle(TableStyle([
@@ -190,10 +321,10 @@ def generate_pdf(changes, target_date):
                         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
                     ]))
                     story.append(details_table)
-            
+
             if idx < len(changes) - 1:
                 story.append(Spacer(1, 0.4*cm))
-    
+
     doc.build(story)
     buffer.seek(0)
     return buffer
@@ -201,7 +332,7 @@ def generate_pdf(changes, target_date):
 def render_mobile_view(changes, target_date):
     """Render mobile-friendly view"""
     date_str = datetime.strptime(target_date, '%Y-%m-%d').strftime('%A, %d %B %Y')
-    
+
     html = f"""
     <!DOCTYPE html>
     <html>
@@ -285,7 +416,7 @@ def render_mobile_view(changes, target_date):
                 <span style="font-size: 0.9rem; font-weight: normal;">{date_str}</span>
             </div>
     """
-    
+
     if not changes:
         html += '<p style="text-align: center; color: #666; padding: 2rem;">No program changes scheduled</p>'
     else:
@@ -295,27 +426,27 @@ def render_mobile_view(changes, target_date):
                 <div class="mobile-staff">{change.get('staff_name', 'N/A')}</div>
                 <div class="mobile-reason">{change.get('reason', 'Program Change')}</div>
             """
-            
+
             if change.get('covered_by'):
                 html += f'<div class="mobile-covered">Covered by: {change.get("covered_by")}</div>'
-            
-            blocks = change.get('time_blocks', [])
+
+            blocks = sort_blocks(change.get('time_blocks', []))
             if blocks:
                 html += '<div class="mobile-blocks">'
                 for block in blocks:
                     start = format_time(block.get('start_time', ''))
                     end = format_time(block.get('end_time', ''))
                     program = block.get('modified_program', 'N/A')
-                    released_by = block.get('released_by', '')
-                    
+                    release_text = block.get('released_by', '')
+
                     html += f'<div class="block-item"><span class="mobile-time">{start} → {end}</span>: {program}'
-                    if released_by:
-                        html += f'<span class="released-by">(Released by: {released_by})</span>'
+                    if release_text:
+                        html += f'<span class="released-by">({release_text})</span>'
                     html += '</div>'
                 html += '</div>'
-            
+
             html += '</div>'
-    
+
     html += """
         </div>
     </body>
@@ -323,9 +454,12 @@ def render_mobile_view(changes, target_date):
     """
     return html
 
-# Main interface
+# ── MAIN INTERFACE ──────────────────────────────────────────────
 st.title("📋 Program Changes Manager")
-st.info("⚠️ **Session-Based Storage**: Changes are stored in your browser session. Use Export/Import to save permanently.")
+st.info("⚠️ **Changes are session-based** and use Export/Import to save permanently. Staff list is saved to the database when available.")
+
+if st.session_state.get('staff_db_connected') is False:
+    st.warning("⚠️ Staff list database not reachable right now - new staff added will only last this session. Use Export/Import (💾 Data) to keep a backup.")
 
 # Date selector
 col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
@@ -341,33 +475,37 @@ with col3:
     st.write("")
     with st.popover("👥 Staff", use_container_width=True):
         st.markdown("**Manage Staff List**")
-        
-        # Add new staff member
+
         new_staff_name = st.text_input("Add Staff Member", placeholder="e.g., New Teacher Name", key="new_staff_input")
         if st.button("➕ Add Staff", use_container_width=True, key="add_staff_btn"):
-            if new_staff_name and new_staff_name.strip():
-                if new_staff_name.strip() not in st.session_state.staff_list:
-                    st.session_state.staff_list.append(new_staff_name.strip())
-                    st.success(f"✅ Added {new_staff_name.strip()}")
+            name = new_staff_name.strip()
+            if name:
+                if name not in st.session_state.staff_list:
+                    st.session_state.staff_list.append(name)
+                    saved = add_staff_to_db(name)
+                    if saved:
+                        st.success(f"✅ Added {name} (saved permanently)")
+                    else:
+                        st.warning(f"Added {name} for this session only - database not reachable")
                     st.rerun()
                 else:
                     st.warning("Already in list")
             else:
                 st.warning("Enter a name first")
-        
+
         st.markdown("---")
         st.markdown("**Current Staff**")
-        
-        # List current staff with remove buttons
-        for staff in st.session_state.staff_list:
+
+        for staff in list(st.session_state.staff_list):
             scol1, scol2 = st.columns([3, 1])
             with scol1:
                 st.write(staff)
             with scol2:
                 if st.button("🗑️", key=f"remove_staff_{staff}", help=f"Remove {staff}"):
                     st.session_state.staff_list.remove(staff)
+                    remove_staff_from_db(staff)
                     st.rerun()
-        
+
         st.markdown("---")
         if st.button("↩️ Reset to Default List", use_container_width=True, key="reset_staff_btn"):
             st.session_state.staff_list = DEFAULT_STAFF.copy()
@@ -386,7 +524,7 @@ with col4:
             mime="application/json",
             use_container_width=True
         )
-        
+
         st.markdown("**Import Data**")
         uploaded_file = st.file_uploader("Upload JSON", type=['json'], key="import_json")
         if uploaded_file:
@@ -396,159 +534,210 @@ with col4:
                 st.rerun()
 
 target_date_str = target_date.isoformat()
-
-# Get existing changes
 changes = get_changes_for_date(target_date_str)
 
-# Main interface continues
 st.markdown("---")
 
-# Add new change section
-with st.expander("➕ Add Timetable Change", expanded=len(changes) == 0):
+# ── ADD / EDIT FORM (not wrapped in st.form, so Add/Remove Block react instantly) ──
+editing = st.session_state.draft['id'] is not None
+expander_label = "✏️ Editing Timetable Change" if editing else "➕ Add Timetable Change"
+
+with st.expander(expander_label, expanded=(len(changes) == 0 or editing)):
     st.info("""
     **Important:** Only create entries for people WHO ARE ONSITE.
-    
-    - **Ben Sutton absent?** → Create entry for the TRT (Gary) showing Gary's timetable
-    - **Caitie released for meeting?** → Create entry for Caitie AND entry for person covering her
-    - **Someone picks up extra lunch duty?** → Create entry for that person
-    
+
+    - **Ben Sutton absent?** → Create an entry for the TRT (e.g. Gary) showing the TRT's timetable
+    - **Caitie released for meeting?** → Create an entry for Caitie AND an entry for whoever covers her
+    - **Someone picks up extra lunch duty?** → Create an entry for that person
+
     Each entry = one person's view of what THEY are doing today.
     """)
-    
-    # Staff type selection OUTSIDE form so it updates immediately
+
+    if editing:
+        ccol1, ccol2 = st.columns([4, 1])
+        with ccol1:
+            st.markdown(f"**Editing:** {st.session_state.draft.get('staff_member', '')}")
+        with ccol2:
+            if st.button("✖️ Cancel Edit", use_container_width=True):
+                st.session_state.draft = new_draft()
+                st.session_state.draft_version += 1
+                st.rerun()
+
+    dv = st.session_state.draft_version
+
     st.subheader("Staff Member (must be onsite)")
     st.caption("Only create entries for people WHO ARE ONSITE. Absent staff don't get entries.")
-    
+
     col1, col2 = st.columns([1, 3])
     with col1:
+        staff_type_idx = 0 if st.session_state.draft['staff_type'] == "Regular Staff" else 1
         staff_type = st.radio(
             "Type",
             options=["Regular Staff", "TRT/Relief"],
-            key="staff_type_selector"
+            index=staff_type_idx,
+            key=f"staff_type_{dv}"
         )
-    
+        st.session_state.draft['staff_type'] = staff_type
+
     with col2:
         if staff_type == "Regular Staff":
-            staff_member = st.selectbox("Select Staff Member *", options=STAFF_LIST, key="staff_select_main")
+            current_staff = st.session_state.draft['staff_member']
+            options = STAFF_LIST if current_staff in STAFF_LIST else STAFF_LIST + ([current_staff] if current_staff else [])
+            default_idx = options.index(current_staff) if current_staff in options else 0
+            staff_member = st.selectbox("Select Staff Member *", options=options, index=default_idx, key=f"staff_select_{dv}")
         else:
-            staff_member = st.text_input("TRT/Relief Name *", placeholder="e.g., Gary, Relief Teacher Name", key="trt_name_main")
-    
-    # Now the form starts
-    if not staff_member:
-        st.warning("⬆️ Please select or enter a staff member name above")
-        st.stop()
-    
-    with st.form("new_change_form"):
-        # Display current selection
-        st.info(f"📝 Creating timetable for: **{staff_member}**")
-        
-        st.markdown("---")
-        st.subheader(f"Why is {staff_member}'s timetable different today?")
-        
-        reason = st.text_input(
-            "Reason *", 
-            placeholder="e.g., Covering absent Ben Sutton, Released for PAC Meeting, Extra lunch duty",
-            help="What are they doing that's different from their normal timetable?"
+            staff_member = st.text_input("TRT/Relief Name *", value=st.session_state.draft['staff_member'],
+                                          placeholder="e.g., Gary, Relief Teacher Name", key=f"trt_name_{dv}")
+        st.session_state.draft['staff_member'] = staff_member
+
+    st.markdown("---")
+    st.subheader(f"Why is {staff_member or 'this person'}'s timetable different today?")
+
+    reason = st.text_input(
+        "Reason *",
+        value=st.session_state.draft['reason'],
+        placeholder="e.g., Covering absent Ben Sutton, Released for PAC Meeting, Extra lunch duty",
+        key=f"reason_{dv}"
+    )
+    st.session_state.draft['reason'] = reason
+
+    col1, col2 = st.columns(2)
+    with col1:
+        covered_by = st.text_input(
+            "If THEY are being covered (optional)",
+            value=st.session_state.draft['covered_by'],
+            placeholder="e.g., Candice, Gary (TRT)",
+            help="Only fill if THIS person is being released/covered by someone else",
+            key=f"covered_by_{dv}"
         )
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            covered_by = st.text_input(
-                "If THEY are being covered (optional)", 
-                placeholder="e.g., Candice, Gary",
-                help="Only fill if THIS person is being released/covered by someone else"
+        st.session_state.draft['covered_by'] = covered_by
+    with col2:
+        notes = st.text_area("Additional Notes", value=st.session_state.draft['notes'],
+                              placeholder="Optional notes...", key=f"notes_{dv}")
+        st.session_state.draft['notes'] = notes
+
+    st.markdown("---")
+    st.subheader(f"{staff_member or 'Their'}'s Timetable for Today")
+    st.caption("Blocks are automatically reordered by start time, so you can add them in any order.")
+
+    for i, block in enumerate(st.session_state.draft['blocks']):
+        st.markdown('<div class="block-row">', unsafe_allow_html=True)
+        bcol1, bcol2, bcol3, bcol4, bcolx = st.columns([2, 2, 2, 2, 0.6])
+        with bcol1:
+            start_val = block['start_time'] if isinstance(block['start_time'], time) else parse_time_str(block['start_time'])
+            start_time_in = st.time_input("Start", value=start_val, key=f"start_{dv}_{i}")
+        with bcol2:
+            end_val = block['end_time'] if isinstance(block['end_time'], time) else parse_time_str(block['end_time'])
+            end_time_in = st.time_input("End", value=end_val, key=f"end_{dv}_{i}")
+        with bcol3:
+            program_options = ["N/A", "JP", "PY", "SY", "NIT", "PRT", "Lunch Cover", "Meeting", "Other"]
+            p_idx = program_options.index(block['program_type']) if block['program_type'] in program_options else 0
+            program_type = st.selectbox("Program", options=program_options, index=p_idx, key=f"program_{dv}_{i}")
+        with bcol4:
+            lunch_options = ["N/A", "Own Lunch", "Lunch Cover"]
+            l_idx = lunch_options.index(block['lunch_type']) if block['lunch_type'] in lunch_options else 0
+            lunch_type = st.selectbox("Lunch", options=lunch_options, index=l_idx, key=f"lunch_{dv}_{i}")
+        with bcolx:
+            st.write("")
+            st.write("")
+            remove_clicked = st.button("🗑️", key=f"remove_block_{dv}_{i}", help="Remove this block") if len(st.session_state.draft['blocks']) > 1 else False
+
+        rcol1, rcol2 = st.columns([1, 2])
+        with rcol1:
+            direction_options = ["N/A", "Released by", "Releasing"]
+            d_idx = direction_options.index(block['release_direction']) if block['release_direction'] in direction_options else 0
+            release_direction = st.selectbox(
+                "Release",
+                options=direction_options,
+                index=d_idx,
+                key=f"direction_{dv}_{i}",
+                help="'Released by X' = X frees this person up. 'Releasing X' = this person frees someone else up."
             )
-        with col2:
-            notes = st.text_area("Additional Notes", placeholder="Optional notes...")
-        
-        st.markdown("---")
-        st.subheader(f"{staff_member}'s Timetable for Today")
-        st.caption("What are their actual duties/blocks for this day?")
-        
-        # Dynamic time blocks
-        if 'num_blocks' not in st.session_state:
-            st.session_state.num_blocks = 1
-        
-        time_blocks = []
-        for i in range(st.session_state.num_blocks):
-            st.markdown(f"**Block {i + 1}**")
-            bcol1, bcol2, bcol3, bcol4, bcol5 = st.columns([2, 2, 2, 2, 2])
-            with bcol1:
-                start_time = st.time_input(f"Start", value=time(9, 0), key=f"start_{i}")
-            with bcol2:
-                end_time = st.time_input(f"End", value=time(10, 0), key=f"end_{i}")
-            with bcol3:
-                program_type = st.selectbox(
-                    f"Program",
-                    options=["JP", "PY", "SY", "NIT", "PRT", "Lunch Cover", "Meeting", "Other"],
-                    key=f"program_type_{i}"
-                )
-            with bcol4:
-                lunch_type = st.selectbox(
-                    f"Lunch",
-                    options=["N/A", "Own Lunch", "Lunch Cover"],
-                    key=f"lunch_type_{i}"
-                )
-            with bcol5:
-                # WHO releases this person during this block (for lunch/NIT)
-                release_options = ["N/A"] + [s for s in STAFF_LIST if s != staff_member]
-                released_by = st.selectbox(
-                    f"Released by",
-                    options=release_options,
-                    key=f"released_by_{i}",
-                    help="Who releases them for lunch/break during this block?"
-                )
-            
-            # Combine program info
-            program_text = program_type
-            if lunch_type != "N/A":
-                program_text = f"{program_type} - {lunch_type}"
-            
-            time_blocks.append({
-                'start_time': start_time.strftime("%H:%M:%S"),
-                'end_time': end_time.strftime("%H:%M:%S"),
-                'modified_program': program_text,
-                'program_type': program_type,
-                'lunch_type': lunch_type,
-                'released_by': released_by if released_by != "N/A" else ""
-            })
-        
-        col1, col2 = st.columns([1, 4])
-        with col1:
-            if st.form_submit_button("➕ Add Block"):
-                st.session_state.num_blocks += 1
-                st.rerun()
-        
-        st.markdown("---")
-        submitted = st.form_submit_button("💾 Save Timetable Change", type="primary", use_container_width=True)
-        
-        if submitted:
-            if not staff_member or not reason:
-                st.error("Please fill in Staff Member and Reason")
-                st.stop()
-            
-            # Filter out empty blocks
-            valid_blocks = [b for b in time_blocks if b.get('program_type')]
-            
-            if not valid_blocks:
-                st.error("Please add at least one time block")
-                st.stop()
-            
+        with rcol2:
+            if release_direction != "N/A":
+                person_options = ["(Select)"] + STAFF_LIST + ["Type a name..."]
+                current_person = block['release_person']
+                if current_person and current_person not in STAFF_LIST:
+                    default_person_idx = person_options.index("Type a name...")
+                elif current_person in STAFF_LIST:
+                    default_person_idx = person_options.index(current_person)
+                else:
+                    default_person_idx = 0
+                person_choice = st.selectbox("Who", options=person_options, index=default_person_idx, key=f"person_choice_{dv}_{i}")
+                if person_choice == "Type a name...":
+                    release_person = st.text_input("Enter name (e.g. TRT)", value=current_person if current_person not in STAFF_LIST else "",
+                                                     key=f"person_manual_{dv}_{i}")
+                elif person_choice == "(Select)":
+                    release_person = ""
+                else:
+                    release_person = person_choice
+            else:
+                release_person = ""
+                st.write("")
+
+        # persist this block's live values back to draft
+        st.session_state.draft['blocks'][i] = {
+            'start_time': start_time_in,
+            'end_time': end_time_in,
+            'program_type': program_type,
+            'lunch_type': lunch_type,
+            'release_direction': release_direction,
+            'release_person': release_person,
+        }
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        if remove_clicked:
+            st.session_state.draft['blocks'].pop(i)
+            st.rerun()
+
+    if st.button("➕ Add Block", key=f"add_block_{dv}"):
+        st.session_state.draft['blocks'].append(new_block())
+        st.rerun()
+
+    st.markdown("---")
+    save_label = "💾 Update Timetable Change" if editing else "💾 Save Timetable Change"
+    if st.button(save_label, type="primary", use_container_width=True, key=f"save_{dv}"):
+        if not staff_member or not reason:
+            st.error("Please fill in Staff Member and Reason")
+        elif not st.session_state.draft['blocks']:
+            st.error("Please add at least one time block")
+        else:
+            sorted_blocks = sort_blocks([
+                {
+                    'start_time': b['start_time'].strftime("%H:%M:%S") if isinstance(b['start_time'], time) else b['start_time'],
+                    'end_time': b['end_time'].strftime("%H:%M:%S") if isinstance(b['end_time'], time) else b['end_time'],
+                    'program_type': b['program_type'],
+                    'lunch_type': b['lunch_type'],
+                    'modified_program': compute_modified_program(b['program_type'], b['lunch_type']),
+                    'release_direction': b['release_direction'],
+                    'release_person': b['release_person'],
+                    'released_by': compute_release_text(b['release_direction'], b['release_person']),
+                }
+                for b in st.session_state.draft['blocks']
+            ])
+
             change_data = {
                 'change_date': target_date_str,
                 'staff_name': staff_member,
                 'reason': reason,
                 'covered_by': covered_by if covered_by else None,
                 'notes': notes if notes else None,
-                'time_blocks': valid_blocks
+                'time_blocks': sorted_blocks
             }
-            
-            save_program_change(target_date_str, change_data)
-            st.success(f"✅ Timetable saved for {staff_member}!")
-            st.session_state.num_blocks = 1
+
+            if editing:
+                update_program_change(target_date_str, st.session_state.draft['id'], change_data)
+                st.success(f"✅ Timetable updated for {staff_member}!")
+            else:
+                save_program_change(target_date_str, change_data)
+                st.success(f"✅ Timetable saved for {staff_member}!")
+
+            st.session_state.draft = new_draft()
+            st.session_state.draft_version += 1
             st.rerun()
 
-# Display existing changes
+# ── DISPLAY EXISTING CHANGES ──────────────────────────────────
 st.markdown("---")
 st.subheader(f"Program Changes for {target_date.strftime('%A, %d %B %Y')}")
 st.caption("Each entry = one person's view of their timetable changes")
@@ -556,43 +745,65 @@ st.caption("Each entry = one person's view of their timetable changes")
 if not changes:
     st.info("No program changes scheduled for this day")
 else:
-    for idx, change in enumerate(changes):
+    for change in changes:
         with st.container():
-            st.markdown(f'<div class="change-card">', unsafe_allow_html=True)
-            
-            col1, col2 = st.columns([4, 1])
+            st.markdown('<div class="change-card">', unsafe_allow_html=True)
+
+            col1, col2, col3 = st.columns([4, 0.6, 0.6])
             with col1:
                 st.markdown(f"### {change.get('staff_name', 'N/A')}: {change.get('reason', 'Program Change')}")
                 if change.get('covered_by'):
                     st.markdown(f"**Covered by:** {change.get('covered_by')}")
             with col2:
-                if st.button("🗑️", key=f"del_{change['id']}", use_container_width=True):
+                if st.button("✏️", key=f"edit_{change['id']}", use_container_width=True, help="Edit this entry"):
+                    edit_copy = copy.deepcopy(change)
+                    blocks = []
+                    for b in sort_blocks(edit_copy.get('time_blocks', [])):
+                        blocks.append({
+                            'start_time': parse_time_str(b.get('start_time', '')),
+                            'end_time': parse_time_str(b.get('end_time', '')),
+                            'program_type': b.get('program_type', 'N/A'),
+                            'lunch_type': b.get('lunch_type', 'N/A'),
+                            'release_direction': b.get('release_direction', 'N/A'),
+                            'release_person': b.get('release_person', ''),
+                        })
+                    st.session_state.draft = {
+                        'id': change['id'],
+                        'staff_type': "Regular Staff" if change.get('staff_name') in STAFF_LIST else "TRT/Relief",
+                        'staff_member': change.get('staff_name', ''),
+                        'reason': change.get('reason', ''),
+                        'covered_by': change.get('covered_by') or '',
+                        'notes': change.get('notes') or '',
+                        'blocks': blocks if blocks else [new_block()],
+                    }
+                    st.session_state.draft_version += 1
+                    st.rerun()
+            with col3:
+                if st.button("🗑️", key=f"del_{change['id']}", use_container_width=True, help="Delete this entry"):
                     delete_program_change(target_date_str, change['id'])
                     st.rerun()
-            
+
             if change.get('notes'):
                 st.markdown(f"*{change.get('notes')}*")
-            
-            # Display time blocks
-            blocks = change.get('time_blocks', [])
+
+            blocks = sort_blocks(change.get('time_blocks', []))
             if blocks:
                 st.markdown("**Timetable:**")
                 for block in blocks:
                     time_display = f"{format_time(block.get('start_time', ''))} → {format_time(block.get('end_time', ''))}"
                     program_display = block.get('modified_program', 'N/A')
-                    released_by = block.get('released_by', '')
-                    
-                    if released_by:
-                        st.markdown(f"- **{time_display}**: {program_display} *(Released by: {released_by})*")
+                    release_text = block.get('released_by', '')
+
+                    if release_text:
+                        st.markdown(f"- **{time_display}**: {program_display} *({release_text})*")
                     else:
                         st.markdown(f"- **{time_display}**: {program_display}")
-            
+
             st.markdown('</div>', unsafe_allow_html=True)
 
-# Action buttons
+# ── ACTION BUTTONS ──────────────────────────────────────────
 st.markdown("---")
 
-# Initialize mobile view state
 if 'show_mobile_view' not in st.session_state:
     st.session_state.show_mobile_view = False
 
@@ -613,7 +824,6 @@ with col2:
         type="primary"
     )
 
-# Show mobile view if toggled
 if st.session_state.show_mobile_view:
     st.markdown("---")
     st.markdown("### 📱 Mobile View (Screenshot this for forwarding)")
