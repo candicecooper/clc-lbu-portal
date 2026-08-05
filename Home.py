@@ -1,18 +1,17 @@
 from theme import apply_clc_theme
 import streamlit as st
-from auth import require_auth, logout_button, get_staff_name
+from staff_auth import require_staff_auth, staff_logout_button
 from datetime import date
 
 st.set_page_config(page_title="CLC LBU Staff Portal", page_icon="🏫", layout="wide", initial_sidebar_state="collapsed")
 apply_clc_theme()
-# require_auth("CLC LBU Staff Portal", "🏫")
-logout_button("sidebar")
+require_staff_auth("CLC LBU Staff Portal", "🏫")
+staff_logout_button("sidebar")
 
-staff_name = get_staff_name()
 today = date.today().strftime("%A %-d %B %Y")
 BASE = "https://clc-lbu-portal.onrender.com"
 
-st.markdown(f"### 👋 Welcome, {staff_name} — {today}")
+st.markdown(f"### 👋 Welcome — {today}")
 st.markdown(f"""
 <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin-top:1rem;">
   <a href="{BASE}/Daily_Bulletin" style="display:block;background:#1A7A7A;color:white;padding:1rem;border-radius:10px;text-decoration:none;font-weight:600;">📰 Daily Bulletin</a>
