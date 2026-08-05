@@ -208,7 +208,8 @@ def build_docx(parsed):
     inc = parsed["incident"]
     add_details_grid(doc, [
         ("Incident Date", inc.get("Incident Date", "")), ("Incident Time", inc.get("Incident Time", "")),
-        ("Location(s)", inc.get("Location", "")), ("Reporting Staff", inc.get("Reporting Staff", "")),
+        ("Incident End Time", inc.get("Incident End Time", "")), ("Location(s)", inc.get("Location", "")),
+        ("Reporting Staff", inc.get("Reporting Staff", "")), ("", ""),
     ])
 
     add_heading(doc, "Incident Timeline – ABC-H (one row per phase of the same incident)")
@@ -304,7 +305,7 @@ PHASE_START = re.compile(r"^(PHASE|EVENT)\s*\d+", re.IGNORECASE)
 GENERIC_LABELS = [
     "Other students involved", "Home School", "EDSAS ID", "Program", "DOB",
     "Witnesses", "Name",
-    "Incident Date", "Incident Time", "Location",
+    "Incident Date", "Incident End Time", "Incident Time", "Location",
     "Reporting Staff",
     "ED155 required", "ED155 completed", "ED155 number",
     "Emergency services involved", "SAPOL reference number", "Service",
