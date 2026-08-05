@@ -120,6 +120,10 @@ if uploaded_file is not None:
                 else:
                     record[db_field] = str(val).strip()
             if record.get('student_name'):
+                if not record.get('meeting_week'):
+                    fallback_term = record.get('term') or ''
+                    fallback_year = record.get('year') or ''
+                    record['meeting_week'] = f"Unknown Week ({fallback_term} {fallback_year})".strip() or "Unknown Week"
                 parsed_records.append(record)
 
         st.success(f"Ready: {len(parsed_records)} student records parsed from the file")
@@ -140,40 +144,52 @@ if uploaded_file is not None:
 
         if st.button("🚀 Apply", type="primary", use_container_width=True):
             with st.spinner("Working..."):
-                try:
-                    if mode.startswith("🗑️"):
+                errors = []
+                if mode.startswith("🗑️"):
+                    try:
                         supabase.table('allocation_students').delete().gte(
                             'id', '00000000-0000-0000-0000-000000000000'
                         ).execute()
-                        for i in range(0, len(parsed_records), 50):
-                            supabase.table('allocation_students').insert(parsed_records[i:i + 50]).execute()
-                        st.success(f"✅ Wiped and re-imported {len(parsed_records)} records!")
-                    else:
-                        existing = supabase.table('allocation_students').select('id, student_name').execute().data
-                        existing_by_name = {str(r['student_name']).strip().lower(): r['id'] for r in existing if r.get('student_name')}
+                    except Exception as e:
+                        st.error(f"Couldn't clear existing rows: {str(e)[:300]}")
+                        st.stop()
 
-                        updated, inserted = 0, 0
-                        to_insert = []
-                        for record in parsed_records:
-                            name_key = str(record['student_name']).strip().lower()
+                    inserted = 0
+                    for record in parsed_records:
+                        try:
+                            supabase.table('allocation_students').insert(record).execute()
+                            inserted += 1
+                        except Exception as e:
+                            errors.append((record.get('student_name', '?'), str(e)[:200]))
+                    st.success(f"✅ Wiped and re-imported {inserted} of {len(parsed_records)} record(s).")
+                else:
+                    existing = supabase.table('allocation_students').select('id, student_name').execute().data
+                    existing_by_name = {str(r['student_name']).strip().lower(): r['id'] for r in existing if r.get('student_name')}
+
+                    updated, inserted = 0, 0
+                    for record in parsed_records:
+                        name_key = str(record['student_name']).strip().lower()
+                        try:
                             if name_key in existing_by_name:
                                 supabase.table('allocation_students').update(record).eq(
                                     'id', existing_by_name[name_key]
                                 ).execute()
                                 updated += 1
                             else:
-                                to_insert.append(record)
+                                supabase.table('allocation_students').insert(record).execute()
+                                inserted += 1
+                        except Exception as e:
+                            errors.append((record.get('student_name', '?'), str(e)[:200]))
 
-                        for i in range(0, len(to_insert), 50):
-                            supabase.table('allocation_students').insert(to_insert[i:i + 50]).execute()
-                        inserted = len(to_insert)
+                    st.success(f"✅ Updated {updated} existing student(s), added {inserted} new one(s).")
 
-                        st.success(f"✅ Updated {updated} existing student(s), added {inserted} new one(s).")
-
+                if errors:
+                    st.error(f"⚠️ {len(errors)} record(s) failed and were skipped — everything else above succeeded:")
+                    for name, err in errors:
+                        st.write(f"- **{name}**: {err}")
+                else:
                     st.balloons()
-                    st.info("Open the Allocation Dashboard or Meetings Tool to confirm.")
-                except Exception as e:
-                    st.error(f"Failed: {str(e)[:500]}")
+                st.info("Open the Allocation Dashboard or Meetings Tool to confirm.")
     except Exception as e:
         st.error(f"Error reading file: {e}")
 
