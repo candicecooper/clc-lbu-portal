@@ -3,6 +3,15 @@ from supabase import create_client
 from datetime import datetime, date
 from groq import Groq
 import json
+import re
+from io import BytesIO
+
+from docx import Document
+from docx.shared import Pt, RGBColor, Cm
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
+from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
 
 # Page config
 st.set_page_config(page_title="Committees", page_icon="📋", layout="wide")
@@ -71,6 +80,274 @@ COMMITTEES = {
         'description': 'Planning · Coordination · Celebration'
     }
 }
+
+# ========== MINUTES DOCX GENERATOR ==========
+
+def _hex_to_rgb(hex_color):
+    hex_color = hex_color.lstrip('#')
+    return RGBColor(int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16))
+
+
+def _set_cell_shading(cell, hex_color):
+    shd = OxmlElement('w:shd')
+    shd.set(qn('w:val'), 'clear')
+    shd.set(qn('w:color'), 'auto')
+    shd.set(qn('w:fill'), hex_color.lstrip('#'))
+    cell._tc.get_or_add_tcPr().append(shd)
+
+
+def _set_cell_margins(cell, top=100, bottom=100, left=150, right=150):
+    tcPr = cell._tc.get_or_add_tcPr()
+    tcMar = OxmlElement('w:tcMar')
+    for side, val in (('top', top), ('bottom', bottom), ('start', left), ('end', right)):
+        node = OxmlElement(f'w:{side}')
+        node.set(qn('w:w'), str(val))
+        node.set(qn('w:type'), 'dxa')
+        tcMar.append(node)
+    tcPr.append(tcMar)
+
+
+def _add_bottom_border(paragraph, color="e2e8f0", size=6):
+    pPr = paragraph._p.get_or_add_pPr()
+    pBdr = OxmlElement('w:pBdr')
+    bottom = OxmlElement('w:bottom')
+    bottom.set(qn('w:val'), 'single')
+    bottom.set(qn('w:sz'), str(size))
+    bottom.set(qn('w:space'), '4')
+    bottom.set(qn('w:color'), color)
+    pBdr.append(bottom)
+    pPr.append(pBdr)
+
+
+def _add_page_number_field(paragraph, grey_rgb):
+    run = paragraph.add_run()
+    run.font.size = Pt(9)
+    run.font.color.rgb = grey_rgb
+    fld1 = OxmlElement('w:fldChar')
+    fld1.set(qn('w:fldCharType'), 'begin')
+    instr = OxmlElement('w:instrText')
+    instr.set(qn('xml:space'), 'preserve')
+    instr.text = "PAGE"
+    fld2 = OxmlElement('w:fldChar')
+    fld2.set(qn('w:fldCharType'), 'end')
+    run._r.append(fld1)
+    run._r.append(instr)
+    run._r.append(fld2)
+
+    run2 = paragraph.add_run(" of ")
+    run2.font.size = Pt(9)
+    run2.font.color.rgb = grey_rgb
+
+    run3 = paragraph.add_run()
+    run3.font.size = Pt(9)
+    run3.font.color.rgb = grey_rgb
+    fld3 = OxmlElement('w:fldChar')
+    fld3.set(qn('w:fldCharType'), 'begin')
+    instr2 = OxmlElement('w:instrText')
+    instr2.set(qn('xml:space'), 'preserve')
+    instr2.text = "NUMPAGES"
+    fld4 = OxmlElement('w:fldChar')
+    fld4.set(qn('w:fldCharType'), 'end')
+    run3._r.append(fld3)
+    run3._r.append(instr2)
+    run3._r.append(fld4)
+
+
+_HEADING_PATTERN = re.compile(r'^\d+\.\s+[A-Z][A-Z\s&/\'\-]+$')
+_ITEM_HEADING_PATTERN = re.compile(r'^\d+\.\s+.+$')
+_LABEL_PATTERN = re.compile(r'^(Present|Apologies|Status|Discussion|Actions):\s*(.*)$', re.IGNORECASE)
+
+
+def _parse_minutes_body(text):
+    """Return the lines of the minutes text starting at the first
+    ALL-CAPS numbered section heading (e.g. '1. ATTENDANCE'), skipping
+    the raw metadata header that's already shown in the meta table."""
+    lines = text.split('\n')
+    start = 0
+    for i, line in enumerate(lines):
+        if _HEADING_PATTERN.match(line.strip()):
+            start = i
+            break
+    return lines[start:]
+
+
+def generate_minutes_docx(meeting, committee, formatted_minutes_text):
+    """Build a professionally branded Word document for a set of committee
+    meeting minutes and return it as a BytesIO buffer ready for download."""
+    doc = Document()
+
+    section = doc.sections[0]
+    section.page_width = Cm(21.0)
+    section.page_height = Cm(29.7)
+    section.top_margin = Cm(2.0)
+    section.bottom_margin = Cm(2.0)
+    section.left_margin = Cm(2.2)
+    section.right_margin = Cm(2.2)
+
+    accent_hex = committee['color']
+    accent_rgb = _hex_to_rgb(accent_hex)
+    navy_rgb = RGBColor(0x1e, 0x3a, 0x5f)
+    grey_rgb = RGBColor(0x64, 0x74, 0x8b)
+
+    normal = doc.styles['Normal']
+    normal.font.name = 'Calibri'
+    normal.font.size = Pt(10.5)
+    normal.font.color.rgb = RGBColor(0x1f, 0x29, 0x37)
+    normal.paragraph_format.space_after = Pt(6)
+    normal.paragraph_format.line_spacing = 1.15
+
+    content_width = Cm(21.0) - section.left_margin - section.right_margin
+
+    # ---- Letterhead ----
+    header_table = doc.add_table(rows=1, cols=1)
+    header_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    header_table.autofit = False
+    hcell = header_table.rows[0].cells[0]
+    hcell.width = content_width
+    _set_cell_shading(hcell, "1e3a5f")
+    _set_cell_margins(hcell, top=200, bottom=200, left=300, right=300)
+    hp = hcell.paragraphs[0]
+    run = hp.add_run("COWANDILLA LEARNING CENTRE")
+    run.font.color.rgb = RGBColor(0xff, 0xff, 0xff)
+    run.font.size = Pt(15)
+    run.font.bold = True
+    hp2 = hcell.add_paragraph()
+    run2 = hp2.add_run("Learning and Behaviour Unit")
+    run2.font.color.rgb = RGBColor(0xcb, 0xd5, 0xe1)
+    run2.font.size = Pt(10.5)
+    run2.font.italic = True
+
+    doc.add_paragraph().paragraph_format.space_after = Pt(4)
+
+    # ---- Title block ----
+    title_p = doc.add_paragraph()
+    title_p.paragraph_format.space_after = Pt(0)
+    trun = title_p.add_run("MEETING MINUTES")
+    trun.font.size = Pt(20)
+    trun.font.bold = True
+    trun.font.color.rgb = navy_rgb
+
+    committee_p = doc.add_paragraph()
+    committee_p.paragraph_format.space_after = Pt(10)
+    crun = committee_p.add_run(committee['name'])
+    crun.font.size = Pt(13)
+    crun.font.bold = True
+    crun.font.color.rgb = accent_rgb
+    _add_bottom_border(committee_p, color=accent_hex.lstrip('#'), size=10)
+
+    # ---- Meta table ----
+    meta_items = [
+        ("Meeting", meeting['meeting_title']),
+        ("Date", meeting['meeting_date']),
+        ("Time", meeting['meeting_time']),
+        ("Location", meeting.get('location') or 'TBA'),
+        ("Status", meeting.get('status', 'draft').capitalize()),
+    ]
+    meta_table = doc.add_table(rows=len(meta_items), cols=2)
+    meta_table.alignment = WD_TABLE_ALIGNMENT.LEFT
+    meta_table.autofit = False
+    label_w = Cm(3.6)
+    value_w = content_width - label_w
+    for r, (label, value) in enumerate(meta_items):
+        lcell = meta_table.cell(r, 0)
+        vcell = meta_table.cell(r, 1)
+        lcell.width = label_w
+        vcell.width = value_w
+        _set_cell_shading(lcell, "f1f5f9")
+        _set_cell_margins(lcell, top=80, bottom=80, left=150, right=150)
+        _set_cell_margins(vcell, top=80, bottom=80, left=150, right=150)
+        lp = lcell.paragraphs[0]
+        lrun = lp.add_run(label)
+        lrun.font.bold = True
+        lrun.font.size = Pt(9.5)
+        lrun.font.color.rgb = grey_rgb
+        vp = vcell.paragraphs[0]
+        vrun = vp.add_run(str(value))
+        vrun.font.size = Pt(10.5)
+        vcell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+        lcell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+
+    doc.add_paragraph().paragraph_format.space_after = Pt(2)
+
+    # ---- Body ----
+    body_lines = _parse_minutes_body(formatted_minutes_text)
+    blank_run = False
+    for raw_line in body_lines:
+        line = raw_line.strip()
+
+        if not line:
+            blank_run = True
+            continue
+
+        if _HEADING_PATTERN.match(line):
+            p = doc.add_paragraph()
+            p.paragraph_format.space_before = Pt(14)
+            p.paragraph_format.space_after = Pt(6)
+            r = p.add_run(line)
+            r.font.size = Pt(12.5)
+            r.font.bold = True
+            r.font.color.rgb = navy_rgb
+            _add_bottom_border(p)
+            blank_run = False
+            continue
+
+        label_match = _LABEL_PATTERN.match(line)
+        if label_match:
+            label, rest = label_match.group(1), label_match.group(2)
+            p = doc.add_paragraph()
+            p.paragraph_format.space_after = Pt(4)
+            lr = p.add_run(f"{label}: ")
+            lr.font.bold = True
+            lr.font.size = Pt(10.5)
+            if rest:
+                vr = p.add_run(rest)
+                vr.font.size = Pt(10.5)
+            blank_run = False
+            continue
+
+        if _ITEM_HEADING_PATTERN.match(line) and len(line) < 90 and not line.isupper():
+            p = doc.add_paragraph()
+            p.paragraph_format.space_before = Pt(8)
+            p.paragraph_format.space_after = Pt(3)
+            r = p.add_run(line)
+            r.font.size = Pt(11)
+            r.font.bold = True
+            r.font.color.rgb = accent_rgb
+            blank_run = False
+            continue
+
+        p = doc.add_paragraph()
+        p.paragraph_format.space_after = Pt(6 if blank_run else 3)
+        r = p.add_run(line)
+        r.font.size = Pt(10.5)
+        blank_run = False
+
+    # ---- Footer ----
+    footer = section.footer
+    footer_p = footer.paragraphs[0]
+    footer_p.text = ""
+    footer_p.paragraph_format.tab_stops.add_tab_stop(content_width, WD_TAB_ALIGNMENT.RIGHT)
+    pPr = footer_p._p.get_or_add_pPr()
+    pBdr = OxmlElement('w:pBdr')
+    top = OxmlElement('w:top')
+    top.set(qn('w:val'), 'single')
+    top.set(qn('w:sz'), '4')
+    top.set(qn('w:space'), '4')
+    top.set(qn('w:color'), 'e2e8f0')
+    pBdr.append(top)
+    pPr.append(pBdr)
+
+    fr1 = footer_p.add_run("Cowandilla Learning Centre — Learning and Behaviour Unit")
+    fr1.font.size = Pt(8.5)
+    fr1.font.color.rgb = grey_rgb
+    footer_p.add_run("\t")
+    _add_page_number_field(footer_p, grey_rgb)
+
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
+
 
 # ========== HEADER ==========
 st.markdown("""
@@ -157,12 +434,10 @@ if st.session_state.committee_view == 'home':
         if st.button("Open Special Events", key="btn_special", use_container_width=True):
             navigate_to('committee_home', 'special')
     
-    # Additional Cards - Below
+    # Documents Card - Centered below
     st.divider()
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        # Documents Card
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
         st.markdown("""
             <div style="border: 3px solid #0891b2; border-radius: 16px; padding: 2rem; 
                         background: white; margin-bottom: 1.5rem; min-height: 220px;
@@ -174,24 +449,8 @@ if st.session_state.committee_view == 'home':
                             border-radius: 20px; font-size: 0.85rem; font-weight: 600;">● Active</span>
             </div>
         """, unsafe_allow_html=True)
-        if st.button("View Documents", key="btn_documents", use_container_width=True):
+        if st.button("📂 Open Documents Library", key="btn_docs", use_container_width=True):
             navigate_to('documents')
-    
-    with col2:
-        # Committee Members Card (NEW!)
-        st.markdown("""
-            <div style="border: 3px solid #8b5cf6; border-radius: 16px; padding: 2rem; 
-                        background: white; margin-bottom: 1.5rem; min-height: 220px;
-                        box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
-                <div style="font-size: 3.5rem; margin-bottom: 1rem;">👥</div>
-                <h3 style="color: #1e3a5f; margin-bottom: 0.5rem;">Committee Members</h3>
-                <p style="color: #64748b; margin-bottom: 1rem;">Roles · Positions · Staff</p>
-                <span style="background: #ede9fe; color: #6b21a8; padding: 0.4rem 0.8rem; 
-                            border-radius: 20px; font-size: 0.85rem; font-weight: 600;">● Active</span>
-            </div>
-        """, unsafe_allow_html=True)
-        if st.button("View Members", key="btn_members", use_container_width=True):
-            navigate_to('members')
 
 # ========== COMMITTEE HOME VIEW ==========
 elif st.session_state.committee_view == 'committee_home':
@@ -618,7 +877,7 @@ Generate the formatted minutes:"""
                             key="edit_ai_minutes"
                         )
                         
-                        col1, col2 = st.columns(2)
+                        col1, col2, col3 = st.columns(3)
                         with col1:
                             if st.button("💾 Save Edited Minutes", use_container_width=True):
                                 supabase.table("committee_minutes").update({
@@ -635,6 +894,20 @@ Generate the formatted minutes:"""
                                 }).eq("id", st.session_state.selected_meeting).execute()
                                 st.success("Minutes published!")
                                 st.rerun()
+                        
+                        with col3:
+                            try:
+                                quick_docx = generate_minutes_docx(meeting, committee, edited_minutes)
+                                st.download_button(
+                                    "📄 Download Word",
+                                    data=quick_docx,
+                                    file_name=f"{meeting['meeting_title']}_{meeting['meeting_date']}_Minutes.docx",
+                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                    use_container_width=True,
+                                    key="quick_download_ai"
+                                )
+                            except Exception as e:
+                                st.caption(f"Preview unavailable: {str(e)[:40]}")
                 
                 else:  # Manual Entry
                     st.markdown("#### ✍️ Manual Minutes Entry (DfE Format)")
@@ -753,12 +1026,30 @@ Status: {previous_confirmed}
                         st.markdown("#### Current Minutes")
                         st.text_area("", value=existing_minutes['formatted_minutes'], height=400, disabled=True, key="view_manual")
                         
-                        if st.button("📢 Publish Minutes", use_container_width=True):
-                            supabase.table("committee_meetings").update({
-                                "status": "published"
-                            }).eq("id", st.session_state.selected_meeting).execute()
-                            st.success("Minutes published!")
-                            st.rerun()
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.button("📢 Publish Minutes", use_container_width=True):
+                                supabase.table("committee_meetings").update({
+                                    "status": "published"
+                                }).eq("id", st.session_state.selected_meeting).execute()
+                                st.success("Minutes published!")
+                                st.rerun()
+                        
+                        with col2:
+                            try:
+                                quick_docx_manual = generate_minutes_docx(
+                                    meeting, committee, existing_minutes['formatted_minutes']
+                                )
+                                st.download_button(
+                                    "📄 Download Word",
+                                    data=quick_docx_manual,
+                                    file_name=f"{meeting['meeting_title']}_{meeting['meeting_date']}_Minutes.docx",
+                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                    use_container_width=True,
+                                    key="quick_download_manual"
+                                )
+                            except Exception as e:
+                                st.caption(f"Preview unavailable: {str(e)[:40]}")
             
             # ========== DOWNLOAD TAB ==========
             with tab3:
@@ -772,17 +1063,23 @@ Status: {previous_confirmed}
                 if download_minutes_response.data:
                     minutes_data = download_minutes_response.data[0]
                     
-                    # Download minutes
+                    # Download minutes as a professionally formatted Word document
                     if minutes_data.get('formatted_minutes'):
-                        st.download_button(
-                            label="📄 Download Minutes (TXT)",
-                            data=minutes_data['formatted_minutes'],
-                            file_name=f"{meeting['meeting_title']}_{meeting['meeting_date']}_Minutes.txt",
-                            mime="text/plain",
-                            use_container_width=True
-                        )
+                        try:
+                            docx_buffer = generate_minutes_docx(
+                                meeting, committee, minutes_data['formatted_minutes']
+                            )
+                            st.download_button(
+                                label="📄 Download Minutes (Word)",
+                                data=docx_buffer,
+                                file_name=f"{meeting['meeting_title']}_{meeting['meeting_date']}_Minutes.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                use_container_width=True
+                            )
+                        except Exception as e:
+                            st.error(f"Error generating Word document: {str(e)}")
                     
-                    # Download transcript if exists
+                    # Download transcript if exists (kept as plain text - it's a raw transcript)
                     if minutes_data.get('transcript'):
                         st.download_button(
                             label="📝 Download Transcript (TXT)",
@@ -947,239 +1244,6 @@ elif st.session_state.committee_view == 'documents':
     if st.button("↩ Return to Committees Home", use_container_width=True):
         navigate_to('home')
 
-# ========== COMMITTEE MEMBERS VIEW ==========
-# ========== COMMITTEE MEMBERS VIEW (EDITABLE WITH ARCHIVING) ==========
-elif st.session_state.committee_view == 'members':
-    
-    st.markdown("### 👥 Committee Members & Roles")
-    st.markdown("View all staff committee assignments and roles.")
-    
-    col1, col2, col3 = st.columns([2, 2, 1])
-    with col1:
-        if st.button("↩ Return to Committees Home"):
-            navigate_to('home')
-    with col2:
-        # Year selection for archiving
-        current_year = datetime.now().year
-        years = list(range(current_year - 2, current_year + 2))
-        selected_year = st.selectbox("Year", years, index=years.index(current_year), label_visibility="visible")
-    with col3:
-        edit_mode = st.toggle("✏️ Edit Mode", value=False)
-    
-    st.divider()
-    
-    # Note about archiving
-    if selected_year != current_year:
-        st.info(f"📅 Viewing committee members for {selected_year}")
-    
-    # Try to load from database first, fall back to hardcoded
-    try:
-        committees_response = supabase.table('committee_roles')\
-            .select('*')\
-            .order('display_order', desc=False)\
-            .execute()
-        
-        if committees_response.data and len(committees_response.data) > 0:
-            # Database works! Use it
-            committees = committees_response.data
-            
-            for committee in committees:
-                members_response = supabase.table('committee_role_members')\
-                    .select('*')\
-                    .eq('committee_id', committee['id'])\
-                    .order('display_order', desc=False)\
-                    .execute()
-                committee['members'] = members_response.data if members_response.data else []
-            
-            using_database = True
-            st.info("✅ Using database (edits will be saved)")
-        else:
-            raise Exception("No data in database")
-    
-    except:
-        # Fallback to hardcoded
-        using_database = False
-        st.warning("⚠️ Using hardcoded data (edits won't be saved until database cache refreshes)")
-        
-        committees = [
-            {'id': 'pac', 'name': 'PAC', 'description': 'Partnership & Cooperation Committee', 'display_order': 0, 'members': [
-                {'id': 'pac_1', 'staff_name': 'Candice', 'role': 'Leader', 'display_order': 0},
-                {'id': 'pac_2', 'staff_name': 'Naomi', 'role': 'SSO rep', 'display_order': 1},
-                {'id': 'pac_3', 'staff_name': 'Ben', 'role': 'AEU Rep', 'display_order': 2},
-                {'id': 'pac_4', 'staff_name': 'Brenton', 'role': 'Teacher Rep', 'display_order': 3}
-            ]},
-            {'id': 'whs', 'name': 'WHS', 'description': 'Work Health & Safety', 'display_order': 1, 'members': [
-                {'id': 'whs_1', 'staff_name': 'Candice', 'role': 'OHS Rep', 'display_order': 0},
-                {'id': 'whs_2', 'staff_name': 'Naomi', 'role': '', 'display_order': 1},
-                {'id': 'whs_3', 'staff_name': 'Ben Selga', 'role': '', 'display_order': 2},
-                {'id': 'whs_4', 'staff_name': 'Caitie', 'role': '', 'display_order': 3},
-                {'id': 'whs_5', 'staff_name': 'Roisin', 'role': '', 'display_order': 4}
-            ]},
-            {'id': 'social', 'name': 'Social Club', 'description': '', 'display_order': 2, 'members': [
-                {'id': 'social_1', 'staff_name': 'Ben Sutton', 'role': '', 'display_order': 0},
-                {'id': 'social_2', 'staff_name': 'Vinnie', 'role': '', 'display_order': 1},
-                {'id': 'social_3', 'staff_name': 'Jacqui', 'role': '', 'display_order': 2},
-                {'id': 'social_4', 'staff_name': 'Annette', 'role': '', 'display_order': 3}
-            ]},
-            {'id': 'events', 'name': 'Centre Spec Events', 'description': 'Centre Special Events', 'display_order': 3, 'members': [
-                {'id': 'events_1', 'staff_name': 'Brenton', 'role': '', 'display_order': 0},
-                {'id': 'events_2', 'staff_name': 'Ben Selga', 'role': '', 'display_order': 1},
-                {'id': 'events_3', 'staff_name': 'Annette', 'role': '', 'display_order': 2}
-            ]},
-            {'id': 'leaving', 'name': 'Leaving Gift', 'description': '', 'display_order': 4, 'members': [
-                {'id': 'leaving_1', 'staff_name': 'Caitie', 'role': '', 'display_order': 0},
-                {'id': 'leaving_2', 'staff_name': 'Jacqui', 'role': '', 'display_order': 1},
-                {'id': 'leaving_3', 'staff_name': 'Annette', 'role': '', 'display_order': 2},
-                {'id': 'leaving_4', 'staff_name': 'Candice', 'role': '', 'display_order': 3},
-                {'id': 'leaving_5', 'staff_name': 'Naomi', 'role': '', 'display_order': 4}
-            ]},
-            {'id': 'ohs', 'name': 'OHS', 'description': 'Occupational Health & Safety', 'display_order': 5, 'members': [
-                {'id': 'ohs_1', 'staff_name': 'Roisin', 'role': 'Proxy', 'display_order': 0},
-                {'id': 'ohs_2', 'staff_name': 'Caitie', 'role': 'Proxy', 'display_order': 1}
-            ]},
-            {'id': 'aeu', 'name': 'AEU', 'description': 'Australian Education Union', 'display_order': 6, 'members': [
-                {'id': 'aeu_1', 'staff_name': 'Roisin', 'role': 'Proxy', 'display_order': 0},
-                {'id': 'aeu_2', 'staff_name': 'Ben Sutton', 'role': 'Proxy', 'display_order': 1}
-            ]},
-            {'id': 'fire', 'name': 'Fire Warden', 'description': '', 'display_order': 7, 'members': [
-                {'id': 'fire_1', 'staff_name': 'Brenton', 'role': '', 'display_order': 0},
-                {'id': 'fire_2', 'staff_name': 'Ben Selga', 'role': '', 'display_order': 1}
-            ]},
-            {'id': 'firstaid', 'name': 'First Aid Officer', 'description': '', 'display_order': 8, 'members': [
-                {'id': 'firstaid_1', 'staff_name': 'Naomi', 'role': '', 'display_order': 0}
-            ]},
-            {'id': 'mathletics', 'name': 'Mathletics Coordinator', 'description': '3P Learning', 'display_order': 9, 'members': [
-                {'id': 'mathletics_1', 'staff_name': 'Caitie', 'role': '', 'display_order': 0}
-            ]}
-        ]
-    
-    # Display committees
-    for committee in committees:
-        # Check if this committee is being edited
-        editing = st.session_state.get(f'editing_{committee["id"]}', False)
-        
-        if editing:
-            # EDIT MODE
-            st.markdown(f"### ✏️ Editing: {committee['name']}")
-            if committee.get('description'):
-                st.caption(committee['description'])
-            
-            st.markdown("#### Members")
-            
-            # Show existing members with edit options
-            for member in committee['members']:
-                col1, col2, col3, col4 = st.columns([3, 2, 1, 1])
-                
-                with col1:
-                    new_name = st.text_input(
-                        "Name",
-                        value=member.get('staff_name', ''),
-                        key=f"name_{member['id']}",
-                        label_visibility="collapsed"
-                    )
-                
-                with col2:
-                    new_role = st.text_input(
-                        "Role",
-                        value=member.get('role', ''),
-                        key=f"role_{member['id']}",
-                        label_visibility="collapsed"
-                    )
-                
-                with col3:
-                    if st.button("💾", key=f"save_{member['id']}", help="Save"):
-                        if using_database:
-                            try:
-                                supabase.table('committee_role_members')\
-                                    .update({'staff_name': new_name, 'role': new_role})\
-                                    .eq('id', member['id'])\
-                                    .execute()
-                                st.success("Saved!")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Error: {str(e)}")
-                        else:
-                            st.warning("Can't save - database not available")
-                
-                with col4:
-                    if st.button("🗑️", key=f"del_{member['id']}", help="Delete"):
-                        if using_database:
-                            try:
-                                supabase.table('committee_role_members')\
-                                    .delete()\
-                                    .eq('id', member['id'])\
-                                    .execute()
-                                st.success("Deleted!")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Error: {str(e)}")
-                        else:
-                            st.warning("Can't delete - database not available")
-            
-            # Add new member
-            st.markdown("#### Add New Member")
-            with st.form(key=f"add_member_{committee['id']}"):
-                col1, col2, col3 = st.columns([3, 2, 2])
-                with col1:
-                    new_staff = st.text_input("Staff Name")
-                with col2:
-                    new_role = st.text_input("Role (optional)")
-                with col3:
-                    st.write("")
-                    if st.form_submit_button("➕ Add", use_container_width=True):
-                        if new_staff:
-                            if using_database:
-                                try:
-                                    supabase.table('committee_role_members').insert({
-                                        'committee_id': committee['id'],
-                                        'staff_name': new_staff,
-                                        'role': new_role,
-                                        'display_order': len(committee['members'])
-                                    }).execute()
-                                    st.success(f"Added {new_staff}!")
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Error: {str(e)}")
-                            else:
-                                st.warning("Can't add - database not available")
-            
-            if st.button("✅ Done Editing", key=f"done_{committee['id']}"):
-                st.session_state[f'editing_{committee["id"]}'] = False
-                st.rerun()
-            
-            st.divider()
-        
-        else:
-            # VIEW MODE
-            col1, col2 = st.columns([4, 1])
-            
-            with col1:
-                st.markdown(f"### 🤝 {committee['name']}")
-                if committee.get('description'):
-                    st.caption(committee['description'])
-            
-            with col2:
-                if edit_mode:
-                    if st.button("✏️", key=f"edit_{committee['id']}", help="Edit"):
-                        st.session_state[f'editing_{committee["id"]}'] = True
-                        st.rerun()
-            
-            # Display members
-            if committee['members']:
-                member_list = []
-                for member in committee['members']:
-                    name = member.get('staff_name', '')
-                    role = member.get('role', '')
-                    if role:
-                        member_list.append(f"**{name}** ({role})")
-                    else:
-                        member_list.append(f"**{name}**")
-                
-                st.markdown("**Members:** " + " • ".join(member_list))
-            else:
-                st.caption("_No members assigned_")
-            
-            st.divider()
 # ========== FOOTER ==========
 st.divider()
 st.caption("💡 Tip: Use AI-assisted minutes generation to save time, or enter minutes manually following DfE format.")
