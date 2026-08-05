@@ -120,10 +120,14 @@ if uploaded_file is not None:
                 else:
                     record[db_field] = str(val).strip()
             if record.get('student_name'):
+                if not record.get('term'):
+                    record['term'] = "Unknown Term"
+                if not record.get('year'):
+                    record['year'] = str(datetime.now().year)
                 if not record.get('meeting_week'):
-                    fallback_term = record.get('term') or ''
-                    fallback_year = record.get('year') or ''
-                    record['meeting_week'] = f"Unknown Week ({fallback_term} {fallback_year})".strip() or "Unknown Week"
+                    record['meeting_week'] = f"Unknown Week ({record['term']} {record['year']})"
+                if not record.get('meeting_date'):
+                    record['meeting_date'] = datetime.now().date().isoformat()
                 parsed_records.append(record)
 
         st.success(f"Ready: {len(parsed_records)} student records parsed from the file")
@@ -176,8 +180,10 @@ if uploaded_file is not None:
                                 ).execute()
                                 updated += 1
                             else:
-                                supabase.table('allocation_students').insert(record).execute()
+                                result = supabase.table('allocation_students').insert(record).execute()
                                 inserted += 1
+                                if result.data:
+                                    existing_by_name[name_key] = result.data[0]['id']
                         except Exception as e:
                             errors.append((record.get('student_name', '?'), str(e)[:200]))
 
