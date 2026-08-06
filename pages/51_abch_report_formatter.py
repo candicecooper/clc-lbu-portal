@@ -93,11 +93,36 @@ def add_field_line(doc, label, value):
 
 
 def add_plain(doc, text):
-    p = doc.add_paragraph(text or "")
-    for r in p.runs:
-        r.font.size = Pt(10.5)
-    p.paragraph_format.space_after = Pt(4)
-    return p
+    lines = (text or "").split("\n") or [""]
+    first_p = None
+    for line in lines:
+        p = doc.add_paragraph(line)
+        p.paragraph_format.space_after = Pt(4)
+        for r in p.runs:
+            r.font.size = Pt(10.5)
+        if first_p is None:
+            first_p = p
+    return first_p
+
+
+def fill_cell_multiline(cell, text, size=10, bold=False, color=None, align_center=False):
+    """Write text into a table cell, splitting on '\\n' so each line
+    becomes its own paragraph — matching the official ABC-H template,
+    where each distinct action/name/quote is its own paragraph rather
+    than one run-on block of prose."""
+    lines = (text or "").split("\n") or [""]
+    first = True
+    for line in lines:
+        p = cell.paragraphs[0] if first else cell.add_paragraph()
+        first = False
+        if align_center:
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = p.add_run(line)
+        run.font.size = Pt(size)
+        run.bold = bold
+        if color:
+            run.font.color.rgb = color
+    return cell
 
 
 def add_details_grid(doc, pairs, col_widths_cm=(3.2, 8.7, 3.2, 8.7)):
@@ -113,17 +138,9 @@ def add_details_grid(doc, pairs, col_widths_cm=(3.2, 8.7, 3.2, 8.7)):
             else:
                 label, value = "", ""
             lbl_cell, val_cell = cells[i * 2], cells[i * 2 + 1]
-            lbl_cell.text = ""
-            p = lbl_cell.paragraphs[0]
-            run = p.add_run(label)
-            run.bold = True
-            run.font.size = Pt(10)
-            run.font.color.rgb = NAVY
+            fill_cell_multiline(lbl_cell, label, size=10, bold=True, color=NAVY)
             set_cell_shading(lbl_cell, GREY_HEX)
-            val_cell.text = ""
-            p2 = val_cell.paragraphs[0]
-            run2 = p2.add_run(value)
-            run2.font.size = Pt(10)
+            fill_cell_multiline(val_cell, value, size=10)
     set_col_widths(table, col_widths_cm)
     return table
 
@@ -158,14 +175,9 @@ def add_phase_table(doc, phases):
             phase.get("Consequence", ""),
         ]
         for i, val in enumerate(values):
-            row_cells[i].text = ""
-            p = row_cells[i].paragraphs[0]
-            if i == 0:
-                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run = p.add_run(val)
-            run.font.size = Pt(9)
-            if i == 0:
-                run.bold = True
+            fill_cell_multiline(
+                row_cells[i], val, size=9, bold=(i == 0), align_center=(i == 0)
+            )
             if idx % 2 == 1:
                 set_cell_shading(row_cells[i], LIGHT_HEX)
     set_col_widths(table, PHASE_WIDTHS_CM)
@@ -338,9 +350,11 @@ GENERIC_RE = re.compile(
 
 def parse_block_text(lines):
     """For headings whose entire content is free text with no 'Label:'
-    lines (e.g. WITNESSES, OTHER STUDENTS INVOLVED) — just join the
-    non-empty lines into one string."""
-    return " ".join(ln.strip() for ln in lines if ln.strip())
+    lines (e.g. WITNESSES, OTHER STUDENTS INVOLVED, STAFF RESPONSES) —
+    join the non-empty lines with a newline so each stays its own
+    paragraph (e.g. two witness names on two lines), matching the
+    official template's style rather than flattening into one sentence."""
+    return "\n".join(ln.strip() for ln in lines if ln.strip())
 
 # ABC phase field labels — matched separately so "Behaviour (Student):" etc.
 # always canonicalise to the plain field name. "Context" and "Antecedent" are
@@ -420,7 +434,12 @@ def parse_phase_labeled_lines(lines):
     may have parenthetical suffixes like 'Behaviour (Student):'. "Context"
     and "Antecedent" share one canonical key — if a report has both as
     separate lines (older format), the second is appended rather than
-    overwriting the first."""
+    overwriting the first.
+
+    Continuation lines are joined with "\\n", not a space — on the real
+    ABC-H template each distinct action or quote is its own paragraph
+    within the cell (e.g. "Octavia said X" / "Octavia then did Y" as two
+    lines), and flattening them into one run-on paragraph loses that."""
     result = {}
     current_key = None
     for ln in lines:
@@ -433,14 +452,14 @@ def parse_phase_labeled_lines(lines):
             if m:
                 value = m.group(1).strip()
                 if key in result and result[key]:
-                    result[key] = (result[key] + " " + value).strip()
+                    result[key] = result[key] + "\n" + value if value else result[key]
                 else:
                     result[key] = value
                 current_key = key
                 matched = True
                 break
         if not matched and current_key:
-            result[current_key] = (result[current_key] + " " + stripped).strip()
+            result[current_key] = result[current_key] + "\n" + stripped if result[current_key] else stripped
     return result
 
 
