@@ -448,21 +448,37 @@ def delete_bulletin_change(cid):
 
 def load_pc_manager_changes(d):
     """Load entries saved by the Program Changes Manager tool.
-    
-    The Program Changes Manager stores its data in st.session_state (not a
-    database) after Supabase/PostgREST proved unreliable. Because both pages
-    run in the same Streamlit app, st.session_state is shared automatically
-    within the same browser session - so we read it directly here rather
-    than querying a database table.
-    
-    NOTE: This only sees changes entered in the SAME browser session/tab.
-    If the Program Changes Manager was used in a different tab/browser
-    (e.g. on a different computer), those entries won't appear here unless
-    that session's data has been imported via the Data > Import feature.
+
+    Reads directly from the program_changes Supabase table (plain table
+    calls only, no RPC functions - the reliable pattern used elsewhere in
+    this app). This works regardless of which tab, browser, or device the
+    Program Changes Manager was used on, since it's a real shared database
+    rather than browser session state.
+
+    Falls back to session state (only useful within the same tab) if the
+    database is unreachable, so the tool degrades gracefully rather than
+    breaking outright.
     """
+    import os
+    from supabase import create_client as _create_client
+    try:
+        _url = os.environ.get("SUPABASE_URL", "")
+        _key = os.environ.get("SUPABASE_KEY", "")
+        if _url and _key:
+            _sb = _create_client(_url, _key)
+            res = _sb.table("program_changes").select("*").eq("change_date", str(d)).order("created_at").execute()
+            rows = res.data or []
+            for row in rows:
+                if isinstance(row.get("time_blocks"), str):
+                    try: row["time_blocks"] = json.loads(row["time_blocks"])
+                    except: row["time_blocks"] = []
+            return rows
+    except Exception:
+        pass
+
+    # Fallback: session state (same tab only)
     all_changes = st.session_state.get("program_changes", {})
-    rows = all_changes.get(str(d), [])
-    return rows
+    return all_changes.get(str(d), [])
 
 
 def _fmt_pc_time(ts):
@@ -1044,8 +1060,8 @@ with page_tab:
             '<span style="font-size:.72rem;font-weight:400;color:#7a907a;">'
             '(from Program Changes Manager)</span></div>'
             '<div style="font-size:.78rem;color:#7a907a;">Managed via the '
-            '<strong>Program Changes Manager</strong> tool — changes appear here automatically '
-            'if entered in this same browser session/tab.</div>'
+            '<strong>Program Changes Manager</strong> tool — changes appear here automatically, '
+            'from any device.</div>'
             '</div>',
             unsafe_allow_html=True
         )
@@ -1057,10 +1073,10 @@ with page_tab:
                 '\U0001f4ed No staff timetable changes entered via Program Changes Manager for this day.</div>',
                 unsafe_allow_html=True
             )
-            with st.expander("\U0001f4e5 Import changes from a different session"):
+            with st.expander("\U0001f4e5 Import changes (only needed if the database is unreachable)"):
                 st.caption(
-                    "If changes were entered in Program Changes Manager on a different tab/device, "
-                    "export a JSON there (\U0001f4be Data \u2192 Download JSON) and upload it here."
+                    "This is a fallback for when the database can't be reached. Normally changes "
+                    "appear here automatically with no action needed."
                 )
                 _pcm_upload = st.file_uploader("Upload Program Changes JSON", type=["json"], key="bulletin_pcm_import")
                 if _pcm_upload is not None:
