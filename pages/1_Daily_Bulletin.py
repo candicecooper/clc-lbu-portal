@@ -447,29 +447,23 @@ def delete_bulletin_change(cid):
     except Exception as e: st.error(f"Delete failed: {e}"); return False
 
 def load_pc_manager_changes(d):
-    """Load entries saved by the Program Changes Manager tool (program_changes table).
-    Creates its own Supabase connection so it always hits the right project.
-    Surfaces any error visibly rather than silently returning empty.
+    """Load entries saved by the Program Changes Manager tool.
+    
+    The Program Changes Manager stores its data in st.session_state (not a
+    database) after Supabase/PostgREST proved unreliable. Because both pages
+    run in the same Streamlit app, st.session_state is shared automatically
+    within the same browser session - so we read it directly here rather
+    than querying a database table.
+    
+    NOTE: This only sees changes entered in the SAME browser session/tab.
+    If the Program Changes Manager was used in a different tab/browser
+    (e.g. on a different computer), those entries won't appear here unless
+    that session's data has been imported via the Data > Import feature.
     """
-    import os
-    from supabase import create_client as _create_client
-    try:
-        _url = os.environ.get("SUPABASE_URL", "")
-        _key = os.environ.get("SUPABASE_KEY", "")
-        if not _url or not _key:
-            st.warning("⚠️ Program Changes Manager: SUPABASE_URL / SUPABASE_KEY env vars not set.")
-            return []
-        _sb = _create_client(_url, _key)
-        res = _sb.table("program_changes").select("*").eq("change_date", str(d)).order("created_at").execute()
-        rows = res.data or []
-        for row in rows:
-            if isinstance(row.get("time_blocks"), str):
-                try: row["time_blocks"] = json.loads(row["time_blocks"])
-                except: row["time_blocks"] = []
-        return rows
-    except Exception as e:
-        st.warning(f"⚠️ Could not load Program Changes Manager entries: {e}")
-        return []
+    all_changes = st.session_state.get("program_changes", {})
+    rows = all_changes.get(str(d), [])
+    return rows
+
 
 def _fmt_pc_time(ts):
     try: return datetime.strptime(str(ts), "%H:%M:%S").strftime("%I:%M %p").lstrip("0")
@@ -1042,194 +1036,6 @@ with page_tab:
             st.markdown('</div></div>', unsafe_allow_html=True)
 
     with s4:
-        _changes = load_bulletin_changes(current_date)
-
-        def _render_change_view(ch, ci, total):
-            reason = ch.get("reason",""); absent = ch.get("staff_absent",""); has_trt = ch.get("has_trt",False); trt_name = ch.get("trt_name",""); staff_rows = ch.get("staff_rows",[])
-            color = "#dc2626" if reason == "Staff Absence" else "#0e7490"; bg_tint = "#fff5f5" if reason == "Staff Absence" else "#f0f9ff"; icon = "\U0001f645" if reason == "Staff Absence" else "\U0001f4cc"
-            st.markdown(f'<div style="display:flex;align-items:center;gap:.75rem;margin:1rem 0 .4rem;"><div style="background:{color};color:white;font-weight:800;font-size:.75rem;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;">{ci+1}</div><div style="font-size:.9rem;font-weight:700;color:{color};">{icon} {reason}' + (f' \u2014 <span style="color:#1a2e44;">{absent}</span>' if absent else "") + (f' &nbsp;<span style="background:{color}22;color:{color};font-size:.72rem;font-weight:600;padding:.1rem .5rem;border-radius:10px;">TRT: {trt_name or "on site"}</span>' if has_trt else "") + f'</div>' + (f'<div style="flex:1;height:1px;background:{color}33;"></div>' if ci < total - 1 else "") + f'</div>', unsafe_allow_html=True)
-            with st.container():
-                st.markdown(f'<div style="background:{bg_tint};border:1.5px solid {color}44;border-left:5px solid {color};border-radius:10px;padding:.85rem 1rem;margin-bottom:.5rem;">', unsafe_allow_html=True)
-                tt_html = _timetable_grid_html(staff_rows, PC_TIME_SLOTS)
-                if tt_html: st.markdown(tt_html, unsafe_allow_html=True)
-                else:
-                    for row in staff_rows:
-                        name = row.get("name",""); blocks = row.get("blocks",[])
-                        if blocks:
-                            badges = " ".join([f'<span style="background:{_slot_color_bg(b.get("role",""))};color:{_slot_color_fg(b.get("role",""))};padding:1px 7px;border-radius:8px;font-size:.72rem;font-weight:600;">{b.get("start","")}&ndash;{b.get("end","")} {b.get("role","")}{(" \u2192 "+b["person"]) if b.get("person") and b.get("role")=="Lunch Cover" else ""}{(" \u21a9 "+b["person"]) if b.get("person") and b.get("role")=="Lunch Break" else ""}</span>' for b in blocks if b.get("role") or b.get("start")])
-                            if badges: st.markdown(f'<div style="margin:3px 0;font-size:.82rem;"><b>{name}:</b> {badges}</div>', unsafe_allow_html=True)
-                    if not any(row.get("blocks") for row in staff_rows): st.markdown('<div style="color:#9ab09a;font-size:.82rem;font-style:italic;">No timetable blocks recorded.</div>', unsafe_allow_html=True)
-                st.markdown("</div>", unsafe_allow_html=True)
-                if edit:
-                    dc1, dc2, dc3 = st.columns([2, 2, 6])
-                    with dc1:
-                        if st.button("\u270f\ufe0f Edit this change", key=f"ch_edit_{ch.get('id',ci)}_{ci}", use_container_width=True):
-                            st.session_state["_pc_form_id"] = int(_time.time() * 1000); st.session_state["_pc_editing"] = dict(ch); st.session_state["_pc_adding"] = False; st.rerun()
-                    with dc2:
-                        if st.button("\U0001f5d1\ufe0f Delete", key=f"ch_del_{ch.get('id',ci)}_{ci}", use_container_width=True): delete_bulletin_change(ch["id"]); st.rerun()
-                    with dc3: st.markdown(f'<div style="padding-top:.45rem;font-size:.72rem;color:#9ab09a;">Saved to database \u00b7 click \u270f\ufe0f to reopen and modify timetable</div>', unsafe_allow_html=True)
-            if ci < total - 1: st.markdown('<div style="border-top:2px dashed #e0e8dc;margin:1rem 0;"></div>', unsafe_allow_html=True)
-
-        if not _changes:
-            st.markdown('<div style="text-align:center;padding:1.5rem;color:#9ab09a;font-size:.85rem;background:#f8fdf6;border-radius:10px;">\U0001f4ed No program changes recorded for this day.</div>', unsafe_allow_html=True)
-        else:
-            st.markdown(f'<div style="font-size:.82rem;font-weight:600;color:#4a8f33;margin-bottom:.25rem;">\U0001f4ca {len(_changes)} change{"s" if len(_changes)!=1 else ""} recorded for {current_date.strftime("%-d %B")}:</div>', unsafe_allow_html=True)
-            for _ci, _ch in enumerate(_changes): _render_change_view(_ch, _ci, len(_changes))
-
-        if edit:
-            st.markdown("---")
-
-            def _render_change_form(d, existing=None):
-                is_edit = existing is not None; form_id = st.session_state.get("_pc_form_id", 0); pfx = f"_pcf_{form_id}"; rows_key = f"{pfx}_rows"
-                existing_rows = []
-                if existing:
-                    rr = existing.get("staff_rows",[]); existing_rows = json.loads(rr) if isinstance(rr,str) else (rr or [])
-                if rows_key not in st.session_state:
-                    st.session_state[rows_key] = existing_rows if existing_rows else [{"name":"","normal_prog":"","blocks":[]}]
-                st.markdown(f'<div style="background:#f8fdf6;border:2px solid {"#c97b1a" if is_edit else "#6BBF4E"};border-radius:12px;padding:1rem 1.25rem;margin-bottom:1rem;">', unsafe_allow_html=True)
-                st.markdown(f"#### {'✏️ Editing' if is_edit else '➕ New'} Program Change")
-                reason_opts = ["Staff Absence","Site Need / Other"]; r_idx = 1 if (existing or {}).get("reason","") == "Site Need / Other" else 0
-                reason = st.radio("Reason for change", reason_opts, index=r_idx, key=f"{pfx}_reason", horizontal=True)
-                staff_absent = ""; has_trt = False; trt_name = ""
-                if reason == "Staff Absence":
-                    c1, c2 = st.columns(2)
-                    with c1: staff_absent = st.text_input("Absent staff member *", value=(existing or {}).get("staff_absent",""), key=f"{pfx}_absent", placeholder="e.g. Sarah Jones")
-                    with c2: has_trt = st.checkbox("TRT coming in today?", value=bool((existing or {}).get("has_trt",False)), key=f"{pfx}_trt")
-                    if has_trt: trt_name = st.text_input("TRT name", value=(existing or {}).get("trt_name",""), key=f"{pfx}_trt_name", placeholder="e.g. Michael Brown")
-                else:
-                    c1, c2 = st.columns(2)
-                    with c1: staff_absent = st.text_input("Who / what is the change for?", value=(existing or {}).get("staff_absent",""), key=f"{pfx}_absent2", placeholder="e.g. PY program, Caitie")
-                    with c2: has_trt = st.checkbox("TRT / relief staff involved?", value=bool((existing or {}).get("has_trt",False)), key=f"{pfx}_trt2")
-                    if has_trt: trt_name = st.text_input("Relief staff name", value=(existing or {}).get("trt_name",""), key=f"{pfx}_trt_name2")
-                st.markdown("---")
-                st.markdown('<div style="background:#e8f5e1;border-radius:8px;padding:.6rem .9rem;margin-bottom:.75rem;font-size:.82rem;color:#1a2e44;"><strong>\U0001f4cb Timetable rows</strong> \u2014 add one row per staff member whose day is affected. Fill in time blocks for the changed part of their day. Click <strong>\U0001f4be Save Program Change</strong> when done.</div>', unsafe_allow_html=True)
-                rows = st.session_state[rows_key]
-                for ri, row in enumerate(rows):
-                    st.markdown(f'<div style="background:white;border:1.5px solid #d8ead2;border-radius:10px;padding:.85rem;margin-bottom:.6rem;">', unsafe_allow_html=True)
-                    rc1, rc2, rc3 = st.columns([3,2,1])
-                    with rc1: row["name"] = st.text_input("Staff / SSO name *", value=row.get("name",""), placeholder="e.g. Sarah Jones", key=f"{pfx}_r{ri}_name")
-                    with rc2: row["normal_prog"] = st.text_input("Normal program/role (optional)", value=row.get("normal_prog",""), placeholder="e.g. JP teacher", key=f"{pfx}_r{ri}_norm")
-                    with rc3:
-                        st.markdown("<div style='padding-top:1.7rem;'>", unsafe_allow_html=True)
-                        if ri > 0 and st.button("\U0001f5d1 Row", key=f"{pfx}_r{ri}_dr"): rows.pop(ri); st.rerun()
-                        st.markdown("</div>", unsafe_allow_html=True)
-                    blocks = row.setdefault("blocks",[])
-                    qp_cols = st.columns([3,1])
-                    with qp_cols[0]: preset = st.selectbox("\u26a1 Quick fill \u2014 cover the whole day as:", ["--- or enter blocks below ---","JP Cover (full day)","PY Cover (full day)","SY Cover (full day)","NIT (full day)"], key=f"{pfx}_r{ri}_preset")
-                    with qp_cols[1]:
-                        st.markdown("<div style='padding-top:1.7rem;'>", unsafe_allow_html=True)
-                        if st.button("\u25b6 Apply", key=f"{pfx}_r{ri}_apply_preset"):
-                            role_map = {"JP Cover (full day)":"JP","PY Cover (full day)":"PY","SY Cover (full day)":"SY","NIT (full day)":"NIT"}
-                            if preset in role_map:
-                                row["blocks"] = [{"start":"9:00","end":"2:45","role":role_map[preset],"person":""}]
-                                for k,v in [("s","9:00"),("e","2:45"),("r",role_map[preset]),("p","")]: st.session_state[f"{pfx}_r{ri}_b0_{k}"] = v
-                                st.rerun()
-                        st.markdown("</div>", unsafe_allow_html=True)
-                    if blocks: st.markdown("**Time blocks:**")
-                    for bi, block in enumerate(blocks):
-                        s_key = f"{pfx}_r{ri}_b{bi}_s"; e_key = f"{pfx}_r{ri}_b{bi}_e"; r_key = f"{pfx}_r{ri}_b{bi}_r"; p_key = f"{pfx}_r{ri}_b{bi}_p"
-                        for key2, val2 in [(s_key, block.get("start","")), (e_key, block.get("end","")), (r_key, block.get("role","")), (p_key, block.get("person",""))]:
-                            if key2 not in st.session_state: st.session_state[key2] = val2
-                        bc1, bc2, bc3, bc4, bc5, bc6 = st.columns([1.5,1.5,2,2,0.5,0.5])
-                        with bc1: block["start"] = st.selectbox("Start", [""] + PC_TIME_SLOTS, key=s_key)
-                        with bc2: block["end"] = st.selectbox("End", [""] + PC_TIME_SLOTS, key=e_key)
-                        with bc3: block["role"] = st.selectbox("Role", ROLE_OPTIONS, key=r_key)
-                        with bc4:
-                            live_role = st.session_state.get(r_key, "")
-                            if live_role == "Lunch Cover": block["person"] = st.text_input("Releasing (who)", key=p_key, placeholder="Staff member getting lunch break")
-                            elif live_role == "Lunch Break": block["person"] = st.text_input("Covered by (who)", key=p_key, placeholder="Staff member providing cover")
-                            else: block["person"] = st.text_input("Detail (optional)", key=p_key, placeholder="e.g. covering Annette")
-                        with bc5:
-                            st.markdown("<div style='padding-top:1.7rem;'>", unsafe_allow_html=True)
-                            if st.button("\u2715", key=f"{pfx}_r{ri}_b{bi}_del"):
-                                blocks.pop(bi)
-                                for old_bi in range(bi, len(blocks)+1):
-                                    for sfx in ("_s","_e","_r","_p"): st.session_state.pop(f"{pfx}_r{ri}_b{old_bi}{sfx}", None)
-                                st.rerun()
-                            st.markdown("</div>", unsafe_allow_html=True)
-                        with bc6:
-                            if bi < len(blocks)-1:
-                                st.markdown("<div style='padding-top:1.7rem;'>", unsafe_allow_html=True)
-                                if st.button("\u2193", key=f"{pfx}_r{ri}_b{bi}_dn"):
-                                    blocks[bi], blocks[bi+1] = blocks[bi+1], blocks[bi]
-                                    for sfx in ("_s","_e","_r","_p"):
-                                        ka = f"{pfx}_r{ri}_b{bi}{sfx}"; kb = f"{pfx}_r{ri}_b{bi+1}{sfx}"
-                                        va = st.session_state.get(ka); vb_val = st.session_state.get(kb)
-                                        if va is not None: st.session_state[kb] = va
-                                        if vb_val is not None: st.session_state[ka] = vb_val
-                                    st.rerun()
-                                st.markdown("</div>", unsafe_allow_html=True)
-                        live_s = st.session_state.get(s_key, ""); live_e = st.session_state.get(e_key, ""); live_r = st.session_state.get(r_key, "")
-                        if live_s and live_e and live_r and _t2m(live_s) >= _t2m(live_e):
-                            st.markdown(f'<div style="background:#fee2e2;border:1.5px solid #fca5a5;border-radius:6px;padding:.35rem .75rem;margin:.2rem 0 .4rem;font-size:.75rem;color:#991b1b;">\u26d4 Block {bi+1}: <strong>Start ({live_s}) is the same as or after End ({live_e})</strong> \u2014 this block will be skipped. Swap the times or delete this block.</div>', unsafe_allow_html=True)
-                    if blocks:
-                        broken = [bi2+1 for bi2, block2 in enumerate(blocks) if _t2m(st.session_state.get(f"{pfx}_r{ri}_b{bi2}_s", block2.get("start",""))) >= _t2m(st.session_state.get(f"{pfx}_r{ri}_b{bi2}_e", block2.get("end",""))) and st.session_state.get(f"{pfx}_r{ri}_b{bi2}_s") and st.session_state.get(f"{pfx}_r{ri}_b{bi2}_e") and st.session_state.get(f"{pfx}_r{ri}_b{bi2}_r")]
-                        if broken: st.markdown(f'<div style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:6px;padding:.4rem .85rem;margin:.3rem 0;">\u26a0\ufe0f <strong>Block{"s" if len(broken)>1 else ""} {", ".join(str(b) for b in broken)} {"have" if len(broken)>1 else "has"} start \u2265 end</strong> and will not appear on the timetable.</div>', unsafe_allow_html=True)
-                        ts_preview = blocks_to_slots(blocks)
-                        if any(v.get("value","") for v in ts_preview.values()):
-                            preview_html = _timetable_grid_html([{"name": st.session_state.get(f"{pfx}_r{ri}_name", row.get("name","(Preview)")),"normal_prog": st.session_state.get(f"{pfx}_r{ri}_norm", row.get("normal_prog","")),"time_slots": ts_preview}], PC_TIME_SLOTS)
-                            if preview_html:
-                                st.markdown('<div style="background:#f0f7eb;border-radius:8px;padding:.5rem .75rem;margin:.4rem 0;border:1px solid #c8e0c8;"><div style="font-size:.68rem;font-weight:600;color:#4a8f33;margin-bottom:3px;">\U0001f441\ufe0f Live timetable preview</div>', unsafe_allow_html=True)
-                                st.markdown(preview_html, unsafe_allow_html=True); st.markdown("</div>", unsafe_allow_html=True)
-                        else: st.markdown('<div style="font-size:.72rem;color:#c97b1a;padding:.3rem 0;">\u26a0\ufe0f Select a Role for each block to see the timetable preview.</div>', unsafe_allow_html=True)
-                    ba1, ba2 = st.columns(2)
-                    with ba1:
-                        if st.button("\u2795 Add time block", key=f"{pfx}_r{ri}_ab", use_container_width=True):
-                            last_bi = len(blocks)-1; last_end = st.session_state.get(f"{pfx}_r{ri}_b{last_bi}_e","") or (blocks[last_bi].get("end","") if last_bi >= 0 else "9:00"); new_bi = len(blocks)
-                            blocks.append({"start":last_end,"end":"","role":"","person":""})
-                            for k,v in [(f"{pfx}_r{ri}_b{new_bi}_s",last_end),(f"{pfx}_r{ri}_b{new_bi}_e",""),(f"{pfx}_r{ri}_b{new_bi}_r",""),(f"{pfx}_r{ri}_b{new_bi}_p","")]: st.session_state[k] = v
-                            st.rerun()
-                    with ba2:
-                        if st.button("\U0001f37d\ufe0f Add lunch block", key=f"{pfx}_r{ri}_add_lunch", use_container_width=True):
-                            bi_new = len(blocks); blocks.append({"start":"12:00","end":"12:30","role":"Lunch Break","person":""})
-                            for k,v in [(f"{pfx}_r{ri}_b{bi_new}_s","12:00"),(f"{pfx}_r{ri}_b{bi_new}_e","12:30"),(f"{pfx}_r{ri}_b{bi_new}_r","Lunch Break"),(f"{pfx}_r{ri}_b{bi_new}_p","")]: st.session_state[k] = v
-                            st.rerun()
-                    st.markdown("</div>", unsafe_allow_html=True)
-                if st.button("\u2795 Add another staff member", key=f"{pfx}_ar", use_container_width=True): rows.append({"name":"","normal_prog":"","blocks":[]}); st.rerun()
-                st.markdown("---")
-                all_broken = [f"{st.session_state.get(f'{pfx}_r{ri2}_name','') or f'Row {ri2+1}'} \u2014 Block {bi2+1} ({st.session_state.get(f'{pfx}_r{ri2}_b{bi2}_s','')}\u2192{st.session_state.get(f'{pfx}_r{ri2}_b{bi2}_e','')})" for ri2, row2 in enumerate(st.session_state[rows_key]) for bi2 in range(len(row2.get("blocks",[]))) if st.session_state.get(f"{pfx}_r{ri2}_b{bi2}_s") and st.session_state.get(f"{pfx}_r{ri2}_b{bi2}_e") and st.session_state.get(f"{pfx}_r{ri2}_b{bi2}_r") and _t2m(st.session_state.get(f"{pfx}_r{ri2}_b{bi2}_s","")) >= _t2m(st.session_state.get(f"{pfx}_r{ri2}_b{bi2}_e",""))]
-                if all_broken: st.error("\u26d4 **Cannot save \u2014 fix blocks with Start \u2265 End:**\n\n" + "\n".join(f"- {b}" for b in all_broken))
-                sa1, sa2 = st.columns(2)
-                with sa1:
-                    if st.button("\U0001f4be Save Program Change", type="primary", key=f"{pfx}_save", use_container_width=True, disabled=bool(all_broken)):
-                        if reason == "Staff Absence" and not staff_absent.strip(): st.warning("Please enter the absent staff member's name.")
-                        else:
-                            valid_rows = []
-                            for ri, row in enumerate(st.session_state[rows_key]):
-                                name = st.session_state.get(f"{pfx}_r{ri}_name", row.get("name","")).strip(); norm = st.session_state.get(f"{pfx}_r{ri}_norm", row.get("normal_prog",""))
-                                fresh_blocks = [{"start": st.session_state.get(f"{pfx}_r{ri}_b{bi}_s",""),"end": st.session_state.get(f"{pfx}_r{ri}_b{bi}_e",""),"role": st.session_state.get(f"{pfx}_r{ri}_b{bi}_r",""),"person": st.session_state.get(f"{pfx}_r{ri}_b{bi}_p","")} for bi in range(len(row.get("blocks",[])))]
-                                if name or fresh_blocks: valid_rows.append({"name": name, "normal_prog": norm, "blocks": fresh_blocks})
-                            entry = {"id": (existing or {}).get("id"),"reason": reason,"staff_absent": staff_absent.strip(),"has_trt": has_trt,"trt_name": trt_name.strip() if has_trt else "","staff_rows": valid_rows}
-                            saved = save_bulletin_change(d, entry)
-                            if saved:
-                                st.success("\u2705 Saved!")
-                                for k in [k for k in st.session_state if k.startswith(pfx)]: del st.session_state[k]
-                                st.session_state["_pc_editing"] = None; st.session_state["_pc_adding"] = False; st.rerun()
-                with sa2:
-                    if st.button("Cancel", key=f"{pfx}_cancel", use_container_width=True):
-                        for k in [k for k in st.session_state if k.startswith(pfx)]: del st.session_state[k]
-                        st.session_state["_pc_editing"] = None; st.session_state["_pc_adding"] = False; st.rerun()
-                st.markdown("</div>", unsafe_allow_html=True)
-
-            _editing = st.session_state.get("_pc_editing"); _adding = st.session_state.get("_pc_adding", False)
-            if not _editing and not _adding:
-                if st.button("\u2795 Add Program Change", type="primary", key="pc_add_new", use_container_width=True):
-                    st.session_state["_pc_form_id"] = int(_time.time() * 1000); st.session_state["_pc_adding"] = True; st.session_state["_pc_editing"] = None; st.rerun()
-            if _adding and not _editing: _render_change_form(current_date, existing=None)
-            elif _editing: _render_change_form(current_date, existing=_editing)
-
-        if _changes:
-            st.markdown("---")
-            st.markdown('<div style="background:white;border-radius:12px;border:1.5px solid #d8e8d4;padding:1.25rem 1.5rem;margin-bottom:1rem;"><div style="font-size:1rem;font-weight:700;color:#1a2e44;margin-bottom:.2rem;">\U0001f4e4 Share / Download Program Changes</div><div style="font-size:.8rem;color:#7a907a;">Plain text for SMS \u00b7 Printable/PDF sheet for email or TRT</div></div>', unsafe_allow_html=True)
-            _plain = _build_plain_text_bc(_changes, current_date); _html_export = _build_html_sheet_bc(_changes, current_date)
-            ex1, ex2, ex3 = st.columns([1,1,2])
-            with ex1: st.download_button("\U0001f4f1 Download text (SMS/email)", data=_plain, file_name=f"CLC_ProgramChanges_{current_date.strftime('%Y-%m-%d')}.txt", mime="text/plain", use_container_width=True, type="secondary")
-            with ex2: st.download_button("\U0001f5a8\ufe0f Download printable sheet", data=_html_export, file_name=f"CLC_ProgramChanges_{current_date.strftime('%Y-%m-%d')}.html", mime="text/html", use_container_width=True, type="secondary")
-            with ex3: st.markdown('<div style="font-size:.75rem;color:#7a907a;padding-top:.5rem;">\U0001f4a1 <strong>Text file</strong> \u2014 paste into SMS or email &nbsp;\u00b7&nbsp; <strong>Printable sheet</strong> \u2014 open in browser then Print or Save as PDF</div>', unsafe_allow_html=True)
-            with st.expander("\U0001f441\ufe0f Preview plain text"): st.code(_plain, language=None)
-
-        # ── Program Changes Manager entries ─────────────────────────────
-        st.markdown("---")
         st.markdown(
             '<div style="background:#fff8f0;border:1.5px solid #e8c090;border-radius:10px;'
             'padding:.75rem 1rem;margin-bottom:.75rem;">'
@@ -1238,7 +1044,8 @@ with page_tab:
             '<span style="font-size:.72rem;font-weight:400;color:#7a907a;">'
             '(from Program Changes Manager)</span></div>'
             '<div style="font-size:.78rem;color:#7a907a;">Managed via the '
-            '<strong>Program Changes Manager</strong> tool — changes appear here automatically.</div>'
+            '<strong>Program Changes Manager</strong> tool — changes appear here automatically '
+            'if entered in this same browser session/tab.</div>'
             '</div>',
             unsafe_allow_html=True
         )
@@ -1250,6 +1057,25 @@ with page_tab:
                 '\U0001f4ed No staff timetable changes entered via Program Changes Manager for this day.</div>',
                 unsafe_allow_html=True
             )
+            with st.expander("\U0001f4e5 Import changes from a different session"):
+                st.caption(
+                    "If changes were entered in Program Changes Manager on a different tab/device, "
+                    "export a JSON there (\U0001f4be Data \u2192 Download JSON) and upload it here."
+                )
+                _pcm_upload = st.file_uploader("Upload Program Changes JSON", type=["json"], key="bulletin_pcm_import")
+                if _pcm_upload is not None:
+                    try:
+                        _pcm_data = json.loads(_pcm_upload.read().decode())
+                        if "program_changes" in _pcm_data:
+                            st.session_state["program_changes"] = _pcm_data["program_changes"]
+                            if "staff_list" in _pcm_data:
+                                st.session_state["staff_list"] = _pcm_data["staff_list"]
+                        else:
+                            st.session_state["program_changes"] = _pcm_data
+                        st.success("\u2705 Imported!")
+                        st.rerun()
+                    except Exception:
+                        st.error("Could not read that file - make sure it's a JSON export from Program Changes Manager.")
         else:
             st.markdown(
                 f'<div style="font-size:.82rem;font-weight:600;color:#C8760A;margin-bottom:.5rem;">'
@@ -1281,6 +1107,7 @@ with page_tab:
                     _brb    = _b.get("released_by","")
                     _rb_txt = f" *(Release: {_brb})*" if _brb else ""
                     st.markdown(f"&nbsp;&nbsp;&nbsp;- **{_bstart} → {_bend}**: {_bprog}{_rb_txt}")
+            st.caption("\U0001f4a1 To edit or remove an entry, use the Program Changes Manager tool directly.")
 
     if edit:
         st.markdown('<div style="background:white;border-top:2px solid #e8f0e3;padding:1rem 2rem;position:sticky;bottom:0;z-index:100;display:flex;gap:1rem;align-items:center;">', unsafe_allow_html=True)
