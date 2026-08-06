@@ -108,6 +108,73 @@ def remove_staff_from_db(name):
     except Exception:
         return False
 
+# ── PROGRAM CHANGES PERSISTENCE (Supabase, direct table calls only) ──
+CHANGES_TABLE = "program_changes"
+
+def _parse_time_blocks(raw):
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except Exception:
+            return []
+    return raw or []
+
+def load_changes_from_db(target_date_str):
+    """Load program changes for a date from Supabase. Returns list or None on failure."""
+    sb = _get_supabase()
+    if not sb:
+        return None
+    try:
+        res = sb.table(CHANGES_TABLE).select("*").eq("change_date", target_date_str).order("created_at").execute()
+        rows = res.data or []
+        for row in rows:
+            row['time_blocks'] = _parse_time_blocks(row.get('time_blocks'))
+        return rows
+    except Exception:
+        return None
+
+def insert_change_to_db(change_data):
+    """Insert a new program change into Supabase. Returns the new row's id, or None on failure."""
+    sb = _get_supabase()
+    if not sb:
+        return None
+    try:
+        payload = dict(change_data)
+        payload['time_blocks'] = json.dumps(payload.get('time_blocks', []))
+        res = sb.table(CHANGES_TABLE).insert(payload).execute()
+        if res.data:
+            return res.data[0].get('id')
+        return None
+    except Exception:
+        return None
+
+def update_change_in_db(change_id, change_data):
+    """Update an existing program change in Supabase. Returns True on success."""
+    sb = _get_supabase()
+    if not sb:
+        return False
+    try:
+        payload = dict(change_data)
+        payload['time_blocks'] = json.dumps(payload.get('time_blocks', []))
+        payload['updated_at'] = datetime.now().isoformat()
+        payload.pop('id', None)
+        payload.pop('created_at', None)
+        sb.table(CHANGES_TABLE).update(payload).eq("id", change_id).execute()
+        return True
+    except Exception:
+        return False
+
+def delete_change_from_db(change_id):
+    """Delete a program change from Supabase. Returns True on success."""
+    sb = _get_supabase()
+    if not sb:
+        return False
+    try:
+        sb.table(CHANGES_TABLE).delete().eq("id", change_id).execute()
+        return True
+    except Exception:
+        return False
+
 # Initialize staff list: try DB first, fall back to session/default
 if 'staff_list' not in st.session_state:
     db_staff = load_staff_from_db()
@@ -178,11 +245,23 @@ def sort_blocks(blocks):
     return sorted(blocks, key=lambda b: b.get('start_time', ''))
 
 def get_changes_for_date(target_date_str):
-    """Get changes for specific date from session state"""
+    """Get changes for specific date - from database if connected, else session state"""
+    db_rows = load_changes_from_db(target_date_str)
+    if db_rows is not None:
+        st.session_state.pc_db_connected = True
+        return db_rows
+    st.session_state.pc_db_connected = False
     return st.session_state.program_changes.get(target_date_str, [])
 
 def save_program_change(target_date_str, change_data):
-    """Save a NEW program change to session state"""
+    """Save a NEW program change - to database if connected, else session state"""
+    change_data = dict(change_data)
+    change_data['change_date'] = target_date_str
+    new_id = insert_change_to_db(change_data)
+    if new_id:
+        st.session_state.pc_db_connected = True
+        return
+    st.session_state.pc_db_connected = False
     if target_date_str not in st.session_state.program_changes:
         st.session_state.program_changes[target_date_str] = []
     change_data['id'] = str(uuid.uuid4())
@@ -190,7 +269,13 @@ def save_program_change(target_date_str, change_data):
     st.session_state.program_changes[target_date_str].append(change_data)
 
 def update_program_change(target_date_str, change_id, new_data):
-    """Update an EXISTING program change in place"""
+    """Update an EXISTING program change - in database if connected, else session state"""
+    new_data = dict(new_data)
+    new_data['change_date'] = target_date_str
+    if update_change_in_db(change_id, new_data):
+        st.session_state.pc_db_connected = True
+        return
+    st.session_state.pc_db_connected = False
     entries = st.session_state.program_changes.get(target_date_str, [])
     for idx, entry in enumerate(entries):
         if entry.get('id') == change_id:
@@ -202,7 +287,11 @@ def update_program_change(target_date_str, change_id, new_data):
     st.session_state.program_changes[target_date_str] = entries
 
 def delete_program_change(target_date_str, change_id):
-    """Delete a program change from session state"""
+    """Delete a program change - from database if connected, else session state"""
+    if delete_change_from_db(change_id):
+        st.session_state.pc_db_connected = True
+        return
+    st.session_state.pc_db_connected = False
     if target_date_str in st.session_state.program_changes:
         st.session_state.program_changes[target_date_str] = [
             c for c in st.session_state.program_changes[target_date_str]
@@ -222,26 +311,55 @@ def compute_release_text(direction, person):
     else:  # "Releasing"
         return f"Releasing {person}"
 
+def load_all_changes_from_db():
+    """Load ALL program changes from Supabase, grouped by date. Returns dict or None on failure."""
+    sb = _get_supabase()
+    if not sb:
+        return None
+    try:
+        res = sb.table(CHANGES_TABLE).select("*").order("change_date").execute()
+        rows = res.data or []
+        grouped = {}
+        for row in rows:
+            row['time_blocks'] = _parse_time_blocks(row.get('time_blocks'))
+            d = row.get('change_date')
+            grouped.setdefault(d, []).append(row)
+        return grouped
+    except Exception:
+        return None
+
 def export_data():
     """Export all changes and staff list as JSON"""
+    db_changes = load_all_changes_from_db()
+    changes_to_export = db_changes if db_changes is not None else st.session_state.program_changes
     export_package = {
         'staff_list': st.session_state.staff_list,
-        'program_changes': st.session_state.program_changes
+        'program_changes': changes_to_export
     }
     return json.dumps(export_package, indent=2)
 
 def import_data(json_str):
-    """Import changes and staff list from JSON"""
+    """Import changes and staff list from JSON. Pushes changes into the database when connected."""
     try:
         data = json.loads(json_str)
-        if 'program_changes' in data:
-            st.session_state.program_changes = data['program_changes']
-            if 'staff_list' in data:
-                st.session_state.staff_list = data['staff_list']
+        changes = data.get('program_changes', data if 'program_changes' not in data else {})
+        if 'staff_list' in data:
+            st.session_state.staff_list = data['staff_list']
+
+        sb = _get_supabase()
+        if sb:
+            for date_str, entries in changes.items():
+                for entry in entries:
+                    entry = dict(entry)
+                    entry['change_date'] = date_str
+                    entry.pop('id', None)
+                    entry.pop('created_at', None)
+                    entry.pop('updated_at', None)
+                    insert_change_to_db(entry)
         else:
-            st.session_state.program_changes = data
+            st.session_state.program_changes = changes
         return True
-    except:
+    except Exception:
         return False
 
 def generate_pdf(changes, target_date):
@@ -456,7 +574,11 @@ def render_mobile_view(changes, target_date):
 
 # ── MAIN INTERFACE ──────────────────────────────────────────────
 st.title("📋 Program Changes Manager")
-st.info("⚠️ **Changes are session-based** and use Export/Import to save permanently. Staff list is saved to the database when available.")
+
+if st.session_state.get('pc_db_connected') is False:
+    st.warning("⚠️ Database not reachable right now - changes are only saved for this browser session. Use Export/Import (💾 Data) to keep a backup, and they'll sync once the database is back.")
+else:
+    st.success("✅ Changes save automatically and appear on the Daily Bulletin for everyone, on any device.")
 
 if st.session_state.get('staff_db_connected') is False:
     st.warning("⚠️ Staff list database not reachable right now - new staff added will only last this session. Use Export/Import (💾 Data) to keep a backup.")
