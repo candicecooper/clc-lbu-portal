@@ -128,8 +128,8 @@ def add_details_grid(doc, pairs, col_widths_cm=(3.2, 8.7, 3.2, 8.7)):
     return table
 
 
-PHASE_COLS = ["PHASE", "LOCATION", "CONTEXT", "TIME", "ANTECEDENT", "BEHAVIOUR (STUDENT)", "CONSEQUENCE (STAFF / OTHERS)"]
-PHASE_WIDTHS_CM = [1.4, 3.6, 3.9, 1.9, 4.3, 5.2, 5.4]
+PHASE_COLS = ["PHASE", "LOCATION", "CONTEXT / ANTECEDENT", "TIME", "BEHAVIOUR (STUDENT)", "CONSEQUENCE (STAFF / OTHERS)"]
+PHASE_WIDTHS_CM = [1.4, 3.6, 6.0, 1.9, 5.8, 6.0]
 
 
 def add_phase_table(doc, phases):
@@ -154,7 +154,6 @@ def add_phase_table(doc, phases):
             phase.get("Location", ""),
             phase.get("Context", ""),
             phase.get("Time", ""),
-            phase.get("Antecedent", ""),
             phase.get("Behaviour", ""),
             phase.get("Consequence", ""),
         ]
@@ -344,12 +343,17 @@ def parse_block_text(lines):
     return " ".join(ln.strip() for ln in lines if ln.strip())
 
 # ABC phase field labels — matched separately so "Behaviour (Student):" etc.
-# always canonicalise to the plain field name.
+# always canonicalise to the plain field name. "Context" and "Antecedent" are
+# the same thing on the official template (a merged "Context / Antecedent"
+# label going forward) — both patterns map to the same canonical key so
+# older-format pasted reports (with the two as separate fields) still merge
+# correctly.
 PHASE_FIELD_PATTERNS = [
     ("Time", re.compile(r"^\s*Time\s*:\s*(.*)$", re.IGNORECASE)),
     ("Location", re.compile(r"^\s*Location\s*:\s*(.*)$", re.IGNORECASE)),
+    ("Context", re.compile(r"^\s*Context\s*/?\s*Antecedent[^:]*:\s*(.*)$", re.IGNORECASE)),
     ("Context", re.compile(r"^\s*Context\s*:\s*(.*)$", re.IGNORECASE)),
-    ("Antecedent", re.compile(r"^\s*Antecedent[^:]*:\s*(.*)$", re.IGNORECASE)),
+    ("Context", re.compile(r"^\s*Antecedent[^:]*:\s*(.*)$", re.IGNORECASE)),
     ("Behaviour", re.compile(r"^\s*Behaviour[^:]*:\s*(.*)$", re.IGNORECASE)),
     ("Consequence", re.compile(r"^\s*Consequence[^:]*:\s*(.*)$", re.IGNORECASE)),
 ]
@@ -411,9 +415,12 @@ def parse_generic_labeled_lines(lines):
 
 
 def parse_phase_labeled_lines(lines):
-    """Same idea as parse_generic_labeled_lines but for the six ABC-H
-    phase fields (Time/Location/Context/Antecedent/Behaviour/Consequence),
-    which may have parenthetical suffixes like 'Behaviour (Student):'."""
+    """Same idea as parse_generic_labeled_lines but for the ABC-H phase
+    fields (Time/Location/Context-Antecedent/Behaviour/Consequence), which
+    may have parenthetical suffixes like 'Behaviour (Student):'. "Context"
+    and "Antecedent" share one canonical key — if a report has both as
+    separate lines (older format), the second is appended rather than
+    overwriting the first."""
     result = {}
     current_key = None
     for ln in lines:
@@ -424,7 +431,11 @@ def parse_phase_labeled_lines(lines):
         for key, pattern in PHASE_FIELD_PATTERNS:
             m = pattern.match(stripped)
             if m:
-                result[key] = m.group(1).strip()
+                value = m.group(1).strip()
+                if key in result and result[key]:
+                    result[key] = (result[key] + " " + value).strip()
+                else:
+                    result[key] = value
                 current_key = key
                 matched = True
                 break
@@ -459,7 +470,6 @@ def parse_phases(timeline_lines):
             "Time": fields.get("Time", ""),
             "Location": fields.get("Location", ""),
             "Context": fields.get("Context", ""),
-            "Antecedent": fields.get("Antecedent", ""),
             "Behaviour": fields.get("Behaviour", ""),
             "Consequence": fields.get("Consequence", ""),
         })
