@@ -529,7 +529,10 @@ with tab1:
                     with col1:
                         student_name = st.text_input("Name *", value=draft.get('student_name') or "")
                     with col2:
-                        dob = st.date_input("DOB", value=parse_stored_date(draft.get('date_of_birth')))
+                        dob = st.date_input(
+                            "DOB", value=parse_stored_date(draft.get('date_of_birth')),
+                            min_value=date(2000, 1, 1), max_value=date.today()
+                        )
                     with col3:
                         gender = st.selectbox(
                             "Gender", [""] + GENDER_OPTIONS,
@@ -768,7 +771,7 @@ with tab1:
             with col1:
                 student_name = st.text_input("Name *")
             with col2:
-                dob = st.date_input("DOB", value=None)
+                dob = st.date_input("DOB", value=None, min_value=date(2000, 1, 1), max_value=date.today())
             with col3:
                 gender = st.selectbox("Gender", [""] + GENDER_OPTIONS)
 
@@ -926,10 +929,24 @@ with tab2:
 
     try:
         all_students = supabase.table("allocation_students").select("*").execute()
-        allocated_data = [
-            r for r in all_students.data
-            if str(r.get("outcome", "")).strip().lower() == "allocated"
-        ]
+
+        def _is_active(r):
+            if str(r.get("outcome", "")).strip().lower() != "allocated":
+                return False
+            if str(r.get("current_status", "")).strip().lower() == "inactive":
+                return False
+            if r.get("exit_reason"):
+                return False
+            finish = r.get("actual_finish_date") or r.get("finishing_date")
+            if finish:
+                try:
+                    if datetime.fromisoformat(str(finish)[:10]).date() < datetime.now().date():
+                        return False
+                except Exception:
+                    pass
+            return True
+
+        allocated_data = [r for r in all_students.data if _is_active(r)]
         class _Wrap:
             pass
         allocated = _Wrap()
@@ -943,6 +960,12 @@ with tab2:
                 outcome_counts[key] = outcome_counts.get(key, 0) + 1
             st.write("Breakdown by `outcome` value (exact, including hidden spaces/case):")
             st.write(outcome_counts)
+            allocated_total = sum(1 for r in all_students.data if str(r.get("outcome", "")).strip().lower() == "allocated")
+            st.write(
+                f"Of {allocated_total} allocated student(s), {len(allocated_data)} are considered "
+                f"**active** and shown below; {allocated_total - len(allocated_data)} are excluded "
+                "(marked Inactive, already exited, or with a finish date in the past)."
+            )
 
         if allocated.data:
             sorted_students = sorted(allocated.data, key=lambda r: (r.get('student_name') or '').lower())
