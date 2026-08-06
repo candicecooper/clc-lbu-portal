@@ -200,8 +200,8 @@ def build_docx(parsed):
     add_details_grid(doc, [
         ("Name", s.get("Name", "")), ("DOB", s.get("DOB", "")),
         ("EDSAS ID", s.get("EDSAS ID", "")), ("Program", s.get("Program", "")),
-        ("Home School", s.get("Home School", "")), ("Witnesses", s.get("Witnesses", "")),
-        ("Other students involved", s.get("Other students involved", "")), ("", ""),
+        ("Year Level", s.get("Year Level", "")), ("Home School", s.get("Home School", "")),
+        ("Witnesses", s.get("Witnesses", "")), ("Other students involved", s.get("Other students involved", "")),
     ])
 
     add_heading(doc, "Incident Details & Reporting Staff")
@@ -235,6 +235,19 @@ def build_docx(parsed):
                     add_field_line(doc, k, v)
         else:
             add_plain(doc, es)
+
+    if parsed.get("staff_responses"):
+        add_heading(doc, "Staff Responses")
+        add_plain(doc, parsed["staff_responses"])
+
+    hyp_input = parsed.get("hypothesis_input", {})
+    if hyp_input:
+        add_heading(doc, "Hypothesis Input (Staff)")
+        if hyp_input.get("Function"):
+            add_field_line(doc, "Function", hyp_input["Function"])
+        for k, v in hyp_input.items():
+            if k != "Function" and v:
+                add_field_line(doc, k, v)
 
     notif = parsed.get("notifications", {})
     if notif:
@@ -284,7 +297,10 @@ HEADING_ALIASES = {
     "STUDENT DETAILS": "student",
     "INCIDENT DETAILS": "incident",
     "REPORTING STAFF": "reporting_staff",
+    "WITNESSES": "witnesses",
+    "OTHER STUDENTS INVOLVED": "other_students",
     "INCIDENT TIMELINE": "timeline",   # matches "INCIDENT TIMELINE – ABC-H" via startswith
+    "HYPOTHESIS INPUT": "hypothesis_input",
     "HARM / OUTCOMES": "harm",
     "HARM/OUTCOMES": "harm",
     "ED155": "ed155",
@@ -304,9 +320,9 @@ PHASE_START = re.compile(r"^(PHASE|EVENT)\s*\d+", re.IGNORECASE)
 # first, so "Behaviour Type" never gets swallowed by a generic "Behaviour" match.
 GENERIC_LABELS = [
     "Other students involved", "Home School", "EDSAS ID", "Program", "DOB",
-    "Witnesses", "Name",
-    "Incident Date", "Incident End Time", "Incident Time", "Location",
-    "Reporting Staff",
+    "Witnesses", "Name", "Student Name", "Date of Birth", "Year Level",
+    "Incident Date", "Incident End Time", "Incident Time", "Time", "Location(s)", "Location",
+    "Reporting Staff", "Date", "Day",
     "ED155 required", "ED155 completed", "ED155 number",
     "Emergency services involved", "SAPOL reference number", "Service",
     "Parent/Carer informed", "Time informed", "Informed by", "Others notified", "Method",
@@ -319,6 +335,13 @@ GENERIC_RE = re.compile(
     r"^\s*(" + "|".join(re.escape(l) for l in GENERIC_LABELS) + r")\s*:\s*(.*)$",
     re.IGNORECASE,
 )
+
+
+def parse_block_text(lines):
+    """For headings whose entire content is free text with no 'Label:'
+    lines (e.g. WITNESSES, OTHER STUDENTS INVOLVED) — just join the
+    non-empty lines into one string."""
+    return " ".join(ln.strip() for ln in lines if ln.strip())
 
 # ABC phase field labels — matched separately so "Behaviour (Student):" etc.
 # always canonicalise to the plain field name.
@@ -447,13 +470,37 @@ def parse_report(raw_text):
     sections = split_sections(raw_text)
 
     student = parse_generic_labeled_lines(sections.get("student", []))
+    # Normalise label variants the bot may use to the canonical field name.
+    if not student.get("Name") and student.get("Student Name"):
+        student["Name"] = student.pop("Student Name")
+    if not student.get("DOB") and student.get("Date of Birth"):
+        student["DOB"] = student.pop("Date of Birth")
+
+    # WITNESSES / OTHER STUDENTS INVOLVED sometimes come as their own
+    # heading with free-text content underneath, rather than inline
+    # "Witnesses:" / "Other students involved:" fields.
+    if sections.get("witnesses") and not student.get("Witnesses"):
+        val = parse_block_text(sections["witnesses"])
+        if val:
+            student["Witnesses"] = val
+    if sections.get("other_students") and not student.get("Other students involved"):
+        val = parse_block_text(sections["other_students"])
+        if val:
+            student["Other students involved"] = val
+
     incident = parse_generic_labeled_lines(sections.get("incident", []))
-    if not incident.get("Location"):
-        loc_val = incident.get("Location(s)") or incident.get("Location")
-        if loc_val:
-            incident["Location"] = loc_val
-    if sections.get("reporting_staff"):
-        rep = " ".join(x.strip() for x in sections["reporting_staff"] if x.strip())
+    if not incident.get("Incident Time") and incident.get("Time"):
+        incident["Incident Time"] = incident.pop("Time")
+    if not incident.get("Location") and incident.get("Location(s)"):
+        incident["Location"] = incident.pop("Location(s)")
+    # Date + Day sometimes come as separate fields instead of one
+    # "Incident Date" field.
+    if not incident.get("Incident Date") and incident.get("Date"):
+        date_val = incident.pop("Date")
+        day_val = incident.pop("Day", "")
+        incident["Incident Date"] = f"{date_val} ({day_val})" if day_val else date_val
+    if sections.get("reporting_staff") and not incident.get("Reporting Staff"):
+        rep = parse_block_text(sections["reporting_staff"])
         if rep:
             incident["Reporting Staff"] = rep
 
@@ -467,9 +514,13 @@ def parse_report(raw_text):
     if not emergency and emergency_lines:
         emergency = " ".join(emergency_lines)
 
+    staff_responses = parse_block_text(sections.get("staff_responses", []))
     notifications = parse_generic_labeled_lines(sections.get("notifications", []))
     declaration = parse_generic_labeled_lines(sections.get("declaration", []))
 
+    # HYPOTHESIS INPUT is the staff member's own GET/AVOID call, distinct
+    # from the AI-GENERATED HYPOTHESIS section further down.
+    hypothesis_input = parse_generic_labeled_lines(sections.get("hypothesis_input", []))
     hypothesis = parse_generic_labeled_lines(sections.get("hypothesis", []))
     irms = " ".join(x.strip() for x in sections.get("irms", []) if x.strip())
     tagging = parse_generic_labeled_lines(sections.get("tagging", []))
@@ -481,8 +532,10 @@ def parse_report(raw_text):
         "harm": harm,
         "ed155": ed155,
         "emergency": emergency,
+        "staff_responses": staff_responses,
         "notifications": notifications,
         "declaration": declaration,
+        "hypothesis_input": hypothesis_input,
         "hypothesis": hypothesis,
         "irms": irms,
         "tagging": tagging,
