@@ -78,6 +78,12 @@ COMMITTEES = {
         'icon': '✨',
         'color': '#ec4899',
         'description': 'Planning · Coordination · Celebration'
+    },
+    'personel': {
+        'name': 'Personal Advisory Committee',
+        'icon': '🧭',
+        'color': '#2563eb',
+        'description': 'Guidance · Support · Advocacy'
     }
 }
 
@@ -369,70 +375,39 @@ if st.session_state.committee_view == 'home':
     
     st.markdown("<h3 style='color: #1e3a5f; margin-bottom: 1.5rem;'>Select a committee to manage meetings and documents.</h3>", unsafe_allow_html=True)
     
-    # Committee Cards
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        # Finance Card
+    # Badge colors (light bg / dark text) per committee, derived to complement each accent color
+    BADGE_COLORS = {
+        'finance': ('#d1fae5', '#065f46'),
+        'whs': ('#fef3c7', '#92400e'),
+        'social': ('#e9d5ff', '#6b21a8'),
+        'special': ('#fce7f3', '#9f1239'),
+        'personel': ('#dbeafe', '#1e40af'),
+    }
+
+    def render_committee_card(key, info):
+        badge_bg, badge_text = BADGE_COLORS.get(key, ('#e2e8f0', '#334155'))
         st.markdown(f"""
-            <div style="border: 3px solid {COMMITTEES['finance']['color']}; border-radius: 16px; padding: 2rem; 
+            <div style="border: 3px solid {info['color']}; border-radius: 16px; padding: 2rem; 
                         background: white; margin-bottom: 1.5rem; min-height: 220px;
                         box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
-                <div style="font-size: 3.5rem; margin-bottom: 1rem;">{COMMITTEES['finance']['icon']}</div>
-                <h3 style="color: #1e3a5f; margin-bottom: 0.5rem;">{COMMITTEES['finance']['name']}</h3>
-                <p style="color: #64748b; margin-bottom: 1rem;">{COMMITTEES['finance']['description']}</p>
-                <span style="background: #d1fae5; color: #065f46; padding: 0.4rem 0.8rem; 
+                <div style="font-size: 3.5rem; margin-bottom: 1rem;">{info['icon']}</div>
+                <h3 style="color: #1e3a5f; margin-bottom: 0.5rem;">{info['name']}</h3>
+                <p style="color: #64748b; margin-bottom: 1rem;">{info['description']}</p>
+                <span style="background: {badge_bg}; color: {badge_text}; padding: 0.4rem 0.8rem; 
                             border-radius: 20px; font-size: 0.85rem; font-weight: 600;">● Active</span>
             </div>
         """, unsafe_allow_html=True)
-        if st.button("Open Finance", key="btn_finance", use_container_width=True):
-            navigate_to('committee_home', 'finance')
-        
-        # Social Club Card
-        st.markdown(f"""
-            <div style="border: 3px solid {COMMITTEES['social']['color']}; border-radius: 16px; padding: 2rem; 
-                        background: white; margin-bottom: 1.5rem; min-height: 220px;
-                        box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
-                <div style="font-size: 3.5rem; margin-bottom: 1rem;">{COMMITTEES['social']['icon']}</div>
-                <h3 style="color: #1e3a5f; margin-bottom: 0.5rem;">{COMMITTEES['social']['name']}</h3>
-                <p style="color: #64748b; margin-bottom: 1rem;">{COMMITTEES['social']['description']}</p>
-                <span style="background: #e9d5ff; color: #6b21a8; padding: 0.4rem 0.8rem; 
-                            border-radius: 20px; font-size: 0.85rem; font-weight: 600;">● Active</span>
-            </div>
-        """, unsafe_allow_html=True)
-        if st.button("Open Social Club", key="btn_social", use_container_width=True):
-            navigate_to('committee_home', 'social')
-    
-    with col2:
-        # WHS Card
-        st.markdown(f"""
-            <div style="border: 3px solid {COMMITTEES['whs']['color']}; border-radius: 16px; padding: 2rem; 
-                        background: white; margin-bottom: 1.5rem; min-height: 220px;
-                        box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
-                <div style="font-size: 3.5rem; margin-bottom: 1rem;">{COMMITTEES['whs']['icon']}</div>
-                <h3 style="color: #1e3a5f; margin-bottom: 0.5rem;">{COMMITTEES['whs']['name']}</h3>
-                <p style="color: #64748b; margin-bottom: 1rem;">{COMMITTEES['whs']['description']}</p>
-                <span style="background: #fef3c7; color: #92400e; padding: 0.4rem 0.8rem; 
-                            border-radius: 20px; font-size: 0.85rem; font-weight: 600;">● Active</span>
-            </div>
-        """, unsafe_allow_html=True)
-        if st.button("Open WHS", key="btn_whs", use_container_width=True):
-            navigate_to('committee_home', 'whs')
-        
-        # Special Events Card
-        st.markdown(f"""
-            <div style="border: 3px solid {COMMITTEES['special']['color']}; border-radius: 16px; padding: 2rem; 
-                        background: white; margin-bottom: 1.5rem; min-height: 220px;
-                        box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
-                <div style="font-size: 3.5rem; margin-bottom: 1rem;">{COMMITTEES['special']['icon']}</div>
-                <h3 style="color: #1e3a5f; margin-bottom: 0.5rem;">{COMMITTEES['special']['name']}</h3>
-                <p style="color: #64748b; margin-bottom: 1rem;">{COMMITTEES['special']['description']}</p>
-                <span style="background: #fce7f3; color: #9f1239; padding: 0.4rem 0.8rem; 
-                            border-radius: 20px; font-size: 0.85rem; font-weight: 600;">● Active</span>
-            </div>
-        """, unsafe_allow_html=True)
-        if st.button("Open Special Events", key="btn_special", use_container_width=True):
-            navigate_to('committee_home', 'special')
+        if st.button(f"Open {info['name']}", key=f"btn_{key}", use_container_width=True):
+            navigate_to('committee_home', key)
+
+    # Committee Cards - 3 per row
+    committee_keys = list(COMMITTEES.keys())
+    for row_start in range(0, len(committee_keys), 3):
+        row_keys = committee_keys[row_start:row_start + 3]
+        cols = st.columns(3)
+        for col, key in zip(cols, row_keys):
+            with col:
+                render_committee_card(key, COMMITTEES[key])
     
     # Documents Card - Centered below
     st.divider()
