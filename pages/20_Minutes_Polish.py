@@ -67,10 +67,24 @@ label[data-testid="stWidgetLabel"] p{font-size:.72rem!important;font-weight:600!
 """, unsafe_allow_html=True)
 
 # ── GROQ ──────────────────────────────────────────────────────
+def _groq_client():
+    """Build a Groq client, tolerating the old groq/httpx version clash
+    (TypeError: Client.__init__() got an unexpected keyword argument 'proxies')
+    that shows up when the deploy environment has a stale cached groq wheel."""
+    from groq import Groq
+    try:
+        return Groq(api_key=st.secrets["GROQ_API_KEY"], timeout=120.0)
+    except TypeError:
+        import httpx
+        return Groq(
+            api_key=st.secrets["GROQ_API_KEY"],
+            timeout=120.0,
+            http_client=httpx.Client(timeout=120.0),
+        )
+
 def groq_call(prompt: str, max_tokens: int = 3000, system: str = "") -> str:
     try:
-        from groq import Groq
-        client = Groq(api_key=st.secrets["GROQ_API_KEY"], timeout=120.0)
+        client = _groq_client()
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -79,7 +93,7 @@ def groq_call(prompt: str, max_tokens: int = 3000, system: str = "") -> str:
         for attempt in range(2):  # one automatic retry on transient failure
             try:
                 resp = client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
+                    model="qwen/qwen3.6-27b",
                     max_tokens=max_tokens,
                     temperature=0.1,  # low temperature — factual fidelity over creativity
                     messages=messages
