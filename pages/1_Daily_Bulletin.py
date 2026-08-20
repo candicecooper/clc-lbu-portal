@@ -391,7 +391,7 @@ def load_todays_nit_bookings(for_date):
         return []
 
 # Meeting room hour-block slots, 8:00am through the last bookable start of 4:00pm.
-# Kept in the same order as 36_Meeting_Room_Bookings.py so sorting lines up.
+# Kept in the same order as 52_meeting_room_bookings.py so sorting lines up.
 MEETING_ROOM_SLOT_ORDER = {
     "8:00 - 9:00am": 1, "9:00 - 10:00am": 2, "10:00 - 11:00am": 3,
     "11:00am - 12:00pm": 4, "12:00 - 1:00pm": 5, "1:00 - 2:00pm": 6,
@@ -1095,10 +1095,10 @@ with page_tab:
                     purpose = booking.get('purpose', '')
                     purpose_html = f'<div style="font-size:0.75rem;color:#6b7280;margin-top:0.1rem;">{purpose}</div>' if purpose else ""
                     st.markdown(f'<div style="background:#eef2f7;padding:0.75rem;margin:0.5rem 0;border-radius:8px;border-left:4px solid #1a2e44;"><div style="font-weight:700;color:#1a2e44;font-size:0.9rem;">🕐 {time_slot}</div><div style="font-size:0.85rem;color:#374151;margin-top:0.2rem;">{booked_by}</div>{purpose_html}</div>', unsafe_allow_html=True)
-                st.markdown('<div style="margin-top:0.75rem;font-size:0.75rem;color:#6b7280;">📌 <a href="/Meeting_Room_Bookings" target="_self" style="color:#1a2e44;text-decoration:none;font-weight:600;">Manage Meeting Room →</a></div>', unsafe_allow_html=True)
+                st.markdown('<div style="margin-top:0.75rem;font-size:0.75rem;color:#6b7280;">📌 <a href="/meeting_room_bookings" target="_self" style="color:#1a2e44;text-decoration:none;font-weight:600;">Manage Meeting Room →</a></div>', unsafe_allow_html=True)
             else:
                 st.markdown('<div class="empty-state"><div class="icon">🗓️</div>No meeting room bookings today</div>', unsafe_allow_html=True)
-                st.markdown('<div style="margin-top:0.5rem;font-size:0.75rem;color:#6b7280;">📌 <a href="/Meeting_Room_Bookings" target="_self" style="color:#1a2e44;text-decoration:none;font-weight:600;">Book Meeting Room →</a></div>', unsafe_allow_html=True)
+                st.markdown('<div style="margin-top:0.5rem;font-size:0.75rem;color:#6b7280;">📌 <a href="/meeting_room_bookings" target="_self" style="color:#1a2e44;text-decoration:none;font-weight:600;">Book Meeting Room →</a></div>', unsafe_allow_html=True)
 
             st.markdown('</div></div>', unsafe_allow_html=True)
 
