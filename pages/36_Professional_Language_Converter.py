@@ -57,6 +57,10 @@ st.markdown(f"""
     margin:0 0 .75rem; font-size:1rem; font-weight:800; color:{TEAL};
 }}
 
+.starter-btn-wrap {{
+    display:flex; flex-wrap:wrap; gap:.5rem;
+}}
+
 .output-box {{
     background:{TEAL_L}; border:1px solid {TEAL}; border-radius:10px;
     padding:1rem 1.25rem; white-space:pre-wrap; font-size:.9rem;
@@ -67,11 +71,6 @@ st.markdown(f"""
     background:{AMB_B}; border:1px solid {AMBER}; border-radius:8px;
     padding:.55rem .9rem; font-size:.78rem; color:#7a4a08;
     margin-bottom:1rem;
-}}
-
-/* Style containers as cards */
-.element-container:has(> .section-card) {{
-    margin-bottom: 1rem;
 }}
 </style>
 """, unsafe_allow_html=True)
@@ -169,28 +168,19 @@ if "plc_standard" not in st.session_state:
 if "plc_formal" not in st.session_state:
     st.session_state.plc_formal = ""
 
-# -- Input section: Prompt starters -------------------------------------------
-st.markdown("""
-<div class="section-card">
-  <h3>Prompt starters</h3>
-</div>
-""", unsafe_allow_html=True)
+# -- Input section ------------------------------------------------------------
+with st.container():
+    st.markdown('<div class="section-card"><h3>Prompt starters</h3>', unsafe_allow_html=True)
+    cols = st.columns(5)
+    for i, (label, prefix) in enumerate(STARTERS.items()):
+        col = cols[i % 5]
+        with col:
+            if st.button(label, key=f"starter_{i}", use_container_width=True):
+                st.session_state.plc_input = prefix
+                st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
 
-cols = st.columns(5)
-for i, (label, prefix) in enumerate(STARTERS.items()):
-    col = cols[i % 5]
-    with col:
-        if st.button(label, key=f"starter_{i}", use_container_width=True):
-            st.session_state.plc_input = prefix
-            st.rerun()
-
-# -- Input section: Your description ------------------------------------------
-st.markdown("""
-<div class="section-card">
-  <h3>Your description</h3>
-</div>
-""", unsafe_allow_html=True)
-
+st.markdown('<div class="section-card"><h3>Your description</h3>', unsafe_allow_html=True)
 user_input = st.text_area(
     label="Description",
     value=st.session_state.plc_input,
@@ -200,6 +190,7 @@ user_input = st.text_area(
     key="plc_textarea",
 )
 st.caption(f"{len(user_input)} characters — write as you normally would, no need for formal language.")
+st.markdown("</div>", unsafe_allow_html=True)
 
 col_btn, col_clear, _ = st.columns([2, 1, 4])
 with col_btn:
@@ -220,7 +211,7 @@ if convert:
             try:
                 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
                 response = client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
+                    model="qwen/qwen3.6-27b",
                     max_tokens=1800,
                     messages=[
                         {"role": "system", "content": SYSTEM_PROMPT},
@@ -260,17 +251,12 @@ if st.session_state.plc_standard:
     tab1, tab2 = st.tabs(["📄 Standard version", "📋 Formal / documentation"])
 
     with tab1:
-        st.markdown("""
-        <div class="section-card">
-          <h3>Standard version</h3>
-        </div>
-        """, unsafe_allow_html=True)
-        
+        st.markdown('<div class="section-card"><h3>Standard version</h3>', unsafe_allow_html=True)
         st.markdown(
             f'<div class="output-box">{st.session_state.plc_standard}</div>',
             unsafe_allow_html=True,
         )
-        
+        st.markdown("</div>", unsafe_allow_html=True)
         st.download_button(
             label="⬇️ Download standard version",
             data=st.session_state.plc_standard,
@@ -280,17 +266,12 @@ if st.session_state.plc_standard:
 
     with tab2:
         if st.session_state.plc_formal:
-            st.markdown("""
-            <div class="section-card">
-              <h3>Formal / documentation version</h3>
-            </div>
-            """, unsafe_allow_html=True)
-            
+            st.markdown('<div class="section-card"><h3>Formal / documentation version</h3>', unsafe_allow_html=True)
             st.markdown(
                 f'<div class="output-box">{st.session_state.plc_formal}</div>',
                 unsafe_allow_html=True,
             )
-            
+            st.markdown("</div>", unsafe_allow_html=True)
             st.download_button(
                 label="⬇️ Download formal version",
                 data=st.session_state.plc_formal,
