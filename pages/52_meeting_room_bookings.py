@@ -41,6 +41,9 @@ ACCENT_COLOR = "#C8760A"  # Amber
 # Room name (single shared meeting room)
 ROOM_NAME = "Meeting Room"
 
+# Staff to always include in the dropdown, even if not yet in the staff table
+ADDITIONAL_STAFF = ["Roisin"]
+
 # Hour-block time slots: 8:00am start through to the last bookable start of 4:00pm
 # (so the room can be occupied through to 5:00pm on that final slot).
 HOUR_SLOTS = [
@@ -128,14 +131,45 @@ def load_bookings():
         return pd.DataFrame()
 
 def load_staff_names():
-    """Load staff names from database for dropdowns"""
+    """Load staff names from database for dropdowns, always including ADDITIONAL_STAFF"""
     try:
         response = supabase.table("staff").select("name").order("name").execute()
         names = [r["name"] for r in response.data] if response.data else []
-        return sorted(names)
     except Exception as e:
         st.warning(f"Could not load staff names: {e}")
+        names = []
+
+    # Add any additional staff not already present (partial match check)
+    for extra in ADDITIONAL_STAFF:
+        if not any(extra.lower() in n.lower() for n in names):
+            names.append(extra)
+
+    return sorted(names)
+
+def load_staff_records():
+    """Load staff as (id, name) records for the admin Manage Staff panel"""
+    try:
+        response = supabase.table("staff").select("id, name").order("name").execute()
+        return response.data or []
+    except Exception as e:
+        st.warning(f"Could not load staff records: {e}")
         return []
+
+def add_staff_member(name):
+    """Add a new staff member to the shared staff table"""
+    try:
+        supabase.table("staff").insert({"name": name}).execute()
+        return True, "Staff member added successfully!"
+    except Exception as e:
+        return False, f"Error adding staff member: {e}"
+
+def update_staff_member(staff_id, new_name):
+    """Rename an existing staff member"""
+    try:
+        supabase.table("staff").update({"name": new_name}).eq("id", staff_id).execute()
+        return True, "Staff member updated successfully!"
+    except Exception as e:
+        return False, f"Error updating staff member: {e}"
 
 def create_booking(booking_date, time_slot, staff_name, purpose=""):
     """Create a new booking"""
@@ -291,6 +325,60 @@ if is_admin_user:
                         st.error(message)
     else:
         st.info("No bookings in the system yet")
+
+    st.markdown("---")
+
+    # ── Admin: Manage Staff ──────────────────────────────────
+    st.markdown("### 🧑‍💼 Manage Staff")
+    st.caption("This staff list is shared across the portal (NIT Booking, Meeting Room Booking, etc.) — changes here apply everywhere.")
+
+    staff_records = load_staff_records()
+
+    if staff_records:
+        for record in staff_records:
+            scol1, scol2 = st.columns([4, 1])
+            with scol1:
+                edited_name = st.text_input(
+                    "Name",
+                    value=record.get("name", ""),
+                    key=f"staff_edit_{record['id']}",
+                    label_visibility="collapsed"
+                )
+            with scol2:
+                if st.button("Save", key=f"staff_save_{record['id']}"):
+                    new_name = edited_name.strip()
+                    if not new_name:
+                        st.warning("Name cannot be empty")
+                    elif new_name == record.get("name", ""):
+                        st.info("No changes to save")
+                    else:
+                        success, message = update_staff_member(record["id"], new_name)
+                        if success:
+                            st.success(message)
+                            st.rerun()
+                        else:
+                            st.error(message)
+    else:
+        st.info("No staff members found in the database yet.")
+
+    st.markdown("**Add a new staff member:**")
+    acol1, acol2 = st.columns([4, 1])
+    with acol1:
+        new_staff_name = st.text_input(
+            "New staff name", key="new_staff_name",
+            label_visibility="collapsed", placeholder="e.g. Jamie Smith"
+        )
+    with acol2:
+        if st.button("➕ Add", key="add_staff_btn"):
+            if new_staff_name.strip():
+                success, message = add_staff_member(new_staff_name.strip())
+                if success:
+                    st.success(message)
+                    st.rerun()
+                else:
+                    st.error(message)
+            else:
+                st.warning("Please enter a name")
 
     st.markdown("---")
 
