@@ -15,17 +15,27 @@ except:
     DOCX_AVAILABLE = False
 
 # ── Groq token-budget guard ────────────────────────────────────────────────
-# The Groq account is on the on_demand tier: 12,000 tokens/minute total,
-# shared across prompt + requested output. Long transcripts can blow past
-# that in a single call ("Request too large" / 413 rate_limit_exceeded).
-# This trims input text to fit before sending, and tells the user if it did.
+# The Groq account is on the on_demand tier. Groq enforces this per model —
+# openai/gpt-oss-120b's actual cap on this account is 8,000 tokens/minute
+# total, shared across prompt + requested output (earlier this was assumed
+# to be 12,000, which was wrong and let requests through that Groq then
+# rejected with a 413 "Request too large" error).
+# A safety margin is applied on top of the 8,000 cap because the
+# chars-per-token estimate below is approximate, and transcripts (speaker
+# labels, timestamps, cross-talk) tend to tokenize less efficiently than
+# plain prose — so a text that "fits" by this estimate can still occasionally
+# run slightly over the real count without some headroom.
+GROQ_TPM_LIMIT = 8000
+
 def _fit_to_groq_budget(text: str, max_tokens: int, prompt_overhead_tokens: int = 400,
-                         tpm_limit: int = 12000) -> tuple[str, bool]:
+                         tpm_limit: int = GROQ_TPM_LIMIT) -> tuple[str, bool]:
     """Truncate text so prompt_overhead + text + max_tokens stays under the
-    account's TPM limit. Returns (possibly-truncated text, was_truncated)."""
+    account's TPM limit, with a safety margin. Returns (possibly-truncated
+    text, was_truncated)."""
     CHARS_PER_TOKEN = 4  # rough estimate for English text
-    input_token_budget = tpm_limit - max_tokens - prompt_overhead_tokens
-    char_budget = max(0, input_token_budget) * CHARS_PER_TOKEN
+    SAFETY_MARGIN = 0.85  # headroom for the estimate above being approximate
+    input_token_budget = (tpm_limit - max_tokens - prompt_overhead_tokens) * SAFETY_MARGIN
+    char_budget = max(0, int(input_token_budget)) * CHARS_PER_TOKEN
     if len(text) <= char_budget:
         return text, False
     return text[:char_budget], True
@@ -1098,7 +1108,7 @@ with tab1:
                             if was_truncated:
                                 st.warning(
                                     "⚠️ This transcript is longer than the AI can read in one go "
-                                    "(Groq's 12,000 tokens/minute limit on the current plan). Only "
+                                    "(Groq's 8,000 tokens/minute limit on the current plan). Only "
                                     "the first part was synthesised. Paste the rest of the transcript "
                                     "above and click **Synthesise Transcript** again — the new part "
                                     "will be added to the synthesis below rather than replacing it."
@@ -1323,7 +1333,7 @@ if minutes and minutes.strip() and GROQ_KEY:
                     if was_truncated:
                         st.warning(
                             "⚠️ These minutes are longer than the AI can process in one go "
-                            "(Groq's 12,000 tokens/minute limit on the current plan). "
+                            "(Groq's 8,000 tokens/minute limit on the current plan). "
                             "Only the first part was sent — check for any actions later in "
                             "the minutes and add them manually if missed."
                         )
@@ -1573,7 +1583,7 @@ with st.expander("📚 PD Session Details", expanded=True):
                             if was_truncated:
                                 st.warning(
                                     "⚠️ This PD transcript is longer than the AI can process in one go "
-                                    "(Groq's 12,000 tokens/minute limit on the current plan). "
+                                    "(Groq's 8,000 tokens/minute limit on the current plan). "
                                     "Only the first part was sent — review the extracted notes and "
                                     "add anything from later in the session by hand, or split the "
                                     "transcript into parts and run each separately."
