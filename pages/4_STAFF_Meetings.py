@@ -87,24 +87,166 @@ def _render_minutes_section_fields(seed: dict, key_prefix: str) -> dict:
     return values
 
 
+# ── CLC-LBU document theme ──────────────────────────────────────────────────
+# Same teal + Segoe UI look already used for the on-screen minutes preview
+# (see the .clc-minutes CSS below) and the "Back to Staff Portal" sidebar
+# button, so the downloaded Word doc matches the rest of the tool.
+_CLC_TEAL = "1A7A7A"
+_CLC_TEAL_LIGHT = "EAF5F5"
+_CLC_GRAY = "6B7280"
+_CLC_TEXT = "1A1A1A"
+_CLC_BORDER = "D9DEE2"
+
+
+def _docx_shade_cell(cell, hex_fill):
+    """Set a table cell's background fill colour."""
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    tcPr = cell._tc.get_or_add_tcPr()
+    shd = OxmlElement('w:shd')
+    shd.set(qn('w:val'), 'clear')
+    shd.set(qn('w:color'), 'auto')
+    shd.set(qn('w:fill'), hex_fill)
+    tcPr.append(shd)
+
+
+def _docx_cell_borders(cell, color=_CLC_BORDER, sz=4):
+    """Give a table cell a thin single-colour border on all four sides."""
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    tcPr = cell._tc.get_or_add_tcPr()
+    borders = OxmlElement('w:tcBorders')
+    for edge in ('top', 'left', 'bottom', 'right'):
+        el = OxmlElement(f'w:{edge}')
+        el.set(qn('w:val'), 'single')
+        el.set(qn('w:sz'), str(sz))
+        el.set(qn('w:color'), color)
+        borders.append(el)
+    tcPr.append(borders)
+
+
+def _docx_bottom_rule(paragraph, color=_CLC_TEAL, sz=16):
+    """Add a coloured rule under a paragraph — used as a heading underline
+    instead of a horizontal-rule table."""
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    pPr = paragraph._p.get_or_add_pPr()
+    pBdr = OxmlElement('w:pBdr')
+    bottom = OxmlElement('w:bottom')
+    bottom.set(qn('w:val'), 'single')
+    bottom.set(qn('w:sz'), str(sz))
+    bottom.set(qn('w:space'), '4')
+    bottom.set(qn('w:color'), color)
+    pBdr.append(bottom)
+    pPr.append(pBdr)
+
+
+def _docx_set_cell_text(cell, text, bold=False, color=_CLC_TEXT, size=10.5, align=None):
+    from docx.shared import Pt, RGBColor
+    cell.text = ""
+    p = cell.paragraphs[0]
+    if align is not None:
+        p.alignment = align
+    run = p.add_run(text)
+    run.bold = bold
+    run.font.size = Pt(size)
+    run.font.color.rgb = RGBColor.from_string(color)
+    run.font.name = "Segoe UI"
+
+
+def _docx_section_heading(doc, text, size=13):
+    """A coloured, underlined heading used for each minutes/actions section —
+    built manually (rather than doc.add_heading) so the colour always matches
+    the CLC teal regardless of the template's built-in heading colours."""
+    from docx.shared import Pt, RGBColor
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(16)
+    p.paragraph_format.space_after = Pt(4)
+    run = p.add_run(text)
+    run.bold = True
+    run.font.size = Pt(size)
+    run.font.color.rgb = RGBColor.from_string(_CLC_TEAL)
+    run.font.name = "Segoe UI"
+    _docx_bottom_rule(p, color=_CLC_BORDER, sz=6)
+    return p
+
+
 def _build_minutes_docx_bytes(meeting: dict):
-    """Build a Word document from a meeting record (or the in-progress form
-    data) for download. Returns None if python-docx isn't available."""
+    """Build a professionally styled Word document from a meeting record (or
+    the in-progress form data) for download. Uses the same CLC-LBU teal +
+    Segoe UI theme as the rest of the tool. Returns None if python-docx isn't
+    available."""
     if not DOCX_AVAILABLE:
         return None
     from io import BytesIO
-    doc = docx.Document()
-    doc.add_heading("CLC Staff Meeting Minutes", level=1)
-    doc.add_paragraph(
-        f"Date: {meeting.get('meeting_date', '')}    "
-        f"Term: {meeting.get('term', '')}  Week: {meeting.get('week_number', '')}"
-    )
-    doc.add_paragraph(f"Minute Taker: {meeting.get('minute_taker', '')}")
-    doc.add_paragraph(f"Attendees: {meeting.get('attendees', '') or 'Not recorded'}")
-    doc.add_paragraph(f"Apologies: {meeting.get('apologies', '') or 'None'}")
-    if meeting.get('acknowledgement_done'):
-        doc.add_paragraph(f"Acknowledgement of Country: completed, led by {meeting.get('acknowledgement_by', '') or 'not recorded'}")
+    from docx.shared import Pt, Inches, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.table import WD_TABLE_ALIGNMENT
 
+    doc = docx.Document()
+
+    # ── Base typography ──────────────────────────────────────────────────
+    normal = doc.styles['Normal']
+    normal.font.name = "Segoe UI"
+    normal.font.size = Pt(10.5)
+    normal.font.color.rgb = RGBColor.from_string(_CLC_TEXT)
+
+    section = doc.sections[0]
+    section.left_margin = Inches(0.9)
+    section.right_margin = Inches(0.9)
+    section.top_margin = Inches(0.7)
+    section.bottom_margin = Inches(0.8)
+
+    # ── Letterhead ───────────────────────────────────────────────────────
+    eyebrow = doc.add_paragraph()
+    eyebrow.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    er = eyebrow.add_run("COWANDILLA LEARNING CENTRE  ·  LEARNING & BEHAVIOUR UNIT")
+    er.bold = True
+    er.font.size = Pt(9)
+    er.font.color.rgb = RGBColor.from_string(_CLC_GRAY)
+    er.font.name = "Segoe UI"
+
+    title = doc.add_paragraph()
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title.paragraph_format.space_before = Pt(2)
+    title.paragraph_format.space_after = Pt(12)
+    tr = title.add_run("Staff Meeting Minutes")
+    tr.bold = True
+    tr.font.size = Pt(24)
+    tr.font.color.rgb = RGBColor.from_string(_CLC_TEAL)
+    tr.font.name = "Segoe UI"
+    _docx_bottom_rule(title, color=_CLC_TEAL, sz=18)
+
+    # ── Meeting details card ─────────────────────────────────────────────
+    details = [
+        ("Date", meeting.get('meeting_date', '') or '—'),
+        ("Term / Week", f"{meeting.get('term', '')} · Week {meeting.get('week_number', '')}"),
+        ("Minute Taker", meeting.get('minute_taker', '') or '—'),
+        ("Attendees", meeting.get('attendees', '') or 'Not recorded'),
+        ("Apologies", meeting.get('apologies', '') or 'None'),
+    ]
+    if meeting.get('acknowledgement_done'):
+        details.append((
+            "Acknowledgement of Country",
+            f"Completed — led by {meeting.get('acknowledgement_by', '') or 'not recorded'}"
+        ))
+
+    table = doc.add_table(rows=len(details), cols=2)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.autofit = False
+    for i, (label, value) in enumerate(details):
+        cells = table.rows[i].cells
+        cells[0].width = Inches(1.9)
+        cells[1].width = Inches(4.7)
+        _docx_shade_cell(cells[0], _CLC_TEAL_LIGHT)
+        _docx_set_cell_text(cells[0], label, bold=True, color=_CLC_TEAL, size=9.5)
+        _docx_set_cell_text(cells[1], str(value), size=10)
+        _docx_cell_borders(cells[0])
+        _docx_cell_borders(cells[1])
+
+    doc.add_paragraph()
+
+    # ── Minutes sections ─────────────────────────────────────────────────
     minutes_text = meeting.get('minutes', '') or ''
     for block in minutes_text.split('\n\n---\n\n'):
         block = block.strip()
@@ -114,29 +256,51 @@ def _build_minutes_docx_bytes(meeting: dict):
             lines = block.split('\n', 1)
             heading = lines[0][3:].strip()
             body = lines[1].strip() if len(lines) > 1 else ''
-            doc.add_heading(heading, level=2)
+            _docx_section_heading(doc, heading)
             for para in body.split('\n'):
-                if para.strip():
-                    doc.add_paragraph(para.strip())
+                para = para.strip()
+                if not para:
+                    continue
+                bp = doc.add_paragraph()
+                bp.paragraph_format.space_after = Pt(4)
+                if para.startswith(('- ', '• ')):
+                    bp.style = doc.styles['List Bullet']
+                    bp.add_run(para[2:].strip())
+                else:
+                    bp.add_run(para)
         else:
             doc.add_paragraph(block)
 
+    # ── Actions ───────────────────────────────────────────────────────────
     raw_actions = meeting.get('actions')
     try:
         actions_list = json.loads(raw_actions) if isinstance(raw_actions, str) else (raw_actions or [])
     except Exception:
         actions_list = []
     if actions_list:
-        doc.add_heading("Actions", level=2)
-        table = doc.add_table(rows=1, cols=3)
-        table.style = 'Light Grid Accent 1'
-        hdr = table.rows[0].cells
-        hdr[0].text, hdr[1].text, hdr[2].text = "Action", "Owner", "Due Date"
+        _docx_section_heading(doc, "Actions")
+        atable = doc.add_table(rows=1, cols=3)
+        atable.autofit = True
+        hdr = atable.rows[0].cells
+        for c, label in zip(hdr, ("Action", "Owner", "Due Date")):
+            _docx_shade_cell(c, _CLC_TEAL)
+            _docx_set_cell_text(c, label, bold=True, color="FFFFFF", size=10)
+            _docx_cell_borders(c, color=_CLC_TEAL)
         for a in actions_list:
-            row = table.add_row().cells
-            row[0].text = a.get('action', '')
-            row[1].text = a.get('owner', '')
-            row[2].text = a.get('due_date', '')
+            row = atable.add_row().cells
+            _docx_set_cell_text(row[0], a.get('action', ''), size=10)
+            _docx_set_cell_text(row[1], a.get('owner', ''), size=10)
+            _docx_set_cell_text(row[2], a.get('due_date', ''), size=10)
+            for c in row:
+                _docx_cell_borders(c)
+
+    # ── Footer ────────────────────────────────────────────────────────────
+    footer_p = section.footer.paragraphs[0]
+    footer_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    fr = footer_p.add_run("Cowandilla Learning Centre  ·  Learning and Behaviour Unit  ·  Staff Meeting Minutes")
+    fr.font.size = Pt(8)
+    fr.font.color.rgb = RGBColor.from_string(_CLC_GRAY)
+    fr.font.name = "Segoe UI"
 
     buf = BytesIO()
     doc.save(buf)
@@ -868,6 +1032,17 @@ with tab1:
         
         else:  # AI from Transcript
             st.markdown("**Paste your transcript below, or upload a file (.txt / .docx)**")
+            st.caption(
+                "Two steps: Step 1 condenses the transcript into a short synthesis of what was "
+                "actually discussed — the Acknowledgement of Country and icebreaker activity are "
+                "dropped automatically, not just summarised. Step 2 sorts that short synthesis "
+                "(not the raw transcript) into the six sections below, which is what keeps each AI "
+                "call well under Groq's token limit."
+            )
+
+            _mkey = st.session_state.current_staff_meeting_id or "new"
+            synthesis_state_key = f"transcript_synthesis_{_mkey}"
+            synthesis_widget_key = f"synthesis_editor_{_mkey}"
 
             # ── Paste or upload ───────────────────────────────────────────────
             transcript_text = ""
@@ -900,40 +1075,148 @@ with tab1:
                     else:
                         st.error("python-docx not installed — please paste the transcript instead.")
 
-            # ── Generate button ───────────────────────────────────────────────
+            st.markdown("---")
+
+            # ══════════════════════════════════════════════════════════════════
+            # STEP 1 — Synthesise the transcript. This drops the Acknowledgement
+            # of Country and icebreaker activity entirely and condenses the rest,
+            # so the text that later gets classified into sections is small — the
+            # raw transcript never goes near the classifier prompt.
+            # ══════════════════════════════════════════════════════════════════
+            st.markdown("##### Step 1 · Synthesise transcript")
+
             if transcript_text and GROQ_KEY:
-                if st.button("🤖 Generate Structured Minutes", type="primary"):
+                if st.button("🧹 Synthesise Transcript", key="synthesise_transcript_btn"):
+                    with st.spinner("Condensing transcript…"):
+                        try:
+                            from groq import Groq
+                            client = Groq(api_key=GROQ_KEY)
+
+                            transcript_for_synthesis, was_truncated = _fit_to_groq_budget(
+                                transcript_text, max_tokens=1200, prompt_overhead_tokens=350
+                            )
+                            if was_truncated:
+                                st.warning(
+                                    "⚠️ This transcript is longer than the AI can read in one go "
+                                    "(Groq's 12,000 tokens/minute limit on the current plan). Only "
+                                    "the first part was synthesised. Paste the rest of the transcript "
+                                    "above and click **Synthesise Transcript** again — the new part "
+                                    "will be added to the synthesis below rather than replacing it."
+                                )
+
+                            synthesis_prompt = f"""Read the transcript of a school staff meeting below
+and condense it into a short, information-dense synthesis of what was
+actually discussed, ready to be sorted into meeting minutes afterwards.
+
+Rules:
+1. COMPLETELY leave out the Acknowledgement of Country (the formal
+   acknowledgement/welcome-to-country reading) — do not mention that it
+   happened, just omit it entirely.
+2. COMPLETELY leave out the icebreaker / BSEM activity (warm-up games,
+   check-ins, "two truths and a lie", wellbeing rounds, etc.) — omit it
+   entirely, do not summarise it.
+3. Keep every substantive point: updates given, decisions made, concerns
+   raised, and action items (what needs to be done, who's responsible, and
+   any due date mentioned).
+4. Keep staff names, dates and figures that are mentioned.
+5. Write in tight prose or bullet points — no filler, no small talk, no
+   repeated pleasantries.
+6. Do not invent anything that isn't in the transcript.
+
+Return ONLY the condensed synthesis text — no preamble, no commentary.
+
+TRANSCRIPT:
+{transcript_for_synthesis}"""
+
+                            response = client.chat.completions.create(
+                                model="openai/gpt-oss-120b",
+                                messages=[{"role": "user", "content": synthesis_prompt}],
+                                temperature=0.2,
+                                max_tokens=1200
+                            )
+                            new_synthesis = response.choices[0].message.content.strip()
+
+                            existing_synthesis = (st.session_state.get(synthesis_state_key) or "").strip()
+                            if existing_synthesis:
+                                combined = existing_synthesis + "\n\n— continued —\n\n" + new_synthesis
+                                st.success("✅ Transcript synthesised and added to the synthesis below.")
+                            else:
+                                combined = new_synthesis
+                                st.success("✅ Transcript synthesised — review it below before generating minutes.")
+
+                            st.session_state[synthesis_state_key] = combined
+                            # Widget key already exists once rendered, so setting it here
+                            # (not just the value= below) is what actually updates the box.
+                            st.session_state[synthesis_widget_key] = combined
+
+                        except Exception as e:
+                            st.error(f"Synthesis failed: {e}")
+
+            elif transcript_text and not GROQ_KEY:
+                st.warning("⚠️ GROQ_API_KEY not configured.")
+            else:
+                st.caption("Paste or upload a transcript above, then click **Synthesise Transcript**.")
+
+            current_synthesis = st.session_state.get(synthesis_state_key, "")
+
+            synthesis_for_minutes = ""
+            if current_synthesis:
+                col_syn, col_syn_clear = st.columns([5, 1])
+                with col_syn:
+                    st.caption(
+                        "Review/edit the synthesis below — this is what Step 2 sorts into "
+                        "sections, not the raw transcript."
+                    )
+                with col_syn_clear:
+                    if st.button("🗑️ Clear", key="clear_synthesis_btn", help="Clear the synthesis and start over"):
+                        st.session_state[synthesis_state_key] = ""
+                        st.session_state.pop(synthesis_widget_key, None)
+                        st.rerun()
+                synthesis_for_minutes = st.text_area(
+                    "Transcript synthesis",
+                    value=current_synthesis,
+                    height=180,
+                    key=synthesis_widget_key,
+                    label_visibility="collapsed"
+                )
+
+            st.markdown("---")
+
+            # ══════════════════════════════════════════════════════════════════
+            # STEP 2 — Sort the (short) synthesis into the six standing sections
+            # ══════════════════════════════════════════════════════════════════
+            st.markdown("##### Step 2 · Generate structured minutes")
+
+            if synthesis_for_minutes.strip() and GROQ_KEY:
+                if st.button("🤖 Generate Structured Minutes", type="primary", key="generate_minutes_btn"):
 
                     with st.spinner("Generating structured minutes…"):
                         try:
                             from groq import Groq
                             client = Groq(api_key=GROQ_KEY)
 
-                            transcript_for_ai, was_truncated = _fit_to_groq_budget(
-                                transcript_text, max_tokens=1800, prompt_overhead_tokens=500
+                            synthesis_for_ai, was_truncated = _fit_to_groq_budget(
+                                synthesis_for_minutes.strip(), max_tokens=2000, prompt_overhead_tokens=400
                             )
                             if was_truncated:
                                 st.warning(
-                                    "⚠️ This transcript is longer than the AI can process in one go "
-                                    "(Groq's 12,000 tokens/minute limit on the current plan). "
-                                    "Only the first part was sent. Paste the rest of the transcript "
-                                    "below and click **Generate Structured Minutes** again — the new "
-                                    "part will be merged into the sections below rather than replacing "
-                                    "them, so you can review everything before saving."
+                                    "⚠️ Even the synthesis is longer than the AI can process in one "
+                                    "go. Trim the synthesis above (or split the transcript into "
+                                    "smaller parts at Step 1) and try again."
                                 )
 
                             section_list = "\n".join(f"- {label}" for _, label in MEETING_SECTIONS)
 
-                            prompt = f"""Read the transcript of a school staff meeting below and sort what was
-discussed into EXACTLY these six standing sections, in this order:
+                            prompt = f"""Read the synthesis of a school staff meeting below and sort what
+was discussed into EXACTLY these six standing sections, in this order:
 {section_list}
 
 For each section, summarise what was discussed, any decisions made, and any
 action items (what needs to be done, who's responsible, and the due date if
-mentioned). If a section was not discussed at all in the transcript, use
-exactly this text for it: "{_NIL_TEXT}"
+mentioned). If a section was not discussed at all, use exactly this text for
+it: "{_NIL_TEXT}"
 
-Do not invent information that isn't in the transcript. If something doesn't
+Do not invent information that isn't in the synthesis. If something doesn't
 clearly belong to one of the six sections, put it under "Other Business".
 
 Return ONLY a JSON object with exactly these keys, no preamble or commentary:
@@ -946,14 +1229,14 @@ Return ONLY a JSON object with exactly these keys, no preamble or commentary:
   "other_business": "..."
 }}
 
-TRANSCRIPT:
-{transcript_for_ai}"""
+MEETING SYNTHESIS:
+{synthesis_for_ai}"""
 
                             response = client.chat.completions.create(
                                 model="openai/gpt-oss-120b",
                                 messages=[{"role": "user", "content": prompt}],
                                 temperature=0.2,
-                                max_tokens=1800
+                                max_tokens=2000
                             )
                             raw = response.choices[0].message.content.strip()
                             json_match = re.search(r'\{.*\}', raw, re.DOTALL)
@@ -965,40 +1248,25 @@ TRANSCRIPT:
                                 for key, _ in MEETING_SECTIONS
                             }
 
-                            # If sections already exist (e.g. from an earlier part of a
-                            # split transcript), merge rather than overwrite — keeps any
-                            # edits already made instead of wiping them out.
-                            existing_sections = st.session_state.get("ai_section_values")
-                            if existing_sections:
-                                merged = {}
-                                for key, _ in MEETING_SECTIONS:
-                                    old_val = (existing_sections.get(key) or "").strip()
-                                    new_val = new_sections.get(key, "").strip()
-                                    old_has_content = old_val and old_val != _NIL_TEXT
-                                    new_has_content = new_val and new_val != _NIL_TEXT
-                                    if old_has_content and new_has_content:
-                                        merged[key] = old_val + "\n\n— continued —\n\n" + new_val
-                                    elif old_has_content:
-                                        merged[key] = old_val
-                                    else:
-                                        merged[key] = new_val
-                                st.success("✅ Minutes generated and merged into the sections below.")
-                            else:
-                                merged = new_sections
-                                st.success("✅ Minutes generated — review the sections below before saving.")
-
-                            st.session_state["ai_section_values"] = merged
+                            # The synthesis already merges any multi-part transcript (Step 1
+                            # appends rather than overwrites), so a single classification pass
+                            # over the whole thing can just replace the draft sections outright.
+                            st.session_state["ai_section_values"] = new_sections
                             # Sync the edit widgets too — once a widget key exists in
                             # session_state, its `value=` argument is ignored on rerun,
                             # so this is what actually updates what's shown for editing.
                             for key, _ in MEETING_SECTIONS:
-                                st.session_state[f"ai_section_manual_{key}"] = merged[key]
+                                st.session_state[f"ai_section_manual_{key}"] = new_sections[key]
+
+                            st.success("✅ Minutes generated — review the sections below before saving.")
 
                         except Exception as e:
                             st.error(f"AI extraction failed: {e}")
 
-            elif transcript_text and not GROQ_KEY:
+            elif synthesis_for_minutes.strip() and not GROQ_KEY:
                 st.warning("⚠️ GROQ_API_KEY not configured.")
+            else:
+                st.caption("Complete Step 1 above to produce a synthesis, then generate structured minutes from it.")
 
             # ── Review and edit the generated sections before saving ──────────
             if st.session_state.get("ai_section_values"):
@@ -1016,8 +1284,8 @@ TRANSCRIPT:
                 section_values = _render_minutes_section_fields(seed, key_prefix="ai_section_manual")
                 minutes = _build_minutes_from_sections(section_values)
             else:
-                st.info("Paste or upload a transcript, then click **Generate Structured Minutes** "
-                         "to fill in the sections above.")
+                st.info("Paste or upload a transcript, then run Step 1 and Step 2 above to fill in "
+                         "the sections.")
                 # minutes keeps whatever was previously saved until something is generated
 
         if minutes and minutes.strip():
