@@ -390,6 +390,30 @@ def load_todays_nit_bookings(for_date):
     except Exception:
         return []
 
+# Meeting room hour-block slots, 8:00am through the last bookable start of 4:00pm.
+# Kept in the same order as 36_Meeting_Room_Bookings.py so sorting lines up.
+MEETING_ROOM_SLOT_ORDER = {
+    "8:00 - 9:00am": 1, "9:00 - 10:00am": 2, "10:00 - 11:00am": 3,
+    "11:00am - 12:00pm": 4, "12:00 - 1:00pm": 5, "1:00 - 2:00pm": 6,
+    "2:00 - 3:00pm": 7, "3:00 - 4:00pm": 8, "4:00 - 5:00pm": 9,
+}
+
+def load_todays_meeting_room_bookings(for_date):
+    """Load Meeting Room bookings for a given date from the database.
+
+    Called with whichever date the bulletin is currently showing (today or
+    any future date via the date navigator), so a booking made for a future
+    day automatically appears when that day's bulletin is opened.
+    """
+    try:
+        sb = _get_sb()
+        response = sb.table("meeting_room_bookings").select("*").eq("status", "booked").eq("booking_date", str(for_date)).execute()
+        if response.data:
+            return sorted(response.data, key=lambda x: MEETING_ROOM_SLOT_ORDER.get(x.get('time_slot', ''), 99))
+        return []
+    except Exception:
+        return []
+
 def load_notices(for_date=None):
     try:
         q = _get_sb().table("daily_notices").select("*").order("created_at", desc=False)
@@ -658,6 +682,14 @@ if params.get("display") == "true":
     with r2c5:
         nit = d_data.get("nit_booking","") or '<span class="dt-em">None</span>'
         st.markdown(f'<div class="dp"><div class="dp-header green">📅 NIT</div><div class="dp-body"><p style="font-size:.75rem;color:#2a3a2a;margin:0;line-height:1.3;">{nit}</p></div></div>', unsafe_allow_html=True)
+
+    # Meeting Room bookings for the day being viewed (today or a future date)
+    _mrb_today = load_todays_meeting_room_bookings(today)
+    if _mrb_today:
+        _mrb_rows = "".join([f'<tr><td style="font-family:\'DM Mono\',monospace;font-size:.7rem;color:#4a8f33;font-weight:700;white-space:nowrap;">{b.get("time_slot","")}</td><td>{b.get("staff_name","")}</td><td style="font-size:.7rem;color:#666;">{b.get("purpose","") or ""}</td></tr>' for b in _mrb_today])
+        st.markdown(f'<div class="dp"><div class="dp-header navy">🗓️ Meeting Room</div><div class="dp-body"><table class="dt"><tr><th>Time</th><th>Booked By</th><th>Purpose</th></tr>{_mrb_rows}</table></div></div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="dp"><div class="dp-header navy">🗓️ Meeting Room</div><div class="dp-body"><span class="dt-em">No meeting room bookings today</span></div></div>', unsafe_allow_html=True)
 
     # Travel Changes — highlighted red if anything entered
     tc_today = d_data.get("travel_changes", [])
@@ -1024,7 +1056,7 @@ with page_tab:
         st.markdown('</div></div>', unsafe_allow_html=True)
 
     with s3:
-        resp_col, nit_col = st.columns(2)
+        resp_col, nit_col, room_col = st.columns(3)
         with resp_col:
             st.markdown('<div class="section-card"><div class="section-card-header amber"><h3>\u2b50 Staff Responsibilities</h3></div><div class="section-card-body">', unsafe_allow_html=True)
             sr = bulletin_data["staff_responsibilities"]
@@ -1048,7 +1080,26 @@ with page_tab:
             else:
                 st.markdown('<div class="empty-state"><div class="icon">📅</div>No NIT bookings today</div>', unsafe_allow_html=True)
                 st.markdown('<div style="margin-top:0.5rem;font-size:0.75rem;color:#6b7280;">📌 <a href="/NIT_Bookings" target="_self" style="color:#1A7A6E;text-decoration:none;font-weight:600;">Book NIT Time →</a></div>', unsafe_allow_html=True)
-            
+
+            st.markdown('</div></div>', unsafe_allow_html=True)
+
+        with room_col:
+            st.markdown('<div class="section-card"><div class="section-card-header navy"><h3>🗓️ Meeting Room Bookings</h3></div><div class="section-card-body">', unsafe_allow_html=True)
+
+            room_bookings = load_todays_meeting_room_bookings(current_date)
+
+            if room_bookings:
+                for booking in room_bookings:
+                    time_slot = booking.get('time_slot', '')
+                    booked_by = booking.get('staff_name', '')
+                    purpose = booking.get('purpose', '')
+                    purpose_html = f'<div style="font-size:0.75rem;color:#6b7280;margin-top:0.1rem;">{purpose}</div>' if purpose else ""
+                    st.markdown(f'<div style="background:#eef2f7;padding:0.75rem;margin:0.5rem 0;border-radius:8px;border-left:4px solid #1a2e44;"><div style="font-weight:700;color:#1a2e44;font-size:0.9rem;">🕐 {time_slot}</div><div style="font-size:0.85rem;color:#374151;margin-top:0.2rem;">{booked_by}</div>{purpose_html}</div>', unsafe_allow_html=True)
+                st.markdown('<div style="margin-top:0.75rem;font-size:0.75rem;color:#6b7280;">📌 <a href="/Meeting_Room_Bookings" target="_self" style="color:#1a2e44;text-decoration:none;font-weight:600;">Manage Meeting Room →</a></div>', unsafe_allow_html=True)
+            else:
+                st.markdown('<div class="empty-state"><div class="icon">🗓️</div>No meeting room bookings today</div>', unsafe_allow_html=True)
+                st.markdown('<div style="margin-top:0.5rem;font-size:0.75rem;color:#6b7280;">📌 <a href="/Meeting_Room_Bookings" target="_self" style="color:#1a2e44;text-decoration:none;font-weight:600;">Book Meeting Room →</a></div>', unsafe_allow_html=True)
+
             st.markdown('</div></div>', unsafe_allow_html=True)
 
     with s4:
