@@ -30,7 +30,6 @@ except Exception:
         parts = [p for p in str(name or "").replace("_", " ").split() if p]
         return "".join(p[0].upper() for p in parts[:2]) or None
 
-from groq import Groq
 import json, os, io, time
 from datetime import date, datetime
 from copy import deepcopy
@@ -68,6 +67,71 @@ RISK_MATRIX = {
     ("A","5"):"HIGH",   ("A","4"):"HIGH",   ("A","3"):"MODERATE",("A","2"):"LOW",("A","1"):"LOW",
 }
 RISK_COLOURS = {"EXTREME":RED_RISK,"HIGH":ORANGE_RISK,"MODERATE":YELLOW_RISK,"LOW":"#27AE60"}
+
+# ══════════════════════════════════════════════════════════════════════════
+# RESILIENT GROQ AI HELPER — portal-wide standard (Aug 2026)
+#
+# Fixes the recurring portal-wide Groq issue, which has three stacked causes:
+#   1) A stale groq/httpx combo can raise
+#      "Client.__init__() got an unexpected keyword argument 'proxies'" on
+#      client creation — worked around by retrying with an explicit http_client.
+#   2) Groq retired "llama-3.3-70b-versatile" for free/dev-tier accounts
+#      (16 Aug 2026), so any call hardcoded to that model can start failing
+#      with a model-not-found/decommissioned error — worked around by trying
+#      a small chain of current models instead of one hardcoded name.
+#   3) qwen/qwen3.6-27b is a hybrid-thinking model — left to its defaults it
+#      spends the whole max_tokens budget on a <think> chain-of-thought block
+#      before ever writing the actual answer, which shows up as "Extra data"/
+#      JSON-parse errors or empty/truncated replies. Fixed by scoping
+#      reasoning_effort="none" to that model only — gpt-oss and llama don't
+#      accept that parameter, so it must NOT be sent to them.
+# It also self-heals 413 "request too large" errors by halving max_tokens
+# and retrying, instead of failing outright.
+#
+# Use groq_ai_call(prompt, ...) anywhere in a tool instead of building a
+# Groq client or calling chat.completions.create directly.
+# ══════════════════════════════════════════════════════════════════════════
+_GROQ_MODEL_CHAIN = ["openai/gpt-oss-120b", "qwen/qwen3.6-27b", "llama-3.3-70b-versatile"]
+def _get_groq_client(api_key):
+    from groq import Groq
+    try:
+        return Groq(api_key=api_key)
+    except TypeError:
+        import httpx
+        return Groq(api_key=api_key, http_client=httpx.Client())
+def groq_ai_call(prompt, max_tokens=1500, temperature=0.1, api_key=None, system=None):
+    """Resilient Groq chat-completion call. Returns the response text (str).
+    Raises the last error encountered if every model/retry combination fails
+    — wrap the call in try/except at the call site if you want a graceful
+    fallback instead of Streamlit's default traceback."""
+    api_key = api_key or st.secrets.get("GROQ_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("Groq API key not configured.")
+    client = _get_groq_client(api_key)
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    last_err = None
+    for model in _GROQ_MODEL_CHAIN:
+        tokens = max_tokens
+        for _attempt in range(2):  # original size, then one halved retry
+            try:
+                kwargs = dict(model=model, messages=messages, max_tokens=tokens, temperature=temperature)
+                if model == "qwen/qwen3.6-27b":
+                    kwargs["reasoning_effort"] = "none"
+                resp = client.chat.completions.create(**kwargs)
+                return resp.choices[0].message.content.strip()
+            except Exception as e:
+                last_err = e
+                msg = str(e).lower()
+                if "413" in msg or "too large" in msg:
+                    tokens = max(256, tokens // 2)
+                    continue  # retry same model with a smaller token budget
+                break  # any other error: move on to the next model in the chain
+    raise last_err
+
+GROQ_KEY = st.secrets.get("GROQ_API_KEY", os.environ.get("GROQ_API_KEY", ""))
 
 # ── CLC standard risk categories (from revised plan) ──────────────────────────
 CLC_RISK_TEMPLATES = [
@@ -113,13 +177,6 @@ STEPS = ["1 · Student","2 · Documents","3 · AI Synthesis",
 # ══════════════════════════════════════════════════════════════════════════════
 # HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
-def get_client():
-    key = st.secrets.get("GROQ_API_KEY", os.environ.get("GROQ_API_KEY",""))
-    if not key:
-        st.error("⚠️  GROQ_API_KEY not found in Render environment variables.")
-        st.stop()
-    return Groq(api_key=key)
-
 def extract_docx_text(uploaded_file) -> str:
     """Extract plain text from an uploaded .docx or .pdf file."""
     name = getattr(uploaded_file, "name", "").lower()
@@ -148,22 +205,6 @@ def extract_docx_text(uploaded_file) -> str:
             return "\n".join(lines)
     except Exception as e:
         return f"[Extraction error: {e}]"
-
-def groq_call(prompt: str, max_tokens: int = 2000, timeout_seconds: int = 60) -> str:
-    """Call Groq API with timeout protection."""
-    client = get_client()
-    try:
-        resp = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            max_tokens=max_tokens,
-            messages=[{"role":"user","content":prompt}],
-            timeout=timeout_seconds
-        )
-        return resp.choices[0].message.content.strip()
-    except Exception as e:
-        if "timeout" in str(e).lower():
-            raise Exception(f"AI request timed out after {timeout_seconds}s")
-        raise
 
 def check_language_objectivity(text: str) -> list:
     """
@@ -529,7 +570,7 @@ Return ONLY valid JSON array. No markdown fences, no preamble.
 PLAN TEXT:
 {plan_text[:8000]}"""
     try:
-        raw = groq_call(prompt, 3000)
+        raw = groq_ai_call(prompt, max_tokens=3000, api_key=GROQ_KEY)
         raw = raw.replace("```json","").replace("```","").strip()
         
         # Clean up control characters
@@ -605,7 +646,7 @@ Return a JSON array. Each object:
 
 Return ONLY valid JSON array. No markdown, no preamble."""
     try:
-        raw = groq_call(prompt, 4000)
+        raw = groq_ai_call(prompt, max_tokens=4000, api_key=GROQ_KEY)
         raw = raw.replace("```json","").replace("```","").strip()
         
         # Clean up control characters
@@ -670,7 +711,7 @@ Write a SHORT advisory note (150-250 words) for the staff member that:
 
 Keep it practical and direct. Do not repeat school plan content verbatim."""
     try:
-        return groq_call(prompt, 500)
+        return groq_ai_call(prompt, max_tokens=500, api_key=GROQ_KEY)
     except Exception as e:
         return f"[AI unavailable: {e}]"
 
@@ -703,7 +744,7 @@ Return ONLY valid JSON (no markdown fences):
 {{"proactive": "### Heading\\n• strategy\\n• strategy", "procedure": "### If scenario\\n• step\\n• step"}}"""
     
     try:
-        raw = groq_call(prompt, 1000, timeout_seconds=25)
+        raw = groq_ai_call(prompt, max_tokens=1000, api_key=GROQ_KEY)
         raw = raw.replace("```json","").replace("```","").strip()
         
         # Clean up control characters
@@ -756,7 +797,7 @@ Include: TAC meeting, fence/environment audit, staff sign-off, BAP update, CARL/
 Order by urgency (URGENT items first).
 Return plain text only — no JSON, no headers."""
     try:
-        return groq_call(prompt, 500)
+        return groq_ai_call(prompt, max_tokens=500, api_key=GROQ_KEY)
     except Exception:
         return "• Schedule TAC meeting\n• Conduct fence/gate safety audit\n• Ensure all staff sign this plan"
 
@@ -785,7 +826,7 @@ Task: {mode_instruction}
 Return ONLY the improved text. No explanations, no markdown, no quotes. Just the improved text ready to use in a professional document."""
 
     try:
-        result = groq_call(prompt, max_tokens=1500, timeout_seconds=25)
+        result = groq_ai_call(prompt, max_tokens=1500, api_key=GROQ_KEY)
         return result.strip()
     except Exception as e:
         st.warning(f"⚠️ Enhancement failed: {str(e)[:50]}. Keeping original text.")
@@ -924,7 +965,7 @@ For each risk found, provide:
 Return JSON only (no markdown):
 {{"student_details": {{"name": "{student['name']}", "dob": "", "age": "", "edsas": "", "home_school": ""}}, "risks": [{{"issue_title": "Title", "issue_detail": "Detail", "behaviour_descriptors": "• descriptor", "function": "", "likelihood": "D – Likely/frequently", "consequence": "3 – Moderate", "proactive": "### Heading\\n• strategy", "procedure": "### If scenario\\n• step", "clc_notes": "", "from_school": false, "from_docs": true}}], "priority_actions": "• action", "review_date": "8 weeks"}}"""
         
-        raw = groq_call(simple_prompt, 3000, timeout_seconds=30)
+        raw = groq_ai_call(simple_prompt, max_tokens=3000, api_key=GROQ_KEY)
         raw = raw.replace("```json","").replace("```","").strip()
         
         # Handle case where model wraps in extra text
