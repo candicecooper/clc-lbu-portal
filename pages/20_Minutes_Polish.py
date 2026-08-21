@@ -66,52 +66,78 @@ label[data-testid="stWidgetLabel"] p{font-size:.72rem!important;font-weight:600!
 </style>
 """, unsafe_allow_html=True)
 
-# ── GROQ ──────────────────────────────────────────────────────
-def _groq_client():
-    """Build a Groq client, tolerating the old groq/httpx version clash
-    (TypeError: Client.__init__() got an unexpected keyword argument 'proxies')
-    that shows up when the deploy environment has a stale cached groq wheel."""
+# ══════════════════════════════════════════════════════════════════════════
+# RESILIENT GROQ AI HELPER
+# Fixes the recurring portal-wide Groq issue (Aug 2026), which turned out to
+# have three stacked causes:
+#   1) A stale groq/httpx combo can raise
+#      "Client.__init__() got an unexpected keyword argument 'proxies'" on
+#      client creation — worked around by retrying with an explicit http_client.
+#   2) Groq retired "llama-3.3-70b-versatile" for free/dev-tier accounts
+#      (16 Aug 2026), so any call hardcoded to that model can start failing
+#      with a model-not-found/decommissioned error — worked around by trying
+#      a small chain of current models instead of one hardcoded name.
+#   3) qwen/qwen3.6-27b is a hybrid-thinking model — left to its defaults it
+#      spends the whole max_tokens budget on a <think> chain-of-thought block
+#      before ever writing the actual answer, which showed up here as
+#      "Extra data"/parse errors. Scoped reasoning_effort="none" to that model
+#      only, since gpt-oss/llama don't accept that parameter.
+# It also self-heals 413 "request too large" errors by halving max_tokens
+# and retrying, instead of failing outright.
+# Use groq_ai_call(prompt, ...) anywhere in this file instead of building a
+# Groq client / calling chat.completions.create directly.
+# Matches the shared helper standardised across the portal (5_Behaviour_
+# Support.py etc.), extended with an optional `system` message param since
+# this tool's prompts rely on a system role.
+# ══════════════════════════════════════════════════════════════════════════
+_GROQ_MODEL_CHAIN = ["openai/gpt-oss-120b", "qwen/qwen3.6-27b", "llama-3.3-70b-versatile"]
+
+def _get_groq_client(api_key):
     from groq import Groq
     try:
-        return Groq(api_key=st.secrets["GROQ_API_KEY"], timeout=120.0)
+        return Groq(api_key=api_key)
     except TypeError:
         import httpx
-        return Groq(
-            api_key=st.secrets["GROQ_API_KEY"],
-            timeout=120.0,
-            http_client=httpx.Client(timeout=120.0),
-        )
+        return Groq(api_key=api_key, http_client=httpx.Client())
 
-def groq_call(prompt: str, max_tokens: int = 3000, system: str = "") -> str:
-    try:
-        client = _groq_client()
-        messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
-        last_err = None
-        current_max = max_tokens
-        for attempt in range(3):  # shrink-and-retry on "request too large", plain retry otherwise
+def groq_ai_call(prompt, max_tokens=1500, temperature=0.1, api_key=None, system=None):
+    """Resilient Groq chat-completion call. Returns the response text (str).
+    Raises the last error encountered if every model/retry combination fails."""
+    api_key = api_key or st.secrets.get("GROQ_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("Groq API key not configured.")
+    client = _get_groq_client(api_key)
+
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    last_err = None
+    for model in _GROQ_MODEL_CHAIN:
+        tokens = max_tokens
+        for _attempt in range(2):  # original size, then one halved retry
             try:
-                resp = client.chat.completions.create(
-                    model="qwen/qwen3.6-27b",
-                    max_tokens=current_max,
-                    temperature=0.1,  # low temperature — factual fidelity over creativity
-                    messages=messages
-                )
+                kwargs = dict(model=model, messages=messages, max_tokens=tokens, temperature=temperature)
+                if model == "qwen/qwen3.6-27b":
+                    kwargs["reasoning_effort"] = "none"
+                resp = client.chat.completions.create(**kwargs)
                 return resp.choices[0].message.content.strip()
             except Exception as e:
                 last_err = e
-                msg = str(e)
-                if "Request too large" in msg or "413" in msg:
-                    # Prompt + requested completion tokens exceeded the model's
-                    # per-request token budget. Shrinking max_tokens frees up
-                    # room without dropping any input — retry smaller instead
-                    # of repeating the identical oversized request.
-                    if current_max <= 500:
-                        break
-                    current_max = max(500, current_max // 2)
-        return f"[AI error: {last_err}]"
+                msg = str(e).lower()
+                if "413" in msg or "too large" in msg:
+                    tokens = max(256, tokens // 2)
+                    continue  # retry same model with a smaller token budget
+                break  # any other error: move on to the next model in the chain
+    raise last_err
+
+def groq_call(prompt: str, max_tokens: int = 3000, system: str = "") -> str:
+    """Thin wrapper kept so every existing call site in this file (which
+    expects a string back, including an "[AI error: ...]" string on failure
+    rather than a raised exception) doesn't need to change its error handling."""
+    try:
+        return groq_ai_call(prompt, max_tokens=max_tokens, temperature=0.1, system=system or None)
     except Exception as e:
         return f"[AI error: {e}]"
 
