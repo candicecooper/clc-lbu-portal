@@ -90,17 +90,27 @@ def groq_call(prompt: str, max_tokens: int = 3000, system: str = "") -> str:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
         last_err = None
-        for attempt in range(2):  # one automatic retry on transient failure
+        current_max = max_tokens
+        for attempt in range(3):  # shrink-and-retry on "request too large", plain retry otherwise
             try:
                 resp = client.chat.completions.create(
                     model="qwen/qwen3.6-27b",
-                    max_tokens=max_tokens,
+                    max_tokens=current_max,
                     temperature=0.1,  # low temperature — factual fidelity over creativity
                     messages=messages
                 )
                 return resp.choices[0].message.content.strip()
             except Exception as e:
                 last_err = e
+                msg = str(e)
+                if "Request too large" in msg or "413" in msg:
+                    # Prompt + requested completion tokens exceeded the model's
+                    # per-request token budget. Shrinking max_tokens frees up
+                    # room without dropping any input — retry smaller instead
+                    # of repeating the identical oversized request.
+                    if current_max <= 500:
+                        break
+                    current_max = max(500, current_max // 2)
         return f"[AI error: {last_err}]"
     except Exception as e:
         return f"[AI error: {e}]"
@@ -672,7 +682,7 @@ MANDATORY RULES — failure to follow these is not acceptable:
     with p2:
         if st.button("✨ Polish Minutes Now", type="primary", use_container_width=True):
             with st.spinner("Reading transcript and writing detailed minutes — this may take 30–60 seconds…"):
-                raw = groq_call(build_prompt(), 6000, SYSTEM_PROMPT)
+                raw = groq_call(build_prompt(), 4000, SYSTEM_PROMPT)
                 try:
                     parsed = parse_ai_json(raw)
                     st.session_state.mp_sections  = parsed.get("sections", [])
