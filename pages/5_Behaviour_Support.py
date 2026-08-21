@@ -47,6 +47,62 @@ def init_supabase() -> Client:
 
 supabase: Client = init_supabase()
 
+# ══════════════════════════════════════════════════════════════════════════
+# RESILIENT GROQ AI HELPER
+# Fixes the recurring portal-wide Groq issue (Aug 2026), which turned out to
+# have two stacked causes:
+#   1) A stale groq/httpx combo can raise
+#      "Client.__init__() got an unexpected keyword argument 'proxies'" on
+#      client creation — worked around by retrying with an explicit http_client.
+#   2) Groq retired "llama-3.3-70b-versatile" for free/dev-tier accounts
+#      (16 Aug 2026), so any call hardcoded to that model can start failing
+#      with a model-not-found/decommissioned error — worked around by trying
+#      a small chain of current models instead of one hardcoded name.
+# It also self-heals 413 "request too large" errors by halving max_tokens
+# and retrying, instead of failing outright.
+# Use groq_ai_call(prompt, ...) anywhere in this file instead of building a
+# Groq client / calling chat.completions.create directly.
+# ══════════════════════════════════════════════════════════════════════════
+_GROQ_MODEL_CHAIN = ["openai/gpt-oss-120b", "qwen/qwen3.6-27b", "llama-3.3-70b-versatile"]
+
+def _get_groq_client(api_key):
+    from groq import Groq
+    try:
+        return Groq(api_key=api_key)
+    except TypeError:
+        # Older/newer groq+httpx combo mismatch (the "proxies" kwarg error).
+        import httpx
+        return Groq(api_key=api_key, http_client=httpx.Client())
+
+def groq_ai_call(prompt, max_tokens=1500, temperature=0.1, api_key=None):
+    """Resilient Groq chat-completion call. Returns the response text (str).
+    Raises the last error encountered if every model/retry combination fails."""
+    api_key = api_key or st.secrets.get("GROQ_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("Groq API key not configured.")
+    client = _get_groq_client(api_key)
+
+    last_err = None
+    for model in _GROQ_MODEL_CHAIN:
+        tokens = max_tokens
+        for _attempt in range(2):  # original size, then one halved retry
+            try:
+                resp = client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=tokens,
+                    temperature=temperature,
+                )
+                return resp.choices[0].message.content.strip()
+            except Exception as e:
+                last_err = e
+                msg = str(e).lower()
+                if "413" in msg or "too large" in msg:
+                    tokens = max(256, tokens // 2)
+                    continue  # retry same model with a smaller token budget
+                break  # any other error: move on to the next model in the chain
+    raise last_err
+
 st.set_page_config(page_title="CLC Behaviour Support", page_icon="📊", layout="wide", initial_sidebar_state="collapsed")
 
 with st.sidebar:
@@ -3033,9 +3089,7 @@ def render_student_analysis_page():
                     if GROQ_KEY:
                         with st.spinner("AI extracting sensory themes — this takes a few seconds..."):
                             try:
-                                from groq import Groq as _GQ
                                 import json as _sjs
-                                _gc = _GQ(api_key=GROQ_KEY)
                                 _so_prompt = (
                                     "You are an occupational therapist and behaviour support specialist. "
                                     f"Extract a structured sensory profile from this document for student: {student['name']}. "
@@ -3049,12 +3103,7 @@ def render_student_analysis_page():
                                     '"summary":"2-3 sentence clinical summary"}'
                                     f" Document: {_so_raw[:4000]}"
                                 )
-                                _so_resp = _gc.chat.completions.create(
-                                    model="llama-3.3-70b-versatile",
-                                    messages=[{"role": "user", "content": _so_prompt}],
-                                    max_tokens=1500, temperature=0.1
-                                )
-                                _so_json = _so_resp.choices[0].message.content.strip()
+                                _so_json = groq_ai_call(_so_prompt, max_tokens=1500, temperature=0.1, api_key=GROQ_KEY)
                                 _so_json = _so_json.replace("```json", "").replace("```", "").strip()
                                 _so_parsed = _sjs.loads(_so_json)
                                 st.session_state[_so_key] = _so_parsed
@@ -6167,9 +6216,7 @@ def render_student_dashboard():
             return
         with st.spinner("AI is reading your document..."):
             try:
-                from groq import Groq as GroqClient
                 import json as _json
-                client = GroqClient(api_key=GROQ_KEY)
                 prompt = f"""You are a behaviour support data analyst for Cowandilla Learning Centre, Learning & Behaviour Unit.
 The following document describes ONE critical incident involving student: {student_name}.
 Extract the incident as a single JSON object with this exact structure:
@@ -6184,11 +6231,8 @@ Rules:
 - behaviour is the narrative/description; behaviour_type is the clinical classification.
 - Return ONLY valid JSON, no markdown fences, no extra text.
 Document: {doc_text}"""
-                response = client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=3000, temperature=0.1)
-                raw = response.choices[0].message.content.strip().replace("```json","").replace("```","").strip()
+                raw = groq_ai_call(prompt, max_tokens=3000, temperature=0.1, api_key=GROQ_KEY)
+                raw = raw.replace("```json","").replace("```","").strip()
                 extracted = _json.loads(raw)
                 if isinstance(extracted, list):
                     extracted = extracted[0] if extracted else {}
@@ -7139,9 +7183,6 @@ def render_admin_portal():
                             if GROQ_KEY:
                                 with st.spinner(f"AI classifying {len(_ambiguous)} ambiguous record(s)..."):
                                     try:
-                                        from groq import Groq as _GC
-                                        import json as _jmod
-                                        _gc = _GC(api_key=GROQ_KEY)
                                         _canonical_list = [b for b in BEHAVIOUR_TYPES if not b.startswith("---")]
                                         for _amb in _ambiguous:
                                             _ai_prompt = (
@@ -7151,12 +7192,9 @@ def render_admin_portal():
                                                 f"Behaviour description: {_amb['raw'][:300]}\n\n"
                                                 "Labels:\n" + "\n".join(f"- {l}" for l in _canonical_list)
                                             )
-                                            _ai_r = _gc.chat.completions.create(
-                                                model="llama-3.3-70b-versatile",
-                                                messages=[{"role":"user","content":_ai_prompt}],
-                                                max_tokens=60, temperature=0
-                                            )
-                                            _ai_label = _ai_r.choices[0].message.content.strip().strip("-").strip()
+                                            _ai_label = groq_ai_call(
+                                                _ai_prompt, max_tokens=60, temperature=0, api_key=GROQ_KEY
+                                            ).strip("-").strip()
                                             if _ai_label in _known_types:
                                                 _amb["suggested"] = _ai_label
                                                 _amb["ai"] = True
