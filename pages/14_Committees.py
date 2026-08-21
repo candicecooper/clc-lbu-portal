@@ -1,7 +1,6 @@
 import streamlit as st
 from supabase import create_client
 from datetime import datetime, date
-from groq import Groq
 import json
 import re
 from io import BytesIO
@@ -29,12 +28,69 @@ supabase = create_client(
     st.secrets["supabase"]["key"]
 )
 
-# Initialize Groq
-@st.cache_resource
-def get_groq():
-    return Groq(api_key=st.secrets["GROQ_API_KEY"])
+# ══════════════════════════════════════════════════════════════════════════
+# RESILIENT GROQ AI HELPER — portal-wide standard (Aug 2026)
+#
+# Fixes the recurring portal-wide Groq issue, which has three stacked causes:
+#   1) A stale groq/httpx combo can raise
+#      "Client.__init__() got an unexpected keyword argument 'proxies'" on
+#      client creation — worked around by retrying with an explicit http_client.
+#   2) Groq retired "llama-3.3-70b-versatile" for free/dev-tier accounts
+#      (16 Aug 2026), so any call hardcoded to that model can start failing
+#      with a model-not-found/decommissioned error — worked around by trying
+#      a small chain of current models instead of one hardcoded name.
+#   3) qwen/qwen3.6-27b is a hybrid-thinking model — left to its defaults it
+#      spends the whole max_tokens budget on a <think> chain-of-thought block
+#      before ever writing the actual answer, which shows up as "Extra data"/
+#      JSON-parse errors or empty/truncated replies. Fixed by scoping
+#      reasoning_effort="none" to that model only — gpt-oss and llama don't
+#      accept that parameter, so it must NOT be sent to them.
+# It also self-heals 413 "request too large" errors by halving max_tokens
+# and retrying, instead of failing outright.
+#
+# Use groq_ai_call(prompt, ...) anywhere in a tool instead of building a
+# Groq client or calling chat.completions.create directly.
+# ══════════════════════════════════════════════════════════════════════════
+_GROQ_MODEL_CHAIN = ["openai/gpt-oss-120b", "qwen/qwen3.6-27b", "llama-3.3-70b-versatile"]
+def _get_groq_client(api_key):
+    from groq import Groq
+    try:
+        return Groq(api_key=api_key)
+    except TypeError:
+        import httpx
+        return Groq(api_key=api_key, http_client=httpx.Client())
+def groq_ai_call(prompt, max_tokens=1500, temperature=0.1, api_key=None, system=None):
+    """Resilient Groq chat-completion call. Returns the response text (str).
+    Raises the last error encountered if every model/retry combination fails
+    — wrap the call in try/except at the call site if you want a graceful
+    fallback instead of Streamlit's default traceback."""
+    api_key = api_key or st.secrets.get("GROQ_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("Groq API key not configured.")
+    client = _get_groq_client(api_key)
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    last_err = None
+    for model in _GROQ_MODEL_CHAIN:
+        tokens = max_tokens
+        for _attempt in range(2):  # original size, then one halved retry
+            try:
+                kwargs = dict(model=model, messages=messages, max_tokens=tokens, temperature=temperature)
+                if model == "qwen/qwen3.6-27b":
+                    kwargs["reasoning_effort"] = "none"
+                resp = client.chat.completions.create(**kwargs)
+                return resp.choices[0].message.content.strip()
+            except Exception as e:
+                last_err = e
+                msg = str(e).lower()
+                if "413" in msg or "too large" in msg:
+                    tokens = max(256, tokens // 2)
+                    continue  # retry same model with a smaller token budget
+                break  # any other error: move on to the next model in the chain
+    raise last_err
 
-groq_client = get_groq()
 
 # Initialize session state
 if 'committee_view' not in st.session_state:
@@ -808,14 +864,11 @@ TRANSCRIPT:
 
 Generate the formatted minutes:"""
                                     
-                                    response = groq_client.chat.completions.create(
-                                        model="llama-3.3-70b-versatile",
-                                        messages=[{"role": "user", "content": prompt}],
-                                        temperature=0.3,
-                                        max_tokens=4000
+                                    generated_minutes = groq_ai_call(
+                                        prompt,
+                                        max_tokens=4000,
+                                        temperature=0.3
                                     )
-                                    
-                                    generated_minutes = response.choices[0].message.content
                                     
                                     # Save minutes
                                     if existing_minutes:
