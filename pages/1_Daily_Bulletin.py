@@ -196,7 +196,7 @@ def load_bulletin(d):
     # Migrate old combined staff_absent → separate staff_absent + student_absent
     old_sa = data.get("staff_absent", [])
     if old_sa and isinstance(old_sa[0], dict) and "Staff Absence" in old_sa[0]:
-        data["staff_absent"]   = [{"Staff Member": r.get("Staff Absence",""), "TRT": r.get("TRT","")} for r in old_sa if (r.get("Staff Absence") or "").strip()]
+        data["staff_absent"]   = [{"Staff Member": r.get("Staff Absence",""), "TRT": r.get("TRT","")} for r in old_sa if (r.get("Staff Absence") or "").strip() or (r.get("TRT") or "").strip()]
         data["student_absent"] = [{"Student": r.get("Student Absence",""), "Program": r.get("Program",""), "Reason": r.get("Reason","")} for r in old_sa if (r.get("Student Absence") or "").strip()]
         if not data["staff_absent"]:   data["staff_absent"]   = [{"Staff Member":"","TRT":""} for _ in range(4)]
         if not data["student_absent"]: data["student_absent"] = [{"Student":"","Program":"","Reason":""} for _ in range(4)]
@@ -580,25 +580,38 @@ if params.get("display") == "true":
     if time.time() - st.session_state.display_last_refresh > 60:
         st.session_state.display_last_refresh = time.time(); st.session_state.display_date = date.today(); st.rerun()
 
-    st.markdown("""<style>[data-testid="stAppViewContainer"]{background:#f4f8f2!important}.main .block-container{padding:0!important;max-width:100%!important}[data-testid="stHeader"]{display:none}#MainMenu,footer,.stDeployButton{display:none}[data-baseweb="tab-list"]{display:none!important}</style>""", unsafe_allow_html=True)
+    st.markdown("""<style>
+    html,body{margin:0!important;padding:0!important}
+    [data-testid="stAppViewContainer"]{background:#f4f8f2!important;padding:0!important}
+    [data-testid="stMainBlockContainer"],.main .block-container{padding:0!important;margin:0!important;max-width:100%!important}
+    [data-testid="stHeader"],[data-testid="stToolbar"],[data-testid="stDecoration"]{display:none!important}
+    #MainMenu,footer,.stDeployButton{display:none}
+    [data-baseweb="tab-list"]{display:none!important}
+    [data-testid="stVerticalBlock"]{gap:.4rem!important}
+    [data-testid="stVerticalBlockBorderWrapper"]{gap:.4rem!important}
+    [data-testid="element-container"],.element-container{margin-bottom:0!important}
+    iframe{display:block}
+    </style>""", unsafe_allow_html=True)
     st.markdown('<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">', unsafe_allow_html=True)
     sr = d_data.get("staff_responsibilities", {}); fun = d_data.get("fun_fact","")
     st.markdown("""<style>
-    .dp{background:#ffffff;border:1px solid #e0e8e0;border-radius:4px;overflow:hidden;margin-bottom:3px;box-shadow:0 1px 2px rgba(0,0,0,0.04)}
-    .dp-header{padding:.25rem .5rem;font-size:.7rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:white}
+    .dp{background:#ffffff;border:1px solid #e0e8e0;border-radius:6px;overflow:hidden;margin-bottom:5px;box-shadow:0 1px 2px rgba(0,0,0,0.04)}
+    .dp-header{padding:.4rem .65rem;font-size:1.05rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:white}
     .dp-header.green{background:#4a8f33}.dp-header.navy{background:#1a2e44}.dp-header.brown{background:#7a5c4a}
     .dp-header.amber{background:#c97b1a;color:#1a2e44}.dp-header.blue{background:#3a6a9a}
     .dp-header.purple{background:#6a4a9a}.dp-header.slate{background:#4a5a6a}.dp-header.red{background:#c0392b}
-    .dp-body{padding:.3rem .4rem;background:white}
-    .dt{width:100%;border-collapse:collapse;font-size:.75rem;color:#1a2e44;font-family:'Segoe UI',Arial,sans-serif}
-    .dt th{color:#4a8f33;font-weight:600;font-size:.65rem;text-transform:uppercase;letter-spacing:.03em;padding:.2rem .3rem;border-bottom:1px solid #ddd;text-align:left}
-    .dt td{padding:.18rem .3rem;border-bottom:1px solid #f0f0f0;vertical-align:top;line-height:1.25}
+    .dp-body{padding:.45rem .55rem;background:white}
+    .dt{width:100%;border-collapse:collapse;font-size:1.08rem;color:#1a2e44;font-family:'Segoe UI',Arial,sans-serif}
+    .dt th{color:#4a8f33;font-weight:700;font-size:.85rem;text-transform:uppercase;letter-spacing:.02em;padding:.3rem .4rem;border-bottom:1px solid #ddd;text-align:left}
+    .dt td{padding:.28rem .4rem;border-bottom:1px solid #f0f0f0;vertical-align:top;line-height:1.3}
     .dt tr:last-child td{border-bottom:none}
-    .dt-em{color:#999;font-style:italic;font-size:.7rem}
-    .vb-tag{background:#e8f5e1;color:#2d6b1a;padding:.1rem .35rem;border-radius:3px;font-size:.7rem;font-weight:600}
-    .kitchen-val{background:#e8a125;border-radius:4px;padding:.15rem .4rem;color:#1a2e44;font-weight:800;font-size:.75rem;display:inline-block}
-    .resp-label{font-size:.65rem;color:#4a8f33;font-weight:600;text-transform:uppercase}.resp-val{font-size:.75rem;color:#2a3a2a;margin-top:.1rem}
-    .tc-badge{background:#fdd;color:#c00;padding:.1rem .35rem;border-radius:3px;font-size:.7rem;font-weight:700}
+    .dt-em{color:#999;font-style:italic;font-size:.95rem}
+    .vb-tag{background:#e8f5e1;color:#2d6b1a;padding:.15rem .5rem;border-radius:4px;font-size:1rem;font-weight:600}
+    .kitchen-val{background:#e8a125;border-radius:5px;padding:.2rem .55rem;color:#1a2e44;font-weight:800;font-size:1.05rem;display:inline-block}
+    .resp-label{font-size:.85rem;color:#4a8f33;font-weight:600;text-transform:uppercase}.resp-val{font-size:1.05rem;color:#2a3a2a;margin-top:.15rem}
+    .tc-badge{background:#fdd;color:#c00;padding:.15rem .5rem;border-radius:4px;font-size:1rem;font-weight:700}
+    .fact-bar{display:flex;align-items:center;gap:.6rem;background:#1a2e44;color:white;padding:.55rem 1rem;margin-top:4px;border-radius:6px;font-size:1.05rem;line-height:1.35}
+    .fact-label{background:#6BBF4E;color:#1a2e44;font-weight:800;font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;padding:.25rem .6rem;border-radius:20px;white-space:nowrap}
     </style>""", unsafe_allow_html=True)
     import streamlit.components.v1 as _components
     _date_str = today.strftime("%A %-d %B %Y").upper()
@@ -644,7 +657,7 @@ if params.get("display") == "true":
 
     r1c1, r1c2, r1c3, r1c4, r1c5 = st.columns([2,2,2.5,1.5,2])
     with r1c1:
-        _staff_rows   = [r for r in d_data.get("staff_absent",  []) if (r.get("Staff Member") or "").strip()]
+        _staff_rows   = [r for r in d_data.get("staff_absent",  []) if (r.get("Staff Member") or "").strip() or (r.get("TRT") or "").strip()]
         _student_rows = [r for r in d_data.get("student_absent", []) if (r.get("Student") or "").strip()]
         st.markdown(f'<div class="dp"><div class="dp-header green">\U0001f645 Staff Absent</div><div class="dp-body"><table class="dt"><tr><th>Staff</th><th>TRT</th></tr>{tbl_rows(_staff_rows, ["Staff Member","TRT"])}</table></div></div><div style="height:6px;"></div><div class="dp"><div class="dp-header blue">\U0001f392 Student Absent</div><div class="dp-body"><table class="dt"><tr><th>Student</th><th>Program</th><th>Reason</th></tr>{tbl_rows(_student_rows, ["Student","Program","Reason"])}</table></div></div>', unsafe_allow_html=True)
     with r1c2:
@@ -906,7 +919,7 @@ with page_tab:
                 sa_edited = st.data_editor(sa_df, key="sa_editor", hide_index=True, use_container_width=True, num_rows="dynamic")
                 bulletin_data["staff_absent"] = sa_edited.to_dict("records")
             else:
-                _s_rows = [r for r in bulletin_data["staff_absent"] if (r.get("Staff Member") or "").strip()]
+                _s_rows = [r for r in bulletin_data["staff_absent"] if (r.get("Staff Member") or "").strip() or (r.get("TRT") or "").strip()]
                 if _s_rows: st.markdown('<table class="data-table"><tr><th>Staff Member</th><th>TRT</th></tr>'+"".join([f"<tr><td><strong>{r.get('Staff Member','')}</strong></td><td>{r.get('TRT','')}</td></tr>" for r in _s_rows])+"</table>", unsafe_allow_html=True)
                 else: st.markdown('<div class="empty-state"><div class="icon">\u2705</div>No staff absent today</div>', unsafe_allow_html=True)
             st.markdown('</div></div>', unsafe_allow_html=True)
