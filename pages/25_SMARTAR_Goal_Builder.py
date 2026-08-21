@@ -10,7 +10,7 @@ except Exception:
         parts = [p for p in str(name or "").replace("_", " ").split() if p]
         return "".join(p[0].upper() for p in parts[:2]) or None
 
-import json
+import json, os
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -22,7 +22,6 @@ import pandas as pd
 from datetime import date, datetime, timedelta
 from io import BytesIO
 from supabase import create_client
-from groq import Groq
 from urllib.parse import unquote, quote
 from collections import defaultdict
 
@@ -84,14 +83,73 @@ def _make_sb():
 # Fresh client on every page load — prevents stale connections on Render free tier
 sb = _make_sb()
 
-@st.cache_resource
-def get_groq():
-    api_key = st.secrets.get("GROQ_API_KEY")
+# ══════════════════════════════════════════════════════════════════════════
+# RESILIENT GROQ AI HELPER — portal-wide standard (Aug 2026)
+#
+# Fixes the recurring portal-wide Groq issue, which has three stacked causes:
+#   1) A stale groq/httpx combo can raise
+#      "Client.__init__() got an unexpected keyword argument 'proxies'" on
+#      client creation — worked around by retrying with an explicit http_client.
+#   2) Groq retired "llama-3.3-70b-versatile" for free/dev-tier accounts
+#      (16 Aug 2026), so any call hardcoded to that model can start failing
+#      with a model-not-found/decommissioned error — worked around by trying
+#      a small chain of current models instead of one hardcoded name.
+#   3) qwen/qwen3.6-27b is a hybrid-thinking model — left to its defaults it
+#      spends the whole max_tokens budget on a <think> chain-of-thought block
+#      before ever writing the actual answer, which shows up as "Extra data"/
+#      JSON-parse errors or empty/truncated replies. Fixed by scoping
+#      reasoning_effort="none" to that model only — gpt-oss and llama don't
+#      accept that parameter, so it must NOT be sent to them.
+# It also self-heals 413 "request too large" errors by halving max_tokens
+# and retrying, instead of failing outright.
+#
+# Use groq_ai_call(prompt, ...) anywhere in a tool instead of building a
+# Groq client or calling chat.completions.create directly.
+# ══════════════════════════════════════════════════════════════════════════
+_GROQ_MODEL_CHAIN = ["openai/gpt-oss-120b", "qwen/qwen3.6-27b", "llama-3.3-70b-versatile"]
+def _get_groq_client(api_key):
+    from groq import Groq
+    try:
+        return Groq(api_key=api_key)
+    except TypeError:
+        import httpx
+        return Groq(api_key=api_key, http_client=httpx.Client())
+def groq_ai_call(prompt, max_tokens=1500, temperature=0.1, api_key=None, system=None):
+    """Resilient Groq chat-completion call. Returns the response text (str).
+    Raises the last error encountered if every model/retry combination fails
+    — wrap the call in try/except at the call site if you want a graceful
+    fallback instead of Streamlit's default traceback."""
+    api_key = api_key or st.secrets.get("GROQ_API_KEY", "")
     if not api_key:
-        return None
-    return Groq(api_key=api_key)
+        raise RuntimeError("Groq API key not configured.")
+    client = _get_groq_client(api_key)
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    last_err = None
+    for model in _GROQ_MODEL_CHAIN:
+        tokens = max_tokens
+        for _attempt in range(2):  # original size, then one halved retry
+            try:
+                kwargs = dict(model=model, messages=messages, max_tokens=tokens, temperature=temperature)
+                if model == "qwen/qwen3.6-27b":
+                    kwargs["reasoning_effort"] = "none"
+                resp = client.chat.completions.create(**kwargs)
+                return resp.choices[0].message.content.strip()
+            except Exception as e:
+                last_err = e
+                msg = str(e).lower()
+                if "413" in msg or "too large" in msg:
+                    tokens = max(256, tokens // 2)
+                    continue  # retry same model with a smaller token budget
+                break  # any other error: move on to the next model in the chain
+    raise last_err
 
-groq_client = get_groq()
+GROQ_KEY = st.secrets.get("GROQ_API_KEY", os.environ.get("GROQ_API_KEY", ""))
+# groq_client is kept as a plain availability flag — every actual call now
+# goes through groq_ai_call(), which builds its own resilient client per call.
+groq_client = bool(GROQ_KEY)
 
 import time as _time
 
@@ -163,20 +221,17 @@ PROGRAMS = ["JP", "PY", "SY"]
 def groq_call(prompt,
               system="You are an expert educator supporting students in alternative "
                      "education settings. Be concise and practical."):
-    if not groq_client:
+    if not GROQ_KEY:
         return "[AI unavailable — Groq API key not configured]"
-    resp = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "system", "content": system},
-                  {"role": "user",   "content": prompt}],
-        max_tokens=800,
-    )
-    return resp.choices[0].message.content.strip()
+    try:
+        return groq_ai_call(prompt, max_tokens=800, api_key=GROQ_KEY, system=system)
+    except Exception as e:
+        return f"[AI unavailable: {e}]"
 
 
 def ai_check_period(smartar_goal: str) -> dict:
     """Ask Groq to determine appropriate tracking period for a goal."""
-    if not groq_client:
+    if not GROQ_KEY:
         return {"period": "All Day", "reasoning": "AI unavailable.", "confidence": "Low"}
     prompt = f"""You are an educational support specialist for students in alternative education.
 
@@ -189,7 +244,7 @@ School sessions:
 - Middle (~11am–1pm): recess, lunch, social time, transitions
 - Afternoon (~1pm–3pm): specialist subjects, projects, outdoor education
 
-Return ONLY valid JSON, nothing else:
+Return ONLY valid JSON, nothing else — no markdown fences, no preamble:
 {{
   "period": "All Day" | "Morning Only" | "Middle Only" | "Afternoon Only" | "Morning & Middle" | "Middle & Afternoon",
   "reasoning": "One concise sentence explaining why",
@@ -198,14 +253,13 @@ Return ONLY valid JSON, nothing else:
 
 Use "All Day" unless the goal text CLEARLY references a specific time context (e.g., 'morning literacy', 'at lunch', 'during afternoon session')."""
     try:
-        resp = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-            max_tokens=200,
-            temperature=0.1,
-        )
-        result = json.loads(resp.choices[0].message.content.strip())
+        raw = groq_ai_call(prompt, max_tokens=200, temperature=0.1, api_key=GROQ_KEY)
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        if not raw.startswith("{"):
+            start = raw.find("{")
+            if start != -1:
+                raw = raw[start:]
+        result = json.loads(raw)
         if result.get("period") not in TRACKING_PERIODS:
             result["period"] = "All Day"
         return result
