@@ -1639,7 +1639,7 @@ def render_program_meeting(program):
                     with col_d2:
                         st.metric("TAC/Reports Notes", "✅ YES" if debug_mtg.get('reports_tac_notes') and debug_mtg.get('reports_tac_notes').strip() else "❌ EMPTY")
                     with col_d3:
-                        trans_len = len(debug_mtg.get('transcript', ''))
+                        trans_len = len(debug_mtg.get('meeting_minutes', ''))
                         st.metric("Transcript Length", f"{trans_len} chars")
                     
                     if not debug_mtg.get('checkin_notes') or not debug_mtg.get('checkin_notes').strip():
@@ -1711,7 +1711,7 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
                                     attendees=mtg.get('attendees', ''),
                                     extracted_notes=mtg.get('checkin_notes', ''),
                                     summary_notes=mtg.get('reports_tac_notes', ''),
-                                    transcript=mtg.get('transcript', '')
+                                    transcript=mtg.get('meeting_minutes', '')
                                 )
                                 
                                 # Save to bytes for download
@@ -1768,8 +1768,8 @@ To remove a meeting, click the 🗑️ Delete button and confirm.
                     st.info(f"✅ Editing: {meeting_data.get('meeting_date', '')} — {meeting_data.get('facilitator', '')}", icon="✅")
                     
                     # Load transcript and notes into session state for editing
-                    if meeting_data.get('transcript'):
-                        st.session_state[f"adhoc_transcript_{program}"] = meeting_data.get('transcript', '')
+                    if meeting_data.get('meeting_minutes'):
+                        st.session_state[f"adhoc_transcript_{program}"] = meeting_data.get('meeting_minutes', '')
                     if meeting_data.get('reports_tac_notes'):
                         st.session_state[f"adhoc_notes_{program}"] = meeting_data.get('reports_tac_notes', '')
                     if meeting_data.get('checkin_notes'):
@@ -1801,7 +1801,7 @@ To remove a meeting, click the 🗑️ Delete button and confirm.
         with transcript_tab1:
             adhoc_transcript = st.text_area(
                 "Transcript / Notes",
-                value=meeting_data.get('transcript', '') if meeting_data else '',
+                value=meeting_data.get('meeting_minutes', '') if meeting_data else '',
                 height=200,
                 placeholder="Paste your meeting transcript, discussion notes, or meeting summary here...",
                 key=f"adhoc_transcript_{program}",
@@ -2045,21 +2045,23 @@ Team discussed recent changes and workload distribution.
         
         st.markdown("---")
         
-        # DEBUG: Show what we're capturing
+        # Show status of what's filled in
         debug_transcript = st.session_state.get(f"adhoc_transcript_{program}", "").strip()
-        debug_notes = st.session_state.get(f"adhoc_notes_{program}", "")
+        debug_notes = st.session_state.get(f"adhoc_notes_{program}", "").strip()
         
-        if len(debug_transcript) == 0:
-            st.warning("""
-⚠️ **No transcript detected yet!**
-
-Please:
-1. Click on the **"📝 Paste Transcript"** tab above
-2. Paste your meeting notes or transcript
-3. Then click [💾 Save Ad-Hoc Meeting]
-            """)
-        else:
-            st.success(f"✅ Transcript ready ({len(debug_transcript)} characters)")
+        col_status1, col_status2 = st.columns(2)
+        
+        with col_status1:
+            if len(debug_transcript) > 0:
+                st.success(f"✅ Transcript: {len(debug_transcript)} characters")
+            else:
+                st.caption("📝 No transcript yet (optional)")
+        
+        with col_status2:
+            if len(debug_notes) > 0:
+                st.success(f"✅ Summary: {len(debug_notes)} characters")
+            else:
+                st.caption("📝 No summary yet (optional)")
         
         # SAVE MEETING
         st.markdown("#### 💾 Save & Manage Meeting")
@@ -2068,33 +2070,18 @@ Please:
         
         with save_col1:
             if st.button("💾 Save Ad-Hoc Meeting", key=f"save_adhoc_{program}", type="primary", use_container_width=True):
-                # Try to get transcript from session state first
-                adhoc_transcript = st.session_state.get(f"adhoc_transcript_{program}", "")
-                adhoc_notes = st.session_state.get(f"adhoc_notes_{program}", "")
+                # Get transcript and notes from session state
+                adhoc_transcript = st.session_state.get(f"adhoc_transcript_{program}", "").strip()
+                adhoc_notes = st.session_state.get(f"adhoc_notes_{program}", "").strip()
                 
-                # Safety: ensure they're strings
-                adhoc_transcript = str(adhoc_transcript).strip() if adhoc_transcript else ""
-                adhoc_notes = str(adhoc_notes).strip() if adhoc_notes else ""
-                
-                # Debug: Show what we found
-                st.write(f"DEBUG: Session state value for transcript = {repr(adhoc_transcript[:50] if adhoc_transcript else '[EMPTY]')}")
-                
-                if not adhoc_transcript or len(adhoc_transcript) == 0:
-                    st.error("❌ **Transcript is empty!**\n\n" +
-"Session State Check:\n" +
-f"- Key: `adhoc_transcript_{program}`\n" +
-f"- Value in session state: {repr(st.session_state.get(f'adhoc_transcript_{program}'))}\n" +
-f"- Length: {len(st.session_state.get(f'adhoc_transcript_{program}', ''))}\n\n" +
-"**How to fix:**\n" +
-"1. Click the **Paste Transcript** tab above\n" +
-"2. Click inside the text box under Transcript / Notes\n" +
-"3. Paste or type your meeting notes\n" +
-"4. Wait 1-2 seconds for Streamlit to register the change\n" +
-"5. Look for the character counter to appear below the text box\n" +
-"6. Scroll down and click Save again\n\n" +
-"**Alternative:** If pasting doesn't work, try typing a few words instead to test.")
+                # Allow save if EITHER transcript OR notes exist
+                if not adhoc_transcript and not adhoc_notes:
+                    st.error("⚠️ Please add at least one of:\n- Meeting transcript/notes, OR\n- Summary & action items")
                 else:
                     try:
+                        # Use notes as transcript if no transcript provided
+                        final_transcript = adhoc_transcript if adhoc_transcript else adhoc_notes
+                        
                         meeting_payload = {
                             'program': program,
                             'meeting_date': str(adhoc_date),
@@ -2102,13 +2089,12 @@ f"- Length: {len(st.session_state.get(f'adhoc_transcript_{program}', ''))}\n\n" 
                             'week_type': 'ad-hoc',
                             'facilitator': adhoc_facilitator or _safe_staff_name(),
                             'attendees': adhoc_attendees or '',
-                            'transcript': adhoc_transcript,
-                            'checkin_notes': st.session_state.get(f"adhoc_extracted_edited_{program}", ''),
+                            'checkin_notes': final_transcript,  # Store transcript/summary as check-in notes
                             'student_concerns': _json.dumps([]),
                             'smartar_spotlight': _json.dumps([]),
-                            'reports_tac_notes': adhoc_notes,
+                            'reports_tac_notes': adhoc_notes,  # Store summary/actions
                             'priority_focus': _json.dumps([]),
-                            'meeting_minutes': adhoc_notes,
+                            'meeting_minutes': final_transcript,  # Also store for backup
                             'actions': _json.dumps([]),
                         }
                         
@@ -2174,7 +2160,7 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
                         st.json({
                             'checkin_notes': debug_mtg.get('checkin_notes', '[EMPTY]'),
                             'reports_tac_notes': debug_mtg.get('reports_tac_notes', '[EMPTY]'),
-                            'transcript_length': len(debug_mtg.get('transcript', '')) if debug_mtg.get('transcript') else 0,
+                            'transcript_length': len(debug_mtg.get('meeting_minutes', '')) if debug_mtg.get('meeting_minutes') else 0,
                         })
                         
                         if not debug_mtg.get('checkin_notes'):
@@ -2205,7 +2191,7 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
                             attendees=mtg.get('attendees', ''),
                             extracted_notes=mtg.get('checkin_notes', ''),
                             summary_notes=mtg.get('reports_tac_notes', ''),
-                            transcript=mtg.get('transcript', '')
+                            transcript=mtg.get('meeting_minutes', '')
                         )
                         
                         # Save to bytes for download
@@ -3504,9 +3490,9 @@ def render_meeting_archive(program):
                             st.markdown(mtg.get('reports_tac_notes'))
                     
                     # Full Transcript
-                    if mtg.get('transcript'):
+                    if mtg.get('meeting_minutes'):
                         with st.expander("📄 Full Transcript", expanded=False):
-                            st.markdown(mtg.get('transcript'))
+                            st.markdown(mtg.get('meeting_minutes'))
                     
                     # Download Button
                     doc = generate_minutes_docx(
@@ -3516,7 +3502,7 @@ def render_meeting_archive(program):
                         attendees=attendees,
                         extracted_notes=mtg.get('checkin_notes', ''),
                         summary_notes=mtg.get('reports_tac_notes', ''),
-                        transcript=mtg.get('transcript', '')
+                        transcript=mtg.get('meeting_minutes', '')
                     )
                     
                     doc_bytes = io.BytesIO()
