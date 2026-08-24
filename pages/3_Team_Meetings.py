@@ -1907,7 +1907,7 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
                         
                         if groq_client:
                             response = groq_client.chat.completions.create(
-                                model="llama-3.3-70b-versatile",
+                                model="llama-3.1-70b-versatile",
                                 messages=[
                                     {
                                         "role": "system",
@@ -2255,7 +2255,7 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
                         
                         if groq_client:
                             response = groq_client.chat.completions.create(
-                                model="llama-3.3-70b-versatile",
+                                model="llama-3.1-70b-versatile",
                                 messages=[
                                     {
                                         "role": "system",
