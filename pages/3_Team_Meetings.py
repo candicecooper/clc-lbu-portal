@@ -1669,8 +1669,8 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
         
         with active_tab:
             try:
-                # Load active ad-hoc meetings
-                active_meetings = supabase.table('tm_program_meetings').select("*").eq('program', program).eq('week_type', 'ad-hoc').eq('is_archived', False).order('meeting_date', desc=True).execute()
+                # Load active ad-hoc meetings (no archived filter - column doesn't exist)
+                active_meetings = supabase.table('tm_program_meetings').select("*").eq('program', program).eq('week_type', 'ad-hoc').order('meeting_date', desc=True).execute()
                 active_adhoc = active_meetings.data or []
                 
                 if active_adhoc:
@@ -1680,7 +1680,7 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
                         mtg_facilitator = mtg.get('facilitator', '')
                         mtg_id = mtg.get('id', '')
                         
-                        col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
+                        col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
                         
                         with col1:
                             if st.button(f"📝 {mtg_date} — {mtg_facilitator}", key=f"load_active_{mtg_id}", use_container_width=True):
@@ -1729,14 +1729,6 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
                                 )
                         
                         with col4:
-                            if st.button("📦 Archive", key=f"archive_active_{mtg_id}", use_container_width=True):
-                                try:
-                                    supabase.table('tm_program_meetings').update({'is_archived': True}).eq('id', mtg_id).execute()
-                                    st.success(f"📦 {mtg_facilitator} archived - refresh to see changes")
-                                except Exception as e:
-                                    st.error(f"Error archiving: {e}")
-                        
-                        with col5:
                             if st.button("🗑️ Delete", key=f"delete_active_{mtg_id}", use_container_width=True):
                                 if st.session_state.get(f"confirm_delete_{mtg_id}", False):
                                     try:
@@ -1753,81 +1745,14 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
                 st.warning(f"Could not load active meetings: {e}")
         
         with archive_tab:
-            try:
-                # Load archived ad-hoc meetings
-                archived_meetings = supabase.table('tm_program_meetings').select("*").eq('program', program).eq('week_type', 'ad-hoc').eq('is_archived', True).order('meeting_date', desc=True).execute()
-                archived_adhoc = archived_meetings.data or []
-                
-                if archived_adhoc:
-                    st.markdown("**Click to reopen archived meeting:**")
-                    for mtg in archived_adhoc:
-                        mtg_date = mtg.get('meeting_date', '')
-                        mtg_facilitator = mtg.get('facilitator', '')
-                        mtg_id = mtg.get('id', '')
-                        
-                        col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
-                        
-                        with col1:
-                            if st.button(f"📦 {mtg_date} — {mtg_facilitator}", key=f"load_archived_{mtg_id}", use_container_width=True):
-                                st.session_state.current_meeting_id = mtg_id
-                                st.rerun()
-                        
-                        with col2:
-                            if st.button("🔧 Edit", key=f"edit_archived_{mtg_id}", use_container_width=True):
-                                st.session_state.current_meeting_id = mtg_id
-                                st.session_state.meeting_loaded = True
-                                st.info("✅ Meeting loaded - scroll up to edit all fields")
-                        
-                        with col3:
-                            if st.button("📥 Download", key=f"dl_archived_{mtg_id}", use_container_width=True):
-                                # Generate Word document
-                                doc = generate_minutes_docx(
-                                    program=program,
-                                    meeting_date=mtg_date,
-                                    facilitator=mtg_facilitator,
-                                    attendees=mtg.get('attendees', ''),
-                                    extracted_notes=mtg.get('checkin_notes', ''),
-                                    summary_notes=mtg.get('reports_tac_notes', ''),
-                                    transcript=mtg.get('transcript', '')
-                                )
-                                
-                                # Save to bytes
-                                doc_bytes = io.BytesIO()
-                                doc.save(doc_bytes)
-                                doc_bytes.seek(0)
-                                
-                                st.download_button(
-                                    label="📥 Download (.docx)",
-                                    data=doc_bytes,
-                                    file_name=f"Minutes_{mtg_date}_{mtg_facilitator}_{program}.docx",
-                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                    key=f"dl_minutes_archived_{mtg_id}",
-                                    use_container_width=True
-                                )
-                        
-                        with col4:
-                            if st.button("🗑️ Delete", key=f"delete_archived_{mtg_id}", use_container_width=True):
-                                if st.session_state.get(f"confirm_delete_arch_{mtg_id}", False):
-                                    try:
-                                        supabase.table('tm_program_meetings').delete().eq('id', mtg_id).execute()
-                                        st.success(f"🗑️ {mtg_facilitator} deleted")
-                                    except Exception as e:
-                                        st.error(f"Error deleting: {e}")
-                                else:
-                                    st.session_state[f"confirm_delete_arch_{mtg_id}"] = True
-                                    st.warning(f"⚠️ Click again to confirm delete")
-                        
-                        with col3:
-                            if st.button("🔄 Restore", key=f"restore_archived_{mtg_id}", use_container_width=True):
-                                try:
-                                    supabase.table('tm_program_meetings').update({'is_archived': False}).eq('id', mtg_id).execute()
-                                    st.success(f"♻️ {mtg_facilitator} restored - refresh to see changes")
-                                except Exception as e:
-                                    st.error(f"Error restoring: {e}")
-                else:
-                    st.info("No archived ad-hoc meetings yet")
-            except Exception as e:
-                st.warning(f"Could not load archived meetings: {e}")
+            st.info("""
+**Ad-Hoc Meeting Management:**
+
+Meetings can be deleted when no longer needed. All ad-hoc meetings are displayed in the "Active Meetings" tab.
+
+To remove a meeting, click the 🗑️ Delete button and confirm.
+            """)
+            st.caption("💡 Note: Archived column not available for ad-hoc meetings in this version.")
         
         st.markdown("---")
         
@@ -1907,7 +1832,8 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
             col_process, col_skip = st.columns([1, 3])
             
             if col_process.button("🤖 Extract Key Points", key=f"adhoc_process_{program}", type="primary"):
-                if adhoc_transcript.strip():
+                adhoc_transcript = st.session_state.get(f"adhoc_transcript_{program}", "").strip()
+                if adhoc_transcript:
                     with st.spinner("Processing transcript..."):
                         try:
                             groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
@@ -2054,6 +1980,9 @@ Team discussed recent changes and workload distribution.
             
             with col_inst1:
                 if st.button("📥 Download Now", key=f"instant_download_{program}", type="primary", use_container_width=True):
+                    # Get transcript from session state
+                    adhoc_transcript = st.session_state.get(f"adhoc_transcript_{program}", "")
+                    
                     # Create Word document with EDITED extracted content
                     doc = generate_minutes_docx(
                         program=program,
@@ -2105,7 +2034,11 @@ Team discussed recent changes and workload distribution.
         
         with save_col1:
             if st.button("💾 Save Ad-Hoc Meeting", key=f"save_adhoc_{program}", type="primary", use_container_width=True):
-                if not adhoc_transcript.strip():
+                # Get transcript and notes from session state (works consistently)
+                adhoc_transcript = st.session_state.get(f"adhoc_transcript_{program}", "").strip()
+                adhoc_notes = st.session_state.get(f"adhoc_notes_{program}", "")
+                
+                if not adhoc_transcript:
                     st.warning("Please add a transcript or meeting notes")
                 else:
                     try:
@@ -2143,6 +2076,10 @@ Team discussed recent changes and workload distribution.
         # DOWNLOAD MEETING
         with save_col2:
             if st.session_state.current_meeting_id:
+                # Get values from session state for safety
+                adhoc_transcript = st.session_state.get(f"adhoc_transcript_{program}", "")
+                adhoc_notes = st.session_state.get(f"adhoc_notes_{program}", "")
+                
                 # Create downloadable text file
                 meeting_text = f"""AD-HOC MEETING RECORD
 ═══════════════════════════════════════════════════
@@ -2171,19 +2108,6 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
                     mime="text/plain",
                     key=f"dl_adhoc_{program}"
                 )
-        
-        # ARCHIVE MEETING
-        with save_col3:
-            if st.session_state.current_meeting_id:
-                if st.button("📦 Archive", key=f"archive_adhoc_{program}", use_container_width=True):
-                    try:
-                        supabase.table('tm_program_meetings').update({'is_archived': True}).eq('id', st.session_state.current_meeting_id).execute()
-                        st.success("📦 Meeting archived")
-                        st.session_state.current_meeting_id = None
-                        time.sleep(1)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error archiving: {e}")
         
         st.markdown("---")
         
@@ -3511,10 +3435,8 @@ def render_meeting_archive(program):
                 facilitator = mtg.get('facilitator', '')
                 attendees = mtg.get('attendees', 'Not recorded')
                 mtg_id = mtg.get('id', '')
-                is_archived = mtg.get('is_archived', False)
                 
-                archive_badge = "📦 Archived" if is_archived else "📝 Active"
-                header = f"{archive_badge} | {mtg_date} | {facilitator}"
+                header = f"📝 {mtg_date} | {facilitator}"
                 
                 with st.expander(header, expanded=False):
                     st.markdown(f"**Facilitator:** {facilitator} &nbsp;|&nbsp; **Attendees:** {attendees}")
