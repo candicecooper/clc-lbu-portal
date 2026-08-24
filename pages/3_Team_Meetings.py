@@ -1803,22 +1803,33 @@ To remove a meeting, click the 🗑️ Delete button and confirm.
                 key=f"adhoc_transcript_{program}",
                 label_visibility="collapsed"
             )
+            # Show real-time feedback
+            current_length = len(st.session_state.get(f"adhoc_transcript_{program}", "").strip())
+            if current_length > 0:
+                st.caption(f"✅ {current_length} characters captured")
+            else:
+                st.caption("👆 Start typing or pasting here...")
         
         with transcript_tab2:
             uploaded_file = st.file_uploader("Upload transcript file (.txt, .docx)", 
                                              type=['txt', 'docx'],
                                              key=f"adhoc_upload_{program}")
             if uploaded_file:
+                uploaded_transcript = ""
                 if uploaded_file.type == "text/plain":
-                    adhoc_transcript = uploaded_file.read().decode("utf-8")
+                    uploaded_transcript = uploaded_file.read().decode("utf-8")
                 elif uploaded_file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
                     try:
                         doc = Document(uploaded_file)
-                        adhoc_transcript = "\n".join([p.text for p in doc.paragraphs])
+                        uploaded_transcript = "\n".join([p.text for p in doc.paragraphs])
                     except:
                         st.error("Could not read Word document")
-                        adhoc_transcript = selected_record.get('transcript', '') if selected_record else ""
-                st.success(f"✅ Uploaded: {uploaded_file.name}")
+                        uploaded_transcript = ""
+                
+                if uploaded_transcript:
+                    # Store in session state so save button can access it
+                    st.session_state[f"adhoc_transcript_{program}"] = uploaded_transcript
+                    st.success(f"✅ Uploaded: {uploaded_file.name}")
         
         st.markdown("---")
         
@@ -2022,10 +2033,29 @@ Team discussed recent changes and workload distribution.
             key=f"adhoc_notes_{program}",
             label_visibility="collapsed"
         )
+        notes_length = len(st.session_state.get(f"adhoc_notes_{program}", "").strip())
+        if notes_length > 0:
+            st.caption(f"✅ {notes_length} characters in notes")
         
         st.markdown("---")
         
         st.markdown("---")
+        
+        # DEBUG: Show what we're capturing
+        debug_transcript = st.session_state.get(f"adhoc_transcript_{program}", "").strip()
+        debug_notes = st.session_state.get(f"adhoc_notes_{program}", "")
+        
+        if len(debug_transcript) == 0:
+            st.warning("""
+⚠️ **No transcript detected yet!**
+
+Please:
+1. Click on the **"📝 Paste Transcript"** tab above
+2. Paste your meeting notes or transcript
+3. Then click [💾 Save Ad-Hoc Meeting]
+            """)
+        else:
+            st.success(f"✅ Transcript ready ({len(debug_transcript)} characters)")
         
         # SAVE MEETING
         st.markdown("#### 💾 Save & Manage Meeting")
@@ -2038,8 +2068,20 @@ Team discussed recent changes and workload distribution.
                 adhoc_transcript = st.session_state.get(f"adhoc_transcript_{program}", "").strip()
                 adhoc_notes = st.session_state.get(f"adhoc_notes_{program}", "")
                 
+                # Debug output
+                st.info(f"Checking: Transcript={len(adhoc_transcript)} chars, Notes={len(adhoc_notes)} chars")
+                
                 if not adhoc_transcript:
-                    st.warning("Please add a transcript or meeting notes")
+                    st.error("""
+❌ **Cannot save - Transcript is empty!**
+
+Steps to fix:
+1. Scroll up to the **"🎤 Meeting Transcript / Notes"** section
+2. Click the **"📝 Paste Transcript"** tab
+3. Paste your meeting transcript or notes into the text box
+4. Scroll back down
+5. Click [💾 Save Ad-Hoc Meeting] again
+                    """)
                 else:
                     try:
                         meeting_payload = {
