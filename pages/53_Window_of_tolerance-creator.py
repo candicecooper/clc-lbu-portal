@@ -2,6 +2,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,ital@9..144,400..700,0..1&family=IBM+Plex+Sans:wght@400;500;600;700&family=Newsreader:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Work+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 
 <style>
   :root{
@@ -614,10 +615,10 @@
     padding:5px 7px;
     font-size:9.5px;
     line-height:1.25;
-    color:#161616;
   }
+  .print-table td.zone-label-cell{ color:#fff; }
   .zone-label-cell .zn{ display:block; font-weight:700; font-size:11px; margin-bottom:2px; }
-  .zone-label-cell .zd{ font-style:italic; }
+  .zone-label-cell .zd{ font-style:italic; opacity:.92; }
   .content-cell{
     vertical-align:top;
     font-size:10px;
@@ -754,16 +755,187 @@
     body:not([data-print-style="map"]) .wot-print-sheet{ display:block !important; }
     @page{ size:landscape; margin:9mm; }
   }
+
+  /* ---------- multi-screen shell (teacher gate / student picker / builder) ---------- */
+  .screen{ display:none; }
+  .screen.active{ display:block; }
+
+  .center-shell{
+    min-height:100vh;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:28px;
+  }
+  .gate-card{
+    width:min(480px,100%);
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:16px;
+    box-shadow:var(--shadow);
+    padding:32px 30px;
+  }
+  .gate-card h1{ font-size:24px; margin-bottom:6px; }
+  .gate-card .sub{ color:var(--ink-soft); font-size:13.5px; margin-bottom:22px; }
+  .gate-field{ margin-bottom:16px; }
+  .gate-field label{ display:block; font-size:12px; font-weight:600; color:var(--ink-soft); margin-bottom:6px; text-transform:uppercase; letter-spacing:.04em; }
+  .gate-field input{
+    width:100%;
+    font-size:15px;
+    padding:11px 13px;
+    border-radius:9px;
+    border:1px solid var(--border);
+    background:var(--surface-2);
+    color:var(--ink);
+    font-family:var(--font-body);
+  }
+  .gate-field input:focus{ outline:2px solid var(--accent); outline-offset:1px; }
+  .gate-hint{ font-size:11.5px; color:var(--ink-faint); margin-top:16px; }
+  .gate-error{ font-size:12.5px; color:var(--hyper); margin-top:8px; min-height:1.2em; }
+
+  /* ---------- student picker screen ---------- */
+  .picker-shell{ max-width:1100px; margin:0 auto; padding:32px 28px 60px; }
+  .picker-header{ display:flex; align-items:flex-end; justify-content:space-between; gap:20px; flex-wrap:wrap; margin-bottom:18px; }
+  .picker-header h1{ font-size:28px; }
+  .picker-header .whoami{ font-size:13px; color:var(--ink-soft); text-align:right; }
+  .picker-header .whoami button{
+    background:none; border:0; color:var(--accent); font-weight:600; font-size:13px; cursor:pointer; padding:0; font-family:inherit;
+  }
+  .picker-search{
+    width:100%;
+    font-size:15px;
+    padding:12px 16px;
+    border-radius:11px;
+    border:1px solid var(--border);
+    background:var(--surface);
+    color:var(--ink);
+    margin-bottom:20px;
+    box-shadow:var(--shadow);
+    font-family:var(--font-body);
+  }
+  .picker-search:focus{ outline:2px solid var(--accent); outline-offset:1px; }
+  .student-grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
+    gap:14px;
+  }
+  .student-tile{
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:14px;
+    padding:16px 14px;
+    text-align:left;
+    cursor:pointer;
+    box-shadow:var(--shadow);
+    transition:transform .12s ease, box-shadow .12s ease;
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+  }
+  .student-tile:hover{ transform:translateY(-2px); box-shadow:0 4px 16px -4px rgba(0,0,0,0.25); }
+  .student-tile .initials{
+    font-family:var(--font-display);
+    font-size:26px;
+    font-weight:700;
+    color:var(--accent);
+  }
+  .student-tile .fullname{ font-size:12.5px; color:var(--ink-soft); line-height:1.3; }
+  .student-tile .status-pill{
+    align-self:flex-start;
+    font-size:10px;
+    font-weight:600;
+    letter-spacing:.03em;
+    text-transform:uppercase;
+    padding:3px 8px;
+    border-radius:20px;
+    margin-top:2px;
+  }
+  .student-tile .status-pill.not-started{ background:var(--surface-2); color:var(--ink-faint); }
+  .student-tile .status-pill.draft{ background:var(--copingup-wash); color:var(--copingup); }
+  .student-tile .status-pill.archived{ background:var(--wot-wash); color:var(--wot); }
+  .picker-empty{ color:var(--ink-faint); font-size:13.5px; font-style:italic; padding:30px 4px; }
+  .picker-loading{ color:var(--ink-soft); font-size:13.5px; padding:20px 4px; }
+
+  /* ---------- builder breadcrumb / identity strip ---------- */
+  .builder-topbar{
+    display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;
+    margin-bottom:8px; font-size:13px;
+  }
+  .builder-topbar .crumb{ color:var(--accent); font-weight:600; cursor:pointer; background:none; border:0; padding:0; font-family:inherit; font-size:13px; }
+  .builder-topbar .who{ color:var(--ink-soft); }
+  .builder-topbar .who button{ background:none; border:0; color:var(--accent); font-weight:600; cursor:pointer; padding:0; font-family:inherit; font-size:13px; }
+  .student-heading{ margin-bottom:4px; }
+  .student-heading .name{ font-size:22px; font-weight:700; font-family:var(--font-display); }
+  .student-heading .prog{ font-size:12.5px; color:var(--ink-soft); margin-left:8px; font-weight:400; font-family:var(--font-body); }
+
+  /* ---------- save status + toasts ---------- */
+  .save-status{ font-size:12px; color:var(--ink-soft); margin:2px 0 10px; min-height:1.3em; }
+  .save-status.ok{ color:var(--wot); }
+  .save-status.err{ color:var(--hyper); }
+  .save-status.busy{ color:var(--copingup); }
+  .offline-banner{
+    background:var(--copingup-wash); color:var(--copingup); border:1px solid var(--copingup);
+    border-radius:9px; padding:8px 12px; font-size:12.5px; margin-bottom:12px; display:none;
+  }
+  .offline-banner.show{ display:block; }
+
+  /* ---------- archive dialog extras ---------- */
+  .archive-fields{ display:flex; gap:10px; margin:12px 0; flex-wrap:wrap; }
+  .archive-fields label{ font-size:12px; color:var(--ink-soft); display:block; margin-bottom:4px; font-weight:600; }
+  .archive-fields input, .archive-fields select{
+    font-size:13.5px; padding:8px 10px; border-radius:8px; border:1px solid var(--border);
+    background:var(--surface-2); color:var(--ink); font-family:var(--font-body);
+  }
+  .archive-fields .field{ flex:1; min-width:120px; }
+
 </style>
 
+<div class="screen active" id="screenTeacher">
+  <div class="center-shell">
+    <div class="gate-card">
+      <h1>Window of Tolerance Builder</h1>
+      <p class="sub">Who's completing reports right now? This is used to save your reports and build your own reusable phrase bank.</p>
+      <div class="gate-field">
+        <label for="teacherInput">Your name</label>
+        <input id="teacherInput" type="text" list="teacherList" placeholder="Start typing your name…" autocomplete="off">
+        <datalist id="teacherList"></datalist>
+      </div>
+      <button class="btn primary" id="btnTeacherContinue" style="width:100%; justify-content:center;">Continue</button>
+      <p class="gate-error" id="teacherError"></p>
+      <p class="gate-hint">Not listed? Just type your name — it will be remembered on this device.</p>
+    </div>
+  </div>
+</div>
+
+<div class="screen" id="screenStudents">
+  <div class="picker-shell">
+    <div class="picker-header">
+      <h1>Select a student</h1>
+      <div class="whoami">Signed in as <strong id="whoamiName"></strong><br><button type="button" id="btnSwitchTeacherFromList">Switch</button></div>
+    </div>
+    <input type="text" class="picker-search" id="studentSearch" placeholder="Search by name or initials…" autocomplete="off">
+    <div id="studentGrid" class="student-grid"></div>
+    <p class="picker-loading" id="studentLoading">Loading students…</p>
+    <p class="picker-empty" id="studentEmpty" style="display:none;">No students match that search.</p>
+  </div>
+</div>
+
+<div class="screen" id="screenBuilder">
 <div class="app">
+  <div class="builder-topbar">
+    <button type="button" class="crumb" id="btnBackToStudents">← All students</button>
+    <span class="who">Teacher: <strong id="builderTeacherName"></strong> · <button type="button" id="btnSwitchTeacherFromBuilder">Switch</button></span>
+  </div>
+
   <header class="masthead">
     <div>
-      <h1>Window of Tolerance Builder</h1>
+      <div class="student-heading"><span class="name" id="studentHeadingName">Student</span><span class="prog" id="studentHeadingProgram"></span></div>
       <p class="org">Cowandilla Learning Centre — Learning and Behaviour Unit</p>
     </div>
     <p class="tagline">Click an example on the left to send it into the student's personalised plan on the right. Your own saved phrases carry over into every future report.</p>
   </header>
+
+  <div class="offline-banner" id="offlineBanner">Showing the last locally saved version of this report — couldn't reach the shared database just now. Changes will keep working here, but won't be visible to other staff until you can save again.</div>
 
   <div class="ladder-key" aria-hidden="true">
     <span style="background:var(--hyper)">Hyperarousal</span>
@@ -784,21 +956,19 @@
     <aside class="report" id="reportPane">
       <div class="report-toolbar">
         <h2>Your report</h2>
-        <div class="student-field">
-          <label for="studentName">Student</label>
-          <input id="studentName" type="text" placeholder="Student name" autocomplete="off">
-        </div>
-        <div class="progress" id="progress"></div>
+        <div class="save-status" id="saveStatus"></div>
         <div class="print-style-toggle" id="printStyleToggle">
           <span class="lbl">Print layout:</span>
           <button type="button" id="btnStyleGrid" aria-pressed="true">Grid template</button>
           <button type="button" id="btnStyleMap" aria-pressed="false">Regulation Map</button>
         </div>
         <div class="toolbar-actions">
-          <button class="btn primary" id="btnExport">Export text</button>
+          <button class="btn primary" id="btnSave">Save</button>
+          <button class="btn" id="btnExport">Export text</button>
           <button class="btn" id="btnPrint">Print / save PDF</button>
           <button class="btn ghost" id="btnManageBank">My phrase bank</button>
-          <button class="btn ghost" id="btnClear">New report</button>
+          <button class="btn ghost" id="btnArchive">Archive to Document Archive</button>
+          <button class="btn ghost" id="btnClear">Clear this report</button>
         </div>
       </div>
       <div class="report-body" id="reportBody"></div>
@@ -826,7 +996,7 @@
         </div>
         <div class="map-meta">
           Cowandilla Learning Centre — Learning and Behaviour Unit<br>
-          Prepared by: <b>[staff name]</b> &nbsp;·&nbsp; Reviewed: <b>[term, year]</b>
+          Prepared by: <b id="mapPreparedBy">[staff name]</b> &nbsp;·&nbsp; Reviewed: <b id="mapReviewed">[term, year]</b>
         </div>
       </div>
 
@@ -869,7 +1039,7 @@
 <div class="overlay" id="bankOverlay">
   <div class="overlay-card wide">
     <h3>My phrase bank</h3>
-    <p class="hint">Anything you've typed with "Add your own…" is saved here on this device and shows up in the example lists on every future report, for every student. Remove one for good with the trash icon — that won't affect any report it's already been added to.</p>
+    <p class="hint">Anything you've typed with "Add your own…" is saved here against your name and shows up in the example lists on every future report, for every student. Remove one for good with the trash icon — that won't affect any report it's already been added to.</p>
     <div class="bank-manage" id="bankManageBody"></div>
     <div class="overlay-actions">
       <button class="btn" id="btnCloseBank">Close</button>
@@ -877,333 +1047,685 @@
   </div>
 </div>
 
+<div class="overlay" id="archiveOverlay">
+  <div class="overlay-card">
+    <h3>Archive to Document Archive</h3>
+    <p class="hint">This files the current report as a completed document in the shared Document Archive, alongside PDPs, BAPs and safety plans. The report stays editable here afterwards — archiving again files an updated copy.</p>
+    <div class="archive-fields">
+      <div class="field">
+        <label for="archiveTerm">Term</label>
+        <input type="text" id="archiveTerm" placeholder="e.g. Term 3">
+      </div>
+      <div class="field">
+        <label for="archiveYear">Year</label>
+        <input type="text" id="archiveYear" placeholder="e.g. 2026">
+      </div>
+    </div>
+    <p class="gate-error" id="archiveError"></p>
+    <div class="overlay-actions">
+      <span class="copy-msg" id="archiveMsg"></span>
+      <button class="btn" id="btnCloseArchive">Cancel</button>
+      <button class="btn primary" id="btnDoArchive">File to Document Archive</button>
+    </div>
+  </div>
+</div>
+</div>
+
+
 <script>
 (function(){
   "use strict";
 
-  var ZONES = [
-    {
-      id:"hyper", label:"Mobilisation — Hyperarousal", color:"hyper",
-      mapName:"Mobilisation", mapTag:"Hyperarousal",
-      desc:"Too much arousal to integrate. Sympathetic nervous system activation (fight / flight / freeze) — the student cannot process what is happening, who is around them, or what staff are saying.",
-      short:"Too much arousal to integrate. Activation of the sympathetic nervous system (fight / flight / freeze).",
-      cols:{
-        context:[
-          "Non-preferred instruction given during a transition between tasks",
-          "Recess, lunch play or yard time",
-          "A relief teacher (TRT) is in the room",
-          "Being told to stop a preferred activity (basketball, iPad)",
-          "A peer they've had a recent negative interaction with is nearby",
-          "Loud, crowded or unpredictable spaces (hallway, assembly, canteen line)",
-          "First thing after arriving at school, before they've had a chance to settle",
-          "Sudden, unexpected touch, or someone entering their personal space quickly",
-          "Being corrected or disciplined in front of peers",
-          "A high-stakes or timed assessment task",
-          "A sudden loud noise — alarm, siren, bell, shout",
-          "Overhearing an adult talking about them",
-          "The crowded rush of end-of-day dismissal",
-          "A specific sensory trigger once identified (a smell, texture, taste)"
-        ],
-        behaviour:[
-          "Instant reaction — shouting or swearing that escalates in volume and intensity",
-          "Making verbal threats of violence",
-          "Throwing or slamming objects",
-          "Tense, agitated body; pacing; difficulty finding stillness",
-          "Attempting to kick, hit or grab a staff member or peer",
-          "Running from the space or refusing to enter it",
-          "Wide or darting eyes, scanning the room as if for an exit",
-          "Voice pitch rises sharply; speech speeds up or becomes fragmented",
-          "A sudden silence that tips into an explosive reaction without warning",
-          "Gripping or clenching objects, furniture, or their own body",
-          "Repeating the same phrase or demand with rising volume",
-          "Trying to leave the classroom or school grounds without permission"
-        ],
-        interventions:[
-          "Maintain a safe distance and a calm, neutral tone",
-          "Remove the audience / onlooking peers as a safety measure",
-          "Give one firm, simple direction for safety (“Stop”)",
-          "Offer the student's pre-planned escape route or quiet space",
-          "Remove hazardous objects if it's safe to do so",
-          "Phone home and inform leadership per the safety plan",
-          "Use short, concrete sentences — avoid reasoning or negotiating in this state",
-          "Slow and lower your own voice and movements; avoid sudden gestures",
-          "Stand at an angle rather than square-on; ease off direct eye contact if it escalates them",
-          "Use the student's name calmly and repeat one simple instruction only",
-          "Pre-agree a signal they can give staff before reaching this point",
-          "Debrief later, once fully back in the window — never during or straight after"
-        ]
-      }
-    },
-    {
-      id:"copingup", label:"Coping Mechanisms — moving toward Hyperarousal", color:"copingup",
-      mapName:"Coping — rising", mapTag:"Early warning",
-      desc:"Early warning signs as arousal climbs toward this student's threshold. Reduced capacity to learn and interact, but co-regulation and choice can often still land.",
-      short:"Reduced capacity to learn and interact.",
-      cols:{
-        context:[
-          "Asked to pack away or stop a preferred activity",
-          "Losing a competitive game (basketball, soccer, board game)",
-          "A change in routine or an unfamiliar staff member",
-          "Being asked to wait, or to accept a teacher decision",
-          "Using a device for something not school-appropriate",
-          "A peer copying or antagonising them from a distance",
-          "Anticipating a non-preferred activity later in the day",
-          "Ambiguous or open-ended instructions (“just get started”)",
-          "Sitting near a peer who is fidgeting or off-task",
-          "Being partly corrected — told they're “nearly right” or “not quite”",
-          "Waiting in a queue or for their turn",
-          "A task that's slightly too hard without enough scaffolding"
-        ],
-        behaviour:[
-          "Short, terse answers; refusing instructions",
-          "Swearing or name-calling that hasn't yet peaked in intensity",
-          "Muttering under their breath",
-          "Snatching objects or touching things that aren't theirs",
-          "Saying “you're not the boss of me” or similar",
-          "Antagonising peers who are also dysregulated",
-          "Increased fidgeting, foot-tapping, or seeking sensory input (chewing, clicking a pen)",
-          "Testing limits with small rule-breaks, short of full defiance",
-          "Asking the same question repeatedly for reassurance",
-          "Sarcastic or pointed comments aimed at staff or peers",
-          "Watching staff closely to gauge their reaction",
-          "Sudden interest in leaving the room “for a reason” (toilet, drink)"
-        ],
-        interventions:[
-          "Offer a genuine choice, or an if/then (“when you finish X, then Y”)",
-          "Co-regulate with a quiet, preferred activity (drawing, shooting hoops)",
-          "Name what you're noticing (“I can see you're a bit outside your window”)",
-          "Give a little time and space to process the instruction",
-          "Negotiate a re-entry plan before things escalate further",
-          "Offer a check-in call with a trusted adult or family member",
-          "Pre-empt with a heads-up about what's coming next, and why",
-          "Break the task into two smaller, clearly-bounded steps",
-          "Use humour or a light aside to defuse, if this student responds well to it",
-          "Offer movement disguised as a job (hand out books, deliver a message)",
-          "Validate the feeling before addressing the behaviour (“makes sense you're annoyed”)",
-          "Check in privately rather than in front of the group"
-        ]
-      }
-    },
-    {
-      id:"wot", label:"Window of Tolerance", color:"wot",
-      mapName:"Window of Tolerance", mapTag:"Regulated",
-      desc:"The student feels safe enough to learn, connect with others, reflect, and make good decisions. Protect and expand this zone through proactive support.",
-      short:"Student feels safe to learn and interact with others.",
-      cols:{
-        context:[
-          "Working 1:1 or in a small group on a well-scaffolded task",
-          "Morning check-in or morning circle",
-          "Drawing, colouring or a preferred activity with a trusted adult",
-          "A structured game with clear, simple rules",
-          "Helping a peer, or being given a small job or responsibility",
-          "Predictable routine with visual and verbal transition warnings",
-          "Physical activity or sport where they feel competent",
-          "Being asked their opinion, or given a genuine choice",
-          "A well-rehearsed, predictable part of the daily routine",
-          "One-on-one conversation about a topic they know a lot about",
-          "Contributing to a class job or roster",
-          "Arriving to a calm, organised classroom space"
-        ],
-        behaviour:[
-          "Relaxed body and facial expression; smiling",
-          "Uses kind words and a calm, friendly tone",
-          "Follows instructions with minimal reminders",
-          "Accepts teacher decisions without protest",
-          "Shares ideas, asks for help, or names their own needs",
-          "Engages with and starts learning tasks independently",
-          "Initiates conversation or play with peers appropriately",
-          "Uses humour that lands well and includes others",
-          "Tolerates minor frustration without needing adult support",
-          "Offers to help a peer or staff member unprompted",
-          "Can name their own emotional state accurately",
-          "Transitions between activities without a reminder"
-        ],
-        interventions:[
-          "Greet warmly and check in on arrival",
-          "Give specific, immediate positive feedback",
-          "Build in movement or sensory breaks proactively",
-          "Keep routines, expectations and seating options predictable",
-          "Show genuine interest in their activities outside school",
-          "Reinforce character strengths in the moment (“that's persistence”)",
-          "Bank strengths-based observations to reference later in a harder moment",
-          "Rotate a class job or responsibility to this student regularly",
-          "With their consent, use their own regulation strategies as a model for peers",
-          "Keep a visual schedule visible and refer to it together",
-          "Briefly debrief a recent success, in their own words",
-          "Protect this state by not over-testing it — avoid stacking demands"
-        ]
-      }
-    },
-    {
-      id:"copingdown", label:"Coping Mechanisms — moving toward Hypoarousal", color:"copingdown",
-      mapName:"Coping — falling", mapTag:"Early withdrawal",
-      desc:"Early signs of withdrawal as arousal drops below this student's threshold. Reduced capacity to learn and interact; the student is beginning to disengage rather than escalate.",
-      short:"Reduced capacity to learn and interact.",
-      cols:{
-        context:[
-          "Negative feedback or teasing from peers",
-          "Losing, or being caught out, in a game",
-          "A task or piece of work being damaged or interrupted",
-          "Feeling tired, unwell, hungry or in pain",
-          "A quiet, unstructured moment after a big activity",
-          "Being asked a question they can't answer",
-          "End of a long or demanding block of learning",
-          "Being left out of a game or group by peers",
-          "A reminder of a past difficult experience",
-          "Feeling embarrassed, or having made a visible mistake",
-          "Extended quiet or unstructured time with no clear task",
-          "A change of adult they feel safest with"
-        ],
-        behaviour:[
-          "Head down, shoulders slumped, minimal eye contact",
-          "Going quiet; short or no verbal response",
-          "Negative self-talk (“I'm dumb”, “I hate myself”)",
-          "Retreating to a desk, corner, or facing the wall",
-          "Hiding under a table or behind furniture",
-          "Repeating a request for reassurance (“I want my mum”)",
-          "Voice drops to barely audible; only short yes/no answers",
-          "Stops making requests altogether, even for things they need",
-          "Physically curls inward — arms crossed tightly, knees to chest",
-          "Stares at one spot without engaging with surroundings",
-          "Apologises repeatedly for small or imagined mistakes",
-          "Loses interest in an activity they usually enjoy"
-        ],
-        interventions:[
-          "Give time and space, and say clearly you're available when ready",
-          "Get curious rather than corrective (“I'm noticing your shoulders are low—help me understand?”)",
-          "Offer food, water, or a softer space (couch, hammock)",
-          "Lower your own voice and tone to match theirs",
-          "Offer a short break with a clear return time",
-          "Avoid demanding an immediate verbal response",
-          "Sit alongside rather than opposite; ease off direct eye contact",
-          "Use fewer words, longer pauses, and a slower pace",
-          "Offer a favoured object, fidget, or comfort item",
-          "Keep instructions optional (“when you're ready” rather than “now”)",
-          "Quietly check basic needs — temperature, hunger, tiredness, pain",
-          "Stay nearby without requiring interaction — presence over prompts"
-        ]
-      }
-    },
-    {
-      id:"hypo", label:"Immobilisation — Hypoarousal", color:"hypo",
-      mapName:"Immobilisation", mapTag:"Hypoarousal",
-      desc:"Too little arousal to integrate. Dorsal vagal activation (submit / collapse / shutdown) — the student may appear flat, numb or empty, and unable to respond.",
-      short:"Too little arousal to integrate. Activation of the dorsal vagal system (shutdown / collapse).",
-      cols:{
-        context:[
-          "A long stretch of high demand without a break",
-          "Straight after a distressing incident",
-          "Sustained noise or sensory overload",
-          "Extreme tiredness, hunger, or being unwell",
-          "Feeling completely unheard or unseen",
-          "Being highly restricted or held for safety",
-          "Well past this student's own regulation threshold with no earlier intervention",
-          "A significant unmet sleep, food or medical need",
-          "Repeated failure or correction across a session",
-          "A space that feels unsafe or overwhelming to this student specifically",
-          "Being talked about, rather than to, in their presence",
-          "The recovery period straight after a hyperarousal episode"
-        ],
-        behaviour:[
-          "Blank, vacant stare; fixed or pinpoint pupils",
-          "Collapsed or slumped posture; loose muscle tone",
-          "No verbal response; appears not to hear you",
-          "Slowed movement, slowed breathing or heart rate",
-          "Appears flat, numb, empty or “checked out”",
-          "No visible distress — easy to mistake for calm",
-          "Breathing becomes very shallow or barely visible",
-          "Noticeable change in skin colour or temperature (pale, cold to touch)",
-          "Eyes open but unfocused; doesn't track movement or speech",
-          "Doesn't initiate movement even when physically able to",
-          "May not register pain, cold or discomfort as expected",
-          "Comes across as unusually compliant — easy to overlook as regulated"
-        ],
-        interventions:[
-          "Short, sharp present-moment prompts (name something green, describe 3 things you can see)",
-          "Offer gentle physical grounding (weighted blanket, textured cushion)",
-          "Use a soft, warm tone without demanding a response",
-          "Allow recovery time before expecting engagement",
-          "Reduce sensory input (dim lights, lower noise, fewer people)",
-          "Check physical safety and comfort first (seated, warm, safe)",
-          "Prioritise physiological needs first — warmth, food, water, comfort",
-          "Use very brief, simple, single-step prompts only",
-          "Reintroduce sensory input gradually — light touch, gentle movement — not all at once",
-          "Avoid crowding: one familiar adult, quiet space, reduced stimulation",
-          "Note the duration and pattern to inform the next review of this plan",
-          "Resume demands only once clear signs of re-engagement return"
-        ]
-      }
+  // ---------------- Supabase config ----------------
+  var SUPABASE_URL = "https://lvzaebjrxrgguypqvdcq.supabase.co";
+  var SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx2emFlYmpyeHJnZ3V5cHF2ZGNxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQwMzQ1NjEsImV4cCI6MjA3OTYxMDU2MX0._FRXmevMwE-ij5phtY3DAq-olBuTsfGrr6xRNKHqE9I";
+  // TODO: confirm this matches the bucket name already used by the Document Archive
+  // tool for PDPs / BAPs / safety plans, then update this constant if it differs.
+  var ARCHIVE_BUCKET = "document-archive";
+
+  var sb = null;
+  try{
+    if(window.supabase && typeof window.supabase.createClient === "function"){
+      sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     }
-  ];
+  }catch(e){ sb = null; }
+
+  var ZONES = [
+      {
+        id:"hyper", label:"Mobilisation — Hyperarousal", color:"hyper",
+        mapName:"Mobilisation", mapTag:"Hyperarousal",
+        desc:"Too much arousal to integrate. Sympathetic nervous system activation (fight / flight / freeze) — the student cannot process what is happening, who is around them, or what staff are saying.",
+        short:"Too much arousal to integrate. Activation of the sympathetic nervous system (fight / flight / freeze).",
+        cols:{
+          context:[
+            "Non-preferred instruction given during a transition between tasks",
+            "Recess, lunch play or yard time",
+            "A relief teacher (TRT) is in the room",
+            "Being told to stop a preferred activity (basketball, iPad)",
+            "A peer they've had a recent negative interaction with is nearby",
+            "Loud, crowded or unpredictable spaces (hallway, assembly, canteen line)",
+            "First thing after arriving at school, before they've had a chance to settle",
+            "Sudden, unexpected touch, or someone entering their personal space quickly",
+            "Being corrected or disciplined in front of peers",
+            "A high-stakes or timed assessment task",
+            "A sudden loud noise — alarm, siren, bell, shout",
+            "Overhearing an adult talking about them",
+            "The crowded rush of end-of-day dismissal",
+            "A specific sensory trigger once identified (a smell, texture, taste)"
+          ],
+          behaviour:[
+            "Instant reaction — shouting or swearing that escalates in volume and intensity",
+            "Making verbal threats of violence",
+            "Throwing or slamming objects",
+            "Tense, agitated body; pacing; difficulty finding stillness",
+            "Attempting to kick, hit or grab a staff member or peer",
+            "Running from the space or refusing to enter it",
+            "Wide or darting eyes, scanning the room as if for an exit",
+            "Voice pitch rises sharply; speech speeds up or becomes fragmented",
+            "A sudden silence that tips into an explosive reaction without warning",
+            "Gripping or clenching objects, furniture, or their own body",
+            "Repeating the same phrase or demand with rising volume",
+            "Trying to leave the classroom or school grounds without permission"
+          ],
+          interventions:[
+            "Maintain a safe distance and a calm, neutral tone",
+            "Remove the audience / onlooking peers as a safety measure",
+            "Give one firm, simple direction for safety (“Stop”)",
+            "Offer the student's pre-planned escape route or quiet space",
+            "Remove hazardous objects if it's safe to do so",
+            "Phone home and inform leadership per the safety plan",
+            "Use short, concrete sentences — avoid reasoning or negotiating in this state",
+            "Slow and lower your own voice and movements; avoid sudden gestures",
+            "Stand at an angle rather than square-on; ease off direct eye contact if it escalates them",
+            "Use the student's name calmly and repeat one simple instruction only",
+            "Pre-agree a signal they can give staff before reaching this point",
+            "Debrief later, once fully back in the window — never during or straight after"
+          ]
+        }
+      },
+      {
+        id:"copingup", label:"Coping Mechanisms — moving toward Hyperarousal", color:"copingup",
+        mapName:"Coping — rising", mapTag:"Early warning",
+        desc:"Early warning signs as arousal climbs toward this student's threshold. Reduced capacity to learn and interact, but co-regulation and choice can often still land.",
+        short:"Reduced capacity to learn and interact.",
+        cols:{
+          context:[
+            "Asked to pack away or stop a preferred activity",
+            "Losing a competitive game (basketball, soccer, board game)",
+            "A change in routine or an unfamiliar staff member",
+            "Being asked to wait, or to accept a teacher decision",
+            "Using a device for something not school-appropriate",
+            "A peer copying or antagonising them from a distance",
+            "Anticipating a non-preferred activity later in the day",
+            "Ambiguous or open-ended instructions (“just get started”)",
+            "Sitting near a peer who is fidgeting or off-task",
+            "Being partly corrected — told they're “nearly right” or “not quite”",
+            "Waiting in a queue or for their turn",
+            "A task that's slightly too hard without enough scaffolding"
+          ],
+          behaviour:[
+            "Short, terse answers; refusing instructions",
+            "Swearing or name-calling that hasn't yet peaked in intensity",
+            "Muttering under their breath",
+            "Snatching objects or touching things that aren't theirs",
+            "Saying “you're not the boss of me” or similar",
+            "Antagonising peers who are also dysregulated",
+            "Increased fidgeting, foot-tapping, or seeking sensory input (chewing, clicking a pen)",
+            "Testing limits with small rule-breaks, short of full defiance",
+            "Asking the same question repeatedly for reassurance",
+            "Sarcastic or pointed comments aimed at staff or peers",
+            "Watching staff closely to gauge their reaction",
+            "Sudden interest in leaving the room “for a reason” (toilet, drink)"
+          ],
+          interventions:[
+            "Offer a genuine choice, or an if/then (“when you finish X, then Y”)",
+            "Co-regulate with a quiet, preferred activity (drawing, shooting hoops)",
+            "Name what you're noticing (“I can see you're a bit outside your window”)",
+            "Give a little time and space to process the instruction",
+            "Negotiate a re-entry plan before things escalate further",
+            "Offer a check-in call with a trusted adult or family member",
+            "Pre-empt with a heads-up about what's coming next, and why",
+            "Break the task into two smaller, clearly-bounded steps",
+            "Use humour or a light aside to defuse, if this student responds well to it",
+            "Offer movement disguised as a job (hand out books, deliver a message)",
+            "Validate the feeling before addressing the behaviour (“makes sense you're annoyed”)",
+            "Check in privately rather than in front of the group"
+          ]
+        }
+      },
+      {
+        id:"wot", label:"Window of Tolerance", color:"wot",
+        mapName:"Window of Tolerance", mapTag:"Regulated",
+        desc:"The student feels safe enough to learn, connect with others, reflect, and make good decisions. Protect and expand this zone through proactive support.",
+        short:"Student feels safe to learn and interact with others.",
+        cols:{
+          context:[
+            "Working 1:1 or in a small group on a well-scaffolded task",
+            "Morning check-in or morning circle",
+            "Drawing, colouring or a preferred activity with a trusted adult",
+            "A structured game with clear, simple rules",
+            "Helping a peer, or being given a small job or responsibility",
+            "Predictable routine with visual and verbal transition warnings",
+            "Physical activity or sport where they feel competent",
+            "Being asked their opinion, or given a genuine choice",
+            "A well-rehearsed, predictable part of the daily routine",
+            "One-on-one conversation about a topic they know a lot about",
+            "Contributing to a class job or roster",
+            "Arriving to a calm, organised classroom space"
+          ],
+          behaviour:[
+            "Relaxed body and facial expression; smiling",
+            "Uses kind words and a calm, friendly tone",
+            "Follows instructions with minimal reminders",
+            "Accepts teacher decisions without protest",
+            "Shares ideas, asks for help, or names their own needs",
+            "Engages with and starts learning tasks independently",
+            "Initiates conversation or play with peers appropriately",
+            "Uses humour that lands well and includes others",
+            "Tolerates minor frustration without needing adult support",
+            "Offers to help a peer or staff member unprompted",
+            "Can name their own emotional state accurately",
+            "Transitions between activities without a reminder"
+          ],
+          interventions:[
+            "Greet warmly and check in on arrival",
+            "Give specific, immediate positive feedback",
+            "Build in movement or sensory breaks proactively",
+            "Keep routines, expectations and seating options predictable",
+            "Show genuine interest in their activities outside school",
+            "Reinforce character strengths in the moment (“that's persistence”)",
+            "Bank strengths-based observations to reference later in a harder moment",
+            "Rotate a class job or responsibility to this student regularly",
+            "With their consent, use their own regulation strategies as a model for peers",
+            "Keep a visual schedule visible and refer to it together",
+            "Briefly debrief a recent success, in their own words",
+            "Protect this state by not over-testing it — avoid stacking demands"
+          ]
+        }
+      },
+      {
+        id:"copingdown", label:"Coping Mechanisms — moving toward Hypoarousal", color:"copingdown",
+        mapName:"Coping — falling", mapTag:"Early withdrawal",
+        desc:"Early signs of withdrawal as arousal drops below this student's threshold. Reduced capacity to learn and interact; the student is beginning to disengage rather than escalate.",
+        short:"Reduced capacity to learn and interact.",
+        cols:{
+          context:[
+            "Negative feedback or teasing from peers",
+            "Losing, or being caught out, in a game",
+            "A task or piece of work being damaged or interrupted",
+            "Feeling tired, unwell, hungry or in pain",
+            "A quiet, unstructured moment after a big activity",
+            "Being asked a question they can't answer",
+            "End of a long or demanding block of learning",
+            "Being left out of a game or group by peers",
+            "A reminder of a past difficult experience",
+            "Feeling embarrassed, or having made a visible mistake",
+            "Extended quiet or unstructured time with no clear task",
+            "A change of adult they feel safest with"
+          ],
+          behaviour:[
+            "Head down, shoulders slumped, minimal eye contact",
+            "Going quiet; short or no verbal response",
+            "Negative self-talk (“I'm dumb”, “I hate myself”)",
+            "Retreating to a desk, corner, or facing the wall",
+            "Hiding under a table or behind furniture",
+            "Repeating a request for reassurance (“I want my mum”)",
+            "Voice drops to barely audible; only short yes/no answers",
+            "Stops making requests altogether, even for things they need",
+            "Physically curls inward — arms crossed tightly, knees to chest",
+            "Stares at one spot without engaging with surroundings",
+            "Apologises repeatedly for small or imagined mistakes",
+            "Loses interest in an activity they usually enjoy"
+          ],
+          interventions:[
+            "Give time and space, and say clearly you're available when ready",
+            "Get curious rather than corrective (“I'm noticing your shoulders are low—help me understand?”)",
+            "Offer food, water, or a softer space (couch, hammock)",
+            "Lower your own voice and tone to match theirs",
+            "Offer a short break with a clear return time",
+            "Avoid demanding an immediate verbal response",
+            "Sit alongside rather than opposite; ease off direct eye contact",
+            "Use fewer words, longer pauses, and a slower pace",
+            "Offer a favoured object, fidget, or comfort item",
+            "Keep instructions optional (“when you're ready” rather than “now”)",
+            "Quietly check basic needs — temperature, hunger, tiredness, pain",
+            "Stay nearby without requiring interaction — presence over prompts"
+          ]
+        }
+      },
+      {
+        id:"hypo", label:"Immobilisation — Hypoarousal", color:"hypo",
+        mapName:"Immobilisation", mapTag:"Hypoarousal",
+        desc:"Too little arousal to integrate. Dorsal vagal activation (submit / collapse / shutdown) — the student may appear flat, numb or empty, and unable to respond.",
+        short:"Too little arousal to integrate. Activation of the dorsal vagal system (shutdown / collapse).",
+        cols:{
+          context:[
+            "A long stretch of high demand without a break",
+            "Straight after a distressing incident",
+            "Sustained noise or sensory overload",
+            "Extreme tiredness, hunger, or being unwell",
+            "Feeling completely unheard or unseen",
+            "Being highly restricted or held for safety",
+            "Well past this student's own regulation threshold with no earlier intervention",
+            "A significant unmet sleep, food or medical need",
+            "Repeated failure or correction across a session",
+            "A space that feels unsafe or overwhelming to this student specifically",
+            "Being talked about, rather than to, in their presence",
+            "The recovery period straight after a hyperarousal episode"
+          ],
+          behaviour:[
+            "Blank, vacant stare; fixed or pinpoint pupils",
+            "Collapsed or slumped posture; loose muscle tone",
+            "No verbal response; appears not to hear you",
+            "Slowed movement, slowed breathing or heart rate",
+            "Appears flat, numb, empty or “checked out”",
+            "No visible distress — easy to mistake for calm",
+            "Breathing becomes very shallow or barely visible",
+            "Noticeable change in skin colour or temperature (pale, cold to touch)",
+            "Eyes open but unfocused; doesn't track movement or speech",
+            "Doesn't initiate movement even when physically able to",
+            "May not register pain, cold or discomfort as expected",
+            "Comes across as unusually compliant — easy to overlook as regulated"
+          ],
+          interventions:[
+            "Short, sharp present-moment prompts (name something green, describe 3 things you can see)",
+            "Offer gentle physical grounding (weighted blanket, textured cushion)",
+            "Use a soft, warm tone without demanding a response",
+            "Allow recovery time before expecting engagement",
+            "Reduce sensory input (dim lights, lower noise, fewer people)",
+            "Check physical safety and comfort first (seated, warm, safe)",
+            "Prioritise physiological needs first — warmth, food, water, comfort",
+            "Use very brief, simple, single-step prompts only",
+            "Reintroduce sensory input gradually — light touch, gentle movement — not all at once",
+            "Avoid crowding: one familiar adult, quiet space, reduced stimulation",
+            "Note the duration and pattern to inform the next review of this plan",
+            "Resume demands only once clear signs of re-engagement return"
+          ]
+        }
+      }
+    ];
 
   var COL_LABELS = { context:"Context", behaviour:"Behaviour descriptors", interventions:"Interventions" };
   var COLS = ["context","behaviour","interventions"];
-  var STORAGE_KEY = "wot-builder-draft-v1";
-  var BANK_KEY = "wot-builder-phrasebank-v1";
+  var TEACHER_KEY = "wot-builder-teacher-v2";
+  var CACHE_PREFIX = "wot-builder-cache-v2-";
 
-  // ---- report state (one student's plan) ----
-  var state = { studentName:"", items:{} };
-  ZONES.forEach(function(z){ state.items[z.id] = { context:[], behaviour:[], interventions:[] }; });
-
-  function loadState(){
-    try{
-      var raw = localStorage.getItem(STORAGE_KEY);
-      if(!raw) return;
-      var parsed = JSON.parse(raw);
-      if(parsed && parsed.items){
-        state.studentName = parsed.studentName || "";
-        ZONES.forEach(function(z){
-          if(parsed.items[z.id]){
-            COLS.forEach(function(c){
-              if(Array.isArray(parsed.items[z.id][c])) state.items[z.id][c] = parsed.items[z.id][c];
-            });
-          }
-        });
-      }
-    }catch(e){ /* storage unavailable - continue with blank state */ }
+  function blankItems(){
+    var obj = {};
+    ZONES.forEach(function(z){ obj[z.id] = { context:[], behaviour:[], interventions:[] }; });
+    return obj;
   }
-  function saveState(){
-    try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }catch(e){ /* ignore */ }
-  }
-  loadState();
 
-  // ---- personal phrase bank (persists across every future report, on this device) ----
-  var bank = { };
+  // ---------------- app-level state ----------------
+  var teacherName = null;
+  var currentStudent = null;
+  var currentReportId = null;
+  var currentReportStatus = "draft";
+  var reportsIndex = {};
+  var studentsCache = [];
+  var lastSavedSnapshot = null;
+
+  var state = { items: blankItems() };
+
+  var bank = {};
   ZONES.forEach(function(z){ bank[z.id] = { context:[], behaviour:[], interventions:[] }; });
-  var bankIdCounter = 1;
 
-  function loadBank(){
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"]/g, function(c){
+      return { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c];
+    });
+  }
+  function flash(el){
+    el.classList.remove("flash");
+    void el.offsetWidth;
+    el.classList.add("flash");
+  }
+  function tidyWording(raw){
+    var t = raw.replace(/\s+/g," ").trim();
+    if(!t) return t;
+    t = t.replace(/[\s.]+$/,"");
+    t = t.charAt(0).toUpperCase() + t.slice(1);
+    return t;
+  }
+  function formatDate(iso){
+    if(!iso) return "";
     try{
-      var raw = localStorage.getItem(BANK_KEY);
-      if(!raw) return;
-      var parsed = JSON.parse(raw);
-      if(parsed && parsed.bank){
-        ZONES.forEach(function(z){
-          if(parsed.bank[z.id]){
-            COLS.forEach(function(c){
-              if(Array.isArray(parsed.bank[z.id][c])) bank[z.id][c] = parsed.bank[z.id][c];
-            });
-          }
-        });
-        if(typeof parsed.counter === "number") bankIdCounter = parsed.counter;
+      var d = new Date(iso);
+      return d.toLocaleDateString(undefined, { day:"numeric", month:"short" });
+    }catch(e){ return ""; }
+  }
+
+  // ================= SCREENS =================
+  function showScreen(id){
+    var all = document.querySelectorAll(".screen");
+    for(var i=0;i<all.length;i++){ all[i].classList.remove("active"); }
+    document.getElementById(id).classList.add("active");
+  }
+
+  // ================= TEACHER GATE =================
+  var teacherInput = document.getElementById("teacherInput");
+  var teacherListEl = document.getElementById("teacherList");
+  var teacherError = document.getElementById("teacherError");
+
+  function loadStaffOptions(){
+    if(!sb) return;
+    sb.from("staff_directory").select("name").order("name").then(function(res){
+      if(res.error || !res.data) return;
+      teacherListEl.innerHTML = "";
+      res.data.forEach(function(row){
+        if(!row.name) return;
+        var opt = document.createElement("option");
+        opt.value = row.name;
+        teacherListEl.appendChild(opt);
+      });
+    }).catch(function(){ /* free-text entry still works without this */ });
+  }
+
+  function getSavedTeacher(){
+    try{ return localStorage.getItem(TEACHER_KEY) || null; }catch(e){ return null; }
+  }
+  function setTeacher(name){
+    teacherName = name;
+    try{ localStorage.setItem(TEACHER_KEY, name); }catch(e){ /* ignore */ }
+    document.getElementById("whoamiName").textContent = name;
+    document.getElementById("builderTeacherName").textContent = name;
+  }
+
+  document.getElementById("btnTeacherContinue").addEventListener("click", function(){
+    var v = teacherInput.value.trim();
+    if(!v){ teacherError.textContent = "Please enter your name to continue."; return; }
+    teacherError.textContent = "";
+    setTeacher(v);
+    enterStudentPicker();
+  });
+  teacherInput.addEventListener("keydown", function(e){
+    if(e.key === "Enter"){ e.preventDefault(); document.getElementById("btnTeacherContinue").click(); }
+  });
+
+  function switchTeacher(){
+    try{ localStorage.removeItem(TEACHER_KEY); }catch(e){ /* ignore */ }
+    teacherName = null;
+    teacherInput.value = "";
+    teacherError.textContent = "";
+    showScreen("screenTeacher");
+  }
+  document.getElementById("btnSwitchTeacherFromList").addEventListener("click", switchTeacher);
+  document.getElementById("btnSwitchTeacherFromBuilder").addEventListener("click", function(){
+    if(hasUnsavedChanges() && !window.confirm("You have changes that haven't been saved yet. Switch teacher anyway?")) return;
+    switchTeacher();
+  });
+
+  // ================= STUDENT PICKER =================
+  var studentGrid = document.getElementById("studentGrid");
+  var studentSearch = document.getElementById("studentSearch");
+  var studentLoading = document.getElementById("studentLoading");
+  var studentEmpty = document.getElementById("studentEmpty");
+
+  function statusForStudent(studentId){
+    var r = reportsIndex[studentId];
+    if(!r) return { cls:"not-started", label:"Not started" };
+    if(r.status === "archived") return { cls:"archived", label:"Archived · " + formatDate(r.updated_at) };
+    return { cls:"draft", label:"Draft · " + formatDate(r.updated_at) };
+  }
+
+  function renderStudentGrid(){
+    var q = studentSearch.value.trim().toLowerCase();
+    var filtered = studentsCache.filter(function(s){
+      if(!q) return true;
+      return (s.full_name||"").toLowerCase().indexOf(q) !== -1 || (s.initials||"").toLowerCase().indexOf(q) !== -1;
+    });
+    studentGrid.innerHTML = "";
+    studentEmpty.style.display = filtered.length ? "none" : "block";
+    filtered.forEach(function(s){
+      var tile = document.createElement("button");
+      tile.type = "button";
+      tile.className = "student-tile";
+      var st = statusForStudent(s.id);
+      tile.innerHTML =
+        '<span class="initials">'+escapeHtml(s.initials||"?")+'</span>' +
+        '<span class="fullname">'+escapeHtml(s.full_name||"")+'</span>' +
+        '<span class="status-pill '+st.cls+'">'+escapeHtml(st.label)+'</span>';
+      tile.addEventListener("click", function(){ openStudent(s); });
+      studentGrid.appendChild(tile);
+    });
+  }
+  studentSearch.addEventListener("input", renderStudentGrid);
+
+  function enterStudentPicker(){
+    document.getElementById("whoamiName").textContent = teacherName;
+    showScreen("screenStudents");
+    loadStudentsAndReports();
+  }
+
+  function loadStudentsAndReports(){
+    if(!sb){
+      studentLoading.style.display = "block";
+      studentLoading.textContent = "Can't reach the student list right now — check your connection and reload the page.";
+      return;
+    }
+    studentLoading.style.display = "block";
+    studentLoading.textContent = "Loading students…";
+    Promise.all([
+      sb.from("student_directory").select("*").order("full_name"),
+      sb.from("wot_builder_reports").select("id,student_register_id,status,updated_at")
+    ]).then(function(results){
+      var studentsRes = results[0], reportsRes = results[1];
+      if(studentsRes.error){
+        studentLoading.textContent = "Couldn't load the student list. Check your connection and try reloading.";
+        return;
+      }
+      studentsCache = studentsRes.data || [];
+      reportsIndex = {};
+      (reportsRes.data || []).forEach(function(r){
+        var existing = reportsIndex[r.student_register_id];
+        if(!existing || new Date(r.updated_at) > new Date(existing.updated_at)){
+          reportsIndex[r.student_register_id] = r;
+        }
+      });
+      studentLoading.style.display = "none";
+      renderStudentGrid();
+    }).catch(function(){
+      studentLoading.textContent = "Couldn't load the student list. Check your connection and try reloading.";
+    });
+  }
+
+  document.getElementById("btnBackToStudents").addEventListener("click", function(){
+    if(hasUnsavedChanges() && !window.confirm("You have changes that haven't been saved yet. Leave without saving?")) return;
+    showScreen("screenStudents");
+    loadStudentsAndReports();
+  });
+
+  // ================= OPEN / LOAD A STUDENT'S REPORT =================
+  function hasUnsavedChanges(){
+    if(lastSavedSnapshot === null) return false;
+    try{ return JSON.stringify(state.items) !== lastSavedSnapshot; }catch(e){ return false; }
+  }
+
+  function openStudent(s){
+    currentStudent = s;
+    currentReportId = null;
+    currentReportStatus = "draft";
+    state.items = blankItems();
+    lastSavedSnapshot = null;
+
+    document.getElementById("studentHeadingName").textContent = s.full_name + " (" + s.initials + ")";
+    document.getElementById("studentHeadingProgram").textContent = s.program ? ("· " + s.program) : "";
+    document.getElementById("offlineBanner").classList.remove("show");
+    setSaveStatus("", "");
+
+    showScreen("screenBuilder");
+    loadBankForTeacher();
+    loadReportForCurrentStudent();
+  }
+
+  function mergeItems(data){
+    var obj = blankItems();
+    if(data && typeof data === "object"){
+      ZONES.forEach(function(z){
+        if(data[z.id]){
+          COLS.forEach(function(c){
+            if(Array.isArray(data[z.id][c])) obj[z.id][c] = data[z.id][c];
+          });
+        }
+      });
+    }
+    return obj;
+  }
+
+  function cacheKeyForCurrentStudent(){ return CACHE_PREFIX + currentStudent.id; }
+  function cacheReportLocally(){
+    try{
+      localStorage.setItem(cacheKeyForCurrentStudent(), JSON.stringify({ items: state.items, printStyle: printStyle, savedAt: Date.now() }));
+    }catch(e){ /* ignore */ }
+  }
+  function loadFromLocalCache(showBanner){
+    try{
+      var raw = localStorage.getItem(cacheKeyForCurrentStudent());
+      if(raw){
+        var parsed = JSON.parse(raw);
+        state.items = mergeItems(parsed.items);
+        if(parsed.printStyle === "map" || parsed.printStyle === "grid"){ printStyle = parsed.printStyle; applyPrintStyle(); }
+        if(showBanner) document.getElementById("offlineBanner").classList.add("show");
       }
     }catch(e){ /* ignore */ }
   }
-  function saveBank(){
-    try{ localStorage.setItem(BANK_KEY, JSON.stringify({ bank:bank, counter:bankIdCounter })); }catch(e){ /* ignore */ }
+
+  function loadReportForCurrentStudent(){
+    if(!sb){
+      loadFromLocalCache(true);
+      lastSavedSnapshot = JSON.stringify(state.items);
+      renderBank(); renderReport();
+      return;
+    }
+    sb.from("wot_builder_reports")
+      .select("*")
+      .eq("student_register_id", currentStudent.id)
+      .order("updated_at", { ascending:false })
+      .limit(1)
+      .then(function(res){
+        if(res.error){
+          loadFromLocalCache(true);
+        } else {
+          var rows = res.data || [];
+          if(rows.length){
+            var row = rows[0];
+            currentReportId = row.id;
+            currentReportStatus = row.status || "draft";
+            state.items = mergeItems(row.data);
+            if(row.print_style === "map" || row.print_style === "grid") printStyle = row.print_style;
+            applyPrintStyle();
+            cacheReportLocally();
+          } else {
+            loadFromLocalCache(false);
+          }
+        }
+        lastSavedSnapshot = JSON.stringify(state.items);
+        renderBank(); renderReport();
+      })
+      .catch(function(){
+        loadFromLocalCache(true);
+        lastSavedSnapshot = JSON.stringify(state.items);
+        renderBank(); renderReport();
+      });
   }
-  loadBank();
+
+  // ================= SAVE =================
+  function setSaveStatus(text, cls){
+    var el = document.getElementById("saveStatus");
+    el.textContent = text;
+    el.className = "save-status" + (cls ? " " + cls : "");
+  }
+
+  function saveReport(onDone){
+    cacheReportLocally();
+    if(!sb){
+      setSaveStatus("Saved locally on this device only — couldn't reach the shared database.", "err");
+      if(onDone) onDone(false);
+      return;
+    }
+    setSaveStatus("Saving…", "busy");
+    var nowIso = new Date().toISOString();
+    var payload = {
+      student_register_id: currentStudent.id,
+      student_initials: currentStudent.initials,
+      student_name: currentStudent.full_name,
+      data: state.items,
+      print_style: printStyle,
+      updated_by: teacherName,
+      updated_at: nowIso
+    };
+    var query;
+    if(currentReportId){
+      query = sb.from("wot_builder_reports").update(payload).eq("id", currentReportId).select().single();
+    } else {
+      payload.created_by = teacherName;
+      payload.status = "draft";
+      query = sb.from("wot_builder_reports").insert(payload).select().single();
+    }
+    query.then(function(res){
+      if(res.error){
+        setSaveStatus("Couldn't save — check your connection and try again.", "err");
+        if(onDone) onDone(false);
+        return;
+      }
+      currentReportId = res.data.id;
+      currentReportStatus = res.data.status;
+      lastSavedSnapshot = JSON.stringify(state.items);
+      reportsIndex[currentStudent.id] = { id: res.data.id, student_register_id: currentStudent.id, status: res.data.status, updated_at: res.data.updated_at };
+      setSaveStatus("Saved just now.", "ok");
+      if(onDone) onDone(true);
+    }).catch(function(){
+      setSaveStatus("Couldn't save — check your connection and try again.", "err");
+      if(onDone) onDone(false);
+    });
+  }
+  document.getElementById("btnSave").addEventListener("click", function(){ saveReport(); });
+
+  document.getElementById("btnClear").addEventListener("click", function(){
+    if(!window.confirm("Clear every line from " + currentStudent.full_name + "'s report? This can't be undone unless you've saved a previous version.")) return;
+    state.items = blankItems();
+    renderReport();
+    saveReport();
+  });
+
+  // ================= PHRASE BANK (Supabase, per teacher) =================
+  function loadBankForTeacher(){
+    ZONES.forEach(function(z){ bank[z.id] = { context:[], behaviour:[], interventions:[] }; });
+    if(!sb || !teacherName){ renderBank(); return; }
+    sb.from("wot_phrase_bank").select("*").eq("teacher_name", teacherName).order("created_at").then(function(res){
+      if(!res.error && res.data){
+        res.data.forEach(function(row){
+          if(bank[row.zone_id] && bank[row.zone_id][row.column_key]){
+            bank[row.zone_id][row.column_key].push({ id: row.id, text: row.phrase });
+          }
+        });
+      }
+      renderBank();
+    }).catch(function(){ renderBank(); });
+  }
 
   function addToPersonalBank(zoneId, colKey, text){
     var norm = text.trim().toLowerCase();
     var exists = bank[zoneId][colKey].some(function(p){ return p.text.trim().toLowerCase() === norm; });
     if(exists) return;
-    bank[zoneId][colKey].push({ id: "p" + (bankIdCounter++), text: text.trim() });
-    saveBank();
+    var localId = "local-" + Math.random().toString(36).slice(2);
+    bank[zoneId][colKey].push({ id: localId, text: text.trim() });
+    if(sb && teacherName){
+      sb.from("wot_phrase_bank").insert({ teacher_name: teacherName, zone_id: zoneId, column_key: colKey, phrase: text.trim() })
+        .select().single().then(function(res){
+          if(!res.error && res.data){
+            var item = null;
+            for(var i=0;i<bank[zoneId][colKey].length;i++){ if(bank[zoneId][colKey][i].id === localId) item = bank[zoneId][colKey][i]; }
+            if(item) item.id = res.data.id;
+          }
+        }).catch(function(){ /* stays local-only for this session */ });
+    }
   }
   function removeFromPersonalBank(zoneId, colKey, id){
     bank[zoneId][colKey] = bank[zoneId][colKey].filter(function(p){ return p.id !== id; });
-    saveBank();
+    if(sb && typeof id === "string" && id.indexOf("local-") !== 0){
+      sb.from("wot_phrase_bank").delete().eq("id", id).then(function(){}).catch(function(){});
+    }
   }
   function bankPhraseCount(){
     var n = 0;
@@ -1211,7 +1733,7 @@
     return n;
   }
 
-  // ---- downloads capability (optional; export overlay upgrades if present) ----
+  // ================= downloads capability (optional Claude-artifact feature) =================
   var downloadsNS = null;
   (function(){
     try{
@@ -1225,7 +1747,7 @@
     }catch(e){ /* leave hidden */ }
   })();
 
-  // ---- bank rendering ----
+  // ================= BANK RENDERING =================
   var bankPane = document.getElementById("bankPane");
   var openZoneId = ZONES[0].id;
 
@@ -1357,36 +1879,8 @@
     return row;
   }
 
-  function flash(el){
-    el.classList.remove("flash");
-    void el.offsetWidth;
-    el.classList.add("flash");
-  }
-
-  function escapeHtml(s){
-    return String(s).replace(/[&<>"]/g, function(c){
-      return { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c];
-    });
-  }
-
-  // ---- tidy wording: light, deterministic clean-up (not AI) ----
-  function tidyWording(raw){
-    var t = raw.replace(/\s+/g," ").trim();
-    if(!t) return t;
-    t = t.replace(/[\s.]+$/,"");
-    t = t.charAt(0).toUpperCase() + t.slice(1);
-    return t;
-  }
-
-  // ---- report rendering ----
+  // ================= REPORT RENDERING =================
   var reportBody = document.getElementById("reportBody");
-  var progressEl = document.getElementById("progress");
-  var studentInput = document.getElementById("studentName");
-  studentInput.value = state.studentName;
-  studentInput.addEventListener("input", function(){
-    state.studentName = studentInput.value;
-    saveState();
-  });
 
   function renderReport(){
     reportBody.innerHTML = "";
@@ -1403,7 +1897,6 @@
       });
       reportBody.appendChild(rz);
     });
-    progressEl.textContent = usedCount() + " of " + totalExamples() + " built-in prompts used";
     renderPrintSheet();
     renderPrintMap();
   }
@@ -1433,7 +1926,6 @@
         text.addEventListener("blur", function(){
           item.text = text.textContent.trim() || item.text;
           text.textContent = item.text;
-          saveState();
         });
         var remove = document.createElement("button");
         remove.className = "remove";
@@ -1441,7 +1933,6 @@
         remove.innerHTML = "×";
         remove.addEventListener("click", function(){
           items.splice(idx,1);
-          saveState();
           renderReport();
           renderBank();
         });
@@ -1496,31 +1987,12 @@
       return;
     }
     list.push({ text:text, custom:!!custom });
-    saveState();
     renderReport();
     renderBank();
   }
 
-  // ---- toolbar actions ----
-  document.getElementById("btnClear").addEventListener("click", function(){
-    var any = usedCount() > 0;
-    if(any && !window.confirm("Start a new report? This clears the student name and every line from the current report. Your saved phrase bank is not affected.")) return;
-    state.studentName = "";
-    studentInput.value = "";
-    ZONES.forEach(function(z){ state.items[z.id] = { context:[], behaviour:[], interventions:[] }; });
-    saveState();
-    renderReport();
-    renderBank();
-  });
-
-  document.getElementById("btnPrint").addEventListener("click", function(){
-    renderPrintSheet();
-    renderPrintMap();
-    try{ window.print(); }catch(e){ /* ignore */ }
-  });
-
-  // ---- print style choice (grid template vs. Regulation Map), persisted per device ----
-  var PRINT_STYLE_KEY = "wot-builder-print-style-v1";
+  // ================= PRINT STYLE CHOICE =================
+  var PRINT_STYLE_KEY = "wot-builder-print-style-v2";
   var printStyle = "grid";
   try{ var savedStyle = localStorage.getItem(PRINT_STYLE_KEY); if(savedStyle === "map" || savedStyle === "grid") printStyle = savedStyle; }catch(e){ /* ignore */ }
 
@@ -1538,14 +2010,33 @@
   if(btnStyleGrid) btnStyleGrid.addEventListener("click", function(){ printStyle = "grid"; applyPrintStyle(); });
   if(btnStyleMap) btnStyleMap.addEventListener("click", function(){ printStyle = "map"; applyPrintStyle(); });
 
+  document.getElementById("btnPrint").addEventListener("click", function(){
+    renderPrintSheet();
+    renderPrintMap();
+    try{ window.print(); }catch(e){ /* ignore */ }
+  });
+
   // ---- print sheet: single grid matching the org's regulation-profile template ----
-  var PRINT_COLORS = { hyper:"var(--print-red)", copingup:"var(--print-amber)", wot:"var(--print-green)", copingdown:"var(--print-amber)", hypo:"var(--print-red)" };
+  var PRINT_COLORS = { hyper:"var(--map-hyper)", copingup:"var(--map-copeup)", wot:"var(--map-wot)", copingdown:"var(--map-copedown)", hypo:"var(--map-hypo)" };
+
+  function studentDisplayName(){
+    return currentStudent ? currentStudent.full_name : "[Student name]";
+  }
+
+  function getCurrentTermYear(){
+    var now = new Date();
+    var month = now.getMonth(); // 0 = Jan
+    var term = month <= 2 ? 1 : month <= 5 ? 2 : month <= 8 ? 3 : 4;
+    return { term: term, year: now.getFullYear() };
+  }
 
   function renderPrintSheet(){
     var printMeta = document.getElementById("printMeta");
     if(printMeta){
-      var name = state.studentName.trim() || "[Student name]";
-      printMeta.textContent = "Student: " + name;
+      var ty = getCurrentTermYear();
+      printMeta.innerHTML = "Student: " + escapeHtml(studentDisplayName()) +
+        " &nbsp;·&nbsp; Prepared by: " + escapeHtml(teacherName || "[staff name]") +
+        " &nbsp;·&nbsp; Reviewed: Term " + ty.term + ", " + ty.year;
     }
 
     var body = document.getElementById("printTableBody");
@@ -1582,12 +2073,17 @@
     body.innerHTML = html;
   }
 
-  // ---- print sheet 2: "Regulation Map" (open bands + gradient rail) ----
   function renderPrintMap(){
     var nameEl = document.getElementById("mapName");
-    if(nameEl){
-      var name = state.studentName.trim();
-      nameEl.textContent = name || "[Student name]";
+    if(nameEl) nameEl.textContent = studentDisplayName();
+
+    var preparedByEl = document.getElementById("mapPreparedBy");
+    if(preparedByEl) preparedByEl.textContent = teacherName || "[staff name]";
+
+    var reviewedEl = document.getElementById("mapReviewed");
+    if(reviewedEl){
+      var ty = getCurrentTermYear();
+      reviewedEl.textContent = "Term " + ty.term + ", " + ty.year;
     }
 
     var bandsEl = document.getElementById("mapBands");
@@ -1615,15 +2111,14 @@
     bandsEl.innerHTML = html;
   }
 
-  // ---- export overlay ----
+  // ================= EXPORT OVERLAY =================
   var overlay = document.getElementById("exportOverlay");
   var exportText = document.getElementById("exportText");
   var copyMsg = document.getElementById("copyMsg");
 
   function buildExportText(){
     var lines = [];
-    var name = state.studentName.trim() || "[Student name]";
-    lines.push("Personalised Window of Tolerance — " + name);
+    lines.push("Personalised Window of Tolerance — " + studentDisplayName());
     lines.push("");
     ZONES.forEach(function(zone){
       lines.push(zone.label.toUpperCase());
@@ -1684,7 +2179,7 @@
 
   document.getElementById("btnDoSave").addEventListener("click", function(){
     if(!downloadsNS){ copyMsg.textContent = "File saving isn't available here — use Copy instead."; return; }
-    var name = (state.studentName.trim() || "student").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/(^-|-$)/g,"");
+    var name = (currentStudent ? currentStudent.initials : "student").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/(^-|-$)/g,"");
     copyMsg.textContent = "Saving…";
     downloadsNS.save({ filename: "window-of-tolerance-" + (name || "report") + ".txt", data: exportText.value })
       .then(function(){ copyMsg.textContent = "Saved."; })
@@ -1696,7 +2191,7 @@
       });
   });
 
-  // ---- manage-phrase-bank overlay ----
+  // ================= MANAGE PHRASE BANK OVERLAY =================
   var bankOverlay = document.getElementById("bankOverlay");
   var bankManageBody = document.getElementById("bankManageBody");
 
@@ -1759,7 +2254,111 @@
   });
   bankOverlay.addEventListener("click", function(e){ if(e.target === bankOverlay) bankOverlay.classList.remove("open"); });
 
-  // ---- mobile view toggle ----
+  // ================= ARCHIVE TO DOCUMENT ARCHIVE =================
+  var ROOT_VARS_CSS = ":root{\n    --bg:#F1F4EF;\n    --surface:#FFFFFF;\n    --surface-2:#E7ECE3;\n    --surface-3:#DEE5D9;\n    --ink:#1B211C;\n    --ink-soft:#57604F;\n    --ink-faint:#818B77;\n    --border:#D2DACB;\n    --accent:#2F6F6A;\n    --accent-ink:#FFFFFF;\n    --accent-wash:#DEEAE7;\n    --shadow: 0 1px 2px rgba(27,33,28,0.06), 0 6px 20px -8px rgba(27,33,28,0.18);\n\n    --hyper:#AF3A2C;       --hyper-wash:#F5E1DC;\n    --copingup:#B9761A;    --copingup-wash:#F3E5CC;\n    --wot:#2E7A48;         --wot-wash:#DDEBE0;\n    --copingdown:#2A6693;  --copingdown-wash:#DCE7EF;\n    --hypo:#3C4C6B;        --hypo-wash:#E1E4EB;\n\n    /* fixed print palette — always renders the same on paper, regardless of screen theme */\n    --print-red:#E14B3D;\n    --print-amber:#F2A93C;\n    --print-green:#8BC24A;\n    --print-navy:#1F2A38;\n\n    /* regulation-map print style — its own fixed palette, independent of screen theme */\n    --map-paper:#F3F5F7;\n    --map-ink:#1E2530;\n    --map-ink-soft:#565F6E;\n    --map-ink-faint:#8892A0;\n    --map-rule:#D6DBE1;\n    --map-hyper:#C1543A;     --map-hyper-tint:#F3E2DC;\n    --map-copeup:#C98A2E;    --map-copeup-tint:#F3E7D3;\n    --map-wot:#4C7A5A;       --map-wot-tint:#E1EBE3;\n    --map-copedown:#3E6E8E;  --map-copedown-tint:#DEE7ED;\n    --map-hypo:#38456B;      --map-hypo-tint:#DFE2EA;\n\n    --font-display:'Fraunces', 'Iowan Old Style', Georgia, serif;\n    --font-body:'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;\n    --font-serif-map:'Newsreader', 'Iowan Old Style', Georgia, serif;\n    --font-sans-map:'Work Sans', 'Segoe UI', system-ui, sans-serif;\n  }";
+  var PRINT_CSS = "/* ---------- print sheet: single grid, zone rows x Context/Behaviour/Interventions columns ---------- */\n  .wot-print-sheet{ display:none; }\n  .print-meta{\n    font-family:var(--font-body);\n    font-size:13px;\n    color:#000;\n    margin-bottom:8px;\n    font-weight:600;\n  }\n  .print-table{\n    width:100%;\n    border-collapse:collapse;\n    table-layout:fixed;\n    background:#fff;\n  }\n  .print-table th, .print-table td{\n    border:1px solid #333;\n    padding:5px 7px;\n    vertical-align:middle;\n    color:#161616;\n  }\n  .print-table col.axis-col{ width:22px; }\n  .print-table col.label-col{ width:135px; }\n  .rot{\n    writing-mode:vertical-rl;\n    transform:rotate(180deg);\n    white-space:nowrap;\n    display:inline-block;\n  }\n  .axis-cell{\n    background:var(--print-navy);\n    color:#fff;\n    text-align:center;\n    padding:6px 1px;\n  }\n  .axis-cell .rot{ font-weight:700; font-size:11px; letter-spacing:.06em; }\n  .print-table th.title-cell{\n    background:var(--print-navy);\n    color:#fff;\n    text-align:center;\n    height:56px;\n  }\n  .title-cell .rot{ font-weight:700; font-size:10.5px; line-height:1.25; }\n  .print-table th.col-head{\n    background:#fff;\n    text-align:center;\n    height:56px;\n  }\n  .col-head .rot{ font-weight:700; font-size:10.5px; letter-spacing:.02em; }\n  .zone-label-cell{\n    vertical-align:middle;\n    padding:5px 7px;\n    font-size:9.5px;\n    line-height:1.25;\n  }\n  .print-table td.zone-label-cell{ color:#fff; }\n  .zone-label-cell .zn{ display:block; font-weight:700; font-size:11px; margin-bottom:2px; }\n  .zone-label-cell .zd{ font-style:italic; opacity:.92; }\n  .content-cell{\n    vertical-align:top;\n    font-size:10px;\n    line-height:1.3;\n    background:#F4F7FA;\n  }\n  .content-cell ul{ margin:0; padding-left:14px; }\n  .content-cell li{ margin-bottom:2px; }\n  .content-cell .empty{ color:#9AA0A6; font-style:italic; }\n\n  /* ---------- print style 2: \"Regulation Map\" — open bands + gradient rail ---------- */\n  .print-style-toggle{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0 0 10px; font-family:var(--font-body); font-size:12.5px; color:var(--ink-soft); }\n  .print-style-toggle span.lbl{ margin-right:2px; }\n  .print-style-toggle button{\n    font-family:var(--font-body); font-size:12.5px; font-weight:600;\n    padding:6px 12px; border-radius:20px; border:1px solid var(--border);\n    background:var(--surface); color:var(--ink-soft); cursor:pointer;\n  }\n  .print-style-toggle button[aria-pressed=\"true\"]{ background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }\n\n  .wot-print-map{ display:none; }\n  .wot-print-map, .wot-print-map *{ box-sizing:border-box; }\n  .wot-print-map{\n    background:var(--map-paper);\n    color:var(--map-ink);\n    font-family:var(--font-sans-map);\n    -webkit-font-smoothing:antialiased;\n  }\n  .wot-print-map .map-page{\n    width:100%;\n    margin:0;\n    padding:0;\n    position:relative;\n  }\n  .wot-print-map .map-head{\n    display:flex; justify-content:space-between; align-items:flex-end; gap:24px;\n    padding-bottom:4mm; border-bottom:1px solid var(--map-rule); margin-bottom:4mm;\n  }\n  .wot-print-map .map-head .id{ max-width:70%; }\n  .wot-print-map .map-eyebrow{\n    font-family:var(--font-sans-map); font-size:10.5px; font-weight:600;\n    letter-spacing:.12em; text-transform:uppercase; color:var(--map-ink-faint); margin:0 0 6px;\n  }\n  .wot-print-map .map-name{\n    font-family:var(--font-serif-map); font-weight:500; font-size:34px;\n    color:var(--map-ink); margin:0; letter-spacing:-0.01em;\n  }\n  .wot-print-map .map-subtitle{\n    font-family:var(--font-serif-map); font-style:italic; font-size:15px;\n    color:var(--map-ink-soft); margin:5px 0 0;\n  }\n  .wot-print-map .map-meta{ text-align:right; font-size:11.5px; color:var(--map-ink-soft); line-height:1.8; white-space:nowrap; }\n  .wot-print-map .map-meta b{ color:var(--map-ink); font-weight:600; }\n\n  .wot-print-map .map-col-header{ display:grid; grid-template-columns:30px 1fr; margin-bottom:5px; }\n  .wot-print-map .map-col-header .spacer{ margin-right:14px; }\n  .wot-print-map .map-col-header .inner{ display:grid; grid-template-columns:225px 1fr 1fr 1fr; gap:22px; }\n  .wot-print-map .map-col-header .inner > div{\n    font-family:var(--font-sans-map); font-size:9.5px; font-weight:700;\n    letter-spacing:.1em; text-transform:uppercase; color:var(--map-ink-faint);\n  }\n\n  .wot-print-map .map-ladder{ display:grid; grid-template-columns:30px 1fr; gap:0; }\n  .wot-print-map .map-rail{\n    position:relative; border-radius:5px; margin-right:14px;\n    background:linear-gradient(180deg,\n      var(--map-hyper) 0%, var(--map-hyper) 12%,\n      var(--map-copeup) 26%,\n      var(--map-wot) 50%,\n      var(--map-copedown) 74%,\n      var(--map-hypo) 88%, var(--map-hypo) 100%);\n  }\n  .wot-print-map .map-rail .map-tag{\n    position:absolute; left:50%; top:50%; translate:0 50%;\n    transform:translateX(-50%) rotate(180deg); writing-mode:vertical-rl;\n    font-family:var(--font-sans-map); font-weight:600; font-size:10.5px;\n    letter-spacing:.16em; color:rgba(255,255,255,0.88); text-transform:uppercase;\n  }\n\n  .wot-print-map .map-bands{ display:flex; flex-direction:column; }\n  .wot-print-map .map-band{\n    display:grid; grid-template-columns:225px 1fr 1fr 1fr; gap:22px;\n    padding:2px 0; border-bottom:1px solid var(--map-rule);\n  }\n  .wot-print-map .map-band:last-child{ border-bottom:none; }\n\n  .wot-print-map .map-zone{ padding-right:6px; }\n  .wot-print-map .map-zn{\n    font-family:var(--font-serif-map); font-weight:500; font-size:16.5px;\n    color:var(--map-ink); margin:0 0 3px; line-height:1.2;\n  }\n  .wot-print-map .map-tagpill{\n    display:inline-block; font-size:9.5px; font-weight:600; letter-spacing:.05em;\n    text-transform:uppercase; padding:2px 7px; border-radius:20px; margin-bottom:5px;\n  }\n  .wot-print-map .map-zd{ font-size:10.5px; color:var(--map-ink-soft); line-height:1.4; font-style:italic; }\n\n  .wot-print-map .map-col{ padding-top:2px; }\n  .wot-print-map .map-col ul{ margin:0; padding:0; list-style:none; }\n  .wot-print-map .map-col li{\n    font-size:11px; line-height:1.35; color:var(--map-ink);\n    margin-bottom:3px; padding-left:11px; position:relative;\n  }\n  .wot-print-map .map-col li::before{\n    content:\"\"; position:absolute; left:0; top:6px; width:4px; height:4px;\n    border-radius:50%; background:var(--map-ink-faint);\n  }\n  .wot-print-map .map-col li.empty{ color:var(--map-ink-faint); font-style:italic; }\n  .wot-print-map .map-col li.empty::before{ display:none; }\n\n  .wot-print-map .map-band[data-zone=\"hyper\"] .map-tagpill{ background:var(--map-hyper-tint); color:var(--map-hyper); }\n  .wot-print-map .map-band[data-zone=\"copingup\"] .map-tagpill{ background:var(--map-copeup-tint); color:var(--map-copeup); }\n  .wot-print-map .map-band[data-zone=\"wot\"] .map-tagpill{ background:var(--map-wot-tint); color:var(--map-wot); }\n  .wot-print-map .map-band[data-zone=\"copingdown\"] .map-tagpill{ background:var(--map-copedown-tint); color:var(--map-copedown); }\n  .wot-print-map .map-band[data-zone=\"hypo\"] .map-tagpill{ background:var(--map-hypo-tint); color:var(--map-hypo); }\n\n  .wot-print-map .map-band[data-zone=\"hyper\"] .map-col li::before{ background:var(--map-hyper); }\n  .wot-print-map .map-band[data-zone=\"copingup\"] .map-col li::before{ background:var(--map-copeup); }\n  .wot-print-map .map-band[data-zone=\"wot\"] .map-col li::before{ background:var(--map-wot); }\n  .wot-print-map .map-band[data-zone=\"copingdown\"] .map-col li::before{ background:var(--map-copedown); }\n  .wot-print-map .map-band[data-zone=\"hypo\"] .map-col li::before{ background:var(--map-hypo); }\n\n  .wot-print-map .map-foot{\n    margin-top:3mm; padding-top:2.5mm; border-top:1px solid var(--map-rule);\n    display:flex; justify-content:space-between; font-size:9.5px; color:var(--map-ink-faint);\n  }\n\n  ";
+
+  var archiveOverlay = document.getElementById("archiveOverlay");
+  var archiveMsg = document.getElementById("archiveMsg");
+  var archiveError = document.getElementById("archiveError");
+
+  document.getElementById("btnArchive").addEventListener("click", function(){
+    archiveError.textContent = "";
+    archiveMsg.textContent = "";
+    var ty = getCurrentTermYear();
+    if(!document.getElementById("archiveYear").value){
+      document.getElementById("archiveYear").value = String(ty.year);
+    }
+    if(!document.getElementById("archiveTerm").value){
+      document.getElementById("archiveTerm").value = "Term " + ty.term;
+    }
+    archiveOverlay.classList.add("open");
+  });
+  document.getElementById("btnCloseArchive").addEventListener("click", function(){
+    archiveOverlay.classList.remove("open");
+  });
+  archiveOverlay.addEventListener("click", function(e){ if(e.target === archiveOverlay) archiveOverlay.classList.remove("open"); });
+
+  function buildArchiveSnapshotHtml(){
+    renderPrintSheet();
+    renderPrintMap();
+    var activeEl = printStyle === "map" ? document.getElementById("printMap") : document.getElementById("printSheet");
+    var markup = activeEl.outerHTML;
+    return "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Window of Tolerance — " +
+      escapeHtml(studentDisplayName()) + "</title><style>" + ROOT_VARS_CSS + "\n" + PRINT_CSS +
+      "\nbody{background:#fff;margin:0;padding:24px;} .wot-print-sheet{display:block;max-width:1200px;margin:0 auto;} .wot-print-map{display:block;}" +
+      "</style></head><body>" + markup + "</body></html>";
+  }
+
+  document.getElementById("btnDoArchive").addEventListener("click", function(){
+    if(!sb){ archiveError.textContent = "Can't reach the shared database right now."; return; }
+    var term = document.getElementById("archiveTerm").value.trim();
+    var year = document.getElementById("archiveYear").value.trim();
+    archiveError.textContent = "";
+    archiveMsg.textContent = "Saving report…";
+
+    saveReport(function(ok){
+      if(!ok){ archiveError.textContent = "Couldn't save the report first — check your connection and try again."; archiveMsg.textContent = ""; return; }
+
+      archiveMsg.textContent = "Building document…";
+      var html = buildArchiveSnapshotHtml();
+      var studentSlug = (currentStudent.initials || "student").toLowerCase().replace(/[^a-z0-9]+/g,"-");
+      var stamp = new Date().toISOString().replace(/[:.]/g,"-");
+      var fileName = "window-of-tolerance-" + studentSlug + "-" + stamp + ".html";
+      var path = "wot-builder/" + fileName;
+
+      archiveMsg.textContent = "Uploading…";
+      sb.storage.from(ARCHIVE_BUCKET).upload(path, new Blob([html], { type:"text/html" }), { upsert:true, contentType:"text/html" })
+        .then(function(uploadRes){
+          if(uploadRes.error){
+            archiveError.textContent = "Couldn't upload the document (" + uploadRes.error.message + "). The bucket name may need updating in the tool's config.";
+            archiveMsg.textContent = "";
+            return;
+          }
+          var docRow = {
+            source_tool: "wot_builder",
+            doc_type: "Window of Tolerance",
+            title: "Window of Tolerance — " + currentStudent.full_name,
+            student_initials: currentStudent.initials,
+            term: term || null,
+            year: year ? parseInt(year,10) : null,
+            tags: ["window-of-tolerance"],
+            storage_path: path,
+            file_name: fileName,
+            confidential: true,
+            created_by: teacherName
+          };
+          sb.from("document_archive").insert(docRow).select().single().then(function(archRes){
+            if(archRes.error){
+              archiveError.textContent = "Uploaded, but couldn't file it in the archive (" + archRes.error.message + ").";
+              archiveMsg.textContent = "";
+              return;
+            }
+            sb.from("wot_builder_reports").update({
+              status: "archived",
+              archived_at: new Date().toISOString(),
+              archived_document_id: archRes.data.id
+            }).eq("id", currentReportId).then(function(){
+              currentReportStatus = "archived";
+              if(reportsIndex[currentStudent.id]) reportsIndex[currentStudent.id].status = "archived";
+              archiveMsg.textContent = "Filed to Document Archive.";
+              setTimeout(function(){
+                archiveOverlay.classList.remove("open");
+                archiveMsg.textContent = "";
+              }, 1300);
+            });
+          }).catch(function(){
+            archiveError.textContent = "Uploaded, but couldn't file it in the archive — check your connection.";
+            archiveMsg.textContent = "";
+          });
+        }).catch(function(){
+          archiveError.textContent = "Couldn't upload the document — check your connection.";
+          archiveMsg.textContent = "";
+        });
+    });
+  });
+
+  // ================= MOBILE VIEW TOGGLE =================
   var tabBank = document.getElementById("tabBank");
   var tabReport = document.getElementById("tabReport");
   var bankPaneEl = document.getElementById("bankPane");
@@ -1774,12 +2373,21 @@
   tabReport.addEventListener("click", function(){ setMobileView("report"); });
   setMobileView("bank");
 
-  // safety net: keep the print sheet in sync even if the user prints via
-  // the browser's own shortcut (Ctrl/Cmd+P) instead of the Print button
   try{ window.addEventListener("beforeprint", function(){ renderPrintSheet(); renderPrintMap(); }); }catch(e){ /* ignore */ }
 
-  // ---- init ----
-  renderBank();
-  renderReport();
+  window.addEventListener("beforeunload", function(e){
+    if(hasUnsavedChanges()){
+      e.preventDefault();
+      e.returnValue = "";
+    }
+  });
+
+  // ================= INIT =================
+  loadStaffOptions();
+  var saved = getSavedTeacher();
+  if(saved){
+    setTeacher(saved);
+    enterStudentPicker();
+  }
 })();
 </script>
