@@ -62,16 +62,25 @@ def get_current_term():
     return None, None, None
 
 def get_booking_date_range():
-    """Get the date range for bookings (current term + 5 weeks of next term)"""
+    """Get the date range for bookings. Starts at today (not the beginning of
+    term) so the grid opens on the current date instead of making teachers
+    scroll past weeks that have already happened - historical bookings are
+    never deleted, they just live outside this forward-looking window.
+    Runs through 5 weeks into the next term so there's always room to book
+    ahead."""
     today = date.today()
     current_term, term_start, term_end = get_current_term()
-    
+
     # If we're before Term 2 starts, use Term 2 start date
     if not current_term or today < TERM_DATES["Term 2"]["start"]:
         term_start = TERM_DATES["Term 2"]["start"]
         term_end = TERM_DATES["Term 2"]["end"]
         current_term = "Term 2"
-    
+
+    # Start from today (or term start, if the term hasn't begun yet) so the
+    # grid always opens on the current date
+    start_date = max(today, term_start)
+
     # End date is 5 weeks into next term
     next_term_start = None
     terms_list = list(TERM_DATES.items())
@@ -84,8 +93,8 @@ def get_booking_date_range():
         end_date = next_term_start + timedelta(weeks=5)
     else:
         end_date = term_end
-        
-    return term_start, end_date
+
+    return start_date, end_date
 
 def get_available_dates():
     """Generate all valid booking dates (Mon, Tue, Thu only)"""
@@ -189,7 +198,7 @@ today = date.today()
 if today < TERM_DATES["Term 2"]["start"]:
     period_text = f"Term 2 bookings (starts {TERM_DATES['Term 2']['start'].strftime('%d %B %Y')})"
 else:
-    period_text = f"{current_term} (viewing until {booking_end.strftime('%d %B %Y')})"
+    period_text = f"{current_term} (showing {booking_start.strftime('%d %B %Y')} to {booking_end.strftime('%d %B %Y')})"
 
 st.info(f"""
 **Current Period**: {period_text}  
@@ -245,24 +254,40 @@ if staff_name_filter:
         my_bookings = pd.DataFrame()  # Empty DataFrame if no bookings exist yet
     
     if not my_bookings.empty:
-        my_bookings_sorted = my_bookings.sort_values('booking_date')
-        
-        st.markdown(f"**You have {len(my_bookings_sorted)} upcoming booking(s):**")
-        
-        for idx, booking in my_bookings_sorted.iterrows():
-            col1, col2, col3 = st.columns([3, 3, 1])
-            with col1:
-                st.write(f"📅 {booking['booking_date'].strftime('%A, %d %B %Y')}")
-            with col2:
-                st.write(f"🕐 {booking['time_slot']}")
-            with col3:
-                if st.button("Cancel", key=f"cancel_{booking['id']}"):
-                    success, message = cancel_booking(booking['id'])
-                    if success:
-                        st.success(message)
-                        st.rerun()
-                    else:
-                        st.error(message)
+        # Split into upcoming and past so old bookings stay visible (never
+        # deleted) without cluttering the "upcoming" list or being editable
+        upcoming = my_bookings[my_bookings['booking_date'] >= today].sort_values('booking_date')
+        past = my_bookings[my_bookings['booking_date'] < today].sort_values('booking_date', ascending=False)
+
+        if not upcoming.empty:
+            st.markdown(f"**You have {len(upcoming)} upcoming booking(s):**")
+
+            for idx, booking in upcoming.iterrows():
+                col1, col2, col3 = st.columns([3, 3, 1])
+                with col1:
+                    st.write(f"📅 {booking['booking_date'].strftime('%A, %d %B %Y')}")
+                with col2:
+                    st.write(f"🕐 {booking['time_slot']}")
+                with col3:
+                    if st.button("Cancel", key=f"cancel_{booking['id']}"):
+                        success, message = cancel_booking(booking['id'])
+                        if success:
+                            st.success(message)
+                            st.rerun()
+                        else:
+                            st.error(message)
+        else:
+            st.info("You have no upcoming bookings.")
+
+        if not past.empty:
+            with st.expander(f"📜 Past bookings ({len(past)}) - kept for your records"):
+                for idx, booking in past.iterrows():
+                    col1, col2 = st.columns([3, 3])
+                    with col1:
+                        st.write(f"📅 {booking['booking_date'].strftime('%A, %d %B %Y')}")
+                    with col2:
+                        st.write(f"🕐 {booking['time_slot']}")
+
         st.markdown("---")
     else:
         st.info("You have no upcoming bookings.")
