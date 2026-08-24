@@ -1629,20 +1629,20 @@ def render_program_meeting(program):
         
         if st.session_state.current_meeting_id:
             try:
-                debug_result = supabase.table('team_meetings').select("*").eq('id', st.session_state.current_meeting_id).execute()
+                debug_result = supabase.table('tm_program_meetings').select("*").eq('id', st.session_state.current_meeting_id).execute()
                 if debug_result.data:
                     debug_mtg = debug_result.data[0]
                     
                     col_d1, col_d2, col_d3 = st.columns(3)
                     with col_d1:
-                        st.metric("Extracted Notes", "✅ YES" if debug_mtg.get('extracted_notes') and debug_mtg.get('extracted_notes').strip() else "❌ EMPTY")
+                        st.metric("Check-in Notes", "✅ YES" if debug_mtg.get('checkin_notes') and debug_mtg.get('checkin_notes').strip() else "❌ EMPTY")
                     with col_d2:
-                        st.metric("Summary Notes", "✅ YES" if debug_mtg.get('summary_notes') and debug_mtg.get('summary_notes').strip() else "❌ EMPTY")
+                        st.metric("TAC/Reports Notes", "✅ YES" if debug_mtg.get('reports_tac_notes') and debug_mtg.get('reports_tac_notes').strip() else "❌ EMPTY")
                     with col_d3:
                         trans_len = len(debug_mtg.get('transcript', ''))
                         st.metric("Transcript Length", f"{trans_len} chars")
                     
-                    if not debug_mtg.get('extracted_notes') or not debug_mtg.get('extracted_notes').strip():
+                    if not debug_mtg.get('checkin_notes') or not debug_mtg.get('checkin_notes').strip():
                         st.error("""
 ❌ **EXTRACTED NOTES ARE EMPTY**
 
@@ -1670,7 +1670,7 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
         with active_tab:
             try:
                 # Load active ad-hoc meetings
-                active_meetings = supabase.table('team_meetings').select("*").eq('program', program).eq('meeting_type', 'ad-hoc').eq('is_archived', False).order('meeting_date', desc=True).execute()
+                active_meetings = supabase.table('tm_program_meetings').select("*").eq('program', program).eq('week_type', 'ad-hoc').eq('is_archived', False).order('meeting_date', desc=True).execute()
                 active_adhoc = active_meetings.data or []
                 
                 if active_adhoc:
@@ -1697,7 +1697,7 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
                             if st.button("📥 Minutes", key=f"dl_active_{mtg_id}", use_container_width=True):
                                 # Fetch fresh data from database
                                 try:
-                                    fresh_mtg = supabase.table('team_meetings').select("*").eq('id', mtg_id).execute()
+                                    fresh_mtg = supabase.table('tm_program_meetings').select("*").eq('id', mtg_id).execute()
                                     if fresh_mtg.data:
                                         mtg = fresh_mtg.data[0]
                                 except:
@@ -1709,8 +1709,8 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
                                     meeting_date=mtg_date,
                                     facilitator=mtg_facilitator,
                                     attendees=mtg.get('attendees', ''),
-                                    extracted_notes=mtg.get('extracted_notes', ''),
-                                    summary_notes=mtg.get('summary_notes', ''),
+                                    extracted_notes=mtg.get('checkin_notes', ''),
+                                    summary_notes=mtg.get('reports_tac_notes', ''),
                                     transcript=mtg.get('transcript', '')
                                 )
                                 
@@ -1731,7 +1731,7 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
                         with col4:
                             if st.button("📦 Archive", key=f"archive_active_{mtg_id}", use_container_width=True):
                                 try:
-                                    supabase.table('team_meetings').update({'is_archived': True}).eq('id', mtg_id).execute()
+                                    supabase.table('tm_program_meetings').update({'is_archived': True}).eq('id', mtg_id).execute()
                                     st.success(f"📦 {mtg_facilitator} archived - refresh to see changes")
                                 except Exception as e:
                                     st.error(f"Error archiving: {e}")
@@ -1740,7 +1740,7 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
                             if st.button("🗑️ Delete", key=f"delete_active_{mtg_id}", use_container_width=True):
                                 if st.session_state.get(f"confirm_delete_{mtg_id}", False):
                                     try:
-                                        supabase.table('team_meetings').delete().eq('id', mtg_id).execute()
+                                        supabase.table('tm_program_meetings').delete().eq('id', mtg_id).execute()
                                         st.success(f"🗑️ {mtg_facilitator} deleted - refresh to see changes")
                                     except Exception as e:
                                         st.error(f"Error deleting: {e}")
@@ -1755,7 +1755,7 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
         with archive_tab:
             try:
                 # Load archived ad-hoc meetings
-                archived_meetings = supabase.table('team_meetings').select("*").eq('program', program).eq('meeting_type', 'ad-hoc').eq('is_archived', True).order('meeting_date', desc=True).execute()
+                archived_meetings = supabase.table('tm_program_meetings').select("*").eq('program', program).eq('week_type', 'ad-hoc').eq('is_archived', True).order('meeting_date', desc=True).execute()
                 archived_adhoc = archived_meetings.data or []
                 
                 if archived_adhoc:
@@ -1786,8 +1786,8 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
                                     meeting_date=mtg_date,
                                     facilitator=mtg_facilitator,
                                     attendees=mtg.get('attendees', ''),
-                                    extracted_notes=mtg.get('extracted_notes', ''),
-                                    summary_notes=mtg.get('summary_notes', ''),
+                                    extracted_notes=mtg.get('checkin_notes', ''),
+                                    summary_notes=mtg.get('reports_tac_notes', ''),
                                     transcript=mtg.get('transcript', '')
                                 )
                                 
@@ -1809,7 +1809,7 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
                             if st.button("🗑️ Delete", key=f"delete_archived_{mtg_id}", use_container_width=True):
                                 if st.session_state.get(f"confirm_delete_arch_{mtg_id}", False):
                                     try:
-                                        supabase.table('team_meetings').delete().eq('id', mtg_id).execute()
+                                        supabase.table('tm_program_meetings').delete().eq('id', mtg_id).execute()
                                         st.success(f"🗑️ {mtg_facilitator} deleted")
                                     except Exception as e:
                                         st.error(f"Error deleting: {e}")
@@ -1820,7 +1820,7 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
                         with col3:
                             if st.button("🔄 Restore", key=f"restore_archived_{mtg_id}", use_container_width=True):
                                 try:
-                                    supabase.table('team_meetings').update({'is_archived': False}).eq('id', mtg_id).execute()
+                                    supabase.table('tm_program_meetings').update({'is_archived': False}).eq('id', mtg_id).execute()
                                     st.success(f"♻️ {mtg_facilitator} restored - refresh to see changes")
                                 except Exception as e:
                                     st.error(f"Error restoring: {e}")
@@ -1837,7 +1837,7 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
         meeting_data = None
         if st.session_state.current_meeting_id:
             try:
-                result = supabase.table('team_meetings').select("*").eq('id', st.session_state.current_meeting_id).execute()
+                result = supabase.table('tm_program_meetings').select("*").eq('id', st.session_state.current_meeting_id).execute()
                 if result.data:
                     meeting_data = result.data[0]
                     st.info(f"✅ Editing: {meeting_data.get('meeting_date', '')} — {meeting_data.get('facilitator', '')}", icon="✅")
@@ -1849,15 +1849,17 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
             except Exception as e:
                 st.error(f"Error loading meeting: {e}")
         
-        adhoc_col1, adhoc_col2, adhoc_col3 = st.columns(3)
+        adhoc_col1, adhoc_col2, adhoc_col3, adhoc_col4 = st.columns(4)
         
         default_date = datetime.date.fromisoformat(meeting_data['meeting_date']) if meeting_data and meeting_data.get('meeting_date') else datetime.date.today()
+        default_term = meeting_data.get('term', '') if meeting_data else ''
         default_facilitator = meeting_data.get('facilitator', '') if meeting_data else _safe_staff_name()
         default_attendees = meeting_data.get('attendees', '') if meeting_data else ''
         
         with adhoc_col1: adhoc_date = st.date_input("Date", value=default_date, key=f"adhoc_date_{program}")
-        with adhoc_col2: adhoc_facilitator = st.text_input("Facilitator", value=default_facilitator, key=f"adhoc_fac_{program}")
-        with adhoc_col3: adhoc_attendees = st.text_input("Attendees", value=default_attendees, placeholder="Names separated by commas", key=f"adhoc_att_{program}")
+        with adhoc_col2: adhoc_term = st.text_input("Term", value=default_term, placeholder="e.g. Term 1", key=f"adhoc_term_{program}")
+        with adhoc_col3: adhoc_facilitator = st.text_input("Facilitator", value=default_facilitator, key=f"adhoc_fac_{program}")
+        with adhoc_col4: adhoc_attendees = st.text_input("Attendees", value=default_attendees, placeholder="Comma-separated", key=f"adhoc_att_{program}")
         
         st.markdown("---")
         
@@ -1941,7 +1943,7 @@ Format your response as clear sections with bullet points."""
                                 # Save to database if meeting is loaded
                                 if st.session_state.current_meeting_id:
                                     try:
-                                        supabase.table('team_meetings').update({'extracted_notes': extracted}).eq('id', st.session_state.current_meeting_id).execute()
+                                        supabase.table('tm_program_meetings').update({'checkin_notes': extracted}).eq('id', st.session_state.current_meeting_id).execute()
                                         st.success("✅ Extracted & Saved to Database!")
                                     except Exception as e:
                                         st.success("✅ Extracted! (Save meeting to persist to database)")
@@ -2008,7 +2010,7 @@ Team discussed recent changes and workload distribution.
                         # Save to database if meeting is loaded
                         if st.session_state.current_meeting_id:
                             try:
-                                supabase.table('team_meetings').update({'extracted_notes': polished_summary.strip()}).eq('id', st.session_state.current_meeting_id).execute()
+                                supabase.table('tm_program_meetings').update({'checkin_notes': polished_summary.strip()}).eq('id', st.session_state.current_meeting_id).execute()
                                 st.success("✅ Summary saved to meeting!")
                             except Exception as e:
                                 st.success("✅ Summary ready! (Save meeting to persist to database)")
@@ -2110,19 +2112,26 @@ Team discussed recent changes and workload distribution.
                         meeting_payload = {
                             'program': program,
                             'meeting_date': str(adhoc_date),
+                            'term': adhoc_term.strip(),
+                            'week_type': 'ad-hoc',
                             'meeting_type': 'ad-hoc',
                             'facilitator': adhoc_facilitator or _safe_staff_name(),
                             'attendees': adhoc_attendees or '',
                             'transcript': adhoc_transcript,
-                            'summary_notes': adhoc_notes,
-                            'extracted_notes': st.session_state.get(f"adhoc_extracted_edited_{program}", ''),
+                            'checkin_notes': st.session_state.get(f"adhoc_extracted_edited_{program}", ''),
+                            'student_concerns': _json.dumps([]),
+                            'smartar_spotlight': _json.dumps([]),
+                            'reports_tac_notes': adhoc_notes,
+                            'priority_focus': _json.dumps([]),
+                            'meeting_minutes': adhoc_notes,
+                            'actions': _json.dumps([]),
                         }
                         
                         if st.session_state.current_meeting_id:
-                            supabase.table('team_meetings').update(meeting_payload).eq('id', st.session_state.current_meeting_id).execute()
+                            supabase.table('tm_program_meetings').update(meeting_payload).eq('id', st.session_state.current_meeting_id).execute()
                             st.success(f"✅ Ad-Hoc Meeting Updated")
                         else:
-                            result = supabase.table('team_meetings').insert(meeting_payload).execute()
+                            result = supabase.table('tm_program_meetings').insert(meeting_payload).execute()
                             st.session_state.current_meeting_id = result.data[0]['id']
                             st.success(f"✅ Ad-Hoc Meeting Saved (ID: {st.session_state.current_meeting_id})")
                         
@@ -2168,7 +2177,7 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
             if st.session_state.current_meeting_id:
                 if st.button("📦 Archive", key=f"archive_adhoc_{program}", use_container_width=True):
                     try:
-                        supabase.table('team_meetings').update({'is_archived': True}).eq('id', st.session_state.current_meeting_id).execute()
+                        supabase.table('tm_program_meetings').update({'is_archived': True}).eq('id', st.session_state.current_meeting_id).execute()
                         st.success("📦 Meeting archived")
                         st.session_state.current_meeting_id = None
                         time.sleep(1)
@@ -2182,18 +2191,18 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
         if st.session_state.current_meeting_id:
             if st.checkbox("🔍 Debug: Show meeting data in database", value=False, key=f"debug_data_{program}"):
                 try:
-                    debug_result = supabase.table('team_meetings').select("*").eq('id', st.session_state.current_meeting_id).execute()
+                    debug_result = supabase.table('tm_program_meetings').select("*").eq('id', st.session_state.current_meeting_id).execute()
                     if debug_result.data:
                         debug_mtg = debug_result.data[0]
                         st.info("**Meeting Data in Database:**")
                         st.json({
-                            'extracted_notes': debug_mtg.get('extracted_notes', '[EMPTY]'),
-                            'summary_notes': debug_mtg.get('summary_notes', '[EMPTY]'),
+                            'checkin_notes': debug_mtg.get('checkin_notes', '[EMPTY]'),
+                            'reports_tac_notes': debug_mtg.get('reports_tac_notes', '[EMPTY]'),
                             'transcript_length': len(debug_mtg.get('transcript', '')) if debug_mtg.get('transcript') else 0,
                         })
                         
-                        if not debug_mtg.get('extracted_notes'):
-                            st.warning("⚠️ **extracted_notes is EMPTY**\n\nYou need to:\n1. Write your transcript/notes\n2. Click [🤖 Extract Key Points]\n3. Wait for it to save\n4. Then download minutes")
+                        if not debug_mtg.get('checkin_notes'):
+                            st.warning("⚠️ **checkin_notes is EMPTY**\n\nYou need to:\n1. Write your transcript/notes\n2. Click [🤖 Extract Key Points] or [✨ Tidy Formatting]\n3. Wait for it to save\n4. Then download minutes")
                 except Exception as e:
                     st.error(f"Debug error: {e}")
         
@@ -2208,7 +2217,7 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
             if st.button("📄 Generate & Download Minutes", key=f"gen_minutes_{program}", type="primary", use_container_width=True):
                 # Fetch the meeting record
                 try:
-                    mtg_result = supabase.table('team_meetings').select("*").eq('id', st.session_state.current_meeting_id).execute()
+                    mtg_result = supabase.table('tm_program_meetings').select("*").eq('id', st.session_state.current_meeting_id).execute()
                     if mtg_result.data:
                         mtg = mtg_result.data[0]
                         
@@ -2218,8 +2227,8 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
                             meeting_date=mtg.get('meeting_date', ''),
                             facilitator=mtg.get('facilitator', ''),
                             attendees=mtg.get('attendees', ''),
-                            extracted_notes=mtg.get('extracted_notes', ''),
-                            summary_notes=mtg.get('summary_notes', ''),
+                            extracted_notes=mtg.get('checkin_notes', ''),
+                            summary_notes=mtg.get('reports_tac_notes', ''),
                             transcript=mtg.get('transcript', '')
                         )
                         
@@ -3491,7 +3500,7 @@ def render_meeting_archive(program):
     # ── AD-HOC MEETINGS SECTION ──
     st.markdown("#### 📝 Ad-Hoc Meetings")
     try:
-        adhoc_result = supabase.table('team_meetings').select("*").eq('program', program).eq('meeting_type', 'ad-hoc').order('meeting_date', desc=True).execute()
+        adhoc_result = supabase.table('tm_program_meetings').select("*").eq('program', program).eq('week_type', 'ad-hoc').order('meeting_date', desc=True).execute()
         adhoc_meetings = adhoc_result.data or []
         
         if adhoc_meetings:
@@ -3513,12 +3522,12 @@ def render_meeting_archive(program):
                     st.markdown("")
                     
                     # Meeting Minutes
-                    if mtg.get('extracted_notes') or mtg.get('summary_notes'):
+                    if mtg.get('checkin_notes') or mtg.get('reports_tac_notes'):
                         st.markdown("**📋 Minutes:**")
-                        if mtg.get('extracted_notes'):
-                            st.markdown(mtg.get('extracted_notes'))
+                        if mtg.get('checkin_notes'):
+                            st.markdown(mtg.get('checkin_notes'))
                         else:
-                            st.markdown(mtg.get('summary_notes'))
+                            st.markdown(mtg.get('reports_tac_notes'))
                     
                     # Full Transcript
                     if mtg.get('transcript'):
@@ -3531,8 +3540,8 @@ def render_meeting_archive(program):
                         meeting_date=mtg_date,
                         facilitator=facilitator,
                         attendees=attendees,
-                        extracted_notes=mtg.get('extracted_notes', ''),
-                        summary_notes=mtg.get('summary_notes', ''),
+                        extracted_notes=mtg.get('checkin_notes', ''),
+                        summary_notes=mtg.get('reports_tac_notes', ''),
                         transcript=mtg.get('transcript', '')
                     )
                     
