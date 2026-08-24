@@ -2080,24 +2080,19 @@ Please:
                 st.write(f"DEBUG: Session state value for transcript = {repr(adhoc_transcript[:50] if adhoc_transcript else '[EMPTY]')}")
                 
                 if not adhoc_transcript or len(adhoc_transcript) == 0:
-                    st.error(f"""
-❌ **Transcript is empty!**
-
-Session State Check:
-- Key: `adhoc_transcript_{program}`
-- Value in session state: {repr(st.session_state.get(f'adhoc_transcript_{program}'))}
-- Length: {len(st.session_state.get(f'adhoc_transcript_{program}', ''))}
-
-**How to fix:**
-1. Click the **"📝 Paste Transcript"** tab above
-2. Click inside the text box under "Transcript / Notes"
-3. Paste or type your meeting notes
-4. **Wait 1-2 seconds** for Streamlit to register the change
-5. Look for the character counter to appear (✅ {X} characters captured)
-6. Scroll down and click [💾 Save] again
-
-**Alternative:** If pasting doesn't work, try **typing** a few words instead to test.
-                    """)
+                    st.error("❌ **Transcript is empty!**\n\n" +
+"Session State Check:\n" +
+f"- Key: `adhoc_transcript_{program}`\n" +
+f"- Value in session state: {repr(st.session_state.get(f'adhoc_transcript_{program}'))}\n" +
+f"- Length: {len(st.session_state.get(f'adhoc_transcript_{program}', ''))}\n\n" +
+"**How to fix:**\n" +
+"1. Click the **Paste Transcript** tab above\n" +
+"2. Click inside the text box under Transcript / Notes\n" +
+"3. Paste or type your meeting notes\n" +
+"4. Wait 1-2 seconds for Streamlit to register the change\n" +
+"5. Look for the character counter to appear below the text box\n" +
+"6. Scroll down and click Save again\n\n" +
+"**Alternative:** If pasting doesn't work, try typing a few words instead to test.")
                 else:
                     try:
                         meeting_payload = {
