@@ -1400,6 +1400,126 @@ def render_specialist_meeting():
     except Exception as _e:
         st.caption(f"Minutes document could not be generated: {_e}")
 
+    # ── AD-HOC MEETINGS FOR SPECIALIST ────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 📝 Ad-Hoc Specialist Meetings")
+    st.caption("Quick notes from unscheduled or urgent specialist team conversations")
+    
+    active_tab, archive_tab = st.tabs(["📋 Active Meetings", "📚 Archive"])
+    
+    with active_tab:
+        try:
+            # Load active ad-hoc meetings for Specialist
+            active_meetings = supabase.table('tm_program_meetings').select("*").eq('program', 'SPECIALIST').eq('week_type', 'ad-hoc').order('meeting_date', desc=True).execute()
+            active_adhoc = active_meetings.data or []
+            
+            if active_adhoc:
+                st.markdown("**Click to open and manage:**")
+                for mtg in active_adhoc:
+                    mtg_date = mtg.get('meeting_date', '')
+                    mtg_facilitator = mtg.get('facilitator', '')
+                    mtg_id = mtg.get('id', '')
+                    
+                    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+                    
+                    with col1:
+                        if st.button(f"📝 {mtg_date} — {mtg_facilitator}", key=f"load_active_{mtg_id}", use_container_width=True):
+                            st.session_state.current_meeting_id = mtg_id
+                            st.rerun()
+                    
+                    with col2:
+                        if st.button("👁️ View", key=f"view_active_{mtg_id}", use_container_width=True):
+                            st.info(f"**{mtg_facilitator}** | {mtg_date}\n\n{mtg.get('checkin_notes', '[No notes]')}")
+                    
+                    with col3:
+                        if st.button("📥 Download", key=f"dl_active_{mtg_id}", use_container_width=True):
+                            doc = generate_minutes_docx(
+                                program='SPECIALIST',
+                                meeting_date=mtg_date,
+                                facilitator=mtg_facilitator,
+                                attendees=mtg.get('attendees', ''),
+                                extracted_notes=mtg.get('checkin_notes', ''),
+                                summary_notes=mtg.get('reports_tac_notes', ''),
+                                transcript=mtg.get('meeting_minutes', '')
+                            )
+                            doc_bytes = io.BytesIO()
+                            doc.save(doc_bytes)
+                            doc_bytes.seek(0)
+                            st.download_button(
+                                label="📥 Download",
+                                data=doc_bytes,
+                                file_name=f"Minutes_{mtg_date}_{mtg_facilitator}_Specialist.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                key=f"dl_doc_{mtg_id}"
+                            )
+                    
+                    with col4:
+                        if st.button("🗑️ Delete", key=f"delete_active_{mtg_id}", use_container_width=True):
+                            if st.session_state.get(f"confirm_delete_{mtg_id}", False):
+                                try:
+                                    supabase.table('tm_program_meetings').delete().eq('id', mtg_id).execute()
+                                    st.success(f"🗑️ Deleted")
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+                            else:
+                                st.session_state[f"confirm_delete_{mtg_id}"] = True
+                                st.warning("Click again to confirm")
+            else:
+                st.info("No active ad-hoc specialist meetings yet")
+        except Exception as e:
+            st.error(f"Could not load active meetings: {e}")
+    
+    with archive_tab:
+        st.info("Ad-hoc specialist meetings can be deleted when no longer needed.")
+    
+    # ── NEW AD-HOC MEETING FORM ────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### ➕ Record New Ad-Hoc Specialist Meeting")
+    
+    adhoc_col1, adhoc_col2, adhoc_col3, adhoc_col4 = st.columns(4)
+    
+    with adhoc_col1: adhoc_date = st.date_input("Date", key="adhoc_date_SPECIALIST")
+    with adhoc_col2: adhoc_term = st.text_input("Term", placeholder="e.g. Term 1", key="adhoc_term_SPECIALIST")
+    with adhoc_col3: adhoc_facilitator = st.text_input("Facilitator", key="adhoc_fac_SPECIALIST")
+    with adhoc_col4: adhoc_attendees = st.text_input("Attendees", placeholder="Names", key="adhoc_att_SPECIALIST")
+    
+    st.markdown("##### 📝 Meeting Notes")
+    adhoc_notes = st.text_area(
+        "Meeting details, decisions, action items",
+        height=150,
+        key="adhoc_notes_SPECIALIST",
+        placeholder="Paste your meeting notes here...",
+        label_visibility="collapsed"
+    )
+    
+    if st.button("💾 Save Ad-Hoc Meeting", type="primary", use_container_width=True, key="save_adhoc_SPECIALIST"):
+        if not adhoc_notes.strip():
+            st.error("Please add meeting notes")
+        else:
+            try:
+                meeting_payload = {
+                    'program': 'SPECIALIST',
+                    'meeting_date': str(adhoc_date),
+                    'term': adhoc_term.strip(),
+                    'week_type': 'ad-hoc',
+                    'facilitator': adhoc_facilitator.strip(),
+                    'attendees': adhoc_attendees.strip(),
+                    'checkin_notes': adhoc_notes.strip(),
+                    'student_concerns': _json.dumps([]),
+                    'smartar_spotlight': _json.dumps([]),
+                    'reports_tac_notes': adhoc_notes.strip(),
+                    'priority_focus': _json.dumps([]),
+                    'meeting_minutes': adhoc_notes.strip(),
+                    'actions': _json.dumps([]),
+                }
+                
+                result = supabase.table('tm_program_meetings').insert(meeting_payload).execute()
+                if result.data:
+                    st.success(f"✅ Ad-Hoc Meeting Saved (ID: {result.data[0]['id']})")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error saving: {e}")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PROGRAM MEETING (JP/PY/SY) - WITH SMARTAR INTEGRATION
@@ -2076,7 +2196,13 @@ Team discussed recent changes and workload distribution.
                 
                 # Allow save if EITHER transcript OR notes exist
                 if not adhoc_transcript and not adhoc_notes:
-                    st.error("⚠️ Please add at least one of:\n- Meeting transcript/notes, OR\n- Summary & action items")
+                    st.error("""
+**Need content to save!**
+
+Please fill in at least ONE section:
+- 🎤 **Meeting Transcript** tab (your meeting notes)
+- OR 📝 **Summary & Actions** section (key points)
+                    """)
                 else:
                     try:
                         # Use notes as transcript if no transcript provided
