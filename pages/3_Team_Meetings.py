@@ -1895,27 +1895,32 @@ The Word document will ONLY show the extracted summary if extracted_notes is sav
         
         st.markdown("---")
         
-        # AI PROCESSING OPTION
-        st.markdown("#### ✨ AI Processing (Optional)")
-        col_process, col_skip = st.columns([1, 3])
+        # MEETING SUMMARY OPTIONS
+        st.markdown("#### 📝 Meeting Summary")
+        st.caption("Choose: AI extraction from transcript OR paste a polished summary")
         
-        if col_process.button("🤖 Extract Key Points", key=f"adhoc_process_{program}", type="primary"):
-            if adhoc_transcript.strip():
-                with st.spinner("Processing transcript..."):
-                    try:
-                        groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
-                        
-                        if groq_client:
-                            response = groq_client.chat.completions.create(
-                                model="llama-3.1-70b-versatile",
-                                messages=[
-                                    {
-                                        "role": "system",
-                                        "content": "You are an expert at analyzing educational team meeting transcripts. Extract key information in a structured format."
-                                    },
-                                    {
-                                        "role": "user",
-                                        "content": f"""Analyze this meeting transcript and extract:
+        summary_tab1, summary_tab2 = st.tabs(["🤖 AI Extract", "✍️ Paste Polished Summary"])
+        
+        with summary_tab1:
+            col_process, col_skip = st.columns([1, 3])
+            
+            if col_process.button("🤖 Extract Key Points", key=f"adhoc_process_{program}", type="primary"):
+                if adhoc_transcript.strip():
+                    with st.spinner("Processing transcript..."):
+                        try:
+                            groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
+                            
+                            if groq_client:
+                                response = groq_client.chat.completions.create(
+                                    model="mixtral-8x7b-32768",
+                                    messages=[
+                                        {
+                                            "role": "system",
+                                            "content": "You are an expert at analyzing educational team meeting transcripts. Extract key information in a structured format."
+                                        },
+                                        {
+                                            "role": "user",
+                                            "content": f"""Analyze this meeting transcript and extract:
 1. KEY DISCUSSION POINTS (3-5 main topics discussed)
 2. DECISIONS MADE (what was decided)
 3. ACTION ITEMS (who is doing what, by when)
@@ -1925,29 +1930,29 @@ Meeting transcript:
 {adhoc_transcript}
 
 Format your response as clear sections with bullet points."""
-                                    }
-                                ],
-                                max_tokens=1200
-                            )
-                            
-                            extracted = response.choices[0].message.content
-                            st.session_state[f"adhoc_extracted_{program}"] = extracted
-                            
-                            # Save to database if meeting is loaded
-                            if st.session_state.current_meeting_id:
-                                try:
-                                    supabase.table('team_meetings').update({'extracted_notes': extracted}).eq('id', st.session_state.current_meeting_id).execute()
-                                    st.success("✅ Extracted & Saved to Database!")
-                                except Exception as e:
-                                    st.success("✅ Extracted! (Save meeting to persist to database)")
+                                        }
+                                    ],
+                                    max_tokens=1200
+                                )
+                                
+                                extracted = response.choices[0].message.content
+                                st.session_state[f"adhoc_extracted_{program}"] = extracted
+                                
+                                # Save to database if meeting is loaded
+                                if st.session_state.current_meeting_id:
+                                    try:
+                                        supabase.table('team_meetings').update({'extracted_notes': extracted}).eq('id', st.session_state.current_meeting_id).execute()
+                                        st.success("✅ Extracted & Saved to Database!")
+                                    except Exception as e:
+                                        st.success("✅ Extracted! (Save meeting to persist to database)")
+                                else:
+                                    st.info("💡 Tip: Save your meeting first, then re-run extraction to save it to the database")
                             else:
-                                st.info("💡 Tip: Save your meeting first, then re-run extraction to save it to the database")
-                        else:
-                            st.warning("Groq API not configured - showing transcript as-is")
-                    except Exception as e:
-                        error_msg = str(e)
-                        if "rate_limit" in error_msg.lower() or "429" in error_msg:
-                            st.warning("⚠️ **Rate Limit Reached**")
+                                st.warning("Groq API not configured - showing transcript as-is")
+                        except Exception as e:
+                            error_msg = str(e)
+                            if "rate_limit" in error_msg.lower() or "429" in error_msg:
+                                st.warning("⚠️ **Rate Limit Reached**")
                             st.info("""
 The AI extraction service has reached its daily limit. 
 
@@ -1966,6 +1971,52 @@ The AI extraction is optional!
                             """)
                         else:
                             st.error(f"Error processing transcript: {e}")
+            with col_skip:
+                st.caption("No transcript? Paste a polished summary in the other tab instead →")
+        
+        with summary_tab2:
+            st.markdown("#### ✍️ Paste Polished Summary")
+            st.caption("If you already have a well-written summary, paste it here and we'll tidy up formatting")
+            
+            polished_summary = st.text_area(
+                "Paste your polished meeting summary here:",
+                height=250,
+                placeholder="""Example:
+
+**Check-in**
+Team discussed recent changes and workload distribution.
+
+**Student Concerns**
+- Abdullah: Needs additional support during transitions
+- Sarah: Progressing well with literacy
+
+**Actions**
+- Ben to implement transition schedule by Friday
+- Sarah to monitor daily progress checks""",
+                key=f"adhoc_polished_{program}",
+                label_visibility="collapsed"
+            )
+            
+            if polished_summary.strip():
+                col_tidy1, col_tidy2 = st.columns([1, 3])
+                
+                with col_tidy1:
+                    if st.button("✨ Tidy Formatting", key=f"tidy_summary_{program}", type="primary"):
+                        # Store the polished summary with basic formatting tidying
+                        st.session_state[f"adhoc_extracted_{program}"] = polished_summary.strip()
+                        
+                        # Save to database if meeting is loaded
+                        if st.session_state.current_meeting_id:
+                            try:
+                                supabase.table('team_meetings').update({'extracted_notes': polished_summary.strip()}).eq('id', st.session_state.current_meeting_id).execute()
+                                st.success("✅ Summary saved to meeting!")
+                            except Exception as e:
+                                st.success("✅ Summary ready! (Save meeting to persist to database)")
+                        else:
+                            st.info("💡 Save your meeting to store the summary in the database")
+                
+                with col_tidy2:
+                    st.caption("Just stores your summary as-is with proper formatting for download")
         
         # DISPLAY EXTRACTED CONTENT (from session or loaded meeting)
         extracted_from_session = st.session_state.get(f"adhoc_extracted_{program}", '')
@@ -1973,7 +2024,7 @@ The AI extraction is optional!
         extracted_content = extracted_from_session or extracted_from_db
         
         if extracted_content:
-            st.markdown("#### 📊 Meeting Minutes (from AI Extraction)")
+            st.markdown("#### 📊 Meeting Minutes (Ready to Edit)")
             st.markdown(extracted_content)
             
             st.markdown("---")
@@ -2255,7 +2306,7 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
                         
                         if groq_client:
                             response = groq_client.chat.completions.create(
-                                model="llama-3.1-70b-versatile",
+                                model="mixtral-8x7b-32768",
                                 messages=[
                                     {
                                         "role": "system",
