@@ -1767,10 +1767,14 @@ To remove a meeting, click the 🗑️ Delete button and confirm.
                     meeting_data = result.data[0]
                     st.info(f"✅ Editing: {meeting_data.get('meeting_date', '')} — {meeting_data.get('facilitator', '')}", icon="✅")
                     
-                    # Load extracted notes into session state for editing
-                    if meeting_data.get('extracted_notes'):
-                        st.session_state[f"adhoc_extracted_{program}"] = meeting_data.get('extracted_notes', '')
-                        st.session_state[f"adhoc_extracted_edited_{program}"] = meeting_data.get('extracted_notes', '')
+                    # Load transcript and notes into session state for editing
+                    if meeting_data.get('transcript'):
+                        st.session_state[f"adhoc_transcript_{program}"] = meeting_data.get('transcript', '')
+                    if meeting_data.get('reports_tac_notes'):
+                        st.session_state[f"adhoc_notes_{program}"] = meeting_data.get('reports_tac_notes', '')
+                    if meeting_data.get('checkin_notes'):
+                        st.session_state[f"adhoc_extracted_{program}"] = meeting_data.get('checkin_notes', '')
+                        st.session_state[f"adhoc_extracted_edited_{program}"] = meeting_data.get('checkin_notes', '')
             except Exception as e:
                 st.error(f"Error loading meeting: {e}")
         
@@ -2064,23 +2068,35 @@ Please:
         
         with save_col1:
             if st.button("💾 Save Ad-Hoc Meeting", key=f"save_adhoc_{program}", type="primary", use_container_width=True):
-                # Get transcript and notes from session state (works consistently)
-                adhoc_transcript = st.session_state.get(f"adhoc_transcript_{program}", "").strip()
+                # Try to get transcript from session state first
+                adhoc_transcript = st.session_state.get(f"adhoc_transcript_{program}", "")
                 adhoc_notes = st.session_state.get(f"adhoc_notes_{program}", "")
                 
-                # Debug output
-                st.info(f"Checking: Transcript={len(adhoc_transcript)} chars, Notes={len(adhoc_notes)} chars")
+                # Safety: ensure they're strings
+                adhoc_transcript = str(adhoc_transcript).strip() if adhoc_transcript else ""
+                adhoc_notes = str(adhoc_notes).strip() if adhoc_notes else ""
                 
-                if not adhoc_transcript:
-                    st.error("""
-❌ **Cannot save - Transcript is empty!**
+                # Debug: Show what we found
+                st.write(f"DEBUG: Session state value for transcript = {repr(adhoc_transcript[:50] if adhoc_transcript else '[EMPTY]')}")
+                
+                if not adhoc_transcript or len(adhoc_transcript) == 0:
+                    st.error(f"""
+❌ **Transcript is empty!**
 
-Steps to fix:
-1. Scroll up to the **"🎤 Meeting Transcript / Notes"** section
-2. Click the **"📝 Paste Transcript"** tab
-3. Paste your meeting transcript or notes into the text box
-4. Scroll back down
-5. Click [💾 Save Ad-Hoc Meeting] again
+Session State Check:
+- Key: `adhoc_transcript_{program}`
+- Value in session state: {repr(st.session_state.get(f'adhoc_transcript_{program}'))}
+- Length: {len(st.session_state.get(f'adhoc_transcript_{program}', ''))}
+
+**How to fix:**
+1. Click the **"📝 Paste Transcript"** tab above
+2. Click inside the text box under "Transcript / Notes"
+3. Paste or type your meeting notes
+4. **Wait 1-2 seconds** for Streamlit to register the change
+5. Look for the character counter to appear (✅ {X} characters captured)
+6. Scroll down and click [💾 Save] again
+
+**Alternative:** If pasting doesn't work, try **typing** a few words instead to test.
                     """)
                 else:
                     try:
@@ -2089,7 +2105,6 @@ Steps to fix:
                             'meeting_date': str(adhoc_date),
                             'term': adhoc_term.strip(),
                             'week_type': 'ad-hoc',
-                            'meeting_type': 'ad-hoc',
                             'facilitator': adhoc_facilitator or _safe_staff_name(),
                             'attendees': adhoc_attendees or '',
                             'transcript': adhoc_transcript,
