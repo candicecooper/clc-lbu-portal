@@ -765,7 +765,7 @@
   }
 
   @media print{
-    .masthead, .ladder-key, .view-toggle, .bank, .toolbar-actions, .add-own, .rline .remove, .footnote, .layout, .print-style-toggle, .builder-topbar{ display:none !important; }
+    .masthead, .ladder-key, .view-toggle, .bank, .toolbar-actions, .add-own, .rline .remove, .footnote, .layout, .print-style-toggle, .builder-topbar, .print-name-field{ display:none !important; }
     body{ background:#fff; color:#000; }
     .app{ padding:6px; max-width:none; }
     body[data-print-style="map"] .wot-print-sheet{ display:none !important; }
@@ -893,6 +893,16 @@
   .student-heading .name{ font-size:22px; font-weight:700; font-family:var(--font-display); }
   .student-heading .prog{ font-size:12.5px; color:var(--ink-soft); margin-left:8px; font-weight:400; font-family:var(--font-body); }
 
+  /* ---------- print-time-only student name ---------- */
+  .print-name-field{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:0 0 10px; font-family:var(--font-body); font-size:12.5px; color:var(--ink-soft); }
+  .print-name-field label{ font-weight:600; }
+  .print-name-field input{
+    font-size:13px; padding:6px 10px; border-radius:8px; border:1px solid var(--border);
+    background:var(--surface); color:var(--ink); font-family:var(--font-body); min-width:220px;
+  }
+  .print-name-field input:focus{ outline:2px solid var(--accent); outline-offset:1px; }
+  .print-name-field .hint{ font-size:11px; color:var(--ink-faint); font-style:italic; }
+
   /* ---------- save status + toasts ---------- */
   .save-status{ font-size:12px; color:var(--ink-soft); margin:2px 0 10px; min-height:1.3em; }
   .save-status.ok{ color:var(--wot); }
@@ -986,6 +996,11 @@
           <span class="lbl">Print layout:</span>
           <button type="button" id="btnStyleGrid" aria-pressed="true">Grid template</button>
           <button type="button" id="btnStyleMap" aria-pressed="false">Regulation Map</button>
+        </div>
+        <div class="print-name-field">
+          <label for="printStudentName">Name for this printout</label>
+          <input type="text" id="printStudentName" placeholder="Optional — shows on the printed/downloaded report only" autocomplete="off">
+          <span class="hint">Never saved — the report itself only stores initials.</span>
         </div>
         <div class="toolbar-actions">
           <button class="btn primary" id="btnSave">Save</button>
@@ -1385,6 +1400,10 @@
   // ---------------- app-level state ----------------
   var teacherName = null;
   var currentStudent = null;
+  // print-time-only student name: typed in just before printing/downloading/archiving so a
+  // report can show a name instead of initials on paper, without that name ever being sent
+  // to Supabase or saved anywhere — lives only in this variable / the input field on screen.
+  var manualStudentName = "";
   var currentReportId = null;
   var currentReportStatus = "draft";
   var reportsIndex = {};
@@ -1573,6 +1592,9 @@
     currentReportStatus = "draft";
     state.items = blankItems();
     lastSavedSnapshot = null;
+    manualStudentName = "";
+    var printNameInput = document.getElementById("printStudentName");
+    if(printNameInput) printNameInput.value = "";
 
     document.getElementById("studentHeadingName").textContent = s.full_name + " (" + s.initials + ")";
     document.getElementById("studentHeadingProgram").textContent = s.program ? ("· " + s.program) : "";
@@ -1674,7 +1696,6 @@
     var payload = {
       student_register_id: currentStudent.id,
       student_initials: currentStudent.initials,
-      student_name: currentStudent.full_name,
       data: state.items,
       print_style: printStyle,
       updated_by: teacherName,
@@ -1708,7 +1729,7 @@
   document.getElementById("btnSave").addEventListener("click", function(){ saveReport(); });
 
   document.getElementById("btnClear").addEventListener("click", function(){
-    if(!window.confirm("Clear every line from " + currentStudent.full_name + "'s report? This can't be undone unless you've saved a previous version.")) return;
+    if(!window.confirm("Clear every line from " + studentDisplayName() + "'s report? This can't be undone unless you've saved a previous version.")) return;
     state.items = blankItems();
     renderReport();
     saveReport();
@@ -2115,7 +2136,15 @@
   // ---- print sheet: single grid matching the org's regulation-profile template ----
 
   function studentDisplayName(){
-    return currentStudent ? currentStudent.full_name : "[Student name]";
+    if(manualStudentName && manualStudentName.trim()) return manualStudentName.trim();
+    return currentStudent ? currentStudent.initials : "[Student initials]";
+  }
+
+  var printStudentNameInput = document.getElementById("printStudentName");
+  if(printStudentNameInput){
+    printStudentNameInput.addEventListener("input", function(){
+      manualStudentName = printStudentNameInput.value;
+    });
   }
 
   function getCurrentTermYear(){
@@ -2417,7 +2446,7 @@
           var docRow = {
             source_tool: "wot_builder",
             doc_type: "Window of Tolerance",
-            title: "Window of Tolerance — " + currentStudent.full_name,
+            title: "Window of Tolerance — " + currentStudent.initials,
             student_initials: currentStudent.initials,
             term: term || null,
             year: year ? parseInt(year,10) : null,
