@@ -933,6 +933,30 @@ elif view == "📋 Goal Builder":
                         f' — {", ".join(SESSIONS_FOR_PERIOD.get(period, ALL_SESSIONS))}</div>',
                         unsafe_allow_html=True,
                     )
+                    if st.button("✏️ Change tracking period", key=f"editper_gb_{g['id']}"):
+                        st.session_state[f"editper_open_{g['id']}"] = True
+                    if st.session_state.get(f"editper_open_{g['id']}"):
+                        new_period = st.selectbox(
+                            "New tracking period",
+                            TRACKING_PERIODS,
+                            index=TRACKING_PERIODS.index(period) if period in TRACKING_PERIODS else 0,
+                            key=f"editper_sel_{g['id']}",
+                            help="Determines which sessions Quick Track / Daily Tracking shows for this goal.",
+                        )
+                        epc1, epc2 = st.columns(2)
+                        with epc1:
+                            if st.button("💾 Save period", key=f"editper_save_{g['id']}", type="primary"):
+                                sb.table("smartar_goals").update({
+                                    "tracking_period": new_period,
+                                    "updated_at":      datetime.utcnow().isoformat(),
+                                }).eq("id", g["id"]).execute()
+                                st.session_state.pop(f"editper_open_{g['id']}", None)
+                                st.success(f"✅ Tracking period updated to {new_period}.")
+                                st.rerun()
+                        with epc2:
+                            if st.button("Cancel", key=f"editper_cancel_{g['id']}"):
+                                st.session_state.pop(f"editper_open_{g['id']}", None)
+                                st.rerun()
 
                     gas = get_gas_dict(g)
                     if any(gas.values()):
