@@ -1559,7 +1559,13 @@
         studentLoading.textContent = "Couldn't load the student list. Check your connection and try reloading.";
         return;
       }
-      studentsCache = studentsRes.data || [];
+      // Students who've left are marked "archived" (via the Document Archive tool) in the
+      // same student_directory list this screen reads from — keep everyone else, including
+      // any row where status is missing/unrecognised, so a data gap never hides a student
+      // who's still actually enrolled.
+      studentsCache = (studentsRes.data || []).filter(function(s){
+        return String(s.status || "").trim().toLowerCase() !== "archived";
+      });
       reportsIndex = {};
       (reportsRes.data || []).forEach(function(r){
         var existing = reportsIndex[r.student_register_id];
