@@ -25,7 +25,7 @@ supabase = init_supabase()
 # STATIC LISTS
 # ══════════════════════════════════════════════════════════════════════════════
 
-PROGRAMS = ["Junior Primary (JP)", "Primary Years (PY)", "Senior Years (SY)"]
+DEFAULT_PROGRAMS = ["Junior Primary (JP)", "Primary Years (PY)", "Senior Years (SY)"]
 DEFAULT_STAFF_NAMES = ["Ben Sutton", "Jacqui Simpson", "Caitie Hook", "Ben Selga", "Brenton McGorman", "Roisin McIlduff"]
 
 def load_dropdown_list(list_name, default_list):
@@ -43,6 +43,7 @@ def load_dropdown_list(list_name, default_list):
     return default_list
 
 STAFF_NAMES = load_dropdown_list("focus_teacher", DEFAULT_STAFF_NAMES)
+PROGRAMS = load_dropdown_list("program", DEFAULT_PROGRAMS)
 OUTCOMES = ["Allocated", "Not Allocated"]
 EXTENSION_OUTCOMES = ["Approved", "Not Approved"]
 GENDER_OPTIONS = ["Male", "Female", "Other", "Prefer not to say"]
@@ -51,13 +52,17 @@ YEAR_LEVELS = ["R", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
 YES_NO = ["", "Yes", "No"]
 WAITLIST_STATUS_OPTIONS = ["Not Applicable", "On Waitlist", "Declined", "Site Decision", "Site Withdraw"]
 
-MEDICAL_CONDITION_TYPES = [
+DEFAULT_MEDICAL_CONDITION_TYPES = [
     "Anaphylaxis / Severe Allergy", "Asthma", "Diabetes (Type 1)", "Epilepsy / Seizure Disorder",
     "Cardiac Condition", "Genetic / Chromosomal Condition", "Physical Disability",
     "Gastrointestinal Condition", "Autoimmune Condition", "Hearing Impairment",
     "Vision Impairment", "Chronic Pain Condition", "Sleep Disorder", "Continence Condition",
     "Other Medical Condition"
 ]
+MEDICAL_CONDITION_TYPES = load_dropdown_list("medical_condition_type", DEFAULT_MEDICAL_CONDITION_TYPES)
+
+DEFAULT_IESP_OPTIONS = ["No", "Currently Being Reviewed", "IESP Grant"]
+IESP_OPTIONS = load_dropdown_list("iesp_funding_option", DEFAULT_IESP_OPTIONS)
 
 # Support flag checkboxes: (Display label, Excel column name, Supabase field name)
 BOOL_FLAGS = [
@@ -482,10 +487,16 @@ with tab1:
             drafts = query.execute()
 
             if drafts.data:
+                st.caption(f"📋 {len(drafts.data)} draft(s) found")
                 label_for = lambda d: f"{d['student_name']} ({d.get('meeting_week', 'no week set')})" if show_all_weeks else d['student_name']
-                draft_options = {label_for(d): d for d in drafts.data}
-                selected = st.selectbox("Select draft:", list(draft_options.keys()))
-                draft = draft_options[selected]
+                # Keyed by the record's unique id (not name) — two drafts sharing the same
+                # student name used to silently collide and hide one of them from this list.
+                draft_by_id = {d['id']: d for d in drafts.data}
+                selected_id = st.selectbox(
+                    "Select draft:", list(draft_by_id.keys()),
+                    format_func=lambda i: label_for(draft_by_id[i])
+                )
+                draft = draft_by_id[selected_id]
                 st.success(f"✅ Loaded: **{draft['student_name']}**")
 
                 if draft.get('meeting_week') != selected_week:
@@ -625,7 +636,7 @@ with tab1:
                             )
                             attendance = st.selectbox("Attendance", attendance_options, index=attendance_options.index(current_attendance))
                         with acol2:
-                            iesp_options = ["", "No", "Currently Being Reviewed"]
+                            iesp_options = [""] + IESP_OPTIONS
                             current_iesp = draft.get('flag_iesp_funding_no') or ""
                             iesp_status_if_no_category = st.selectbox(
                                 "IESP Funding (if no category ticked above)", iesp_options,
@@ -837,7 +848,7 @@ with tab1:
                 with acol2:
                     iesp_status_if_no_category = st.selectbox(
                         "IESP Funding (if no category ticked above)",
-                        ["", "No", "Currently Being Reviewed"],
+                        [""] + IESP_OPTIONS,
                         help="Ignored if any funding category above is ticked — that automatically means Yes."
                     )
 
@@ -1114,9 +1125,13 @@ with tab4:
 
             st.markdown("---")
             with st.expander("🗑️ Delete a Record"):
-                del_options = {r['student_name']: r for r in export_records}
-                del_selected = st.selectbox("Select student to delete:", list(del_options.keys()), key="del_record_select")
-                del_record = del_options[del_selected]
+                del_by_id = {r['id']: r for r in export_records}
+                del_id = st.selectbox(
+                    "Select student to delete:", list(del_by_id.keys()),
+                    format_func=lambda i: f"{del_by_id[i]['student_name']} ({del_by_id[i].get('school', '')})",
+                    key="del_record_select"
+                )
+                del_record = del_by_id[del_id]
 
                 if st.button("🗑️ Delete This Record", key=f"del_rec_{del_record['id']}"):
                     st.session_state[f"confirm_del_rec_{del_record['id']}"] = True
@@ -1129,7 +1144,7 @@ with tab4:
                     )
                     dccol1, dccol2 = st.columns(2)
                     with dccol1:
-                        if st.button("✅ Yes, delete it", key=f"confirm_del_rec_{del_record['id']}", type="primary", use_container_width=True):
+                        if st.button("✅ Yes, delete it", key=f"do_delete_rec_{del_record['id']}", type="primary", use_container_width=True):
                             supabase.table("allocation_students").delete().eq("id", del_record["id"]).execute()
                             st.session_state.pop(f"confirm_del_rec_{del_record['id']}", None)
                             st.success(f"Deleted {del_record['student_name']}")
@@ -1325,7 +1340,7 @@ with tab6:
     )
 
     admin_password = st.text_input("🔐 Enter admin password", type="password", key="admin_pw")
-    if admin_password != "secret2026":
+    if admin_password.strip() != "secret2026":
         if admin_password:
             st.error("❌ Incorrect password.")
         st.stop()
@@ -1334,6 +1349,9 @@ with tab6:
 
     MANAGED_LISTS = {
         "Focus Teacher": ("focus_teacher", DEFAULT_STAFF_NAMES),
+        "Program": ("program", DEFAULT_PROGRAMS),
+        "Medical Condition Type": ("medical_condition_type", DEFAULT_MEDICAL_CONDITION_TYPES),
+        "IESP Funding Option": ("iesp_funding_option", DEFAULT_IESP_OPTIONS),
     }
 
     list_label = st.selectbox("Which list do you want to manage?", list(MANAGED_LISTS.keys()))
@@ -1342,13 +1360,15 @@ with tab6:
     try:
         supabase.table("dropdown_options").select("id").limit(1).execute()
         table_exists = True
-    except Exception:
+        table_error = None
+    except Exception as e:
         table_exists = False
+        table_error = str(e)
 
     if not table_exists:
         st.error(
-            "The `dropdown_options` table doesn't exist in Supabase yet. Run this once in the "
-            "Supabase SQL editor, then refresh this page:"
+            "The `dropdown_options` table doesn't exist in Supabase yet (or couldn't be reached). "
+            "Run this once in the Supabase SQL editor, then refresh this page:"
         )
         st.code(
             "CREATE TABLE dropdown_options (\n"
@@ -1359,6 +1379,8 @@ with tab6:
             ");",
             language="sql"
         )
+        with st.expander("Technical details"):
+            st.code(table_error or "No error detail available")
         st.stop()
 
     current = supabase.table("dropdown_options").select("*") \
