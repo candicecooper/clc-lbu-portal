@@ -699,7 +699,17 @@ with tab1:
                     transition_plan = st.text_area("Transition Plan (if applicable)")
                     notes = st.text_area("Additional Notes")
 
-                    if st.form_submit_button("✅ Save Allocation", type="primary", use_container_width=True):
+                    bcol1, bcol2 = st.columns(2)
+                    with bcol1:
+                        save_draft_clicked = st.form_submit_button(
+                            "💾 Save Changes (keep here, don't finalize)", use_container_width=True
+                        )
+                    with bcol2:
+                        finalize_clicked = st.form_submit_button(
+                            "✅ Finalize Allocation", type="primary", use_container_width=True
+                        )
+
+                    if save_draft_clicked or finalize_clicked:
                         if not student_name or not school or not year_level:
                             st.error("Please fill required fields (Name, School, Year Level)")
                         elif has_medical and not medical_type:
@@ -745,19 +755,23 @@ with tab1:
                                     "queries": queries,
                                     "bse": bse or None,
                                     "program": program,
-                                    "outcome": outcome,
                                     "case_worker": case_worker or None,
                                     "actioned_by": case_worker or None,
                                     "start_after": start_date.isoformat() if start_date else None,
                                     "finishing_date": end_date.isoformat() if end_date else None,
                                     "bespoke_placement": yn(bespoke),
                                     "information": information or None,
-                                    "waitlist_status": waitlist_status if outcome == "Not Allocated" else "Not Applicable",
                                     "waitlist_date": waitlist_date.isoformat() if waitlist_date else None,
                                     "exit_reason": exit_reason or None,
                                     "transition_plan": transition_plan or None,
                                     "notes": notes or None,
                                 }
+
+                                if finalize_clicked:
+                                    update_payload["outcome"] = outcome
+                                    update_payload["waitlist_status"] = waitlist_status if outcome == "Not Allocated" else "Not Applicable"
+                                # else: leave outcome untouched — stays a draft, keeps showing in Stage 2
+
                                 for db_col, val in edit_flag_values.items():
                                     update_payload[db_col] = yn(val)
                                 for db_col, val in edit_funding_values.items():
@@ -765,8 +779,12 @@ with tab1:
 
                                 supabase.table("allocation_students").update(update_payload).eq("id", draft['id']).execute()
 
-                                st.success(f"✅ Allocation saved for {student_name}!")
-                                st.balloons()
+                                if finalize_clicked:
+                                    st.success(f"✅ Allocation finalized for {student_name}!")
+                                    st.balloons()
+                                else:
+                                    st.success(f"💾 Changes saved for {student_name} — still here in Stage 2.")
+                                    st.rerun()
                             except Exception as e:
                                 st.error(f"Error: {e}")
             else:
@@ -1122,6 +1140,26 @@ with tab4:
                     pd.DataFrame(full_rows, columns=EXPORT_COLUMNS),
                     use_container_width=True, hide_index=True
                 )
+
+            st.markdown("---")
+            with st.expander("↩️ Reopen a Record to Stage 2"):
+                st.caption(
+                    "Sends a student back to an unfinished draft — their outcome is cleared, and they'll "
+                    "show up in Stage 2 (Complete Draft) again to review and re-finalize. Nothing else "
+                    "about their record is changed."
+                )
+                reopen_by_id = {r['id']: r for r in export_records}
+                reopen_id = st.selectbox(
+                    "Select student to reopen:", list(reopen_by_id.keys()),
+                    format_func=lambda i: f"{reopen_by_id[i]['student_name']} ({reopen_by_id[i].get('outcome', '')})",
+                    key="reopen_record_select"
+                )
+                reopen_record = reopen_by_id[reopen_id]
+
+                if st.button("↩️ Reopen to Stage 2", key=f"reopen_{reopen_record['id']}"):
+                    supabase.table("allocation_students").update({"outcome": None}).eq("id", reopen_record["id"]).execute()
+                    st.success(f"{reopen_record['student_name']} sent back to Stage 2.")
+                    st.rerun()
 
             st.markdown("---")
             with st.expander("🗑️ Delete a Record"):
