@@ -8,29 +8,47 @@ vs weekly. Backed by Supabase (project cmqyrfekxgjdtuloseri) so every tick
 and assignment is saved centrally and shows up for anyone else with this
 page open — matching how the rest of the portal stores data.
 
+A password-gated "🔒 Admin" panel (password: see ADMIN_PASSWORD below) lets
+someone add a new duty to any section, or edit/delete a duty already
+listed — see "Note on the Admin panel" below for how that's stored and
+what the password does and doesn't protect.
+
 Setup (one-off):
 1. Run supabase_schema.sql once in the Supabase project's SQL editor —
    it creates checklist_staff / checklist_assignments / checklist_completions
    and seeds the starting staff list.
-2. Optionally add SUPABASE_URL / SUPABASE_KEY to .streamlit/secrets.toml
+2. Run supabase_schema_tasks.sql once too (after the above) — it creates
+   checklist_tasks and seeds it with the current duty list, which is what
+   the Admin panel adds/edits/deletes rows in. Skipping this step doesn't
+   break the page — it just falls back to the built-in DEFAULT_TASKS below
+   and Admin panel changes won't be able to save.
+3. Optionally add SUPABASE_URL / SUPABASE_KEY to .streamlit/secrets.toml
    (falls back to the hardcoded project values below if not set, same
    st.secrets → env var → default chain used elsewhere in the portal).
-3. `pip install supabase` (and optionally `streamlit-autorefresh` for
+4. `pip install supabase` (and optionally `streamlit-autorefresh` for
    near-live updates across users without a manual refresh).
 
 Note on scope: unlike the Safety & Risk Plan Builder, this tool holds no
-student data — only staff names, job assignments, and tick timestamps —
-so storing it in Supabase doesn't raise the same data-governance concerns.
+student data — only staff names, job assignments, tick timestamps, and the
+duty text itself — so storing it in Supabase doesn't raise the same
+data-governance concerns.
 
 Note on login: there's no real password-protected sign-in here, just a
 name picker (see checklist_staff) — matching what was agreed for this
 tool specifically. If the portal later adds real Supabase Auth, the
 identity block below is the piece to swap out.
+
+Note on the Admin panel: ADMIN_PASSWORD is checked in this script, which
+anyone with repo access can read — it's a "don't show this to everyone"
+gate, not real security. The same anon Supabase key this whole page ships
+with can already write to checklist_tasks directly, so this doesn't add
+a new attack surface, it just keeps the panel out of casual browsing.
 """
 
 import streamlit as st
 import os
 from datetime import date, datetime, timedelta
+from uuid import uuid4
 
 # ── Supabase client (fails to a read-only "offline" mode if unavailable) ───
 try:
@@ -58,65 +76,94 @@ WEEKDAY_COLS = ["Mon", "Tue", "Wed", "Thu", "Fri"]  # date.weekday(): Mon=0..Fri
 
 DEFAULT_STAFF = ["Candice", "Vinnie", "Annette", "Bonnie", "Naomi"]
 
-# task keys: id, text, sso ("am"/"pm"/"both"/None), frequency ("daily"/"weekly"),
-# weekday ("Mon".."Fri" or None — only meaningful when frequency == "weekly")
-CATEGORIES = [
-    {"id": "email", "title": "Email Monitoring", "safety": False, "tasks": [
-        {"id": "email-1", "text": "Check emails as they come through", "sso": None, "frequency": "daily", "weekday": None},
-        {"id": "email-2", "text": "Forward emails on to the correct people", "sso": None, "frequency": "daily", "weekday": None},
-        {"id": "email-3", "text": "Respond to the admin email inbox", "sso": None, "frequency": "daily", "weekday": None},
-    ]},
-    {"id": "allocation", "title": "Allocation Process", "safety": False, "tasks": [
-        {"id": "alloc-1", "text": "Print referrals that come through via email no later than 9am Wednesday", "sso": "am", "frequency": "weekly", "weekday": "Wed"},
-        {"id": "alloc-2", "text": "Give a copy to the manager and the transition coordinator", "sso": "am", "frequency": "weekly", "weekday": "Wed"},
-        {"id": "alloc-3", "text": "Receive the transition coordinator's email with allocation outcomes", "sso": None, "frequency": "weekly", "weekday": "Wed"},
-        {"id": "alloc-6", "text": "Send communication to referring schools, BSE and TC (using the script) before 4:00pm Wednesday", "sso": "pm", "frequency": "weekly", "weekday": "Wed"},
-        {"id": "alloc-7", "text": "Send a separate email to the allocated teacher with the student's details (not documents)", "sso": "pm", "frequency": "weekly", "weekday": "Wed"},
-        {"id": "alloc-5", "text": "Create a OneDrive file for the student", "sso": None, "frequency": "weekly", "weekday": "Wed"},
-        {"id": "alloc-4", "text": "Upload the student's files to OneDrive", "sso": None, "frequency": "weekly", "weekday": "Wed"},
-        {"id": "alloc-8", "text": "Email LBU admin the student's information for the referrals database", "sso": None, "frequency": "weekly", "weekday": "Wed"},
-    ]},
-    {"id": "entry-meeting", "title": "Entry Meeting Follow-Up", "safety": False, "tasks": [
-        {"id": "entry-1", "text": "Scan and upload entry meeting documents to OneDrive", "sso": None, "frequency": "daily", "weekday": None},
-        {"id": "entry-4", "text": "Place the original documents in the student's box", "sso": None, "frequency": "daily", "weekday": None},
-        {"id": "entry-5", "text": "Distribute documents to the teacher", "sso": None, "frequency": "daily", "weekday": None},
-        {"id": "entry-2", "text": "Enrol the student through the EMS", "sso": None, "frequency": "daily", "weekday": None},
-        {"id": "entry-3", "text": "Send taxi forms to LBU admin email for signing", "sso": None, "frequency": "daily", "weekday": None},
-    ]},
-    {"id": "phone", "title": "Phone Management", "safety": False, "tasks": [
-        {"id": "phone-1", "text": "Transfer the phone over to mobile when not at the desk", "sso": None, "frequency": "daily", "weekday": None},
-        {"id": "phone-2", "text": "Switch the day/night switch each morning and afternoon", "sso": "both", "frequency": "daily", "weekday": None},
-        {"id": "phone-3", "text": "Check the message bank and action any messages left", "sso": "both", "frequency": "daily", "weekday": None},
-    ]},
-    {"id": "taxi", "title": "Taxi Bookings", "safety": False, "tasks": [
-        {"id": "taxi-1", "text": "Update and confirm bookings through the 131 Cabs app", "sso": "am", "frequency": "daily", "weekday": None},
-        {"id": "taxi-2", "text": "Upload each day's transport details to the bulletin", "sso": "am", "frequency": "daily", "weekday": None},
-        {"id": "taxi-3", "text": "Log pickups and the process for each student in OneNote", "sso": None, "frequency": "daily", "weekday": None},
-        {"id": "taxi-4", "text": "Monitor the app for student arrivals and departures, and update as required", "sso": "both", "frequency": "daily", "weekday": None},
-    ]},
-    {"id": "trt", "title": "TRT Payroll", "safety": False, "tasks": [
-        {"id": "trt-1", "text": "Email Naomi with the day's on-site TRTs so they're added to payroll", "sso": "pm", "frequency": "daily", "weekday": None},
-    ]},
-    {"id": "medication", "title": "Medication", "safety": False, "tasks": [
-        {"id": "med-2", "text": "Ensure medication documents (e.g. medication agreement form) are signed and filed with the medicine", "sso": None, "frequency": "daily", "weekday": None},
-        {"id": "med-1", "text": "Distribute medication to students who require it, at the correct times — set alarms as a reminder", "sso": None, "frequency": "daily", "weekday": None},
-    ]},
-    {"id": "bulletin", "title": "Daily Bulletin Screen", "safety": False, "tasks": [
-        {"id": "bull-1", "text": "Update the planning room screen so staff can read the daily bulletin", "sso": "am", "frequency": "daily", "weekday": None},
-    ]},
-    {"id": "foodbank", "title": "Food Bank & Kickstart", "safety": False, "tasks": [
-        {"id": "food-1", "text": "Work out what needs ordering for the week", "sso": None, "frequency": "weekly", "weekday": None},
-        {"id": "food-2", "text": "Place the weekly order", "sso": None, "frequency": "weekly", "weekday": None},
-    ]},
-    {"id": "hazards", "title": "Hazard Management", "safety": True, "tasks": [
-        {"id": "haz-1", "text": "Check for hazards reported via email", "sso": None, "frequency": "daily", "weekday": None},
-        {"id": "haz-2", "text": "Action and follow up on reported hazards", "sso": None, "frequency": "daily", "weekday": None},
-    ]},
-    {"id": "ventia", "title": "Ventia", "safety": False, "tasks": [
-        {"id": "vent-1", "text": "Handle communication with Ventia as required", "sso": None, "frequency": "daily", "weekday": None},
-        {"id": "vent-2", "text": "Sign off completed jobs in the Ventia portal", "sso": None, "frequency": "daily", "weekday": None},
-    ]},
+# Password for the "Manage duties" admin panel below. This only hides the
+# panel from casual browsing — it's checked in this script, which anyone
+# with repo access can read, so it isn't real security (same tradeoff as
+# the anon Supabase key this whole page already ships with).
+ADMIN_PASSWORD = "secret2026"
+
+# Sections are fixed in code — the admin panel adds/edits/removes duties
+# *within* these, it doesn't add new sections. Order here is display order.
+CATEGORY_DEFS = [
+    {"id": "email", "title": "Email Monitoring", "safety": False},
+    {"id": "allocation", "title": "Allocation Process", "safety": False},
+    {"id": "entry-meeting", "title": "Entry Meeting Follow-Up", "safety": False},
+    {"id": "phone", "title": "Phone Management", "safety": False},
+    {"id": "taxi", "title": "Taxi Bookings", "safety": False},
+    {"id": "trt", "title": "TRT Payroll", "safety": False},
+    {"id": "medication", "title": "Medication", "safety": False},
+    {"id": "bulletin", "title": "Daily Bulletin Screen", "safety": False},
+    {"id": "foodbank", "title": "Food Bank & Kickstart", "safety": False},
+    {"id": "hazards", "title": "Hazard Management", "safety": True},
+    {"id": "ventia", "title": "Ventia", "safety": False},
 ]
+CATEGORY_TITLES = {c["id"]: c["title"] for c in CATEGORY_DEFS}
+
+# task keys: id, category_id, text, sso ("am"/"pm"/"both"/None),
+# frequency ("daily"/"weekly"), weekday ("Mon".."Fri" or None — only
+# meaningful when frequency == "weekly"), sort_order.
+#
+# This flat list is only the fallback used before the checklist_tasks
+# Supabase table has been migrated to (see supabase_schema_tasks.sql) or if
+# it can't be reached — once that table is live it's the source of truth,
+# and duties added/edited/removed via the admin panel live there instead.
+DEFAULT_TASKS = [
+    {"id": "email-1", "category_id": "email", "text": "Check emails as they come through", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 1},
+    {"id": "email-2", "category_id": "email", "text": "Forward emails on to the correct people", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 2},
+    {"id": "email-3", "category_id": "email", "text": "Respond to the admin email inbox", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 3},
+
+    {"id": "alloc-1", "category_id": "allocation", "text": "Print referrals that come through via email no later than 9am Wednesday", "sso": "am", "frequency": "weekly", "weekday": "Wed", "sort_order": 1},
+    {"id": "alloc-2", "category_id": "allocation", "text": "Give a copy to the manager and the transition coordinator", "sso": "am", "frequency": "weekly", "weekday": "Wed", "sort_order": 2},
+    {"id": "alloc-3", "category_id": "allocation", "text": "Receive the transition coordinator's email with allocation outcomes", "sso": None, "frequency": "weekly", "weekday": "Wed", "sort_order": 3},
+    {"id": "alloc-6", "category_id": "allocation", "text": "Send communication to referring schools, BSE and TC (using the script) before 4:00pm Wednesday", "sso": "pm", "frequency": "weekly", "weekday": "Wed", "sort_order": 4},
+    {"id": "alloc-7", "category_id": "allocation", "text": "Send a separate email to the allocated teacher with the student's details (not documents)", "sso": "pm", "frequency": "weekly", "weekday": "Wed", "sort_order": 5},
+    {"id": "alloc-5", "category_id": "allocation", "text": "Create a OneDrive file for the student", "sso": None, "frequency": "weekly", "weekday": "Wed", "sort_order": 6},
+    {"id": "alloc-4", "category_id": "allocation", "text": "Upload the student's files to OneDrive", "sso": None, "frequency": "weekly", "weekday": "Wed", "sort_order": 7},
+    {"id": "alloc-8", "category_id": "allocation", "text": "Email LBU admin the student's information for the referrals database", "sso": None, "frequency": "weekly", "weekday": "Wed", "sort_order": 8},
+
+    {"id": "entry-1", "category_id": "entry-meeting", "text": "Scan and upload entry meeting documents to OneDrive", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 1},
+    {"id": "entry-4", "category_id": "entry-meeting", "text": "Place the original documents in the student's box", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 2},
+    {"id": "entry-5", "category_id": "entry-meeting", "text": "Distribute documents to the teacher", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 3},
+    {"id": "entry-2", "category_id": "entry-meeting", "text": "Enrol the student through the EMS", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 4},
+    {"id": "entry-3", "category_id": "entry-meeting", "text": "Send taxi forms to LBU admin email for signing", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 5},
+
+    {"id": "phone-1", "category_id": "phone", "text": "Transfer the phone over to mobile when not at the desk", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 1},
+    {"id": "phone-2", "category_id": "phone", "text": "Switch the day/night switch each morning and afternoon", "sso": "both", "frequency": "daily", "weekday": None, "sort_order": 2},
+    {"id": "phone-3", "category_id": "phone", "text": "Check the message bank and action any messages left", "sso": "both", "frequency": "daily", "weekday": None, "sort_order": 3},
+
+    {"id": "taxi-1", "category_id": "taxi", "text": "Update and confirm bookings through the 131 Cabs app", "sso": "am", "frequency": "daily", "weekday": None, "sort_order": 1},
+    {"id": "taxi-2", "category_id": "taxi", "text": "Upload each day's transport details to the bulletin", "sso": "am", "frequency": "daily", "weekday": None, "sort_order": 2},
+    {"id": "taxi-3", "category_id": "taxi", "text": "Log pickups and the process for each student in OneNote", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 3},
+    {"id": "taxi-4", "category_id": "taxi", "text": "Monitor the app for student arrivals and departures, and update as required", "sso": "both", "frequency": "daily", "weekday": None, "sort_order": 4},
+
+    {"id": "trt-1", "category_id": "trt", "text": "Email Naomi with the day's on-site TRTs so they're added to payroll", "sso": "pm", "frequency": "daily", "weekday": None, "sort_order": 1},
+
+    {"id": "med-2", "category_id": "medication", "text": "Ensure medication documents (e.g. medication agreement form) are signed and filed with the medicine", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 1},
+    {"id": "med-1", "category_id": "medication", "text": "Distribute medication to students who require it, at the correct times — set alarms as a reminder", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 2},
+
+    {"id": "bull-1", "category_id": "bulletin", "text": "Update the planning room screen so staff can read the daily bulletin", "sso": "am", "frequency": "daily", "weekday": None, "sort_order": 1},
+
+    {"id": "food-1", "category_id": "foodbank", "text": "Work out what needs ordering for the week", "sso": None, "frequency": "weekly", "weekday": None, "sort_order": 1},
+    {"id": "food-2", "category_id": "foodbank", "text": "Place the weekly order", "sso": None, "frequency": "weekly", "weekday": None, "sort_order": 2},
+
+    {"id": "haz-1", "category_id": "hazards", "text": "Check for hazards reported via email", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 1},
+    {"id": "haz-2", "category_id": "hazards", "text": "Action and follow up on reported hazards", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 2},
+
+    {"id": "vent-1", "category_id": "ventia", "text": "Handle communication with Ventia as required", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 1},
+    {"id": "vent-2", "category_id": "ventia", "text": "Sign off completed jobs in the Ventia portal", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 2},
+]
+
+
+def grouped_categories(tasks_flat):
+    """Group a flat task list under CATEGORY_DEFS, in display + sort order."""
+    out = []
+    for cd in CATEGORY_DEFS:
+        cat_tasks = sorted(
+            (t for t in tasks_flat if t["category_id"] == cd["id"]),
+            key=lambda t: t.get("sort_order", 0),
+        )
+        out.append({"id": cd["id"], "title": cd["title"], "safety": cd["safety"], "tasks": cat_tasks})
+    return out
 
 # ══════════════════════════════════════════════════════════════════════════
 # SUPABASE CONNECTION — same st.secrets → env var → default chain used
@@ -232,6 +279,75 @@ def load_completions():
         return {}
 
 
+def load_tasks():
+    """Flat list of task dicts (id, category_id, text, sso, frequency,
+    weekday, sort_order) — checklist_tasks is the source of truth once it
+    has rows in it; falls back to the built-in DEFAULT_TASKS if the table
+    is empty (not migrated to yet) or unreachable."""
+    if not sb:
+        return [dict(t) for t in DEFAULT_TASKS]
+    try:
+        res = (
+            sb.table("checklist_tasks")
+            .select("id, category_id, text, sso, frequency, weekday, sort_order")
+            .order("sort_order")
+            .execute()
+        )
+        rows = res.data or []
+        if not rows:
+            return [dict(t) for t in DEFAULT_TASKS]
+        return rows
+    except Exception:
+        return [dict(t) for t in DEFAULT_TASKS]
+
+
+def next_sort_order(tasks_flat, category_id):
+    existing = [t.get("sort_order", 0) for t in tasks_flat if t["category_id"] == category_id]
+    return (max(existing) + 1) if existing else 1
+
+
+def add_task(category_id, text, frequency, weekday, sso, tasks_flat):
+    task_id = f"{category_id}-{uuid4().hex[:8]}"
+    row = {
+        "id": task_id, "category_id": category_id, "text": text,
+        "sso": sso or None, "frequency": frequency,
+        "weekday": weekday if frequency == "weekly" else None,
+        "sort_order": next_sort_order(tasks_flat, category_id),
+    }
+    if not sb:
+        st.toast("Not connected to Supabase — duty wasn't saved", icon="⚠️")
+        return
+    try:
+        sb.table("checklist_tasks").insert(row).execute()
+    except Exception as e:
+        st.toast(f"Couldn't save the new duty: {e}", icon="⚠️")
+
+
+def update_task(task_id, fields):
+    if not sb:
+        st.toast("Not connected to Supabase — change wasn't saved", icon="⚠️")
+        return
+    try:
+        payload = dict(fields)
+        if payload.get("frequency") == "daily":
+            payload["weekday"] = None
+        sb.table("checklist_tasks").update(payload).eq("id", task_id).execute()
+    except Exception as e:
+        st.toast(f"Couldn't save that change: {e}", icon="⚠️")
+
+
+def delete_task(task_id):
+    if not sb:
+        st.toast("Not connected to Supabase — duty wasn't deleted", icon="⚠️")
+        return
+    try:
+        sb.table("checklist_completions").delete().eq("task_id", task_id).execute()
+        sb.table("checklist_assignments").delete().eq("task_id", task_id).execute()
+        sb.table("checklist_tasks").delete().eq("id", task_id).execute()
+    except Exception as e:
+        st.toast(f"Couldn't delete that duty: {e}", icon="⚠️")
+
+
 def set_done(task_id, period_key, done, by):
     if not sb:
         st.toast("Not connected to Supabase — change wasn't saved", icon="⚠️")
@@ -296,6 +412,9 @@ def init_state():
         "filter_sso": False,
         "week_offset": 0,
         "show_staff_panel": False,
+        "admin_unlocked": False,
+        "show_admin_login": False,
+        "show_admin_panel": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -340,6 +459,17 @@ st.markdown(f"""
 
 init_state()
 
+# Reset the "Add a duty" form fields on the run after a successful add —
+# must happen before those widgets are instantiated below (see the note in
+# the "Add duty" button handler further down for why this can't happen
+# in the same run as the click).
+if st.session_state.get("_clear_admin_form"):
+    st.session_state["admin_new_text"] = ""
+    st.session_state["admin_new_freq"] = "Daily"
+    st.session_state["admin_new_sso"] = "None"
+    st.session_state.pop("admin_new_weekday", None)
+    st.session_state["_clear_admin_form"] = False
+
 if st_autorefresh:
     # Near-live updates across users without a manual refresh. Optional —
     # `pip install streamlit-autorefresh` to enable; degrades silently
@@ -357,7 +487,7 @@ staff = load_staff()
 
 # ── Identity ─────────────────────────────────────────────────────────────
 if st.session_state.current_user:
-    id_col1, id_col2, id_col3 = st.columns([4, 1, 1])
+    id_col1, id_col2, id_col3, id_col4 = st.columns([3, 1, 1, 1])
     with id_col1:
         st.markdown(f"Signed in as **{st.session_state.current_user}**")
     with id_col2:
@@ -367,6 +497,12 @@ if st.session_state.current_user:
     with id_col3:
         if st.button("Manage staff", use_container_width=True):
             st.session_state.show_staff_panel = not st.session_state.show_staff_panel
+    with id_col4:
+        if st.button("🔒 Admin", use_container_width=True):
+            if st.session_state.admin_unlocked:
+                st.session_state.show_admin_panel = not st.session_state.show_admin_panel
+            else:
+                st.session_state.show_admin_login = not st.session_state.show_admin_login
 else:
     st.markdown('<div class="sec-head">Who\'s ticking things off?</div>', unsafe_allow_html=True)
     st.caption("This labels your ticks and job assignments so the team can see who did what — it isn't a password, so please pick your real name.")
@@ -401,6 +537,117 @@ if st.session_state.show_staff_panel:
                 add_staff(new_staff_name.strip())
                 st.rerun()
 
+# ── Admin: duty management (password-gated, Supabase-backed) ───────────────
+# See the ADMIN_PASSWORD note above the constant — this is a "don't show
+# this to everyone" gate, not real security.
+if st.session_state.show_admin_login and not st.session_state.admin_unlocked:
+    with st.expander("🔒 Admin access", expanded=True):
+        st.caption("Enter the admin password to add, edit, or remove duties.")
+        pw_col1, pw_col2 = st.columns([3, 1])
+        admin_pw = pw_col1.text_input("Password", type="password", key="admin_pw_input", label_visibility="collapsed")
+        if pw_col2.button("Unlock", use_container_width=True):
+            if admin_pw == ADMIN_PASSWORD:
+                st.session_state.admin_unlocked = True
+                st.session_state.show_admin_login = False
+                st.session_state.show_admin_panel = True
+                st.rerun()
+            else:
+                st.error("That password isn't right.")
+
+if st.session_state.show_admin_panel and st.session_state.admin_unlocked:
+    with st.expander("🛠️ Manage duties", expanded=True):
+        st.caption(
+            "Add a new duty to any section below, or edit and remove ones already listed. "
+            "Changes save straight to Supabase for everyone."
+        )
+        admin_tasks = load_tasks()
+
+        st.markdown("**Add a duty**")
+        new_text = st.text_input("Duty text", key="admin_new_text", placeholder="e.g. Print the visitor sign-in sheet")
+        ac1, ac2, ac3, ac4 = st.columns(4)
+        new_cat_title = ac1.selectbox("Section", [c["title"] for c in CATEGORY_DEFS], key="admin_new_cat")
+        new_freq = ac2.selectbox("Frequency", ["Daily", "Weekly"], key="admin_new_freq")
+        new_weekday = None
+        if new_freq == "Weekly":
+            new_weekday_pick = ac3.selectbox("Fixed day", ["No fixed day"] + WEEKDAY_COLS, key="admin_new_weekday")
+            new_weekday = None if new_weekday_pick == "No fixed day" else new_weekday_pick
+        else:
+            ac3.markdown("&nbsp;", unsafe_allow_html=True)
+        new_sso_pick = ac4.selectbox("SSO hours", ["None", "8–9am", "2:45–4pm", "Both"], key="admin_new_sso")
+        new_sso = {"None": None, "8–9am": "am", "2:45–4pm": "pm", "Both": "both"}[new_sso_pick]
+
+        if st.button("Add duty", key="admin_add_btn"):
+            if new_text.strip():
+                new_cat_id = next(c["id"] for c in CATEGORY_DEFS if c["title"] == new_cat_title)
+                add_task(new_cat_id, new_text.strip(), new_freq.lower(), new_weekday, new_sso, admin_tasks)
+                # Streamlit won't let a widget's session_state be changed in
+                # the same run after it's been instantiated — set a flag and
+                # clear the form on the next run instead, before those
+                # widgets are created (see the top of the script).
+                st.session_state["_clear_admin_form"] = True
+                st.rerun()
+
+        st.markdown("---")
+        for cat in grouped_categories(admin_tasks):
+            if not cat["tasks"]:
+                continue
+            st.markdown(f'<div class="sec-head">{cat["title"]}</div>', unsafe_allow_html=True)
+            for t in cat["tasks"]:
+                dr1, dr2, dr3, dr4, dr5 = st.columns([4, 1.2, 1, 1.3, 1])
+                edited_text = dr1.text_input(
+                    "Duty text", value=t["text"], key=f"dtext_{t['id']}", label_visibility="collapsed"
+                )
+                freq_pick = dr2.selectbox(
+                    "Frequency", ["Daily", "Weekly"],
+                    index=0 if t["frequency"] == "daily" else 1,
+                    key=f"dfreq_{t['id']}", label_visibility="collapsed",
+                )
+                freq_val = freq_pick.lower()
+                weekday_val = t["weekday"]
+                if freq_val == "weekly":
+                    wd_options = ["No fixed day"] + WEEKDAY_COLS
+                    wd_index = wd_options.index(t["weekday"]) if t["weekday"] in WEEKDAY_COLS else 0
+                    wd_pick = dr3.selectbox(
+                        "Fixed day", wd_options, index=wd_index,
+                        key=f"dweekday_{t['id']}", label_visibility="collapsed",
+                    )
+                    weekday_val = None if wd_pick == "No fixed day" else wd_pick
+                else:
+                    dr3.markdown("&nbsp;")
+                    weekday_val = None
+                sso_options = ["None", "8–9am", "2:45–4pm", "Both"]
+                sso_map = {"None": None, "8–9am": "am", "2:45–4pm": "pm", "Both": "both"}
+                sso_rev = {v: k for k, v in sso_map.items()}
+                sso_pick = dr4.selectbox(
+                    "SSO hours", sso_options, index=sso_options.index(sso_rev.get(t["sso"], "None")),
+                    key=f"dsso_{t['id']}", label_visibility="collapsed",
+                )
+                sso_val = sso_map[sso_pick]
+
+                confirm_key = f"confirm_del_{t['id']}"
+                if st.session_state.get(confirm_key):
+                    if dr5.button("Confirm?", key=f"delc_{t['id']}", use_container_width=True):
+                        delete_task(t["id"])
+                        st.session_state.pop(confirm_key, None)
+                        st.rerun()
+                else:
+                    if dr5.button("Delete", key=f"del_{t['id']}", use_container_width=True):
+                        st.session_state[confirm_key] = True
+                        st.rerun()
+
+                changed = (
+                    edited_text.strip() and edited_text.strip() != t["text"]
+                    or freq_val != t["frequency"]
+                    or weekday_val != t["weekday"]
+                    or sso_val != t["sso"]
+                )
+                if changed:
+                    update_task(t["id"], {
+                        "text": edited_text.strip() or t["text"],
+                        "frequency": freq_val, "weekday": weekday_val, "sso": sso_val,
+                    })
+                    st.rerun()
+
 st.markdown("---")
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -412,10 +659,11 @@ tab_checklist, tab_week = st.tabs(["📋 Checklist", "📅 This Week"])
 with tab_checklist:
     assignments = load_assignments()
     completions = load_completions()
+    checklist_tasks_flat = load_tasks()
     today = date.today()
 
     total_tasks, done_tasks = 0, 0
-    for cat in CATEGORIES:
+    for cat in grouped_categories(checklist_tasks_flat):
         for t in cat["tasks"]:
             total_tasks += 1
             if period_key_for(t, today) in completions.get(t["id"], {}):
@@ -429,7 +677,7 @@ with tab_checklist:
         st.session_state.filter_sso = st.toggle("SSO hours only", value=st.session_state.filter_sso)
     with ctrl2:
         if st.button("Clear today's ticks"):
-            for cat in CATEGORIES:
+            for cat in grouped_categories(checklist_tasks_flat):
                 for t in cat["tasks"]:
                     key = period_key_for(t, today)
                     if key in completions.get(t["id"], {}):
@@ -439,7 +687,7 @@ with tab_checklist:
         if st.button("🔄 Refresh now"):
             st.rerun()
 
-    for cat in CATEGORIES:
+    for cat in grouped_categories(checklist_tasks_flat):
         tasks = cat["tasks"]
         if st.session_state.filter_sso:
             tasks = [t for t in tasks if t["sso"]]
@@ -486,6 +734,7 @@ with tab_checklist:
 with tab_week:
     assignments = load_assignments()
     completions = load_completions()
+    week_tasks_flat = load_tasks()
 
     nav1, nav2, nav3, nav4 = st.columns([1, 3, 1, 1])
     with nav1:
@@ -519,7 +768,7 @@ with tab_week:
 
     any_day_tasks = []
 
-    for cat in CATEGORIES:
+    for cat in grouped_categories(week_tasks_flat):
         pinned = [t for t in cat["tasks"] if t["frequency"] == "daily" or (t["frequency"] == "weekly" and t["weekday"])]
         any_day = [t for t in cat["tasks"] if t["frequency"] == "weekly" and not t["weekday"]]
         any_day_tasks.extend((cat, t) for t in any_day)
@@ -567,7 +816,7 @@ with tab_week:
 
 st.markdown("---")
 st.caption(
-    "Ticks and assignments save straight to Supabase and are shared with anyone who opens this page "
+    "Ticks, assignments, and duty changes save straight to Supabase and are shared with anyone who opens this page "
     "(refresh, or wait ~20s if streamlit-autorefresh is installed, to see others' changes). "
     "\"Clear today's ticks\" only clears the current day/week — past history stays on the This Week tab."
 )
