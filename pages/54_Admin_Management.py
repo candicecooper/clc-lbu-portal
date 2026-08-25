@@ -9,9 +9,10 @@ and assignment is saved centrally and shows up for anyone else with this
 page open — matching how the rest of the portal stores data.
 
 A password-gated "🔒 Admin" panel (password: see ADMIN_PASSWORD below) lets
-someone add a new duty to any section, or edit/delete a duty already
-listed — see "Note on the Admin panel" below for how that's stored and
-what the password does and doesn't protect.
+someone add a new duty to any section, edit/delete a duty already listed,
+and create, rename, or remove sections themselves — see "Note on the
+Admin panel" below for how that's stored and what the password does and
+doesn't protect.
 
 Setup (one-off):
 1. Run supabase_schema.sql once in the Supabase project's SQL editor —
@@ -22,10 +23,16 @@ Setup (one-off):
    the Admin panel adds/edits/deletes rows in. Skipping this step doesn't
    break the page — it just falls back to the built-in DEFAULT_TASKS below
    and Admin panel changes won't be able to save.
-3. Optionally add SUPABASE_URL / SUPABASE_KEY to .streamlit/secrets.toml
+3. Run supabase_schema_categories.sql once too (after the above two) — it
+   creates checklist_categories and seeds it with the current section
+   list, which is what the Admin panel's "Sections" area adds/renames/
+   deletes rows in. Skipping this step doesn't break the page — it just
+   falls back to the built-in DEFAULT_CATEGORIES below and new sections
+   won't be able to save.
+4. Optionally add SUPABASE_URL / SUPABASE_KEY to .streamlit/secrets.toml
    (falls back to the hardcoded project values below if not set, same
    st.secrets → env var → default chain used elsewhere in the portal).
-4. `pip install supabase` (and optionally `streamlit-autorefresh` for
+5. `pip install supabase` (and optionally `streamlit-autorefresh` for
    near-live updates across users without a manual refresh).
 
 Note on scope: unlike the Safety & Risk Plan Builder, this tool holds no
@@ -45,6 +52,7 @@ with can already write to checklist_tasks directly, so this doesn't add
 a new attack surface, it just keeps the panel out of casual browsing.
 """
 
+import re
 import streamlit as st
 import os
 from datetime import date, datetime, timedelta
@@ -82,22 +90,24 @@ DEFAULT_STAFF = ["Candice", "Vinnie", "Annette", "Bonnie", "Naomi"]
 # the anon Supabase key this whole page already ships with).
 ADMIN_PASSWORD = "secret2026"
 
-# Sections are fixed in code — the admin panel adds/edits/removes duties
-# *within* these, it doesn't add new sections. Order here is display order.
-CATEGORY_DEFS = [
-    {"id": "email", "title": "Email Monitoring", "safety": False},
-    {"id": "allocation", "title": "Allocation Process", "safety": False},
-    {"id": "entry-meeting", "title": "Entry Meeting Follow-Up", "safety": False},
-    {"id": "phone", "title": "Phone Management", "safety": False},
-    {"id": "taxi", "title": "Taxi Bookings", "safety": False},
-    {"id": "trt", "title": "TRT Payroll", "safety": False},
-    {"id": "medication", "title": "Medication", "safety": False},
-    {"id": "bulletin", "title": "Daily Bulletin Screen", "safety": False},
-    {"id": "foodbank", "title": "Food Bank & Kickstart", "safety": False},
-    {"id": "hazards", "title": "Hazard Management", "safety": True},
-    {"id": "ventia", "title": "Ventia", "safety": False},
+# This list is only the fallback used before the checklist_categories
+# Supabase table has been migrated to (see supabase_schema_categories.sql)
+# or if it can't be reached — once that table is live it's the source of
+# truth, and sections added/renamed/removed via the admin panel live there
+# instead (same story as DEFAULT_TASKS / checklist_tasks below).
+DEFAULT_CATEGORIES = [
+    {"id": "email", "title": "Email Monitoring", "safety": False, "sort_order": 1},
+    {"id": "allocation", "title": "Allocation Process", "safety": False, "sort_order": 2},
+    {"id": "entry-meeting", "title": "Entry Meeting Follow-Up", "safety": False, "sort_order": 3},
+    {"id": "phone", "title": "Phone Management", "safety": False, "sort_order": 4},
+    {"id": "taxi", "title": "Taxi Bookings", "safety": False, "sort_order": 5},
+    {"id": "trt", "title": "TRT Payroll", "safety": False, "sort_order": 6},
+    {"id": "medication", "title": "Medication", "safety": False, "sort_order": 7},
+    {"id": "bulletin", "title": "Daily Bulletin Screen", "safety": False, "sort_order": 8},
+    {"id": "foodbank", "title": "Food Bank & Kickstart", "safety": False, "sort_order": 9},
+    {"id": "hazards", "title": "Hazard Management", "safety": True, "sort_order": 10},
+    {"id": "ventia", "title": "Ventia", "safety": False, "sort_order": 11},
 ]
-CATEGORY_TITLES = {c["id"]: c["title"] for c in CATEGORY_DEFS}
 
 # task keys: id, category_id, text, sso ("am"/"pm"/"both"/None),
 # frequency ("daily"/"weekly"), weekday ("Mon".."Fri" or None — only
@@ -154,10 +164,13 @@ DEFAULT_TASKS = [
 ]
 
 
-def grouped_categories(tasks_flat):
-    """Group a flat task list under CATEGORY_DEFS, in display + sort order."""
+def grouped_categories(tasks_flat, categories):
+    """Group a flat task list under the given categories list, in display +
+    sort order. `categories` is normally whatever load_categories() returns
+    for this run — pass it explicitly rather than a module-level constant
+    so newly-created sections show up without a code change."""
     out = []
-    for cd in CATEGORY_DEFS:
+    for cd in sorted(categories, key=lambda c: c.get("sort_order", 0)):
         cat_tasks = sorted(
             (t for t in tasks_flat if t["category_id"] == cd["id"]),
             key=lambda t: t.get("sort_order", 0),
@@ -299,6 +312,98 @@ def load_tasks():
         return rows
     except Exception:
         return [dict(t) for t in DEFAULT_TASKS]
+
+
+def load_categories():
+    """Flat list of section dicts (id, title, safety, sort_order) —
+    checklist_categories is the source of truth once it has rows in it;
+    falls back to the built-in DEFAULT_CATEGORIES if the table is empty
+    (not migrated to yet) or unreachable."""
+    if not sb:
+        return [dict(c) for c in DEFAULT_CATEGORIES]
+    try:
+        res = (
+            sb.table("checklist_categories")
+            .select("id, title, safety, sort_order")
+            .order("sort_order")
+            .execute()
+        )
+        rows = res.data or []
+        if not rows:
+            # The table exists but is empty — most likely someone used the
+            # "Add a new section" admin form before ever running
+            # supabase_schema_categories.sql. Seed it with the built-in
+            # defaults now so the 11 default sections don't silently
+            # disappear once the table has any rows at all (this fallback
+            # only kicks in while the table is EMPTY). Best-effort — this
+            # run still shows the defaults either way.
+            try:
+                sb.table("checklist_categories").insert([dict(c) for c in DEFAULT_CATEGORIES]).execute()
+            except Exception:
+                pass
+            return [dict(c) for c in DEFAULT_CATEGORIES]
+        return rows
+    except Exception:
+        return [dict(c) for c in DEFAULT_CATEGORIES]
+
+
+def slugify(title):
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    return slug or "section"
+
+
+def new_category_id(title, categories):
+    base = slugify(title)
+    cid = base
+    existing_ids = {c["id"] for c in categories}
+    n = 2
+    while cid in existing_ids:
+        cid = f"{base}-{n}"
+        n += 1
+    return cid
+
+
+def next_category_sort_order(categories):
+    existing = [c.get("sort_order", 0) for c in categories]
+    return (max(existing) + 1) if existing else 1
+
+
+def add_category(title, safety, categories):
+    row = {
+        "id": new_category_id(title, categories), "title": title,
+        "safety": bool(safety), "sort_order": next_category_sort_order(categories),
+    }
+    if not sb:
+        st.toast("Not connected to Supabase — section wasn't saved", icon="⚠️")
+        return
+    try:
+        sb.table("checklist_categories").insert(row).execute()
+    except Exception as e:
+        st.toast(f"Couldn't save the new section: {e}", icon="⚠️")
+
+
+def update_category(category_id, fields):
+    if not sb:
+        st.toast("Not connected to Supabase — change wasn't saved", icon="⚠️")
+        return
+    try:
+        sb.table("checklist_categories").update(fields).eq("id", category_id).execute()
+    except Exception as e:
+        st.toast(f"Couldn't save that change: {e}", icon="⚠️")
+
+
+def delete_category(category_id, tasks_flat):
+    # Guard: refuse if any duty still lives in this section, so we never
+    # orphan a task whose category_id no longer matches any known section.
+    if any(t["category_id"] == category_id for t in tasks_flat):
+        return
+    if not sb:
+        st.toast("Not connected to Supabase — section wasn't deleted", icon="⚠️")
+        return
+    try:
+        sb.table("checklist_categories").delete().eq("id", category_id).execute()
+    except Exception as e:
+        st.toast(f"Couldn't delete that section: {e}", icon="⚠️")
 
 
 def next_sort_order(tasks_flat, category_id):
@@ -470,6 +575,12 @@ if st.session_state.get("_clear_admin_form"):
     st.session_state.pop("admin_new_weekday", None)
     st.session_state["_clear_admin_form"] = False
 
+# Same defer-to-next-run trick as above, for the "Add a new section" form.
+if st.session_state.get("_clear_admin_section_form"):
+    st.session_state["admin_new_section_title"] = ""
+    st.session_state["admin_new_section_safety"] = False
+    st.session_state["_clear_admin_section_form"] = False
+
 if st_autorefresh:
     # Near-live updates across users without a manual refresh. Optional —
     # `pip install streamlit-autorefresh` to enable; degrades silently
@@ -561,11 +672,61 @@ if st.session_state.show_admin_panel and st.session_state.admin_unlocked:
             "Changes save straight to Supabase for everyone."
         )
         admin_tasks = load_tasks()
+        admin_categories = load_categories()
 
+        st.markdown("**Sections**")
+        for cat in sorted(admin_categories, key=lambda c: c.get("sort_order", 0)):
+            duty_count = sum(1 for t in admin_tasks if t["category_id"] == cat["id"])
+            sc1, sc2, sc3, sc4 = st.columns([3, 2, 1, 1])
+            edited_title = sc1.text_input(
+                "Section name", value=cat["title"], key=f"cat_title_{cat['id']}", label_visibility="collapsed"
+            )
+            edited_safety = sc2.checkbox(
+                "Highlight as safety", value=cat["safety"], key=f"cat_safety_{cat['id']}"
+            )
+            sc3.markdown(f"{duty_count} " + ("duty" if duty_count == 1 else "duties"))
+
+            confirm_cat_key = f"confirm_delcat_{cat['id']}"
+            if duty_count > 0:
+                sc4.button("Delete", key=f"delcat_{cat['id']}", use_container_width=True, disabled=True,
+                           help="Move or delete this section's duties first")
+            elif st.session_state.get(confirm_cat_key):
+                if sc4.button("Confirm?", key=f"delcatc_{cat['id']}", use_container_width=True):
+                    delete_category(cat["id"], admin_tasks)
+                    st.session_state.pop(confirm_cat_key, None)
+                    st.rerun()
+            else:
+                if sc4.button("Delete", key=f"delcat_{cat['id']}", use_container_width=True):
+                    st.session_state[confirm_cat_key] = True
+                    st.rerun()
+
+            if edited_title.strip() and edited_title.strip() != cat["title"]:
+                update_category(cat["id"], {"title": edited_title.strip()})
+                st.rerun()
+            if edited_safety != cat["safety"]:
+                update_category(cat["id"], {"safety": edited_safety})
+                st.rerun()
+
+        st.markdown("**Add a new section**")
+        nsc1, nsc2, nsc3 = st.columns([3, 2, 1])
+        new_section_title = nsc1.text_input(
+            "New section name", key="admin_new_section_title",
+            placeholder="e.g. Excursions", label_visibility="collapsed",
+        )
+        new_section_safety = nsc2.checkbox("Highlight as safety", key="admin_new_section_safety")
+        if nsc3.button("Add section", key="admin_add_section_btn", use_container_width=True):
+            if new_section_title.strip():
+                add_category(new_section_title.strip(), new_section_safety, admin_categories)
+                # Same next-run clearing trick as the "Add a duty" form below.
+                st.session_state["_clear_admin_section_form"] = True
+                st.rerun()
+
+        st.markdown("---")
         st.markdown("**Add a duty**")
         new_text = st.text_input("Duty text", key="admin_new_text", placeholder="e.g. Print the visitor sign-in sheet")
         ac1, ac2, ac3, ac4 = st.columns(4)
-        new_cat_title = ac1.selectbox("Section", [c["title"] for c in CATEGORY_DEFS], key="admin_new_cat")
+        cat_titles_sorted = [c["title"] for c in sorted(admin_categories, key=lambda c: c.get("sort_order", 0))]
+        new_cat_title = ac1.selectbox("Section", cat_titles_sorted, key="admin_new_cat")
         new_freq = ac2.selectbox("Frequency", ["Daily", "Weekly"], key="admin_new_freq")
         new_weekday = None
         if new_freq == "Weekly":
@@ -578,7 +739,7 @@ if st.session_state.show_admin_panel and st.session_state.admin_unlocked:
 
         if st.button("Add duty", key="admin_add_btn"):
             if new_text.strip():
-                new_cat_id = next(c["id"] for c in CATEGORY_DEFS if c["title"] == new_cat_title)
+                new_cat_id = next(c["id"] for c in admin_categories if c["title"] == new_cat_title)
                 add_task(new_cat_id, new_text.strip(), new_freq.lower(), new_weekday, new_sso, admin_tasks)
                 # Streamlit won't let a widget's session_state be changed in
                 # the same run after it's been instantiated — set a flag and
@@ -588,7 +749,8 @@ if st.session_state.show_admin_panel and st.session_state.admin_unlocked:
                 st.rerun()
 
         st.markdown("---")
-        for cat in grouped_categories(admin_tasks):
+        st.markdown("**Duties**")
+        for cat in grouped_categories(admin_tasks, admin_categories):
             if not cat["tasks"]:
                 continue
             st.markdown(f'<div class="sec-head">{cat["title"]}</div>', unsafe_allow_html=True)
@@ -660,10 +822,11 @@ with tab_checklist:
     assignments = load_assignments()
     completions = load_completions()
     checklist_tasks_flat = load_tasks()
+    checklist_categories = load_categories()
     today = date.today()
 
     total_tasks, done_tasks = 0, 0
-    for cat in grouped_categories(checklist_tasks_flat):
+    for cat in grouped_categories(checklist_tasks_flat, checklist_categories):
         for t in cat["tasks"]:
             total_tasks += 1
             if period_key_for(t, today) in completions.get(t["id"], {}):
@@ -677,7 +840,7 @@ with tab_checklist:
         st.session_state.filter_sso = st.toggle("SSO hours only", value=st.session_state.filter_sso)
     with ctrl2:
         if st.button("Clear today's ticks"):
-            for cat in grouped_categories(checklist_tasks_flat):
+            for cat in grouped_categories(checklist_tasks_flat, checklist_categories):
                 for t in cat["tasks"]:
                     key = period_key_for(t, today)
                     if key in completions.get(t["id"], {}):
@@ -687,7 +850,7 @@ with tab_checklist:
         if st.button("🔄 Refresh now"):
             st.rerun()
 
-    for cat in grouped_categories(checklist_tasks_flat):
+    for cat in grouped_categories(checklist_tasks_flat, checklist_categories):
         tasks = cat["tasks"]
         if st.session_state.filter_sso:
             tasks = [t for t in tasks if t["sso"]]
@@ -735,6 +898,7 @@ with tab_week:
     assignments = load_assignments()
     completions = load_completions()
     week_tasks_flat = load_tasks()
+    week_categories = load_categories()
 
     nav1, nav2, nav3, nav4 = st.columns([1, 3, 1, 1])
     with nav1:
@@ -768,7 +932,7 @@ with tab_week:
 
     any_day_tasks = []
 
-    for cat in grouped_categories(week_tasks_flat):
+    for cat in grouped_categories(week_tasks_flat, week_categories):
         pinned = [t for t in cat["tasks"] if t["frequency"] == "daily" or (t["frequency"] == "weekly" and t["weekday"])]
         any_day = [t for t in cat["tasks"] if t["frequency"] == "weekly" and not t["weekday"]]
         any_day_tasks.extend((cat, t) for t in any_day)
