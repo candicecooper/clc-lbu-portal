@@ -771,7 +771,14 @@
     body[data-print-style="map"] .wot-print-sheet{ display:none !important; }
     body[data-print-style="map"] .wot-print-map{ display:block !important; }
     body:not([data-print-style="map"]) .wot-print-sheet{ display:block !important; }
-    @page{ size:landscape; margin:9mm; }
+    /* force the colour coding (gradient rail, zone fills, tinted rows, tag pills) to always print,
+       regardless of the browser's "background graphics" print-dialog setting */
+    *{
+      -webkit-print-color-adjust:exact !important;
+      print-color-adjust:exact !important;
+      color-adjust:exact !important;
+    }
+    @page{ size:A4 landscape; margin:9mm; }
   }
 
   /* ---------- multi-screen shell (teacher gate / student picker / builder) ---------- */
@@ -2029,9 +2036,54 @@
   if(btnStyleGrid) btnStyleGrid.addEventListener("click", function(){ printStyle = "grid"; applyPrintStyle(); });
   if(btnStyleMap) btnStyleMap.addEventListener("click", function(){ printStyle = "map"; applyPrintStyle(); });
 
+  // ---- shrink-to-fit: scale the print output down so it always lands on a single
+  // A4 landscape page, regardless of how much content a report holds ----
+  var PRINT_PAGE_CONTENT_W = 1054; // ~279mm at 96dpi (A4 landscape minus 9mm margins each side)
+  var PRINT_PAGE_CONTENT_H = 726;  // ~192mm at 96dpi
+  var PRINT_MIN_SCALE = 0.55;      // never shrink past this — beyond it, text stops being legible
+
+  function fitPrintElementToOnePage(el){
+    if(!el) return;
+    // reset first (zoom, not transform: a transform is a paint-time effect only, and
+    // Chrome computes print page breaks from the pre-transform layout size — it doesn't
+    // stop a row from spilling onto page 2 even though it looks "shrunk" on page 1.
+    // zoom actually resizes the laid-out box, so pagination is computed on the smaller size.)
+    el.style.zoom = "";
+
+    var prevDisplay = el.style.display;
+    var prevPosition = el.style.position;
+    var prevLeft = el.style.left;
+    var prevTop = el.style.top;
+    var prevWidth = el.style.width;
+
+    el.style.position = "fixed";
+    el.style.left = "-10000px";
+    el.style.top = "0px";
+    el.style.width = PRINT_PAGE_CONTENT_W + "px";
+    el.style.display = "block";
+
+    var naturalHeight = el.scrollHeight;
+
+    el.style.display = prevDisplay;
+    el.style.position = prevPosition;
+    el.style.left = prevLeft;
+    el.style.top = prevTop;
+    el.style.width = prevWidth;
+
+    if(naturalHeight > PRINT_PAGE_CONTENT_H){
+      var scale = Math.max(PRINT_MIN_SCALE, PRINT_PAGE_CONTENT_H / naturalHeight);
+      el.style.zoom = scale.toFixed(4);
+    }
+  }
+
+  function activePrintElement(){
+    return printStyle === "map" ? document.getElementById("printMap") : document.getElementById("printSheet");
+  }
+
   document.getElementById("btnPrint").addEventListener("click", function(){
     renderPrintSheet();
     renderPrintMap();
+    fitPrintElementToOnePage(activePrintElement());
     try{ window.print(); }catch(e){ /* ignore */ }
   });
 
@@ -2326,10 +2378,14 @@
     renderPrintSheet();
     renderPrintMap();
     var activeEl = printStyle === "map" ? document.getElementById("printMap") : document.getElementById("printSheet");
+    fitPrintElementToOnePage(activeEl);
     var markup = activeEl.outerHTML;
+    activeEl.style.zoom = "";
     return "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Window of Tolerance — " +
       escapeHtml(studentDisplayName()) + "</title><style>" + ROOT_VARS_CSS + "\n" + PRINT_CSS +
       "\nbody{background:#fff;margin:0;padding:24px;} .wot-print-sheet{display:block;max-width:1200px;margin:0 auto;} .wot-print-map{display:block;}" +
+      "\n*{ -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; color-adjust:exact !important; }" +
+      "\n@page{ size:A4 landscape; margin:9mm; }" +
       "</style></head><body>" + markup + "</body></html>";
   }
 
