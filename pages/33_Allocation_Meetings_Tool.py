@@ -956,6 +956,14 @@ with tab2:
     st.header("🔄 Extensions")
     st.info("Record an extension decision for a currently allocated student.")
 
+    if st.session_state.get("last_extension_saved"):
+        info = st.session_state["last_extension_saved"]
+        st.success(
+            f"✅ Last saved: **{info['name']}** — Extension: **{info['status']}**, "
+            f"Weeks: **{info['weeks']}** (saved {info['when']})"
+        )
+        st.caption("This confirmation stays here until you save another extension, so you can check it any time.")
+
     try:
         all_students = supabase.table("allocation_students").select("*").execute()
 
@@ -1033,22 +1041,13 @@ with tab2:
                                 "wasn't actually found or updated. Nothing may have been saved."
                             )
                         else:
-                            st.success(f"✅ Extension recorded for {record['student_name']}!")
-                            st.markdown("**🔍 Verify — read directly back from the database:**")
-                            st.write(
-                                f"Extension: **{result.data[0].get('extension_status')}**, "
-                                f"Weeks: **{result.data[0].get('extension_weeks')}**, "
-                                f"Outcome: **{result.data[0].get('outcome')}**, "
-                                f"Meeting Week: **{result.data[0].get('meeting_week')}**"
-                            )
-                            st.caption(
-                                "If this looks right but the student still isn't showing up correctly in "
-                                "View & Export, check the 'Show:' scope selector there is set to "
-                                "'All allocated & completed records' or 'Only students with an extension "
-                                "decision' — 'This meeting week only' will hide them if their original "
-                                "meeting week differs from what's currently selected in the sidebar."
-                            )
-                            st.balloons()
+                            st.session_state["last_extension_saved"] = {
+                                "name": result.data[0].get("student_name"),
+                                "status": result.data[0].get("extension_status"),
+                                "weeks": result.data[0].get("extension_weeks"),
+                                "when": datetime.now().strftime("%I:%M %p"),
+                            }
+                            st.rerun()
                     except Exception as e:
                         st.error(f"Error: {e}")
         else:
