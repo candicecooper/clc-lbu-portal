@@ -1026,7 +1026,7 @@ with tab2:
 
                 if st.form_submit_button("✅ Save Extension", type="primary", use_container_width=True):
                     try:
-                        supabase.table("allocation_students").update({
+                        result = supabase.table("allocation_students").update({
                             "extension": yn(ext_outcome == "Approved"),
                             "extension_status": ext_outcome,
                             "extension_date": ext_date.isoformat() if ext_date else None,
@@ -1035,8 +1035,29 @@ with tab2:
                             "information": ext_comm or record.get("information"),
                             "actioned_by": ext_owner or record.get("actioned_by"),
                         }).eq("id", record["id"]).execute()
-                        st.success(f"✅ Extension recorded for {record['student_name']}!")
-                        st.balloons()
+
+                        if not result.data:
+                            st.error(
+                                "⚠️ The update ran but returned no confirmation — this can mean the row "
+                                "wasn't actually found or updated. Nothing may have been saved."
+                            )
+                        else:
+                            st.success(f"✅ Extension recorded for {record['student_name']}!")
+                            st.markdown("**🔍 Verify — read directly back from the database:**")
+                            st.write(
+                                f"Extension: **{result.data[0].get('extension_status')}**, "
+                                f"Weeks: **{result.data[0].get('extension_weeks')}**, "
+                                f"Outcome: **{result.data[0].get('outcome')}**, "
+                                f"Meeting Week: **{result.data[0].get('meeting_week')}**"
+                            )
+                            st.caption(
+                                "If this looks right but the student still isn't showing up correctly in "
+                                "View & Export, check the 'Show:' scope selector there is set to "
+                                "'All allocated & completed records' or 'Only students with an extension "
+                                "decision' — 'This meeting week only' will hide them if their original "
+                                "meeting week differs from what's currently selected in the sidebar."
+                            )
+                            st.balloons()
                     except Exception as e:
                         st.error(f"Error: {e}")
         else:
