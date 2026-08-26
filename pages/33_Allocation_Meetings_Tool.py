@@ -964,15 +964,6 @@ with tab2:
                 return False
             if str(r.get("current_status", "")).strip().lower() == "inactive":
                 return False
-            if r.get("exit_reason"):
-                return False
-            finish = r.get("actual_finish_date") or r.get("finishing_date")
-            if finish:
-                try:
-                    if datetime.fromisoformat(str(finish)[:10]).date() < datetime.now().date():
-                        return False
-                except Exception:
-                    pass
             return True
 
         allocated_data = [r for r in all_students.data if _is_active(r)]
@@ -993,7 +984,7 @@ with tab2:
             st.write(
                 f"Of {allocated_total} allocated student(s), {len(allocated_data)} are considered "
                 f"**active** and shown below; {allocated_total - len(allocated_data)} are excluded "
-                "(marked Inactive, already exited, or with a finish date in the past)."
+                "(marked Inactive via Current_Status)."
             )
 
         if allocated.data:
