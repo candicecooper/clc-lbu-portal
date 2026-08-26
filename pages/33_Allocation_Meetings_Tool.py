@@ -1080,6 +1080,24 @@ with tab3:
 with tab4:
     st.header("📊 View & Export Completed Allocations")
 
+    with st.expander("🔍 Debug: every student with extension data, ignoring scope/filters entirely"):
+        try:
+            everyone = supabase.table("allocation_students").select("*").execute().data
+            with_extension = [r for r in everyone if r.get("extension_status")]
+            st.write(f"Total rows in database: {len(everyone)}")
+            st.write(f"Rows with a non-blank `extension_status`: {len(with_extension)}")
+            if with_extension:
+                st.dataframe(
+                    pd.DataFrame([{
+                        "Student": r.get("student_name"), "Outcome": r.get("outcome"),
+                        "Current_Status": r.get("current_status"), "Extension_Status": r.get("extension_status"),
+                        "Extension_Weeks": r.get("extension_weeks"), "Meeting_Week": r.get("meeting_week"),
+                    } for r in with_extension]),
+                    use_container_width=True, hide_index=True
+                )
+        except Exception as e:
+            st.error(f"Debug error: {e}")
+
     scope = st.radio(
         "Show:",
         ["This meeting week only", "All allocated & completed records", "Only students with an extension decision"],
