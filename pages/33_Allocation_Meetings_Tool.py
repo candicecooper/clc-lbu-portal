@@ -1112,7 +1112,10 @@ with tab4:
         if scope == "This meeting week only":
             query = query.eq("meeting_week", selected_week)
         elif scope == "Only students with an extension decision":
-            query = query.not_.is_("extension_status", "null")
+            # extension_date is only ever set by actually using the Extensions tab —
+            # this filters out leftover "Not Approved" placeholder values that came
+            # across from the Excel import with no real decision behind them.
+            query = query.not_.is_("extension_date", "null")
         full_data = query.execute()
 
         if full_data.data:
