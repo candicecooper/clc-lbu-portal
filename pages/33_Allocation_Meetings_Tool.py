@@ -1100,21 +1100,29 @@ with tab4:
 
     scope = st.radio(
         "Show:",
-        ["This meeting week only", "All allocated & completed records", "Only students with an extension decision"],
+        [
+            "This meeting week only", "All allocated & completed records",
+            "Extensions decided this week", "All extensions ever recorded"
+        ],
         horizontal=True, index=1,
         help="Extensions and waitlist changes on students allocated in earlier weeks won't show under "
-             "'this week only' — switch to 'All records' to include them for export/sync. Use the "
-             "extension option to export just the students you've approved or declined an extension for."
+             "'this week only' — switch to 'All records' to include them for export/sync. "
+             "'Extensions decided this week' matches the Term/Year/Week selected in the sidebar."
     )
 
     try:
         query = supabase.table("allocation_students").select("*").not_.is_("outcome", "null")
         if scope == "This meeting week only":
             query = query.eq("meeting_week", selected_week)
-        elif scope == "Only students with an extension decision":
+        elif scope == "Extensions decided this week":
             # extension_date is only ever set by actually using the Extensions tab —
             # this filters out leftover "Not Approved" placeholder values that came
-            # across from the Excel import with no real decision behind them.
+            # across from the Excel import with no real decision behind them, and
+            # ties the list to the Term/Year/Week currently selected in the sidebar.
+            week_monday = meeting_date - timedelta(days=2)
+            week_sunday = meeting_date + timedelta(days=4)
+            query = query.gte("extension_date", week_monday.isoformat()).lte("extension_date", week_sunday.isoformat())
+        elif scope == "All extensions ever recorded":
             query = query.not_.is_("extension_date", "null")
         full_data = query.execute()
 
