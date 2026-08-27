@@ -226,9 +226,15 @@ def load_bulletin(d):
         data["vehicle_bookings"] = converted
     for tk in ("travel_jp","travel_py","travel_sy"):
         data[tk] = _migrate_travel_rows(data.get(tk, []))
-    # Migrate old combined staff_absent → separate staff_absent + student_absent
+    # Migrate old combined staff_absent → separate staff_absent + student_absent.
+    # Guarded on "Staff Member" being ABSENT, not just "Staff Absence" being present —
+    # a row already migrated to the current schema must never be rebuilt from the old
+    # field again, even if a stray "Staff Absence" key is still sitting in the stored
+    # data alongside it (e.g. from a save that merges fields rather than replacing the
+    # row outright). Re-running this on an already-current row is what makes freshly
+    # saved Staff Member / TRT values disappear on the next load.
     old_sa = data.get("staff_absent", [])
-    if old_sa and isinstance(old_sa[0], dict) and "Staff Absence" in old_sa[0]:
+    if old_sa and isinstance(old_sa[0], dict) and "Staff Absence" in old_sa[0] and "Staff Member" not in old_sa[0]:
         data["staff_absent"]   = [{"Staff Member": r.get("Staff Absence",""), "TRT": r.get("TRT","")} for r in old_sa if (r.get("Staff Absence") or "").strip() or (r.get("TRT") or "").strip()]
         data["student_absent"] = [{"Student": r.get("Student Absence",""), "Program": r.get("Program",""), "Reason": r.get("Reason","")} for r in old_sa if (r.get("Student Absence") or "").strip()]
         if not data["staff_absent"]:   data["staff_absent"]   = [{"Staff Member":"","TRT":""} for _ in range(4)]
