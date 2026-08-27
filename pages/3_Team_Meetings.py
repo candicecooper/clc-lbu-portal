@@ -1965,7 +1965,61 @@ To remove a meeting, click the 🗑️ Delete button and confirm.
         
         with summary_tab1:
             st.markdown("##### 📝 Summarize Your Transcript")
-            st.caption("No AI needed - just write the key points yourself:")
+            
+            # AI Extract option
+            col_ai1, col_ai2 = st.columns([1, 2])
+            
+            with col_ai1:
+                if st.button("🤖 AI Extract", key=f"adhoc_ai_extract_{program}", type="primary"):
+                    adhoc_transcript = st.session_state.get(f"adhoc_transcript_{program}", "").strip()
+                    if adhoc_transcript:
+                        with st.spinner("🤖 Extracting key points..."):
+                            try:
+                                groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
+                                
+                                if groq_client:
+                                    response = groq_client.chat.completions.create(
+                                        model="gpt-oss-120b",
+                                        messages=[
+                                            {
+                                                "role": "system",
+                                                "content": "You are an expert at analyzing educational team meeting transcripts. Extract key information in a structured, concise format."
+                                            },
+                                            {
+                                                "role": "user",
+                                                "content": f"""Analyze this meeting transcript and extract key points:
+
+Meeting transcript:
+{adhoc_transcript}
+
+Provide:
+- TEAM UPDATES: What was discussed
+- DECISIONS MADE: What was approved/decided
+- ACTION ITEMS: Who is doing what by when
+- NEXT STEPS: What's happening next
+
+Format as clear bullet points."""
+                                            }
+                                        ],
+                                        max_tokens=1000
+                                    )
+                                    
+                                    extracted = response.choices[0].message.content
+                                    st.session_state[f"adhoc_extracted_{program}"] = extracted
+                                    st.success("✅ Extracted!")
+                                else:
+                                    st.warning("Groq API not configured")
+                                    
+                            except Exception as e:
+                                st.error(f"Error: {e}")
+                    else:
+                        st.warning("Paste transcript first")
+            
+            with col_ai2:
+                st.caption("Let AI extract key points from your transcript")
+            
+            st.markdown("---")
+            st.caption("**Or write your summary manually:**")
             
             extracted_summary = st.text_area(
                 "Summary of meeting",
@@ -2342,13 +2396,88 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
         st.markdown("---")
         st.markdown("#### 📋 Organize Transcript into Meeting Sections")
         
-        col_org1, col_org2 = st.columns([2, 1])
+        col_org1, col_org2, col_org3 = st.columns([2, 1, 1])
         
         with col_org1:
-            st.caption("Break your transcript into CLC meeting sections (Check-in, Student Concerns, SMARTAR Goals, Reports, TAC, Transitions, Actions)")
+            st.caption("Use AI to automatically divide your transcript into CLC meeting sections, or organize manually by keyword")
         
         with col_org2:
-            if st.button("🔄 Manual Organize", key=f"manual_organize_{program}", type="primary", use_container_width=True):
+            if st.button("🤖 AI Organize", key=f"ai_organize_{program}", type="primary", use_container_width=True):
+                transcript_to_org = transcript_input.strip()
+                if transcript_to_org:
+                    with st.spinner("🤖 Organizing transcript with AI..."):
+                        try:
+                            groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
+                            
+                            if groq_client:
+                                response = groq_client.chat.completions.create(
+                                    model="gpt-oss-120b",
+                                    messages=[
+                                        {
+                                            "role": "system",
+                                            "content": """You are an expert at organizing educational meeting transcripts for {program} team meetings.
+
+Your job is to:
+1. Read the raw meeting transcript
+2. Organize content into these CLC LBU meeting sections:
+   - CHECK-IN: Team updates, regulatory/wellbeing info needed today
+   - STUDENT CONCERNS: Behavior, learning, wellbeing issues discussed
+   - SMARTAR GOALS: Student learning targets, goal-setting discussions
+   - REPORT: Progress reports, assessment data, outcomes
+   - TAC: Transition Advisory Committee items, transition planning
+   - TRANSITIONS: Specific transition strategies and visual supports
+   - ACTIONS: Who is doing what by when - clarified action items
+
+3. Clean up and refine each section for clarity
+4. Use professional educational language
+5. Make action items specific (Who/What/By When)
+
+Output format:
+===CHECK-IN===
+[content here, 2-3 sentences max]
+
+===STUDENT CONCERNS===
+[organized by student if mentioned, 2-3 sentences each]
+
+===SMARTAR GOALS===
+[specific learning targets with dates/metrics]
+
+===REPORT===
+[progress data and outcomes]
+
+===TAC===
+[transition planning items]
+
+===TRANSITIONS===
+[specific visual/sensory strategies]
+
+===ACTIONS===
+- Who: What by When
+- Who: What by When
+
+Only include sections that have content. Be concise and professional."""
+                                        },
+                                        {
+                                            "role": "user",
+                                            "content": f"Here is the meeting transcript to organize:\n\n{transcript_to_org}"
+                                        }
+                                    ],
+                                    max_tokens=2000
+                                )
+                                
+                                organized = response.choices[0].message.content
+                                st.session_state[f"organized_transcript_{program}"] = organized
+                                st.success("✅ Transcript organized by AI!")
+                            else:
+                                st.warning("Groq API not configured")
+                                
+                        except Exception as e:
+                            st.error(f"Error organizing: {e}")
+                else:
+                    st.warning("Please paste a transcript first")
+        
+        with col_org3:
+            if st.button("📋 Manual", key=f"manual_organize_{program}", use_container_width=True):
                 st.session_state[f"show_manual_org_{program}"] = True
                 st.rerun()
     
