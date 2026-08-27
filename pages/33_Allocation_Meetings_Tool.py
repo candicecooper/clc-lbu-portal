@@ -1158,7 +1158,7 @@ with tab4:
             "This meeting week only", "All allocated & completed records",
             "Extensions decided this week", "All extensions ever recorded"
         ],
-        horizontal=True, index=1,
+        horizontal=True, index=0,
         help="'This meeting week only' now includes both new allocations from this week AND any "
              "extension decided this week, even for a student allocated earlier. "
              "'Extensions decided this week' narrows to just the extension decisions on their own."
@@ -1188,21 +1188,32 @@ with tab4:
         full_data = query.execute()
 
         if full_data.data:
-            allocated = [r for r in full_data.data if r.get('outcome') == 'Allocated']
-            not_allocated = [r for r in full_data.data if r.get('outcome') == 'Not Allocated']
+            ext_approved = [r for r in full_data.data if r.get('extension_status') == 'Approved']
+            ext_not_approved = [r for r in full_data.data if r.get('extension_status') == 'Not Approved']
+            has_extension_ids = {r['id'] for r in ext_approved + ext_not_approved}
+            allocated = [r for r in full_data.data if r.get('outcome') == 'Allocated' and r['id'] not in has_extension_ids]
+            not_allocated = [r for r in full_data.data if r.get('outcome') == 'Not Allocated' and r['id'] not in has_extension_ids]
 
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4, col5 = st.columns(5)
             with col1:
                 st.metric("Total Records", len(full_data.data))
             with col2:
                 st.metric("Allocated", len(allocated))
             with col3:
                 st.metric("Not Allocated", len(not_allocated))
+            with col4:
+                st.metric("Extension Approved", len(ext_approved))
+            with col5:
+                st.metric("Extension Not Approved", len(ext_not_approved))
+            st.caption(
+                "A student who was extended is counted once, under Extension — not also under "
+                "Allocated — since they'd already been allocated previously."
+            )
 
             st.markdown("---")
             st.subheader("📋 Pre-Export Review & Validation")
 
-            export_records = allocated + not_allocated
+            export_records = allocated + not_allocated + ext_approved + ext_not_approved
             validation_issues = []
             for record in export_records:
                 issues = []
@@ -1224,16 +1235,42 @@ with tab4:
 
             st.markdown("---")
             st.subheader("👁️ Export Preview")
-            with st.expander("Click to review records being exported", expanded=True):
-                preview_data = [{
+
+            def _preview_table(records):
+                data = [{
                     "Student": r.get('student_name', ''), "Year": r.get('year_level', ''),
                     "Program": r.get('program', ''), "School": r.get('school', ''),
                     "Outcome": r.get('outcome', ''), "Focus Teacher": r.get('actioned_by', ''),
                     "Extension": r.get('extension_status', ''), "Ext. Weeks": r.get('extension_weeks', ''),
                     "Meeting Week": r.get('meeting_week', ''), "BSE": r.get('bse', ''),
-                } for r in export_records]
-                st.dataframe(pd.DataFrame(preview_data), use_container_width=True, hide_index=True)
-                st.caption(f"📊 {len(export_records)} record(s) ready for export")
+                } for r in records]
+                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+
+            with st.expander(f"✅ Allocated ({len(allocated)})", expanded=True):
+                if allocated:
+                    _preview_table(allocated)
+                else:
+                    st.caption("None in this view.")
+
+            with st.expander(f"⏸️ Not Allocated ({len(not_allocated)})"):
+                if not_allocated:
+                    _preview_table(not_allocated)
+                else:
+                    st.caption("None in this view.")
+
+            with st.expander(f"🔄 Extension Approved ({len(ext_approved)})"):
+                if ext_approved:
+                    _preview_table(ext_approved)
+                else:
+                    st.caption("None in this view.")
+
+            with st.expander(f"🔄 Extension Not Approved ({len(ext_not_approved)})"):
+                if ext_not_approved:
+                    _preview_table(ext_not_approved)
+                else:
+                    st.caption("None in this view.")
+
+            st.caption(f"📊 {len(export_records)} record(s) total, ready for export")
 
             with st.expander("🔎 View all captured data (every field, per student)"):
                 full_rows = build_export_rows(export_records)
