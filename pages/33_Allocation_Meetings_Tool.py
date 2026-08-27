@@ -103,7 +103,7 @@ EXPORT_COLUMNS = [
     'Extension', 'Extension_Date', 'Exit_Reason', 'Transition_Plan', 'Notes', 'Placement_End',
     'Exclusion_End_Date', 'Proposed_Extension_Finish_Date', 'Extension_Weeks', 'Action_owner',
     'Actual_Finish_Date', 'Extended_Placement', 'Referral_Year', 'Term', 'Extension_Status',
-    'Referral_Occurrence', 'Referral_ID', 'BSE'
+    'Referral_Occurrence', 'Referral_ID', 'BSE', 'Exclusion_Start_Date'
 ]
 
 # Excel column -> Supabase field. None means the column is left blank on export
@@ -143,7 +143,7 @@ FIELD_MAP = {
     'Extension_Weeks': 'extension_weeks', 'Action_owner': 'actioned_by',
     'Actual_Finish_Date': 'actual_finish_date', 'Extended_Placement': 'extended_placement',
     'Referral_Year': 'year', 'Term': 'term', 'Extension_Status': 'extension_status',
-    'Referral_Occurrence': None, 'Referral_ID': None, 'BSE': 'bse',
+    'Referral_Occurrence': None, 'Referral_ID': None, 'BSE': 'bse', 'Exclusion_Start_Date': 'exclusion_start_date',
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -575,6 +575,16 @@ with tab1:
                         )
                     previous_referrals = st.text_input("Number of Previous Referrals", value=draft.get('previous_referrals') or "")
 
+                    ecol1, ecol2 = st.columns(2)
+                    with ecol1:
+                        exclusion_start_date = st.date_input(
+                            "Exclusion Start Date", value=parse_stored_date(draft.get('exclusion_start_date'))
+                        )
+                    with ecol2:
+                        exclusion_end_date = st.date_input(
+                            "Exclusion End Date", value=parse_stored_date(draft.get('exclusion_end_date'))
+                        )
+
                     edit_needs_priority = st.checkbox(
                         "Needs prioritising against other waiting referrals",
                         value=bool(draft.get('priority_level'))
@@ -754,6 +764,8 @@ with tab1:
                                     ),
                                     "queries": queries,
                                     "bse": bse or None,
+                                    "exclusion_start_date": exclusion_start_date.isoformat() if exclusion_start_date else None,
+                                    "exclusion_end_date": exclusion_end_date.isoformat() if exclusion_end_date else None,
                                     "program": program,
                                     "case_worker": case_worker or None,
                                     "actioned_by": case_worker or None,
@@ -820,6 +832,12 @@ with tab1:
                 previously_referred = st.selectbox("Previously Referred?", YES_NO)
 
             previous_referrals = st.text_input("Number of Previous Referrals")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                exclusion_start_date = st.date_input("Exclusion Start Date", value=None)
+            with col2:
+                exclusion_end_date = st.date_input("Exclusion End Date", value=None)
 
             needs_priority = st.checkbox(
                 "Needs prioritising against other waiting referrals",
@@ -936,6 +954,8 @@ with tab1:
                             ),
                             "queries": queries,
                             "bse": bse or None,
+                            "exclusion_start_date": exclusion_start_date.isoformat() if exclusion_start_date else None,
+                            "exclusion_end_date": exclusion_end_date.isoformat() if exclusion_end_date else None,
                             "outcome": None,
                         }
                         for db_col, val in flag_values.items():
