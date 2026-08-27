@@ -467,11 +467,11 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
 # ══════════════════════════════════════════════════════════════════════════════
 with tab1:
     st.header("New Student Allocations")
-    stage_choice = st.radio("Stage:", ["➕ Create Draft (Stage 1)", "📝 Complete Draft (Stage 2)"], horizontal=True)
+    stage_choice = st.radio("Stage:", ["➕ Referral", "📝 Allocation Outcome"], horizontal=True)
     st.markdown("---")
 
-    if stage_choice == "📝 Complete Draft (Stage 2)":
-        st.subheader("📂 Select Draft to Complete")
+    if stage_choice == "📝 Allocation Outcome":
+        st.subheader("📂 Select Referral to Progress")
 
         show_all_weeks = st.checkbox(
             "🔍 Show drafts from all weeks",
@@ -534,7 +534,7 @@ with tab1:
                             st.rerun()
 
                 with st.form("complete_allocation"):
-                    st.markdown("#### 📋 Stage 1 Details — review and edit if needed")
+                    st.markdown("#### 📋 Referral Details — review and edit if needed")
 
                     col1, col2, col3 = st.columns(3)
                     with col1:
@@ -670,7 +670,7 @@ with tab1:
                     queries = st.text_area("Queries/Notes for Meeting", value=draft.get('queries') or "")
 
                     st.markdown("---")
-                    st.markdown("#### ✅ Stage 2 — Allocation Outcome")
+                    st.markdown("#### ✅ Allocation Outcome")
 
                     col1, col2, col3 = st.columns(3)
                     with col1:
@@ -793,7 +793,7 @@ with tab1:
             st.error(f"Error: {e}")
 
     else:
-        st.subheader("➕ Create New Draft")
+        st.subheader("➕ New Referral")
 
         with st.form("new_draft", clear_on_submit=True):
             col1, col2, col3 = st.columns(3)
@@ -954,15 +954,18 @@ with tab1:
 # ══════════════════════════════════════════════════════════════════════════════
 with tab2:
     st.header("🔄 Extensions")
-    st.info("Record an extension decision for a currently allocated student.")
 
     if st.session_state.get("last_extension_saved"):
         info = st.session_state["last_extension_saved"]
-        st.success(
-            f"✅ Last saved: **{info['name']}** — Extension: **{info['status']}**, "
-            f"Weeks: **{info['weeks']}** (saved {info['when']})"
-        )
+        st.success(f"✅ Last saved: **{info['name']}** — {info['detail']} (saved {info['when']})")
         st.caption("This confirmation stays here until you save another extension, so you can check it any time.")
+
+    ext_stage = st.radio(
+        "Stage:", ["➕ Extension Request", "✅ Extension Decision"], horizontal=True,
+        help="Log the request first without an outcome, then come back here to record the decision "
+             "once it's been made — the same way referrals work in New Allocations."
+    )
+    st.markdown("---")
 
     try:
         all_students = supabase.table("allocation_students").select("*").execute()
@@ -974,11 +977,10 @@ with tab2:
                 return False
             return True
 
+        def _has_pending_request(r):
+            return bool(r.get("extension_weeks") or r.get("proposed_extension_finish_date")) and not r.get("extension_status")
+
         allocated_data = [r for r in all_students.data if _is_active(r)]
-        class _Wrap:
-            pass
-        allocated = _Wrap()
-        allocated.data = allocated_data
 
         with st.expander("🔍 Debug: what's actually in the database"):
             st.write(f"Total rows in `allocation_students`: {len(all_students.data)}")
@@ -995,63 +997,115 @@ with tab2:
                 "(marked Inactive via Current_Status)."
             )
 
-        if allocated.data:
-            sorted_students = sorted(allocated.data, key=lambda r: (r.get('student_name') or '').lower())
-            options = {
-                f"{r['student_name']} — {r.get('school', 'no school')} (Year {r.get('year_level', '?')})": r
-                for r in sorted_students
-            }
-            chosen = st.selectbox(
-                f"Select allocated student ({len(options)} total — type to search)",
-                list(options.keys())
-            )
-            record = options[chosen]
+        if ext_stage == "➕ Extension Request":
+            st.subheader("➕ New Extension Request")
+            st.caption("Log the request details — no outcome yet. This moves them into Extension Decision once saved.")
 
-            with st.form("extension_form"):
-                col1, col2 = st.columns(2)
-                with col1:
-                    ext_outcome = st.selectbox("Extension Outcome *", EXTENSION_OUTCOMES)
-                with col2:
-                    ext_weeks = st.text_input("Extension Weeks")
+            eligible = [r for r in allocated_data if not _has_pending_request(r)]
+            if eligible:
+                sorted_students = sorted(eligible, key=lambda r: (r.get('student_name') or '').lower())
+                options = {
+                    f"{r['student_name']} — {r.get('school', 'no school')} (Year {r.get('year_level', '?')})": r
+                    for r in sorted_students
+                }
+                chosen = st.selectbox(f"Select allocated student ({len(options)} total — type to search)", list(options.keys()))
+                record = options[chosen]
 
-                col1, col2 = st.columns(2)
-                with col1:
-                    ext_date = st.date_input("Extension Decision Date", value=datetime.now().date())
-                with col2:
-                    proposed_finish = st.date_input("Proposed Extension Finish Date", value=None)
+                with st.form("extension_request_form"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        ext_weeks = st.text_input("Extension Weeks Requested")
+                    with col2:
+                        proposed_finish = st.date_input("Proposed Extension Finish Date", value=None)
 
-                ext_comm = st.text_area("Communication to School")
-                ext_owner = st.selectbox("Focus Teacher", [""] + STAFF_NAMES)
+                    ext_comm = st.text_area("Reason for request / communication so far")
+                    ext_owner = st.selectbox("Focus Teacher", [""] + STAFF_NAMES)
 
-                if st.form_submit_button("✅ Save Extension", type="primary", use_container_width=True):
-                    try:
-                        result = supabase.table("allocation_students").update({
-                            "extension": yn(ext_outcome == "Approved"),
-                            "extension_status": ext_outcome,
-                            "extension_date": ext_date.isoformat() if ext_date else None,
-                            "extension_weeks": num_or_none(ext_weeks),
-                            "proposed_extension_finish_date": proposed_finish.isoformat() if proposed_finish else None,
-                            "information": ext_comm or record.get("information"),
-                            "actioned_by": ext_owner or record.get("actioned_by"),
-                        }).eq("id", record["id"]).execute()
+                    if st.form_submit_button("💾 Save Extension Request", type="primary", use_container_width=True):
+                        try:
+                            result = supabase.table("allocation_students").update({
+                                "extension_weeks": num_or_none(ext_weeks),
+                                "proposed_extension_finish_date": proposed_finish.isoformat() if proposed_finish else None,
+                                "information": ext_comm or record.get("information"),
+                                "actioned_by": ext_owner or record.get("actioned_by"),
+                            }).eq("id", record["id"]).execute()
 
-                        if not result.data:
-                            st.error(
-                                "⚠️ The update ran but returned no confirmation — this can mean the row "
-                                "wasn't actually found or updated. Nothing may have been saved."
-                            )
-                        else:
-                            st.session_state["last_extension_saved"] = {
-                                "name": result.data[0].get("student_name"),
-                                "status": result.data[0].get("extension_status"),
-                                "weeks": result.data[0].get("extension_weeks"),
-                                "when": datetime.now().strftime("%I:%M %p"),
-                            }
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"Error: {e}")
+                            if not result.data:
+                                st.error("⚠️ The update ran but returned no confirmation — nothing may have been saved.")
+                            else:
+                                st.session_state["last_extension_saved"] = {
+                                    "name": result.data[0].get("student_name"),
+                                    "detail": f"Request logged, {result.data[0].get('extension_weeks') or '?'} weeks requested",
+                                    "when": datetime.now().strftime("%I:%M %p"),
+                                }
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+            else:
+                st.info("No allocated students currently need a new extension request logged.")
+
         else:
-            st.info("No allocated students found yet.")
+            st.subheader("✅ Record Extension Decision")
+            pending = [r for r in allocated_data if _has_pending_request(r)]
+            if pending:
+                sorted_pending = sorted(pending, key=lambda r: (r.get('student_name') or '').lower())
+                options = {
+                    f"{r['student_name']} — {r.get('school', 'no school')} "
+                    f"(requested {r.get('extension_weeks') or '?'} wks)": r
+                    for r in sorted_pending
+                }
+                chosen = st.selectbox(f"Select pending request ({len(options)} total)", list(options.keys()))
+                record = options[chosen]
+
+                with st.form("extension_decision_form"):
+                    st.caption("Details from the request — edit if needed before recording the decision.")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        ext_weeks = st.text_input("Extension Weeks", value=record.get("extension_weeks") or "")
+                    with col2:
+                        proposed_finish = st.date_input(
+                            "Proposed Extension Finish Date",
+                            value=parse_stored_date(record.get("proposed_extension_finish_date"))
+                        )
+                    ext_comm = st.text_area("Communication to School", value=record.get("information") or "")
+                    ext_owner = st.selectbox(
+                        "Focus Teacher", [""] + STAFF_NAMES,
+                        index=([""] + STAFF_NAMES).index(record.get("actioned_by")) if record.get("actioned_by") in STAFF_NAMES else 0
+                    )
+
+                    st.markdown("---")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        ext_outcome = st.selectbox("Extension Outcome *", EXTENSION_OUTCOMES)
+                    with col2:
+                        ext_date = st.date_input("Extension Decision Date", value=datetime.now().date())
+
+                    if st.form_submit_button("✅ Save Decision", type="primary", use_container_width=True):
+                        try:
+                            result = supabase.table("allocation_students").update({
+                                "extension": yn(ext_outcome == "Approved"),
+                                "extension_status": ext_outcome,
+                                "extension_date": ext_date.isoformat() if ext_date else None,
+                                "extension_weeks": num_or_none(ext_weeks),
+                                "proposed_extension_finish_date": proposed_finish.isoformat() if proposed_finish else None,
+                                "information": ext_comm or record.get("information"),
+                                "actioned_by": ext_owner or record.get("actioned_by"),
+                            }).eq("id", record["id"]).execute()
+
+                            if not result.data:
+                                st.error("⚠️ The update ran but returned no confirmation — nothing may have been saved.")
+                            else:
+                                st.session_state["last_extension_saved"] = {
+                                    "name": result.data[0].get("student_name"),
+                                    "detail": f"Decision: {result.data[0].get('extension_status')}, "
+                                              f"{result.data[0].get('extension_weeks') or '?'} weeks",
+                                    "when": datetime.now().strftime("%I:%M %p"),
+                                }
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+            else:
+                st.info("No pending extension requests waiting on a decision. Log one under Extension Request first.")
     except Exception as e:
         st.error(f"Error: {e}")
 
