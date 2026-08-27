@@ -1,15 +1,17 @@
 """
-Admin Duties Checklist
+Admin Jobs Checklist
 Cowandilla Learning Centre – LBU Portal Tool
 
-Shared, live checklist of admin duties: pick your name, tick jobs off,
-hand a job to a teammate, and see a dated "This Week" view of what's daily
-vs weekly. Backed by Supabase (project cmqyrfekxgjdtuloseri) so every tick
-and assignment is saved centrally and shows up for anyone else with this
-page open — matching how the rest of the portal stores data.
+Shared, live checklist of admin jobs (deliberately called "jobs" rather
+than "duties" throughout this page, since "duty" already means yard/break
+duty at school): pick your name, tick jobs off, and see a dated "This
+Week" view of what's daily vs weekly. Backed by Supabase (project
+cmqyrfekxgjdtuloseri) so every tick and roster change is saved centrally
+and shows up for anyone else with this page open — matching how the rest
+of the portal stores data.
 
 A password-gated "🔒 Admin" panel (password: see ADMIN_PASSWORD below) lets
-someone add a new duty to any section, edit/delete a duty already listed,
+someone add a new job to any section, edit/delete a job already listed,
 and create, rename, or remove sections themselves — see "Note on the
 Admin panel" below for how that's stored and what the password does and
 doesn't protect.
@@ -19,7 +21,7 @@ Setup (one-off):
    it creates checklist_staff / checklist_assignments / checklist_completions
    and seeds the starting staff list.
 2. Run supabase_schema_tasks.sql once too (after the above) — it creates
-   checklist_tasks and seeds it with the current duty list, which is what
+   checklist_tasks and seeds it with the current job list, which is what
    the Admin panel adds/edits/deletes rows in. Skipping this step doesn't
    break the page — it just falls back to the built-in DEFAULT_TASKS below
    and Admin panel changes won't be able to save.
@@ -31,10 +33,10 @@ Setup (one-off):
    won't be able to save.
 4. Run supabase_schema_roster.sql once too (after the above three) — it
    creates checklist_duty_roster, which is what drives who's responsible
-   for each duty, day by day (see "Note on responsibility" below). This
+   for each job, day by day (see "Note on responsibility" below). This
    REPLACES the old single "assigned to" dropdown backed by
    checklist_assignments — that table is left alone but no longer read by
-   this page. Skipping this step doesn't break the page — duties just show
+   this page. Skipping this step doesn't break the page — jobs just show
    as "Unassigned" everywhere until it's run.
 5. Optionally add SUPABASE_URL / SUPABASE_KEY to .streamlit/secrets.toml
    (falls back to the hardcoded project values below if not set, same
@@ -42,18 +44,18 @@ Setup (one-off):
 6. `pip install supabase` (and optionally `streamlit-autorefresh` for
    near-live updates across users without a manual refresh).
 
-Note on responsibility: each duty can have different people responsible
+Note on responsibility: each job can have different people responsible
 on different weekdays, and a single day can have more than one person
-(shared responsibility) — set this up per duty from the "Manage duties"
-admin panel's "Roster" section. The Checklist tab shows a read-only badge
-for who's on a duty today; This Week has a "Viewing" picker to see one
-person's day-by-day duties, with "+ Name" shown for any day they share
-with someone else.
+(shared responsibility) — set this up per job from the "Manage jobs"
+admin panel's "Roster" section. A single "Viewing" picker sits above the
+tabs — pick a name and both the Today tab and This Week tab filter down
+to just their jobs (still tickable), with "+ Name" shown for any day
+they share with someone else. Leave it on "Everyone" to see the full list.
 
 Note on scope: unlike the Safety & Risk Plan Builder, this tool holds no
-student data — only staff names, job assignments, tick timestamps, and the
-duty text itself — so storing it in Supabase doesn't raise the same
-data-governance concerns.
+student data — only staff names, job roster assignments, tick timestamps,
+and the job text itself — so storing it in Supabase doesn't raise the
+same data-governance concerns.
 
 Note on login: there's no real password-protected sign-in here, just a
 name picker (see checklist_staff) — matching what was agreed for this
@@ -97,14 +99,14 @@ SAFETY_RED  = "#C0392B"
 SSO_LABEL = {"am": "8–9am", "pm": "2:45–4pm", "both": "8–9am · 2:45–4pm"}
 WEEKDAY_COLS = ["Mon", "Tue", "Wed", "Thu", "Fri"]  # date.weekday(): Mon=0..Fri=4
 
-# Sentinel used in checklist_duty_roster.weekday for a weekly duty with no
+# Sentinel used in checklist_duty_roster.weekday for a weekly job with no
 # fixed day, instead of NULL — Postgres primary keys can't contain NULL,
 # and "Any" reads clearly in the data too.
 WEEKDAY_ANY = "Any"
 
 DEFAULT_STAFF = ["Candice", "Vinnie", "Annette", "Bonnie", "Naomi"]
 
-# Password for the "Manage duties" admin panel below. This only hides the
+# Password for the "Manage jobs" admin panel below. This only hides the
 # panel from casual browsing — it's checked in this script, which anyone
 # with repo access can read, so it isn't real security (same tradeoff as
 # the anon Supabase key this whole page already ships with).
@@ -136,7 +138,7 @@ DEFAULT_CATEGORIES = [
 # This flat list is only the fallback used before the checklist_tasks
 # Supabase table has been migrated to (see supabase_schema_tasks.sql) or if
 # it can't be reached — once that table is live it's the source of truth,
-# and duties added/edited/removed via the admin panel live there instead.
+# and jobs added/edited/removed via the admin panel live there instead.
 DEFAULT_TASKS = [
     {"id": "email-1", "category_id": "email", "text": "Check emails as they come through", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 1},
     {"id": "email-2", "category_id": "email", "text": "Forward emails on to the correct people", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 2},
@@ -200,9 +202,9 @@ def grouped_categories(tasks_flat, categories):
 
 
 def applicable_day_keys(task):
-    """Which weekday keys a duty's roster spans: all 5 weekdays for a daily
-    duty, just its fixed day for a weekly duty that has one, or the single
-    WEEKDAY_ANY sentinel for a weekly duty with no fixed day."""
+    """Which weekday keys a job's roster spans: all 5 weekdays for a daily
+    job, just its fixed day for a weekly job that has one, or the single
+    WEEKDAY_ANY sentinel for a weekly job with no fixed day."""
     if task["frequency"] == "daily":
         return WEEKDAY_COLS[:]
     if task["weekday"]:
@@ -213,14 +215,14 @@ def applicable_day_keys(task):
 def get_responsible(roster, task_id, day_key):
     """roster is the {task_id: {weekday: [staff_name, ...]}} shape returned
     by load_roster() — returns the (possibly empty) list of names responsible
-    for a duty on a given day key."""
+    for a job on a given day key."""
     return roster.get(task_id, {}).get(day_key, [])
 
 
 def day_key_for_today(task, ref_date):
     """Which single day key applies to `task` on `ref_date` — None for a
-    daily duty on a weekend (nothing to show), the duty's fixed weekday for
-    a weekly duty that has one, or WEEKDAY_ANY otherwise."""
+    daily job on a weekend (nothing to show), the job's fixed weekday for
+    a weekly job that has one, or WEEKDAY_ANY otherwise."""
     if task["frequency"] == "daily":
         dow = ref_date.weekday()  # Mon=0..Sun=6
         if dow > 4:
@@ -229,6 +231,18 @@ def day_key_for_today(task, ref_date):
     if task["weekday"]:
         return task["weekday"]
     return WEEKDAY_ANY
+
+
+def is_viewed_responsible(task, roster, ref_date, viewing_staff):
+    """Whether `task` is one of the viewed person's jobs on ref_date —
+    always True when nobody's selected (viewing "Everyone"). Shared by the
+    Today and This Week tabs so the same "Viewing" pick filters both."""
+    if not viewing_staff:
+        return True
+    day_key = day_key_for_today(task, ref_date)
+    if not day_key:
+        return False
+    return viewing_staff in get_responsible(roster, task["id"], day_key)
 
 # ══════════════════════════════════════════════════════════════════════════
 # SUPABASE CONNECTION — same st.secrets → env var → default chain used
@@ -322,7 +336,7 @@ def load_staff():
 
 def load_roster():
     """{ task_id: { weekday: [staff_name, ...] } } — who's responsible for a
-    duty, day by day. Multiple names under the same (task_id, weekday) means
+    job, day by day. Multiple names under the same (task_id, weekday) means
     shared responsibility that day."""
     if not sb:
         return {}
@@ -451,7 +465,7 @@ def update_category(category_id, fields):
 
 
 def delete_category(category_id, tasks_flat):
-    # Guard: refuse if any duty still lives in this section, so we never
+    # Guard: refuse if any job still lives in this section, so we never
     # orphan a task whose category_id no longer matches any known section.
     if any(t["category_id"] == category_id for t in tasks_flat):
         return
@@ -478,12 +492,12 @@ def add_task(category_id, text, frequency, weekday, sso, tasks_flat):
         "sort_order": next_sort_order(tasks_flat, category_id),
     }
     if not sb:
-        st.toast("Not connected to Supabase — duty wasn't saved", icon="⚠️")
+        st.toast("Not connected to Supabase — job wasn't saved", icon="⚠️")
         return
     try:
         sb.table("checklist_tasks").insert(row).execute()
     except Exception as e:
-        st.toast(f"Couldn't save the new duty: {e}", icon="⚠️")
+        st.toast(f"Couldn't save the new job: {e}", icon="⚠️")
 
 
 def update_task(task_id, fields):
@@ -501,14 +515,14 @@ def update_task(task_id, fields):
 
 def delete_task(task_id):
     if not sb:
-        st.toast("Not connected to Supabase — duty wasn't deleted", icon="⚠️")
+        st.toast("Not connected to Supabase — job wasn't deleted", icon="⚠️")
         return
     try:
         sb.table("checklist_completions").delete().eq("task_id", task_id).execute()
         sb.table("checklist_duty_roster").delete().eq("task_id", task_id).execute()
         sb.table("checklist_tasks").delete().eq("id", task_id).execute()
     except Exception as e:
-        st.toast(f"Couldn't delete that duty: {e}", icon="⚠️")
+        st.toast(f"Couldn't delete that job: {e}", icon="⚠️")
 
 
 def set_done(task_id, period_key, done, by):
@@ -596,7 +610,7 @@ def init_state():
 # PAGE CONFIG & CSS
 # ══════════════════════════════════════════════════════════════════════════
 st.set_page_config(
-    page_title="Admin Duties Checklist | LBU",
+    page_title="Admin Jobs Checklist | LBU",
     page_icon="✅", layout="wide", initial_sidebar_state="collapsed"
 )
 
@@ -633,9 +647,9 @@ st.markdown(f"""
 
 init_state()
 
-# Reset the "Add a duty" form fields on the run after a successful add —
+# Reset the "Add a job" form fields on the run after a successful add —
 # must happen before those widgets are instantiated below (see the note in
-# the "Add duty" button handler further down for why this can't happen
+# the "Add job" button handler further down for why this can't happen
 # in the same run as the click).
 if st.session_state.get("_clear_admin_form"):
     st.session_state["admin_new_text"] = ""
@@ -658,7 +672,7 @@ if st_autorefresh:
 
 st.markdown(f"""
 <div class="clc-header">
-  <div><h1>✅ Admin Duties Checklist</h1>
+  <div><h1>✅ Admin Jobs Checklist</h1>
   <p>Cowandilla Learning Centre — LBU Portal Tool</p></div>
   <span class="clc-badge">{"SUPABASE CONNECTED" if sb else "OFFLINE — CHECK CONNECTION"}</span>
 </div>""", unsafe_allow_html=True)
@@ -717,12 +731,12 @@ if st.session_state.show_staff_panel:
                 add_staff(new_staff_name.strip())
                 st.rerun()
 
-# ── Admin: duty management (password-gated, Supabase-backed) ───────────────
+# ── Admin: job management (password-gated, Supabase-backed) ───────────────
 # See the ADMIN_PASSWORD note above the constant — this is a "don't show
 # this to everyone" gate, not real security.
 if st.session_state.show_admin_login and not st.session_state.admin_unlocked:
     with st.expander("🔒 Admin access", expanded=True):
-        st.caption("Enter the admin password to add, edit, or remove duties.")
+        st.caption("Enter the admin password to add, edit, or remove jobs.")
         pw_col1, pw_col2 = st.columns([3, 1])
         admin_pw = pw_col1.text_input("Password", type="password", key="admin_pw_input", label_visibility="collapsed")
         if pw_col2.button("Unlock", use_container_width=True):
@@ -735,9 +749,9 @@ if st.session_state.show_admin_login and not st.session_state.admin_unlocked:
                 st.error("That password isn't right.")
 
 if st.session_state.show_admin_panel and st.session_state.admin_unlocked:
-    with st.expander("🛠️ Manage duties", expanded=True):
+    with st.expander("🛠️ Manage jobs", expanded=True):
         st.caption(
-            "Add a new duty to any section below, or edit and remove ones already listed. "
+            "Add a new job to any section below, or edit and remove ones already listed. "
             "Changes save straight to Supabase for everyone."
         )
         admin_tasks = load_tasks()
@@ -755,12 +769,12 @@ if st.session_state.show_admin_panel and st.session_state.admin_unlocked:
             edited_safety = sc2.checkbox(
                 "Highlight as safety", value=cat["safety"], key=f"cat_safety_{cat['id']}"
             )
-            sc3.markdown(f"{duty_count} " + ("duty" if duty_count == 1 else "duties"))
+            sc3.markdown(f"{duty_count} " + ("job" if duty_count == 1 else "jobs"))
 
             confirm_cat_key = f"confirm_delcat_{cat['id']}"
             if duty_count > 0:
                 sc4.button("Delete", key=f"delcat_{cat['id']}", use_container_width=True, disabled=True,
-                           help="Move or delete this section's duties first")
+                           help="Move or delete this section's jobs first")
             elif st.session_state.get(confirm_cat_key):
                 if sc4.button("Confirm?", key=f"delcatc_{cat['id']}", use_container_width=True):
                     delete_category(cat["id"], admin_tasks)
@@ -788,13 +802,13 @@ if st.session_state.show_admin_panel and st.session_state.admin_unlocked:
         if nsc3.button("Add section", key="admin_add_section_btn", use_container_width=True):
             if new_section_title.strip():
                 add_category(new_section_title.strip(), new_section_safety, admin_categories)
-                # Same next-run clearing trick as the "Add a duty" form below.
+                # Same next-run clearing trick as the "Add a job" form below.
                 st.session_state["_clear_admin_section_form"] = True
                 st.rerun()
 
         st.markdown("---")
-        st.markdown("**Add a duty**")
-        new_text = st.text_input("Duty text", key="admin_new_text", placeholder="e.g. Print the visitor sign-in sheet")
+        st.markdown("**Add a job**")
+        new_text = st.text_input("Job text", key="admin_new_text", placeholder="e.g. Print the visitor sign-in sheet")
         ac1, ac2, ac3, ac4 = st.columns(4)
         cat_titles_sorted = [c["title"] for c in sorted(admin_categories, key=lambda c: c.get("sort_order", 0))]
         new_cat_title = ac1.selectbox("Section", cat_titles_sorted, key="admin_new_cat")
@@ -808,7 +822,7 @@ if st.session_state.show_admin_panel and st.session_state.admin_unlocked:
         new_sso_pick = ac4.selectbox("SSO hours", ["None", "8–9am", "2:45–4pm", "Both"], key="admin_new_sso")
         new_sso = {"None": None, "8–9am": "am", "2:45–4pm": "pm", "Both": "both"}[new_sso_pick]
 
-        if st.button("Add duty", key="admin_add_btn"):
+        if st.button("Add job", key="admin_add_btn"):
             if new_text.strip():
                 new_cat_id = next(c["id"] for c in admin_categories if c["title"] == new_cat_title)
                 add_task(new_cat_id, new_text.strip(), new_freq.lower(), new_weekday, new_sso, admin_tasks)
@@ -820,7 +834,7 @@ if st.session_state.show_admin_panel and st.session_state.admin_unlocked:
                 st.rerun()
 
         st.markdown("---")
-        st.markdown("**Duties**")
+        st.markdown("**Jobs**")
         for cat in grouped_categories(admin_tasks, admin_categories):
             if not cat["tasks"]:
                 continue
@@ -828,7 +842,7 @@ if st.session_state.show_admin_panel and st.session_state.admin_unlocked:
             for t in cat["tasks"]:
                 dr1, dr2, dr3, dr4, dr5 = st.columns([4, 1.2, 1, 1.3, 1])
                 edited_text = dr1.text_input(
-                    "Duty text", value=t["text"], key=f"dtext_{t['id']}", label_visibility="collapsed"
+                    "Job text", value=t["text"], key=f"dtext_{t['id']}", label_visibility="collapsed"
                 )
                 freq_pick = dr2.selectbox(
                     "Frequency", ["Daily", "Weekly"],
@@ -905,12 +919,32 @@ if st.session_state.show_admin_panel and st.session_state.admin_unlocked:
 
 st.markdown("---")
 
+# "Viewing" is a separate picker from the signed-in identity — anyone can
+# look at anyone's jobs, on either tab below, without switching who they're
+# signed in as. It lives once here, above the tabs, so the same person you
+# pick stays selected whether you're looking at Today or This Week. Reset
+# it before the widget is instantiated if the previously-viewed person is
+# no longer on staff (same defer-to-next-run pattern used for the admin
+# forms above).
+viewing_staff_names = load_staff()
+viewing_options = ["Everyone"] + viewing_staff_names
+if st.session_state.get("week_viewing") not in viewing_options:
+    st.session_state["week_viewing"] = "Everyone"
+vwcol1, vwcol2 = st.columns([1, 4])
+with vwcol1:
+    st.markdown("**Viewing jobs for:**")
+with vwcol2:
+    viewing_pick = st.selectbox(
+        "Viewing", viewing_options, key="week_viewing", label_visibility="collapsed"
+    )
+viewing_staff = None if viewing_pick == "Everyone" else viewing_pick
+
 # ══════════════════════════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════════════════════════
-tab_checklist, tab_week = st.tabs(["📋 Checklist", "📅 This Week"])
+tab_checklist, tab_week = st.tabs(["📋 Today", "📅 This Week"])
 
-# ── Checklist tab ───────────────────────────────────────────────────────────
+# ── Today tab ───────────────────────────────────────────────────────────────
 with tab_checklist:
     roster = load_roster()
     completions = load_completions()
@@ -921,6 +955,8 @@ with tab_checklist:
     total_tasks, done_tasks = 0, 0
     for cat in grouped_categories(checklist_tasks_flat, checklist_categories):
         for t in cat["tasks"]:
+            if not is_viewed_responsible(t, roster, today, viewing_staff):
+                continue
             total_tasks += 1
             if period_key_for(t, today) in completions.get(t["id"], {}):
                 done_tasks += 1
@@ -947,6 +983,8 @@ with tab_checklist:
         tasks = cat["tasks"]
         if st.session_state.filter_sso:
             tasks = [t for t in tasks if t["sso"]]
+        if viewing_staff:
+            tasks = [t for t in tasks if is_viewed_responsible(t, roster, today, viewing_staff)]
         if not tasks:
             continue
 
@@ -975,7 +1013,7 @@ with tab_checklist:
             row[1].markdown(f'{t["text"]}<br/>{badges}', unsafe_allow_html=True)
 
             # Read-only "who's on this today" badge — responsibility is set
-            # per-weekday from the "Manage duties" admin panel's Roster
+            # per-weekday from the "Manage jobs" admin panel's Roster
             # editor, not edited inline here.
             today_day_key = day_key_for_today(t, today)
             responsible_today = get_responsible(roster, t["id"], today_day_key) if today_day_key else []
@@ -997,18 +1035,10 @@ with tab_week:
     completions = load_completions()
     week_tasks_flat = load_tasks()
     week_categories = load_categories()
-    week_staff = load_staff()
+    # viewing_staff comes from the shared "Viewing" picker above the tabs —
+    # same selection as the Today tab, so switching tabs doesn't lose it.
 
-    # "Viewing" is a separate picker from the signed-in identity — anyone
-    # can look at anyone's day-by-day duties without switching who they're
-    # signed in as. Reset it before the widget is instantiated if the
-    # previously-viewed person is no longer on staff (same defer-to-next-run
-    # pattern used for the admin forms above).
-    viewing_options = ["Everyone"] + week_staff
-    if st.session_state.get("week_viewing") not in viewing_options:
-        st.session_state["week_viewing"] = "Everyone"
-
-    nav1, nav2, nav3, nav4, nav5 = st.columns([1, 2, 1, 1, 2])
+    nav1, nav2, nav3, nav4 = st.columns([1, 3, 1, 1])
     with nav1:
         if st.button("‹ Prev", key="week_prev"):
             st.session_state.week_offset -= 1
@@ -1025,11 +1055,6 @@ with tab_week:
         if st.button("Next ›", key="week_next"):
             st.session_state.week_offset += 1
             st.rerun()
-    with nav5:
-        viewing_pick = st.selectbox(
-            "Viewing", viewing_options, key="week_viewing", label_visibility="collapsed"
-        )
-    viewing_staff = None if viewing_pick == "Everyone" else viewing_pick
 
     today_iso = date.today().isoformat()
 
@@ -1136,7 +1161,7 @@ with tab_week:
 
 st.markdown("---")
 st.caption(
-    "Ticks, assignments, and duty changes save straight to Supabase and are shared with anyone who opens this page "
+    "Ticks, rosters, and job changes save straight to Supabase and are shared with anyone who opens this page "
     "(refresh, or wait ~20s if streamlit-autorefresh is installed, to see others' changes). "
     "\"Clear today's ticks\" only clears the current day/week — past history stays on the This Week tab."
 )
