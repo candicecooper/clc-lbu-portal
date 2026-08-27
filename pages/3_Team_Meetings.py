@@ -1979,7 +1979,7 @@ To remove a meeting, click the 🗑️ Delete button and confirm.
                                 
                                 if groq_client:
                                     response = groq_client.chat.completions.create(
-                                        model="gpt-oss-120b",
+                                        model="openai/gpt-oss-120b",
                                         messages=[
                                             {
                                                 "role": "system",
@@ -2411,7 +2411,7 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
                             
                             if groq_client:
                                 response = groq_client.chat.completions.create(
-                                    model="gpt-oss-120b",
+                                    model="openai/gpt-oss-120b",
                                     messages=[
                                         {
                                             "role": "system",
