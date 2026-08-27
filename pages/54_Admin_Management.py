@@ -29,11 +29,26 @@ Setup (one-off):
    deletes rows in. Skipping this step doesn't break the page — it just
    falls back to the built-in DEFAULT_CATEGORIES below and new sections
    won't be able to save.
-4. Optionally add SUPABASE_URL / SUPABASE_KEY to .streamlit/secrets.toml
+4. Run supabase_schema_roster.sql once too (after the above three) — it
+   creates checklist_duty_roster, which is what drives who's responsible
+   for each duty, day by day (see "Note on responsibility" below). This
+   REPLACES the old single "assigned to" dropdown backed by
+   checklist_assignments — that table is left alone but no longer read by
+   this page. Skipping this step doesn't break the page — duties just show
+   as "Unassigned" everywhere until it's run.
+5. Optionally add SUPABASE_URL / SUPABASE_KEY to .streamlit/secrets.toml
    (falls back to the hardcoded project values below if not set, same
    st.secrets → env var → default chain used elsewhere in the portal).
-5. `pip install supabase` (and optionally `streamlit-autorefresh` for
+6. `pip install supabase` (and optionally `streamlit-autorefresh` for
    near-live updates across users without a manual refresh).
+
+Note on responsibility: each duty can have different people responsible
+on different weekdays, and a single day can have more than one person
+(shared responsibility) — set this up per duty from the "Manage duties"
+admin panel's "Roster" section. The Checklist tab shows a read-only badge
+for who's on a duty today; This Week has a "Viewing" picker to see one
+person's day-by-day duties, with "+ Name" shown for any day they share
+with someone else.
 
 Note on scope: unlike the Safety & Risk Plan Builder, this tool holds no
 student data — only staff names, job assignments, tick timestamps, and the
@@ -81,6 +96,11 @@ SAFETY_RED  = "#C0392B"
 
 SSO_LABEL = {"am": "8–9am", "pm": "2:45–4pm", "both": "8–9am · 2:45–4pm"}
 WEEKDAY_COLS = ["Mon", "Tue", "Wed", "Thu", "Fri"]  # date.weekday(): Mon=0..Fri=4
+
+# Sentinel used in checklist_duty_roster.weekday for a weekly duty with no
+# fixed day, instead of NULL — Postgres primary keys can't contain NULL,
+# and "Any" reads clearly in the data too.
+WEEKDAY_ANY = "Any"
 
 DEFAULT_STAFF = ["Candice", "Vinnie", "Annette", "Bonnie", "Naomi"]
 
@@ -178,6 +198,38 @@ def grouped_categories(tasks_flat, categories):
         out.append({"id": cd["id"], "title": cd["title"], "safety": cd["safety"], "tasks": cat_tasks})
     return out
 
+
+def applicable_day_keys(task):
+    """Which weekday keys a duty's roster spans: all 5 weekdays for a daily
+    duty, just its fixed day for a weekly duty that has one, or the single
+    WEEKDAY_ANY sentinel for a weekly duty with no fixed day."""
+    if task["frequency"] == "daily":
+        return WEEKDAY_COLS[:]
+    if task["weekday"]:
+        return [task["weekday"]]
+    return [WEEKDAY_ANY]
+
+
+def get_responsible(roster, task_id, day_key):
+    """roster is the {task_id: {weekday: [staff_name, ...]}} shape returned
+    by load_roster() — returns the (possibly empty) list of names responsible
+    for a duty on a given day key."""
+    return roster.get(task_id, {}).get(day_key, [])
+
+
+def day_key_for_today(task, ref_date):
+    """Which single day key applies to `task` on `ref_date` — None for a
+    daily duty on a weekend (nothing to show), the duty's fixed weekday for
+    a weekly duty that has one, or WEEKDAY_ANY otherwise."""
+    if task["frequency"] == "daily":
+        dow = ref_date.weekday()  # Mon=0..Sun=6
+        if dow > 4:
+            return None
+        return WEEKDAY_COLS[dow]
+    if task["weekday"]:
+        return task["weekday"]
+    return WEEKDAY_ANY
+
 # ══════════════════════════════════════════════════════════════════════════
 # SUPABASE CONNECTION — same st.secrets → env var → default chain used
 # elsewhere in the portal (see GROQ_API_KEY in the Safety Plan Builder).
@@ -268,12 +320,18 @@ def load_staff():
         return DEFAULT_STAFF[:]
 
 
-def load_assignments():
+def load_roster():
+    """{ task_id: { weekday: [staff_name, ...] } } — who's responsible for a
+    duty, day by day. Multiple names under the same (task_id, weekday) means
+    shared responsibility that day."""
     if not sb:
         return {}
     try:
-        res = sb.table("checklist_assignments").select("task_id, assignee").execute()
-        return {r["task_id"]: r["assignee"] for r in (res.data or []) if r.get("assignee")}
+        res = sb.table("checklist_duty_roster").select("task_id, weekday, staff_name").execute()
+        out = {}
+        for r in (res.data or []):
+            out.setdefault(r["task_id"], {}).setdefault(r["weekday"], []).append(r["staff_name"])
+        return out
     except Exception:
         return {}
 
@@ -447,7 +505,7 @@ def delete_task(task_id):
         return
     try:
         sb.table("checklist_completions").delete().eq("task_id", task_id).execute()
-        sb.table("checklist_assignments").delete().eq("task_id", task_id).execute()
+        sb.table("checklist_duty_roster").delete().eq("task_id", task_id).execute()
         sb.table("checklist_tasks").delete().eq("id", task_id).execute()
     except Exception as e:
         st.toast(f"Couldn't delete that duty: {e}", icon="⚠️")
@@ -470,20 +528,28 @@ def set_done(task_id, period_key, done, by):
         st.toast(f"Couldn't save: {e}", icon="⚠️")
 
 
-def set_assignee(task_id, name):
+def add_roster_entry(task_id, weekday, staff_name):
     if not sb:
         st.toast("Not connected to Supabase — change wasn't saved", icon="⚠️")
         return
     try:
-        if name:
-            sb.table("checklist_assignments").upsert(
-                {"task_id": task_id, "assignee": name, "updated_at": datetime.utcnow().isoformat()},
-                on_conflict="task_id",
-            ).execute()
-        else:
-            sb.table("checklist_assignments").delete().eq("task_id", task_id).execute()
+        sb.table("checklist_duty_roster").insert(
+            {"task_id": task_id, "weekday": weekday, "staff_name": staff_name}
+        ).execute()
     except Exception as e:
-        st.toast(f"Couldn't save: {e}", icon="⚠️")
+        st.toast(f"Couldn't save the roster change: {e}", icon="⚠️")
+
+
+def remove_roster_entry(task_id, weekday, staff_name):
+    if not sb:
+        st.toast("Not connected to Supabase — change wasn't saved", icon="⚠️")
+        return
+    try:
+        sb.table("checklist_duty_roster").delete().eq("task_id", task_id).eq("weekday", weekday).eq(
+            "staff_name", staff_name
+        ).execute()
+    except Exception as e:
+        st.toast(f"Couldn't save the roster change: {e}", icon="⚠️")
 
 
 def add_staff(name):
@@ -501,7 +567,7 @@ def remove_staff(name):
         st.toast("Not connected to Supabase — name wasn't removed", icon="⚠️")
         return
     try:
-        sb.table("checklist_assignments").delete().eq("assignee", name).execute()
+        sb.table("checklist_duty_roster").delete().eq("staff_name", name).execute()
         sb.table("checklist_staff").delete().eq("name", name).execute()
     except Exception as e:
         st.toast(f"Couldn't remove name: {e}", icon="⚠️")
@@ -550,6 +616,9 @@ st.markdown(f"""
   .badge-sso  {{ background:{TEAL_LIGHT}; color:{TEAL}; }}
   .badge-freq {{ background:{GREY_LIGHT}; color:#5C6B74; }}
   .badge-done {{ background:#d1fae5; color:#065f46; }}
+  .badge-assignee {{ background:{GREY_LIGHT}; color:#5C6B74; }}
+  .badge-assignee-shared {{ background:{TEAL_LIGHT}; color:{TEAL}; }}
+  .badge-assignee-unassigned {{ background:{GREY_LIGHT}; color:#98a2ac; font-style:italic; }}
 
   .cat-card {{ border:1px solid #e2e8f0; border-left-width:4px; border-radius:10px; padding:10px 16px 4px; margin-bottom:14px; background:white; }}
   .cat-card.safety {{ border-left-color:{SAFETY_RED}; }}
@@ -673,6 +742,8 @@ if st.session_state.show_admin_panel and st.session_state.admin_unlocked:
         )
         admin_tasks = load_tasks()
         admin_categories = load_categories()
+        admin_roster = load_roster()
+        admin_staff = load_staff()
 
         st.markdown("**Sections**")
         for cat in sorted(admin_categories, key=lambda c: c.get("sort_order", 0)):
@@ -810,6 +881,28 @@ if st.session_state.show_admin_panel and st.session_state.admin_unlocked:
                     })
                     st.rerun()
 
+                with st.expander(f"Roster — who's responsible for \"{t['text'][:60]}\"", expanded=False):
+                    if not admin_staff:
+                        st.caption("Add staff names first.")
+                    else:
+                        for day_key in applicable_day_keys(t):
+                            day_label = "Any day this week" if day_key == WEEKDAY_ANY else day_key
+                            current_resp = get_responsible(admin_roster, t["id"], day_key)
+                            picked_resp = st.multiselect(
+                                day_label,
+                                admin_staff,
+                                default=[n for n in current_resp if n in admin_staff],
+                                key=f"roster_{t['id']}_{day_key}",
+                            )
+                            if set(picked_resp) != set(current_resp):
+                                for n in picked_resp:
+                                    if n not in current_resp:
+                                        add_roster_entry(t["id"], day_key, n)
+                                for n in current_resp:
+                                    if n not in picked_resp:
+                                        remove_roster_entry(t["id"], day_key, n)
+                                st.rerun()
+
 st.markdown("---")
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -819,7 +912,7 @@ tab_checklist, tab_week = st.tabs(["📋 Checklist", "📅 This Week"])
 
 # ── Checklist tab ───────────────────────────────────────────────────────────
 with tab_checklist:
-    assignments = load_assignments()
+    roster = load_roster()
     completions = load_completions()
     checklist_tasks_flat = load_tasks()
     checklist_categories = load_categories()
@@ -871,7 +964,7 @@ with tab_checklist:
             comp = completions.get(t["id"], {}).get(key)
             checked = comp is not None
 
-            row = st.columns([0.5, 5, 2, 2])
+            row = st.columns([0.5, 5, 2])
             new_val = row[0].checkbox("", value=checked, key=f"chk_{t['id']}", label_visibility="collapsed")
 
             badges = f'<span class="task-badge badge-freq">{freq_badge_text(t)}</span>'
@@ -881,26 +974,41 @@ with tab_checklist:
                 badges += f'<span class="task-badge badge-done">Done by {comp["by"]} · {format_time(comp["at"])}</span>'
             row[1].markdown(f'{t["text"]}<br/>{badges}', unsafe_allow_html=True)
 
-            current_assignee = assignments.get(t["id"])
-            options = ["Unassigned"] + staff
-            idx = options.index(current_assignee) if current_assignee in options else 0
-            picked = row[2].selectbox("Assigned to", options, index=idx, key=f"asg_{t['id']}", label_visibility="collapsed")
+            # Read-only "who's on this today" badge — responsibility is set
+            # per-weekday from the "Manage duties" admin panel's Roster
+            # editor, not edited inline here.
+            today_day_key = day_key_for_today(t, today)
+            responsible_today = get_responsible(roster, t["id"], today_day_key) if today_day_key else []
+            if not responsible_today:
+                assignee_html = '<span class="task-badge badge-assignee-unassigned">Unassigned</span>'
+            elif len(responsible_today) > 1:
+                assignee_html = f'<span class="task-badge badge-assignee-shared">{" & ".join(responsible_today)}</span>'
+            else:
+                assignee_html = f'<span class="task-badge badge-assignee">{responsible_today[0]}</span>'
+            row[2].markdown(assignee_html, unsafe_allow_html=True)
 
             if new_val != checked:
                 set_done(t["id"], key, new_val, st.session_state.current_user or "Unknown")
                 st.rerun()
-            if picked != (current_assignee or "Unassigned"):
-                set_assignee(t["id"], None if picked == "Unassigned" else picked)
-                st.rerun()
 
 # ── This Week tab ────────────────────────────────────────────────────────────
 with tab_week:
-    assignments = load_assignments()
+    roster = load_roster()
     completions = load_completions()
     week_tasks_flat = load_tasks()
     week_categories = load_categories()
+    week_staff = load_staff()
 
-    nav1, nav2, nav3, nav4 = st.columns([1, 3, 1, 1])
+    # "Viewing" is a separate picker from the signed-in identity — anyone
+    # can look at anyone's day-by-day duties without switching who they're
+    # signed in as. Reset it before the widget is instantiated if the
+    # previously-viewed person is no longer on staff (same defer-to-next-run
+    # pattern used for the admin forms above).
+    viewing_options = ["Everyone"] + week_staff
+    if st.session_state.get("week_viewing") not in viewing_options:
+        st.session_state["week_viewing"] = "Everyone"
+
+    nav1, nav2, nav3, nav4, nav5 = st.columns([1, 2, 1, 1, 2])
     with nav1:
         if st.button("‹ Prev", key="week_prev"):
             st.session_state.week_offset -= 1
@@ -917,6 +1025,11 @@ with tab_week:
         if st.button("Next ›", key="week_next"):
             st.session_state.week_offset += 1
             st.rerun()
+    with nav5:
+        viewing_pick = st.selectbox(
+            "Viewing", viewing_options, key="week_viewing", label_visibility="collapsed"
+        )
+    viewing_staff = None if viewing_pick == "Everyone" else viewing_pick
 
     today_iso = date.today().isoformat()
 
@@ -939,39 +1052,82 @@ with tab_week:
         if not pinned:
             continue
 
-        st.markdown(f'<div class="sec-head">{cat["title"]}</div>', unsafe_allow_html=True)
+        cat_header_shown = False
         for t in pinned:
-            row = st.columns([3, 1, 1, 1, 1, 1])
-            assignee = assignments.get(t["id"])
-            label = t["text"] + (f"  ·  *{assignee}*" if assignee else "")
-            row[0].markdown(label)
-            for i, d in enumerate(week_dates):
+            day_infos = []
+            for d in week_dates:
                 col_short = WEEKDAY_COLS[d.weekday()]
                 applies = t["frequency"] == "daily" or t["weekday"] == col_short
-                if not applies:
+                responsible = get_responsible(roster, t["id"], col_short) if applies else []
+                day_infos.append({"date": d, "applies": applies, "responsible": responsible})
+
+            if viewing_staff:
+                relevant = any(di["applies"] and viewing_staff in di["responsible"] for di in day_infos)
+                if not relevant:
+                    continue
+
+            if not cat_header_shown:
+                st.markdown(f'<div class="sec-head">{cat["title"]}</div>', unsafe_allow_html=True)
+                cat_header_shown = True
+
+            row = st.columns([3, 1, 1, 1, 1, 1])
+            week_roster_union = []
+            for di in day_infos:
+                for n in di["responsible"]:
+                    if n not in week_roster_union:
+                        week_roster_union.append(n)
+            label = t["text"] + (f"  ·  *{' & '.join(week_roster_union)}*" if week_roster_union else "")
+            row[0].markdown(label)
+
+            for i, di in enumerate(day_infos):
+                viewer_blocked = viewing_staff and viewing_staff not in di["responsible"]
+                if not di["applies"] or viewer_blocked:
                     row[i + 1].markdown("—")
                 else:
-                    key = period_key_for(t, d)
+                    key = period_key_for(t, di["date"])
                     comp = completions.get(t["id"], {}).get(key)
                     checked = comp is not None
+                    help_parts = []
+                    if comp:
+                        help_parts.append(f"Done by {comp['by']} · {format_time(comp['at'])}")
+                    if di["responsible"]:
+                        help_parts.append("Responsible: " + " & ".join(di["responsible"]))
                     new_val = row[i + 1].checkbox(
                         "", value=checked, key=f"wk_{t['id']}_{key}",
                         label_visibility="collapsed",
-                        help=f"Done by {comp['by']} · {format_time(comp['at'])}" if comp else None,
+                        help=" — ".join(help_parts) if help_parts else None,
                     )
+                    if viewing_staff:
+                        others = [n for n in di["responsible"] if n != viewing_staff]
+                        if others:
+                            # A leading "+ " reads as a Markdown bullet list
+                            # marker (stripped from the rendered text) —
+                            # parenthesise it instead so the "+" survives.
+                            row[i + 1].caption("(+ " + ", ".join(others) + ")")
                     if new_val != checked:
                         set_done(t["id"], key, new_val, st.session_state.current_user or "Unknown")
                         st.rerun()
 
-    if any_day_tasks:
+    filtered_any_day = []
+    for cat, t in any_day_tasks:
+        responsible = get_responsible(roster, t["id"], WEEKDAY_ANY)
+        if viewing_staff and viewing_staff not in responsible:
+            continue
+        filtered_any_day.append((cat, t, responsible))
+
+    if filtered_any_day:
         st.markdown('<div class="sec-head">Weekly (any day this week)</div>', unsafe_allow_html=True)
-        for cat, t in any_day_tasks:
+        for cat, t, responsible in filtered_any_day:
             key = period_key_for(t, monday)
             comp = completions.get(t["id"], {}).get(key)
             checked = comp is not None
-            assignee = assignments.get(t["id"])
             c1, c2 = st.columns([6, 1])
-            label = f'{cat["title"]} — {t["text"]}' + (f"  ·  *{assignee}*" if assignee else "")
+            if viewing_staff:
+                others = [n for n in responsible if n != viewing_staff]
+                suffix = f"  ·  *+ {', '.join(others)}*" if others else ""
+            else:
+                suffix = f"  ·  *{' & '.join(responsible)}*" if responsible else ""
+            label = f'{cat["title"]} — {t["text"]}' + suffix
             c1.markdown(label)
             new_val = c2.checkbox("", value=checked, key=f"anyday_{t['id']}", label_visibility="collapsed")
             if new_val != checked:
