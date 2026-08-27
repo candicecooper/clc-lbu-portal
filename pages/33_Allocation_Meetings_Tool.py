@@ -1159,22 +1159,29 @@ with tab4:
             "Extensions decided this week", "All extensions ever recorded"
         ],
         horizontal=True, index=1,
-        help="Extensions and waitlist changes on students allocated in earlier weeks won't show under "
-             "'this week only' — switch to 'All records' to include them for export/sync. "
-             "'Extensions decided this week' matches the Term/Year/Week selected in the sidebar."
+        help="'This meeting week only' now includes both new allocations from this week AND any "
+             "extension decided this week, even for a student allocated earlier. "
+             "'Extensions decided this week' narrows to just the extension decisions on their own."
     )
 
     try:
         query = supabase.table("allocation_students").select("*").not_.is_("outcome", "null")
+        week_monday = meeting_date - timedelta(days=2)
+        week_sunday = meeting_date + timedelta(days=4)
+
         if scope == "This meeting week only":
-            query = query.eq("meeting_week", selected_week)
+            # Combines two different things that both count as "this week's activity":
+            # students newly allocated/decided this meeting week, OR any student (regardless
+            # of when they were originally allocated) who had an extension decided this week.
+            query = query.or_(
+                f"meeting_week.eq.{selected_week},"
+                f"and(extension_date.gte.{week_monday.isoformat()},extension_date.lte.{week_sunday.isoformat()})"
+            )
         elif scope == "Extensions decided this week":
             # extension_date is only ever set by actually using the Extensions tab —
             # this filters out leftover "Not Approved" placeholder values that came
             # across from the Excel import with no real decision behind them, and
             # ties the list to the Term/Year/Week currently selected in the sidebar.
-            week_monday = meeting_date - timedelta(days=2)
-            week_sunday = meeting_date + timedelta(days=4)
             query = query.gte("extension_date", week_monday.isoformat()).lte("extension_date", week_sunday.isoformat())
         elif scope == "All extensions ever recorded":
             query = query.not_.is_("extension_date", "null")
