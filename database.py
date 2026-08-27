@@ -36,16 +36,58 @@ def get_bulletin(bulletin_date: date):
     return result.data[0] if result.data else None
 
 def save_bulletin(bulletin_date: date, data: dict):
+    """
+    Save (create or update) the bulletin for a given date.
+
+    Previously this fired .update()/.insert() and never looked at the
+    result. That hides two failure modes that both look identical to a
+    user — "I edited something, saved it, and it's gone":
+
+      1. .update() only touches rows that match .eq("date", ...). If that
+         match fails for any reason (a stale/misjudged `existing` check, a
+         date-format quirk against the stored column), Supabase returns a
+         normal 200 response with an EMPTY data list — not an error — so
+         the call "succeeds" while writing nothing, and the next load just
+         hands back the unchanged old row.
+      2. If the insert/update branch is ever picked wrongly, a duplicate
+         insert against a unique "date" constraint fails outright.
+
+    This version checks that the write actually returned a saved row, and
+    falls back from update→insert if an update unexpectedly matches zero
+    rows (rather than silently accepting that as success). Any failure
+    that still can't be resolved raises a clear, specific error, so the
+    caller's existing try/except surfaces a real message to staff instead
+    of the page quietly discarding their edit.
+    """
     sb = get_supabase()
-    existing = get_bulletin(bulletin_date)
+    data = dict(data)
     data["date"] = str(bulletin_date)
     data["updated_at"] = datetime.utcnow().isoformat()
-    
+
+    existing = get_bulletin(bulletin_date)
+
     if existing:
-        sb.table("daily_bulletins").update(data).eq("date", str(bulletin_date)).execute()
+        result = sb.table("daily_bulletins").update(data).eq("date", str(bulletin_date)).execute()
+        if not result.data:
+            # Update matched zero rows despite existing being truthy — fall
+            # back to insert rather than silently doing nothing. If a row
+            # genuinely already exists this will raise a clear
+            # unique-constraint error instead of losing the edit quietly.
+            data["created_at"] = existing.get("created_at") or datetime.utcnow().isoformat()
+            result = sb.table("daily_bulletins").insert(data).execute()
     else:
         data["created_at"] = datetime.utcnow().isoformat()
-        sb.table("daily_bulletins").insert(data).execute()
+        result = sb.table("daily_bulletins").insert(data).execute()
+
+    if not result.data:
+        raise RuntimeError(
+            "Save did not return a saved row for "
+            f"{bulletin_date}. This usually means the Supabase key in use "
+            "doesn't have write permission on daily_bulletins (check Row "
+            "Level Security policies there), or the write didn't match "
+            "the row you expected."
+        )
+    return result.data[0]
 
 def get_bulletins_range(start: date, end: date):
     sb = get_supabase()
@@ -54,7 +96,7 @@ def get_bulletins_range(start: date, end: date):
 
 def search_bulletins(keyword: str):
     sb = get_supabase()
-    result = sb.table("daily_bulletins").select("*").order("bulletin_date", desc=True).execute()
+    result = sb.table("daily_bulletins").select("*").order("date", desc=True).execute()
     kw = keyword.lower()
     matches = []
     for row in result.data:
