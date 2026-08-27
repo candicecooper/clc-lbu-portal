@@ -1,1595 +1,4027 @@
+from theme import apply_clc_theme
 import streamlit as st
-import pandas as pd
-from datetime import datetime, timedelta, date
-import os
-from io import BytesIO
-import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment
 from supabase import create_client
+import datetime
+from groq import Groq
+import json
+import io
+import time
+from urllib.parse import quote
+from docx import Document
+from docx.shared import Pt, RGBColor, Inches, Cm
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
 
-st.set_page_config(
-    page_title="Allocation Meetings - CLC-LBU",
-    page_icon="📋",
-    layout="wide"
+# ── Page config ──────────────────────────────────────────────────────────────
+st.set_page_config(page_title="CLC Team Meetings", page_icon="👥", layout="wide")
+apply_clc_theme()
+
+# Auth/login removed - portal now open to all staff
+# (To re-enable: uncomment require_auth and logout_button calls below)
+
+def _safe_staff_name():
+    """Facilitator default — returns empty string (auth removed)."""
+    return ""
+
+# ── Auto-save session state initialization ───────────────────────────────────
+if 'last_autosave_time' not in st.session_state:
+    st.session_state.last_autosave_time = None
+if 'autosave_message' not in st.session_state:
+    st.session_state.autosave_message = ""
+if 'current_meeting_id' not in st.session_state:
+    st.session_state.current_meeting_id = None
+
+# ── Back to Portal ─────────────────────────────────────────────────────────────
+st.sidebar.markdown(
+    '<a href="https://16cefb77.clc-portal.pages.dev/" target="_self" style="display:block;text-align:center;'
+    'background:#1A7A7A;color:white;font-weight:600;font-size:0.85rem;'
+    'padding:0.5rem;border-radius:8px;text-decoration:none;margin-bottom:0.5rem;">'
+    '🏠 Back to Staff Portal</a>',
+    unsafe_allow_html=True
 )
 
-@st.cache_resource
-def init_supabase():
-    url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_KEY")
-    return create_client(url, key)
+# ── Supabase ──────────────────────────────────────────────────────────────────
+# Team Meetings uses the MEETINGS database (cmqyrfekxgjdtuloseri project)
+SUPABASE_URL = st.secrets.get("SUPABASE_URL_MEETINGS", st.secrets["SUPABASE_URL"])
+SUPABASE_KEY = st.secrets.get("SUPABASE_KEY_MEETINGS", st.secrets["SUPABASE_KEY"])
+# Use service_role key to bypass RLS (this is an internal staff tool)
+SUPABASE_SERVICE_KEY = st.secrets.get("SUPABASE_SERVICE_KEY_MEETINGS", SUPABASE_KEY)
+ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "CLC2026admin")
+GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
 
-supabase = init_supabase()
+# Create Supabase client with service_role key to avoid RLS issues
+supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# STATIC LISTS
-# ══════════════════════════════════════════════════════════════════════════════
-
-DEFAULT_PROGRAMS = ["Junior Primary (JP)", "Primary Years (PY)", "Senior Years (SY)"]
-DEFAULT_STAFF_NAMES = ["Ben Sutton", "Jacqui Simpson", "Caitie Hook", "Ben Selga", "Brenton McGorman", "Roisin McIlduff"]
-
-def load_dropdown_list(list_name, default_list):
-    """Load an editable dropdown list from Supabase (managed via the Admin tab).
-    Falls back to the hardcoded default if the table doesn't exist yet or is empty
-    for this list — so the tool never breaks even before the admin table is set up."""
-    try:
-        result = supabase.table("dropdown_options").select("*") \
-            .eq("list_name", list_name).order("sort_order").execute()
-        values = [r["option_value"] for r in result.data if r.get("option_value")]
-        if values:
-            return values
-    except Exception:
-        pass
-    return default_list
-
-STAFF_NAMES = load_dropdown_list("focus_teacher", DEFAULT_STAFF_NAMES)
-PROGRAMS = load_dropdown_list("program", DEFAULT_PROGRAMS)
-OUTCOMES = ["Allocated", "Not Allocated"]
-EXTENSION_OUTCOMES = ["Approved", "Not Approved"]
-GENDER_OPTIONS = ["Male", "Female", "Other", "Prefer not to say"]
-PRIORITY_OPTIONS = ["1", "2", "3", "4", "5"]
-YEAR_LEVELS = ["R", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
-YES_NO = ["", "Yes", "No"]
-WAITLIST_STATUS_OPTIONS = ["Not Applicable", "On Waitlist", "Declined", "Site Decision", "Site Withdraw"]
-
-DEFAULT_MEDICAL_CONDITION_TYPES = [
-    "Anaphylaxis / Severe Allergy", "Asthma", "Diabetes (Type 1)", "Epilepsy / Seizure Disorder",
-    "Cardiac Condition", "Genetic / Chromosomal Condition", "Physical Disability",
-    "Gastrointestinal Condition", "Autoimmune Condition", "Hearing Impairment",
-    "Vision Impairment", "Chronic Pain Condition", "Sleep Disorder", "Continence Condition",
-    "Other Medical Condition"
-]
-MEDICAL_CONDITION_TYPES = load_dropdown_list("medical_condition_type", DEFAULT_MEDICAL_CONDITION_TYPES)
-
-DEFAULT_IESP_OPTIONS = ["No", "Currently Being Reviewed", "IESP Grant"]
-IESP_OPTIONS = load_dropdown_list("iesp_funding_option", DEFAULT_IESP_OPTIONS)
-
-# Support flag checkboxes: (Display label, Excel column name, Supabase field name)
-BOOL_FLAGS = [
-    ("EALD", "Flag_EALD", "flag_eald"),
-    ("ATSI / Aboriginal", "Flag_ATSI", "flag_atsi"),
-    ("DCP Involvement", "Flag_DCP_involvement", "flag_dcp_involvement"),
-    ("Child in Care", "Flag_Child_in_care", "flag_child_in_care"),
-    ("Intervention / Custody Order", "Flag_Intervention_Custody_Order", "flag_intervention_custody_order"),
-    ("SWD (Student with Disability)", "Flag_SWD", "flag_swd"),
-    ("Speech and Language", "Flag_Speech_and_Lang", "flag_speech_and_lang"),
-    ("ASD", "Flag_ASD", "flag_asd"),
-    ("Intellectual Disability", "Flag_Intellectual", "flag_intellectual"),
-    ("Learning Difficulty", "Flag_Learning_Difficulty", "flag_learning_difficulty"),
-    ("Sensory Processing", "Flag_Sensory_Processing", "flag_sensory_processing"),
-    ("ADHD", "Flag_ADHD", "flag_adhd"),
-    ("ODD", "Flag_ODD", "flag_odd"),
-    ("PDA", "Flag_PDA", "flag_pda"),
-]
-
-FUNDING_CATEGORIES = [(f"Category {i}", f"Flag_Category_{i}", f"flag_category_{i}") for i in range(1, 10)]
-FUNDING_CATEGORIES.append(("9+ RAAP", "Flag_9plusRAAP", "flag_9plusraap"))
-
-# Full 74-column export order — must match the real Sheet1 layout exactly
-EXPORT_COLUMNS = [
-    'Current_Status', 'Student_ID', 'Previous_Referrals', 'Student_Name', 'DOB', 'Gender', 'Year_Level',
-    'Referring_School', 'Referral_Date', 'Meeting_Date', 'Meeting_Week', 'Previously_Referred',
-    'Allocation_Status', 'Allocated_Program', 'Placement_Start', 'Partnership_Area',
-    'Previous_CLC_Placement', 'Previous_Other_LC', 'Other_LC_Name', 'Total_Previous_Placements',
-    'Placement_History_Notes', 'Flag_EALD', 'Flag_ATSI', 'Flag_Attendance_Fulltime',
-    'Flag_Attendance_Parttime', 'Flag_Intervention_Custody_Order', 'Flag_DCP_involvement',
-    'Flag_Child_in_care', 'Flag_IESP_Funding_yes', 'Flag_IESP_Funding_no', 'Flag_Category_1',
-    'Flag_Category_2', 'Flag_Category_3', 'Flag_Category_4', 'Flag_Category_5', 'Flag_Category_6',
-    'Flag_Category_7', 'Flag_Category_8', 'Flag_Category_9', 'Flag_9plusRAAP', 'Flag_SWD',
-    'Flag_Speech_and_Lang', 'Flag_ASD', 'Flag_Intellectual', 'Flag_Learning_Difficulty',
-    'Flag_Sensory_Processing', 'Flag_ADHD', 'Flag_ODD', 'Flag_PDA', 'Flag_Medication',
-    'Flag_Medical_condition', 'Medical_Condition_Details', 'Medication_Details',
-    'Bespoke_Placement', 'Waitlist_Status', 'Waitlist_Date', 'Allocated_From_Waitlist',
-    'Extension', 'Extension_Date', 'Exit_Reason', 'Transition_Plan', 'Notes', 'Placement_End',
-    'Exclusion_End_Date', 'Proposed_Extension_Finish_Date', 'Extension_Weeks', 'Action_owner',
-    'Actual_Finish_Date', 'Extended_Placement', 'Referral_Year', 'Term', 'Extension_Status',
-    'Referral_Occurrence', 'Referral_ID', 'BSE'
-]
-
-# Excel column -> Supabase field. None means the column is left blank on export
-# (either an Excel-side formula, or not currently captured by the tool).
-FIELD_MAP = {
-    'Current_Status': 'current_status', 'Student_ID': None, 'Previous_Referrals': 'previous_referrals',
-    'Student_Name': 'student_name', 'DOB': 'date_of_birth', 'Gender': 'gender', 'Year_Level': 'year_level',
-    'Referring_School': 'school', 'Referral_Date': 'referral_date', 'Meeting_Date': 'meeting_date',
-    'Meeting_Week': 'meeting_week', 'Previously_Referred': 'previously_referred',
-    'Allocation_Status': 'outcome', 'Allocated_Program': 'program', 'Placement_Start': 'start_after',
-    'Partnership_Area': 'partnership_area', 'Previous_CLC_Placement': 'previous_clc_placement',
-    'Previous_Other_LC': 'previous_other_lc', 'Other_LC_Name': 'other_lc_name',
-    'Total_Previous_Placements': 'total_previous_placements',
-    'Placement_History_Notes': 'placement_history_notes', 'Flag_EALD': 'flag_eald',
-    'Flag_ATSI': 'flag_atsi', 'Flag_Attendance_Fulltime': 'flag_attendance_fulltime',
-    'Flag_Attendance_Parttime': 'flag_attendance_parttime',
-    'Flag_Intervention_Custody_Order': 'flag_intervention_custody_order',
-    'Flag_DCP_involvement': 'flag_dcp_involvement', 'Flag_Child_in_care': 'flag_child_in_care',
-    'Flag_IESP_Funding_yes': 'flag_iesp_funding_yes', 'Flag_IESP_Funding_no': 'flag_iesp_funding_no',
-    'Flag_Category_1': 'flag_category_1', 'Flag_Category_2': 'flag_category_2',
-    'Flag_Category_3': 'flag_category_3', 'Flag_Category_4': 'flag_category_4',
-    'Flag_Category_5': 'flag_category_5', 'Flag_Category_6': 'flag_category_6',
-    'Flag_Category_7': 'flag_category_7', 'Flag_Category_8': 'flag_category_8',
-    'Flag_Category_9': 'flag_category_9', 'Flag_9plusRAAP': 'flag_9plusraap', 'Flag_SWD': 'flag_swd',
-    'Flag_Speech_and_Lang': 'flag_speech_and_lang', 'Flag_ASD': 'flag_asd',
-    'Flag_Intellectual': 'flag_intellectual', 'Flag_Learning_Difficulty': 'flag_learning_difficulty',
-    'Flag_Sensory_Processing': 'flag_sensory_processing', 'Flag_ADHD': 'flag_adhd',
-    'Flag_ODD': 'flag_odd', 'Flag_PDA': 'flag_pda', 'Flag_Medication': 'flag_medication',
-    'Flag_Medical_condition': 'flag_medical_condition',
-    'Medical_Condition_Details': 'medical_condition_details', 'Medication_Details': 'medication_details',
-    'Bespoke_Placement': 'bespoke_placement', 'Waitlist_Status': 'waitlist_status',
-    'Waitlist_Date': 'waitlist_date', 'Allocated_From_Waitlist': 'allocated_from_waitlist',
-    'Extension': 'extension', 'Extension_Date': 'extension_date', 'Exit_Reason': 'exit_reason',
-    'Transition_Plan': 'transition_plan', 'Notes': 'notes', 'Placement_End': 'finishing_date',
-    'Exclusion_End_Date': 'exclusion_end_date',
-    'Proposed_Extension_Finish_Date': 'proposed_extension_finish_date',
-    'Extension_Weeks': 'extension_weeks', 'Action_owner': 'actioned_by',
-    'Actual_Finish_Date': 'actual_finish_date', 'Extended_Placement': 'extended_placement',
-    'Referral_Year': 'year', 'Term': 'term', 'Extension_Status': 'extension_status',
-    'Referral_Occurrence': None, 'Referral_ID': None, 'BSE': 'bse',
+# ── Programs ──────────────────────────────────────────────────────────────────
+PROGRAMS = {
+    "JP":         {"label": "Junior Primary",     "color": "#2d7d4f", "light": "#d1fae5", "emoji": "🟢"},
+    "PY":         {"label": "Primary Years",      "color": "#1a4d8c", "light": "#dbeafe", "emoji": "🔵"},
+    "SY":         {"label": "Senior Years",       "color": "#7c3aed", "light": "#ede9fe", "emoji": "🟣"},
+    "SPECIALIST": {"label": "Specialist Program", "color": "#d97706", "light": "#fef3c7", "emoji": "🎨"},
+    "STAFF":      {"label": "STAFF Meetings",     "color": "#0891b2", "light": "#cffafe", "emoji": "👥"},
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# SCHOOL / PARTNERSHIP LIST — loaded from school_partnerships.csv (same folder)
-# Falls back to a short embedded list if the file isn't deployed yet, so the
-# tool never breaks — but the CSV should sit next to this file for the full list.
-# ══════════════════════════════════════════════════════════════════════════════
+DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+RECURRENCE_TYPES = ["Weekly", "Fortnightly", "Monthly"]
 
-_FALLBACK_SCHOOLS = {
-    "Adelaide Botanic High School": "Adelaide Prospect",
-    "Adelaide High School": "Adelaide Prospect",
-    "Cowandilla Primary School": "Inner West",
-    "Henley Beach Primary School": "Inner West",
-    "Mitcham Girls High School": "Mitcham Plains",
-    "Prospect High School": "Adelaide Prospect",
-}
-
-def _parse_school_csv(source):
-    df = pd.read_csv(source, encoding="utf-8-sig")
-    df.columns = [str(c).strip() for c in df.columns]
-    if "School" not in df.columns or "Partnership_Area" not in df.columns:
-        raise ValueError(f"CSV missing School/Partnership_Area columns — found {list(df.columns)}")
-    df = df.dropna(subset=["School"])
-    mapping = dict(zip(df["School"].astype(str).str.strip(), df["Partnership_Area"].fillna("").astype(str).str.strip()))
-    mapping = {k: v for k, v in mapping.items() if k}
-    if not mapping:
-        raise ValueError("CSV parsed but produced no rows")
-    return mapping
-
-@st.cache_data
-def load_school_partnerships():
-    """Search several likely locations for school_partnerships.csv so this
-    doesn't depend on one exact folder layout. Returns (mapping, path_used)."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    candidates = [
-        os.path.join(here, "school_partnerships.csv"),
-        os.path.join(os.getcwd(), "school_partnerships.csv"),
-        os.path.join(os.getcwd(), "pages", "school_partnerships.csv"),
-        os.path.join(here, "..", "school_partnerships.csv"),
-        os.path.join(here, "pages", "school_partnerships.csv"),
-    ]
-    for path in candidates:
-        if os.path.exists(path):
-            try:
-                return _parse_school_csv(path), path
-            except Exception:
-                continue
-
-    # Last resort: search recursively under the current working directory
-    for root, _dirs, files in os.walk(os.getcwd()):
-        if "school_partnerships.csv" in files:
-            path = os.path.join(root, "school_partnerships.csv")
-            try:
-                return _parse_school_csv(path), path
-            except Exception:
-                continue
-
-    return _FALLBACK_SCHOOLS, None
-
-SCHOOL_PARTNERSHIP_MAP, _schools_csv_path = load_school_partnerships()
-
-# Manual override: if auto-detection failed, let a staff member upload the CSV
-# directly for this session so the tool works today regardless of repo layout.
-if _schools_csv_path is None:
-    st.sidebar.warning(
-        f"⚠️ Full school list not found on disk (checked script folder, working "
-        f"directory `{os.getcwd()}`, and a recursive search). Showing a short "
-        f"fallback list."
-    )
-    manual_csv = st.sidebar.file_uploader(
-        "Upload school_partnerships.csv for this session", type=["csv"], key="manual_school_csv"
-    )
-    if manual_csv is not None:
-        try:
-            SCHOOL_PARTNERSHIP_MAP = _parse_school_csv(manual_csv)
-            st.sidebar.success(f"✅ Loaded {len(SCHOOL_PARTNERSHIP_MAP)} schools for this session")
-        except Exception as e:
-            st.sidebar.error(f"Couldn't read that file: {e}")
-
-ALL_SCHOOLS = sorted(SCHOOL_PARTNERSHIP_MAP.keys())
-PARTNERSHIP_AREAS = sorted(set(SCHOOL_PARTNERSHIP_MAP.values()))
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# HELPERS
-# ══════════════════════════════════════════════════════════════════════════════
-
-TERM_DATES_2026 = {
-    'Term 1': date(2026, 1, 27),
-    'Term 2': date(2026, 4, 27),
-    'Term 3': date(2026, 7, 20),
-    'Term 4': date(2026, 10, 12),
-}
-
-def _monday_of_week(d):
-    return d - timedelta(days=d.weekday())
+# ── Term week helper ──────────────────────────────────────────────────────────
+TERM1_2026_START = datetime.date(2026, 1, 26)
+TERM_WEEKS = 11
 
 def get_current_term_week():
-    today = datetime.now().date()
-    if today.year == 2026:
-        applicable = None
-        for term_name, start in TERM_DATES_2026.items():
-            if start <= today:
-                applicable = (term_name, start)
-        if applicable is None:
-            return 'Term 1', 1, 2026
-        term_name, start = applicable
-        weeks_in = ((today - _monday_of_week(start)).days // 7) + 1
-        weeks_in = max(1, min(weeks_in, 10))
-        return term_name, weeks_in, 2026
-    return 'Term 1', 1, today.year
+    """Return (term_label, week_number) based on today's date."""
+    today = datetime.date.today()
+    delta = (today - TERM1_2026_START).days
+    if delta < 0:
+        return "T1", 1
+    week_num = min(delta // 7 + 1, TERM_WEEKS)
+    return "T1", week_num
 
-def get_meeting_weeks(term, year):
-    return [f"Week {i} {term}" for i in range(1, 11)]
+# ── Auto-initialization & Auto-save helpers ───────────────────────────────────
+def auto_initialize_meeting(program, meeting_data):
+    """DISABLED — auto-init caused duplicates in multi-tab Streamlit. Save-only model."""
+    return bool(st.session_state.current_meeting_id)
 
-def get_wednesday_date(week_number, term, year):
-    start = TERM_DATES_2026.get(term, TERM_DATES_2026['Term 2']) if year == 2026 else TERM_DATES_2026['Term 2']
-    week1_monday = _monday_of_week(start)
-    return week1_monday + timedelta(days=(week_number - 1) * 7 + 2)
+def trigger_autosave(program, meeting_data):
+    """DISABLED — autosave caused duplicates in multi-tab Streamlit. Save-only model."""
+    return False
 
-def get_partnership_from_school(school_name):
-    return SCHOOL_PARTNERSHIP_MAP.get(school_name, "")
+# ── SMARTAR Goal Integration helpers ──────────────────────────────────────────
+def get_smartar_goal_link(student_name, meeting_id, program, term, week_num):
+    """Generate URL to SMARTAR Goal Builder with context."""
+    base_url = "https://clc-lbu-portal.onrender.com/SMARTAR_Goal_Builder"
+    params = f"?student={quote(student_name)}&meeting_id={meeting_id}&program={program}&term={term}&week={week_num}&return_to=team_meetings"
+    return base_url + params
 
-def yn(value):
-    """Normalise a checkbox/bool into the Yes/'' convention used in the master Excel."""
-    return "Yes" if value else ""
-
-def num_or_none(value):
-    """Some Supabase columns (previous_referrals, total_previous_placements,
-    extension_weeks) are integer-typed. An empty string fails there — send NULL instead."""
-    if value is None:
-        return None
-    value = str(value).strip()
-    return value if value else None
-
-def parse_stored_date(value):
-    """Turn a stored ISO date string back into a date object for a date_input default."""
-    if not value:
-        return None
+def fetch_synced_smartar_goal(student_name, meeting_id):
+    """Fetch updated SMARTAR goal from the goal builder (Behaviour Support Supabase) with timeout."""
     try:
-        return datetime.fromisoformat(str(value)[:10]).date()
-    except Exception:
-        return None
-
-def is_yes(value):
-    return str(value).strip().lower() == "yes"
-
-def clean_value(v):
-    if v is None:
-        return ""
-    if isinstance(v, float) and pd.isna(v):
-        return ""
-    if isinstance(v, (datetime, date)):
-        return v
-    return v
-
-def build_export_rows(records):
-    """Turn Supabase records into row lists in EXPORT_COLUMNS order."""
-    rows = []
-    for record in records:
-        row = []
-        for col in EXPORT_COLUMNS:
-            db_field = FIELD_MAP.get(col)
-            if db_field is None:
-                row.append("")
-            else:
-                row.append(clean_value(record.get(db_field, "")))
-        rows.append(row)
-    return rows
-
-def export_new_workbook(records):
-    """Build a brand-new, correctly-ordered Excel of just the selected records."""
-    rows = build_export_rows(records)
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Data_Model"
-    ws.append(EXPORT_COLUMNS)
-    for row in rows:
-        ws.append(row)
-
-    header_fill = PatternFill(start_color="1A7A6E", end_color="1A7A6E", fill_type="solid")
-    header_font = Font(bold=True, color="FFFFFF")
-    for cell in ws[1]:
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = Alignment(horizontal='center', vertical='center')
-
-    for col_cells in ws.columns:
-        max_length = max((len(str(c.value)) for c in col_cells if c.value is not None), default=8)
-        ws.column_dimensions[col_cells[0].column_letter].width = min(max_length + 2, 50)
-
-    output = BytesIO()
-    wb.save(output)
-    output.seek(0)
-    return output
-
-def sync_into_master_workbook(uploaded_bytes, records):
-    """
-    Upsert records directly onto the user's real master Excel file, matching whatever
-    column order that file already uses (read from its own header row).
-    - A student not already in the file (by name) is appended as a new row.
-    - A student already in the file has their EXISTING row updated in place — only
-      cells where the incoming record has a non-blank value are overwritten, so this
-      is how extension/waitlist changes made after the original allocation reach the
-      Excel file without wiping out anything already there for that row.
-    Returns (updated_workbook_bytes, sheet_name, appended_count, appended_names,
-             updated_count, updated_names, unmatched_export_columns, name_column_found).
-    """
-    wb = openpyxl.load_workbook(BytesIO(uploaded_bytes))
-
-    sheet_name = None
-    for candidate in ("Data_Model", "Sheet1"):
-        if candidate in wb.sheetnames:
-            sheet_name = candidate
-            break
-    if sheet_name is None:
-        sheet_name = wb.sheetnames[0]
-    ws = wb[sheet_name]
-
-    existing_headers = [c.value for c in ws[1]]
-    header_index = {str(h).strip(): idx for idx, h in enumerate(existing_headers) if h}
-
-    # Find the Student_Name column (required for matching existing rows)
-    name_col_idx = header_index.get("Student_Name")
-    name_column_found = name_col_idx is not None
-    existing_row_by_name = {}
-    if name_col_idx is not None:
-        for row_num in range(2, ws.max_row + 1):
-            val = ws.cell(row=row_num, column=name_col_idx + 1).value
-            if val:
-                existing_row_by_name[str(val).strip().lower()] = row_num
-
-    unmatched_columns = [col for col in EXPORT_COLUMNS if col not in header_index]
-
-    appended, appended_names = 0, []
-    updated, updated_names = 0, []
-
-    for record in records:
-        student_name = str(record.get("student_name", "")).strip()
-        match_row = existing_row_by_name.get(student_name.lower()) if student_name else None
-
-        if match_row:
-            changed = False
-            for col in EXPORT_COLUMNS:
-                if col not in header_index:
-                    continue
-                db_field = FIELD_MAP.get(col)
-                if not db_field:
-                    continue
-                value = clean_value(record.get(db_field, ""))
-                if value in ("", None):
-                    continue  # never blank out existing data — only fill in real values
-                ws.cell(row=match_row, column=header_index[col] + 1, value=value)
-                changed = True
-            if changed:
-                updated += 1
-                updated_names.append(student_name)
-        else:
-            new_row = [""] * len(existing_headers)
-            for col in EXPORT_COLUMNS:
-                if col not in header_index:
-                    continue
-                db_field = FIELD_MAP.get(col)
-                value = clean_value(record.get(db_field, "")) if db_field else ""
-                new_row[header_index[col]] = value
-
-            ws.append(new_row)
-            appended += 1
-            appended_names.append(student_name or "(no name)")
-            if student_name:
-                existing_row_by_name[student_name.lower()] = ws.max_row
-
-    output = BytesIO()
-    wb.save(output)
-    output.seek(0)
-    return (output, sheet_name, appended, appended_names, updated, updated_names,
-            unmatched_columns, name_column_found)
-
-# ══════════════════════════════════════════════════════════════════════════════
-# MAIN APP
-# ══════════════════════════════════════════════════════════════════════════════
-
-st.title("📋 Allocation Meetings")
-
-if 'current_term' not in st.session_state:
-    term, week, year = get_current_term_week()
-    st.session_state.current_term = term
-    st.session_state.current_week = week
-    st.session_state.current_year = year
-
-with st.sidebar:
-    st.header("📅 Meeting Selection")
-    col1, col2 = st.columns(2)
-    term_options = ["Term 1", "Term 2", "Term 3", "Term 4"]
-    year_options = [2024, 2025, 2026]
-    with col1:
-        st.session_state.current_term = st.selectbox(
-            "Term", term_options,
-            index=term_options.index(st.session_state.current_term) if st.session_state.current_term in term_options else 0
-        )
-    with col2:
-        st.session_state.current_year = st.selectbox(
-            "Year", year_options,
-            index=year_options.index(st.session_state.current_year) if st.session_state.current_year in year_options else 0
-        )
-
-    meeting_weeks = get_meeting_weeks(st.session_state.current_term, st.session_state.current_year)
-    selected_week = st.selectbox("Week", meeting_weeks, index=st.session_state.current_week - 1)
-    week_number = int(selected_week.split()[1])
-
-    meeting_date = get_wednesday_date(week_number, st.session_state.current_term, st.session_state.current_year)
-    st.info(f"**Meeting Date:** {meeting_date.strftime('%A, %B %d, %Y')}")
-    st.caption(f"📚 {len(ALL_SCHOOLS)} schools loaded across {len(PARTNERSHIP_AREAS)} partnership areas")
-
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
-    ["📝 New Allocations", "🔄 Extensions", "⏸️ Not Placed", "📊 View & Export", "⏳ Waitlist", "⚙️ Admin"]
-)
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 1 — NEW ALLOCATIONS
-# ══════════════════════════════════════════════════════════════════════════════
-with tab1:
-    st.header("New Student Allocations")
-    stage_choice = st.radio("Stage:", ["➕ Referral", "📝 Allocation Outcome"], horizontal=True)
-    st.markdown("---")
-
-    if stage_choice == "📝 Allocation Outcome":
-        st.subheader("📂 Select Referral to Progress")
-
-        show_all_weeks = st.checkbox(
-            "🔍 Show drafts from all weeks",
-            help="Use this if a draft you created isn't showing up under the current week — earlier "
-                 "versions of this tool sometimes defaulted to the wrong week, so drafts may be filed "
-                 "under a different Term/Year/Week than you expect."
-        )
-
+        # Import here to avoid issues if behaviour support connection not configured
+        import os
+        from supabase import create_client as _cc
+        import signal
+        
+        # Get Behaviour Support Supabase credentials
+        burl = st.secrets.get("BEHAVIOUR_SUPABASE_URL","") or os.environ.get("BEHAVIOUR_SUPABASE_URL","")
+        bkey = st.secrets.get("BEHAVIOUR_SUPABASE_KEY","") or os.environ.get("BEHAVIOUR_SUPABASE_KEY","")
+        
+        if not burl or not bkey:
+            # Behaviour Support Supabase not configured
+            return None
+        
+        # Define timeout handler
+        def timeout_handler(signum, frame):
+            raise TimeoutError("SMARTAR goal fetch timed out")
+        
+        # Set 3 second timeout
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(3)
+        
         try:
-            query = supabase.table("allocation_students").select("*").is_("outcome", "null")
-            if not show_all_weeks:
-                query = query.eq("meeting_week", selected_week)
-            drafts = query.execute()
+            # Create Behaviour Support Supabase client
+            behaviour_supabase = _cc(burl, bkey)
+            
+            # Query smartar_goals table in Behaviour Support Supabase
+            result = behaviour_supabase.table('smartar_goals').select('smartar_goal').eq('student_name', student_name).eq('meeting_id', meeting_id).order('updated_at', desc=True).limit(1).execute()
+            
+            # Cancel alarm
+            signal.alarm(0)
+            
+            if result.data and len(result.data) > 0:
+                return result.data[0].get('smartar_goal', '')
+        except TimeoutError:
+            signal.alarm(0)
+            return None
+        finally:
+            # Ensure alarm is cancelled
+            signal.alarm(0)
+            
+    except Exception as e:
+        # Log error but don't crash - integration is optional
+        return None
+    
+    return None
 
-            if drafts.data:
-                st.caption(f"📋 {len(drafts.data)} draft(s) found")
-                label_for = lambda d: f"{d['student_name']} ({d.get('meeting_week', 'no week set')})" if show_all_weeks else d['student_name']
-                # Keyed by the record's unique id (not name) — two drafts sharing the same
-                # student name used to silently collide and hide one of them from this list.
-                draft_by_id = {d['id']: d for d in drafts.data}
-                selected_id = st.selectbox(
-                    "Select draft:", list(draft_by_id.keys()),
-                    format_func=lambda i: label_for(draft_by_id[i])
-                )
-                draft = draft_by_id[selected_id]
-                st.success(f"✅ Loaded: **{draft['student_name']}**")
+# ══════════════════════════════════════════════════════════════════════════════
+# NEW: SMART AI GENERATION WITH DUPLICATION DETECTION
+# ══════════════════════════════════════════════════════════════════════════════
 
-                if draft.get('meeting_week') != selected_week:
-                    st.info(
-                        f"This draft was filed under **{draft.get('meeting_week', 'an earlier week')}**, "
-                        f"not the currently selected **{selected_week}**."
-                    )
-                    if st.button("📌 Reassign this draft to the currently selected week", key=f"reassign_{draft['id']}"):
-                        supabase.table("allocation_students").update({
-                            "meeting_week": selected_week,
-                            "meeting_date": meeting_date.isoformat(),
-                            "term": st.session_state.current_term,
-                            "year": st.session_state.current_year,
-                        }).eq("id", draft["id"]).execute()
-                        st.success("Reassigned — reload this draft to continue.")
-                        st.rerun()
-
-                dcol1, dcol2 = st.columns([3, 1])
-                with dcol2:
-                    if st.button("🗑️ Delete This Draft", key=f"del_draft_{draft['id']}", use_container_width=True):
-                        st.session_state[f"confirm_delete_{draft['id']}"] = True
-
-                if st.session_state.get(f"confirm_delete_{draft['id']}"):
-                    st.warning(f"⚠️ Delete **{draft['student_name']}**'s draft permanently? This can't be undone.")
-                    ccol1, ccol2 = st.columns(2)
-                    with ccol1:
-                        if st.button("✅ Yes, delete it", key=f"confirm_del_{draft['id']}", type="primary", use_container_width=True):
-                            supabase.table("allocation_students").delete().eq("id", draft["id"]).execute()
-                            st.session_state.pop(f"confirm_delete_{draft['id']}", None)
-                            st.success(f"Deleted {draft['student_name']}")
-                            st.rerun()
-                    with ccol2:
-                        if st.button("Cancel", key=f"cancel_del_{draft['id']}", use_container_width=True):
-                            st.session_state.pop(f"confirm_delete_{draft['id']}", None)
-                            st.rerun()
-
-                with st.form("complete_allocation"):
-                    st.markdown("#### 📋 Referral Details — review and edit if needed")
-
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        student_name = st.text_input("Name *", value=draft.get('student_name') or "")
-                    with col2:
-                        dob = st.date_input(
-                            "DOB", value=parse_stored_date(draft.get('date_of_birth')),
-                            min_value=date(2000, 1, 1), max_value=date.today()
-                        )
-                    with col3:
-                        gender = st.selectbox(
-                            "Gender", [""] + GENDER_OPTIONS,
-                            index=([""] + GENDER_OPTIONS).index(draft.get('gender')) if draft.get('gender') in GENDER_OPTIONS else 0
-                        )
-
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        school = st.selectbox(
-                            "School *", [""] + ALL_SCHOOLS,
-                            index=([""] + ALL_SCHOOLS).index(draft.get('school')) if draft.get('school') in ALL_SCHOOLS else 0
-                        )
-                    with col2:
-                        edit_auto_partnership = get_partnership_from_school(school) if school else ""
-                        st.text_input("Partnership", value=edit_auto_partnership, disabled=True)
-                    with col3:
-                        year_level = st.selectbox(
-                            "Year Level *", [""] + YEAR_LEVELS,
-                            index=([""] + YEAR_LEVELS).index(draft.get('year_level')) if draft.get('year_level') in YEAR_LEVELS else 0
-                        )
-
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        referral_date = st.date_input("Referral Date", value=parse_stored_date(draft.get('referral_date')))
-                    with col2:
-                        previously_referred = st.selectbox(
-                            "Previously Referred?", YES_NO,
-                            index=YES_NO.index(draft.get('previously_referred')) if draft.get('previously_referred') in YES_NO else 0
-                        )
-                    previous_referrals = st.text_input("Number of Previous Referrals", value=draft.get('previous_referrals') or "")
-
-                    edit_needs_priority = st.checkbox(
-                        "Needs prioritising against other waiting referrals",
-                        value=bool(draft.get('priority_level'))
-                    )
-                    if edit_needs_priority:
-                        priority_level = st.selectbox(
-                            "Priority Level *", [""] + PRIORITY_OPTIONS,
-                            index=([""] + PRIORITY_OPTIONS).index(draft.get('priority_level')) if draft.get('priority_level') in PRIORITY_OPTIONS else 0
-                        )
+def extract_student_names_from_concerns(concerns_json):
+    """Extract student names already documented in Student Concerns section."""
+    try:
+        concerns_data = json.loads(concerns_json) if isinstance(concerns_json, str) else concerns_json
+        if isinstance(concerns_data, list):
+            names = []
+            for item in concerns_data:
+                text = item.get('notes', '')
+                if text.strip():
+                    if '·' in text:
+                        name = text.split('·')[0].strip()
+                        if name:
+                            names.append(name.lower())
                     else:
-                        priority_level = ""
+                        words = text.split()
+                        if words:
+                            name = ' '.join(words[:2]).strip()
+                            names.append(name.lower())
+            return names
+    except:
+        return []
+    return []
 
-                    with st.expander("🏠 Placement History"):
-                        pcol1, pcol2, pcol3 = st.columns(3)
-                        with pcol1:
-                            previous_clc_placement = st.selectbox(
-                                "Previous CLC Placement?", YES_NO,
-                                index=YES_NO.index(draft.get('previous_clc_placement')) if draft.get('previous_clc_placement') in YES_NO else 0
-                            )
-                        with pcol2:
-                            previous_other_lc = st.selectbox(
-                                "Previous Other LC?", YES_NO,
-                                index=YES_NO.index(draft.get('previous_other_lc')) if draft.get('previous_other_lc') in YES_NO else 0
-                            )
-                        with pcol3:
-                            other_lc_name = st.text_input("Other LC Name", value=draft.get('other_lc_name') or "")
-                        total_previous_placements = st.text_input(
-                            "Total Previous Placements", value=draft.get('total_previous_placements') or ""
-                        )
-                        placement_history_notes = st.text_area(
-                            "Placement History Notes", value=draft.get('placement_history_notes') or ""
-                        )
-
-                    with st.expander("🏷️ Support Flags & Funding"):
-                        edit_flag_values = {}
-                        cols = st.columns(3)
-                        for i, (label, excel_col, db_col) in enumerate(BOOL_FLAGS):
-                            with cols[i % 3]:
-                                edit_flag_values[db_col] = st.checkbox(
-                                    label, value=is_yes(draft.get(db_col)), key=f"edit_{db_col}"
-                                )
-
-                        st.markdown("**Funding Categories**")
-                        st.caption("Ticking any category here automatically sets IESP Funding to Yes.")
-                        fcols = st.columns(3)
-                        edit_funding_values = {}
-                        for i, (label, excel_col, db_col) in enumerate(FUNDING_CATEGORIES):
-                            with fcols[i % 3]:
-                                edit_funding_values[db_col] = st.checkbox(
-                                    label, value=is_yes(draft.get(db_col)), key=f"edit_{db_col}"
-                                )
-
-                        acol1, acol2 = st.columns(2)
-                        with acol1:
-                            attendance_options = ["", "Full-time", "Part-time"]
-                            current_attendance = (
-                                "Full-time" if is_yes(draft.get('flag_attendance_fulltime'))
-                                else "Part-time" if is_yes(draft.get('flag_attendance_parttime')) else ""
-                            )
-                            attendance = st.selectbox("Attendance", attendance_options, index=attendance_options.index(current_attendance))
-                        with acol2:
-                            iesp_options = [""] + IESP_OPTIONS
-                            current_iesp = draft.get('flag_iesp_funding_no') or ""
-                            iesp_status_if_no_category = st.selectbox(
-                                "IESP Funding (if no category ticked above)", iesp_options,
-                                index=iesp_options.index(current_iesp) if current_iesp in iesp_options else 0,
-                                help="Ignored if any funding category above is ticked — that automatically means Yes."
-                            )
-
-                    with st.expander("💊 Medical & Medication"):
-                        mcol1, mcol2 = st.columns(2)
-                        with mcol1:
-                            has_medical = st.checkbox("Medical Condition", value=is_yes(draft.get('flag_medical_condition')))
-                            stored_medical = draft.get('medical_condition_details') or ""
-                            stored_medical_type = stored_medical.split(":")[0] if ":" in stored_medical else stored_medical
-                            medical_type = st.selectbox(
-                                "Condition Type *", [""] + MEDICAL_CONDITION_TYPES,
-                                index=([""] + MEDICAL_CONDITION_TYPES).index(stored_medical_type) if stored_medical_type in MEDICAL_CONDITION_TYPES else 0,
-                                disabled=not has_medical
-                            )
-                            medical_details = st.text_area(
-                                "Medical Condition Details",
-                                value=stored_medical.split(":", 1)[1].strip() if ":" in stored_medical else "",
-                                disabled=not has_medical
-                            )
-                        with mcol2:
-                            has_medication = st.checkbox("Medication", value=is_yes(draft.get('flag_medication')))
-                            medication_details = st.text_area(
-                                "Medication Details", value=draft.get('medication_details') or "", disabled=not has_medication
-                            )
-
-                    bse = st.text_input("BSE", value=draft.get('bse') or "")
-                    queries = st.text_area("Queries/Notes for Meeting", value=draft.get('queries') or "")
-
-                    st.markdown("---")
-                    st.markdown("#### ✅ Allocation Outcome")
-
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        program = st.selectbox("Program *", PROGRAMS)
-                    with col2:
-                        outcome = st.selectbox("Outcome *", OUTCOMES)
-                    with col3:
-                        case_worker = st.selectbox("Focus Teacher", [""] + STAFF_NAMES)
-
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        start_date = st.date_input("Allocation Date", value=None)
-                    with col2:
-                        end_date = st.date_input("End Date", value=None)
-
-                    bespoke = st.checkbox("Bespoke Placement")
-                    information = st.text_area("Communication to School")
-
-                    st.markdown("**If not allocated**")
-                    wcol1, wcol2 = st.columns(2)
-                    with wcol1:
-                        waitlist_status = st.selectbox("Waitlist Status", WAITLIST_STATUS_OPTIONS)
-                    with wcol2:
-                        waitlist_date = st.date_input("Waitlist Date", value=None)
-                    exit_reason = st.text_input("Exit Reason (if applicable)")
-                    transition_plan = st.text_area("Transition Plan (if applicable)")
-                    notes = st.text_area("Additional Notes")
-
-                    bcol1, bcol2 = st.columns(2)
-                    with bcol1:
-                        save_draft_clicked = st.form_submit_button(
-                            "💾 Save Changes (keep here, don't finalize)", use_container_width=True
-                        )
-                    with bcol2:
-                        finalize_clicked = st.form_submit_button(
-                            "✅ Finalize Allocation", type="primary", use_container_width=True
-                        )
-
-                    if save_draft_clicked or finalize_clicked:
-                        if not student_name or not school or not year_level:
-                            st.error("Please fill required fields (Name, School, Year Level)")
-                        elif has_medical and not medical_type:
-                            st.error("Please select a Medical Condition Type — required when Medical Condition is checked")
-                        elif edit_needs_priority and not priority_level:
-                            st.error("Please select a Priority Level — required when prioritisation is needed")
-                        else:
-                            try:
-                                edit_any_category_selected = any(edit_funding_values.values())
-                                if edit_any_category_selected:
-                                    edit_iesp_yes, edit_iesp_no = "Yes", ""
-                                else:
-                                    edit_iesp_yes = ""
-                                    edit_iesp_no = iesp_status_if_no_category
-
-                                update_payload = {
-                                    "student_name": student_name,
-                                    "date_of_birth": dob.isoformat() if dob else None,
-                                    "gender": gender,
-                                    "school": school,
-                                    "year_level": year_level,
-                                    "partnership_area": edit_auto_partnership,
-                                    "referral_date": referral_date.isoformat() if referral_date else None,
-                                    "previously_referred": previously_referred,
-                                    "previous_referrals": num_or_none(previous_referrals),
-                                    "priority_level": priority_level if priority_level else None,
-                                    "previous_clc_placement": previous_clc_placement,
-                                    "previous_other_lc": previous_other_lc,
-                                    "other_lc_name": other_lc_name,
-                                    "total_previous_placements": num_or_none(total_previous_placements),
-                                    "placement_history_notes": placement_history_notes,
-                                    "flag_attendance_fulltime": yn(attendance == "Full-time"),
-                                    "flag_attendance_parttime": yn(attendance == "Part-time"),
-                                    "flag_iesp_funding_yes": edit_iesp_yes,
-                                    "flag_iesp_funding_no": edit_iesp_no,
-                                    "flag_medication": yn(has_medication),
-                                    "medication_details": medication_details if has_medication else None,
-                                    "flag_medical_condition": yn(has_medical),
-                                    "medical_condition_details": (
-                                        f"{medical_type}: {medical_details}" if has_medical and medical_details
-                                        else medical_type if has_medical else None
-                                    ),
-                                    "queries": queries,
-                                    "bse": bse or None,
-                                    "program": program,
-                                    "case_worker": case_worker or None,
-                                    "actioned_by": case_worker or None,
-                                    "start_after": start_date.isoformat() if start_date else None,
-                                    "finishing_date": end_date.isoformat() if end_date else None,
-                                    "bespoke_placement": yn(bespoke),
-                                    "information": information or None,
-                                    "waitlist_date": waitlist_date.isoformat() if waitlist_date else None,
-                                    "exit_reason": exit_reason or None,
-                                    "transition_plan": transition_plan or None,
-                                    "notes": notes or None,
-                                }
-
-                                if finalize_clicked:
-                                    update_payload["outcome"] = outcome
-                                    update_payload["waitlist_status"] = waitlist_status if outcome == "Not Allocated" else "Not Applicable"
-                                # else: leave outcome untouched — stays a draft, keeps showing in Stage 2
-
-                                for db_col, val in edit_flag_values.items():
-                                    update_payload[db_col] = yn(val)
-                                for db_col, val in edit_funding_values.items():
-                                    update_payload[db_col] = yn(val)
-
-                                supabase.table("allocation_students").update(update_payload).eq("id", draft['id']).execute()
-
-                                if finalize_clicked:
-                                    st.success(f"✅ Allocation finalized for {student_name}!")
-                                    st.balloons()
-                                else:
-                                    st.success(f"💾 Changes saved for {student_name} — still here in Stage 2.")
-                                    st.rerun()
-                            except Exception as e:
-                                st.error(f"Error: {e}")
-            else:
-                st.info("✅ No drafts to complete. Create one in Stage 1.")
-        except Exception as e:
-            st.error(f"Error: {e}")
-
-    else:
-        st.subheader("➕ New Referral")
-
-        with st.form("new_draft", clear_on_submit=True):
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                student_name = st.text_input("Name *")
-            with col2:
-                dob = st.date_input("DOB", value=None, min_value=date(2000, 1, 1), max_value=date.today())
-            with col3:
-                gender = st.selectbox("Gender", [""] + GENDER_OPTIONS)
-
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                school = st.selectbox("School *", [""] + ALL_SCHOOLS)
-            with col2:
-                auto_partnership = get_partnership_from_school(school) if school else ""
-                partnership = st.text_input("Partnership", value=auto_partnership, disabled=True)
-            with col3:
-                year_level = st.selectbox("Year Level *", [""] + YEAR_LEVELS)
-
-            col1, col2 = st.columns(2)
-            with col1:
-                referral_date = st.date_input("Referral Date", value=None)
-            with col2:
-                previously_referred = st.selectbox("Previously Referred?", YES_NO)
-
-            previous_referrals = st.text_input("Number of Previous Referrals")
-
-            needs_priority = st.checkbox(
-                "Needs prioritising against other waiting referrals",
-                help="Only tick this if there are multiple referrals waiting and this student needs "
-                     "to be ordered against them for placement. Leave unticked if the student is "
-                     "going straight in — Priority Level isn't needed in that case."
-            )
-            if needs_priority:
-                priority_level = st.selectbox("Priority Level *", [""] + PRIORITY_OPTIONS)
-            else:
-                priority_level = ""
-                st.caption("Straight in — no priority ordering needed.")
-
-            with st.expander("🏠 Placement History"):
-                pcol1, pcol2, pcol3 = st.columns(3)
-                with pcol1:
-                    previous_clc_placement = st.selectbox("Previous CLC Placement?", YES_NO)
-                with pcol2:
-                    previous_other_lc = st.selectbox("Previous Other LC?", YES_NO)
-                with pcol3:
-                    other_lc_name = st.text_input("Other LC Name")
-                total_previous_placements = st.text_input("Total Previous Placements")
-                placement_history_notes = st.text_area("Placement History Notes")
-
-            with st.expander("🏷️ Support Flags & Funding"):
-                st.caption("These feed the Dashboard's disability & funding analytics directly.")
-                flag_values = {}
-                cols = st.columns(3)
-                for i, (label, excel_col, db_col) in enumerate(BOOL_FLAGS):
-                    with cols[i % 3]:
-                        flag_values[db_col] = st.checkbox(label, key=f"draft_{db_col}")
-
-                st.markdown("**Funding Categories**")
-                st.caption("Ticking any category here automatically sets IESP Funding to Yes.")
-                fcols = st.columns(3)
-                funding_values = {}
-                for i, (label, excel_col, db_col) in enumerate(FUNDING_CATEGORIES):
-                    with fcols[i % 3]:
-                        funding_values[db_col] = st.checkbox(label, key=f"draft_{db_col}")
-
-                acol1, acol2 = st.columns(2)
-                with acol1:
-                    attendance = st.selectbox("Attendance", ["", "Full-time", "Part-time"])
-                with acol2:
-                    iesp_status_if_no_category = st.selectbox(
-                        "IESP Funding (if no category ticked above)",
-                        [""] + IESP_OPTIONS,
-                        help="Ignored if any funding category above is ticked — that automatically means Yes."
-                    )
-
-            with st.expander("💊 Medical & Medication"):
-                mcol1, mcol2 = st.columns(2)
-                with mcol1:
-                    has_medical = st.checkbox("Medical Condition")
-                    medical_type = st.selectbox(
-                        "Condition Type *", [""] + MEDICAL_CONDITION_TYPES,
-                        disabled=not has_medical
-                    )
-                    medical_details = st.text_area("Medical Condition Details", disabled=not has_medical)
-                with mcol2:
-                    has_medication = st.checkbox("Medication")
-                    medication_details = st.text_area("Medication Details", disabled=not has_medication)
-
-            bse = st.text_input("BSE")
-            queries = st.text_area("Queries/Notes for Meeting")
-
-            submitted = st.form_submit_button("💾 Save Draft", type="primary", use_container_width=True)
-            if submitted:
-                if not student_name or not school or not year_level:
-                    st.error("Please fill required fields (Name, School, Year Level)")
-                elif has_medical and not medical_type:
-                    st.error("Please select a Medical Condition Type — required when Medical Condition is checked")
-                elif needs_priority and not priority_level:
-                    st.error("Please select a Priority Level — required when prioritisation is needed")
-                else:
-                    try:
-                        any_category_selected = any(funding_values.values())
-                        if any_category_selected:
-                            iesp_yes, iesp_no = "Yes", ""
-                        else:
-                            iesp_yes = ""
-                            iesp_no = iesp_status_if_no_category
-
-                        record = {
-                            "meeting_week": selected_week,
-                            "meeting_date": meeting_date.isoformat(),
-                            "term": st.session_state.current_term,
-                            "year": st.session_state.current_year,
-                            "student_name": student_name,
-                            "school": school,
-                            "date_of_birth": dob.isoformat() if dob else None,
-                            "gender": gender,
-                            "year_level": year_level,
-                            "partnership_area": auto_partnership,
-                            "priority_level": priority_level if priority_level else None,
-                            "referral_date": referral_date.isoformat() if referral_date else None,
-                            "previously_referred": previously_referred,
-                            "previous_referrals": num_or_none(previous_referrals),
-                            "previous_clc_placement": previous_clc_placement,
-                            "previous_other_lc": previous_other_lc,
-                            "other_lc_name": other_lc_name,
-                            "total_previous_placements": num_or_none(total_previous_placements),
-                            "placement_history_notes": placement_history_notes,
-                            "flag_attendance_fulltime": yn(attendance == "Full-time"),
-                            "flag_attendance_parttime": yn(attendance == "Part-time"),
-                            "flag_iesp_funding_yes": iesp_yes,
-                            "flag_iesp_funding_no": iesp_no,
-                            "flag_medication": yn(has_medication),
-                            "medication_details": medication_details if has_medication else None,
-                            "flag_medical_condition": yn(has_medical),
-                            "medical_condition_details": (
-                                f"{medical_type}: {medical_details}" if has_medical and medical_details
-                                else medical_type if has_medical else None
-                            ),
-                            "queries": queries,
-                            "bse": bse or None,
-                            "outcome": None,
-                        }
-                        for db_col, val in flag_values.items():
-                            record[db_col] = yn(val)
-                        for db_col, val in funding_values.items():
-                            record[db_col] = yn(val)
-
-                        supabase.table("allocation_students").insert(record).execute()
-                        st.success(f"✅ Draft saved for {student_name}!")
-                        st.balloons()
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 2 — EXTENSIONS
-# ══════════════════════════════════════════════════════════════════════════════
-with tab2:
-    st.header("🔄 Extensions")
-
-    if st.session_state.get("last_extension_saved"):
-        info = st.session_state["last_extension_saved"]
-        st.success(f"✅ Last saved: **{info['name']}** — {info['detail']} (saved {info['when']})")
-        st.caption("This confirmation stays here until you save another extension, so you can check it any time.")
-
-    ext_stage = st.radio(
-        "Stage:", ["➕ Extension Request", "✅ Extension Decision"], horizontal=True,
-        help="Log the request first without an outcome, then come back here to record the decision "
-             "once it's been made — the same way referrals work in New Allocations."
-    )
-    st.markdown("---")
-
+def generate_smart_minutes_week_a(transcript, existing_concerns_json, program):
+    """
+    Week A AI generation with duplication detection.
+    
+    Intelligently splits transcript into:
+    1. NEW student concerns (not already documented)
+    2. General meeting minutes
+    3. Suggested actions with who/when
+    """
+    if not GROQ_KEY or not transcript.strip():
+        return None
+    
+    existing_students = extract_student_names_from_concerns(existing_concerns_json)
+    existing_list = ", ".join(existing_students) if existing_students else "None documented yet"
+    
     try:
-        all_students = supabase.table("allocation_students").select("*").execute()
+        client = Groq(api_key=GROQ_KEY)
+        prompt = f"""You are a professional minute-taker for Cowandilla Learning Centre (CLC), Learning & Behaviour Unit.
 
-        def _is_active(r):
-            if str(r.get("outcome", "")).strip().lower() != "allocated":
-                return False
-            if str(r.get("current_status", "")).strip().lower() == "inactive":
-                return False
-            return True
+A raw transcript from a Week A 'Student Lens' team meeting for the {PROGRAMS[program]['label']} program is provided below.
 
-        def _has_pending_request(r):
-            return bool(r.get("extension_weeks") or r.get("proposed_extension_finish_date")) and not r.get("extension_status")
+CRITICAL CONTEXT — Students already documented in Student Concerns section:
+{existing_list}
 
-        allocated_data = [r for r in all_students.data if _is_active(r)]
+DO NOT repeat any information about students already listed above. Only extract NEW student concerns not yet documented.
 
-        with st.expander("🔍 Debug: what's actually in the database"):
-            st.write(f"Total rows in `allocation_students`: {len(all_students.data)}")
-            outcome_counts = {}
-            for r in all_students.data:
-                key = repr(r.get("outcome"))
-                outcome_counts[key] = outcome_counts.get(key, 0) + 1
-            st.write("Breakdown by `outcome` value (exact, including hidden spaces/case):")
-            st.write(outcome_counts)
-            allocated_total = sum(1 for r in all_students.data if str(r.get("outcome", "")).strip().lower() == "allocated")
-            st.write(
-                f"Of {allocated_total} allocated student(s), {len(allocated_data)} are considered "
-                f"**active** and shown below; {allocated_total - len(allocated_data)} are excluded "
-                "(marked Inactive via Current_Status)."
-            )
+Your job: Read the transcript and produce THREE clearly separated sections.
 
-        if ext_stage == "➕ Extension Request":
-            st.subheader("➕ New Extension Request")
-            st.caption("Log the request details — no outcome yet. This moves them into Extension Decision once saved.")
+---
+SECTION 1 — NEW STUDENT CONCERNS
+ONLY include students NOT in the existing list above.
 
-            eligible = [r for r in allocated_data if not _has_pending_request(r)]
-            if eligible:
-                sorted_students = sorted(eligible, key=lambda r: (r.get('student_name') or '').lower())
-                options = {
-                    f"{r['student_name']} — {r.get('school', 'no school')} (Year {r.get('year_level', '?')})": r
-                    for r in sorted_students
-                }
-                chosen = st.selectbox(f"Select allocated student ({len(options)} total — type to search)", list(options.keys()))
-                record = options[chosen]
+For each NEW student concern, format as:
+[Student Name] · [Concern/behaviour] · [Hypothesis - why?] · [Strategy to try] · [Who] · [By when]
 
-                with st.form("extension_request_form"):
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        ext_weeks = st.text_input("Extension Weeks Requested")
-                    with col2:
-                        proposed_finish = st.date_input("Proposed Extension Finish Date", value=None)
+Example:
+Jayden R · Refusing work in literacy · Possible reading anxiety, avoidance pattern · Trial audio books + visual supports · Tom · W6
 
-                    ext_comm = st.text_area("Reason for request / communication so far")
-                    ext_owner = st.selectbox("Focus Teacher", [""] + STAFF_NAMES)
+If no new students discussed, write: "No new student concerns requiring documentation - see existing entries above."
 
-                    if st.form_submit_button("💾 Save Extension Request", type="primary", use_container_width=True):
-                        try:
-                            result = supabase.table("allocation_students").update({
-                                "extension_weeks": num_or_none(ext_weeks),
-                                "proposed_extension_finish_date": proposed_finish.isoformat() if proposed_finish else None,
-                                "information": ext_comm or record.get("information"),
-                                "actioned_by": ext_owner or record.get("actioned_by"),
-                            }).eq("id", record["id"]).execute()
+---
+SECTION 2 — MEETING MINUTES
+Everything else — general discussion, decisions, announcements, TAC updates, reports, transitions, any other business that is NOT student-specific concerns.
 
-                            if not result.data:
-                                st.error("⚠️ The update ran but returned no confirmation — nothing may have been saved.")
-                            else:
-                                st.session_state["last_extension_saved"] = {
-                                    "name": result.data[0].get("student_name"),
-                                    "detail": f"Request logged, {result.data[0].get('extension_weeks') or '?'} weeks requested",
-                                    "when": datetime.now().strftime("%I:%M %p"),
-                                }
-                                st.rerun()
-                        except Exception as e:
-                            st.error(f"Error: {e}")
-            else:
-                st.info("No allocated students currently need a new extension request logged.")
+Format as clear professional minutes with numbered items.
 
-        else:
-            st.subheader("✅ Record Extension Decision")
-            pending = [r for r in allocated_data if _has_pending_request(r)]
-            if pending:
-                sorted_pending = sorted(pending, key=lambda r: (r.get('student_name') or '').lower())
-                options = {
-                    f"{r['student_name']} — {r.get('school', 'no school')} "
-                    f"(requested {r.get('extension_weeks') or '?'} wks)": r
-                    for r in sorted_pending
-                }
-                chosen = st.selectbox(f"Select pending request ({len(options)} total)", list(options.keys()))
-                record = options[chosen]
+---
+SECTION 3 — SUGGESTED ACTIONS
+Extract all action items mentioned in the transcript.
 
-                with st.form("extension_decision_form"):
-                    st.caption("Details from the request — edit if needed before recording the decision.")
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        ext_weeks = st.text_input("Extension Weeks", value=record.get("extension_weeks") or "")
-                    with col2:
-                        proposed_finish = st.date_input(
-                            "Proposed Extension Finish Date",
-                            value=parse_stored_date(record.get("proposed_extension_finish_date"))
-                        )
-                    ext_comm = st.text_area("Communication to School", value=record.get("information") or "")
-                    ext_owner = st.selectbox(
-                        "Focus Teacher", [""] + STAFF_NAMES,
-                        index=([""] + STAFF_NAMES).index(record.get("actioned_by")) if record.get("actioned_by") in STAFF_NAMES else 0
-                    )
+For each action, provide:
+ACTION: [Specific task]
+WHO: [Person responsible]
+BY WHEN: [Due date or week]
+PRIORITY: [Low/Medium/High/Urgent]
 
-                    st.markdown("---")
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        ext_outcome = st.selectbox("Extension Outcome *", EXTENSION_OUTCOMES)
-                    with col2:
-                        ext_date = st.date_input("Extension Decision Date", value=datetime.now().date())
+Rules:
+- Trauma-informed, strengths-based, plain English
+- Preserve ALL factual content — do not fabricate
+- Be concise but complete
+- DO NOT repeat student names from existing list
+- Clearly label all three sections
 
-                    if st.form_submit_button("✅ Save Decision", type="primary", use_container_width=True):
-                        try:
-                            result = supabase.table("allocation_students").update({
-                                "extension": yn(ext_outcome == "Approved"),
-                                "extension_status": ext_outcome,
-                                "extension_date": ext_date.isoformat() if ext_date else None,
-                                "extension_weeks": num_or_none(ext_weeks),
-                                "proposed_extension_finish_date": proposed_finish.isoformat() if proposed_finish else None,
-                                "information": ext_comm or record.get("information"),
-                                "actioned_by": ext_owner or record.get("actioned_by"),
-                            }).eq("id", record["id"]).execute()
+RAW TRANSCRIPT:
+{transcript[:3500]}"""
 
-                            if not result.data:
-                                st.error("⚠️ The update ran but returned no confirmation — nothing may have been saved.")
-                            else:
-                                st.session_state["last_extension_saved"] = {
-                                    "name": result.data[0].get("student_name"),
-                                    "detail": f"Decision: {result.data[0].get('extension_status')}, "
-                                              f"{result.data[0].get('extension_weeks') or '?'} weeks",
-                                    "when": datetime.now().strftime("%I:%M %p"),
-                                }
-                                st.rerun()
-                        except Exception as e:
-                            st.error(f"Error: {e}")
-            else:
-                st.info("No pending extension requests waiting on a decision. Log one under Extension Request first.")
-    except Exception as e:
-        st.error(f"Error: {e}")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 3 — NOT PLACED
-# ══════════════════════════════════════════════════════════════════════════════
-with tab3:
-    st.header("⏸️ Not Placed Students")
-    try:
-        not_allocated = supabase.table("allocation_students").select("*") \
-            .eq("meeting_week", selected_week).eq("outcome", "Not Allocated").execute()
-
-        if not_allocated.data:
-            st.info(f"📊 {len(not_allocated.data)} student(s) not allocated this week")
-            df = pd.DataFrame(not_allocated.data)
-            show_cols = [c for c in ["student_name", "year_level", "school", "waitlist_status", "exit_reason"] if c in df.columns]
-            st.dataframe(df[show_cols], use_container_width=True, hide_index=True)
-        else:
-            st.success("✅ No students not allocated this week")
-    except Exception as e:
-        st.error(f"Error: {e}")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 4 — VIEW & EXPORT
-# ══════════════════════════════════════════════════════════════════════════════
-with tab4:
-    st.header("📊 View & Export Completed Allocations")
-
-    with st.expander("🔍 Debug: every student with extension data, ignoring scope/filters entirely"):
-        try:
-            everyone = supabase.table("allocation_students").select("*").execute().data
-            with_extension = [r for r in everyone if r.get("extension_status")]
-            st.write(f"Total rows in database: {len(everyone)}")
-            st.write(f"Rows with a non-blank `extension_status`: {len(with_extension)}")
-            if with_extension:
-                st.dataframe(
-                    pd.DataFrame([{
-                        "Student": r.get("student_name"), "Outcome": r.get("outcome"),
-                        "Current_Status": r.get("current_status"), "Extension_Status": r.get("extension_status"),
-                        "Extension_Weeks": r.get("extension_weeks"), "Meeting_Week": r.get("meeting_week"),
-                    } for r in with_extension]),
-                    use_container_width=True, hide_index=True
-                )
-        except Exception as e:
-            st.error(f"Debug error: {e}")
-
-    scope = st.radio(
-        "Show:",
-        [
-            "This meeting week only", "All allocated & completed records",
-            "Extensions decided this week", "All extensions ever recorded"
-        ],
-        horizontal=True, index=0,
-        help="'This meeting week only' now includes both new allocations from this week AND any "
-             "extension decided this week, even for a student allocated earlier. "
-             "'Extensions decided this week' narrows to just the extension decisions on their own."
-    )
-
-    try:
-        query = supabase.table("allocation_students").select("*").not_.is_("outcome", "null")
-        week_monday = meeting_date - timedelta(days=2)
-        week_sunday = meeting_date + timedelta(days=4)
-
-        if scope == "This meeting week only":
-            # Combines two different things that both count as "this week's activity":
-            # students newly allocated/decided this meeting week, OR any student (regardless
-            # of when they were originally allocated) who had an extension decided this week.
-            query = query.or_(
-                f"meeting_week.eq.{selected_week},"
-                f"and(extension_date.gte.{week_monday.isoformat()},extension_date.lte.{week_sunday.isoformat()})"
-            )
-        elif scope == "Extensions decided this week":
-            # extension_date is only ever set by actually using the Extensions tab —
-            # this filters out leftover "Not Approved" placeholder values that came
-            # across from the Excel import with no real decision behind them, and
-            # ties the list to the Term/Year/Week currently selected in the sidebar.
-            query = query.gte("extension_date", week_monday.isoformat()).lte("extension_date", week_sunday.isoformat())
-        elif scope == "All extensions ever recorded":
-            query = query.not_.is_("extension_date", "null")
-        full_data = query.execute()
-
-        if full_data.data:
-            ext_approved = [r for r in full_data.data if r.get('extension_status') == 'Approved']
-            ext_not_approved = [r for r in full_data.data if r.get('extension_status') == 'Not Approved']
-            has_extension_ids = {r['id'] for r in ext_approved + ext_not_approved}
-            allocated = [r for r in full_data.data if r.get('outcome') == 'Allocated' and r['id'] not in has_extension_ids]
-            not_allocated = [r for r in full_data.data if r.get('outcome') == 'Not Allocated' and r['id'] not in has_extension_ids]
-
-            col1, col2, col3, col4, col5 = st.columns(5)
-            with col1:
-                st.metric("Total Records", len(full_data.data))
-            with col2:
-                st.metric("Allocated", len(allocated))
-            with col3:
-                st.metric("Not Allocated", len(not_allocated))
-            with col4:
-                st.metric("Extension Approved", len(ext_approved))
-            with col5:
-                st.metric("Extension Not Approved", len(ext_not_approved))
-            st.caption(
-                "A student who was extended is counted once, under Extension — not also under "
-                "Allocated — since they'd already been allocated previously."
-            )
-
-            st.markdown("---")
-            st.subheader("📋 Pre-Export Review & Validation")
-
-            export_records = allocated + not_allocated + ext_approved + ext_not_approved
-            validation_issues = []
-            for record in export_records:
-                issues = []
-                if not record.get('student_name'):
-                    issues.append("Missing student name")
-                if not record.get('school'):
-                    issues.append("Missing school")
-                if record.get('outcome') == 'Allocated' and not record.get('program'):
-                    issues.append("Missing program")
-                if issues:
-                    validation_issues.append({'student': record.get('student_name', 'Unknown'), 'issues': issues})
-
-            if validation_issues:
-                st.warning(f"⚠️ **{len(validation_issues)} record(s) have issues:**")
-                for issue in validation_issues:
-                    st.write(f"  • **{issue['student']}**: {', '.join(issue['issues'])}")
-            else:
-                st.success(f"✅ **All {len(export_records)} record(s) pass validation!**")
-
-            st.markdown("---")
-            st.subheader("👁️ Export Preview")
-
-            def _preview_table(records):
-                data = [{
-                    "Student": r.get('student_name', ''), "Year": r.get('year_level', ''),
-                    "Program": r.get('program', ''), "School": r.get('school', ''),
-                    "Outcome": r.get('outcome', ''), "Focus Teacher": r.get('actioned_by', ''),
-                    "Extension": r.get('extension_status', ''), "Ext. Weeks": r.get('extension_weeks', ''),
-                    "Meeting Week": r.get('meeting_week', ''), "BSE": r.get('bse', ''),
-                } for r in records]
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
-
-            with st.expander(f"✅ Allocated ({len(allocated)})", expanded=True):
-                if allocated:
-                    _preview_table(allocated)
-                else:
-                    st.caption("None in this view.")
-
-            with st.expander(f"⏸️ Not Allocated ({len(not_allocated)})"):
-                if not_allocated:
-                    _preview_table(not_allocated)
-                else:
-                    st.caption("None in this view.")
-
-            with st.expander(f"🔄 Extension Approved ({len(ext_approved)})"):
-                if ext_approved:
-                    _preview_table(ext_approved)
-                else:
-                    st.caption("None in this view.")
-
-            with st.expander(f"🔄 Extension Not Approved ({len(ext_not_approved)})"):
-                if ext_not_approved:
-                    _preview_table(ext_not_approved)
-                else:
-                    st.caption("None in this view.")
-
-            st.caption(f"📊 {len(export_records)} record(s) total, ready for export")
-
-            with st.expander("🔎 View all captured data (every field, per student)"):
-                full_rows = build_export_rows(export_records)
-                st.dataframe(
-                    pd.DataFrame(full_rows, columns=EXPORT_COLUMNS),
-                    use_container_width=True, hide_index=True
-                )
-
-            st.markdown("---")
-            with st.expander("↩️ Reopen a Record to Stage 2"):
-                st.caption(
-                    "Sends a student back to an unfinished draft — their outcome is cleared, and they'll "
-                    "show up in Stage 2 (Complete Draft) again to review and re-finalize. Nothing else "
-                    "about their record is changed."
-                )
-                reopen_by_id = {r['id']: r for r in export_records}
-                reopen_id = st.selectbox(
-                    "Select student to reopen:", list(reopen_by_id.keys()),
-                    format_func=lambda i: f"{reopen_by_id[i]['student_name']} ({reopen_by_id[i].get('outcome', '')})",
-                    key="reopen_record_select"
-                )
-                reopen_record = reopen_by_id[reopen_id]
-
-                if st.button("↩️ Reopen to Stage 2", key=f"reopen_{reopen_record['id']}"):
-                    supabase.table("allocation_students").update({"outcome": None}).eq("id", reopen_record["id"]).execute()
-                    st.success(f"{reopen_record['student_name']} sent back to Stage 2.")
-                    st.rerun()
-
-            st.markdown("---")
-            with st.expander("🗑️ Delete a Record"):
-                del_by_id = {r['id']: r for r in export_records}
-                del_id = st.selectbox(
-                    "Select student to delete:", list(del_by_id.keys()),
-                    format_func=lambda i: f"{del_by_id[i]['student_name']} ({del_by_id[i].get('school', '')})",
-                    key="del_record_select"
-                )
-                del_record = del_by_id[del_id]
-
-                if st.button("🗑️ Delete This Record", key=f"del_rec_{del_record['id']}"):
-                    st.session_state[f"confirm_del_rec_{del_record['id']}"] = True
-
-                if st.session_state.get(f"confirm_del_rec_{del_record['id']}"):
-                    st.warning(
-                        f"⚠️ Permanently delete **{del_record['student_name']}**'s record "
-                        f"(outcome: {del_record.get('outcome', '')})? This can't be undone and won't "
-                        "affect anything already in your Excel file."
-                    )
-                    dccol1, dccol2 = st.columns(2)
-                    with dccol1:
-                        if st.button("✅ Yes, delete it", key=f"do_delete_rec_{del_record['id']}", type="primary", use_container_width=True):
-                            supabase.table("allocation_students").delete().eq("id", del_record["id"]).execute()
-                            st.session_state.pop(f"confirm_del_rec_{del_record['id']}", None)
-                            st.success(f"Deleted {del_record['student_name']}")
-                            st.rerun()
-                    with dccol2:
-                        if st.button("Cancel", key=f"cancel_del_rec_{del_record['id']}", use_container_width=True):
-                            st.session_state.pop(f"confirm_del_rec_{del_record['id']}", None)
-                            st.rerun()
-
-            st.markdown("---")
-            st.subheader("📥 Download Records for Your Master Excel File")
-            st.caption(
-                "Download the records below as a ready-formatted Excel file, matching your master "
-                "file's column layout exactly. Open it alongside your master file and paste the rows "
-                "in — this is the most reliable option right now."
-            )
-            if st.button("📥 Download Records", type="primary", use_container_width=True):
-                try:
-                    excel_bytes = export_new_workbook(export_records)
-                    st.download_button(
-                        label=f"💾 Save Excel ({len(export_records)} rows)",
-                        data=excel_bytes.getvalue(),
-                        file_name=f"CLC_Allocations_{selected_week.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
-                    )
-                except Exception as e:
-                    st.error(f"Export error: {e}")
-
-            st.markdown("---")
-            with st.expander("🧪 Experimental: sync directly into your master file (still being debugged)"):
-                st.caption(
-                    "Upload your live CLC_Allocation_Dashboard file below — the tool matches its "
-                    "existing columns, updates students already in it (e.g. with new extension info), "
-                    "appends new students, and gives you back the updated file. This hasn't been "
-                    "reliably showing changes in Excel yet — use the download option above instead "
-                    "for now."
-                )
-
-                master_file = st.file_uploader(
-                    "Upload master Excel file (e.g. CLC_Allocation_Dashboard_2026_WithNames.xlsx)",
-                    type=['xlsx'], key="master_upload"
-                )
-
-                if master_file is not None and not validation_issues:
-                    if st.button("🔄 Sync & Download Updated Master File", use_container_width=True):
-                        try:
-                            (updated_bytes, sheet_used, appended, appended_names, updated,
-                             updated_names, unmatched, name_column_found) = sync_into_master_workbook(
-                                master_file.getvalue(), export_records
-                            )
-
-                            if not name_column_found:
-                                st.error(
-                                    "⚠️ No `Student_Name` column was found in your uploaded file's "
-                                    f"**{sheet_used}** sheet — matching against existing students was skipped, "
-                                    "and every record was appended as new. This may mean the wrong sheet or file "
-                                    "was used. Double-check this is the right file."
-                                )
-
-                            if appended == 0 and updated == 0:
-                                st.error("❌ Nothing changed — no records had new data to write.")
-                            if appended:
-                                st.success(f"✅ Added {appended} new student row(s) to **{sheet_used}**:")
-                                st.write(", ".join(appended_names))
-                            if updated:
-                                st.success(
-                                    f"✅ Updated {updated} existing student row(s) in **{sheet_used}** "
-                                    f"(e.g. new extension or waitlist info):"
-                                )
-                                st.write(", ".join(updated_names))
-                            if unmatched:
-                                st.info(
-                                    f"ℹ️ {len(unmatched)} field(s) had no matching column in your file and were left blank: "
-                                    f"{', '.join(unmatched)}"
-                                )
-
-                            if appended or updated:
-                                st.markdown("**🔍 Verify — read directly from the file about to be downloaded:**")
-                                verify_wb = openpyxl.load_workbook(BytesIO(updated_bytes.getvalue()))
-                                verify_ws = verify_wb[sheet_used]
-                                verify_headers = [str(c.value) for c in verify_ws[1]]
-                                name_idx = verify_headers.index("Student_Name") if "Student_Name" in verify_headers else None
-                                changed_names = set(n.lower() for n in appended_names + updated_names)
-                                verify_rows = [
-                                    row for row in verify_ws.iter_rows(min_row=2, values_only=True)
-                                    if name_idx is not None and row[name_idx] and str(row[name_idx]).strip().lower() in changed_names
-                                ]
-                                st.dataframe(
-                                    pd.DataFrame(verify_rows, columns=verify_headers),
-                                    use_container_width=True, hide_index=True
-                                )
-
-                            st.download_button(
-                                label="💾 Download Updated Master Excel",
-                                data=updated_bytes.getvalue(),
-                                file_name=master_file.name,
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                use_container_width=True
-                            )
-                        except Exception as e:
-                            st.error(f"Sync error: {e}")
-                            import traceback
-                            st.code(traceback.format_exc())
-                elif validation_issues:
-                    st.error("❌ Fix the validation issues above before syncing")
-        else:
-            st.info("📭 No records match the selected scope above")
-
-    except Exception as e:
-        st.error(f"Error: {e}")
-        import traceback
-        st.code(traceback.format_exc())
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 5 — WAITLIST
-# ══════════════════════════════════════════════════════════════════════════════
-with tab5:
-    st.header("⏳ Waitlist Management")
-
-    show_removed = st.checkbox(
-        "Show removed students too (Declined / Site Withdraw)",
-        help="Off by default — students disappear from this list once set to Declined or Site Withdraw."
-    )
-
-    try:
-        active_statuses = ["On Waitlist", "Site Decision", "Declined", "Site Withdraw"] if show_removed else ["On Waitlist", "Site Decision"]
-        waitlisted = supabase.table("allocation_students").select("*") \
-            .in_("waitlist_status", active_statuses).execute()
-
-        records = waitlisted.data
-        if records:
-            for r in records:
-                with st.container(border=True):
-                    st.markdown(f"**{r.get('student_name', 'Unknown')}** — {r.get('school', '')} • Year {r.get('year_level', '')}")
-                    st.caption(f"Current status: {r.get('waitlist_status', '')}")
-
-                    c1, c2 = st.columns([2, 1])
-                    with c1:
-                        status_options = ["On Waitlist", "Declined", "Site Decision", "Site Withdraw"]
-                        current = r.get('waitlist_status')
-                        new_status = st.selectbox(
-                            "Set status", status_options,
-                            index=status_options.index(current) if current in status_options else 0,
-                            key=f"status_{r['id']}"
-                        )
-                    with c2:
-                        st.write("")
-                        st.write("")
-                        if st.button("💾 Update Status", key=f"update_{r['id']}", use_container_width=True):
-                            supabase.table("allocation_students").update(
-                                {"waitlist_status": new_status}
-                            ).eq("id", r["id"]).execute()
-                            st.success(f"Status updated to {new_status}")
-                            st.rerun()
-
-                    with st.expander(f"🎓 Allocate {r.get('student_name', 'this student')} now"):
-                        with st.form(f"allocate_from_waitlist_{r['id']}"):
-                            acol1, acol2, acol3 = st.columns(3)
-                            with acol1:
-                                alloc_program = st.selectbox("Program *", PROGRAMS, key=f"prog_{r['id']}")
-                            with acol2:
-                                alloc_start = st.date_input("Allocation Date", value=None, key=f"start_{r['id']}")
-                            with acol3:
-                                alloc_worker = st.selectbox("Focus Teacher", [""] + STAFF_NAMES, key=f"worker_{r['id']}")
-
-                            if st.form_submit_button("✅ Allocate Now", type="primary", use_container_width=True):
-                                supabase.table("allocation_students").update({
-                                    "outcome": "Allocated",
-                                    "program": alloc_program,
-                                    "start_after": alloc_start.isoformat() if alloc_start else None,
-                                    "case_worker": alloc_worker or None,
-                                    "actioned_by": alloc_worker or None,
-                                    "waitlist_status": "Not Applicable",
-                                    "allocated_from_waitlist": "Yes",
-                                }).eq("id", r["id"]).execute()
-                                st.success(f"✅ {r.get('student_name')} allocated!")
-                                st.balloons()
-                                st.rerun()
-        else:
-            st.info("No students currently on the waitlist.")
-    except Exception as e:
-        st.error(f"Error: {e}")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 6 — ADMIN
-# ══════════════════════════════════════════════════════════════════════════════
-with tab6:
-    st.header("⚙️ Admin — Manage Dropdown Lists")
-    st.caption(
-        "Add or remove options for the tool's dropdowns without needing a code change. "
-        "Changes here take effect the next time the tool loads."
-    )
-
-    admin_password = st.text_input("🔐 Enter admin password", type="password", key="admin_pw")
-    if admin_password.strip() != "secret2026":
-        if admin_password:
-            st.error("❌ Incorrect password.")
-        st.stop()
-
-    st.success("✅ Access granted")
-
-    MANAGED_LISTS = {
-        "Focus Teacher": ("focus_teacher", DEFAULT_STAFF_NAMES),
-        "Program": ("program", DEFAULT_PROGRAMS),
-        "Medical Condition Type": ("medical_condition_type", DEFAULT_MEDICAL_CONDITION_TYPES),
-        "IESP Funding Option": ("iesp_funding_option", DEFAULT_IESP_OPTIONS),
-    }
-
-    list_label = st.selectbox("Which list do you want to manage?", list(MANAGED_LISTS.keys()))
-    list_name, default_values = MANAGED_LISTS[list_label]
-
-    try:
-        supabase.table("dropdown_options").select("id").limit(1).execute()
-        table_exists = True
-        table_error = None
-    except Exception as e:
-        table_exists = False
-        table_error = str(e)
-
-    if not table_exists:
-        st.error(
-            "The `dropdown_options` table doesn't exist in Supabase yet (or couldn't be reached). "
-            "Run this once in the Supabase SQL editor, then refresh this page:"
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1200
         )
-        st.code(
-            "CREATE TABLE dropdown_options (\n"
-            "    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n"
-            "    list_name TEXT NOT NULL,\n"
-            "    option_value TEXT NOT NULL,\n"
-            "    sort_order INTEGER DEFAULT 0\n"
-            ");",
-            language="sql"
-        )
-        with st.expander("Technical details"):
-            st.code(table_error or "No error detail available")
-        st.stop()
+        
+        full_output = response.choices[0].message.content
+        
+        sections = {
+            'student_concerns': '',
+            'minutes': '',
+            'actions': []
+        }
+        
+        if "SECTION 2" in full_output:
+            parts = full_output.split("SECTION 2", 1)
+            section1 = parts[0].replace("SECTION 1 — NEW STUDENT CONCERNS", "").replace("SECTION 1", "").replace("---", "").strip()
+            remaining = parts[1]
+            
+            if "SECTION 3" in remaining:
+                section2_and_3 = remaining.split("SECTION 3", 1)
+                section2 = section2_and_3[0].replace("— MEETING MINUTES", "").replace("---", "").strip()
+                section3 = section2_and_3[1].replace("— SUGGESTED ACTIONS", "").replace("---", "").strip()
+                
+                sections['student_concerns'] = section1
+                sections['minutes'] = section2
+                
+                actions_list = []
+                current_action = {}
+                
+                for line in section3.split('\n'):
+                    line = line.strip()
+                    if line.startswith("ACTION:"):
+                        if current_action.get('action'):
+                            actions_list.append(current_action)
+                        current_action = {'action': line.replace("ACTION:", "").strip()}
+                    elif line.startswith("WHO:"):
+                        current_action['who'] = line.replace("WHO:", "").strip()
+                    elif line.startswith("BY WHEN:"):
+                        current_action['by_when'] = line.replace("BY WHEN:", "").strip()
+                    elif line.startswith("PRIORITY:"):
+                        priority = line.replace("PRIORITY:", "").strip()
+                        current_action['priority'] = priority if priority in ["Low", "Medium", "High", "Urgent"] else "Medium"
+                
+                if current_action.get('action'):
+                    actions_list.append(current_action)
+                
+                sections['actions'] = actions_list
+        
+        return sections
+        
+    except Exception as e:
+        st.error(f"AI generation error: {e}")
+        return None
 
-    current = supabase.table("dropdown_options").select("*") \
-        .eq("list_name", list_name).order("sort_order").execute().data
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def get_program_from_params():
+    params = st.query_params
+    prog = params.get("program", "JP")
+    return prog if prog in PROGRAMS else "JP"
 
-    if not current:
-        st.info(f"No custom options saved yet for **{list_label}** — currently using the built-in defaults below.")
-        st.write(", ".join(default_values))
-        if st.button(f"📋 Load these {len(default_values)} defaults into the editable list"):
-            for i, val in enumerate(default_values):
-                supabase.table("dropdown_options").insert(
-                    {"list_name": list_name, "option_value": val, "sort_order": i}
-                ).execute()
-            st.rerun()
-    else:
-        st.markdown(f"**Current {list_label} options:**")
-        for item in current:
-            ccol1, ccol2 = st.columns([4, 1])
-            with ccol1:
-                st.write(item["option_value"])
-            with ccol2:
-                if st.button("🗑️ Remove", key=f"rm_{item['id']}"):
-                    supabase.table("dropdown_options").delete().eq("id", item["id"]).execute()
-                    st.rerun()
+def get_week_from_params():
+    week_str = st.query_params.get("week", None)
+    if not week_str:
+        return None
+    try:
+        monday = datetime.date.fromisoformat(week_str)
+        monday = monday - datetime.timedelta(days=monday.weekday())
+        return monday, monday + datetime.timedelta(days=6)
+    except ValueError:
+        return None
 
-        st.markdown("---")
-        with st.form(f"add_option_{list_name}", clear_on_submit=True):
-            new_value = st.text_input(f"Add a new {list_label}")
-            if st.form_submit_button("➕ Add") and new_value.strip():
-                next_order = max([c.get("sort_order", 0) for c in current], default=-1) + 1
-                supabase.table("dropdown_options").insert(
-                    {"list_name": list_name, "option_value": new_value.strip(), "sort_order": next_order}
-                ).execute()
+def admin_login():
+    if "admin" not in st.session_state:
+        st.session_state.admin = False
+    with st.sidebar:
+        if not st.session_state.admin:
+            with st.expander("🔐 Admin Login"):
+                pw = st.text_input("Password", type="password", key="pw_input")
+                if st.button("Login"):
+                    if pw == ADMIN_PASSWORD:
+                        st.session_state.admin = True
+                        st.rerun()
+                    else:
+                        st.error("Incorrect password")
+        else:
+            st.success("✅ Admin logged in")
+            if st.button("Logout"):
+                st.session_state.admin = False
                 st.rerun()
 
-st.caption("CLC-LBU Allocation Meetings Tool")
+def improve_with_ai(raw_text: str, program: str, meeting_date: str, dsm_summary: str = "") -> str:
+    if not GROQ_KEY:
+        return raw_text
+    client = Groq(api_key=GROQ_KEY)
+
+    if program == "STAFF":
+        dsm_context = f"""
+PART 1 — DIGITAL STAFF MEETING (already recorded, include as first section):
+{dsm_summary}
+""" if dsm_summary else ""
+
+        prompt = f"""You are a professional minute-taker for Cowandilla Learning Centre (CLC), Learning & Behaviour Unit — an alternative education school in South Australia.
+
+Meeting: Staff Meeting (Combined — Digital + Face-to-Face)
+Date: {meeting_date}
+{dsm_context}
+PART 2 — FACE-TO-FACE MEETING TRANSCRIPT:
+{raw_text}
+
+Transform the face-to-face transcript into polished, professional minutes using this EXACT structure:
+
+## PART 2 — FACE-TO-FACE STAFF MEETING
+
+### Attendance
+List names present and apologies from the transcript. If not clear, note "See attendance record."
+
+### Apologies
+Names with apologies.
+
+### Arising Business
+Any matters arising from previous meetings mentioned in the transcript.
+
+### Standing Items
+Present each discussion point as a numbered item:
+1. **Item title** — summary of discussion and any decisions made
+
+### Actions
+| Action | Assigned To | Due |
+|--------|-------------|-----|
+| (list all actions agreed) | (who) | (when) |
+
+### Next Meeting
+Date/time if mentioned, otherwise leave blank.
+
+Rules:
+- Professional but warm, accessible language appropriate for a school setting
+- Trauma-informed, strengths-based framing
+- Preserve ALL factual content — do not add or fabricate anything
+- Keep it concise — one clear sentence per discussion point unless more detail is essential
+- Use plain English, avoid jargon
+
+Transcript to transform:
+{raw_text}"""
+    else:
+        prompt = f"""You are a professional minute-taker for an alternative education school (Cowandilla Learning Centre, Learning & Behaviour Unit).
+
+Program team: {PROGRAMS[program]['label']} ({program})
+Meeting date: {meeting_date}
+
+Transform the following raw transcript or rough notes into polished, professional meeting minutes.
+
+Format requirements:
+- Clear heading with meeting details
+- Numbered agenda items with concise summaries
+- Action items clearly identified with: Action | Assigned to | Timeline
+- Professional but accessible language
+- Trauma-informed, strengths-based framing where relevant
+- Preserve all factual content — do not add or fabricate information
+- End with a summary table of all action items
+
+Raw input:
+{raw_text}"""
+
+    response = client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=900
+    )
+    return response.choices[0].message.content
+
+# ── DB helpers ────────────────────────────────────────────────────────────────
+def fetch(table, filters=None, order=None):
+    q = supabase.table(table).select("*")
+    if filters:
+        for k, v in filters.items():
+            q = q.eq(k, v)
+    if order:
+        q = q.order(order, desc=True)
+    return q.execute().data or []
+
+def insert(table, data):
+    supabase.table(table).insert(data).execute()
+
+def update_row(table, row_id, data):
+    supabase.table(table).update(data).eq("id", row_id).execute()
+
+def delete_row(table, row_id):
+    supabase.table(table).delete().eq("id", row_id).execute()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DUPLICATE DETECTION HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _meeting_signature(rec):
+    """A stable key that identifies 'the same meeting'. Two records sharing this
+    signature are considered duplicates of one another."""
+    return (
+        str(rec.get("program", "")).strip(),
+        str(rec.get("meeting_date", "")).strip(),
+        str(rec.get("week_type", "")).strip(),
+        str(rec.get("term", "")).strip(),
+        str(rec.get("week_number", "")).strip(),
+    )
+
+
+def find_existing_meetings(program, meeting_date, week_type, term, week_number):
+    """Return all saved records matching this meeting's signature (newest first)."""
+    target = (
+        str(program).strip(),
+        str(meeting_date).strip(),
+        str(week_type).strip(),
+        str(term).strip(),
+        str(week_number).strip(),
+    )
+    matches = []
+    for rec in fetch("tm_program_meetings", {"program": program}, "meeting_date"):
+        if _meeting_signature(rec) == target:
+            matches.append(rec)
+    # Newest first (by created/updated id ordering as a fallback)
+    matches.sort(key=lambda r: str(r.get("updated_at") or r.get("created_at") or r.get("id") or ""), reverse=True)
+    return matches
+
+
+def find_duplicate_meeting_groups(program):
+    """Scan all records for this program and return {signature: [records]} for any
+    signature that appears more than once (i.e. true duplicates in the database)."""
+    groups = {}
+    for rec in fetch("tm_program_meetings", {"program": program}, "meeting_date"):
+        sig = _meeting_signature(rec)
+        groups.setdefault(sig, []).append(rec)
+    return {sig: recs for sig, recs in groups.items() if len(recs) > 1}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SMARTAR LINK BUTTON (reliable, opens in a new tab)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def smartar_link_button(url, label="🎯 Open Goal Builder"):
+    """Render a styled anchor that reliably opens the Goal Builder in a NEW tab,
+    so the meeting form is never lost. Markdown links / meta-refresh were unreliable."""
+    st.markdown(
+        f'<a href="{url}" target="_blank" rel="noopener" '
+        f'style="display:inline-block;background:#1A7A6E;color:#fff;font-weight:600;'
+        f'font-size:0.82rem;padding:0.4rem 0.8rem;border-radius:8px;text-decoration:none;">'
+        f'{label}</a>',
+        unsafe_allow_html=True,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CURRENT SMARTAR GOALS — fetched live from the Goal Builder so they can be
+# viewed (and noted against) right inside the spotlight.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _html_escape(text):
+    return (str(text or "")
+            .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_student_smartar_goals(student_name):
+    """Fetch a student's CURRENT SMARTAR goals from the Goal Builder
+    (Behaviour Support Supabase, smartar_goals table). Active goals first,
+    then newest first. Returns a list of dicts (empty if none / not configured).
+    Cached for 60s; use fetch_student_smartar_goals.clear() to refresh."""
+    if not student_name or not str(student_name).strip():
+        return []
+    try:
+        import os
+        from supabase import create_client as _cc
+        burl = st.secrets.get("BEHAVIOUR_SUPABASE_URL", "") or os.environ.get("BEHAVIOUR_SUPABASE_URL", "")
+        bkey = st.secrets.get("BEHAVIOUR_SUPABASE_KEY", "") or os.environ.get("BEHAVIOUR_SUPABASE_KEY", "")
+        # Fallback to a nested [supabase] secrets section if present
+        if not burl:
+            sb = st.secrets.get("supabase", {})
+            if isinstance(sb, dict):
+                burl = sb.get("url", "")
+                bkey = sb.get("key", "") or sb.get("service_key", "")
+        if not burl or not bkey:
+            return []
+        client = _cc(burl, bkey)
+        res = client.table("smartar_goals").select("*").eq("student_name", str(student_name).strip()).execute()
+        rows = res.data or []
+        # Newest first, then stable-sort so active goals come first
+        rows.sort(key=lambda r: str(r.get("updated_at") or r.get("created_at") or r.get("id") or ""), reverse=True)
+        rows.sort(key=lambda r: 0 if r.get("active", True) and str(r.get("status", "Active")).lower() not in ("archived", "achieved", "on hold") else 1)
+        return rows
+    except Exception:
+        return []
+
+
+def render_current_smartar_goals(student_name, max_goals=3):
+    """Display a student's current SMARTAR goal(s) inline, so the team can read
+    the live goal and record notes alongside it during the meeting."""
+    goals = fetch_student_smartar_goals(student_name)
+    if not goals:
+        st.caption("ℹ️ No saved SMARTAR goal found yet — use the Goal Builder button to create one, then ↻ Refresh.")
+        return
+
+    for g in goals[:max_goals]:
+        goal_text = (g.get("smartar_goal") or g.get("goal_text") or g.get("goal") or "").strip()
+        status    = (g.get("status") or ("Active" if g.get("active", True) else "Archived"))
+        skill     = (g.get("skill") or g.get("domain") or "").strip()
+        review    = (g.get("review_date") or g.get("target_date") or "")
+        header_bits = " · ".join(b for b in [status, skill] if b)
+
+        st.markdown(
+            "<div style='background:#f0f9f9;border:1px solid #1A7A6E;border-left:5px solid #1A7A6E;"
+            "border-radius:0 8px 8px 0;padding:8px 12px;margin:4px 0;'>"
+            "<div style='font-size:0.7rem;color:#1A7A6E;font-weight:700;letter-spacing:0.03em;'>"
+            f"CURRENT SMARTAR GOAL{(' · ' + _html_escape(header_bits)) if header_bits else ''}</div>"
+            f"<div style='font-size:0.9rem;color:#0f172a;margin-top:3px;'>{_html_escape(goal_text) or '—'}</div>"
+            + (f"<div style='font-size:0.7rem;color:#64748B;margin-top:4px;'>Review: {_html_escape(review)}</div>" if review else "")
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+
+        # GAS performance levels (Goal Builder schema), if present
+        gas = [
+            ("Exceeding",  g.get("gas_exceeding")),
+            ("Above",      g.get("gas_above")),
+            ("Expected",   g.get("gas_expected")),
+            ("Below",      g.get("gas_below")),
+            ("Not yet",    g.get("gas_not_yet")),
+        ]
+        if any(v for _, v in gas):
+            with st.expander("📊 GAS levels", expanded=False):
+                for lvl, txt in gas:
+                    if txt:
+                        st.markdown(f"**{lvl}:** {txt}")
+
+        # Other detail fields (alternate schema variant), if present
+        extra = [
+            ("Baseline",       g.get("baseline")),
+            ("Target",         g.get("target")),
+            ("Strategies",     g.get("strategies")),
+            ("Progress notes", g.get("progress_notes")),
+        ]
+        if any(v for _, v in extra):
+            with st.expander("📋 Goal detail", expanded=False):
+                for lbl, txt in extra:
+                    if txt:
+                        st.markdown(f"**{lbl}:** {txt}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WORD DOCUMENT HELPERS (keeping existing - truncated for brevity)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _hex(colour):
+    return colour.lstrip("#").upper()
+
+def _shade_cell(cell, hex_colour):
+    try:
+        tc   = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        shd  = OxmlElement("w:shd")
+        shd.set(qn("w:val"),   "clear")
+        shd.set(qn("w:color"), "auto")
+        shd.set(qn("w:fill"),  _hex(hex_colour))
+        tcPr.append(shd)
+    except Exception:
+        pass
+
+def _rgb(hex_colour):
+    h = _hex(hex_colour)
+    return RGBColor(int(h[0:2],16), int(h[2:4],16), int(h[4:6],16))
+
+def _para_run(para, text, bold=False, italic=False, size_pt=10, colour="0f172a"):
+    run = para.add_run(str(text))
+    run.bold           = bold
+    run.italic         = italic
+    run.font.size      = Pt(size_pt)
+    run.font.color.rgb = _rgb(colour)
+    return run
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PROFESSIONAL MINUTES — WORD DOCUMENT BUILDER
+# ─────────────────────────────────────────────────────────────────────────────
+
+TEAL  = "1A7A6E"
+AMBER = "C8760A"
+INK   = "0F172A"
+GREY  = "64748B"
+
+def _safe_json(raw, default):
+    import json as _json
+    if raw is None:
+        return default
+    if not isinstance(raw, str):
+        return raw
+    try:
+        return _json.loads(raw)
+    except Exception:
+        return default
+
+def _doc_heading(doc, text, colour=TEAL, size=13, space_before=10, space_after=4):
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(space_before)
+    p.paragraph_format.space_after  = Pt(space_after)
+    _para_run(p, text, bold=True, size_pt=size, colour=colour)
+    return p
+
+def _doc_rule(doc):
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(2)
+    p.paragraph_format.space_after  = Pt(2)
+    pPr = p._p.get_or_add_pPr()
+    pbdr = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "single")
+    bottom.set(qn("w:sz"), "6")
+    bottom.set(qn("w:space"), "1")
+    bottom.set(qn("w:color"), TEAL)
+    pbdr.append(bottom)
+    pPr.append(pbdr)
+
+def build_minutes_docx(md, program):
+    """Build a polished, sendable Word minutes document from a meeting-data dict
+    (same column structure used for saving). Returns a BytesIO."""
+    week_type = md.get("week_type", "")
+    if program == "SPECIALIST":
+        type_label = "Specialist Program Meeting"
+    elif week_type == "A":
+        type_label = "Week A — Student Lens"
+    elif week_type == "B":
+        type_label = "Week B — System Lens"
+    else:
+        type_label = "Team Meeting"
+
+    prog_label = PROGRAMS.get(program, {}).get("label", program)
+
+    doc = Document()
+    # Base style
+    normal = doc.styles["Normal"]
+    normal.font.name = "Calibri"
+    normal.font.size = Pt(10.5)
+    normal.font.color.rgb = _rgb(INK)
+    for section in doc.sections:
+        section.top_margin    = Cm(1.8)
+        section.bottom_margin = Cm(1.8)
+        section.left_margin   = Cm(2.0)
+        section.right_margin  = Cm(2.0)
+
+    # ── Title band ──
+    title = doc.add_paragraph()
+    title.paragraph_format.space_after = Pt(0)
+    _para_run(title, "Cowandilla Learning Centre", bold=True, size_pt=18, colour=TEAL)
+    sub = doc.add_paragraph()
+    sub.paragraph_format.space_after = Pt(2)
+    _para_run(sub, "Learning & Behaviour Unit", bold=False, size_pt=10.5, colour=GREY)
+    mt = doc.add_paragraph()
+    mt.paragraph_format.space_after = Pt(6)
+    _para_run(mt, f"{prog_label}  ·  {type_label}", bold=True, size_pt=12, colour=AMBER)
+    _doc_rule(doc)
+
+    # ── Meeting details table ──
+    details = [
+        ("Date",        str(md.get("meeting_date", ""))),
+        ("Term / Week", f"{md.get('term','')}  ·  Week {md.get('week_number','')}"),
+        ("Facilitator", md.get("facilitator", "")),
+        ("Attendees",   md.get("attendees", "") or "Not recorded"),
+    ]
+    tbl = doc.add_table(rows=len(details), cols=2)
+    tbl.alignment = WD_TABLE_ALIGNMENT.LEFT
+    tbl.allow_autofit = True
+    for i, (label, value) in enumerate(details):
+        c0, c1 = tbl.rows[i].cells
+        c0.width = Cm(3.5); c1.width = Cm(13.0)
+        _shade_cell(c0, "F1F5F9")
+        p0 = c0.paragraphs[0]; p0.paragraph_format.space_after = Pt(1)
+        _para_run(p0, label, bold=True, size_pt=9.5, colour=TEAL)
+        p1 = c1.paragraphs[0]; p1.paragraph_format.space_after = Pt(1)
+        _para_run(p1, str(value), size_pt=10, colour=INK)
+    doc.add_paragraph().paragraph_format.space_after = Pt(2)
+
+    # ── Check-in notes ──
+    checkin = md.get("checkin_notes", "")
+    if program == "SPECIALIST":
+        cd = _safe_json(checkin, {})
+        mon = cd.get("monday_teacher", "") if isinstance(cd, dict) else ""
+        tf  = cd.get("tuefri_teacher", "") if isinstance(cd, dict) else ""
+        if mon or tf:
+            _doc_heading(doc, "Team Check-in & Handover")
+            if mon:
+                p = doc.add_paragraph(); _para_run(p, "Monday Teacher: ", bold=True, size_pt=10, colour=AMBER); _para_run(p, mon, size_pt=10)
+            if tf:
+                p = doc.add_paragraph(); _para_run(p, "Tuesday–Friday Teacher: ", bold=True, size_pt=10, colour=AMBER); _para_run(p, tf, size_pt=10)
+    else:
+        if isinstance(checkin, str) and checkin.strip():
+            _doc_heading(doc, "Team Check-in")
+            doc.add_paragraph(checkin.strip())
+
+    # ── Student concerns (Week A / Specialist) ──
+    concerns = _safe_json(md.get("student_concerns", ""), [])
+    concern_items = []
+    if isinstance(concerns, dict):
+        # Specialist structure
+        for c in concerns.get("concerns", []):
+            if isinstance(c, dict):
+                txt = " · ".join(v for v in [c.get("concern"), c.get("strategy"), c.get("adjustment"), c.get("who"), c.get("timeline")] if v)
+                if txt:
+                    concern_items.append(txt)
+        prog_c = concerns.get("program_concerns", "")
+    elif isinstance(concerns, list):
+        for c in concerns:
+            if isinstance(c, dict) and c.get("notes", "").strip():
+                concern_items.append(c["notes"].strip())
+        prog_c = ""
+    else:
+        prog_c = ""
+
+    if concern_items:
+        _doc_heading(doc, "Student Concerns")
+        for txt in concern_items:
+            p = doc.add_paragraph(style=None)
+            p.paragraph_format.left_indent = Cm(0.4)
+            p.paragraph_format.space_after = Pt(3)
+            _para_run(p, "•  ", bold=True, colour=AMBER)
+            _para_run(p, txt, size_pt=10)
+    if isinstance(concerns, dict) and prog_c and prog_c.strip():
+        p = doc.add_paragraph(); _para_run(p, "Program-level concerns: ", bold=True, size_pt=10, colour=AMBER); _para_run(p, prog_c.strip(), size_pt=10)
+
+    # ── SMARTAR spotlight ──
+    smartar = _safe_json(md.get("smartar_spotlight", ""), [])
+    if isinstance(smartar, list) and any(s.get("student_name") for s in smartar if isinstance(s, dict)):
+        _doc_heading(doc, "SMARTAR Goal Spotlight")
+        for s in smartar:
+            if isinstance(s, dict) and s.get("student_name"):
+                p = doc.add_paragraph()
+                p.paragraph_format.left_indent = Cm(0.4)
+                p.paragraph_format.space_after = Pt(2)
+                _para_run(p, "•  ", bold=True, colour=AMBER)
+                _para_run(p, s["student_name"], bold=True, size_pt=10)
+                if s.get("notes", "").strip():
+                    _para_run(p, "  —  " + s["notes"].strip(), size_pt=10, colour=GREY)
+
+    # ── Priority focus (Week B) ──
+    pf = _safe_json(md.get("priority_focus", ""), {})
+    pf_notes = pf.get("notes", "") if isinstance(pf, dict) else ""
+    if pf_notes and pf_notes.strip():
+        _doc_heading(doc, "Priority Focus — System Lens")
+        for line in pf_notes.strip().split("\n"):
+            if line.strip():
+                doc.add_paragraph(line.strip())
+
+    # ── Reports / TAC ──
+    reports = md.get("reports_tac_notes", "")
+    if isinstance(reports, str) and reports.strip():
+        _doc_heading(doc, "Reports / TAC / Transitions")
+        doc.add_paragraph(reports.strip())
+
+    # ── Meeting minutes ──
+    minutes = md.get("meeting_minutes", "")
+    if isinstance(minutes, str) and minutes.strip():
+        _doc_heading(doc, "Meeting Minutes")
+        for block in minutes.strip().split("\n"):
+            if block.strip():
+                doc.add_paragraph(block.strip())
+
+    # ── Actions table ──
+    actions = _safe_json(md.get("actions", ""), [])
+    real_actions = [a for a in actions if isinstance(a, dict) and a.get("action", "").strip()]
+    if real_actions:
+        _doc_heading(doc, "Actions")
+        at = doc.add_table(rows=1, cols=5)
+        at.alignment = WD_TABLE_ALIGNMENT.LEFT
+        hdr = ["Action", "Who", "By When", "Priority", "Done"]
+        widths = [Cm(7.0), Cm(3.0), Cm(2.6), Cm(2.2), Cm(1.6)]
+        for j, h in enumerate(hdr):
+            cell = at.rows[0].cells[j]
+            cell.width = widths[j]
+            _shade_cell(cell, TEAL)
+            pr = cell.paragraphs[0]; pr.paragraph_format.space_after = Pt(1)
+            _para_run(pr, h, bold=True, size_pt=9.5, colour="FFFFFF")
+        for a in real_actions:
+            row = at.add_row().cells
+            vals = [a.get("action",""), a.get("who",""), a.get("by_when",""),
+                    a.get("priority","Medium"), "✓" if a.get("done") else ""]
+            for j, v in enumerate(vals):
+                row[j].width = widths[j]
+                pr = row[j].paragraphs[0]; pr.paragraph_format.space_after = Pt(1)
+                _para_run(pr, str(v), size_pt=9.5)
+
+    # ── Footer line ──
+    doc.add_paragraph().paragraph_format.space_after = Pt(4)
+    _doc_rule(doc)
+    foot = doc.add_paragraph()
+    _para_run(foot, f"Minutes generated from the CLC LBU Portal · {datetime.date.today().isoformat()}",
+              italic=True, size_pt=8.5, colour=GREY)
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WORD DOCUMENT GENERATION FOR MEETING MINUTES
+# ─────────────────────────────────────────────────────────────────────────────
+
+def generate_minutes_docx(program, meeting_date, facilitator, attendees, extracted_notes, summary_notes, transcript):
+    """Generate professional Word document matching CLC LBU minutes format"""
+    doc = Document()
+    
+    # ── Base style ──
+    normal = doc.styles["Normal"]
+    normal.font.name = "Calibri"
+    normal.font.size = Pt(10.5)
+    normal.font.color.rgb = RGBColor(31, 41, 55)  # Dark gray
+    
+    for section in doc.sections:
+        section.top_margin = Cm(1.8)
+        section.bottom_margin = Cm(1.8)
+        section.left_margin = Cm(2.0)
+        section.right_margin = Cm(2.0)
+    
+    # ── Title band (matching CLC LBU format) ──
+    title = doc.add_heading("Cowandilla Learning Centre", 0)
+    title.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    title_run = title.runs[0]
+    title_run.font.color.rgb = RGBColor(0, 128, 128)  # Teal
+    title_run.font.size = Pt(18)
+    
+    sub = doc.add_paragraph("Learning & Behaviour Unit")
+    sub_run = sub.runs[0]
+    sub_run.font.size = Pt(10.5)
+    sub_run.font.color.rgb = RGBColor(107, 114, 128)  # Gray
+    
+    prog_label = PROGRAMS.get(program, {}).get("label", program)
+    meeting_type = doc.add_paragraph(f"{prog_label}  ·  Ad-Hoc Meeting")
+    meeting_type_run = meeting_type.runs[0]
+    meeting_type_run.bold = True
+    meeting_type_run.font.size = Pt(12)
+    meeting_type_run.font.color.rgb = RGBColor(217, 119, 6)  # Amber/Gold
+    
+    # Horizontal rule
+    doc.add_paragraph("_" * 80).paragraph_format.space_after = Pt(6)
+    
+    # ── Meeting Details Table ──
+    details = [
+        ("Date", str(meeting_date)),
+        ("Facilitator", facilitator or ""),
+        ("Attendees", attendees or "Not recorded"),
+    ]
+    
+    tbl = doc.add_table(rows=len(details), cols=2)
+    tbl.style = 'Light Grid Accent 1'
+    
+    for i, (label, value) in enumerate(details):
+        c0, c1 = tbl.rows[i].cells
+        c0.width = Cm(3.5)
+        c1.width = Cm(13.0)
+        
+        # Style left column
+        p0 = c0.paragraphs[0]
+        p0.paragraph_format.space_after = Pt(1)
+        run0 = p0.add_run(label)
+        run0.bold = True
+        run0.font.size = Pt(9.5)
+        run0.font.color.rgb = RGBColor(0, 128, 128)
+        
+        # Style right column
+        p1 = c1.paragraphs[0]
+        p1.paragraph_format.space_after = Pt(1)
+        run1 = p1.add_run(str(value))
+        run1.font.size = Pt(10)
+        run1.font.color.rgb = RGBColor(31, 41, 55)
+    
+    doc.add_paragraph()
+    doc.add_paragraph()
+    
+    # ── Meeting Minutes / Key Points ──
+    heading = doc.add_heading("Meeting Minutes", level=1)
+    heading_run = heading.runs[0]
+    heading_run.font.color.rgb = RGBColor(0, 128, 128)
+    
+    if extracted_notes and extracted_notes.strip():
+        doc.add_paragraph(extracted_notes)
+    elif summary_notes and summary_notes.strip():
+        doc.add_paragraph(summary_notes)
+    else:
+        p = doc.add_paragraph("No meeting summary recorded")
+        p.runs[0].italic = True
+    
+    # ── Full Transcript (removed - not needed in final minutes) ──
+    
+    # ── Footer ──
+    doc.add_paragraph()
+    footer = doc.add_paragraph()
+    footer.paragraph_format.space_before = Pt(12)
+    
+    footer_run = footer.add_run(f"Minutes generated from the CLC LBU Portal · {datetime.datetime.now().strftime('%A, %d %B %Y')}")
+    footer_run.italic = True
+    footer_run.font.size = Pt(9)
+    footer_run.font.color.rgb = RGBColor(107, 114, 128)
+    footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    
+    return doc
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SPECIALIST PROGRAM MEETING (single template - not Week A/B)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render_specialist_meeting():
+    """Specialist Program Meeting — Job Share Coordination, Curriculum, Budget, Artifacts"""
+    import json as _json
+    
+    program = "SPECIALIST"
+    accent = PROGRAMS[program]["color"]
+
+    # Auto-save status display
+    if st.session_state.autosave_message:
+        st.caption(st.session_state.autosave_message)
+
+    # Fetch past meetings for Specialist
+    past_meetings = fetch("tm_program_meetings", {"program": "SPECIALIST"}, "meeting_date")
+    
+    # Meeting selection - New or Edit existing
+    st.markdown("#### 📂 Select Meeting")
+    recent_records = past_meetings[:20]
+    meeting_options = ["➕ New Meeting"] + [
+        f"{rec.get('meeting_date','')} - Term {rec.get('term','')} W{rec.get('week_number','')}"
+        for rec in recent_records
+    ]
+    
+    selected_meeting = st.selectbox(
+        "Choose a meeting to edit or create new",
+        options=meeting_options,
+        key="meeting_select_specialist"
+    )
+    
+    # Load existing meeting if selected
+    selected_record = None
+    if selected_meeting != "➕ New Meeting":
+        # Find the selected record (aligned with meeting_options order)
+        selected_idx = meeting_options.index(selected_meeting) - 1
+        selected_record = recent_records[selected_idx]
+        
+        # Set current_meeting_id so it updates instead of creating new
+        if not st.session_state.current_meeting_id or st.session_state.current_meeting_id != selected_record['id']:
+            st.session_state.current_meeting_id = selected_record['id']
+            
+            # Load data into session state
+            try:
+                if selected_record.get('student_concerns'):
+                    concerns_data = _json.loads(selected_record['student_concerns'])
+                    if isinstance(concerns_data, dict) and 'concerns' in concerns_data:
+                        st.session_state["sp_concerns"] = concerns_data['concerns']
+                if selected_record.get('curriculum_coverage'):
+                    curriculum_data = _json.loads(selected_record['curriculum_coverage'])
+                    if isinstance(curriculum_data, dict) and 'modules' in curriculum_data:
+                        st.session_state["sp_curriculum"] = curriculum_data['modules']
+                if selected_record.get('actions'):
+                    st.session_state["sp_actions"] = _json.loads(selected_record['actions'])
+            except:
+                pass
+        
+        st.info(f"✏️ Editing existing meeting - Meeting ID: {selected_record['id']}")
+        
+        # Show saved minutes in an expander for reference
+        if selected_record.get('meeting_minutes'):
+            with st.expander("📄 View Saved Minutes from This Meeting", expanded=False):
+                st.markdown(selected_record['meeting_minutes'])
+    else:
+        # Clear meeting_id for new meeting
+        if selected_meeting == "➕ New Meeting" and st.session_state.current_meeting_id:
+            st.session_state.current_meeting_id = None
+            # Clear session state
+            for k in ["sp_concerns", "sp_curriculum", "sp_actions"]:
+                st.session_state.pop(k, None)
+    
+    st.markdown("---")
+
+    st.markdown(f"""<div style="background:#fef3c7;border-left:5px solid #d97706;
+        border-radius:0 8px 8px 0;padding:8px 14px;margin-bottom:12px;font-size:13px;color:#92400e;">
+        🎨 <strong>SPECIALIST PROGRAM MEETING</strong> · Job Share Coordination · Curriculum Delivery · Budget & Foodbank · Student Artifacts
+    </div>""", unsafe_allow_html=True)
+
+    if not st.session_state.current_meeting_id:
+        st.markdown("""
+        <div style="background:#e0f2fe;border-left:4px solid #0284c7;border-radius:0 8px 8px 0;
+                    padding:8px 14px;margin-bottom:12px;font-size:13px;color:#075985;">
+          ℹ️ <strong>New Meeting:</strong> Meeting ID will be created automatically when you start entering content.
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.success(f"✅ Meeting Active (ID: {st.session_state.current_meeting_id})")
+
+    st.markdown("#### 📋 Meeting Details")
+    mc1, mc2, mc3, mc4 = st.columns(4)
+    
+    # Pre-populate with existing data if editing
+    default_date = datetime.date.fromisoformat(selected_record['meeting_date']) if selected_record else datetime.date.today()
+    default_term = selected_record.get('term', '') if selected_record else ''
+    default_week = selected_record.get('week_number', 1) if selected_record else 1
+    default_facilitator = selected_record.get('facilitator', _safe_staff_name()) if selected_record else _safe_staff_name()
+    default_attendees = selected_record.get('attendees', '') if selected_record else ''
+    
+    # Get check-in notes if editing
+    default_monday_notes = ""
+    default_tuefri_notes = ""
+    if selected_record and selected_record.get('checkin_notes'):
+        try:
+            checkin_data = _json.loads(selected_record['checkin_notes'])
+            default_monday_notes = checkin_data.get('monday_teacher', '')
+            default_tuefri_notes = checkin_data.get('tuefri_teacher', '')
+        except:
+            pass
+    
+    with mc1: sp_date        = st.date_input("Date", value=default_date, key="sp_date")
+    with mc2: sp_term        = st.text_input("Term", value=default_term, placeholder="T1", key="sp_term")
+    with mc3: sp_week        = st.number_input("Week #", min_value=1, max_value=11, value=default_week, key="sp_week")
+    with mc4: sp_facilitator = st.text_input("Facilitator", value=default_facilitator, key="sp_fac")
+    sp_attendees = st.text_input("Attendees (Both job share teachers + others)", value=default_attendees, placeholder="Names separated by commas", key="sp_att")
+
+    st.markdown("---")
+
+    # ── SECTION 1: Team Check-in ──
+    st.markdown("#### ⏱ 0–10 min | TEAM CHECK-IN & HANDOVER")
+    st.caption("Quick updates from both job share teachers. Any handover issues from previous week?")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Monday Teacher (0.2):**")
+        sp_monday_notes = st.text_area(
+            "Monday teacher notes",
+            value=default_monday_notes,
+            height=100,
+            key="sp_monday_notes",
+            placeholder="How did Monday sessions go? Kitchen/BSEM notes? Concerns for week ahead?",
+            label_visibility="collapsed"
+        )
+    with col2:
+        st.markdown("**Tuesday–Friday Teacher (0.8):**")
+        sp_tuefri_notes = st.text_area(
+            "Tue-Fri teacher notes",
+            value=default_tuefri_notes,
+            height=100,
+            key="sp_tuefri_notes",
+            placeholder="How was curriculum delivery this week? Student engagement? Handover working?",
+            label_visibility="collapsed"
+        )
+    
+    st.markdown("---")
+
+    # ── SECTION 2: Student & Program Concerns ──
+    st.markdown("#### ⏱ 10–25 min | STUDENT & PROGRAM CONCERNS")
+    st.caption("Flag students needing additional support or program adjustments")
+
+    concerns_key = "sp_concerns"
+    if concerns_key not in st.session_state:
+        st.session_state[concerns_key] = [{"concern":"","strategy":"","adjustment":"","who":"","timeline":""}]
+
+    concerns = st.session_state[concerns_key]
+    ch_cols = st.columns([2.5,2,2,1,1,0.5])
+    for h, label in zip(ch_cols, ["Student / Group | Concern","Current Strategy","Adjustment Needed","Who","Timeline",""]):
+        h.markdown(f"**{label}**" if label else "")
+
+    for idx, row in enumerate(concerns):
+        c1,c2,c3,c4,c5,c6 = st.columns([2.5,2,2,1,1,0.5])
+        with c1: row["concern"]    = st.text_input("Con", value=row.get("concern",""),    key=f"spc_con_{idx}",    label_visibility="collapsed", placeholder="Student name · Concern / context")
+        with c2: row["strategy"]   = st.text_input("Str", value=row.get("strategy",""),   key=f"spc_str_{idx}",    label_visibility="collapsed", placeholder="Current strategy")
+        with c3: row["adjustment"] = st.text_input("Adj", value=row.get("adjustment",""), key=f"spc_adj_{idx}",    label_visibility="collapsed", placeholder="What needs to change")
+        with c4: row["who"]        = st.text_input("Who", value=row.get("who",""),        key=f"spc_who_{idx}",    label_visibility="collapsed", placeholder="Person")
+        with c5: row["timeline"]   = st.text_input("By",  value=row.get("timeline",""),   key=f"spc_time_{idx}",   label_visibility="collapsed", placeholder="When")
+        with c6:
+            if len(concerns) > 1:
+                if st.button("✕", key=f"spc_del_{idx}"):
+                    concerns.pop(idx); st.rerun()
+    
+    if st.button("➕ Add concern", key="spc_add"):
+        concerns.append({"concern":"","strategy":"","adjustment":"","who":"","timeline":""}); st.rerun()
+
+    st.markdown("**Program-level concerns:**")
+    sp_program_concerns = st.text_area(
+        "Program concerns",
+        height=80,
+        key="sp_prog_concerns",
+        placeholder="NIT release coverage? Timetable changes? Cross-program coordination? Safety/BSP updates?",
+        label_visibility="collapsed"
+    )
+
+    st.markdown("---")
+
+    # ── SECTION 3: Curriculum Coverage ──
+    st.markdown("#### ⏱ 25–35 min | CURRICULUM COVERAGE CHECK-IN")
+    st.caption("Track progress, student engagement, and needed adjustments across all modules")
+
+    curriculum_key = "sp_curriculum"
+    if curriculum_key not in st.session_state:
+        st.session_state[curriculum_key] = [
+            {"module": "Cooking (all programs)", "progress": "", "engagement": "", "adjustments": "", "resources": ""},
+            {"module": "BSEM Stamina & Character Strengths", "progress": "", "engagement": "", "adjustments": "", "resources": ""},
+            {"module": "Child Protection — Right to be Safe", "progress": "", "engagement": "", "adjustments": "", "resources": ""},
+            {"module": "5 is Against the Law", "progress": "", "engagement": "", "adjustments": "", "resources": ""},
+            {"module": "Sexual Health Ed (SY only — Elephant Ed)", "progress": "", "engagement": "", "adjustments": "", "resources": ""},
+        ]
+
+    curriculum = st.session_state[curriculum_key]
+    cur_cols = st.columns([2,2,2,2,2])
+    for h, label in zip(cur_cols, ["Module / Area","Progress This Week","Student Engagement","Adjustments Needed","Resources / Support"]):
+        h.markdown(f"**{label}**")
+
+    for idx, row in enumerate(curriculum):
+        cu1,cu2,cu3,cu4,cu5 = st.columns([2,2,2,2,2])
+        with cu1: st.markdown(f"`{row['module']}`")
+        with cu2: row["progress"]    = st.text_input("Prog",  value=row.get("progress",""),    key=f"cur_prog_{idx}",  label_visibility="collapsed", placeholder="What was covered")
+        with cu3: row["engagement"]  = st.text_input("Eng",   value=row.get("engagement",""),  key=f"cur_eng_{idx}",   label_visibility="collapsed", placeholder="Student response")
+        with cu4: row["adjustments"] = st.text_input("Adj",   value=row.get("adjustments",""), key=f"cur_adj_{idx}",   label_visibility="collapsed", placeholder="Changes needed")
+        with cu5: row["resources"]   = st.text_input("Res",   value=row.get("resources",""),   key=f"cur_res_{idx}",   label_visibility="collapsed", placeholder="What's needed")
+
+    st.markdown("**Coverage gaps or concerns:**")
+    sp_coverage_gaps = st.text_area(
+        "Coverage gaps",
+        height=80,
+        key="sp_coverage_gaps",
+        placeholder="Students missing key curriculum? Pacing issues? Equity concerns across JP/PY/SY?",
+        label_visibility="collapsed"
+    )
+
+    st.markdown("---")
+
+    # ── SECTION 4: Budget & Foodbank ──
+    st.markdown("#### ⏱ 35–40 min | BUDGET & FOODBANK UPDATE")
+
+    col_fb1, col_fb2, col_fb3 = st.columns(3)
+    with col_fb1:
+        sp_foodbank_submitted = st.selectbox("Foodbank order submitted this fortnight?", ["Not due", "Yes", "No"], key="sp_fb_submitted")
+    with col_fb2:
+        sp_stock_ok = st.selectbox("Stock levels OK for next week?", ["Yes", "No — gaps identified"], key="sp_stock")
+    with col_fb3:
+        sp_ingredient_gaps = st.text_input("Ingredient gaps/substitutions needed", key="sp_gaps", placeholder="List any gaps")
+
+    st.markdown("**Cooking Budget Tracking:**")
+    budget_cols = st.columns([2,2,2,4])
+    with budget_cols[0]: st.markdown("**Program**")
+    with budget_cols[1]: st.markdown("**Spent to Date**")
+    with budget_cols[2]: st.markdown("**Remaining**")
+    with budget_cols[3]: st.markdown("**Notes / Adjustments**")
+
+    for prog_name in ["JP", "PY", "SY"]:
+        bc1, bc2, bc3, bc4 = st.columns([2,2,2,4])
+        with bc1: st.markdown(f"`{prog_name}`")
+        with bc2: st.text_input(f"Spent {prog_name}", key=f"budget_spent_{prog_name}", label_visibility="collapsed", placeholder="$")
+        with bc3: st.text_input(f"Remain {prog_name}", key=f"budget_remain_{prog_name}", label_visibility="collapsed", placeholder="$")
+        with bc4: st.text_input(f"Notes {prog_name}", key=f"budget_notes_{prog_name}", label_visibility="collapsed", placeholder="Any concerns or adjustments")
+
+    sp_budget_concerns = st.text_area(
+        "Budget concerns",
+        height=60,
+        key="sp_budget_concerns",
+        placeholder="Equitable spending? Specialist equipment needed? Budget adjustment for term remainder?",
+        label_visibility="collapsed"
+    )
+
+    st.markdown("---")
+
+    # ── SECTION 5: Artifact Check-In ──
+    st.markdown("#### ⏱ 40–45 min | ARTIFACT CHECK-IN")
+    st.caption("Student reporting artifacts for end-of-placement reports — tracked by program")
+
+    for prog_name, prog_label in [("JP", "JUNIOR PRIMARY"), ("PY", "PRIMARY YEARS"), ("SY", "SENIOR YEARS")]:
+        st.markdown(f"**{prog_label} ({prog_name})**")
+        
+        modules = ["Cooking", "BSEM", "Child Protection", "5 is Against the Law"]
+        if prog_name == "SY":
+            modules.append("Sexual Health Ed (Elephant Ed)")
+        
+        art_cols = st.columns([2,2,2,3])
+        with art_cols[0]: st.markdown("**Module**")
+        with art_cols[1]: st.markdown("**Status**")
+        with art_cols[2]: st.markdown("**Timeline**")
+        with art_cols[3]: st.markdown("**Support Needed**")
+
+        for module in modules:
+            a1,a2,a3,a4 = st.columns([2,2,2,3])
+            with a1: st.markdown(f"`{module}`")
+            with a2: st.selectbox(f"Status {prog_name} {module}", ["Not Started", "In Progress", "Complete"], key=f"art_status_{prog_name}_{module}", label_visibility="collapsed")
+            with a3: st.text_input(f"Timeline {prog_name} {module}", key=f"art_timeline_{prog_name}_{module}", label_visibility="collapsed", placeholder="Due date")
+            with a4: st.text_input(f"Support {prog_name} {module}", key=f"art_support_{prog_name}_{module}", label_visibility="collapsed", placeholder="What's needed")
+        
+        st.markdown("")  # Spacing between programs
+
+    st.markdown("**Cross-program reporting concerns:**")
+    sp_artifact_concerns = st.text_area(
+        "Artifact concerns",
+        height=60,
+        key="sp_artifact_concerns",
+        placeholder="Programs ahead/behind? Deadline alignment? Support needed from program teachers?",
+        label_visibility="collapsed"
+    )
+
+    st.markdown("---")
+
+    # ── SECTION 6: Actions ──
+    st.markdown("#### ✅ ACTIONS — Clear Ownership & Accountability")
+    st.caption("Each action must have: specific task, responsible person, and due date")
+
+    actions_key = "sp_actions"
+    if actions_key not in st.session_state:
+        st.session_state[actions_key] = [{"action":"","who":"","by_when":"","priority":"Medium","done":False}]
+
+    actions = st.session_state[actions_key]
+    ah_cols = st.columns([4,1.5,1,1,0.7,0.5])
+    for h, label in zip(ah_cols, ["Action","Who","By When","Priority","✓ Done",""]):
+        h.markdown(f"**{label}**" if label else "")
+
+    for idx, row in enumerate(actions):
+        a1,a2,a3,a4,a5,a6 = st.columns([4,1.5,1,1,0.7,0.5])
+        with a1: row["action"]   = st.text_input("Act", value=row.get("action",""),   key=f"spa_a_{idx}",    label_visibility="collapsed", placeholder="Specific action")
+        with a2: row["who"]      = st.text_input("Who", value=row.get("who",""),      key=f"spa_w_{idx}",    label_visibility="collapsed", placeholder="Person")
+        with a3: row["by_when"]  = st.text_input("By",  value=row.get("by_when",""),  key=f"spa_by_{idx}",   label_visibility="collapsed", placeholder="When")
+        with a4: row["priority"] = st.selectbox("Pri",  ["Low","Medium","High","Urgent"], index=["Low","Medium","High","Urgent"].index(row.get("priority","Medium")), key=f"spa_pri_{idx}", label_visibility="collapsed")
+        with a5: row["done"]     = st.checkbox("✓",     value=row.get("done",False),   key=f"spa_done_{idx}")
+        with a6:
+            if len(actions) > 1:
+                if st.button("✕", key=f"spa_del_{idx}"):
+                    actions.pop(idx); st.rerun()
+
+    if st.button("➕ Add action", key="spa_add"):
+        actions.append({"action":"","who":"","by_when":"","priority":"Medium","done":False}); st.rerun()
+
+    st.markdown("---")
+    
+    # MEETING MINUTES / NOTES SECTION
+    st.markdown("#### 📝 MEETING MINUTES / NOTES")
+    st.caption("Comprehensive meeting notes - discussions, decisions, key points raised")
+    
+    default_sp_minutes = ""
+    if selected_record and selected_record.get('meeting_minutes'):
+        default_sp_minutes = selected_record['meeting_minutes']
+    
+    sp_minutes = st.text_area(
+        "Meeting minutes",
+        value=default_sp_minutes,
+        height=200,
+        key="sp_minutes",
+        label_visibility="collapsed",
+        placeholder="Record comprehensive meeting minutes here - discussions, decisions, key points, follow-up items..."
+    )
+
+    st.markdown("---")
+
+    # Prepare meeting data - FIXED: Use local variables instead of session state
+    concerns_data = concerns  # Use local variable
+    curriculum_data = curriculum  # Use local variable
+    actions_data = actions  # Use local variable
+    
+    # Collect budget data
+    budget_data = {}
+    for prog_name in ["JP", "PY", "SY"]:
+        budget_data[prog_name] = {
+            "spent": st.session_state.get(f"budget_spent_{prog_name}", ""),
+            "remaining": st.session_state.get(f"budget_remain_{prog_name}", ""),
+            "notes": st.session_state.get(f"budget_notes_{prog_name}", "")
+        }
+    
+    # Collect artifact data
+    artifact_data = {}
+    for prog_name in ["JP", "PY", "SY"]:
+        modules = ["Cooking", "BSEM", "Child Protection", "5 is Against the Law"]
+        if prog_name == "SY":
+            modules.append("Sexual Health Ed (Elephant Ed)")
+        artifact_data[prog_name] = {}
+        for module in modules:
+            artifact_data[prog_name][module] = {
+                "status": st.session_state.get(f"art_status_{prog_name}_{module}", "Not Started"),
+                "timeline": st.session_state.get(f"art_timeline_{prog_name}_{module}", ""),
+                "support": st.session_state.get(f"art_support_{prog_name}_{module}", "")
+            }
+
+    meeting_data = {
+        "program": "SPECIALIST",
+        "meeting_date": str(sp_date),
+        "term": sp_term.strip(),
+        "week_number": int(sp_week),
+        "week_type": "SPECIALIST",  # No A/B for specialist
+        "facilitator": sp_facilitator.strip(),
+        "attendees": sp_attendees.strip(),
+        "checkin_notes": _json.dumps({
+            "monday_teacher": sp_monday_notes,
+            "tuefri_teacher": sp_tuefri_notes
+        }),
+        "student_concerns": _json.dumps({
+            "concerns": concerns_data,
+            "program_concerns": sp_program_concerns
+        }),
+        "curriculum_coverage": _json.dumps({
+            "modules": curriculum_data,
+            "coverage_gaps": sp_coverage_gaps
+        }),
+        "budget_foodbank": _json.dumps({
+            "foodbank_submitted": sp_foodbank_submitted,
+            "stock_ok": sp_stock_ok,
+            "ingredient_gaps": sp_ingredient_gaps,
+            "budget": budget_data,
+            "concerns": sp_budget_concerns
+        }),
+        "artifacts": _json.dumps({
+            "artifact_data": artifact_data,
+            "concerns": sp_artifact_concerns
+        }),
+        "meeting_minutes": sp_minutes.strip(),
+        "actions": _json.dumps(actions_data),
+    }
+
+    # Trigger auto-save/auto-initialization
+    trigger_autosave("SPECIALIST", meeting_data)
+
+    # Manual save button
+    editing_existing = bool(st.session_state.current_meeting_id) and not str(st.session_state.current_meeting_id).startswith("temp_")
+    save_button_text = "💾 Update Meeting Record" if editing_existing else "💾 Save Meeting Record"
+    if st.button(save_button_text, type="primary", use_container_width=True, key="sp_save"):
+        try:
+            saved_id = None
+            if editing_existing:
+                supabase.table('tm_program_meetings').update(meeting_data).eq('id', st.session_state.current_meeting_id).execute()
+                saved_id = st.session_state.current_meeting_id
+                st.success("✅ Meeting record updated!")
+            else:
+                existing = find_existing_meetings(
+                    "SPECIALIST", meeting_data["meeting_date"], meeting_data["week_type"],
+                    meeting_data["term"], meeting_data["week_number"]
+                )
+                if existing:
+                    saved_id = existing[0]['id']
+                    supabase.table('tm_program_meetings').update(meeting_data).eq('id', saved_id).execute()
+                    if len(existing) > 1:
+                        dup_ids = ", ".join(str(e['id']) for e in existing[1:])
+                        st.warning(f"⚠️ {len(existing)} copies of this meeting already exist. Updated the most recent. Extra IDs: {dup_ids}.")
+                    else:
+                        st.success("✅ A meeting for this date already existed — updated it instead of creating a duplicate.")
+                else:
+                    result = supabase.table('tm_program_meetings').insert(meeting_data).execute()
+                    saved_id = result.data[0]['id'] if result.data else None
+                    st.success("✅ Meeting record saved!")
+
+            if saved_id:
+                st.session_state.current_meeting_id = saved_id
+
+            st.session_state.last_autosave_time = None
+            st.session_state.autosave_message = ""
+            st.rerun()
+        except Exception as e:
+            st.error(f"⚠️ Database save failed: {e}")
+
+    # ── Download professional minutes (Word) ──────────────────────────────────
+    st.markdown("")
+    try:
+        _docx_buf = build_minutes_docx(meeting_data, "SPECIALIST")
+        st.download_button(
+            "📥 Download Minutes (Word) — ready to send to members",
+            data=_docx_buf,
+            file_name=f"CLC_Specialist_Minutes_{meeting_data['meeting_date']}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True,
+            key="sp_download",
+        )
+        st.caption("Tip: save first so the download matches the stored record exactly.")
+    except Exception as _e:
+        st.caption(f"Minutes document could not be generated: {_e}")
+
+    # ── AD-HOC MEETINGS FOR SPECIALIST ────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 📝 Ad-Hoc Specialist Meetings")
+    st.caption("Quick notes from unscheduled or urgent specialist team conversations")
+    
+    active_tab, archive_tab = st.tabs(["📋 Active Meetings", "📚 Archive"])
+    
+    with active_tab:
+        try:
+            # Load active ad-hoc meetings for Specialist
+            active_meetings = supabase.table('tm_program_meetings').select("*").eq('program', 'SPECIALIST').eq('week_type', 'ad-hoc').order('meeting_date', desc=True).execute()
+            active_adhoc = active_meetings.data or []
+            
+            if active_adhoc:
+                st.markdown("**Click to open and manage:**")
+                for mtg in active_adhoc:
+                    mtg_date = mtg.get('meeting_date', '')
+                    mtg_facilitator = mtg.get('facilitator', '')
+                    mtg_id = mtg.get('id', '')
+                    
+                    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+                    
+                    with col1:
+                        if st.button(f"📝 {mtg_date} — {mtg_facilitator}", key=f"load_active_{mtg_id}", use_container_width=True):
+                            st.session_state.current_meeting_id = mtg_id
+                            st.rerun()
+                    
+                    with col2:
+                        if st.button("👁️ View", key=f"view_active_{mtg_id}", use_container_width=True):
+                            st.info(f"**{mtg_facilitator}** | {mtg_date}\n\n{mtg.get('checkin_notes', '[No notes]')}")
+                    
+                    with col3:
+                        if st.button("📥 Download", key=f"dl_active_{mtg_id}", use_container_width=True):
+                            doc = generate_minutes_docx(
+                                program='SPECIALIST',
+                                meeting_date=mtg_date,
+                                facilitator=mtg_facilitator,
+                                attendees=mtg.get('attendees', ''),
+                                extracted_notes=mtg.get('checkin_notes', ''),
+                                summary_notes=mtg.get('reports_tac_notes', ''),
+                                transcript=mtg.get('meeting_minutes', '')
+                            )
+                            doc_bytes = io.BytesIO()
+                            doc.save(doc_bytes)
+                            doc_bytes.seek(0)
+                            st.download_button(
+                                label="📥 Download",
+                                data=doc_bytes,
+                                file_name=f"Minutes_{mtg_date}_{mtg_facilitator}_Specialist.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                key=f"dl_doc_{mtg_id}"
+                            )
+                    
+                    with col4:
+                        if st.button("🗑️ Delete", key=f"delete_active_{mtg_id}", use_container_width=True):
+                            if st.session_state.get(f"confirm_delete_{mtg_id}", False):
+                                try:
+                                    supabase.table('tm_program_meetings').delete().eq('id', mtg_id).execute()
+                                    st.success(f"🗑️ Deleted")
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+                            else:
+                                st.session_state[f"confirm_delete_{mtg_id}"] = True
+                                st.warning("Click again to confirm")
+            else:
+                st.info("No active ad-hoc specialist meetings yet")
+        except Exception as e:
+            st.error(f"Could not load active meetings: {e}")
+    
+    with archive_tab:
+        st.info("Ad-hoc specialist meetings can be deleted when no longer needed.")
+    
+    # ── NEW AD-HOC MEETING FORM ────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### ➕ Record New Ad-Hoc Specialist Meeting")
+    
+    adhoc_col1, adhoc_col2, adhoc_col3, adhoc_col4 = st.columns(4)
+    
+    with adhoc_col1: adhoc_date = st.date_input("Date", key="adhoc_date_SPECIALIST")
+    with adhoc_col2: adhoc_term = st.text_input("Term", placeholder="e.g. Term 1", key="adhoc_term_SPECIALIST")
+    with adhoc_col3: adhoc_facilitator = st.text_input("Facilitator", key="adhoc_fac_SPECIALIST")
+    with adhoc_col4: adhoc_attendees = st.text_input("Attendees", placeholder="Names", key="adhoc_att_SPECIALIST")
+    
+    st.markdown("##### 📝 Meeting Notes")
+    adhoc_notes = st.text_area(
+        "Meeting details, decisions, action items",
+        height=150,
+        key="adhoc_notes_SPECIALIST",
+        placeholder="Paste your meeting notes here...",
+        label_visibility="collapsed"
+    )
+    
+    if st.button("💾 Save Ad-Hoc Meeting", type="primary", use_container_width=True, key="save_adhoc_SPECIALIST"):
+        if not adhoc_notes.strip():
+            st.error("Please add meeting notes")
+        else:
+            try:
+                meeting_payload = {
+                    'program': 'SPECIALIST',
+                    'meeting_date': str(adhoc_date),
+                    'term': adhoc_term.strip(),
+                    'week_type': 'ad-hoc',
+                    'facilitator': adhoc_facilitator.strip(),
+                    'attendees': adhoc_attendees.strip(),
+                    'checkin_notes': adhoc_notes.strip(),
+                    'student_concerns': _json.dumps([]),
+                    'smartar_spotlight': _json.dumps([]),
+                    'reports_tac_notes': adhoc_notes.strip(),
+                    'priority_focus': _json.dumps([]),
+                    'meeting_minutes': adhoc_notes.strip(),
+                    'actions': _json.dumps([]),
+                }
+                
+                result = supabase.table('tm_program_meetings').insert(meeting_payload).execute()
+                if result.data:
+                    st.success(f"✅ Ad-Hoc Meeting Saved (ID: {result.data[0]['id']})")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error saving: {e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PROGRAM MEETING (JP/PY/SY) - WITH SMARTAR INTEGRATION
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render_program_meeting(program):
+    import json as _json
+    prog_label = PROGRAMS[program]["label"]
+    accent = PROGRAMS[program]["color"]
+
+    # Auto-save status display
+    if st.session_state.autosave_message:
+        st.caption(st.session_state.autosave_message)
+
+    # Fetch past meetings for this program
+    past_meetings = fetch("tm_program_meetings", {"program": program}, "meeting_date")
+
+    # ── Duplicate check banner ────────────────────────────────────────────────
+    dup_groups = find_duplicate_meeting_groups(program)
+    if dup_groups:
+        with st.expander(f"⚠️ Duplicate check — {len(dup_groups)} meeting(s) saved more than once", expanded=True):
+            st.caption("These meetings share the same date / term / week / type. Keep the newest and remove the extras.")
+            for sig, recs in dup_groups.items():
+                _, mdate, wtype, mterm, mweek = sig
+                st.markdown(f"**{mdate} · Term {mterm} · Week {mweek} · Type {wtype or '—'}** — {len(recs)} copies")
+                # recs are newest-first already from fetch order is by date; sort by id text desc
+                recs_sorted = sorted(recs, key=lambda r: str(r.get("updated_at") or r.get("created_at") or r.get("id") or ""), reverse=True)
+                keep = recs_sorted[0]
+                st.caption(f"Keeping most recent (ID {keep.get('id')}). Extras: {', '.join(str(r.get('id')) for r in recs_sorted[1:])}")
+                if st.session_state.get("admin"):
+                    if st.button(f"🗑️ Delete {len(recs_sorted)-1} extra copy(ies)", key=f"dedupe_{program}_{mdate}_{wtype}_{mweek}"):
+                        deleted = 0
+                        for r in recs_sorted[1:]:
+                            try:
+                                delete_row("tm_program_meetings", r.get("id"))
+                                deleted += 1
+                            except Exception as _e:
+                                st.error(f"Could not delete ID {r.get('id')}: {_e}")
+                        st.success(f"Removed {deleted} duplicate copy(ies).")
+                        st.rerun()
+                else:
+                    st.caption("🔐 Log in as admin (sidebar) to remove duplicates.")
+        # refresh list after potential changes
+        past_meetings = fetch("tm_program_meetings", {"program": program}, "meeting_date")
+
+    # Meeting selection - New or Edit existing
+    st.markdown("#### 📂 Select Meeting")
+    # past_meetings is date-descending; show the newest 20 (newest first) so a
+    # meeting you just saved is always selectable at the top.
+    recent_records = past_meetings[:20]
+    meeting_options = ["➕ New Meeting"] + [
+        f"{rec.get('meeting_date','')} - Term {rec.get('term','')} W{rec.get('week_number','')} - Week {rec.get('week_type','')}"
+        for rec in recent_records
+    ]
+
+    # If we arrived back from the Goal Builder ("Return to Team Meeting"), reopen
+    # the exact meeting that was being worked on so the spotlight (with the goal
+    # just created) and all notes are right there.
+    _open_id = st.query_params.get("open_meeting")
+    if _open_id:
+        _match = next((r for r in recent_records if str(r.get("id")) == str(_open_id)), None)
+        if _match:
+            st.session_state.current_meeting_id = _match["id"]
+            try:
+                if _match.get("student_concerns"):
+                    st.session_state[f"pm_concerns_{program}"] = _json.loads(_match["student_concerns"])
+                if _match.get("smartar_spotlight"):
+                    st.session_state[f"pm_smartar_{program}"] = _json.loads(_match["smartar_spotlight"])
+                if _match.get("priority_focus"):
+                    st.session_state[f"pm_priority_{program}"] = _json.loads(_match["priority_focus"])
+                if _match.get("actions"):
+                    st.session_state[f"pm_actions_{program}"] = _json.loads(_match["actions"])
+            except Exception:
+                pass
+            # Pull the freshly created goal in from the Goal Builder right away
+            try:
+                fetch_student_smartar_goals.clear()
+            except Exception:
+                pass
+        # Clear the param so later manual navigation isn't forced back here
+        try:
+            del st.query_params["open_meeting"]
+        except Exception:
+            pass
+
+    # Pre-select the meeting matching current_meeting_id (e.g. the one just saved).
+    # This is driven entirely by the `index` argument with NO widget key, so we
+    # never write the selectbox's own session_state key — Streamlit forbids that
+    # once the widget has been instantiated, which was causing save failures.
+    default_index = 0
+    if st.session_state.current_meeting_id:
+        for _i, _rec in enumerate(recent_records):
+            if str(_rec.get("id")) == str(st.session_state.current_meeting_id):
+                default_index = _i + 1  # +1 to skip the "➕ New Meeting" entry
+                break
+
+    selected_meeting = st.selectbox(
+        "Choose a meeting to edit or create new",
+        options=meeting_options,
+        index=default_index,
+    )
+    
+    # Load existing meeting if selected
+    selected_record = None
+    if selected_meeting != "➕ New Meeting":
+        # Find the selected record (aligned with meeting_options order)
+        selected_idx = meeting_options.index(selected_meeting) - 1
+        selected_record = recent_records[selected_idx]
+        
+        # Set current_meeting_id so it updates instead of creating new
+        if not st.session_state.current_meeting_id or st.session_state.current_meeting_id != selected_record['id']:
+            st.session_state.current_meeting_id = selected_record['id']
+            
+            # Load data into session state
+            try:
+                if selected_record.get('student_concerns'):
+                    st.session_state[f"pm_concerns_{program}"] = _json.loads(selected_record['student_concerns'])
+                if selected_record.get('smartar_spotlight'):
+                    st.session_state[f"pm_smartar_{program}"] = _json.loads(selected_record['smartar_spotlight'])
+                if selected_record.get('priority_focus'):
+                    st.session_state[f"pm_priority_{program}"] = _json.loads(selected_record['priority_focus'])
+                if selected_record.get('actions'):
+                    st.session_state[f"pm_actions_{program}"] = _json.loads(selected_record['actions'])
+            except:
+                pass
+        
+        st.info(f"✏️ Editing existing meeting - Meeting ID: {selected_record['id']}")
+        
+        # Show saved minutes in an expander for reference
+        if selected_record.get('meeting_minutes'):
+            with st.expander("📄 View Saved Minutes from This Meeting", expanded=False):
+                st.markdown(selected_record['meeting_minutes'])
+    else:
+        # Clear meeting_id for new meeting
+        if selected_meeting == "➕ New Meeting" and st.session_state.current_meeting_id:
+            st.session_state.current_meeting_id = None
+            # Clear session state (lists)
+            for k in [f"pm_concerns_{program}", f"pm_smartar_{program}",
+                      f"pm_priority_{program}", f"pm_actions_{program}"]:
+                st.session_state.pop(k, None)
+            # Also purge per-row widget states so a fresh meeting starts genuinely blank
+            for wk in list(st.session_state.keys()):
+                if wk.startswith(f"con_notes_{program}_") or wk.startswith(f"sm_notes_{program}_") \
+                   or wk.startswith(f"sm_notes_b_{program}_"):
+                    st.session_state.pop(wk, None)
+    
+    st.markdown("---")
+
+    # Fetch students for autocomplete
+    @st.cache_data(ttl=120)
+    def fetch_students(prog):
+        names = []
+        try:
+            import os
+            from supabase import create_client as _cc
+            burl = st.secrets.get("BEHAVIOUR_SUPABASE_URL","") or os.environ.get("BEHAVIOUR_SUPABASE_URL","")
+            bkey = st.secrets.get("BEHAVIOUR_SUPABASE_KEY","") or os.environ.get("BEHAVIOUR_SUPABASE_KEY","")
+            if burl:
+                bsb = _cc(burl, bkey)
+                res = bsb.table("students").select("id,name,year_level").eq("archived", False).execute()
+                if res.data:
+                    names = [s["name"] for s in res.data]
+        except Exception:
+            pass
+        try:
+            res2 = supabase.table("scatter_students").select("name").execute()
+            if res2.data:
+                scatter_names = [s["name"] for s in res2.data if s.get("name")]
+                for n in scatter_names:
+                    if n not in names:
+                        names.append(n)
+        except Exception:
+            pass
+        return sorted(names)
+
+    student_names = fetch_students(program)
+
+    last_records = fetch("tm_program_meetings", {"program": program}, "meeting_date")
+    last_week_type = None
+    # REMOVED: last_actions = [] - no more carrying forward old actions
+    if last_records:
+        last = last_records[-1]
+        last_week_type = last.get("week_type")
+        # Old actions are NOT carried forward anymore - each meeting starts fresh
+
+    suggested_type = "B" if last_week_type == "A" else "A"
+
+    wt_col1, wt_col2 = st.columns([3, 2])
+    with wt_col1:
+        week_type = st.radio(
+            "Meeting type",
+            ["A — Student Lens", "B — System Lens", "📋 Ad-hoc Meeting"],
+            index=0 if suggested_type == "A" else 1,
+            horizontal=True,
+            key=f"pm_wt_{program}",
+        )
+    with wt_col2:
+        if last_week_type:
+            st.caption(f"Last scheduled meeting: Week {last_week_type}")
+
+    is_week_a = week_type.startswith("A")
+    is_adhoc  = week_type.startswith("📋")
+
+    if is_week_a:
+        st.markdown(f"""<div style="background:#dbeafe;border-left:5px solid #1a4d8c;
+            border-radius:0 8px 8px 0;padding:8px 14px;margin-bottom:12px;font-size:13px;color:#1a4d8c;">
+            ⬤ <strong>WEEK A — STUDENT LENS</strong> · Individual Progress · SMARTAR Goals · Evidence
+        </div>""", unsafe_allow_html=True)
+    elif is_adhoc:
+        st.markdown(f"""<div style="background:#f3f0ff;border-left:5px solid #6d28d9;
+            border-radius:0 8px 8px 0;padding:8px 14px;margin-bottom:12px;font-size:13px;color:#4c1d95;">
+            📋 <strong>AD-HOC / ADDITIONAL MEETING</strong>
+        </div>""", unsafe_allow_html=True)
+    else:
+        st.markdown(f"""<div style="background:#fef3c7;border-left:5px solid #d97706;
+            border-radius:0 8px 8px 0;padding:8px 14px;margin-bottom:12px;font-size:13px;color:#92400e;">
+            ⬤ <strong>WEEK B — SYSTEM LENS</strong> · CLC Priorities · Innovation Fidelity · Staff Alignment
+        </div>""", unsafe_allow_html=True)
+
+    if is_adhoc:
+        # ────────────────────────────────────────────────────────────────────────────
+        # AD-HOC MEETING WITH TRANSCRIPT SUPPORT
+        # ────────────────────────────────────────────────────────────────────────────
+        
+        # DEBUG PANEL - SHOW WHAT'S IN DATABASE
+        st.warning("🔍 **DEBUG MODE** - Checking what's saved in database...")
+        
+        if st.session_state.current_meeting_id:
+            try:
+                debug_result = supabase.table('tm_program_meetings').select("*").eq('id', st.session_state.current_meeting_id).execute()
+                if debug_result.data:
+                    debug_mtg = debug_result.data[0]
+                    
+                    col_d1, col_d2, col_d3 = st.columns(3)
+                    with col_d1:
+                        st.metric("Check-in Notes", "✅ YES" if debug_mtg.get('checkin_notes') and debug_mtg.get('checkin_notes').strip() else "❌ EMPTY")
+                    with col_d2:
+                        st.metric("TAC/Reports Notes", "✅ YES" if debug_mtg.get('reports_tac_notes') and debug_mtg.get('reports_tac_notes').strip() else "❌ EMPTY")
+                    with col_d3:
+                        trans_len = len(debug_mtg.get('meeting_minutes', ''))
+                        st.metric("Transcript Length", f"{trans_len} chars")
+                    
+                    if not debug_mtg.get('checkin_notes') or not debug_mtg.get('checkin_notes').strip():
+                        st.error("""
+❌ **EXTRACTED NOTES ARE EMPTY**
+
+**Fix:** 
+1. Make sure transcript is in the form above
+2. Click [🤖 Extract Key Points] button
+3. Wait for ✅ Extracted & Saved message
+4. Then download minutes
+
+The Word document will ONLY show the extracted summary if extracted_notes is saved!
+                        """)
+                    else:
+                        st.success(f"✅ **Extracted notes ARE saved!** ({len(debug_mtg.get('extracted_notes'))} chars)")
+            except Exception as e:
+                st.info(f"Debug check: {e}")
+        else:
+            st.info("💡 Load a meeting first to see debug info")
+        
+        st.markdown("---")
+        st.markdown("#### 📚 Saved & Archived Ad-Hoc Meetings")
+        
+        # Tabs for Active vs Archived
+        active_tab, archive_tab = st.tabs(["📝 Active Meetings", "📦 Archived"])
+        
+        with active_tab:
+            try:
+                # Load active ad-hoc meetings (no archived filter - column doesn't exist)
+                active_meetings = supabase.table('tm_program_meetings').select("*").eq('program', program).eq('week_type', 'ad-hoc').order('meeting_date', desc=True).execute()
+                active_adhoc = active_meetings.data or []
+                
+                if active_adhoc:
+                    st.markdown("**Click a meeting to open and continue editing:**")
+                    for mtg in active_adhoc:
+                        mtg_date = mtg.get('meeting_date', '')
+                        mtg_facilitator = mtg.get('facilitator', '')
+                        mtg_id = mtg.get('id', '')
+                        
+                        col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+                        
+                        with col1:
+                            if st.button(f"📝 {mtg_date} — {mtg_facilitator}", key=f"load_active_{mtg_id}", use_container_width=True):
+                                st.session_state.current_meeting_id = mtg_id
+                                st.session_state.meeting_loaded = True
+                                # Don't rerun - let form load naturally below
+                        
+                        with col2:
+                            if st.button("📄 View", key=f"view_active_{mtg_id}", use_container_width=True, help="Load for editing"):
+                                st.session_state.current_meeting_id = mtg_id
+                                st.rerun()
+                        
+                        with col3:
+                            if st.button("📥 Minutes", key=f"dl_active_{mtg_id}", use_container_width=True):
+                                # Fetch fresh data from database
+                                try:
+                                    fresh_mtg = supabase.table('tm_program_meetings').select("*").eq('id', mtg_id).execute()
+                                    if fresh_mtg.data:
+                                        mtg = fresh_mtg.data[0]
+                                except:
+                                    pass
+                                
+                                # Generate Word document
+                                doc = generate_minutes_docx(
+                                    program=program,
+                                    meeting_date=mtg_date,
+                                    facilitator=mtg_facilitator,
+                                    attendees=mtg.get('attendees', ''),
+                                    extracted_notes=mtg.get('checkin_notes', ''),
+                                    summary_notes=mtg.get('reports_tac_notes', ''),
+                                    transcript=mtg.get('meeting_minutes', '')
+                                )
+                                
+                                # Save to bytes for download
+                                doc_bytes = io.BytesIO()
+                                doc.save(doc_bytes)
+                                doc_bytes.seek(0)
+                                
+                                st.download_button(
+                                    label="📥 Download (.docx)",
+                                    data=doc_bytes,
+                                    file_name=f"Minutes_{mtg_date}_{mtg_facilitator}_{program}.docx",
+                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                    key=f"dl_minutes_active_{mtg_id}",
+                                    use_container_width=True
+                                )
+                        
+                        with col4:
+                            if st.button("🗑️ Delete", key=f"delete_active_{mtg_id}", use_container_width=True):
+                                if st.session_state.get(f"confirm_delete_{mtg_id}", False):
+                                    try:
+                                        supabase.table('tm_program_meetings').delete().eq('id', mtg_id).execute()
+                                        st.success(f"🗑️ {mtg_facilitator} deleted - refresh to see changes")
+                                    except Exception as e:
+                                        st.error(f"Error deleting: {e}")
+                                else:
+                                    st.session_state[f"confirm_delete_{mtg_id}"] = True
+                                    st.warning(f"⚠️ Click again to confirm delete")
+                else:
+                    st.info("No active ad-hoc meetings. Create a new one below!")
+            except Exception as e:
+                st.warning(f"Could not load active meetings: {e}")
+        
+        with archive_tab:
+            st.info("""
+**Ad-Hoc Meeting Management:**
+
+Meetings can be deleted when no longer needed. All ad-hoc meetings are displayed in the "Active Meetings" tab.
+
+To remove a meeting, click the 🗑️ Delete button and confirm.
+            """)
+            st.caption("💡 Note: Archived column not available for ad-hoc meetings in this version.")
+        
+        st.markdown("---")
+        
+        st.markdown("#### 📋 Meeting Details")
+        
+        # Load meeting data if one is selected
+        meeting_data = None
+        if st.session_state.current_meeting_id:
+            try:
+                result = supabase.table('tm_program_meetings').select("*").eq('id', st.session_state.current_meeting_id).execute()
+                if result.data:
+                    meeting_data = result.data[0]
+                    st.info(f"✅ Editing: {meeting_data.get('meeting_date', '')} — {meeting_data.get('facilitator', '')}", icon="✅")
+                    
+                    # Load transcript and notes into session state for editing
+                    if meeting_data.get('meeting_minutes'):
+                        st.session_state[f"adhoc_transcript_{program}"] = meeting_data.get('meeting_minutes', '')
+                    if meeting_data.get('reports_tac_notes'):
+                        st.session_state[f"adhoc_notes_{program}"] = meeting_data.get('reports_tac_notes', '')
+                    if meeting_data.get('checkin_notes'):
+                        st.session_state[f"adhoc_extracted_{program}"] = meeting_data.get('checkin_notes', '')
+                        st.session_state[f"adhoc_extracted_edited_{program}"] = meeting_data.get('checkin_notes', '')
+            except Exception as e:
+                st.error(f"Error loading meeting: {e}")
+        
+        adhoc_col1, adhoc_col2, adhoc_col3, adhoc_col4 = st.columns(4)
+        
+        default_date = datetime.date.fromisoformat(meeting_data['meeting_date']) if meeting_data and meeting_data.get('meeting_date') else datetime.date.today()
+        default_term = meeting_data.get('term', '') if meeting_data else ''
+        default_facilitator = meeting_data.get('facilitator', '') if meeting_data else _safe_staff_name()
+        default_attendees = meeting_data.get('attendees', '') if meeting_data else ''
+        
+        with adhoc_col1: adhoc_date = st.date_input("Date", value=default_date, key=f"adhoc_date_{program}")
+        with adhoc_col2: adhoc_term = st.text_input("Term", value=default_term, placeholder="e.g. Term 1", key=f"adhoc_term_{program}")
+        with adhoc_col3: adhoc_facilitator = st.text_input("Facilitator", value=default_facilitator, key=f"adhoc_fac_{program}")
+        with adhoc_col4: adhoc_attendees = st.text_input("Attendees", value=default_attendees, placeholder="Comma-separated", key=f"adhoc_att_{program}")
+        
+        st.markdown("---")
+        
+        # TRANSCRIPT INPUT
+        st.markdown("#### 🎤 Meeting Transcript / Notes")
+        st.caption("Paste meeting transcript, notes, or discussion summary below")
+        
+        transcript_tab1, transcript_tab2 = st.tabs(["📝 Paste Transcript", "📤 Upload File"])
+        
+        with transcript_tab1:
+            adhoc_transcript = st.text_area(
+                "Transcript / Notes",
+                value=meeting_data.get('meeting_minutes', '') if meeting_data else '',
+                height=200,
+                placeholder="Paste your meeting transcript, discussion notes, or meeting summary here...",
+                key=f"adhoc_transcript_{program}",
+                label_visibility="collapsed"
+            )
+            # Show real-time feedback
+            current_length = len(st.session_state.get(f"adhoc_transcript_{program}", "").strip())
+            if current_length > 0:
+                st.caption(f"✅ {current_length} characters captured")
+            else:
+                st.caption("👆 Start typing or pasting here...")
+        
+        with transcript_tab2:
+            uploaded_file = st.file_uploader("Upload transcript file (.txt, .docx)", 
+                                             type=['txt', 'docx'],
+                                             key=f"adhoc_upload_{program}")
+            if uploaded_file:
+                uploaded_transcript = ""
+                if uploaded_file.type == "text/plain":
+                    uploaded_transcript = uploaded_file.read().decode("utf-8")
+                elif uploaded_file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+                    try:
+                        doc = Document(uploaded_file)
+                        uploaded_transcript = "\n".join([p.text for p in doc.paragraphs])
+                    except:
+                        st.error("Could not read Word document")
+                        uploaded_transcript = ""
+                
+                if uploaded_transcript:
+                    # Store in session state so save button can access it
+                    st.session_state[f"adhoc_transcript_{program}"] = uploaded_transcript
+                    st.success(f"✅ Uploaded: {uploaded_file.name}")
+        
+        st.markdown("---")
+        
+        # MEETING SUMMARY OPTIONS
+        st.markdown("#### 📝 Meeting Summary")
+        st.caption("Choose: AI extraction from transcript OR paste a polished summary")
+        
+        summary_tab1, summary_tab2 = st.tabs(["🤖 AI Extract", "✍️ Paste Polished Summary"])
+        
+        with summary_tab1:
+            st.markdown("##### 📝 Summarize Your Transcript")
+            st.caption("No AI needed - just write the key points yourself:")
+            
+            extracted_summary = st.text_area(
+                "Summary of meeting",
+                height=150,
+                placeholder="""Example:
+- TEAM UPDATES: Discussed new behavior support plan for Student X
+- DECISIONS: Approved trial of visual schedule in the morning routine
+- ACTIONS: Ben to implement by Friday; Candice to monitor progress
+- NOTES: Next check-in: following Thursday""",
+                key=f"adhoc_summary_manual_{program}",
+                label_visibility="collapsed"
+            )
+            
+            if extracted_summary.strip():
+                st.session_state[f"adhoc_extracted_{program}"] = extracted_summary.strip()
+                st.success("✅ Summary captured")
+        
+        with summary_tab2:
+            st.markdown("#### ✍️ Paste Polished Summary")
+            st.caption("If you already have a well-written summary, paste it here and we'll tidy up formatting")
+            
+            polished_summary = st.text_area(
+                "Paste your polished meeting summary here:",
+                height=250,
+                placeholder="""Example:
+
+**Check-in**
+Team discussed recent changes and workload distribution.
+
+**Student Concerns**
+- Abdullah: Needs additional support during transitions
+- Sarah: Progressing well with literacy
+
+**Actions**
+- Ben to implement transition schedule by Friday
+- Sarah to monitor daily progress checks""",
+                key=f"adhoc_polished_{program}",
+                label_visibility="collapsed"
+            )
+            
+            if polished_summary.strip():
+                col_tidy1, col_tidy2 = st.columns([1, 3])
+                
+                with col_tidy1:
+                    if st.button("✨ Tidy Formatting", key=f"tidy_summary_{program}", type="primary"):
+                        # Store the polished summary with basic formatting tidying
+                        st.session_state[f"adhoc_extracted_{program}"] = polished_summary.strip()
+                        
+                        # Save to database if meeting is loaded
+                        if st.session_state.current_meeting_id:
+                            try:
+                                supabase.table('tm_program_meetings').update({'checkin_notes': polished_summary.strip()}).eq('id', st.session_state.current_meeting_id).execute()
+                                st.success("✅ Summary saved to meeting!")
+                            except Exception as e:
+                                st.success("✅ Summary ready! (Save meeting to persist to database)")
+                        else:
+                            st.info("💡 Save your meeting to store the summary in the database")
+                
+                with col_tidy2:
+                    st.caption("Just stores your summary as-is with proper formatting for download")
+        
+        # DISPLAY EXTRACTED CONTENT (from session or loaded meeting)
+        extracted_from_session = st.session_state.get(f"adhoc_extracted_{program}", '')
+        extracted_from_db = meeting_data.get('extracted_notes', '') if meeting_data else ''
+        extracted_content = extracted_from_session or extracted_from_db
+        
+        if extracted_content:
+            st.markdown("#### 📊 Meeting Minutes (Ready to Edit)")
+            st.markdown(extracted_content)
+            
+            st.markdown("---")
+            st.markdown("#### ✏️ Edit Minutes Before Saving")
+            st.caption("Refine the extracted content below - your edits will be saved")
+            
+            # Editable text area for extracted content
+            edited_minutes = st.text_area(
+                "Edit extracted minutes:",
+                value=extracted_content,
+                height=250,
+                key=f"edited_minutes_{program}",
+                label_visibility="collapsed"
+            )
+            
+            # Store the edited version in session state
+            st.session_state[f"adhoc_extracted_edited_{program}"] = edited_minutes
+            
+            st.info("💡 Edit the minutes above, then click [💾 Save] below to save your changes")
+            
+            st.markdown("---")
+            
+            # INSTANT DOWNLOAD BUTTON (with edited content)
+            col_inst1, col_inst2 = st.columns([1, 3])
+            
+            with col_inst1:
+                if st.button("📥 Download Now", key=f"instant_download_{program}", type="primary", use_container_width=True):
+                    # Get transcript from session state
+                    adhoc_transcript = st.session_state.get(f"adhoc_transcript_{program}", "")
+                    
+                    # Create Word document with EDITED extracted content
+                    doc = generate_minutes_docx(
+                        program=program,
+                        meeting_date=adhoc_date,
+                        facilitator=adhoc_facilitator,
+                        attendees=adhoc_attendees,
+                        extracted_notes=edited_minutes,  # Use the edited version
+                        summary_notes="",
+                        transcript=adhoc_transcript
+                    )
+                    
+                    # Save to bytes
+                    doc_bytes = io.BytesIO()
+                    doc.save(doc_bytes)
+                    doc_bytes.seek(0)
+                    
+                    st.download_button(
+                        label="💾 Click Here to Download",
+                        data=doc_bytes,
+                        file_name=f"Minutes_{adhoc_date}_{adhoc_facilitator}_{program}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key=f"instant_dl_button_{program}"
+                    )
+            
+            with col_inst2:
+                st.caption("💡 Download with your edits (no need to save first)")
+            
+            st.markdown("---")
+        
+        # MEETING NOTES
+        st.markdown("#### 📝 Meeting Summary & Actions")
+        adhoc_notes = st.text_area(
+            "Summary & Action Items",
+            value=meeting_data.get('summary_notes', '') if meeting_data else '',
+            height=150,
+            placeholder="Summary of meeting, decisions made, action items, and next steps...",
+            key=f"adhoc_notes_{program}",
+            label_visibility="collapsed"
+        )
+        notes_length = len(st.session_state.get(f"adhoc_notes_{program}", "").strip())
+        if notes_length > 0:
+            st.caption(f"✅ {notes_length} characters in notes")
+        
+        st.markdown("---")
+        
+        st.markdown("---")
+        
+        # Show status of what's filled in
+        debug_transcript = st.session_state.get(f"adhoc_transcript_{program}", "").strip()
+        debug_notes = st.session_state.get(f"adhoc_notes_{program}", "").strip()
+        
+        col_status1, col_status2 = st.columns(2)
+        
+        with col_status1:
+            if len(debug_transcript) > 0:
+                st.success(f"✅ Transcript: {len(debug_transcript)} characters")
+            else:
+                st.caption("📝 No transcript yet (optional)")
+        
+        with col_status2:
+            if len(debug_notes) > 0:
+                st.success(f"✅ Summary: {len(debug_notes)} characters")
+            else:
+                st.caption("📝 No summary yet (optional)")
+        
+        # SAVE MEETING
+        st.markdown("#### 💾 Save & Manage Meeting")
+        
+        save_col1, save_col2, save_col3 = st.columns([2, 1, 1])
+        
+        with save_col1:
+            if st.button("💾 Save Ad-Hoc Meeting", key=f"save_adhoc_{program}", type="primary", use_container_width=True):
+                # Get transcript and notes from session state
+                adhoc_transcript = st.session_state.get(f"adhoc_transcript_{program}", "").strip()
+                adhoc_notes = st.session_state.get(f"adhoc_notes_{program}", "").strip()
+                
+                # Allow save if EITHER transcript OR notes exist
+                if not adhoc_transcript and not adhoc_notes:
+                    st.error("""
+**Need content to save!**
+
+Please fill in at least ONE section:
+- 🎤 **Meeting Transcript** tab (your meeting notes)
+- OR 📝 **Summary & Actions** section (key points)
+                    """)
+                else:
+                    try:
+                        # Use notes as transcript if no transcript provided
+                        final_transcript = adhoc_transcript if adhoc_transcript else adhoc_notes
+                        
+                        meeting_payload = {
+                            'program': program,
+                            'meeting_date': str(adhoc_date),
+                            'term': adhoc_term.strip(),
+                            'week_type': 'ad-hoc',
+                            'facilitator': adhoc_facilitator or _safe_staff_name(),
+                            'attendees': adhoc_attendees or '',
+                            'checkin_notes': final_transcript,  # Store transcript/summary as check-in notes
+                            'student_concerns': _json.dumps([]),
+                            'smartar_spotlight': _json.dumps([]),
+                            'reports_tac_notes': adhoc_notes,  # Store summary/actions
+                            'priority_focus': _json.dumps([]),
+                            'meeting_minutes': final_transcript,  # Also store for backup
+                            'actions': _json.dumps([]),
+                        }
+                        
+                        if st.session_state.current_meeting_id:
+                            supabase.table('tm_program_meetings').update(meeting_payload).eq('id', st.session_state.current_meeting_id).execute()
+                            st.success(f"✅ Ad-Hoc Meeting Updated")
+                        else:
+                            result = supabase.table('tm_program_meetings').insert(meeting_payload).execute()
+                            st.session_state.current_meeting_id = result.data[0]['id']
+                            st.success(f"✅ Ad-Hoc Meeting Saved (ID: {st.session_state.current_meeting_id})")
+                        
+                        st.info("💡 Your data is saved. Continue editing or download minutes below.")
+                    
+                    except Exception as e:
+                        st.error(f"Error saving meeting: {e}")
+        
+        # DOWNLOAD MEETING
+        with save_col2:
+            if st.session_state.current_meeting_id:
+                # Get values from session state for safety
+                adhoc_transcript = st.session_state.get(f"adhoc_transcript_{program}", "")
+                adhoc_notes = st.session_state.get(f"adhoc_notes_{program}", "")
+                
+                # Create downloadable text file
+                meeting_text = f"""AD-HOC MEETING RECORD
+═══════════════════════════════════════════════════
+
+Program: {program}
+Date: {adhoc_date}
+Facilitator: {adhoc_facilitator}
+Attendees: {adhoc_attendees}
+Meeting ID: {st.session_state.current_meeting_id}
+
+TRANSCRIPT / NOTES
+───────────────────────────────────────────────────
+{adhoc_transcript}
+
+SUMMARY & ACTION ITEMS
+───────────────────────────────────────────────────
+{adhoc_notes}
+
+═══════════════════════════════════════════════════
+Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
+"""
+                st.download_button(
+                    label="📥 Download",
+                    data=meeting_text,
+                    file_name=f"AdHoc_{adhoc_date}_{adhoc_facilitator}.txt",
+                    mime="text/plain",
+                    key=f"dl_adhoc_{program}"
+                )
+        
+        st.markdown("---")
+        
+        # DEBUG PANEL
+        if st.session_state.current_meeting_id:
+            if st.checkbox("🔍 Debug: Show meeting data in database", value=False, key=f"debug_data_{program}"):
+                try:
+                    debug_result = supabase.table('tm_program_meetings').select("*").eq('id', st.session_state.current_meeting_id).execute()
+                    if debug_result.data:
+                        debug_mtg = debug_result.data[0]
+                        st.info("**Meeting Data in Database:**")
+                        st.json({
+                            'checkin_notes': debug_mtg.get('checkin_notes', '[EMPTY]'),
+                            'reports_tac_notes': debug_mtg.get('reports_tac_notes', '[EMPTY]'),
+                            'transcript_length': len(debug_mtg.get('meeting_minutes', '')) if debug_mtg.get('meeting_minutes') else 0,
+                        })
+                        
+                        if not debug_mtg.get('checkin_notes'):
+                            st.warning("⚠️ **checkin_notes is EMPTY**\n\nYou need to:\n1. Write your transcript/notes\n2. Click [🤖 Extract Key Points] or [✨ Tidy Formatting]\n3. Wait for it to save\n4. Then download minutes")
+                except Exception as e:
+                    st.error(f"Debug error: {e}")
+        
+        st.markdown("---")
+        
+        st.markdown("---")
+        
+        # MINUTES DOWNLOAD FOR CURRENT MEETING
+        if st.session_state.current_meeting_id:
+            st.markdown("#### 📄 Download Minutes for This Meeting")
+            
+            if st.button("📄 Generate & Download Minutes", key=f"gen_minutes_{program}", type="primary", use_container_width=True):
+                # Fetch the meeting record
+                try:
+                    mtg_result = supabase.table('tm_program_meetings').select("*").eq('id', st.session_state.current_meeting_id).execute()
+                    if mtg_result.data:
+                        mtg = mtg_result.data[0]
+                        
+                        # Create Word document with professional formatting
+                        doc = generate_minutes_docx(
+                            program=mtg.get('program', program),
+                            meeting_date=mtg.get('meeting_date', ''),
+                            facilitator=mtg.get('facilitator', ''),
+                            attendees=mtg.get('attendees', ''),
+                            extracted_notes=mtg.get('checkin_notes', ''),
+                            summary_notes=mtg.get('reports_tac_notes', ''),
+                            transcript=mtg.get('meeting_minutes', '')
+                        )
+                        
+                        # Save to bytes for download
+                        doc_bytes = io.BytesIO()
+                        doc.save(doc_bytes)
+                        doc_bytes.seek(0)
+                        
+                        st.download_button(
+                            label="📥 Download Minutes (.docx) — Ready to Email",
+                            data=doc_bytes,
+                            file_name=f"Minutes_{mtg.get('meeting_date', 'Meeting')}_{program}.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            key=f"dl_final_minutes_{program}",
+                            type="primary",
+                            use_container_width=True
+                        )
+                        
+                        st.caption("✅ Professional Word document - ready to send to staff immediately")
+                except Exception as e:
+                    st.error(f"Error generating minutes: {e}")
+        
+        return
+
+    st.markdown("#### 📋 Meeting Details")
+    mc1, mc2, mc3, mc4 = st.columns(4)
+    
+    # Pre-populate with existing data if editing
+    default_date = datetime.date.fromisoformat(selected_record['meeting_date']) if selected_record else datetime.date.today()
+    default_term = selected_record.get('term', '') if selected_record else ''
+    default_week = selected_record.get('week_number', 1) if selected_record else 1
+    default_facilitator = selected_record.get('facilitator', _safe_staff_name()) if selected_record else _safe_staff_name()
+    default_attendees = selected_record.get('attendees', '') if selected_record else ''
+    # Check session state first (for transcript auto-fill), then selected_record
+    default_checkin = st.session_state.get(f"pm_checkin_{program}") or (selected_record.get('checkin_notes', '') if selected_record else '')
+    default_reports = st.session_state.get(f"pm_reports_{program}") or (selected_record.get('reports_tac_notes', '') if selected_record else '')
+    
+    with mc1: pm_date        = st.date_input("Date", value=default_date, key=f"pm_date_{program}")
+    with mc2: pm_term        = st.text_input("Term", value=default_term, placeholder="T1", key=f"pm_term_{program}")
+    with mc3: pm_week        = st.number_input("Week #", min_value=1, max_value=11, value=default_week, key=f"pm_week_{program}")
+    with mc4: pm_facilitator = st.text_input("Facilitator", value=default_facilitator, key=f"pm_fac_{program}")
+    pm_attendees = st.text_input("Attendees", value=default_attendees, placeholder="Names separated by commas", key=f"pm_att_{program}")
+
+    st.markdown("""<div style="background:#f0f9f9;border:1px solid #1A7A7A;border-radius:8px;
+        padding:6px 12px;font-size:0.78rem;color:#1A7A7A;margin-bottom:8px;">
+        <strong>Meeting Norms:</strong> ☑ Student-centred &nbsp;·&nbsp; ☑ Evidence before opinion
+        &nbsp;·&nbsp; ☑ Clear actions + ownership &nbsp;·&nbsp; ☑ Stick to time
+    </div>""", unsafe_allow_html=True)
+    
+    # STATUS DISPLAY - Updated messaging
+    if not st.session_state.current_meeting_id:
+        st.markdown("""
+        <div style="background:#e0f2fe;border-left:4px solid #0284c7;border-radius:0 8px 8px 0;
+                    padding:8px 14px;margin-bottom:12px;font-size:13px;color:#075985;">
+          ℹ️ <strong>New Meeting:</strong> Meeting ID will be created automatically when you start entering content. 
+          SMARTAR links will appear as soon as you enter a student name below.
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.success(f"✅ Meeting Active (ID: {st.session_state.current_meeting_id}) - SMARTAR integration ready")
+    
+    st.markdown("---")
+    
+    # ── TRANSCRIPT INPUT & AI ORGANIZATION (ENHANCED) ──
+    st.markdown("#### 📝 Meeting Transcript Input & Auto-Organization")
+    st.caption("Paste raw meeting transcript - AI will organize it into meeting sections & auto-fill the form")
+    
+    transcript_input = st.text_area(
+        "Paste meeting transcript or raw notes:",
+        height=120,
+        key=f"pm_transcript_{program}",
+        label_visibility="collapsed",
+        placeholder="Paste your raw meeting transcript here. The AI will organize it and auto-fill your meeting form..."
+    )
+    
+    if transcript_input.strip():
+        st.markdown("---")
+        st.markdown("#### 📋 Organize Transcript into Meeting Sections")
+        
+        col_org1, col_org2 = st.columns([2, 1])
+        
+        with col_org1:
+            st.caption("Break your transcript into CLC meeting sections (Check-in, Student Concerns, SMARTAR Goals, Reports, TAC, Transitions, Actions)")
+        
+        with col_org2:
+            if st.button("🔄 Manual Organize", key=f"manual_organize_{program}", type="primary", use_container_width=True):
+                st.session_state[f"show_manual_org_{program}"] = True
+                st.rerun()
+    
+    # ── DISPLAY ORGANIZED TRANSCRIPT ──
+    if f"organized_transcript_{program}" in st.session_state:
+        org_content = st.session_state[f"organized_transcript_{program}"]
+        
+        st.markdown("---")
+        st.markdown("#### 📋 Organized Meeting Transcript (Edit as Needed)")
+        
+        # Make organized content EDITABLE
+        edited_org_content = st.text_area(
+            "Edit organized content here (you can add, delete, or change anything):",
+            value=org_content,
+            height=200,
+            key=f"edited_org_content_{program}",
+            label_visibility="collapsed"
+        )
+        
+        # Update session state with edited version
+        st.session_state[f"organized_transcript_{program}"] = edited_org_content
+        
+        st.info("✏️ You can edit the organized content above - delete sections, reword, add details, etc.")
+        
+        # Use the edited version for auto-fill
+        org_content = edited_org_content
+        
+        # ── AUTO-FILL FORM BUTTON ──
+        if st.button("✅ Auto-Fill Meeting Form from This Transcript", key=f"autofill_form_{program}", type="primary", use_container_width=True):
+            # Parse sections and auto-fill
+            lines = org_content.split('\n')
+            current_section = None
+            sections_data = {}
+            
+            for line in lines:
+                if '===CHECK-IN===' in line:
+                    current_section = 'checkin'
+                    sections_data['checkin'] = []
+                elif '===STUDENT CONCERNS===' in line:
+                    current_section = 'concerns'
+                    sections_data['concerns'] = []
+                elif '===SMARTAR GOALS===' in line:
+                    current_section = 'smartar'
+                    sections_data['smartar'] = []
+                elif '===REPORT===' in line:
+                    current_section = 'report'
+                    sections_data['report'] = []
+                elif '===TAC===' in line:
+                    current_section = 'tac'
+                    sections_data['tac'] = []
+                elif '===TRANSITIONS===' in line:
+                    current_section = 'transitions'
+                    sections_data['transitions'] = []
+                elif '===ACTIONS===' in line:
+                    current_section = 'actions'
+                    sections_data['actions'] = []
+                elif current_section and line.strip() and not line.startswith('==='):
+                    sections_data[current_section].append(line.strip())
+            
+            st.markdown("---")
+            st.markdown("#### ✅ Auto-Fill Summary")
+            
+            # Display what will be filled
+            col_a1, col_a2, col_a3 = st.columns(3)
+            
+            with col_a1:
+                if 'checkin' in sections_data and sections_data['checkin']:
+                    st.success(f"✅ Check-in: {len(sections_data['checkin'])} item(s)")
+                else:
+                    st.info("⚪ Check-in: None found")
+            
+            with col_a2:
+                if 'concerns' in sections_data and sections_data['concerns']:
+                    st.warning(f"⚠️ Concerns: {len(sections_data['concerns'])} item(s)")
+                else:
+                    st.info("⚪ Concerns: None found")
+            
+            with col_a3:
+                if 'actions' in sections_data and sections_data['actions']:
+                    st.success(f"✅ Actions: {len(sections_data['actions'])} item(s)")
+                else:
+                    st.info("⚪ Actions: None found")
+            
+            # ── DISPLAY EXTRACTED ACTIONS (PRIMARY) ──
+            if 'actions' in sections_data and sections_data['actions']:
+                st.markdown("---")
+                st.markdown("#### ✋ Extracted Action Items (From This Meeting)")
+                
+                actions_text = "\n".join(sections_data['actions'])
+                st.success("✅ Actions from THIS meeting:")
+                
+                # EDITABLE action items
+                edited_actions = st.text_area(
+                    "Edit/refine these actions:",
+                    value=actions_text,
+                    height=120,
+                    key=f"actions_display_editable_{program}",
+                    label_visibility="collapsed"
+                )
+                
+                # Store edited actions
+                st.session_state[f"current_meeting_actions_{program}"] = edited_actions
+                
+                st.info("""
+**Next Step:** 
+Scroll down to the **✋ ACTIONS** section and paste/review these action items there.
+Make sure each action is formatted as:
+- **Who:** Name of person
+- **What:** Specific task
+- **By When:** Date/timeline
+                """)
+            else:
+                st.warning("⚠️ No action items found in this transcript. Add them manually below.")
+            
+            # ── DISPLAY OTHER SECTIONS (ALL EDITABLE) ──
+            st.markdown("---")
+            st.markdown("#### 📋 Other Extracted Content (Edit as Needed)")
+            
+            if 'checkin' in sections_data and sections_data['checkin']:
+                with st.expander("✅ Check-in Content", expanded=True):
+                    checkin_text = "\n".join(sections_data['checkin'])
+                    edited_checkin = st.text_area(
+                        "Edit Check-in:",
+                        value=checkin_text,
+                        height=80,
+                        key=f"checkin_display_editable_{program}",
+                        label_visibility="collapsed"
+                    )
+                    st.session_state[f"current_meeting_checkin_{program}"] = edited_checkin
+            
+            if 'concerns' in sections_data and sections_data['concerns']:
+                with st.expander("👤 Student Concerns Content", expanded=True):
+                    concerns_text = "\n".join(sections_data['concerns'])
+                    edited_concerns = st.text_area(
+                        "Edit Student Concerns:",
+                        value=concerns_text,
+                        height=100,
+                        key=f"concerns_display_editable_{program}",
+                        label_visibility="collapsed"
+                    )
+                    st.session_state[f"current_meeting_concerns_{program}"] = edited_concerns
+            
+            if 'smartar' in sections_data and sections_data['smartar']:
+                with st.expander("🎯 SMARTAR Goals Content", expanded=True):
+                    smartar_text = "\n".join(sections_data['smartar'])
+                    edited_smartar = st.text_area(
+                        "Edit SMARTAR Goals:",
+                        value=smartar_text,
+                        height=100,
+                        key=f"smartar_display_editable_{program}",
+                        label_visibility="collapsed"
+                    )
+                    st.session_state[f"current_meeting_smartar_{program}"] = edited_smartar
+            
+            if 'report' in sections_data and sections_data['report']:
+                with st.expander("📊 Report Content", expanded=True):
+                    report_text = "\n".join(sections_data['report'])
+                    edited_report = st.text_area(
+                        "Edit Report:",
+                        value=report_text,
+                        height=100,
+                        key=f"report_display_editable_{program}",
+                        label_visibility="collapsed"
+                    )
+                    st.session_state[f"current_meeting_report_{program}"] = edited_report
+            
+            if 'tac' in sections_data and sections_data['tac']:
+                with st.expander("🔗 TAC Content", expanded=True):
+                    tac_text = "\n".join(sections_data['tac'])
+                    edited_tac = st.text_area(
+                        "Edit TAC:",
+                        value=tac_text,
+                        height=100,
+                        key=f"tac_display_editable_{program}",
+                        label_visibility="collapsed"
+                    )
+                    st.session_state[f"current_meeting_tac_{program}"] = edited_tac
+            
+            if 'transitions' in sections_data and sections_data['transitions']:
+                with st.expander("🚀 Transitions Content", expanded=True):
+                    transitions_text = "\n".join(sections_data['transitions'])
+                    edited_transitions = st.text_area(
+                        "Edit Transitions:",
+                        value=transitions_text,
+                        height=100,
+                        key=f"transitions_display_editable_{program}",
+                        label_visibility="collapsed"
+                    )
+                    st.session_state[f"current_meeting_transitions_{program}"] = edited_transitions
+            
+            # Auto-fill form fields with extracted content - ALL SECTIONS
+            if 'checkin' in sections_data and sections_data['checkin']:
+                st.session_state[f"pm_checkin_{program}"] = "\n".join(sections_data['checkin'])
+                st.info("✅ Check-in field will be pre-filled below")
+            
+            # Student Concerns
+            if 'concerns' in sections_data and sections_data['concerns']:
+                concerns_list = []
+                for concern_line in sections_data['concerns']:
+                    if concern_line.strip():
+                        concerns_list.append({"notes": concern_line.strip()})
+                st.session_state[f"pm_concerns_{program}"] = concerns_list
+                st.info("✅ Student Concerns will be pre-filled below")
+            
+            # SMARTAR Goals
+            if 'smartar' in sections_data and sections_data['smartar']:
+                smartar_list = []
+                for smartar_line in sections_data['smartar']:
+                    if smartar_line.strip():
+                        smartar_list.append({"student_name": "", "notes": smartar_line.strip()})
+                st.session_state[f"pm_smartar_{program}"] = smartar_list
+                st.info("✅ SMARTAR Goals will be pre-filled below")
+            
+            # TAC/Reports
+            if 'tac' in sections_data or 'report' in sections_data:
+                tac_content = []
+                if 'tac' in sections_data:
+                    tac_content.extend(sections_data['tac'])
+                if 'report' in sections_data:
+                    tac_content.extend(sections_data['report'])
+                if tac_content:
+                    st.session_state[f"pm_reports_{program}"] = "\n".join(tac_content)
+                    st.info("✅ TAC/Reports/Transitions will be pre-filled below")
+            
+            # Add new actions from this meeting only
+            if 'actions' in sections_data and sections_data['actions']:
+                new_actions = []
+                for action_line in sections_data['actions']:
+                    if action_line.strip():
+                        action_text = action_line.strip()
+                        new_actions.append({
+                            "action": action_text,
+                            "who": "",
+                            "by_when": "",
+                            "priority": "Medium",
+                            "notes": "",
+                            "done": False
+                        })
+                st.session_state[f"pm_actions_{program}"] = new_actions
+                
+                st.success(f"✅ {len(new_actions)} action(s) from THIS meeting extracted and ready")
+                st.info("✅ Scroll down to Actions section - only these new actions will show")
+            else:
+                st.warning("⚠️ No specific actions found - you can add them manually below")
+            
+            st.markdown("---")
+            st.success("✅ Meeting form has been prepared! Scroll down to review and save.")
+        
+        st.markdown("---")
+
+    elif f"show_manual_org_{program}" in st.session_state:
+        # Basic keyword-based organization (fallback)
+        st.markdown("---")
+        st.markdown("#### 📋 Keyword-Based Organization")
+        
+        sections = {
+            "✅ Check-in": [],
+            "👤 Student Concerns": [],
+            "🎯 SMARTAR Goals": [],
+            "📊 Report": [],
+            "🔗 TAC (Transition Advisory Committee)": [],
+            "🚀 Transitions": [],
+            "✋ Actions & Clarifications": []
+        }
+        
+        lines = transcript_input.split('\n')
+        current_section = None
+        
+        for line in lines:
+            line_lower = line.lower()
+            
+            if any(word in line_lower for word in ['check', 'check-in', 'checkin', 'update']):
+                current_section = "✅ Check-in"
+            elif any(word in line_lower for word in ['concern', 'student concern', 'behavior', 'wellbeing']):
+                current_section = "👤 Student Concerns"
+            elif any(word in line_lower for word in ['smartar', 'goal', 'learning target', 'objective']):
+                current_section = "🎯 SMARTAR Goals"
+            elif any(word in line_lower for word in ['report', 'progress', 'assessment', 'data']):
+                current_section = "📊 Report"
+            elif any(word in line_lower for word in ['tac', 'transition advisory', 'planning']):
+                current_section = "🔗 TAC (Transition Advisory Committee)"
+            elif any(word in line_lower for word in ['transition', 'visual', 'support']):
+                current_section = "🚀 Transitions"
+            elif any(word in line_lower for word in ['action', 'who', 'what', 'by when', 'clarif']):
+                current_section = "✋ Actions & Clarifications"
+            
+            if current_section and line.strip():
+                sections[current_section].append(line.strip())
+        
+        for section_name, content in sections.items():
+            if content:
+                with st.expander(section_name, expanded=True):
+                    section_text = "\n".join(content)
+                    st.text_area(
+                        "Copy this content:",
+                        value=section_text,
+                        height=100,
+                        disabled=True,
+                        key=f"copy_{section_name}_{program}"
+                    )
+        
+        st.markdown("---")
+
+    checkin_label  = "TEAM CHECK-IN — Regulation Before Reaction" if is_week_a else "TEAM CHECK-IN"
+    checkin_prompt = "What do we need to know to support students effectively today?" if is_week_a else "Quick updates impacting program delivery"
+    st.markdown(f"#### ⏱ 0–10 min | {checkin_label}")
+    st.caption(checkin_prompt)
+    pm_checkin = st.text_area("Check-in notes", value=default_checkin, height=80, key=f"pm_checkin_{program}",
+        label_visibility="collapsed", placeholder=checkin_prompt)
+    st.markdown("---")
+
+    if is_week_a:
+        st.markdown("#### ⏱ 10–25 min | STUDENT CONCERNS — Structured Problem Solving")
+        st.caption("Facilitator prompt: Push for function-based thinking, not description.")
+
+        # Manual entry section
+        st.markdown("**Option A: Manual Entry**")
+        
+        import uuid as _uuid
+        concerns_key = f"pm_concerns_{program}"
+        if concerns_key not in st.session_state:
+            # Load from selected_record if editing
+            if selected_record and selected_record.get('student_concerns'):
+                try:
+                    loaded = _json.loads(selected_record['student_concerns'])
+                    st.session_state[concerns_key] = loaded if isinstance(loaded, list) else [{"notes": ""}]
+                except:
+                    st.session_state[concerns_key] = [{"notes": ""}]
+            else:
+                st.session_state[concerns_key] = [{"notes": ""}]
+        # If auto-filled from transcript, it's already in session_state, so use it
+        
+        concerns = st.session_state[concerns_key]
+
+        # Give every row a STABLE id. Widget keys are tied to the id (not the list
+        # position) so adding/removing a student never scrambles what was typed.
+        for row in concerns:
+            if not row.get("_id"):
+                row["_id"] = _uuid.uuid4().hex
+
+        delete_id = None
+        for idx, row in enumerate(concerns):
+            cid = row["_id"]
+            col_text, col_del = st.columns([11, 0.5])
+            with col_text:
+                row["notes"] = st.text_area(
+                    f"Student {idx + 1}",
+                    value=row.get("notes", ""),
+                    key=f"con_notes_{program}_{cid}",
+                    height=100,
+                    placeholder="Student name · Concern / behaviour · Hypothesis (why?) · Strategy to try · Who · By when",
+                )
+            with col_del:
+                st.markdown("<div style='margin-top:2rem;'></div>", unsafe_allow_html=True)
+                if len(concerns) > 1:
+                    if st.button("✕", key=f"con_del_{program}_{cid}"):
+                        delete_id = cid
+        if delete_id is not None:
+            # Remove the matching row AND its widget state, then rerun.
+            st.session_state[concerns_key] = [c for c in concerns if c.get("_id") != delete_id]
+            st.session_state.pop(f"con_notes_{program}_{delete_id}", None)
+            st.rerun()
+
+        if st.button("➕ Add student concern", key=f"con_add_{program}"):
+            concerns.append({"notes": "", "_id": _uuid.uuid4().hex})
+            st.rerun()
+        
+        # Show summary of documented students
+        if concerns and any(c.get('notes', '').strip() for c in concerns):
+            existing_count = len([c for c in concerns if c.get('notes', '').strip()])
+            st.caption(f"📋 {existing_count} student(s) currently documented above")
+        
+        st.markdown("---")
+        
+        # AI Generation section
+        st.markdown("**Option B: Generate from Transcript**")
+        st.caption("AI will identify NEW student concerns not already documented above")
+        
+        transcript_concerns = st.text_area(
+            "Meeting transcript",
+            height=180,
+            key=f"transcript_concerns_{program}",
+            label_visibility="collapsed",
+            placeholder="Paste meeting transcript here..."
+        )
+        
+        col_gen, col_status = st.columns([2, 3])
+        with col_gen:
+            if st.button("✨ Analyze with AI", key=f"gen_concerns_{program}", type="primary"):
+                if transcript_concerns.strip():
+                    with st.spinner("Analyzing transcript..."):
+                        existing_json = _json.dumps(concerns)
+                        result = generate_smart_minutes_week_a(transcript_concerns, existing_json, program)
+                        
+                        if result:
+                            st.session_state[f'_ai_new_concerns_{program}'] = result['student_concerns']
+                            st.session_state[f'_ai_minutes_{program}'] = result['minutes']
+                            st.session_state[f'_ai_actions_{program}'] = result['actions']
+                            st.success("✓ Analysis complete!")
+                            time.sleep(0.5)
+                            st.rerun()
+                else:
+                    st.warning("Please paste transcript first")
+        
+        with col_status:
+            if st.session_state.get(f'_ai_new_concerns_{program}'):
+                st.info("✓ AI results ready below")
+        
+        st.markdown("---")
+        
+        # AI Results Review
+        if st.session_state.get(f'_ai_new_concerns_{program}'):
+            st.markdown("### 🤖 AI Analysis Results")
+            new_concerns_text = st.session_state[f'_ai_new_concerns_{program}']
+            
+            if "No new student concerns" in new_concerns_text:
+                st.info("✓ All students in transcript already documented")
+                if st.button("Clear Results", key=f"clear_concerns_{program}"):
+                    del st.session_state[f'_ai_new_concerns_{program}']
+                    st.rerun()
+            else:
+                st.markdown("**New Student Concerns Found:**")
+                edited_concerns = st.text_area(
+                    "Review concerns",
+                    value=new_concerns_text,
+                    height=150,
+                    key=f"review_concerns_{program}",
+                    label_visibility="collapsed"
+                )
+                
+                new_lines = [line.strip() for line in edited_concerns.split('\n') 
+                            if line.strip() and not line.startswith("No new")]
+                
+                if new_lines:
+                    st.caption(f"Will add {len(new_lines)} new concern(s)")
+                
+                col_accept, col_reject = st.columns(2)
+                with col_accept:
+                    if st.button("✅ Accept & Add", key=f"accept_concerns_{program}", type="primary"):
+                        for line in new_lines:
+                            if line:
+                                concerns.append({"notes": line})
+                        del st.session_state[f'_ai_new_concerns_{program}']
+                        st.success(f"Added {len(new_lines)} concern(s)!")
+                        time.sleep(0.5)
+                        st.rerun()
+                
+                with col_reject:
+                    if st.button("❌ Discard", key=f"reject_concerns_{program}"):
+                        del st.session_state[f'_ai_new_concerns_{program}']
+                        st.rerun()
+        
+        st.markdown("---")
+
+        st.markdown("#### ⏱ 25–40 min | SMARTAR GOAL SPOTLIGHT — 4 Students")
+        st.caption("Click student name to open Goal Builder, or add new student")
+
+        if not st.session_state.current_meeting_id:
+            st.info("💡 Save the meeting details above first — SMARTAR links will activate once the meeting has an ID.")
+
+        if student_names:
+            st.caption(f"💡 {len(student_names)} students loaded")
+
+        # SMARTAR student selection - REDESIGNED with buttons
+        st.markdown("**Select students for goal spotlight:**")
+        
+        smartar_key = f"pm_smartar_{program}"
+        if smartar_key not in st.session_state:
+            st.session_state[smartar_key] = []
+        
+        smartar = st.session_state[smartar_key]
+        
+        # Display existing students with their CURRENT SMARTAR goal + notes
+        if smartar:
+            hdr_l, hdr_r = st.columns([5, 1])
+            with hdr_r:
+                st.button("↻ Refresh goals", key=f"refresh_goals_{program}",
+                          on_click=fetch_student_smartar_goals.clear,
+                          help="Reload current goals from the Goal Builder")
+            for idx, student_data in enumerate(smartar):
+                student_name = student_data.get("student_name", "")
+                if not student_name:
+                    continue
+
+                col_name, col_goal_btn, col_remove = st.columns([4, 2, 0.5])
+                with col_name:
+                    st.markdown(f"**{idx + 1}. {student_name}**")
+                with col_goal_btn:
+                    if st.session_state.current_meeting_id:
+                        smartar_url = get_smartar_goal_link(
+                            student_name,
+                            st.session_state.current_meeting_id,
+                            program,
+                            pm_term or "T1",
+                            pm_week
+                        )
+                        smartar_link_button(smartar_url)
+                    else:
+                        st.caption("Save meeting first")
+                with col_remove:
+                    if st.button("✕", key=f"sm_remove_{program}_{idx}"):
+                        smartar.pop(idx)
+                        st.rerun()
+
+                # Show the student's CURRENT SMARTAR goal(s) inline
+                render_current_smartar_goals(student_name)
+
+                # Meeting notes recorded alongside the goal
+                student_data["notes"] = st.text_area(
+                    f"Notes for {student_name}",
+                    value=student_data.get("notes", ""),
+                    key=f"sm_notes_{program}_{idx}",
+                    height=80,
+                    placeholder="Notes alongside this goal — progress, evidence, adjustments, next steps…",
+                    label_visibility="collapsed"
+                )
+                st.markdown("<div style='margin-bottom:6px;'></div>", unsafe_allow_html=True)
+
+        st.markdown("---")
+        
+        # Add student section - SIMPLIFIED
+        st.markdown("**Add student to spotlight:**")
+        
+        col_select, col_add = st.columns([4, 1])
+        
+        with col_select:
+            # Student selector with autocomplete
+            new_student_name = st.selectbox(
+                "Select student",
+                options=[""] + student_names,
+                key=f"new_student_select_{program}",
+                label_visibility="collapsed"
+            )
+            # OR manual entry
+            if not new_student_name:
+                new_student_name = st.text_input(
+                    "Or type student name",
+                    key=f"new_student_manual_{program}",
+                    placeholder="Type student name if not in list...",
+                    label_visibility="collapsed"
+                )
+        
+        with col_add:
+            st.markdown("<div style='margin-top:1.8rem;'></div>", unsafe_allow_html=True)
+            if st.button("➕ Add to spotlight", key=f"add_student_{program}", type="primary"):
+                if new_student_name and new_student_name.strip():
+                    nm = new_student_name.strip()
+                    if not any(s.get("student_name") == nm for s in smartar):
+                        smartar.append({"student_name": nm, "notes": ""})
+                    if not st.session_state.current_meeting_id:
+                        st.session_state[f"_smartar_added_{program}"] = nm
+                    st.rerun()
+                else:
+                    st.warning("⚠️ Please select or enter a student name")
+
+        # After adding, show a clear, reliable link that opens the Goal Builder in a
+        # NEW tab (so this meeting form is never lost). Requires a saved meeting id.
+        _just_added = st.session_state.pop(f"_smartar_added_{program}", None)
+        if st.session_state.current_meeting_id and smartar:
+            last = smartar[-1].get("student_name", "")
+            if last:
+                _url = get_smartar_goal_link(last, st.session_state.current_meeting_id, program, pm_term or "T1", pm_week)
+                st.markdown("**Set this student's goal:**")
+                smartar_link_button(_url, f"🎯 Open Goal Builder for {last}")
+        elif not st.session_state.current_meeting_id:
+            st.info("💡 Save the meeting first (button at the bottom) — then a Goal Builder link will appear for each student.")
+        
+        st.markdown("---")
+
+        st.markdown("#### ⏱ 40–45 min | REPORTS / TAC / TRANSITIONS")
+        pm_reports = st.text_area("Reports, TAC meetings, review or transition planning",
+            value=default_reports, height=80, key=f"pm_reports_{program}", label_visibility="collapsed",
+            placeholder="Upcoming reports due · TAC meetings · Review or transition planning")
+        priority_rows = []
+
+    else:  # Week B - System Lens
+        st.markdown("#### ⏱ 10–45 min | WEEK B — SYSTEM LENS")
+        st.caption("Align to: Implementation Plan · PDP Focus Areas · LBU Priorities")
+
+        priority_key = f"pm_priority_{program}"
+
+        # Initialise from saved record if first load
+        if priority_key not in st.session_state:
+            raw_pf = selected_record.get('priority_focus', '') if selected_record else ''
+            existing_focus = ""
+            if raw_pf:
+                try:
+                    import json as _json_pf
+                    pf_data = _json_pf.loads(raw_pf)
+                    if isinstance(pf_data, dict):
+                        existing_focus = pf_data.get("notes", "")
+                    elif isinstance(pf_data, list) and pf_data:
+                        lines = []
+                        for r in pf_data:
+                            if isinstance(r, dict):
+                                parts = [v for v in r.values() if v]
+                                if parts:
+                                    lines.append("• " + " | ".join(parts))
+                        existing_focus = "\n".join(lines)
+                except Exception:
+                    existing_focus = str(raw_pf)
+            st.session_state[priority_key] = {"notes": existing_focus}
+
+        priority_store = st.session_state[priority_key]
+        if not isinstance(priority_store, dict):
+            priority_store = {"notes": ""}
+            st.session_state[priority_key] = priority_store
+
+        # ── SINGLE TRANSCRIPT DROP ZONE ────────────────────────────────────
+        st.markdown("**📋 Drop Transcript / Raw Notes**")
+        st.caption(
+            "Paste a voice transcript, rough notes, or dot points from the whole meeting. "
+            "AI will read it and split content into the **Focus Area** summary and **Meeting Minutes** below."
+        )
+        st.caption("⚠️ Keep transcripts under ~3,000 characters for best results with the free Groq tier.")
+        transcript_raw = st.text_area(
+            "Transcript",
+            height=200,
+            key=f"pr_transcript_{program}",
+            label_visibility="collapsed",
+            placeholder=(
+                "Paste full meeting transcript or rough notes here…\n\n"
+                "e.g. 'We talked about BSEM implementation — Brenton said check-ins are happening but "
+                "not all staff using the language consistently. Candice to model it next week. "
+                "Also discussed upcoming reports — due end of week 8. Tom will send the template out by Thursday.'"
+            )
+        )
+
+        if st.button("✨ Process with AI → Split into Focus Area + Minutes", key=f"pr_groq_{program}", type="primary"):
+            if transcript_raw.strip():
+                if GROQ_KEY:
+                    with st.spinner("Reading transcript and sorting content…"):
+                        try:
+                            _groq_client = Groq(api_key=GROQ_KEY)
+                            _prompt = f"""You are a professional minute-taker for Cowandilla Learning Centre (CLC), Learning & Behaviour Unit — an alternative education school in South Australia.
+
+A raw transcript or rough notes from a Week B 'System Lens' team meeting for the {PROGRAMS[program]['label']} program is provided below.
+
+Your job: Read the full transcript and produce TWO clearly separated sections.
+
+---
+SECTION 1 — FOCUS AREA SUMMARY
+Extract anything about implementation fidelity, frameworks, staff practice, LBU priorities, or systemic/program concerns. Format as:
+
+FOCUS AREA: [topic]
+WHAT'S WORKING: [strengths observed]
+GAP IDENTIFIED: [what needs attention]
+ADJUSTMENT / NEXT STEP: [what will change and how]
+EVIDENCE TO COLLECT: [how progress will be measured]
+WHO & WHEN: [responsible person and timeline]
+
+Repeat for each distinct focus area discussed.
+
+---
+SECTION 2 — MEETING MINUTES
+Everything else — general discussion, decisions, announcements, upcoming events, staff matters, reports, TAC, transitions, any other business. Format as clear professional minutes with numbered items.
+
+Rules:
+- Trauma-informed, strengths-based, plain English
+- Preserve ALL factual content — do not add or fabricate anything
+- Be concise — one sentence per point unless more detail is essential
+- Clearly label the two sections with the headings above
+
+RAW TRANSCRIPT:
+{transcript_raw[:3500]}"""
+                            _resp = _groq_client.chat.completions.create(
+                                model="llama-3.1-8b-instant",
+                                messages=[{"role": "user", "content": _prompt}],
+                                max_tokens=900
+                            )
+                            full_output = _resp.choices[0].message.content
+
+                            # Split on the SECTION 2 heading
+                            split_markers = [
+                                "SECTION 2 — MEETING MINUTES",
+                                "SECTION 2 - MEETING MINUTES",
+                                "---\nSECTION 2",
+                                "\n\nSECTION 2",
+                            ]
+                            focus_text = full_output
+                            minutes_text = ""
+                            for marker in split_markers:
+                                if marker in full_output:
+                                    parts = full_output.split(marker, 1)
+                                    focus_text = parts[0].replace("SECTION 1 — FOCUS AREA SUMMARY", "").replace("SECTION 1 - FOCUS AREA SUMMARY", "").strip()
+                                    minutes_text = parts[1].strip()
+                                    break
+
+                            # Stage results — transferred to widget keys before render
+                            st.session_state[f"_stage_pr_notes_{program}"] = focus_text
+                            st.session_state[f"_stage_pm_minutes_{program}"] = minutes_text
+                            st.rerun()
+                        except Exception as _e:
+                            st.error(f"Groq error: {_e}")
+                else:
+                    st.warning("⚠️ Groq API key not configured.")
+            else:
+                st.warning("⚠️ Paste a transcript first.")
+
+        st.markdown("---")
+
+        # ── Focus Area notes (populated by AI or typed manually) ───────────
+        st.markdown("**📝 Focus Area Summary**")
+        st.caption("AI-populated from your transcript, or type freely. Edit before saving.")
+        _stage_pn = st.session_state.pop(f"_stage_pr_notes_{program}", None)
+        if _stage_pn is not None:
+            st.session_state[f"pr_notes_{program}"] = _stage_pn
+        elif f"pr_notes_{program}" not in st.session_state:
+            st.session_state[f"pr_notes_{program}"] = priority_store.get("notes", "")
+        _focus_notes = st.text_area(
+            "Focus area notes",
+            height=200,
+            key=f"pr_notes_{program}",
+            label_visibility="collapsed",
+            placeholder=(
+                "e.g.\n"
+                "FOCUS AREA: BSEM implementation fidelity\n"
+                "WHAT'S WORKING: Morning check-ins happening consistently\n"
+                "GAP: WoT language not yet embedded in afternoon sessions\n"
+                "ADJUSTMENT: Candice to model language at next team meeting\n"
+                "EVIDENCE: Scatter Plot regulation data — Brenton by W7"
+            )
+        )
+        # Keep priority_store in sync for save
+        priority_store["notes"] = _focus_notes
+        st.session_state[priority_key] = priority_store
+
+        # priority_rows used downstream for save
+        priority_rows = [{"notes": _focus_notes}]
+        st.markdown("---")
+
+        # SMARTAR for Week B (same as Week A)
+        st.markdown("#### ⏱ SMARTAR GOAL SPOTLIGHT — 4 Students")
+        st.caption("Click student name to open Goal Builder, or add new student")
+
+        if not st.session_state.current_meeting_id:
+            st.info("💡 Save the meeting details above first — SMARTAR links will activate once the meeting has an ID.")
+
+        if student_names:
+            st.caption(f"💡 {len(student_names)} students loaded")
+
+        smartar_key = f"pm_smartar_{program}"
+        if smartar_key not in st.session_state:
+            st.session_state[smartar_key] = []
+
+        smartar = st.session_state[smartar_key]
+        
+        # Display existing students with their CURRENT SMARTAR goal + notes
+        if smartar:
+            hdr_l, hdr_r = st.columns([5, 1])
+            with hdr_r:
+                st.button("↻ Refresh goals", key=f"refresh_goals_b_{program}",
+                          on_click=fetch_student_smartar_goals.clear,
+                          help="Reload current goals from the Goal Builder")
+            for idx, student_data in enumerate(smartar):
+                student_name = student_data.get("student_name", "")
+                if not student_name:
+                    continue
+
+                col_name, col_goal_btn, col_remove = st.columns([4, 2, 0.5])
+                with col_name:
+                    st.markdown(f"**{idx + 1}. {student_name}**")
+                with col_goal_btn:
+                    if st.session_state.current_meeting_id:
+                        smartar_url = get_smartar_goal_link(
+                            student_name,
+                            st.session_state.current_meeting_id,
+                            program,
+                            pm_term or "T1",
+                            pm_week
+                        )
+                        smartar_link_button(smartar_url)
+                    else:
+                        st.caption("Save meeting first")
+                with col_remove:
+                    if st.button("✕", key=f"sm_remove_b_{program}_{idx}"):
+                        smartar.pop(idx)
+                        st.rerun()
+
+                # Show the student's CURRENT SMARTAR goal(s) inline
+                render_current_smartar_goals(student_name)
+
+                # Meeting notes recorded alongside the goal
+                student_data["notes"] = st.text_area(
+                    f"Notes for {student_name}",
+                    value=student_data.get("notes", ""),
+                    key=f"sm_notes_b_{program}_{idx}",
+                    height=80,
+                    placeholder="Notes alongside this goal — progress, evidence, adjustments, next steps…",
+                    label_visibility="collapsed"
+                )
+                st.markdown("<div style='margin-bottom:6px;'></div>", unsafe_allow_html=True)
+
+        st.markdown("---")
+        
+        # Add student section
+        st.markdown("**Add student to spotlight:**")
+        
+        col_select, col_add = st.columns([4, 1])
+        
+        with col_select:
+            new_student_name = st.selectbox(
+                "Select student",
+                options=[""] + student_names,
+                key=f"new_student_select_b_{program}",
+                label_visibility="collapsed"
+            )
+            if not new_student_name:
+                new_student_name = st.text_input(
+                    "Or type student name",
+                    key=f"new_student_manual_b_{program}",
+                    placeholder="Type student name if not in list...",
+                    label_visibility="collapsed"
+                )
+        
+        with col_add:
+            st.markdown("<div style='margin-top:1.8rem;'></div>", unsafe_allow_html=True)
+            if st.button("➕ Add to spotlight", key=f"add_student_b_{program}", type="primary"):
+                if new_student_name and new_student_name.strip():
+                    nm = new_student_name.strip()
+                    if not any(s.get("student_name") == nm for s in smartar):
+                        smartar.append({"student_name": nm, "notes": ""})
+                    st.rerun()
+                else:
+                    st.warning("⚠️ Please select or enter a student name")
+
+        if st.session_state.current_meeting_id and smartar:
+            last = smartar[-1].get("student_name", "")
+            if last:
+                _url = get_smartar_goal_link(last, st.session_state.current_meeting_id, program, pm_term or "T1", pm_week)
+                st.markdown("**Set this student's goal:**")
+                smartar_link_button(_url, f"🎯 Open Goal Builder for {last}")
+        elif not st.session_state.current_meeting_id:
+            st.info("💡 Save the meeting first (button at the bottom) — then a Goal Builder link will appear for each student.")
+
+        pm_reports = ""
+        concerns = []
+
+    st.markdown("---")
+
+    # MEETING MINUTES / NOTES SECTION
+    st.markdown("#### 📝 MEETING MINUTES / NOTES")
+    st.caption("For Week B: AI-populated from transcript above. For Week A: type manually. Edit freely before saving.")
+    
+    # Check for AI-generated minutes
+    if st.session_state.get(f'_ai_minutes_{program}'):
+        st.markdown("**🤖 AI Generated Minutes:**")
+        ai_minutes = st.session_state[f'_ai_minutes_{program}']
+        
+        edited_minutes = st.text_area(
+            "Review minutes",
+            value=ai_minutes,
+            height=200,
+            key=f"review_minutes_{program}",
+            label_visibility="collapsed"
+        )
+        
+        col_accept, col_reject = st.columns(2)
+        with col_accept:
+            if st.button("✅ Accept Minutes", key=f"accept_minutes_{program}", type="primary"):
+                st.session_state[f"pm_minutes_{program}"] = edited_minutes
+                del st.session_state[f'_ai_minutes_{program}']
+                st.success("Minutes accepted!")
+                time.sleep(0.5)
+                st.rerun()
+        with col_reject:
+            if st.button("❌ Discard", key=f"reject_minutes_{program}"):
+                del st.session_state[f'_ai_minutes_{program}']
+                st.rerun()
+    else:
+        # Regular minutes entry
+        default_minutes = selected_record.get('meeting_minutes', '') if selected_record else ''
+        _stage_min = st.session_state.pop(f"_stage_pm_minutes_{program}", None)
+        if _stage_min is not None:
+            st.session_state[f"pm_minutes_{program}"] = _stage_min
+        elif f"pm_minutes_{program}" not in st.session_state:
+            st.session_state[f"pm_minutes_{program}"] = default_minutes
+        pm_minutes = st.text_area(
+            "Meeting minutes",
+            height=200,
+            key=f"pm_minutes_{program}",
+            label_visibility="collapsed",
+            placeholder="Record comprehensive meeting minutes here - discussions, decisions, key points, follow-up items..."
+        )
+    
+    st.markdown("---")
+    
+    # ACTIONS SECTION
+    st.markdown("#### ✅ ACTIONS — Clear Ownership & Accountability")
+    st.caption("Each action must have: specific task, responsible person, and due date")
+    
+    actions_key = f"pm_actions_{program}"
+    
+    # No button needed - each meeting starts with fresh actions
+    if actions_key not in st.session_state:
+        # Only carry forward actions if NOT coming from transcript auto-fill
+        st.session_state[actions_key] = [{"action":"","who":"","by_when":"","priority":"Medium","notes":"","done":False}]
+
+    actions = st.session_state[actions_key]
+    # No more carried-forward actions - each meeting starts fresh
+    
+    # AI-suggested actions review
+    if st.session_state.get(f'_ai_actions_{program}'):
+        st.markdown("**🤖 AI Suggested Actions — Review & Add:**")
+        ai_actions = st.session_state[f'_ai_actions_{program}']
+        
+        if ai_actions:
+            for ai_idx, ai_action in enumerate(ai_actions):
+                cols = st.columns([3, 1.5, 1, 1, 0.7])
+                cols[0].text_input("Action", value=ai_action.get('action', ''), key=f"ai_act_{program}_{ai_idx}", label_visibility="collapsed")
+                cols[1].text_input("Who", value=ai_action.get('who', ''), key=f"ai_who_{program}_{ai_idx}", label_visibility="collapsed")
+                cols[2].text_input("When", value=ai_action.get('by_when', ''), key=f"ai_when_{program}_{ai_idx}", label_visibility="collapsed")
+                cols[3].selectbox("Pri", ["Low", "Medium", "High", "Urgent"], 
+                                 index=["Low", "Medium", "High", "Urgent"].index(ai_action.get('priority', 'Medium')),
+                                 key=f"ai_pri_{program}_{ai_idx}", label_visibility="collapsed")
+                if cols[4].button("✅", key=f"add_ai_{program}_{ai_idx}"):
+                    actions.append({
+                        "action": st.session_state[f"ai_act_{program}_{ai_idx}"],
+                        "who": st.session_state[f"ai_who_{program}_{ai_idx}"],
+                        "by_when": st.session_state[f"ai_when_{program}_{ai_idx}"],
+                        "priority": st.session_state[f"ai_pri_{program}_{ai_idx}"],
+                        "notes": "",
+                        "done": False
+                    })
+                    st.success("Action added!")
+                    time.sleep(0.3)
+                    st.rerun()
+        
+        col_all, col_clear = st.columns(2)
+        with col_all:
+            if st.button("✅ Accept All Actions", key=f"accept_all_actions_{program}", type="primary"):
+                for ai_action in ai_actions:
+                    actions.append({
+                        "action": ai_action.get('action', ''),
+                        "who": ai_action.get('who', ''),
+                        "by_when": ai_action.get('by_when', ''),
+                        "priority": ai_action.get('priority', 'Medium'),
+                        "notes": "",
+                        "done": False
+                    })
+                del st.session_state[f'_ai_actions_{program}']
+                st.success(f"Added {len(ai_actions)} actions!")
+                time.sleep(0.5)
+                st.rerun()
+        with col_clear:
+            if st.button("Clear Suggestions", key=f"clear_actions_{program}"):
+                del st.session_state[f'_ai_actions_{program}']
+                st.rerun()
+        
+        st.markdown("---")
+    
+    # Existing actions display
+    st.markdown("**Current Actions:**")
+
+    ah_cols = st.columns([4,1.5,1,1,0.7,0.5])
+    for h, label in zip(ah_cols, ["Action (What needs to be done)","Who (Responsible person)","By When","Priority","✓ Done",""]):
+        h.markdown(f"**{label}**" if label else "")
+
+    for idx, row in enumerate(actions):
+        a1,a2,a3,a4,a5,a6 = st.columns([4,1.5,1,1,0.7,0.5])
+        with a1: row["action"]   = st.text_input("Act", value=row.get("action",""),   key=f"act_a_{program}_{idx}",      label_visibility="collapsed", placeholder="Specific action item")
+        with a2: row["who"]      = st.text_input("Who", value=row.get("who",""),      key=f"act_w_{program}_{idx}",      label_visibility="collapsed", placeholder="Person responsible")
+        with a3: row["by_when"]  = st.text_input("By",  value=row.get("by_when",""),  key=f"act_by_{program}_{idx}",     label_visibility="collapsed", placeholder="Due date/week")
+        with a4: row["priority"] = st.selectbox("Pri",  ["Low","Medium","High","Urgent"], index=["Low","Medium","High","Urgent"].index(row.get("priority","Medium")), key=f"act_pri_{program}_{idx}", label_visibility="collapsed")
+        with a5: row["done"]     = st.checkbox("✓",     value=row.get("done",False),   key=f"act_done_{program}_{idx}")
+        with a6:
+            if len(actions) > 1:
+                if st.button("✕", key=f"act_del_{program}_{idx}"):
+                    actions.pop(idx); st.rerun()
+        
+        if row.get("action"):
+            row["notes"] = st.text_input("Additional context/notes (optional)", 
+                value=row.get("notes", ""), 
+                key=f"act_notes_{program}_{idx}",
+                placeholder="Dependencies, resources needed, background...")
+
+    if st.button("➕ Add action", key=f"act_add_{program}"):
+        actions.append({"action":"","who":"","by_when":"","priority":"Medium","notes":"","done":False})
+        st.rerun()
+    
+    # Multiple add option
+    col_add_multi, col_button = st.columns([3, 1])
+    with col_add_multi:
+        num_actions = st.number_input("Add multiple actions", min_value=1, max_value=10, value=3, 
+                                     key=f"num_add_{program}", label_visibility="collapsed")
+    with col_button:
+        if st.button(f"➕ Add {num_actions} Actions", key=f"add_multi_{program}"):
+            for _ in range(num_actions):
+                actions.append({"action":"","who":"","by_when":"","priority":"Medium","notes":"","done":False})
+            st.rerun()
+    
+    st.markdown("---")
+
+    # Prepare meeting data for save - FIXED: Use local variables instead of session state
+    smartar_data = [{"student_name": r.get("student_name",""), "notes": r.get("notes","")} for r in smartar]
+    actions_data = [{k: v for k, v in a.items() if k != "_id"} for a in actions]
+
+    # Robustly capture student concerns straight from each row's widget by its
+    # stable id — this guarantees every student typed in (including the 2nd, 3rd…)
+    # is saved, and that empty rows are dropped.
+    if is_week_a:
+        concerns_data = []
+        for r in concerns:
+            cid = r.get("_id")
+            note = st.session_state.get(f"con_notes_{program}_{cid}", r.get("notes", "")) if cid else r.get("notes", "")
+            if note and note.strip():
+                concerns_data.append({"notes": note.strip()})
+    else:
+        concerns_data = []
+    # Week B: priority_rows is [{notes: "..."}]; Week A: empty
+    if not is_week_a and priority_rows:
+        priority_data = priority_rows[0] if isinstance(priority_rows[0], dict) else {"notes": ""}
+    else:
+        priority_data = {}
+
+    meeting_data = {
+        "program": program, 
+        "meeting_date": str(pm_date),
+        "term": pm_term.strip(), 
+        "week_number": int(pm_week),
+        "week_type": "A" if is_week_a else "B",
+        "facilitator": pm_facilitator.strip(), 
+        "attendees": pm_attendees.strip(),
+        "checkin_notes": pm_checkin.strip(),
+        "student_concerns": _json.dumps(concerns_data),
+        "smartar_spotlight": _json.dumps(smartar_data),
+        "reports_tac_notes": pm_reports.strip() if is_week_a else "",
+        "priority_focus": _json.dumps(priority_data),
+        "meeting_minutes": pm_minutes.strip(),
+        "actions": _json.dumps(actions_data),
+    }
+
+    # Trigger auto-save/auto-initialization
+    trigger_autosave(program, meeting_data)
+
+    # Manual save button
+    editing_existing = bool(st.session_state.current_meeting_id) and not str(st.session_state.current_meeting_id).startswith("temp_")
+    save_button_text = "💾 Update Meeting Record" if editing_existing else "💾 Save Meeting Record"
+    if st.button(save_button_text, type="primary", use_container_width=True, key=f"pm_save_{program}"):
+        try:
+            saved_id = None
+            if editing_existing:
+                supabase.table('tm_program_meetings').update(meeting_data).eq('id', st.session_state.current_meeting_id).execute()
+                saved_id = st.session_state.current_meeting_id
+                st.success("✅ Meeting record updated!")
+            else:
+                # DUPLICATE GUARD — never create a 2nd copy of a meeting that already
+                # exists for the same date / term / week / type.
+                existing = find_existing_meetings(
+                    program, meeting_data["meeting_date"], meeting_data["week_type"],
+                    meeting_data["term"], meeting_data["week_number"]
+                )
+                if existing:
+                    saved_id = existing[0]['id']
+                    supabase.table('tm_program_meetings').update(meeting_data).eq('id', saved_id).execute()
+                    if len(existing) > 1:
+                        dup_ids = ", ".join(str(e['id']) for e in existing[1:])
+                        st.warning(
+                            f"⚠️ {len(existing)} saved copies of this meeting already exist "
+                            f"(same date / term / week / type). I updated the most recent one rather "
+                            f"than adding another. Extra copies still in the database — IDs: {dup_ids}. "
+                            f"Use the **Duplicate check** banner at the top of this tab to remove them."
+                        )
+                    else:
+                        st.success("✅ A meeting for this date already existed — updated it instead of creating a duplicate.")
+                else:
+                    result = supabase.table('tm_program_meetings').insert(meeting_data).execute()
+                    saved_id = result.data[0]['id'] if result.data else None
+                    st.success("✅ Meeting record saved!")
+
+            # Keep the just-saved meeting loaded so you can carry on editing — this is
+            # what previously made it look like a student had been 'lost'. The Select
+            # Meeting dropdown re-selects it automatically from current_meeting_id
+            # (index-driven), so no widget-key write is needed here.
+            if saved_id:
+                st.session_state.current_meeting_id = saved_id
+
+            st.session_state.last_autosave_time = None
+            st.session_state.autosave_message = ""
+            st.rerun()
+        except Exception as e:
+            st.error(f"⚠️ Database save failed: {e}")
+
+    # ── Download professional minutes (Word) ──────────────────────────────────
+    st.markdown("")
+    try:
+        _docx_buf = build_minutes_docx(meeting_data, program)
+        _fname = f"CLC_{program}_Minutes_{meeting_data['meeting_date']}_Week{meeting_data['week_type']}.docx"
+        st.download_button(
+            "📥 Download Minutes (Word) — ready to send to members",
+            data=_docx_buf,
+            file_name=_fname,
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True,
+            key=f"pm_download_{program}",
+        )
+        st.caption("Tip: save first so the download matches the stored record exactly.")
+    except Exception as _e:
+        st.caption(f"Minutes document could not be generated: {_e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MEETING ARCHIVE - View and Edit Past Meetings
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render_meeting_archive(program):
+    """Display archive of past meetings with full section editing."""
+    import json as _json
+
+    st.markdown("### 📚 Meeting Archive")
+    st.caption(f"Browse and edit past {PROGRAMS[program]['label']} meetings")
+
+    # ── AD-HOC MEETINGS SECTION ──
+    st.markdown("#### 📝 Ad-Hoc Meetings")
+    try:
+        adhoc_result = supabase.table('tm_program_meetings').select("*").eq('program', program).eq('week_type', 'ad-hoc').order('meeting_date', desc=True).execute()
+        adhoc_meetings = adhoc_result.data or []
+        
+        if adhoc_meetings:
+            st.markdown(f"**Ad-Hoc meetings recorded:** {len(adhoc_meetings)}")
+            
+            for mtg in adhoc_meetings:
+                mtg_date = mtg.get('meeting_date', 'Unknown')
+                facilitator = mtg.get('facilitator', '')
+                attendees = mtg.get('attendees', 'Not recorded')
+                mtg_id = mtg.get('id', '')
+                
+                header = f"📝 {mtg_date} | {facilitator}"
+                
+                with st.expander(header, expanded=False):
+                    st.markdown(f"**Facilitator:** {facilitator} &nbsp;|&nbsp; **Attendees:** {attendees}")
+                    st.markdown(f"<small style='color:#888;'>Meeting ID: {mtg_id}</small>", unsafe_allow_html=True)
+                    st.markdown("")
+                    
+                    # Meeting Minutes
+                    if mtg.get('checkin_notes') or mtg.get('reports_tac_notes'):
+                        st.markdown("**📋 Minutes:**")
+                        if mtg.get('checkin_notes'):
+                            st.markdown(mtg.get('checkin_notes'))
+                        else:
+                            st.markdown(mtg.get('reports_tac_notes'))
+                    
+                    # Full Transcript
+                    if mtg.get('meeting_minutes'):
+                        with st.expander("📄 Full Transcript", expanded=False):
+                            st.markdown(mtg.get('meeting_minutes'))
+                    
+                    # Download Button
+                    doc = generate_minutes_docx(
+                        program=program,
+                        meeting_date=mtg_date,
+                        facilitator=facilitator,
+                        attendees=attendees,
+                        extracted_notes=mtg.get('checkin_notes', ''),
+                        summary_notes=mtg.get('reports_tac_notes', ''),
+                        transcript=mtg.get('meeting_minutes', '')
+                    )
+                    
+                    doc_bytes = io.BytesIO()
+                    doc.save(doc_bytes)
+                    doc_bytes.seek(0)
+                    
+                    st.download_button(
+                        label="📥 Download Minutes",
+                        data=doc_bytes,
+                        file_name=f"Minutes_{mtg_date}_{facilitator}_{program}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key=f"archive_adhoc_download_{mtg_id}"
+                    )
+        else:
+            st.info("No ad-hoc meetings recorded yet.")
+    except Exception as e:
+        st.warning(f"Could not load ad-hoc meetings: {e}")
+    
+    st.markdown("---")
+
+    # ── WEEK A / WEEK B MEETINGS SECTION ──
+    st.markdown("#### 📅 Scheduled Meetings (Week A & B)")
+    
+    all_meetings = fetch("tm_program_meetings", {"program": program}, "meeting_date")
+
+    if not all_meetings:
+        st.info("No past meetings found. Start recording meetings in the Program Meeting tab!")
+        return
+
+    st.markdown(f"**Total meetings recorded:** {len(all_meetings)}")
+
+    col_filter1, col_filter2 = st.columns(2)
+    with col_filter1:
+        filter_term = st.selectbox(
+            "Filter by term",
+            ["All Terms"] + sorted(set(m.get('term', '') for m in all_meetings if m.get('term'))),
+            key=f"archive_filter_term_{program}"
+        )
+    with col_filter2:
+        if program in ["JP", "PY", "SY"]:
+            filter_week_type = st.selectbox(
+                "Filter by type", ["All Types", "Week A", "Week B"],
+                key=f"archive_filter_type_{program}"
+            )
+        else:
+            filter_week_type = "All Types"
+
+    filtered_meetings = all_meetings
+    if filter_term != "All Terms":
+        filtered_meetings = [m for m in filtered_meetings if m.get('term') == filter_term]
+    if filter_week_type == "Week A":
+        filtered_meetings = [m for m in filtered_meetings if m.get('week_type') == 'A']
+    elif filter_week_type == "Week B":
+        filtered_meetings = [m for m in filtered_meetings if m.get('week_type') == 'B']
+
+    st.markdown("---")
+
+    for meeting in reversed(filtered_meetings):
+        meeting_date  = meeting.get('meeting_date', 'Unknown')
+        term          = meeting.get('term', '')
+        week_num      = meeting.get('week_number', '')
+        week_type     = meeting.get('week_type', '')
+        facilitator   = meeting.get('facilitator', '')
+        meeting_id    = meeting.get('id', '')
+        edit_key      = f"arch_edit_{meeting_id}"
+
+        if program in ["JP", "PY", "SY"]:
+            week_badge = "🔵 Week A" if week_type == "A" else "🟡 Week B"
+            header = f"{week_badge} | {meeting_date} | Term {term} W{week_num} | {facilitator}"
+        else:
+            header = f"🎨 Specialist | {meeting_date} | Term {term} W{week_num} | {facilitator}"
+
+        in_edit_mode = st.session_state.get(edit_key, False)
+        with st.expander(header, expanded=in_edit_mode):
+
+            if not in_edit_mode:
+                # ── READ VIEW ──────────────────────────────────────────────
+                st.markdown(f"**Facilitator:** {facilitator} &nbsp;|&nbsp; **Attendees:** {meeting.get('attendees','Not recorded')}")
+                st.markdown(f"<small style='color:#888;'>Meeting ID: {meeting_id}</small>", unsafe_allow_html=True)
+                st.markdown("")
+
+                # Check-in notes
+                raw_checkin = meeting.get('checkin_notes', '')
+                if raw_checkin:
+                    st.markdown("**📋 Check-in Notes:**")
+                    if program == "SPECIALIST":
+                        try:
+                            cd = _json.loads(raw_checkin)
+                            if cd.get('monday_teacher'):
+                                st.markdown(f"*Monday:* {cd['monday_teacher']}")
+                            if cd.get('tuefri_teacher'):
+                                st.markdown(f"*Tue–Fri:* {cd['tuefri_teacher']}")
+                        except Exception:
+                            st.markdown(raw_checkin)
+                    else:
+                        st.markdown(raw_checkin)
+
+                # Priority focus (Week B)
+                if week_type == "B" and meeting.get('priority_focus'):
+                    st.markdown("**🎯 Priority Focus:**")
+                    try:
+                        pf = _json.loads(meeting['priority_focus'])
+                        if isinstance(pf, dict):
+                            st.markdown(pf.get('notes', ''))
+                        elif isinstance(pf, list):
+                            for r in pf:
+                                if isinstance(r, dict) and any(r.values()):
+                                    st.markdown("• " + " | ".join(v for v in r.values() if v))
+                    except Exception:
+                        st.markdown(str(meeting['priority_focus']))
+
+                # Student concerns (Week A)
+                if week_type == "A" and meeting.get('student_concerns'):
+                    try:
+                        sc = _json.loads(meeting['student_concerns'])
+                        if isinstance(sc, list) and sc:
+                            st.markdown("**👥 Student Concerns:**")
+                            for r in sc:
+                                note = r.get('notes','') if isinstance(r, dict) else str(r)
+                                if note:
+                                    st.markdown(f"• {note}")
+                    except Exception:
+                        pass
+
+                # Meeting minutes
+                current_minutes = meeting.get('meeting_minutes', '')
+                st.markdown("**📝 Meeting Minutes:**")
+                if current_minutes:
+                    st.markdown(current_minutes)
+                else:
+                    st.caption("No minutes recorded yet.")
+
+                # Actions summary
+                if meeting.get('actions'):
+                    try:
+                        actions = _json.loads(meeting['actions'])
+                        if actions:
+                            st.markdown("**✅ Actions:**")
+                            for a in actions:
+                                if a.get('action'):
+                                    done = "✅" if a.get("done") else "🔲"
+                                    p_emoji = {"Low":"⬇️","Medium":"➡️","High":"⬆️","Urgent":"🔴"}.get(a.get("priority","Medium"),"➡️")
+                                    st.markdown(f"{done} {p_emoji} {a['action']} — {a.get('who','')} by {a.get('by_when','')}")
+                    except Exception:
+                        pass
+
+                st.markdown("")
+                col_edit_btn, col_dl_btn = st.columns(2)
+                with col_edit_btn:
+                    if st.button("✏️ Edit / Add to This Meeting", key=f"arch_open_{meeting_id}", type="secondary", use_container_width=True):
+                        st.session_state[edit_key] = True
+                        st.rerun()
+                with col_dl_btn:
+                    try:
+                        _abuf = build_minutes_docx(meeting, program)
+                        st.download_button(
+                            "📥 Download Minutes (Word)",
+                            data=_abuf,
+                            file_name=f"CLC_{program}_Minutes_{meeting_date}.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            use_container_width=True,
+                            key=f"arch_dl_{meeting_id}",
+                        )
+                    except Exception as _e:
+                        st.caption(f"Minutes doc error: {_e}")
+
+                # ── Delete this meeting (admin only, with confirmation) ──
+                if st.session_state.get("admin"):
+                    _confirm_key = f"arch_delconfirm_{meeting_id}"
+                    if not st.session_state.get(_confirm_key):
+                        if st.button("🗑️ Delete this meeting", key=f"arch_del_{meeting_id}",
+                                     use_container_width=True):
+                            st.session_state[_confirm_key] = True
+                            st.rerun()
+                    else:
+                        st.warning("Permanently delete this meeting? This can't be undone.")
+                        c_yes, c_no = st.columns(2)
+                        with c_yes:
+                            if st.button("✅ Yes, delete permanently", key=f"arch_delyes_{meeting_id}",
+                                         type="primary", use_container_width=True):
+                                try:
+                                    delete_row("tm_program_meetings", meeting_id)
+                                    if str(st.session_state.get("current_meeting_id")) == str(meeting_id):
+                                        st.session_state.current_meeting_id = None
+                                    st.session_state.pop(_confirm_key, None)
+                                    st.success("Meeting deleted.")
+                                    st.rerun()
+                                except Exception as _e:
+                                    st.error(f"Could not delete: {_e}")
+                        with c_no:
+                            if st.button("Cancel", key=f"arch_delno_{meeting_id}",
+                                         use_container_width=True):
+                                st.session_state.pop(_confirm_key, None)
+                                st.rerun()
+                else:
+                    st.caption("🔐 Log in as admin (sidebar) to delete a meeting.")
+
+            else:
+                # ── FULL EDIT MODE ─────────────────────────────────────────
+                st.markdown(
+                    f"""<div style="background:#fef3c7;border-left:4px solid #d97706;
+                    border-radius:0 8px 8px 0;padding:8px 14px;margin-bottom:10px;font-size:13px;color:#92400e;">
+                    ✏️ <strong>Editing:</strong> {meeting_date} — Term {term} W{week_num}
+                    </div>""",
+                    unsafe_allow_html=True
+                )
+
+                # ── Header fields ──
+                col_d, col_f, col_a = st.columns([1.5, 1.5, 3])
+                with col_d:
+                    try:
+                        ed_date = st.date_input("Date", value=datetime.date.fromisoformat(meeting_date), key=f"arch_date_{meeting_id}")
+                    except Exception:
+                        ed_date = st.date_input("Date", value=datetime.date.today(), key=f"arch_date_{meeting_id}")
+                with col_f:
+                    ed_fac = st.text_input("Facilitator", value=facilitator, key=f"arch_fac_{meeting_id}")
+                with col_a:
+                    ed_att = st.text_input("Attendees", value=meeting.get('attendees',''), key=f"arch_att_{meeting_id}")
+
+                st.markdown("---")
+
+                # ── Check-in notes ──
+                st.markdown("**📋 Check-in Notes**")
+                raw_checkin = meeting.get('checkin_notes','')
+                if program == "SPECIALIST":
+                    try:
+                        cd = _json.loads(raw_checkin) if raw_checkin else {}
+                    except Exception:
+                        cd = {}
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        ed_mon = st.text_area("Monday Teacher", value=cd.get('monday_teacher',''), height=80, key=f"arch_mon_{meeting_id}")
+                    with c2:
+                        ed_tuefri = st.text_area("Tue–Fri Teacher", value=cd.get('tuefri_teacher',''), height=80, key=f"arch_tuefri_{meeting_id}")
+                    ed_checkin_json = _json.dumps({"monday_teacher": ed_mon, "tuefri_teacher": ed_tuefri})
+                    ed_checkin_raw = None
+                else:
+                    ed_checkin_raw = st.text_area(
+                        "Check-in notes",
+                        value=raw_checkin,
+                        height=90,
+                        key=f"arch_checkin_{meeting_id}",
+                        label_visibility="collapsed",
+                        placeholder="Check-in / regulation notes from the meeting…"
+                    )
+                    ed_checkin_json = None
+
+                st.markdown("---")
+
+                # ── Priority focus (Week B) ──
+                ed_priority_json = None
+                if week_type == "B":
+                    st.markdown("**🎯 Priority Focus Notes**")
+                    raw_pf = meeting.get('priority_focus','')
+                    existing_pf = ""
+                    if raw_pf:
+                        try:
+                            pf = _json.loads(raw_pf)
+                            if isinstance(pf, dict):
+                                existing_pf = pf.get('notes','')
+                            elif isinstance(pf, list):
+                                lines = []
+                                for r in pf:
+                                    if isinstance(r, dict):
+                                        parts = [v for v in r.values() if v]
+                                        if parts:
+                                            lines.append("• " + " | ".join(parts))
+                                existing_pf = "\n".join(lines)
+                        except Exception:
+                            existing_pf = str(raw_pf)
+                    _stage_pf = st.session_state.pop(f"_stage_arch_pf_{meeting_id}", None)
+                    if _stage_pf is not None:
+                        st.session_state[f"arch_pf_{meeting_id}"] = _stage_pf
+                    elif f"arch_pf_{meeting_id}" not in st.session_state:
+                        st.session_state[f"arch_pf_{meeting_id}"] = existing_pf
+                    ed_pf = st.text_area(
+                        "Priority focus",
+                        height=160,
+                        key=f"arch_pf_{meeting_id}",
+                        label_visibility="collapsed",
+                        placeholder="Type or append priority focus notes…"
+                    )
+                    # Groq recalibration for archive priority notes
+                    with st.expander("📋 Paste Transcript → Recalibrate with AI", expanded=False):
+                        arch_transcript = st.text_area(
+                            "Transcript",
+                            height=120,
+                            key=f"arch_pf_transcript_{meeting_id}",
+                            label_visibility="collapsed",
+                            placeholder="Paste rough notes or transcript here…"
+                        )
+                        if st.button("✨ Recalibrate", key=f"arch_pf_groq_{meeting_id}"):
+                            if arch_transcript.strip() and GROQ_KEY:
+                                with st.spinner("Recalibrating…"):
+                                    try:
+                                        _gc = Groq(api_key=GROQ_KEY)
+                                        _r = _gc.chat.completions.create(
+                                            model="llama-3.1-8b-instant",
+                                            messages=[{"role": "user", "content":
+                                                f"Transform these rough meeting notes into structured CLC focus-area minutes. "
+                                                f"Use headings: FOCUS AREA, WHAT'S WORKING, GAP, ADJUSTMENT, EVIDENCE, WHO & WHEN. "
+                                                f"Trauma-informed, strengths-based, plain English. Preserve all facts.\n\n{arch_transcript[:3000]}"}],
+                                            max_tokens=800
+                                        )
+                                        _new_text = _r.choices[0].message.content
+                                        st.session_state[f"_stage_arch_pf_{meeting_id}"] = (ed_pf + "\n\n--- AI ---\n" + _new_text).strip() if ed_pf.strip() else _new_text
+                                        st.rerun()
+                                    except Exception as _e:
+                                        st.error(f"Groq error: {_e}")
+                    ed_priority_json = _json.dumps({"notes": ed_pf})
+                    st.markdown("---")
+
+                # ── Student concerns (Week A) ──
+                ed_concerns_json = None
+                if week_type == "A":
+                    st.markdown("**👥 Student Concerns**")
+                    raw_sc = meeting.get('student_concerns','')
+                    existing_sc = ""
+                    if raw_sc:
+                        try:
+                            sc = _json.loads(raw_sc)
+                            if isinstance(sc, list):
+                                existing_sc = "\n\n".join(r.get('notes','') for r in sc if isinstance(r,dict) and r.get('notes'))
+                        except Exception:
+                            existing_sc = str(raw_sc)
+                    ed_sc = st.text_area(
+                        "Student concerns",
+                        value=existing_sc,
+                        height=140,
+                        key=f"arch_sc_{meeting_id}",
+                        label_visibility="collapsed",
+                        placeholder="Add or edit student concern notes…"
+                    )
+                    ed_concerns_json = _json.dumps([{"notes": ed_sc}])
+                    st.markdown("---")
+
+                # ── Meeting minutes ──
+                st.markdown("**📝 Meeting Minutes**")
+                st.caption("Edit existing minutes or append new content — add your notes at the bottom.")
+                # Pending key carries Groq output across reruns without touching the widget key
+                _stage_am = st.session_state.pop(f"_stage_arch_min_{meeting_id}", None)
+                if _stage_am is not None:
+                    st.session_state[f"arch_minutes_{meeting_id}"] = _stage_am
+                elif f"arch_minutes_{meeting_id}" not in st.session_state:
+                    st.session_state[f"arch_minutes_{meeting_id}"] = meeting.get('meeting_minutes', '') or ''
+                ed_minutes = st.text_area(
+                    "Meeting minutes",
+                    height=280,
+                    key=f"arch_minutes_{meeting_id}",
+                    label_visibility="collapsed",
+                    placeholder="Add or edit meeting minutes here…"
+                )
+
+                # Groq recalibration for minutes
+                with st.expander("📋 Generate Minutes from Transcript (Groq)", expanded=False):
+                    arch_min_transcript = st.text_area(
+                        "Raw transcript",
+                        height=140,
+                        key=f"arch_min_transcript_{meeting_id}",
+                        label_visibility="collapsed",
+                        placeholder="Paste raw transcript or rough notes to generate polished minutes…"
+                    )
+                    if st.button("✨ Generate Minutes with AI", key=f"arch_min_groq_{meeting_id}"):
+                        if arch_min_transcript.strip() and GROQ_KEY:
+                            with st.spinner("Generating…"):
+                                try:
+                                    _gc2 = Groq(api_key=GROQ_KEY)
+                                    _r2 = _gc2.chat.completions.create(
+                                        model="llama-3.1-8b-instant",
+                                        messages=[{"role": "user", "content":
+                                            f"Transform these notes into polished professional meeting minutes for "
+                                            f"Cowandilla Learning Centre ({PROGRAMS[program]['label']} team meeting, {meeting_date}). "
+                                            f"Structured, trauma-informed, plain English. Preserve all facts.\n\n{arch_min_transcript[:3000]}"}],
+                                        max_tokens=900
+                                    )
+                                    _new_min = _r2.choices[0].message.content
+                                    st.session_state[f"_stage_arch_min_{meeting_id}"] = (
+                                        (ed_minutes + "\n\n--- AI Generated ---\n" + _new_min).strip()
+                                        if ed_minutes.strip() else _new_min
+                                    )
+                                    st.rerun()
+                                except Exception as _e:
+                                    st.error(f"Groq error: {_e}")
+
+                st.markdown("---")
+
+                # ── Actions — add new rows ──
+                st.markdown("**✅ Actions**")
+                existing_actions = []
+                if meeting.get('actions'):
+                    try:
+                        existing_actions = _json.loads(meeting['actions'])
+                    except Exception:
+                        existing_actions = []
+
+                # Show existing + allow toggling done
+                if existing_actions:
+                    st.caption("Existing actions:")
+                    for aidx, a in enumerate(existing_actions):
+                        if a.get('action'):
+                            ac1, ac2 = st.columns([5, 1])
+                            with ac1:
+                                p_emoji = {"Low":"⬇️","Medium":"➡️","High":"⬆️","Urgent":"🔴"}.get(a.get("priority","Medium"),"➡️")
+                                st.markdown(f"{p_emoji} **{a['action']}** — {a.get('who','')} by {a.get('by_when','')}")
+                            with ac2:
+                                existing_actions[aidx]["done"] = st.checkbox(
+                                    "Done", value=a.get("done", False),
+                                    key=f"arch_done_{meeting_id}_{aidx}"
+                                )
+
+                st.caption("Add new action (will be included when you save):")
+                new_act_cols = st.columns([3, 1.5, 1, 1])
+                new_act_action = new_act_cols[0].text_input("Action", key=f"arch_new_act_{meeting_id}", label_visibility="collapsed", placeholder="New action item")
+                new_act_who   = new_act_cols[1].text_input("Who",    key=f"arch_new_who_{meeting_id}", label_visibility="collapsed", placeholder="Person")
+                new_act_when  = new_act_cols[2].text_input("By",     key=f"arch_new_when_{meeting_id}", label_visibility="collapsed", placeholder="Date/week")
+                new_act_pri   = new_act_cols[3].selectbox("Pri",     ["Medium","Low","High","Urgent"], key=f"arch_new_pri_{meeting_id}", label_visibility="collapsed")
+
+                # NOTE: new action is appended only inside the Save block below, not here,
+                # to prevent it being duplicated on every rerun.
+
+                st.markdown("---")
+
+                # ── Save / Cancel ──
+                col_sv, col_cn = st.columns([1, 1])
+                with col_sv:
+                    if st.button("💾 Save All Changes", key=f"arch_save_{meeting_id}", type="primary", use_container_width=True):
+                        # Append new action only at save time
+                        if new_act_action.strip():
+                            existing_actions.append({
+                                "action": new_act_action.strip(),
+                                "who": new_act_who.strip(),
+                                "by_when": new_act_when.strip(),
+                                "priority": new_act_pri,
+                                "done": False
+                            })
+                        try:
+                            update_payload = {
+                                "meeting_date": str(ed_date),
+                                "facilitator": ed_fac.strip(),
+                                "attendees": ed_att.strip(),
+                                "meeting_minutes": ed_minutes.strip(),
+                                "actions": _json.dumps(existing_actions),
+                            }
+                            if ed_checkin_json is not None:
+                                update_payload["checkin_notes"] = ed_checkin_json
+                            elif ed_checkin_raw is not None:
+                                update_payload["checkin_notes"] = ed_checkin_raw.strip()
+                            if ed_priority_json is not None:
+                                update_payload["priority_focus"] = ed_priority_json
+                            if ed_concerns_json is not None:
+                                update_payload["student_concerns"] = ed_concerns_json
+
+                            result = supabase.table('tm_program_meetings') \
+                                .update(update_payload) \
+                                .eq('id', str(meeting_id)) \
+                                .execute()
+                            st.success("✅ Meeting updated successfully!")
+                            st.session_state[edit_key] = False
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"⚠️ Save failed: {e}")
+                            st.info("Check the console or try again. Meeting ID: " + str(meeting_id))
+
+                with col_cn:
+                    if st.button("❌ Cancel", key=f"arch_cancel_{meeting_id}", use_container_width=True):
+                        st.session_state[edit_key] = False
+                        st.rerun()
+
+def main():
+    program   = get_program_from_params()
+    prog_info = PROGRAMS[program]
+    week_range = get_week_from_params()
+
+    admin_login()
+
+    grad_end = {
+        "JP": "#3fa86a", "PY": "#2a6fd4", "SY": "#9b59b6",
+        "SPECIALIST": "#f59e0b"
+    }.get(program, "#2a6fd4")
+
+    st.markdown(f"""
+    <div style="background:linear-gradient(135deg,{prog_info['color']},{grad_end});
+                padding:1.5rem 2rem;border-radius:16px;margin-bottom:1.5rem;">
+      <div style="font-size:2.5rem;margin-bottom:0.25rem;">{prog_info['emoji']}</div>
+      <h1 style="color:white;margin:0;font-size:1.8rem;">{prog_info['label']}</h1>
+      <p style="color:rgba(255,255,255,0.85);margin:0.25rem 0 0;">Cowandilla Learning Centre · LBU</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    with st.sidebar:
+        st.markdown("### 🔀 Switch Program")
+        for p, info in PROGRAMS.items():
+            if p != program:
+                if st.button(f"{info['emoji']} {info['label']}", key=f"sw_{p}", use_container_width=True):
+                    st.query_params["program"] = p
+                    st.rerun()
+        st.divider()
+        if st.session_state.get("admin"):
+            st.markdown("### ⚙️ Admin Mode Active")
+            st.caption("You can add, edit and delete all content.")
+
+    auto_term, auto_week = get_current_term_week()
+
+    if program == "SPECIALIST":
+        tab_meeting, tab_archive = st.tabs(["🎨 Specialist Meeting", "📚 Archive"])
+        with tab_meeting:
+            render_specialist_meeting()
+        with tab_archive:
+            render_meeting_archive(program)
+            
+    elif program in ("JP", "PY", "SY"):
+        tab_meeting, tab_archive = st.tabs(["🗒️ Program Meeting", "📚 Archive"])
+        with tab_meeting: 
+            render_program_meeting(program)
+        with tab_archive:
+            render_meeting_archive(program)
+
+
+if __name__ == "__main__":
+    main()
