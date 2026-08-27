@@ -1983,22 +1983,18 @@ To remove a meeting, click the 🗑️ Delete button and confirm.
                                         messages=[
                                             {
                                                 "role": "system",
-                                                "content": "You are an expert at analyzing educational team meeting transcripts. Extract key information in a structured, concise format."
+                                                "content": """Extract two things from this meeting transcript, keeping ALL details:
+
+===ITEMS DISCUSSED===
+[Write everything discussed - keep full detail and wording]
+
+===ACTIONS===
+- Who: What by When
+[Extract only clear action items with who, what, and deadline]"""
                                             },
                                             {
                                                 "role": "user",
-                                                "content": f"""Analyze this meeting transcript and extract key points:
-
-Meeting transcript:
-{adhoc_transcript}
-
-Provide:
-- TEAM UPDATES: What was discussed
-- DECISIONS MADE: What was approved/decided
-- ACTION ITEMS: Who is doing what by when
-- NEXT STEPS: What's happening next
-
-Format as clear bullet points."""
+                                                "content": f"Meeting transcript:\n\n{adhoc_transcript}"
                                             }
                                         ],
                                         max_tokens=1000
@@ -2415,51 +2411,25 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
                                     messages=[
                                         {
                                             "role": "system",
-                                            "content": """You are an expert at organizing educational meeting transcripts for {program} team meetings.
+                                            "content": """You are organizing a meeting transcript into two sections.
 
-Your job is to:
-1. Read the raw meeting transcript
-2. Organize content into these CLC LBU meeting sections:
-   - CHECK-IN: Team updates, regulatory/wellbeing info needed today
-   - STUDENT CONCERNS: Behavior, learning, wellbeing issues discussed
-   - SMARTAR GOALS: Student learning targets, goal-setting discussions
-   - REPORT: Progress reports, assessment data, outcomes
-   - TAC: Transition Advisory Committee items, transition planning
-   - TRANSITIONS: Specific transition strategies and visual supports
-   - ACTIONS: Who is doing what by when - clarified action items
+IMPORTANT: Keep ALL details from the transcript. Do NOT summarize or condense. Preserve exact wording when possible.
 
-3. Clean up and refine each section for clarity
-4. Use professional educational language
-5. Make action items specific (Who/What/By When)
+Output EXACTLY in this format:
 
-Output format:
-===CHECK-IN===
-[content here, 2-3 sentences max]
-
-===STUDENT CONCERNS===
-[organized by student if mentioned, 2-3 sentences each]
-
-===SMARTAR GOALS===
-[specific learning targets with dates/metrics]
-
-===REPORT===
-[progress data and outcomes]
-
-===TAC===
-[transition planning items]
-
-===TRANSITIONS===
-[specific visual/sensory strategies]
+===ITEMS DISCUSSED===
+[Keep ALL details from the transcript about what was discussed. Do not summarize - preserve detail]
 
 ===ACTIONS===
 - Who: What by When
 - Who: What by When
+[Extract only explicit action items. If no clear actions, write "None identified"]
 
-Only include sections that have content. Be concise and professional."""
+Do NOT use any other sections. Do NOT condense. Do NOT remove detail."""
                                         },
                                         {
                                             "role": "user",
-                                            "content": f"Here is the meeting transcript to organize:\n\n{transcript_to_org}"
+                                            "content": f"Organize this meeting transcript:\n\n{transcript_to_org}"
                                         }
                                     ],
                                     max_tokens=2000
@@ -2506,93 +2476,71 @@ Only include sections that have content. Be concise and professional."""
         org_content = edited_org_content
         
         # ── AUTO-FILL FORM BUTTON ──
-        if st.button("✅ Auto-Fill Meeting Form from This Transcript", key=f"autofill_form_{program}", type="primary", use_container_width=True):
-            # Parse sections and auto-fill
+        if st.button("✅ Use This Content in Meeting Form", key=f"autofill_form_{program}", type="primary", use_container_width=True):
+            # Simple 2-section parsing
             lines = org_content.split('\n')
             current_section = None
-            sections_data = {}
+            items_discussed = []
+            actions_list = []
             
             for line in lines:
-                if '===CHECK-IN===' in line:
-                    current_section = 'checkin'
-                    sections_data['checkin'] = []
-                elif '===STUDENT CONCERNS===' in line:
-                    current_section = 'concerns'
-                    sections_data['concerns'] = []
-                elif '===SMARTAR GOALS===' in line:
-                    current_section = 'smartar'
-                    sections_data['smartar'] = []
-                elif '===REPORT===' in line:
-                    current_section = 'report'
-                    sections_data['report'] = []
-                elif '===TAC===' in line:
-                    current_section = 'tac'
-                    sections_data['tac'] = []
-                elif '===TRANSITIONS===' in line:
-                    current_section = 'transitions'
-                    sections_data['transitions'] = []
+                if '===ITEMS DISCUSSED===' in line:
+                    current_section = 'items'
                 elif '===ACTIONS===' in line:
                     current_section = 'actions'
-                    sections_data['actions'] = []
                 elif current_section and line.strip() and not line.startswith('==='):
-                    sections_data[current_section].append(line.strip())
+                    if current_section == 'items':
+                        items_discussed.append(line.strip())
+                    elif current_section == 'actions':
+                        actions_list.append(line.strip())
             
             st.markdown("---")
-            st.markdown("#### ✅ Auto-Fill Summary")
+            st.markdown("#### ✅ Content Ready to Use")
             
-            # Display what will be filled
-            col_a1, col_a2, col_a3 = st.columns(3)
+            items_text = "\n".join(items_discussed) if items_discussed else "[No items extracted]"
+            actions_text = "\n".join(actions_list) if actions_list else "[No actions extracted]"
             
-            with col_a1:
-                if 'checkin' in sections_data and sections_data['checkin']:
-                    st.success(f"✅ Check-in: {len(sections_data['checkin'])} item(s)")
-                else:
-                    st.info("⚪ Check-in: None found")
+            st.info(f"**Items Discussed:** {len(items_discussed)} lines")
+            st.info(f"**Actions:** {len(actions_list)} items")
             
-            with col_a2:
-                if 'concerns' in sections_data and sections_data['concerns']:
-                    st.warning(f"⚠️ Concerns: {len(sections_data['concerns'])} item(s)")
-                else:
-                    st.info("⚪ Concerns: None found")
+            # ── DISPLAY ITEMS DISCUSSED ──
+            st.markdown("---")
+            st.markdown("#### 📝 Items Discussed (Copy to Meeting Form)")
             
-            with col_a3:
-                if 'actions' in sections_data and sections_data['actions']:
-                    st.success(f"✅ Actions: {len(sections_data['actions'])} item(s)")
-                else:
-                    st.info("⚪ Actions: None found")
+            edited_items = st.text_area(
+                "Edit as needed before copying to meeting form:",
+                value=items_text,
+                height=150,
+                key=f"items_display_editable_{program}",
+                label_visibility="collapsed"
+            )
             
-            # ── DISPLAY EXTRACTED ACTIONS (PRIMARY) ──
-            if 'actions' in sections_data and sections_data['actions']:
-                st.markdown("---")
-                st.markdown("#### ✋ Extracted Action Items (From This Meeting)")
-                
-                actions_text = "\n".join(sections_data['actions'])
-                st.success("✅ Actions from THIS meeting:")
-                
-                # EDITABLE action items
-                edited_actions = st.text_area(
-                    "Edit/refine these actions:",
-                    value=actions_text,
-                    height=120,
-                    key=f"actions_display_editable_{program}",
-                    label_visibility="collapsed"
-                )
-                
-                # Store edited actions
-                st.session_state[f"current_meeting_actions_{program}"] = edited_actions
-                
-                st.info("""
-**Next Step:** 
-Scroll down to the **✋ ACTIONS** section and paste/review these action items there.
-Make sure each action is formatted as:
-- **Who:** Name of person
-- **What:** Specific task
-- **By When:** Date/timeline
-                """)
-            else:
-                st.warning("⚠️ No action items found in this transcript. Add them manually below.")
+            st.caption("👆 Copy this content and paste into the appropriate meeting form sections (Check-in, Student Concerns, SMARTAR Goals, etc.)")
             
-            # ── DISPLAY OTHER SECTIONS (ALL EDITABLE) ──
+            # ── DISPLAY ACTIONS ──
+            st.markdown("---")
+            st.markdown("#### ✋ Actions (Copy to Meeting Form)")
+            
+            edited_actions = st.text_area(
+                "Edit as needed before copying to meeting form:",
+                value=actions_text,
+                height=120,
+                key=f"actions_display_editable_{program}",
+                label_visibility="collapsed"
+            )
+            
+            st.caption("👆 Copy and paste these actions into the meeting form's Actions section")
+            
+            st.markdown("---")
+            st.info("""
+**How to use this content:**
+1. Copy the "Items Discussed" content above
+2. Paste into your meeting form's relevant sections (Check-in, Student Concerns, SMARTAR Goals, etc.)
+3. Copy the "Actions" content 
+4. Paste into your meeting form's Actions section
+5. Save the meeting
+
+The AI has kept all detail from your transcript - no summarization.""")
             st.markdown("---")
             st.markdown("#### 📋 Other Extracted Content (Edit as Needed)")
             
