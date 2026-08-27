@@ -1964,78 +1964,24 @@ To remove a meeting, click the 🗑️ Delete button and confirm.
         summary_tab1, summary_tab2 = st.tabs(["🤖 AI Extract", "✍️ Paste Polished Summary"])
         
         with summary_tab1:
-            col_process, col_skip = st.columns([1, 3])
+            st.markdown("##### 📝 Summarize Your Transcript")
+            st.caption("No AI needed - just write the key points yourself:")
             
-            if col_process.button("🤖 Extract Key Points", key=f"adhoc_process_{program}", type="primary"):
-                adhoc_transcript = st.session_state.get(f"adhoc_transcript_{program}", "").strip()
-                if adhoc_transcript:
-                    with st.spinner("Processing transcript..."):
-                        try:
-                            groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
-                            
-                            if groq_client:
-                                response = groq_client.chat.completions.create(
-                                    model="llama-3.1-8b-instant",
-                                    messages=[
-                                        {
-                                            "role": "system",
-                                            "content": "You are an expert at analyzing educational team meeting transcripts. Extract key information in a structured format."
-                                        },
-                                        {
-                                            "role": "user",
-                                            "content": f"""Analyze this meeting transcript and extract:
-1. KEY DISCUSSION POINTS (3-5 main topics discussed)
-2. DECISIONS MADE (what was decided)
-3. ACTION ITEMS (who is doing what, by when)
-4. SMARTAR OPPORTUNITIES (student goals or learning targets mentioned)
-
-Meeting transcript:
-{adhoc_transcript}
-
-Format your response as clear sections with bullet points."""
-                                        }
-                                    ],
-                                    max_tokens=1200
-                                )
-                                
-                                extracted = response.choices[0].message.content
-                                st.session_state[f"adhoc_extracted_{program}"] = extracted
-                                
-                                # Save to database if meeting is loaded
-                                if st.session_state.current_meeting_id:
-                                    try:
-                                        supabase.table('tm_program_meetings').update({'checkin_notes': extracted}).eq('id', st.session_state.current_meeting_id).execute()
-                                        st.success("✅ Extracted & Saved to Database!")
-                                    except Exception as e:
-                                        st.success("✅ Extracted! (Save meeting to persist to database)")
-                                else:
-                                    st.info("💡 Tip: Save your meeting first, then re-run extraction to save it to the database")
-                            else:
-                                st.warning("Groq API not configured - showing transcript as-is")
-                        except Exception as e:
-                            error_msg = str(e)
-                            if "rate_limit" in error_msg.lower() or "429" in error_msg:
-                                st.warning("⚠️ **Rate Limit Reached**")
-                            st.info("""
-The AI extraction service has reached its daily limit. 
-
-**Options:**
-1. **Try again later** - Limit resets in ~1 hour
-2. **Continue without AI** - Meeting tool works perfectly without extraction
-3. **Upgrade Groq tier** - https://console.groq.com/settings/billing
-
-You can still:
-✅ Add transcript
-✅ Write summary & actions
-✅ Download minutes
-✅ Archive meeting
-
-The AI extraction is optional!
-                            """)
-                        else:
-                            st.error(f"Error processing transcript: {e}")
-            with col_skip:
-                st.caption("No transcript? Paste a polished summary in the other tab instead →")
+            extracted_summary = st.text_area(
+                "Summary of meeting",
+                height=150,
+                placeholder="""Example:
+- TEAM UPDATES: Discussed new behavior support plan for Student X
+- DECISIONS: Approved trial of visual schedule in the morning routine
+- ACTIONS: Ben to implement by Friday; Candice to monitor progress
+- NOTES: Next check-in: following Thursday""",
+                key=f"adhoc_summary_manual_{program}",
+                label_visibility="collapsed"
+            )
+            
+            if extracted_summary.strip():
+                st.session_state[f"adhoc_extracted_{program}"] = extracted_summary.strip()
+                st.success("✅ Summary captured")
         
         with summary_tab2:
             st.markdown("#### ✍️ Paste Polished Summary")
@@ -2393,88 +2339,14 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
     )
     
     if transcript_input.strip():
-        col_org1, col_org2, col_org3 = st.columns([1, 1, 2])
+        col_org1, col_org2 = st.columns([1, 2])
         
         with col_org1:
-            if st.button("🤖 AI Organize & Refine", key=f"organize_transcript_{program}", type="primary"):
-                with st.spinner("🤖 AI is organizing your transcript..."):
-                    try:
-                        groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
-                        
-                        if groq_client:
-                            response = groq_client.chat.completions.create(
-                                model="llama-3.1-8b-instant",
-                                messages=[
-                                    {
-                                        "role": "system",
-                                        "content": """You are an expert at organizing educational meeting transcripts for {program} team meetings.
-
-Your job is to:
-1. Read the raw meeting transcript
-2. Organize content into these CLC LBU meeting sections:
-   - CHECK-IN: Team updates, regulatory/wellbeing info needed today
-   - STUDENT CONCERNS: Behavior, learning, wellbeing issues discussed
-   - SMARTAR GOALS: Student learning targets, goal-setting discussions
-   - REPORT: Progress reports, assessment data, outcomes
-   - TAC: Transition Advisory Committee items, transition planning
-   - TRANSITIONS: Specific transition strategies and visual supports
-   - ACTIONS: Who is doing what by when - clarified action items
-
-3. Clean up and refine each section for clarity
-4. Use professional educational language
-5. Make action items specific (Who/What/By When)
-
-Output format:
-===CHECK-IN===
-[content here, 2-3 sentences max]
-
-===STUDENT CONCERNS===
-[organized by student if mentioned, 2-3 sentences each]
-
-===SMARTAR GOALS===
-[specific learning targets with dates/metrics]
-
-===REPORT===
-[progress data and outcomes]
-
-===TAC===
-[transition planning items]
-
-===TRANSITIONS===
-[specific visual/sensory strategies]
-
-===ACTIONS===
-- Who: What by When
-- Who: What by When
-
-Only include sections that have content. Be concise and professional."""
-                                    },
-                                    {
-                                        "role": "user",
-                                        "content": f"Here is the meeting transcript to organize:\n\n{transcript_input}"
-                                    }
-                                ],
-                                max_tokens=2000
-                            )
-                            
-                            organized = response.choices[0].message.content
-                            st.session_state[f"organized_transcript_{program}"] = organized
-                            st.success("✅ Transcript organized and refined!")
-                        else:
-                            st.warning("Groq API not configured - basic organization only")
-                            
-                    except Exception as e:
-                        if "rate_limit" in str(e).lower():
-                            st.warning("⚠️ AI rate limit hit - try again in ~1 hour")
-                        else:
-                            st.error(f"Error organizing: {e}")
+            st.info("📋 Organize your transcript into meeting sections")
         
         with col_org2:
             if st.button("📋 Manual Organize", key=f"manual_organize_{program}"):
                 st.session_state[f"show_manual_org_{program}"] = True
-        
-        with col_org3:
-            st.caption("AI Organize: Groq refines content • Manual: Keyword-based grouping")
     
     # ── DISPLAY ORGANIZED TRANSCRIPT ──
     if f"organized_transcript_{program}" in st.session_state:
