@@ -171,6 +171,8 @@ def _travel_key_for_program(prog):
 def transition_students_by_program(student_absent_rows):
     groups = {"travel_jp": [], "travel_py": [], "travel_sy": []}
     for r in (student_absent_rows or []):
+        if not isinstance(r, dict):
+            continue
         name = (r.get("Student") or "").strip()
         reason = (r.get("Reason") or "")
         if not name or "transition" not in reason.lower():
@@ -209,6 +211,34 @@ def default_bulletin():
         "program_changes": []
     }
 
+def _clean_row_list(value):
+    """Normalize a bulletin list-field to a plain list of dicts.
+
+    Guards every downstream `for r in rows: r.get(...)` against crashing on
+    malformed stored data — a field saved as a JSON-encoded string instead
+    of a true array (iterating a string yields characters, which have no
+    .get()), a null/None value, or a stray non-dict entry mixed into an
+    otherwise-fine list. Any of those previously crashed the page outright
+    (e.g. AttributeError on r.get(...)) instead of just showing an empty
+    or partial table.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        try:
+            value = json.loads(value) if value.strip() else []
+        except Exception:
+            return []
+    if not isinstance(value, list):
+        return []
+    return [r for r in value if isinstance(r, dict)]
+
+_ROW_LIST_FIELDS = (
+    "staff_absent", "student_absent", "excursions", "staff_meetings",
+    "entry_meetings", "additional_messages", "visitors_on_site",
+    "travel_jp", "travel_py", "travel_sy", "travel_changes",
+)
+
 def load_bulletin(d):
     data = db.get_bulletin(d)
     defaults = default_bulletin()
@@ -217,6 +247,8 @@ def load_bulletin(d):
     else:
         for k, v in defaults.items():
             if k not in data: data[k] = v
+    for lk in _ROW_LIST_FIELDS:
+        data[lk] = _clean_row_list(data.get(lk))
     vb = data.get("vehicle_bookings", [])
     if isinstance(vb, dict):
         converted = []
