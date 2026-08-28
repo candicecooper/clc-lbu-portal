@@ -231,7 +231,30 @@ def _clean_row_list(value):
             return []
     if not isinstance(value, list):
         return []
-    return [r for r in value if isinstance(r, dict)]
+    cleaned = []
+    for r in value:
+        if not isinstance(r, dict):
+            continue
+        # Every field in these row lists is meant to be plain text. Coerce
+        # each cell to a real string here — not just filter row shape —
+        # because a cell can individually be None/NaN (e.g. a leftover
+        # pandas NaN from a partially-filled data_editor row that was
+        # saved before being cleaned) or some other non-string value. NaN
+        # in particular is truthy in Python, so a downstream
+        # `(r.get("Field") or "").strip()` does NOT fall back to "" for
+        # it — it stays NaN and crashes on .strip(). Cleaning cell values
+        # here means every consumer of these fields can safely trust it's
+        # always a string, without repeating that guard everywhere.
+        safe_row = {}
+        for k, v in r.items():
+            if v is None or (isinstance(v, float) and v != v):  # v != v ⇔ NaN
+                safe_row[k] = ""
+            elif isinstance(v, str):
+                safe_row[k] = v
+            else:
+                safe_row[k] = str(v)
+        cleaned.append(safe_row)
+    return cleaned
 
 _ROW_LIST_FIELDS = (
     "staff_absent", "student_absent", "excursions", "staff_meetings",
