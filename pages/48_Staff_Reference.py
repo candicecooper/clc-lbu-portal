@@ -80,6 +80,25 @@ st.markdown(
     div[data-testid="stExpander"] details summary p {{
         font-weight: 700; color: {TEAL_DARK}; font-size: 1.02rem;
     }}
+    .cat-heading {{
+        display: flex; align-items: center; gap: 0.5rem;
+        color: {TEAL_DARK}; font-size: 1.15rem; font-weight: 700;
+        margin: 1.2rem 0 0.6rem 0;
+    }}
+    .doc-card-code {{
+        color: {TEAL}; font-weight: 700; font-size: 0.78rem;
+        letter-spacing: 0.03em; text-transform: uppercase; margin-bottom: 0.15rem;
+    }}
+    .doc-card-title {{
+        font-weight: 700; font-size: 1.05rem; color: #1a1a1a; margin-bottom: 0.3rem;
+        min-height: 2.6rem;
+    }}
+    .doc-card-sub {{
+        color: #444; font-size: 0.88rem; margin-bottom: 0.5rem; min-height: 2.4rem;
+    }}
+    .doc-card-meta {{
+        color: #888; font-size: 0.78rem; margin-bottom: 0.6rem;
+    }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -831,6 +850,8 @@ def staff_view():
                         f"{doc.get('doc_code','')} {doc['title']} → {sec['title']}".strip()
                     with st.expander(label):
                         st.markdown(_highlight(sec.get("content") or "_(empty)_", query))
+                        if st.button("Open full document →", key=f"kwopen_{doc['id']}_{sec['id']}"):
+                            _open_document(doc["id"])
 
     with tab_ai:
         st.caption("Ask in plain language — the AI points you to the matching section(s); it doesn't rewrite the wording.")
@@ -855,31 +876,66 @@ def staff_view():
                         f"{doc.get('doc_code','')} {doc['title']} → {sec['title']}".strip()
                     with st.expander(label, expanded=(i == 0)):
                         st.markdown(sec.get("content") or "_(empty)_")
+                        if st.button("Open full document →", key=f"aiopen_{doc['id']}_{sec['id']}"):
+                            _open_document(doc["id"])
 
     if searched:
         st.divider()
         return
 
-    cat_order, grouped = _group_by_category(docs)
-
-    if len(cat_order) == 1:
-        _pick_and_render(grouped[cat_order[0]], key_prefix="only")
+    selected_id = st.session_state.get("ref_selected_doc_id")
+    if selected_id:
+        doc = next((d for d in docs if d["id"] == selected_id), None)
+        if doc is None:
+            st.session_state.pop("ref_selected_doc_id", None)
+            st.rerun()
+        if st.button("← All documents"):
+            st.session_state.pop("ref_selected_doc_id", None)
+            st.rerun()
+        _render_document(doc)
         return
 
-    cat_tabs = st.tabs(cat_order)
-    for cat, tab in zip(cat_order, cat_tabs):
-        with tab:
-            _pick_and_render(grouped[cat], key_prefix=re.sub(r"[^a-z0-9]+", "_", cat.lower()))
+    st.caption("Browse by document type, or use search above.")
+    cat_order, grouped = _group_by_category(docs)
+    for cat in cat_order:
+        st.markdown(f"<div class='cat-heading'>{_category_icon(cat)} {cat}</div>", unsafe_allow_html=True)
+        cat_docs = grouped[cat]
+        cols = st.columns(3)
+        for i, doc in enumerate(cat_docs):
+            with cols[i % 3]:
+                _doc_card(doc)
 
 
-def _pick_and_render(docs_in_cat, key_prefix):
-    if len(docs_in_cat) == 1:
-        doc = docs_in_cat[0]
-    else:
-        labels = {f"{d.get('doc_code','')} {d['title']}".strip(): d for d in docs_in_cat}
-        pick = st.selectbox("Document", list(labels.keys()), key=f"pick_{key_prefix}")
-        doc = labels[pick]
-    _render_document(doc)
+CATEGORY_ICONS = {
+    "Policies & Expectations": "📋",
+    "DfE Procedures": "⚖️",
+    "Role Expectations": "🧑‍🏫",
+}
+
+
+def _category_icon(cat):
+    return CATEGORY_ICONS.get(cat, "📁")
+
+
+def _open_document(doc_id):
+    st.session_state["ref_selected_doc_id"] = doc_id
+    st.rerun()
+
+
+def _doc_card(doc):
+    section_count = len(fetch_sections(doc["id"]))
+    updated = (doc.get("updated_at") or "")[:10]
+    meta_bits = [f"{section_count} section{'s' if section_count != 1 else ''}"]
+    if updated:
+        meta_bits.append(f"updated {updated}")
+    with st.container(border=True):
+        if doc.get("doc_code"):
+            st.markdown(f"<div class='doc-card-code'>{doc['doc_code']}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='doc-card-title'>{doc['title']}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='doc-card-sub'>{doc.get('subtitle') or ''}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='doc-card-meta'>{' · '.join(meta_bits)}</div>", unsafe_allow_html=True)
+        if st.button("Open →", key=f"open_{doc['id']}", use_container_width=True):
+            _open_document(doc["id"])
 
 
 # ------------------------------------------------------------------
