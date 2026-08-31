@@ -7,66 +7,80 @@ WHAT THIS DOES
 --------------
 Staff can quickly log a tradesperson/contractor booking with full detail
 (company, contact, phone, work type, time, access notes, etc). That full
-detail is only ever shown inside THIS tool.
+detail is only ever shown inside THIS tool — the whole page requires
+staff sign-in, since it holds contact/company detail.
 
-The Calendar (12_Calendar.py) and Staff Bulletin (11_Staff_Bulletin.py) show
-only a short, generic, student-safe line built from the booking, e.g.:
+The Calendar (12_Calendar.py) and Daily Bulletin show only a short,
+generic, student-safe line built from the booking, e.g.:
 
     Maintenance - repairing wall
     IT Works - network cabling upgrade
 
-To pull that generic line into another page, import and call:
+12_Calendar.py already reads trade_bookings directly (db_trades() /
+trade_events()) and 1_Daily_Bulletin.py already reads it via
+load_todays_trade_bookings() — both select only the sanitized columns,
+so no separate utils file or wiring is needed for this to show up there.
 
-    from trade_bookings_utils import get_public_bookings_for_date
-
-See the bottom of this file ("INTEGRATION NOTES") for exactly how to wire
-that into your existing Calendar and Bulletin pages.
-
-ASSUMPTIONS TO CONFIRM / ADJUST
---------------------------------
-1. Auth: this uses `staff_auth.require_staff_login()` as a stand-in for
-   whatever your shared staff_auth.py actually exposes. Swap the import/
-   call at the top of main() to match the real function name you use
-   elsewhere (e.g. in 43_communication_log.py).
-2. Supabase connection: uses `get_supabase_client()` from a small shared
-   helper (supabase_client.py) — adjust to match however your other pages
-   currently create their Supabase client (env var names etc).
-3. Table name: `trade_bookings`. SQL to create it is below.
-4. Staff name list: swap the placeholder STAFF_NAMES list for however you
-   already pull staff names elsewhere (e.g. from a Supabase staff table).
+Table: trade_bookings — SQL to create it is in trade_bookings_schema.sql.
 """
 
+from theme import apply_clc_theme
 import streamlit as st
+from supabase import create_client, Client
 from datetime import date, datetime, time as dtime
 import pandas as pd
+import os
 
-# ---- adjust these two imports to match your existing modules ----
-try:
-    from staff_auth import require_staff_login
-except ImportError:
-    def require_staff_login():
-        # placeholder — replace with your real staff_auth call
-        return True
+st.set_page_config(page_title="Trade Bookings", page_icon="🔧", layout="wide", initial_sidebar_state="collapsed")
+apply_clc_theme()
 
-try:
-    from supabase_client import get_supabase_client
-except ImportError:
-    from supabase import create_client
-    import os
+st.sidebar.markdown(
+    '<a href="https://16cefb77.clc-portal.pages.dev/" target="_self" style="display:block;text-align:center;'
+    'background:#1A7A7A;color:white;font-weight:600;font-size:0.85rem;'
+    'padding:0.5rem;border-radius:8px;text-decoration:none;margin-bottom:0.75rem;">'
+    '🏠 Back to Staff Portal</a>',
+    unsafe_allow_html=True
+)
 
-    def get_supabase_client():
-        url = os.environ.get("SUPABASE_URL")
-        key = os.environ.get("SUPABASE_KEY")
-        return create_client(url, key)
+# ── Staff sign-in (whole page requires sign-in — full detail here is sensitive) ──
+def _tb_is_signed_in():
+    return bool(st.session_state.get("_tb_staff_name", "").strip())
+
+def _tb_staff_name():
+    return st.session_state.get("_tb_staff_name", "").strip()
+
+st.sidebar.markdown("---")
+if _tb_is_signed_in():
+    st.sidebar.success(f"✅ Signed in as **{_tb_staff_name()}**")
+    if st.sidebar.button("🔓 Sign out", use_container_width=True):
+        st.session_state["_tb_staff_name"] = ""
+        st.rerun()
+else:
+    st.sidebar.markdown("### 🔐 Staff Sign In")
+    st.sidebar.caption("Sign in to view or add trade/contractor bookings.")
+    with st.sidebar.form("tb_signin_form", clear_on_submit=False):
+        _sn_input = st.text_input("Your name", placeholder="e.g. Candice Cooper")
+        _sn_pin   = st.text_input("Staff password", type="password", placeholder="Staff password")
+        if st.form_submit_button("Sign In", use_container_width=True, type="primary"):
+            try:    _correct = st.secrets.get("APP_PASSWORD", "")
+            except: _correct = os.environ.get("APP_PASSWORD", "")
+            if not _correct:
+                _correct = "clcstaff2026"
+            if not _sn_input.strip():
+                st.sidebar.warning("Please enter your name.")
+            elif _sn_pin != _correct:
+                st.sidebar.error("Incorrect password. Please try again.")
+            else:
+                st.session_state["_tb_staff_name"] = _sn_input.strip()
+                st.rerun()
+st.sidebar.markdown("---")
+
+@st.cache_resource
+def init_supabase() -> Client:
+    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+supabase = init_supabase()
 
 TABLE_NAME = "trade_bookings"
-
-# Replace with however staff names are already sourced elsewhere in the portal
-STAFF_NAMES = [
-    "Candice Cooper", "Susan Furga", "Annette Balestrin", "Ben Selga",
-    "Ben Sutton", "Brenton", "Caitie", "Cheryl", "Jacqui", "Naomi", "Vinnie",
-    "Other / not listed",
-]
 
 WORK_TYPES = [
     "Electrical", "Plumbing", "Building/Carpentry", "Painting", "Glazing",
@@ -174,10 +188,9 @@ def booking_form(sb, existing=None):
             contact_name = st.text_input("Contact name", value=existing.get("contact_name", "") if is_edit else "")
             contact_phone = st.text_input("Contact phone", value=existing.get("contact_phone", "") if is_edit else "")
             contact_email = st.text_input("Contact email (optional)", value=existing.get("contact_email", "") if is_edit else "")
-            booked_by = st.selectbox(
+            booked_by = st.text_input(
                 "Booked by",
-                STAFF_NAMES,
-                index=STAFF_NAMES.index(existing["booked_by"]) if is_edit and existing.get("booked_by") in STAFF_NAMES else 0,
+                value=existing.get("booked_by", "") if is_edit else _tb_staff_name(),
             )
             status = st.selectbox(
                 "Status",
@@ -342,16 +355,18 @@ def list_view(sb):
 # ---------------------------------------------------------------------------
 
 def main():
-    st.set_page_config(page_title="Trade Bookings", layout="wide")
-    require_staff_login()
-
     st.title("🔧 Trade & Contractor Bookings")
+
+    if not _tb_is_signed_in():
+        st.info("🔐 **Sign in via the sidebar** to view or add trade/contractor bookings. Full contact detail here is staff-only.", icon="ℹ️")
+        return
+
     st.caption(
         "Full detail here is staff-only. The Calendar and Daily Bulletin will only ever "
         "show a short generic line (e.g. \"Maintenance - repairing wall\")."
     )
 
-    sb = get_supabase_client()
+    sb = supabase
 
     if "editing_booking" in st.session_state:
         booking_form(sb, existing=st.session_state["editing_booking"])
@@ -367,80 +382,28 @@ def main():
         booking_form(sb)
 
 
-if __name__ == "__main__":
-    main()
+main()
 
 
 # ---------------------------------------------------------------------------
-# INTEGRATION NOTES (read this)
+# DEPLOYMENT CHECKLIST
 # ---------------------------------------------------------------------------
 #
-# 1) Create the Supabase table (run once in the SQL editor of whichever
-#    Supabase project you want this to live in):
+# 1) Run trade_bookings_schema.sql once in the SQL editor of the same
+#    Supabase project your other tables (clc_events, pac_meetings, etc.)
+#    already live in.
 #
-#    create table trade_bookings (
-#        id bigint generated always as identity primary key,
-#        booking_date date not null,
-#        start_time time,
-#        end_time time,
-#        work_type text,
-#        display_category text,
-#        work_summary text,
-#        internal_notes text,
-#        company_name text,
-#        contact_name text,
-#        contact_phone text,
-#        contact_email text,
-#        location_onsite text,
-#        access_requirements text,
-#        induction_completed boolean default false,
-#        sign_in_required boolean default true,
-#        students_nearby boolean default false,
-#        booked_by text,
-#        status text default 'Booked',
-#        created_at timestamptz default now()
-#    );
-#    -- add RLS policies to match how your other tables (e.g. communication log) are set up.
+# 2) Push this file as 56_Trade_Bookings.py into your Streamlit pages
+#    folder in the clc-lbu-portal repo, alongside 12_Calendar.py, and
+#    let Render redeploy. It reads SUPABASE_URL / SUPABASE_KEY / APP_PASSWORD
+#    from st.secrets exactly the way 12_Calendar.py does, so no new secrets
+#    are needed if Calendar already works.
 #
-# 2) Create trade_bookings_utils.py in the repo root (or wherever your shared
-#    helpers live) with this function, so Calendar and Bulletin only ever see
-#    the sanitised line — never the company/contact/phone fields:
+# 3) 12_Calendar.py (db_trades()/trade_events()) and 1_Daily_Bulletin.py
+#    (load_todays_trade_bookings()) already read this table directly and
+#    display only the sanitized columns — no separate utils file needed.
 #
-#    from supabase_client import get_supabase_client
-#
-#    def get_public_bookings_for_date(target_date):
-#        sb = get_supabase_client()
-#        result = (
-#            sb.table("trade_bookings")
-#            .select("booking_date,start_time,end_time,display_category,work_summary,status")
-#            .eq("booking_date", target_date.isoformat())
-#            .neq("status", "Cancelled")
-#            .execute()
-#        )
-#        entries = []
-#        for row in result.data or []:
-#            label = f"{row['display_category']} - {row['work_summary']}"
-#            entries.append({
-#                "label": label,
-#                "start_time": row.get("start_time"),
-#                "end_time": row.get("end_time"),
-#            })
-#        return entries
-#
-# 3) In 12_Calendar.py, wherever you build the list of events/items for a
-#    given day, add:
-#
-#    from trade_bookings_utils import get_public_bookings_for_date
-#    trade_entries = get_public_bookings_for_date(the_day)
-#    for t in trade_entries:
-#        day_events.append(f"{t['start_time']}–{t['end_time']}: {t['label']}")
-#
-# 4) In 11_Staff_Bulletin.py, do the same in whatever section lists the day's
-#    or week's onsite activity — pull get_public_bookings_for_date() for the
-#    relevant date(s) and append the `label` string alongside other bulletin
-#    items. No company/contact/phone fields are available to that page at all
-#    since the select() above never requests them.
-#
-# 5) Swap the staff_auth / supabase_client placeholder imports at the top of
-#    this file for your real modules, and swap STAFF_NAMES for however staff
-#    names are already sourced elsewhere in the portal.
+# 4) The Cloudflare tile launcher already links to
+#    https://clc-lbu-portal.onrender.com/Trade_Bookings — that slug is
+#    derived from the filename with the leading number stripped, so it
+#    stays correct regardless of whether this file is numbered 55, 56, etc.
