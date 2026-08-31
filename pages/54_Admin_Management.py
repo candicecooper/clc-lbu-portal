@@ -66,6 +66,14 @@ and couldn't vary by day. It's purely informational: picking a name under
 "Viewing jobs for" shows their hours for the week right underneath, but
 it doesn't hide or filter which jobs show up.
 
+Note on the overdue flag: on the Today tab, a DAILY job still unticked
+after ADMIN_DEADLINE (2:45pm) gets a "⚠ Overdue" badge and a highlighted
+row; once ticked, a job instead fades out (job-row-done). Weekly jobs are
+excluded — one due "any time this week" shouldn't flag every afternoon.
+This is purely a display concern (is_past_admin_deadline()), so it only
+updates when the page reruns — on a tick, a tab switch, or the
+streamlit-autorefresh tick if that package is installed (see below).
+
 Note on scope: unlike the Safety & Risk Plan Builder, this tool holds no
 student data — only staff names, job roster assignments, tick timestamps,
 and the job text itself — so storing it in Supabase doesn't raise the
@@ -86,7 +94,7 @@ a new attack surface, it just keeps the panel out of casual browsing.
 import re
 import streamlit as st
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from uuid import uuid4
 
 # ── Supabase client (fails to a read-only "offline" mode if unavailable) ───
@@ -131,6 +139,7 @@ ADMIN_PASSWORD = "secret2026"
 # truth, and sections added/renamed/removed via the admin panel live there
 # instead (same story as DEFAULT_TASKS / checklist_tasks below).
 DEFAULT_CATEGORIES = [
+    {"id": "startday", "title": "Start of Day", "safety": False, "sort_order": 0},
     {"id": "email", "title": "Email Monitoring", "safety": False, "sort_order": 1},
     {"id": "allocation", "title": "Allocation Process", "safety": False, "sort_order": 2},
     {"id": "entry-meeting", "title": "Entry Meeting Follow-Up", "safety": False, "sort_order": 3},
@@ -142,6 +151,7 @@ DEFAULT_CATEGORIES = [
     {"id": "foodbank", "title": "Food Bank & Kickstart", "safety": False, "sort_order": 9},
     {"id": "hazards", "title": "Hazard Management", "safety": True, "sort_order": 10},
     {"id": "ventia", "title": "Ventia", "safety": False, "sort_order": 11},
+    {"id": "endday", "title": "End of Day", "safety": False, "sort_order": 12},
 ]
 
 # task keys: id, category_id, text, sso (legacy — no longer read or edited
@@ -154,6 +164,11 @@ DEFAULT_CATEGORIES = [
 # it can't be reached — once that table is live it's the source of truth,
 # and jobs added/edited/removed via the admin panel live there instead.
 DEFAULT_TASKS = [
+    {"id": "startday-1", "category_id": "startday", "text": "Take the phones off the night switch", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 1},
+    {"id": "startday-2", "category_id": "startday", "text": "Check voicemail", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 2},
+    {"id": "startday-3", "category_id": "startday", "text": "Check email", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 3},
+    {"id": "startday-4", "category_id": "startday", "text": "Set up the staffroom bulletin display", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 4},
+
     {"id": "email-1", "category_id": "email", "text": "Check emails as they come through", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 1},
     {"id": "email-2", "category_id": "email", "text": "Forward emails on to the correct people", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 2},
     {"id": "email-3", "category_id": "email", "text": "Respond to the admin email inbox", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 3},
@@ -197,6 +212,9 @@ DEFAULT_TASKS = [
 
     {"id": "vent-1", "category_id": "ventia", "text": "Handle communication with Ventia as required", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 1},
     {"id": "vent-2", "category_id": "ventia", "text": "Sign off completed jobs in the Ventia portal", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 2},
+
+    {"id": "endday-1", "category_id": "endday", "text": "Put the phones onto the night switch", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 1},
+    {"id": "endday-2", "category_id": "endday", "text": "Put the vehicles down the driveway", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 2},
 ]
 
 
@@ -298,6 +316,15 @@ sb = get_supabase()
 # ══════════════════════════════════════════════════════════════════════════
 # DATE HELPERS
 # ══════════════════════════════════════════════════════════════════════════
+
+ADMIN_DEADLINE = time(14, 45)  # 2:45pm
+
+
+def is_past_admin_deadline():
+    """A daily job still unticked after this time flags itself on the
+    Today tab — matches the old admin-hours afternoon cutoff."""
+    return datetime.now().time() >= ADMIN_DEADLINE
+
 
 def monday_of(d):
     return d - timedelta(days=d.weekday())
@@ -676,9 +703,16 @@ st.markdown(f"""
   .task-badge {{ display:inline-block; font-size:10px; font-weight:700; padding:2px 8px; border-radius:20px; margin-right:5px; white-space:nowrap; }}
   .badge-freq {{ background:{GREY_LIGHT}; color:#5C6B74; }}
   .badge-done {{ background:#d1fae5; color:#065f46; }}
+  .badge-overdue {{ background:{AMBER}; color:white; }}
   .badge-assignee {{ background:{GREY_LIGHT}; color:#5C6B74; }}
   .badge-assignee-shared {{ background:{TEAL_LIGHT}; color:{TEAL}; }}
   .badge-assignee-unassigned {{ background:{GREY_LIGHT}; color:#98a2ac; font-style:italic; }}
+
+  /* Once ticked for the day, a job visually recedes... */
+  .job-row-done {{ opacity:0.55; }}
+  /* ...but a daily job still sitting untouched after the 2:45pm cutoff
+     flags itself instead, so it doesn't quietly get missed. */
+  .job-row-overdue {{ background:{AMBER_LIGHT}; border-radius:6px; padding:4px 8px; margin:-4px -8px; }}
 
   .cat-card {{ border:1px solid #e2e8f0; border-left-width:4px; border-radius:10px; padding:10px 16px 4px; margin-bottom:14px; background:white; }}
   .cat-card.safety {{ border-left-color:{SAFETY_RED}; }}
@@ -1042,7 +1076,10 @@ with tab_checklist:
                 done_tasks += 1
     st.progress(done_tasks / total_tasks if total_tasks else 0,
                 text=f"{done_tasks}/{total_tasks} done today")
-    st.caption("Daily / Weekly badges show how often a job comes around. See \"Admin hours\" above for who's picking up admin jobs, and when.")
+    st.caption(
+        "Daily / Weekly badges show how often a job comes around. See \"Admin hours\" above for who's picking up "
+        "admin jobs, and when. A daily job still unticked after 2:45pm flags itself ⚠ Overdue; ticking a job off fades it out."
+    )
 
     ctrl1, ctrl2 = st.columns([2, 3])
     with ctrl1:
@@ -1077,14 +1114,29 @@ with tab_checklist:
             key = period_key_for(t, today)
             comp = completions.get(t["id"], {}).get(key)
             checked = comp is not None
+            # Only daily jobs have a same-day deadline — a weekly job due
+            # "any time this week" shouldn't flag as overdue every single
+            # afternoon.
+            overdue = t["frequency"] == "daily" and not checked and is_past_admin_deadline()
 
             row = st.columns([0.5, 5, 2])
             new_val = row[0].checkbox("", value=checked, key=f"chk_{t['id']}", label_visibility="collapsed")
 
             badges = f'<span class="task-badge badge-freq">{freq_badge_text(t)}</span>'
+            if overdue:
+                badges += '<span class="task-badge badge-overdue">⚠ Overdue</span>'
             if comp:
                 badges += f'<span class="task-badge badge-done">Done by {comp["by"]} · {format_time(comp["at"])}</span>'
-            row[1].markdown(f'{t["text"]}<br/>{badges}', unsafe_allow_html=True)
+            row_cls = "job-row-overdue" if overdue else ("job-row-done" if checked else "")
+            row_body = f'{t["text"]}<br/>{badges}'
+            # Only wrap in a styling <div> when there's actually a class to
+            # apply -- an outer block-level element (even an empty-class
+            # one) stops Streamlit from auto-wrapping the text in its usual
+            # <p>, which would otherwise be a needless DOM/structure change
+            # for the common (not-overdue, not-done) row.
+            if row_cls:
+                row_body = f'<div class="{row_cls}">{row_body}</div>'
+            row[1].markdown(row_body, unsafe_allow_html=True)
 
             # Read-only "who's on this today" badge — responsibility is set
             # per-weekday from the "Manage jobs" admin panel's Roster
