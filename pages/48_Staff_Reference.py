@@ -789,6 +789,17 @@ def _pick_and_render(docs_in_cat, key_prefix):
 # ------------------------------------------------------------------
 # ADMIN VIEW
 # ------------------------------------------------------------------
+def _unique_slug(title, existing_docs):
+    base = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") or "document"
+    existing = {d["slug"] for d in existing_docs}
+    slug = base
+    n = 2
+    while slug in existing:
+        slug = f"{base}-{n}"
+        n += 1
+    return slug
+
+
 def admin_view():
     if not admin_unlocked():
         return
@@ -811,7 +822,7 @@ def admin_view():
                 new_cat = cat_choice
             if st.button("Create document"):
                 if new_title.strip() and new_cat.strip():
-                    slug = re.sub(r"[^a-z0-9]+", "-", new_title.lower()).strip("-")
+                    slug = _unique_slug(new_title, docs)
                     sb.table("reference_documents").insert(
                         {"slug": slug, "doc_code": new_code, "title": new_title.strip(),
                          "subtitle": new_sub, "category": new_cat.strip(),
@@ -847,7 +858,7 @@ def admin_view():
                                     value=parsed["intro"], key="up_new_intro", height=100)
             if st.button("✅ Create document from upload", key="up_new_create"):
                 if u_title.strip() and u_cat.strip():
-                    slug = re.sub(r"[^a-z0-9]+", "-", u_title.lower()).strip("-")
+                    slug = _unique_slug(u_title, docs)
                     docrow = sb.table("reference_documents").insert(
                         {"slug": slug, "doc_code": u_code, "title": u_title.strip(), "subtitle": u_sub,
                          "category": u_cat.strip(), "intro": u_intro, "sort_order": len(docs) + 1, "is_published": False}
