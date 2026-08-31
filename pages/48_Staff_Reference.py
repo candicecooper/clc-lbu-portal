@@ -726,10 +726,42 @@ def _render_document(doc):
         st.caption(f"Portal version is the current version. Last updated: {upd[:10]}")
 
 
+def _search_all(query):
+    q = query.lower()
+    results = []
+    for doc in fetch_documents():
+        for sec in fetch_sections(doc["id"]):
+            haystack = f"{sec['title']}\n{sec.get('content','')}"
+            if q in haystack.lower():
+                results.append((doc, sec))
+    return results
+
+
+def _highlight(text, query):
+    return re.sub(f"({re.escape(query)})", r"**\1**", text, flags=re.IGNORECASE)
+
+
 def staff_view():
     docs = fetch_documents()
     if not docs:
         st.info("No documents published yet. An administrator can seed or add documents in the Admin tab.")
+        return
+
+    query = st.text_input(
+        "🔎 Search all documents for specific wording or a topic",
+        placeholder="e.g. legislative limits, appeal timeframes, take-home",
+    )
+    if query.strip():
+        results = _search_all(query.strip())
+        if not results:
+            st.info(f"No matches for “{query}”.")
+        else:
+            st.caption(f"{len(results)} matching section(s):")
+            for doc, sec in results:
+                label = f"{doc.get('doc_code','')} {doc['title']} → {sec['title']}".strip()
+                with st.expander(label):
+                    st.markdown(_highlight(sec.get("content") or "_(empty)_", query))
+        st.divider()
         return
 
     cat_order, grouped = _group_by_category(docs)
