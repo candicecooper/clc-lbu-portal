@@ -29,16 +29,21 @@ from datetime import date, datetime
 from supabase import create_client
 
 # ---- shared portal auth (adjust names if yours differ) ----------------
-from staff_auth import check_staff_password
+from staff_auth import require_staff_auth
 try:
-    from confidential_auth import check_confidential_password
+    from confidential_auth import require_confidential_auth
 except ImportError:
     # fallback so the page still runs if the confidential module isn't
     # present in this checkout — swap for your real import
-    def check_confidential_password():
-        return st.text_input("Admin password", type="password") == st.secrets.get(
-            "CONFIDENTIAL_PASSWORD", ""
-        )
+    def require_confidential_auth(title="Admin Approval", icon="🔒", subtitle=""):
+        if st.session_state.get("_cc_admin_ok"):
+            return True
+        pwd = st.text_input("Admin password", type="password", key="_cc_admin_pwd")
+        if pwd and pwd == st.secrets.get("CONFIDENTIAL_PASSWORD", ""):
+            st.session_state["_cc_admin_ok"] = True
+            st.rerun()
+        st.stop()
+        return False
 
 # ---- config -------------------------------------------------------------
 TABLE_NAME = "credit_card_returns"
@@ -108,8 +113,7 @@ def update_submission(row_id, updates: dict):
 # ---- page ---------------------------------------------------------------
 st.set_page_config(page_title="Credit Card Return", page_icon="💳", layout="wide")
 
-if not check_staff_password():
-    st.stop()
+require_staff_auth("Credit Card Return", "💳", "Cowandilla Learning Centre — LBU Staff")
 
 st.title("💳 Credit Card Return")
 st.caption("Electronic version of Form 2 — Returning Credit Card")
@@ -175,47 +179,14 @@ with tab_submit:
                 )
             st.success(f"Submitted for {final_name} — awaiting admin approval.")
 
-# ------------------------------------------------------------------ STEP 2
-with tab_admin:
-    st.subheader("Admin approval")
-    if not check_confidential_password():
-        st.info("Admin password required to review and approve returns.")
-        st.stop()
-
-    pending_df = fetch_submissions(STATUS_PENDING)
-    if pending_df.empty:
-        st.success("No returns waiting on approval.")
-    else:
-        for _, row in pending_df.iterrows():
-            with st.container(border=True):
-                c1, c2 = st.columns([3, 1])
-                with c1:
-                    st.markdown(f"**{row['staff_member']}** — ${row['total_amount']:.2f}")
-                    st.caption(f"Receipt dated {row['receipt_date']} · submitted {row['submitted_at'][:16]}")
-                    if row.get("notes"):
-                        st.write(row["notes"])
-                    urls = row.get("receipt_urls") or (
-                        [row["receipt_url"]] if row.get("receipt_url") else []
-                    )
-                    for i, url in enumerate(urls, start=1):
-                        label = "View receipt" if len(urls) == 1 else f"View receipt {i}"
-                        st.markdown(f"[{label}]({url})")
-                with c2:
-                    if st.button("✅ Approve", key=f"approve_{row['id']}"):
-                        update_submission(
-                            row["id"],
-                            {
-                                "status": STATUS_APPROVED,
-                                "admin_approved_by": st.session_state.get("admin_name", "Admin"),
-                                "admin_approved_at": datetime.now().isoformat(),
-                            },
-                        )
-                        st.rerun()
-                    if st.button("↩️ Return for correction", key=f"return_{row['id']}"):
-                        update_submission(row["id"], {"status": STATUS_RETURNED})
-                        st.rerun()
-
 # ------------------------------------------------------------------ STEP 3
+# (placed before Step 2 in the source, deliberately — require_confidential_
+# auth() below calls st.stop() when locked, and Streamlit executes every
+# "with tab:" block on each run regardless of which tab is showing. Putting
+# Register's code above Admin's means it always renders even when the
+# admin tab is locked. Tab display order is still Submit / Admin /
+# Register, set by the st.tabs([...]) call above — this only affects
+# the order the code runs in, not what the user sees.)
 with tab_register:
     st.subheader("Full register")
     status_filter = st.selectbox(
@@ -249,3 +220,41 @@ with tab_register:
             file_name=f"credit_card_returns_{date.today().isoformat()}.csv",
             mime="text/csv",
         )
+
+# ------------------------------------------------------------------ STEP 2
+with tab_admin:
+    st.subheader("Admin approval")
+    require_confidential_auth("Credit Card Return — Admin Approval", "🔒", "")
+
+    pending_df = fetch_submissions(STATUS_PENDING)
+    if pending_df.empty:
+        st.success("No returns waiting on approval.")
+    else:
+        for _, row in pending_df.iterrows():
+            with st.container(border=True):
+                c1, c2 = st.columns([3, 1])
+                with c1:
+                    st.markdown(f"**{row['staff_member']}** — ${row['total_amount']:.2f}")
+                    st.caption(f"Receipt dated {row['receipt_date']} · submitted {row['submitted_at'][:16]}")
+                    if row.get("notes"):
+                        st.write(row["notes"])
+                    urls = row.get("receipt_urls") or (
+                        [row["receipt_url"]] if row.get("receipt_url") else []
+                    )
+                    for i, url in enumerate(urls, start=1):
+                        label = "View receipt" if len(urls) == 1 else f"View receipt {i}"
+                        st.markdown(f"[{label}]({url})")
+                with c2:
+                    if st.button("✅ Approve", key=f"approve_{row['id']}"):
+                        update_submission(
+                            row["id"],
+                            {
+                                "status": STATUS_APPROVED,
+                                "admin_approved_by": st.session_state.get("admin_name", "Admin"),
+                                "admin_approved_at": datetime.now().isoformat(),
+                            },
+                        )
+                        st.rerun()
+                    if st.button("↩️ Return for correction", key=f"return_{row['id']}"):
+                        update_submission(row["id"], {"status": STATUS_RETURNED})
+                        st.rerun()
