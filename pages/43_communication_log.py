@@ -484,8 +484,11 @@ def normalise_program(val):
     return ""
 
 
+SMARTAR_ID_COLS = ["id", "student_id", "uuid", "pk"]
+
+
 def fetch_smartar_names(sb):
-    """Return (list of (name, program), error). Program is JP/PY/SY or ''."""
+    """Return (list of (sid, name, program), error). sid is a stable SMARTAR key."""
     if sb is None:
         return [], "not connected"
     try:
@@ -498,6 +501,7 @@ def fetch_smartar_names(sb):
     name_col = next((c for c in SMARTAR_NAME_COLS if c in sample), None)
     if name_col is None:
         return [], f"no name column found (columns: {list(sample.keys())})"
+    id_col = next((c for c in SMARTAR_ID_COLS if c in sample), None)
     prog_col = next((c for c in SMARTAR_PROG_COLS if c in sample), None)
     out = []
     for r in rows:
@@ -507,12 +511,13 @@ def fetch_smartar_names(sb):
         if not nm:
             continue
         prog = normalise_program(r.get(prog_col)) if prog_col else ""
-        out.append((nm, prog))
+        sid = str(r.get(id_col)) if id_col and r.get(id_col) is not None else f"name:{nm.upper()}"
+        out.append((sid, nm, prog))
     seen, uniq = set(), []
-    for nm, pg in sorted(out):
-        if (nm, pg) not in seen:
-            seen.add((nm, pg))
-            uniq.append((nm, pg))
+    for sid, nm, pg in sorted(out, key=lambda x: (x[1].lower(), x[0])):
+        if sid not in seen:
+            seen.add(sid)
+            uniq.append((sid, nm, pg))
     return uniq, None
 
 
@@ -521,37 +526,89 @@ def base_of(code):
     return str(code or "").upper().split("-")[0].strip()
 
 
+CODEMAP_TABLE = "comm_student_codes"
+
+
+def get_code_map(client):
+    """sid -> pinned code, so a student's code never changes once assigned."""
+    try:
+        res = client.table(CODEMAP_TABLE).select("*").execute().data or []
+        return {r["smartar_sid"]: r["code"] for r in res if r.get("code")}
+    except Exception:
+        return {}
+
+
+def save_code(client, sid, code):
+    try:
+        client.table(CODEMAP_TABLE).upsert(
+            {"smartar_sid": sid, "code": code,
+             "updated_at": datetime.now(timezone.utc).isoformat()},
+            on_conflict="smartar_sid").execute()
+    except Exception:
+        pass
+
+
 def build_active_students(op_client, smartar_client):
     archived = set(get_archived_codes(op_client))
-    archived_bases = {base_of(c) for c in archived}
     comm_codes = set(get_codes(op_client))
     smartar_students, err = fetch_smartar_names(smartar_client)
     status = {"connected": smartar_client is not None and err is None,
               "count": len(smartar_students), "error": err,
-              "with_program": sum(1 for _, p in smartar_students if p)}
+              "with_program": sum(1 for _, _, p in smartar_students if p),
+              "no_program": sum(1 for _, _, p in smartar_students if not p),
+              "hidden": 0, "new": 0}
 
-    options, seen_codes, used = [], set(), {}
-    for nm, prog in smartar_students:
-        base = initials_from_name(nm)
-        if not base:
+    pinned = get_code_map(op_client)          # sid -> already-assigned code
+    taken = set(pinned.values())
+    options, seen_codes = [], set()
+    hidden = new_count = 0
+
+    for sid, nm, prog in smartar_students:
+        # 1) if this student already has a pinned code, reuse it
+        code = pinned.get(sid)
+
+        # 1a) upgrade a program-less code once SMARTAR sets a program — but only
+        #     while the student has no logs yet (so nothing gets detached)
+        if code and prog and program_of(code) == "" and code not in comm_codes \
+                and code not in archived:
+            base = initials_from_name(nm)
+            cand = f"{base}-{prog}"
+            if cand not in taken:
+                taken.discard(code)
+                save_code(op_client, sid, cand)
+                code = cand
+                taken.add(code)
+
+        if not code:
+            base = initials_from_name(nm)
+            if not base:
+                continue
+            cand = f"{base}-{prog}" if prog else base
+            # add a number only if that exact code is taken by a DIFFERENT student
+            c, i = cand, 2
+            while c in taken:
+                c = f"{cand}-{i}"
+                i += 1
+            code = c
+            save_code(op_client, sid, code)   # pin it for good
+            taken.add(code)
+            new_count += 1
+
+        if code in archived:
+            hidden += 1
             continue
-        code = f"{base}-{prog}" if prog else base
-        used[code] = used.get(code, 0) + 1
-        if used[code] > 1:                      # genuine clash within same program
-            code = f"{code}-{used[code]}"
-        # hide if this code — or its base — has been archived/removed
-        if code in archived or base_of(code) in archived_bases:
-            continue
-        options.append((f"{nm} — {code}", code))
+        tag = "" if prog else "  ⚠️ no program set"
+        options.append((f"{nm} — {code}{tag}", code))
         seen_codes.add(code)
 
-    # codes already in the log that SMARTAR didn't supply (incl. older-style codes)
     for c in sorted(comm_codes):
-        if c in archived or base_of(c) in archived_bases or c in seen_codes:
+        if c in archived or c in seen_codes:
             continue
         options.append((f"{c}  (existing entry)", c))
         seen_codes.add(c)
 
+    status["hidden"] = hidden
+    status["new"] = new_count
     options.sort(key=lambda x: x[0].lower())
     return options, status
 
@@ -900,7 +957,7 @@ if client is None:
     st.stop()
 
 # --- Connection & setup check ------------------------------------------------
-_req_tables = [TABLE_NAME, ARCHIVE_TABLE, ATTACH_TABLE, LABEL_TABLE]
+_req_tables = [TABLE_NAME, ARCHIVE_TABLE, ATTACH_TABLE, LABEL_TABLE, CODEMAP_TABLE]
 _checks = {t: check_table(client, t) for t in _req_tables}
 _missing = [t for t, (ok, _) in _checks.items() if not ok]
 with st.expander("🔧 Connection & setup check" + ("  ⚠️ action needed" if _missing else "  ✅ all good"),
@@ -974,6 +1031,23 @@ with tab_log:
             else:
                 st.write("🏷️ No program (JP/PY/SY) found in SMARTAR, so codes are initials only. "
                          "If SMARTAR does store this, tell me the column name and I'll map it.")
+            _np = smartar_status.get("no_program", 0)
+            if _np:
+                st.write(f"⚠️ **{_np}** student(s) have **no program set** — they appear under "
+                         "**Unassigned** on the Students tab, not in a JP/PY/SY column. "
+                         "Set their program in SMARTAR and they'll move across automatically.")
+            _new = smartar_status.get("new", 0)
+            if _new:
+                st.write(f"🆕 Assigned a code to **{_new}** newly-registered student(s) this load.")
+            _hid = smartar_status.get("hidden", 0)
+            if _hid:
+                st.write(f"🗄️ **{_hid}** SMARTAR student(s) are hidden here because that exact "
+                         "code was archived or removed. If someone new is missing, check the "
+                         "Archive tab in case an old student shared their code — then unarchive "
+                         "or give the new student a distinct code.")
+        if st.button("🔄 Refresh student list", key="log_refresh"):
+            st.cache_resource.clear()
+            st.rerun()
 
     mode = st.radio("Student", ["Choose existing", "Add new"], horizontal=True, key="student_mode")
     student_code = None
