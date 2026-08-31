@@ -38,10 +38,15 @@ Setup (one-off):
    checklist_assignments — that table is left alone but no longer read by
    this page. Skipping this step doesn't break the page — jobs just show
    as "Unassigned" everywhere until it's run.
-5. Optionally add SUPABASE_URL / SUPABASE_KEY to .streamlit/secrets.toml
+5. Run supabase_schema_staff_hours.sql once too (independent of the other
+   migrations) — it creates checklist_staff_hours, which is what the
+   "🕐 Admin hours" panel reads and writes (see "Note on admin hours"
+   below). Skipping this step doesn't break the page — the panel just
+   won't be able to save.
+6. Optionally add SUPABASE_URL / SUPABASE_KEY to .streamlit/secrets.toml
    (falls back to the hardcoded project values below if not set, same
    st.secrets → env var → default chain used elsewhere in the portal).
-6. `pip install supabase` (and optionally `streamlit-autorefresh` for
+7. `pip install supabase` (and optionally `streamlit-autorefresh` for
    near-live updates across users without a manual refresh).
 
 Note on responsibility: each job can have different people responsible
@@ -51,6 +56,15 @@ admin panel's "Roster" section. A single "Viewing" picker sits above the
 tabs — pick a name and both the Today tab and This Week tab filter down
 to just their jobs (still tickable), with "+ Name" shown for any day
 they share with someone else. Leave it on "Everyone" to see the full list.
+
+Note on admin hours: the "🕐 Admin hours" panel (next to "Manage staff")
+lets you set the hours each person is picking up admin jobs, day by day —
+e.g. someone might only do admin 8:00-9:00am and 2:45-4:00pm most days,
+but longer on a Wednesday. This replaced the old fixed "SSO hours"
+badges/toggle, which hard-coded one pair of windows onto specific jobs
+and couldn't vary by day. It's purely informational: picking a name under
+"Viewing jobs for" shows their hours for the week right underneath, but
+it doesn't hide or filter which jobs show up.
 
 Note on scope: unlike the Safety & Risk Plan Builder, this tool holds no
 student data — only staff names, job roster assignments, tick timestamps,
@@ -96,7 +110,6 @@ GREY_DARK   = "#2E4057"
 GREY_LIGHT  = "#F2F6F6"
 SAFETY_RED  = "#C0392B"
 
-SSO_LABEL = {"am": "8–9am", "pm": "2:45–4pm", "both": "8–9am · 2:45–4pm"}
 WEEKDAY_COLS = ["Mon", "Tue", "Wed", "Thu", "Fri"]  # date.weekday(): Mon=0..Fri=4
 
 # Sentinel used in checklist_duty_roster.weekday for a weekly job with no
@@ -131,7 +144,8 @@ DEFAULT_CATEGORIES = [
     {"id": "ventia", "title": "Ventia", "safety": False, "sort_order": 11},
 ]
 
-# task keys: id, category_id, text, sso ("am"/"pm"/"both"/None),
+# task keys: id, category_id, text, sso (legacy — no longer read or edited
+# from this page; superseded by the per-person "Admin hours" panel below),
 # frequency ("daily"/"weekly"), weekday ("Mon".."Fri" or None — only
 # meaningful when frequency == "weekly"), sort_order.
 #
@@ -350,6 +364,22 @@ def load_roster():
         return {}
 
 
+def load_staff_hours():
+    """{ staff_name: { weekday: "8:00–9:00am & 2:45–4:00pm" } } — the hours
+    that person is picking up admin jobs that day, set from the "Admin
+    hours" panel. A missing day means no admin hours set for them then."""
+    if not sb:
+        return {}
+    try:
+        res = sb.table("checklist_staff_hours").select("staff_name, weekday, hours").execute()
+        out = {}
+        for r in (res.data or []):
+            out.setdefault(r["staff_name"], {})[r["weekday"]] = r["hours"]
+        return out
+    except Exception:
+        return {}
+
+
 def load_completions():
     """{ task_id: { period_key: {"by": ..., "at": ...} } }"""
     if not sb:
@@ -483,11 +513,11 @@ def next_sort_order(tasks_flat, category_id):
     return (max(existing) + 1) if existing else 1
 
 
-def add_task(category_id, text, frequency, weekday, sso, tasks_flat):
+def add_task(category_id, text, frequency, weekday, tasks_flat):
     task_id = f"{category_id}-{uuid4().hex[:8]}"
     row = {
         "id": task_id, "category_id": category_id, "text": text,
-        "sso": sso or None, "frequency": frequency,
+        "sso": None, "frequency": frequency,
         "weekday": weekday if frequency == "weekly" else None,
         "sort_order": next_sort_order(tasks_flat, category_id),
     }
@@ -566,6 +596,22 @@ def remove_roster_entry(task_id, weekday, staff_name):
         st.toast(f"Couldn't save the roster change: {e}", icon="⚠️")
 
 
+def set_staff_hours(name, weekday, hours):
+    if not sb:
+        st.toast("Not connected to Supabase — hours weren't saved", icon="⚠️")
+        return
+    try:
+        if hours:
+            sb.table("checklist_staff_hours").upsert(
+                {"staff_name": name, "weekday": weekday, "hours": hours},
+                on_conflict="staff_name,weekday",
+            ).execute()
+        else:
+            sb.table("checklist_staff_hours").delete().eq("staff_name", name).eq("weekday", weekday).execute()
+    except Exception as e:
+        st.toast(f"Couldn't save those hours: {e}", icon="⚠️")
+
+
 def add_staff(name):
     if not sb:
         st.toast("Not connected to Supabase — name wasn't saved", icon="⚠️")
@@ -582,6 +628,7 @@ def remove_staff(name):
         return
     try:
         sb.table("checklist_duty_roster").delete().eq("staff_name", name).execute()
+        sb.table("checklist_staff_hours").delete().eq("staff_name", name).execute()
         sb.table("checklist_staff").delete().eq("name", name).execute()
     except Exception as e:
         st.toast(f"Couldn't remove name: {e}", icon="⚠️")
@@ -594,9 +641,9 @@ def remove_staff(name):
 def init_state():
     defaults = {
         "current_user": None,
-        "filter_sso": False,
         "week_offset": 0,
         "show_staff_panel": False,
+        "show_hours_panel": False,
         "admin_unlocked": False,
         "show_admin_login": False,
         "show_admin_panel": False,
@@ -627,7 +674,6 @@ st.markdown(f"""
   .sec-head {{ font-size:11px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:{TEAL}; margin:18px 0 8px; border-bottom:2px solid {TEAL_LIGHT}; padding-bottom:4px; }}
 
   .task-badge {{ display:inline-block; font-size:10px; font-weight:700; padding:2px 8px; border-radius:20px; margin-right:5px; white-space:nowrap; }}
-  .badge-sso  {{ background:{TEAL_LIGHT}; color:{TEAL}; }}
   .badge-freq {{ background:{GREY_LIGHT}; color:#5C6B74; }}
   .badge-done {{ background:#d1fae5; color:#065f46; }}
   .badge-assignee {{ background:{GREY_LIGHT}; color:#5C6B74; }}
@@ -654,7 +700,6 @@ init_state()
 if st.session_state.get("_clear_admin_form"):
     st.session_state["admin_new_text"] = ""
     st.session_state["admin_new_freq"] = "Daily"
-    st.session_state["admin_new_sso"] = "None"
     st.session_state.pop("admin_new_weekday", None)
     st.session_state["_clear_admin_form"] = False
 
@@ -681,7 +726,7 @@ staff = load_staff()
 
 # ── Identity ─────────────────────────────────────────────────────────────
 if st.session_state.current_user:
-    id_col1, id_col2, id_col3, id_col4 = st.columns([3, 1, 1, 1])
+    id_col1, id_col2, id_col3, id_col4, id_col5 = st.columns([3, 1, 1, 1, 1])
     with id_col1:
         st.markdown(f"Signed in as **{st.session_state.current_user}**")
     with id_col2:
@@ -692,6 +737,9 @@ if st.session_state.current_user:
         if st.button("Manage staff", use_container_width=True):
             st.session_state.show_staff_panel = not st.session_state.show_staff_panel
     with id_col4:
+        if st.button("🕐 Admin hours", use_container_width=True):
+            st.session_state.show_hours_panel = not st.session_state.show_hours_panel
+    with id_col5:
         if st.button("🔒 Admin", use_container_width=True):
             if st.session_state.admin_unlocked:
                 st.session_state.show_admin_panel = not st.session_state.show_admin_panel
@@ -730,6 +778,37 @@ if st.session_state.show_staff_panel:
             if new_staff_name.strip():
                 add_staff(new_staff_name.strip())
                 st.rerun()
+
+if st.session_state.show_hours_panel:
+    with st.expander("🕐 Admin hours", expanded=True):
+        st.caption(
+            "Set the hours each person is doing admin jobs, day by day — e.g. "
+            "\"8:00–9:00am & 2:45–4:00pm\" most days but \"8:00am–4:00pm\" on "
+            "Wednesday. Leave a day blank if they're not doing admin that day. "
+            "Saves straight to Supabase and shows up next to their name when "
+            "you pick them under \"Viewing jobs for\"."
+        )
+        hours_staff = load_staff()
+        current_hours = load_staff_hours()
+        if not hours_staff:
+            st.caption("Add staff names first (Manage staff) before setting their admin hours.")
+        else:
+            hhead = st.columns([2] + [2] * len(WEEKDAY_COLS))
+            hhead[0].markdown("**Name**")
+            for i, day in enumerate(WEEKDAY_COLS):
+                hhead[i + 1].markdown(f"**{day}**")
+            for name in hours_staff:
+                hrow = st.columns([2] + [2] * len(WEEKDAY_COLS))
+                hrow[0].write(name)
+                for i, day in enumerate(WEEKDAY_COLS):
+                    existing = current_hours.get(name, {}).get(day, "")
+                    picked = hrow[i + 1].text_input(
+                        f"{name} {day} admin hours", value=existing, placeholder="—",
+                        key=f"hours_{name}_{day}", label_visibility="collapsed",
+                    )
+                    if picked.strip() != existing:
+                        set_staff_hours(name, day, picked.strip())
+                        st.rerun()
 
 # ── Admin: job management (password-gated, Supabase-backed) ───────────────
 # See the ADMIN_PASSWORD note above the constant — this is a "don't show
@@ -809,7 +888,7 @@ if st.session_state.show_admin_panel and st.session_state.admin_unlocked:
         st.markdown("---")
         st.markdown("**Add a job**")
         new_text = st.text_input("Job text", key="admin_new_text", placeholder="e.g. Print the visitor sign-in sheet")
-        ac1, ac2, ac3, ac4 = st.columns(4)
+        ac1, ac2, ac3 = st.columns(3)
         cat_titles_sorted = [c["title"] for c in sorted(admin_categories, key=lambda c: c.get("sort_order", 0))]
         new_cat_title = ac1.selectbox("Section", cat_titles_sorted, key="admin_new_cat")
         new_freq = ac2.selectbox("Frequency", ["Daily", "Weekly"], key="admin_new_freq")
@@ -819,13 +898,11 @@ if st.session_state.show_admin_panel and st.session_state.admin_unlocked:
             new_weekday = None if new_weekday_pick == "No fixed day" else new_weekday_pick
         else:
             ac3.markdown("&nbsp;", unsafe_allow_html=True)
-        new_sso_pick = ac4.selectbox("SSO hours", ["None", "8–9am", "2:45–4pm", "Both"], key="admin_new_sso")
-        new_sso = {"None": None, "8–9am": "am", "2:45–4pm": "pm", "Both": "both"}[new_sso_pick]
 
         if st.button("Add job", key="admin_add_btn"):
             if new_text.strip():
                 new_cat_id = next(c["id"] for c in admin_categories if c["title"] == new_cat_title)
-                add_task(new_cat_id, new_text.strip(), new_freq.lower(), new_weekday, new_sso, admin_tasks)
+                add_task(new_cat_id, new_text.strip(), new_freq.lower(), new_weekday, admin_tasks)
                 # Streamlit won't let a widget's session_state be changed in
                 # the same run after it's been instantiated — set a flag and
                 # clear the form on the next run instead, before those
@@ -840,7 +917,7 @@ if st.session_state.show_admin_panel and st.session_state.admin_unlocked:
                 continue
             st.markdown(f'<div class="sec-head">{cat["title"]}</div>', unsafe_allow_html=True)
             for t in cat["tasks"]:
-                dr1, dr2, dr3, dr4, dr5 = st.columns([4, 1.2, 1, 1.3, 1])
+                dr1, dr2, dr3, dr4 = st.columns([4, 1.2, 1, 1])
                 edited_text = dr1.text_input(
                     "Job text", value=t["text"], key=f"dtext_{t['id']}", label_visibility="collapsed"
                 )
@@ -862,23 +939,15 @@ if st.session_state.show_admin_panel and st.session_state.admin_unlocked:
                 else:
                     dr3.markdown("&nbsp;")
                     weekday_val = None
-                sso_options = ["None", "8–9am", "2:45–4pm", "Both"]
-                sso_map = {"None": None, "8–9am": "am", "2:45–4pm": "pm", "Both": "both"}
-                sso_rev = {v: k for k, v in sso_map.items()}
-                sso_pick = dr4.selectbox(
-                    "SSO hours", sso_options, index=sso_options.index(sso_rev.get(t["sso"], "None")),
-                    key=f"dsso_{t['id']}", label_visibility="collapsed",
-                )
-                sso_val = sso_map[sso_pick]
 
                 confirm_key = f"confirm_del_{t['id']}"
                 if st.session_state.get(confirm_key):
-                    if dr5.button("Confirm?", key=f"delc_{t['id']}", use_container_width=True):
+                    if dr4.button("Confirm?", key=f"delc_{t['id']}", use_container_width=True):
                         delete_task(t["id"])
                         st.session_state.pop(confirm_key, None)
                         st.rerun()
                 else:
-                    if dr5.button("Delete", key=f"del_{t['id']}", use_container_width=True):
+                    if dr4.button("Delete", key=f"del_{t['id']}", use_container_width=True):
                         st.session_state[confirm_key] = True
                         st.rerun()
 
@@ -886,12 +955,11 @@ if st.session_state.show_admin_panel and st.session_state.admin_unlocked:
                     edited_text.strip() and edited_text.strip() != t["text"]
                     or freq_val != t["frequency"]
                     or weekday_val != t["weekday"]
-                    or sso_val != t["sso"]
                 )
                 if changed:
                     update_task(t["id"], {
                         "text": edited_text.strip() or t["text"],
-                        "frequency": freq_val, "weekday": weekday_val, "sso": sso_val,
+                        "frequency": freq_val, "weekday": weekday_val,
                     })
                     st.rerun()
 
@@ -939,10 +1007,22 @@ with vwcol2:
     )
 viewing_staff = None if viewing_pick == "Everyone" else viewing_pick
 
+# Shows the viewed person's admin hours (from the "Admin hours" panel)
+# right under the picker, so choosing a name also tells you when they're
+# actually rostered on for admin — e.g. someone's narrower morning/
+# afternoon windows, longer on a particular day.
+if viewing_staff:
+    hours_for_viewed = load_staff_hours().get(viewing_staff, {})
+    hour_parts = [f"{day} {hours_for_viewed[day]}" for day in WEEKDAY_COLS if hours_for_viewed.get(day)]
+    if hour_parts:
+        st.caption("🕐 " + viewing_staff + "'s admin hours: " + " · ".join(hour_parts))
+    else:
+        st.caption(f'No admin hours set yet for {viewing_staff} — add them from "Admin hours" above.')
+
 # ══════════════════════════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════════════════════════
-tab_checklist, tab_week = st.tabs(["📋 Today", "📅 This Week"])
+tab_checklist, tab_week = st.tabs(["📋 Today", "📅 This Week"], key="main_tabs")
 
 # ── Today tab ───────────────────────────────────────────────────────────────
 with tab_checklist:
@@ -962,12 +1042,10 @@ with tab_checklist:
                 done_tasks += 1
     st.progress(done_tasks / total_tasks if total_tasks else 0,
                 text=f"{done_tasks}/{total_tasks} done today")
-    st.caption("🟢 8–9am / 2:45–4pm badges mark tasks that fit an SSO's admin hours. Daily / Weekly badges show how often a job comes around.")
+    st.caption("Daily / Weekly badges show how often a job comes around. See \"Admin hours\" above for who's picking up admin jobs, and when.")
 
-    ctrl1, ctrl2, ctrl3 = st.columns([2, 2, 3])
+    ctrl1, ctrl2 = st.columns([2, 3])
     with ctrl1:
-        st.session_state.filter_sso = st.toggle("SSO hours only", value=st.session_state.filter_sso)
-    with ctrl2:
         if st.button("Clear today's ticks"):
             for cat in grouped_categories(checklist_tasks_flat, checklist_categories):
                 for t in cat["tasks"]:
@@ -975,14 +1053,12 @@ with tab_checklist:
                     if key in completions.get(t["id"], {}):
                         set_done(t["id"], key, False, st.session_state.current_user)
             st.rerun()
-    with ctrl3:
+    with ctrl2:
         if st.button("🔄 Refresh now"):
             st.rerun()
 
     for cat in grouped_categories(checklist_tasks_flat, checklist_categories):
         tasks = cat["tasks"]
-        if st.session_state.filter_sso:
-            tasks = [t for t in tasks if t["sso"]]
         if viewing_staff:
             tasks = [t for t in tasks if is_viewed_responsible(t, roster, today, viewing_staff)]
         if not tasks:
@@ -1006,8 +1082,6 @@ with tab_checklist:
             new_val = row[0].checkbox("", value=checked, key=f"chk_{t['id']}", label_visibility="collapsed")
 
             badges = f'<span class="task-badge badge-freq">{freq_badge_text(t)}</span>'
-            if t["sso"]:
-                badges += f'<span class="task-badge badge-sso">{SSO_LABEL[t["sso"]]}</span>'
             if comp:
                 badges += f'<span class="task-badge badge-done">Done by {comp["by"]} · {format_time(comp["at"])}</span>'
             row[1].markdown(f'{t["text"]}<br/>{badges}', unsafe_allow_html=True)
@@ -1161,7 +1235,7 @@ with tab_week:
 
 st.markdown("---")
 st.caption(
-    "Ticks, rosters, and job changes save straight to Supabase and are shared with anyone who opens this page "
+    "Ticks, rosters, admin hours, and job changes save straight to Supabase and are shared with anyone who opens this page "
     "(refresh, or wait ~20s if streamlit-autorefresh is installed, to see others' changes). "
     "\"Clear today's ticks\" only clears the current day/week — past history stays on the This Week tab."
 )
