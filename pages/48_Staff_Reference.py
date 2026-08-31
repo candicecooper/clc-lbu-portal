@@ -747,18 +747,31 @@ def staff_view():
         st.info("No documents published yet. An administrator can seed or add documents in the Admin tab.")
         return
 
+    doc_labels = {f"{d.get('doc_code','')} {d['title']}".strip(): d for d in docs}
+    scope_choice = st.selectbox("Search in", ["All documents"] + list(doc_labels.keys()), key="ref_search_scope")
+
     query = st.text_input(
-        "🔎 Search all documents for specific wording or a topic",
+        "🔎 Search for specific wording or a topic",
         placeholder="e.g. legislative limits, appeal timeframes, take-home",
     )
     if query.strip():
-        results = _search_all(query.strip())
+        if scope_choice == "All documents":
+            results = _search_all(query.strip())
+        else:
+            scope_doc = doc_labels[scope_choice]
+            q = query.strip().lower()
+            results = [
+                (scope_doc, sec)
+                for sec in fetch_sections(scope_doc["id"])
+                if q in f"{sec['title']}\n{sec.get('content','')}".lower()
+            ]
         if not results:
-            st.info(f"No matches for “{query}”.")
+            st.info(f"No matches for “{query}”" + ("" if scope_choice == "All documents" else f" in {scope_choice}") + ".")
         else:
             st.caption(f"{len(results)} matching section(s):")
             for doc, sec in results:
-                label = f"{doc.get('doc_code','')} {doc['title']} → {sec['title']}".strip()
+                label = sec["title"] if scope_choice != "All documents" else \
+                    f"{doc.get('doc_code','')} {doc['title']} → {sec['title']}".strip()
                 with st.expander(label):
                     st.markdown(_highlight(sec.get("content") or "_(empty)_", query))
         st.divider()
