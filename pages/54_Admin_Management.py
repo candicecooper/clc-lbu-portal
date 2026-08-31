@@ -143,15 +143,17 @@ DEFAULT_CATEGORIES = [
     {"id": "email", "title": "Email Monitoring", "safety": False, "sort_order": 1},
     {"id": "allocation", "title": "Allocation Process", "safety": False, "sort_order": 2},
     {"id": "entry-meeting", "title": "Entry Meeting Follow-Up", "safety": False, "sort_order": 3},
-    {"id": "phone", "title": "Phone Management", "safety": False, "sort_order": 4},
-    {"id": "taxi", "title": "Taxi Bookings", "safety": False, "sort_order": 5},
-    {"id": "trt", "title": "TRT Payroll", "safety": False, "sort_order": 6},
-    {"id": "medication", "title": "Medication", "safety": False, "sort_order": 7},
-    {"id": "bulletin", "title": "Daily Bulletin Screen", "safety": False, "sort_order": 8},
-    {"id": "foodbank", "title": "Food Bank & Kickstart", "safety": False, "sort_order": 9},
-    {"id": "hazards", "title": "Hazard Management", "safety": True, "sort_order": 10},
-    {"id": "ventia", "title": "Ventia", "safety": False, "sort_order": 11},
-    {"id": "endday", "title": "End of Day", "safety": False, "sort_order": 12},
+    {"id": "new-student", "title": "New Student Process", "safety": False, "sort_order": 4},
+    {"id": "end-student", "title": "End of Student Process", "safety": False, "sort_order": 5},
+    {"id": "phone", "title": "Phone Management", "safety": False, "sort_order": 6},
+    {"id": "taxi", "title": "Taxi Bookings", "safety": False, "sort_order": 7},
+    {"id": "trt", "title": "TRT Payroll", "safety": False, "sort_order": 8},
+    {"id": "medication", "title": "Medication", "safety": False, "sort_order": 9},
+    {"id": "bulletin", "title": "Daily Bulletin Screen", "safety": False, "sort_order": 10},
+    {"id": "foodbank", "title": "Food Bank & Kickstart", "safety": False, "sort_order": 11},
+    {"id": "hazards", "title": "Hazard Management", "safety": True, "sort_order": 12},
+    {"id": "ventia", "title": "Ventia", "safety": False, "sort_order": 13},
+    {"id": "endday", "title": "End of Day", "safety": False, "sort_order": 14},
 ]
 
 # task keys: id, category_id, text, sso (legacy — no longer read or edited
@@ -187,6 +189,16 @@ DEFAULT_TASKS = [
     {"id": "entry-5", "category_id": "entry-meeting", "text": "Distribute documents to the teacher", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 3},
     {"id": "entry-2", "category_id": "entry-meeting", "text": "Enrol the student through the EMS", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 4},
     {"id": "entry-3", "category_id": "entry-meeting", "text": "Send taxi forms to LBU admin email for signing", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 5},
+
+    {"id": "newstu-1", "category_id": "new-student", "text": "Notify schools of the allocation outcome", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 1},
+    {"id": "newstu-2", "category_id": "new-student", "text": "Update the allocation Excel database", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 2},
+    {"id": "newstu-3", "category_id": "new-student", "text": "Add the student to the Student Register", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 3},
+    {"id": "newstu-4", "category_id": "new-student", "text": "Create the student's OneDrive folder and save the referral documents in it", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 4},
+    {"id": "newstu-5", "category_id": "new-student", "text": "Set the student's enrolment dates and attendance/absence tracking in the Behaviour Support tool (Analysis section)", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 5},
+
+    {"id": "endstu-1", "category_id": "end-student", "text": "Verify all six portal tools have documents saved to the Document Archive (Communication Log, Behaviour Support, SMARTAR Goals, Interval Support Tracker, Sensory Overview, Safety & Risk Plan)", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 1},
+    {"id": "endstu-2", "category_id": "end-student", "text": "Move the student's folder to the Document Archive", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 2},
+    {"id": "endstu-3", "category_id": "end-student", "text": "Save a copy to OneDrive and print a physical copy for filing", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 3},
 
     {"id": "phone-1", "category_id": "phone", "text": "Transfer the phone over to mobile when not at the desk", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 1},
     {"id": "phone-2", "category_id": "phone", "text": "Switch the day/night switch each morning and afternoon", "sso": "both", "frequency": "daily", "weekday": None, "sort_order": 2},
