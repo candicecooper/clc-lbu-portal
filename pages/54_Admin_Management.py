@@ -229,6 +229,48 @@ DEFAULT_TASKS = [
     {"id": "endday-2", "category_id": "endday", "text": "Put the vehicles down the driveway", "sso": None, "frequency": "daily", "weekday": None, "sort_order": 2},
 ]
 
+# Categories detailed enough to get their own process panel (a flow diagram
+# + fuller step-by-step instructions from the Student Lifecycle Procedure)
+# instead of showing every job inline on the Today tab.
+PROCESS_CATEGORY_IDS = {"new-student", "end-student"}
+
+PROCESS_INFO = {
+    "new-student": {
+        "intro": "The full path from a referral landing in the inbox through to the student's first day — the steps below are Admin's part of it.",
+        "flow": [
+            {"text": "Referral received", "meta": "From school, via CLC admin email", "role": "trigger"},
+            {"text": "Print full application & attachments", "meta": "Admin", "role": "admin"},
+            {"text": "Copy provided to Manager & TC", "meta": "Admin", "role": "admin"},
+            {"text": "Allocation meeting held", "meta": "TC + team decide placement", "role": "trigger"},
+            {"text": "TC emails allocation details", "meta": "Excel format, sent to Admin", "role": "trigger"},
+            {"text": "Notify schools · update Excel DB · add to Student Register · create OneDrive folder", "meta": "Admin", "role": "admin"},
+            {"text": "Entry meeting held", "meta": "By TC, after schools are informed", "role": "trigger"},
+            {"text": "Set enrolment dates & attendance tracking", "meta": "Admin — Behaviour Support tool, Analysis section", "role": "admin"},
+        ],
+        "details": {
+            "newstu-1": "Once TC's allocation email comes through, let the referring school know the outcome.",
+            "newstu-2": "Update the allocation spreadsheet with the new placement's details.",
+            "newstu-3": "Add the student to the Student Register — the portal's single source of truth for current students, syncing through to Behaviour Analysis and SMARTAR.",
+            "newstu-4": "Create a new folder for the student on the OneDrive staff drive, and save the referral documents into it as they arrive — the same folder is used again for the copies made at exit.",
+            "newstu-5": "This happens after the entry meeting: open the Behaviour Support tool, go into that student's Analysis section, and set their enrolment start date plus attendance/absence tracking.",
+        },
+    },
+    "end-student": {
+        "intro": "Admin's verification-and-archiving sequence once a placement ends, so nothing's left unfiled.",
+        "flow": [
+            {"text": "Student exits", "meta": "Placement ends", "role": "trigger"},
+            {"text": "Verify all documents saved", "meta": "Admin — across six portal tools", "role": "admin"},
+            {"text": "Folder moved to archive", "meta": "Admin — Document Archive", "role": "admin"},
+            {"text": "Save copy to OneDrive & print for filing", "meta": "Admin", "role": "admin"},
+        ],
+        "details": {
+            "endstu-1": "Before archiving, check the student's folder has current documents from all six tools: Communication Log, Behaviour Support tool, SMARTAR goals, Interval Support Tracker, Sensory Overview, and Safety & Risk Plan.",
+            "endstu-2": "Once everything's verified, move the whole student folder into the Document Archive.",
+            "endstu-3": "Save a copy to the OneDrive staff drive, and print a physical copy for filing.",
+        },
+    },
+}
+
 
 def grouped_categories(tasks_flat, categories):
     """Group a flat task list under the given categories list, in display +
@@ -369,6 +411,91 @@ def freq_badge_text(task):
     if task["frequency"] == "weekly":
         return f"Weekly · {task['weekday']}" if task["weekday"] else "Weekly"
     return "Daily"
+
+
+def render_task_row(t, today, completions, roster, detail_text=None):
+    """One checkbox + text + badges row on the Today tab. Shared by the
+    normal category loop and the process panel (which also passes
+    `detail_text` -- a fuller explanation from the Student Lifecycle
+    Procedure, shown under the job text)."""
+    key = period_key_for(t, today)
+    comp = completions.get(t["id"], {}).get(key)
+    checked = comp is not None
+    # Only daily jobs have a same-day deadline — a weekly job due "any time
+    # this week" shouldn't flag as overdue every single afternoon.
+    overdue = t["frequency"] == "daily" and not checked and is_past_admin_deadline()
+
+    row = st.columns([0.5, 5, 2])
+    new_val = row[0].checkbox("", value=checked, key=f"chk_{t['id']}", label_visibility="collapsed")
+
+    badges = f'<span class="task-badge badge-freq">{freq_badge_text(t)}</span>'
+    if overdue:
+        badges += '<span class="task-badge badge-overdue">⚠ Overdue</span>'
+    if comp:
+        badges += f'<span class="task-badge badge-done">Done by {comp["by"]} · {format_time(comp["at"])}</span>'
+    row_cls = "job-row-overdue" if overdue else ("job-row-done" if checked else "")
+    row_body = f'{t["text"]}<br/>{badges}'
+    if detail_text:
+        row_body += f'<div class="process-detail">{detail_text}</div>'
+    # Only wrap in a styling <div> when there's actually a class to apply --
+    # an outer block-level element (even an empty-class one) stops
+    # Streamlit from auto-wrapping the text in its usual <p>.
+    if row_cls:
+        row_body = f'<div class="{row_cls}">{row_body}</div>'
+    row[1].markdown(row_body, unsafe_allow_html=True)
+
+    # Read-only "who's on this today" badge — responsibility is set
+    # per-weekday from the "Manage jobs" admin panel's Roster editor, not
+    # edited inline here.
+    today_day_key = day_key_for_today(t, today)
+    responsible_today = get_responsible(roster, t["id"], today_day_key) if today_day_key else []
+    if not responsible_today:
+        assignee_html = '<span class="task-badge badge-assignee-unassigned">Unassigned</span>'
+    elif len(responsible_today) > 1:
+        assignee_html = f'<span class="task-badge badge-assignee-shared">{" & ".join(responsible_today)}</span>'
+    else:
+        assignee_html = f'<span class="task-badge badge-assignee">{responsible_today[0]}</span>'
+    row[2].markdown(assignee_html, unsafe_allow_html=True)
+
+    if new_val != checked:
+        set_done(t["id"], key, new_val, st.session_state.current_user or "Unknown")
+        st.rerun()
+
+
+def render_process_panel(cat, tasks, today, completions, roster):
+    """The 'opened' detail view for a process category: a flow diagram plus
+    fuller instructions from the Student Lifecycle Procedure, with the same
+    tickable checklist rows underneath."""
+    info = PROCESS_INFO.get(cat["id"])
+    if not info:
+        return
+    with st.container(border=True):
+        top1, top2 = st.columns([5, 1])
+        top1.markdown(f"**{cat['title']}**")
+        if top2.button("Close", key=f"close_process_{cat['id']}"):
+            st.session_state.show_process = None
+            st.rerun()
+        st.caption(info["intro"])
+        st.markdown(
+            '<div class="flow-legend">'
+            '<span class="dot role-admin"></span> Admin step&nbsp;&nbsp;&nbsp;'
+            '<span class="dot role-trigger"></span> Someone else / trigger'
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        for i, step in enumerate(info["flow"]):
+            if i > 0:
+                st.markdown('<div class="flow-arrow">↓</div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="flow-step role-{step["role"]}">'
+                f'<div class="flow-step-text">{step["text"]}</div>'
+                f'<div class="flow-step-meta">{step["meta"]}</div>'
+                "</div>",
+                unsafe_allow_html=True,
+            )
+        st.markdown("---")
+        for t in tasks:
+            render_task_row(t, today, completions, roster, detail_text=info["details"].get(t["id"]))
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -686,6 +813,7 @@ def init_state():
         "admin_unlocked": False,
         "show_admin_login": False,
         "show_admin_panel": False,
+        "show_process": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -731,6 +859,22 @@ st.markdown(f"""
   .cat-card.normal {{ border-left-color:{TEAL}; }}
   .cat-title {{ font-weight:700; color:{GREY_DARK}; font-size:14.5px; }}
   .cat-count {{ float:right; font-size:12px; font-weight:600; color:#888; background:{GREY_LIGHT}; padding:2px 10px; border-radius:20px; }}
+
+  /* Process categories (New Student / End of Student) collapse to a single
+     summary line on the Today tab -- the actual checklist and a flow
+     diagram with more detail from the Student Lifecycle Procedure only
+     open in the process panel below, on click. */
+  .process-detail {{ font-size:12px; color:#7a8894; margin:2px 0 0; }}
+  .flow-step {{ border:1px solid #e2e8f0; border-radius:8px; padding:8px 12px; margin-bottom:2px; background:{GREY_LIGHT}; }}
+  .flow-step.role-admin {{ background:{TEAL_LIGHT}; border-color:{TEAL}; }}
+  .flow-step-text {{ font-weight:700; font-size:13px; color:{GREY_DARK}; }}
+  .flow-step.role-admin .flow-step-text {{ color:{TEAL}; }}
+  .flow-step-meta {{ font-size:11px; color:#7a8894; margin-top:1px; }}
+  .flow-arrow {{ text-align:center; color:#98a2ac; font-size:14px; line-height:1.6; }}
+  .flow-legend {{ font-size:11.5px; color:#7a8894; margin-bottom:10px; }}
+  .flow-legend .dot {{ display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:4px; }}
+  .flow-legend .dot.role-admin {{ background:{TEAL}; }}
+  .flow-legend .dot.role-trigger {{ background:#98a2ac; }}
 
   div[data-testid="stExpander"] {{ border:1.5px solid {TEAL_LIGHT} !important; border-radius:8px !important; }}
   .stButton > button {{ font-family:'DM Sans',sans-serif !important; font-weight:600 !important; border-radius:8px !important; }}
@@ -1122,50 +1266,19 @@ with tab_checklist:
             unsafe_allow_html=True,
         )
 
-        for t in tasks:
-            key = period_key_for(t, today)
-            comp = completions.get(t["id"], {}).get(key)
-            checked = comp is not None
-            # Only daily jobs have a same-day deadline — a weekly job due
-            # "any time this week" shouldn't flag as overdue every single
-            # afternoon.
-            overdue = t["frequency"] == "daily" and not checked and is_past_admin_deadline()
-
-            row = st.columns([0.5, 5, 2])
-            new_val = row[0].checkbox("", value=checked, key=f"chk_{t['id']}", label_visibility="collapsed")
-
-            badges = f'<span class="task-badge badge-freq">{freq_badge_text(t)}</span>'
-            if overdue:
-                badges += '<span class="task-badge badge-overdue">⚠ Overdue</span>'
-            if comp:
-                badges += f'<span class="task-badge badge-done">Done by {comp["by"]} · {format_time(comp["at"])}</span>'
-            row_cls = "job-row-overdue" if overdue else ("job-row-done" if checked else "")
-            row_body = f'{t["text"]}<br/>{badges}'
-            # Only wrap in a styling <div> when there's actually a class to
-            # apply -- an outer block-level element (even an empty-class
-            # one) stops Streamlit from auto-wrapping the text in its usual
-            # <p>, which would otherwise be a needless DOM/structure change
-            # for the common (not-overdue, not-done) row.
-            if row_cls:
-                row_body = f'<div class="{row_cls}">{row_body}</div>'
-            row[1].markdown(row_body, unsafe_allow_html=True)
-
-            # Read-only "who's on this today" badge — responsibility is set
-            # per-weekday from the "Manage jobs" admin panel's Roster
-            # editor, not edited inline here.
-            today_day_key = day_key_for_today(t, today)
-            responsible_today = get_responsible(roster, t["id"], today_day_key) if today_day_key else []
-            if not responsible_today:
-                assignee_html = '<span class="task-badge badge-assignee-unassigned">Unassigned</span>'
-            elif len(responsible_today) > 1:
-                assignee_html = f'<span class="task-badge badge-assignee-shared">{" & ".join(responsible_today)}</span>'
-            else:
-                assignee_html = f'<span class="task-badge badge-assignee">{responsible_today[0]}</span>'
-            row[2].markdown(assignee_html, unsafe_allow_html=True)
-
-            if new_val != checked:
-                set_done(t["id"], key, new_val, st.session_state.current_user or "Unknown")
+        if cat["id"] in PROCESS_CATEGORY_IDS:
+            # These categories are detailed enough to warrant their own
+            # process panel (flow diagram + fuller instructions) instead of
+            # showing every job inline here -- click through to open it.
+            if st.button(f"View the steps and instructions for {cat['title'].lower()}  →", key=f"open_process_{cat['id']}"):
+                st.session_state.show_process = cat["id"]
                 st.rerun()
+            if st.session_state.show_process == cat["id"]:
+                render_process_panel(cat, tasks, today, completions, roster)
+            continue
+
+        for t in tasks:
+            render_task_row(t, today, completions, roster)
 
 # ── This Week tab ────────────────────────────────────────────────────────────
 with tab_week:
