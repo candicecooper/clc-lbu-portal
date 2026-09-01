@@ -511,7 +511,7 @@ def load_todays_meeting_room_bookings(for_date):
 def load_todays_trade_bookings(for_date):
     """Load tradesperson/contractor bookings for a given date — public-safe only.
     Full detail (company, contact, phone, internal notes) lives in
-    48_Trade_Bookings.py and is never requested here."""
+    56_Trade_Bookings.py and is never requested here."""
     try:
         sb = _get_sb()
         response = (
@@ -522,8 +522,10 @@ def load_todays_trade_bookings(for_date):
             .execute()
         )
         rows = response.data or []
+        st.session_state["_trade_bookings_last_error"] = None
         return sorted(rows, key=lambda x: str(x.get("start_time") or ""))
-    except Exception:
+    except Exception as _tb_err:
+        st.session_state["_trade_bookings_last_error"] = str(_tb_err)
         return []
 
 def trade_bookings_as_visitor_rows(for_date):
@@ -1119,6 +1121,8 @@ with page_tab:
                     st.caption("🔧 Auto-added from Trade Bookings — edit or cancel these there, not here:")
                     st.markdown('<table class="data-table"><tr><th>Visitor</th><th>Reason</th><th>Staff Responsible</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>'+"".join([f"<tr><td><strong>{r.get('Visitor Name','')}</strong></td><td>{r.get('Reason','')}</td><td>{r.get('Staff Responsible','')}</td><td>{r.get('Arriving','')}</td><td>{r.get('Departing','')}</td><td>{r.get('Location','')}</td></tr>" for r in _trade_vis_rows])+"</table>", unsafe_allow_html=True)
                     st.markdown('<div style="margin-top:0.4rem;font-size:0.75rem;color:#6b7280;">📌 <a href="/Trade_Bookings" target="_self" style="color:#1a2e44;text-decoration:none;font-weight:600;">Manage Trade Bookings →</a></div>', unsafe_allow_html=True)
+                elif st.session_state.get("_trade_bookings_last_error"):
+                    st.warning(f"⚠️ Couldn't load trade bookings: {st.session_state['_trade_bookings_last_error']}")
             else:
                 vis_rows = bulletin_data.get("visitors_on_site", []) + _trade_vis_rows
                 has_vis = any(any(v for v in r.values()) for r in vis_rows)
