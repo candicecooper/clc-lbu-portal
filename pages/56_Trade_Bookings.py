@@ -27,7 +27,7 @@ Table: trade_bookings — SQL to create it is in trade_bookings_schema.sql.
 from theme import apply_clc_theme
 import streamlit as st
 from supabase import create_client, Client
-from datetime import date, datetime, time as dtime
+from datetime import date, datetime, time as dtime, timedelta
 import pandas as pd
 import os
 
@@ -113,6 +113,28 @@ LOCATIONS = [
 ]
 
 STATUSES = ["Booked", "Confirmed", "Completed", "Cancelled"]
+
+# South Australian public (state) school term dates, as published by the
+# Department for Education (education.sa.gov.au/students/term-dates-south-australian-state-schools).
+# SA DfE publishes these year by year — add the next year here once they're
+# confirmed; term_view() will show a warning for any year not listed below.
+SA_SCHOOL_TERMS = {
+    2026: [
+        (1, date(2026, 1, 27), date(2026, 4, 10)),
+        (2, date(2026, 4, 27), date(2026, 7, 3)),
+        (3, date(2026, 7, 20), date(2026, 9, 25)),
+        (4, date(2026, 10, 12), date(2026, 12, 11)),
+    ],
+    2027: [
+        (1, date(2027, 1, 27), date(2027, 4, 9)),
+        (2, date(2027, 4, 26), date(2027, 7, 2)),
+        (3, date(2027, 7, 19), date(2027, 9, 24)),
+        (4, date(2027, 10, 11), date(2027, 12, 10)),
+    ],
+}
+
+def get_sa_terms(year):
+    return SA_SCHOOL_TERMS.get(year, [])
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +373,100 @@ def list_view(sb):
 
 
 # ---------------------------------------------------------------------------
+# UI: Term view — trade bookings across a whole SA school term
+# ---------------------------------------------------------------------------
+
+def term_view(sb):
+    st.subheader("Term view")
+    st.caption("Bookings across a whole SA school term, week by week — full detail visible here since this is staff-only.")
+
+    available_years = sorted(SA_SCHOOL_TERMS.keys())
+    today_d = date.today()
+    default_year = today_d.year if today_d.year in available_years else available_years[0]
+
+    colY, colT = st.columns(2)
+    with colY:
+        year = st.selectbox("Year", available_years, index=available_years.index(default_year))
+
+    terms = get_sa_terms(year)
+    if not terms:
+        st.warning(
+            f"Term dates for {year} haven't been added yet. SA DfE publishes these year by year — "
+            f"add them to SA_SCHOOL_TERMS near the top of this file once confirmed at "
+            f"education.sa.gov.au/students/term-dates-south-australian-state-schools."
+        )
+        return
+
+    # Default to whichever term contains today, else Term 1
+    default_term_idx = 0
+    for i, (_, ts, te) in enumerate(terms):
+        if ts <= today_d <= te:
+            default_term_idx = i
+            break
+
+    term_labels = [f"Term {t[0]} ({t[1].strftime('%-d %b')} \u2013 {t[2].strftime('%-d %b')})" for t in terms]
+    with colT:
+        term_idx = st.selectbox("Term", range(len(terms)), format_func=lambda i: term_labels[i], index=default_term_idx)
+
+    term_no, t_start, t_end = terms[term_idx]
+    st.markdown(f"**Term {term_no}, {year}** \u2014 {t_start.strftime('%A %-d %B')} to {t_end.strftime('%A %-d %B')}")
+
+    bookings = fetch_bookings(sb, t_start, t_end)
+    by_date = {}
+    for b in bookings:
+        by_date.setdefault(b["booking_date"], []).append(b)
+
+    if not bookings:
+        st.info("No trade bookings recorded for this term yet.")
+
+    # Walk week by week (Mon-Fri) across the term
+    cur = t_start - timedelta(days=t_start.weekday())  # back up to the Monday of week 1
+    week_num = 1
+    while cur <= t_end:
+        week_dates = [cur + timedelta(days=i) for i in range(5)]
+        if any(t_start <= d <= t_end for d in week_dates):
+            st.markdown(f"###### Week {week_num}")
+            cols = st.columns(5)
+            for i, d in enumerate(week_dates):
+                in_term = t_start <= d <= t_end
+                with cols[i]:
+                    is_today = d == today_d
+                    header_bg = "#1A7A7A" if is_today else ("#f3f4f6" if in_term else "#fafafa")
+                    header_fg = "white" if is_today else ("#374151" if in_term else "#d1d5db")
+                    st.markdown(
+                        f'<div style="padding:.3rem .4rem;border-radius:6px 6px 0 0;'
+                        f'font-size:.72rem;font-weight:700;background:{header_bg};color:{header_fg};">'
+                        f'{d.strftime("%a %-d %b")}</div>',
+                        unsafe_allow_html=True,
+                    )
+                    if not in_term:
+                        st.markdown('<div style="padding:.4rem;"></div>', unsafe_allow_html=True)
+                        continue
+                    day_bookings = sorted(by_date.get(d.isoformat(), []), key=lambda x: str(x.get("start_time") or ""))
+                    if not day_bookings:
+                        st.markdown('<div style="padding:.35rem;color:#d1d5db;font-size:.7rem;border:1px solid #f0f0f0;border-top:none;border-radius:0 0 6px 6px;">\u2014</div>', unsafe_allow_html=True)
+                        continue
+                    chips = ""
+                    for b in day_bookings:
+                        label = build_public_summary(b.get("work_type",""), b.get("work_summary",""))
+                        t_str = (b.get("start_time") or "")[:5]
+                        status = b.get("status","")
+                        status_dot = {"Booked":"#e8a125","Confirmed":"#4a8f33","Completed":"#9ca3af","Cancelled":"#c0392b"}.get(status, "#9ca3af")
+                        chips += (
+                            f'<div style="background:#eef6f6;border-left:3px solid {status_dot};padding:.25rem .4rem;'
+                            f'margin-top:.25rem;border-radius:4px;font-size:.68rem;line-height:1.25;">'
+                            f'<strong>{t_str}</strong> {label}<br>'
+                            f'<span style="color:#888;">{b.get("company_name","")}</span></div>'
+                        )
+                    st.markdown(
+                        f'<div style="border:1px solid #f0f0f0;border-top:none;border-radius:0 0 6px 6px;padding:.15rem .3rem .35rem;">{chips}</div>',
+                        unsafe_allow_html=True,
+                    )
+        cur += timedelta(days=7)
+        week_num += 1
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -375,11 +491,13 @@ def main():
             st.rerun()
         st.markdown("---")
 
-    tab1, tab2 = st.tabs(["📋 View bookings", "➕ Add booking"])
+    tab1, tab2, tab3 = st.tabs(["📋 View bookings", "➕ Add booking", "🗓️ Term view"])
     with tab1:
         list_view(sb)
     with tab2:
         booking_form(sb)
+    with tab3:
+        term_view(sb)
 
 
 main()
