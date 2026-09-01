@@ -13,11 +13,9 @@ Workflow:
            manage the staff / card name lists used as options elsewhere
            on the page
 
-NOTE ON AUTH: uses require_staff_auth() from staff_auth.py and
-require_confidential_auth() from confidential_auth.py, matching the real
-signatures used elsewhere in the portal. If confidential_auth.py's
-function name or signature differs, only the import block below needs
-adjusting.
+NOTE ON AUTH: staff login was intentionally removed (see below) — anyone
+with the portal link can open Request/Return/Register. Only the Admin tab
+is gated, via require_confidential_auth() from confidential_auth.py.
 
 NOTE ON TAB ORDER: require_confidential_auth() calls st.stop() when
 locked, and Streamlit executes every "with tab:" block on each script run
