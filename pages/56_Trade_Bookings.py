@@ -431,35 +431,42 @@ def term_view(sb):
                 in_term = t_start <= d <= t_end
                 with cols[i]:
                     is_today = d == today_d
-                    header_bg = "#1A7A7A" if is_today else ("#f3f4f6" if in_term else "#fafafa")
-                    header_fg = "white" if is_today else ("#374151" if in_term else "#d1d5db")
-                    st.markdown(
-                        f'<div style="padding:.3rem .4rem;border-radius:6px 6px 0 0;'
-                        f'font-size:.72rem;font-weight:700;background:{header_bg};color:{header_fg};">'
-                        f'{d.strftime("%a %-d %b")}</div>',
-                        unsafe_allow_html=True,
-                    )
+                    border_color = "#1A7A7A" if is_today else ("#9ca3af" if in_term else "#e5e7eb")
+                    header_bg = "#1A7A7A" if is_today else ("#e5e9ea" if in_term else "#fafafa")
+                    header_fg = "white" if is_today else ("#1f2937" if in_term else "#d1d5db")
+
                     if not in_term:
-                        st.markdown('<div style="padding:.4rem;"></div>', unsafe_allow_html=True)
+                        st.markdown(
+                            f'<div style="border:2px solid {border_color};border-radius:8px;overflow:hidden;min-height:70px;">'
+                            f'<div style="padding:.3rem .4rem;font-size:.72rem;font-weight:700;background:{header_bg};color:{header_fg};">'
+                            f'{d.strftime("%a %-d %b")}</div></div>',
+                            unsafe_allow_html=True,
+                        )
                         continue
+
                     day_bookings = sorted(by_date.get(d.isoformat(), []), key=lambda x: str(x.get("start_time") or ""))
                     if not day_bookings:
-                        st.markdown('<div style="padding:.35rem;color:#d1d5db;font-size:.7rem;border:1px solid #f0f0f0;border-top:none;border-radius:0 0 6px 6px;">\u2014</div>', unsafe_allow_html=True)
-                        continue
-                    chips = ""
-                    for b in day_bookings:
-                        label = build_public_summary(b.get("work_type",""), b.get("work_summary",""))
-                        t_str = (b.get("start_time") or "")[:5]
-                        status = b.get("status","")
-                        status_dot = {"Booked":"#e8a125","Confirmed":"#4a8f33","Completed":"#9ca3af","Cancelled":"#c0392b"}.get(status, "#9ca3af")
-                        chips += (
-                            f'<div style="background:#eef6f6;border-left:3px solid {status_dot};padding:.25rem .4rem;'
-                            f'margin-top:.25rem;border-radius:4px;font-size:.68rem;line-height:1.25;">'
-                            f'<strong>{t_str}</strong> {label}<br>'
-                            f'<span style="color:#888;">{b.get("company_name","")}</span></div>'
-                        )
+                        body_html = '<div style="padding:.4rem;color:#c0c0c0;font-size:.7rem;">\u2014</div>'
+                    else:
+                        chips = ""
+                        for b in day_bookings:
+                            label = build_public_summary(b.get("work_type",""), b.get("work_summary",""))
+                            t_str = (b.get("start_time") or "")[:5]
+                            status = b.get("status","")
+                            status_dot = {"Booked":"#e8a125","Confirmed":"#4a8f33","Completed":"#9ca3af","Cancelled":"#c0392b"}.get(status, "#9ca3af")
+                            chips += (
+                                f'<div style="background:#eef6f6;border-left:3px solid {status_dot};padding:.25rem .4rem;'
+                                f'margin:.3rem .3rem 0;border-radius:4px;font-size:.68rem;line-height:1.25;">'
+                                f'<strong>{t_str}</strong> {label}<br>'
+                                f'<span style="color:#888;">{b.get("company_name","")}</span></div>'
+                            )
+                        body_html = chips + '<div style="height:.3rem;"></div>'
+
                     st.markdown(
-                        f'<div style="border:1px solid #f0f0f0;border-top:none;border-radius:0 0 6px 6px;padding:.15rem .3rem .35rem;">{chips}</div>',
+                        f'<div style="border:2px solid {border_color};border-radius:8px;overflow:hidden;'
+                        f'box-shadow:0 1px 3px rgba(0,0,0,0.08);min-height:70px;">'
+                        f'<div style="padding:.3rem .4rem;font-size:.72rem;font-weight:700;background:{header_bg};color:{header_fg};">'
+                        f'{d.strftime("%a %-d %b")}</div>{body_html}</div>',
                         unsafe_allow_html=True,
                     )
         cur += timedelta(days=7)
