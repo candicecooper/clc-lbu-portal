@@ -36,7 +36,10 @@ from supabase import create_client
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 from reportlab.lib.utils import ImageReader
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.pdfgen import canvas
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
 try:
     from confidential_auth import require_confidential_auth
@@ -85,10 +88,17 @@ REQUEST_TABLE = "credit_card_requests"
 RETURN_TABLE = "credit_card_returns"
 STAFF_TABLE = "cc_staff"
 CARD_TABLE = "cc_cards"
+FUNDING_TABLE = "additional_funding_requests"
 BUCKET_NAME = "credit-card-receipts"
 
 REQ_PENDING, REQ_APPROVED, REQ_DECLINED = "Pending", "Approved", "Declined"
 RET_PENDING, RET_APPROVED, RET_RETURNED = "Pending", "Approved", "Needs Correction"
+BUDGET_OPTIONS = ["JP", "PY", "SY", "NIT", "ADMIN", "ADDITIONAL"]
+PROGRAM_OPTIONS = ["JP", "PY", "SY", "NIT", "ADMIN"]
+
+# TODO Candice: confirm this is the right inbox for funding-request approvals —
+# it's a guess based on your SharePoint personal-site URL, not confirmed.
+MANAGER_EMAIL = "candice.cooper330@schools.sa.edu.au"
 
 
 @st.cache_resource
@@ -193,6 +203,99 @@ def _fetch_bytes(url: str, timeout: int = 15) -> bytes:
         return resp.read()
 
 
+# ---- additional funding requests ------------------------------------------
+def insert_funding_request(record: dict):
+    """Best-effort log for the register — the actual approval happens by
+    email, this table just keeps a record of what's been asked for."""
+    try:
+        get_supabase().table(FUNDING_TABLE).insert(record).execute()
+    except Exception:
+        pass
+
+
+def fetch_funding_requests() -> pd.DataFrame:
+    try:
+        res = get_supabase().table(FUNDING_TABLE).select("*").order("submitted_at", desc=True).execute()
+        return pd.DataFrame(res.data) if res.data else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+def build_funding_request_pdf(data: dict) -> bytes:
+    """Builds the Additional Program Funding Request as a proper document —
+    header fields in a table, each narrative section as a wrapped paragraph,
+    and a Manager sign-off block at the bottom so approval can happen on
+    the same page once it's emailed across."""
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4, topMargin=2 * cm, bottomMargin=2 * cm, leftMargin=2 * cm, rightMargin=2 * cm
+    )
+    styles = getSampleStyleSheet()
+    heading_style = ParagraphStyle(
+        "SectionHeading", parent=styles["Heading3"], textColor=colors.HexColor("#1A7A7A"),
+        spaceBefore=12, spaceAfter=3,
+    )
+    body_style = ParagraphStyle("Body", parent=styles["Normal"], spaceAfter=4, leading=14)
+
+    story = [
+        Paragraph("Cowandilla Learning Centre", styles["Title"]),
+        Paragraph("Additional Program Funding Request", styles["Heading2"]),
+        Spacer(1, 4),
+        Paragraph(
+            "Each program is allocated $200 per term. This request draws on the "
+            "further $500 per term available for additional program funding.",
+            styles["Italic"],
+        ),
+        Spacer(1, 12),
+    ]
+
+    info_table = Table(
+        [
+            ["Staff Member:", data["staff"], "Program:", data["program"]],
+            ["Term:", data["term"], "Requested Amount:", f"${data['amount']:.2f}"],
+        ],
+        colWidths=[3.1 * cm, 5.4 * cm, 3.3 * cm, 3.6 * cm],
+    )
+    info_table.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+        ("FONTSIZE", (0, 0), (-1, -1), 10),
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+        ("FONTNAME", (2, 0), (2, -1), "Helvetica-Bold"),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+    ]))
+    story.append(info_table)
+    story.append(Spacer(1, 10))
+
+    for label, text in [
+        ("Purpose", data["purpose"]),
+        ("Connection to Curriculum", data["curriculum"]),
+        ("Genuine Value", data["value"]),
+        ("Continual Learning for Students", data["learning"]),
+    ]:
+        story.append(Paragraph(label, heading_style))
+        story.append(Paragraph((text or "").replace("\n", "<br/>"), body_style))
+
+    story.append(Spacer(1, 16))
+    story.append(Paragraph(f"Submitted by: {data['staff']}   —   Date: {data['date']}", body_style))
+    story.append(Paragraph(
+        "Electronically confirmed as accurate at time of submission (stands in place of signature).",
+        styles["Italic"],
+    ))
+
+    story.append(Spacer(1, 26))
+    story.append(Paragraph("Manager Approval", heading_style))
+    story.append(Spacer(1, 8))
+    story.append(Paragraph("Approved &nbsp;&nbsp;☐ &nbsp;&nbsp;&nbsp;&nbsp; Declined &nbsp;&nbsp;☐", body_style))
+    story.append(Paragraph("Approved amount (if different): $ _______________", body_style))
+    story.append(Spacer(1, 22))
+    story.append(Paragraph("Signature: ______________________________ &nbsp;&nbsp;&nbsp; Date: ______________", body_style))
+
+    doc.build(story)
+    buf.seek(0)
+    return buf.getvalue()
+
+
 def build_return_form_pdf(row: dict) -> bytes:
     """Recreates the paper Form 2 layout as a PDF for one return, with the
     receipt image(s) shown underneath the details — used from the admin
@@ -280,8 +383,8 @@ st.caption("Electronic Form 1 (Requesting) and Form 2 (Returning)")
 STAFF_LIST = fetch_names(STAFF_TABLE)
 CARD_LIST = fetch_names(CARD_TABLE)
 
-tab_request, tab_return, tab_register, tab_admin = st.tabs(
-    ["1️⃣ Request Card", "2️⃣ Return Card", "📋 Register", "🔒 Admin"]
+tab_request, tab_return, tab_funding, tab_register, tab_admin = st.tabs(
+    ["1️⃣ Request Card", "2️⃣ Return Card", "💰 Additional Funding", "📋 Register", "🔒 Admin"]
 )
 
 # ------------------------------------------------------------------ STEP 1
@@ -293,6 +396,8 @@ with tab_request:
         req_staff = st.selectbox("Staff Member", STAFF_LIST, key="req_staff") if STAFF_LIST else None
         if not STAFF_LIST:
             st.warning("No staff members set up yet — add some in the Admin tab first.")
+
+        req_budget = st.selectbox("Budget", BUDGET_OPTIONS, key="req_budget")
 
         st.write("Which card?")
         req_cards = card_tickboxes(CARD_LIST, "req_card")
@@ -306,6 +411,8 @@ with tab_request:
     if req_submitted:
         if not req_staff:
             st.error("Select a staff member.")
+        elif not req_budget:
+            st.error("Select which budget this comes from.")
         elif not req_cards:
             st.error("Tick at least one card.")
         elif req_cost <= 0:
@@ -316,6 +423,7 @@ with tab_request:
             insert_request(
                 {
                     "staff_member": req_staff,
+                    "budget": req_budget,
                     "card_names": req_cards,
                     "approx_cost": req_cost,
                     "explanation": req_reason.strip(),
@@ -344,7 +452,7 @@ with tab_return:
     linked_request = None
     if not open_requests.empty:
         options = {
-            row["id"]: f"{', '.join(row.get('card_names') or [])} — approx "
+            row["id"]: f"{', '.join(row.get('card_names') or [])} — {row.get('budget', '')} — approx "
             f"${row['approx_cost']:.2f} — requested {format_date(row['requested_at'])}"
             for _, row in open_requests.iterrows()
         }
@@ -408,23 +516,127 @@ with tab_return:
                 )
             st.success(f"Return submitted for {ret_staff} — awaiting admin sign-off.")
 
+# -------------------------------------------------------------- FUNDING TAB
+with tab_funding:
+    st.subheader("Additional Program Funding Request")
+    st.write(
+        "Each program (JP / PY / SY / NIT / ADMIN) is allocated **$200 per term**. "
+        "A further **$500 per term** is available for programs to request additional "
+        "funding — in full or in part. This is a genuine application, not a formality, "
+        "so take the space to make the case properly. Once you generate the form below, "
+        f"download it and email it to your Manager ({MANAGER_EMAIL}) for approval."
+    )
+
+    with st.form("funding_request_form", clear_on_submit=True):
+        f_staff = st.selectbox("Staff Member", STAFF_LIST, key="fund_staff") if STAFF_LIST else None
+        if not STAFF_LIST:
+            st.warning("No staff members set up yet — add some in the Admin tab first.")
+        f_program = st.selectbox("Program", PROGRAM_OPTIONS, key="fund_program")
+
+        fc1, fc2 = st.columns(2)
+        with fc1:
+            f_term = st.selectbox("Term", ["Term 1", "Term 2", "Term 3", "Term 4"], key="fund_term")
+        with fc2:
+            f_year = st.number_input(
+                "Year", min_value=2024, max_value=2100, value=date.today().year, step=1, key="fund_year"
+            )
+
+        f_amount = st.number_input(
+            "Requested amount ($)", min_value=0.0, max_value=500.0, step=1.0, format="%.2f", key="fund_amount"
+        )
+        f_purpose = st.text_area("Purpose", placeholder="What is the money for?")
+        f_curriculum = st.text_area(
+            "Connection to curriculum",
+            placeholder="How does this connect to the Australian Curriculum / your program's teaching and learning?",
+        )
+        f_value = st.text_area(
+            "Genuine value",
+            placeholder="Why is this genuinely worth funding — what's the value beyond \"nice to have\"?",
+        )
+        f_learning = st.text_area(
+            "Continual learning for students",
+            placeholder="What ongoing learning or capability will students take from this, beyond the immediate activity?",
+        )
+        f_confirm = st.checkbox("I confirm this request is accurate and made in good faith.")
+        f_submitted = st.form_submit_button("Generate Funding Request Form", type="primary")
+
+    if f_submitted:
+        if not f_staff:
+            st.error("Select a staff member.")
+        elif f_amount <= 0:
+            st.error("Enter the requested amount.")
+        elif not f_purpose.strip():
+            st.error("Describe the purpose.")
+        elif not f_curriculum.strip():
+            st.error("Describe the connection to curriculum.")
+        elif not f_value.strip():
+            st.error("Describe the genuine value.")
+        elif not f_learning.strip():
+            st.error("Describe the continual learning for students.")
+        elif not f_confirm:
+            st.error("Tick to confirm before generating the form.")
+        else:
+            term_label = f"{f_term} {int(f_year)}"
+            pdf_data = {
+                "staff": f_staff,
+                "program": f_program,
+                "term": term_label,
+                "amount": f_amount,
+                "purpose": f_purpose.strip(),
+                "curriculum": f_curriculum.strip(),
+                "value": f_value.strip(),
+                "learning": f_learning.strip(),
+                "date": format_date(date.today().isoformat()),
+            }
+            insert_funding_request({
+                "staff_member": f_staff,
+                "program": f_program,
+                "term": term_label,
+                "amount": f_amount,
+                "purpose": pdf_data["purpose"],
+                "curriculum": pdf_data["curriculum"],
+                "value_statement": pdf_data["value"],
+                "continual_learning": pdf_data["learning"],
+                "submitted_at": now_iso(),
+            })
+            st.session_state["funding_pdf_bytes"] = build_funding_request_pdf(pdf_data)
+            st.session_state["funding_pdf_name"] = (
+                f"AdditionalFundingRequest_{f_staff.replace(' ', '_')}_{term_label.replace(' ', '_')}.pdf"
+            )
+
+    if st.session_state.get("funding_pdf_bytes"):
+        st.success("Form ready — download it below, then email it to your Manager for approval.")
+        st.download_button(
+            "⬇️ Download completed form (PDF)",
+            st.session_state["funding_pdf_bytes"],
+            file_name=st.session_state.get("funding_pdf_name", "AdditionalFundingRequest.pdf"),
+            mime="application/pdf",
+        )
+        st.info(f"Email the downloaded PDF to your Manager at **{MANAGER_EMAIL}** to have it approved.")
+
 # ------------------------------------------------------------------ STEP 3
 with tab_register:
     st.subheader("Full register")
-    reg_view = st.radio("Show", ["Card Requests", "Card Returns"], horizontal=True)
+    reg_view = st.radio("Show", ["Card Requests", "Card Returns", "Additional Funding Requests"], horizontal=True)
 
     if reg_view == "Card Requests":
         status_filter = st.selectbox("Filter by status", ["All", REQ_PENDING, REQ_APPROVED, REQ_DECLINED, "Completed"])
         df = fetch_requests(None if status_filter == "All" else status_filter)
-        cols = ["staff_member", "card_names", "approx_cost", "explanation", "status",
+        cols = ["staff_member", "budget", "card_names", "approx_cost", "explanation", "status",
                 "requested_at", "admin_approved_by", "admin_approved_at"]
         dt_cols, date_cols = ["requested_at", "admin_approved_at"], []
-    else:
+    elif reg_view == "Card Returns":
         status_filter = st.selectbox("Filter by status", ["All", RET_PENDING, RET_APPROVED, RET_RETURNED])
         df = fetch_submissions(None if status_filter == "All" else status_filter)
         cols = ["staff_member", "card_names", "receipt_date", "total_amount", "status",
                 "submitted_at", "admin_approved_by", "admin_approved_at", "notes"]
         dt_cols, date_cols = ["submitted_at", "admin_approved_at"], ["receipt_date"]
+    else:
+        st.caption("Approval for these happens by email to the Manager — this is a record of what's been submitted, not a pending-approval queue.")
+        df = fetch_funding_requests()
+        cols = ["staff_member", "program", "term", "amount", "purpose", "curriculum",
+                "value_statement", "continual_learning", "submitted_at"]
+        dt_cols, date_cols = ["submitted_at"], []
 
     if df.empty:
         st.write("No records yet.")
@@ -472,7 +684,7 @@ with tab_admin:
                     c1, c2 = st.columns([3, 1])
                     with c1:
                         cards = ", ".join(row.get("card_names") or [])
-                        st.markdown(f"**{row['staff_member']}** — {cards} — approx ${row['approx_cost']:.2f}")
+                        st.markdown(f"**{row['staff_member']}** — {cards} — {row.get('budget', '')} — approx ${row['approx_cost']:.2f}")
                         st.caption(f"Requested {format_dt(row['requested_at'])}")
                         st.write(row.get("explanation", ""))
                     with c2:
