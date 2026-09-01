@@ -77,6 +77,7 @@ EVENT_TYPES = {
     "Transition Meeting":    {"color": "#7c3aed", "bg": "#ede9fe", "emoji": "🔄"},
     "TAC Meeting":           {"color": "#b45309", "bg": "#fef3c7", "emoji": "📎"},
     "Student Placement":     {"color": "#374151", "bg": "#f3f4f6", "emoji": "📋"},
+    "Trade/Contractor":      {"color": "#57534e", "bg": "#f5f5f4", "emoji": "🔧"},
     "Other":                 {"color": "#374151", "bg": "#f3f4f6", "emoji": "📌"},
 }
 
@@ -184,6 +185,37 @@ def pac_events(pac_list, d_from=None, d_to=None):
                     "start_time": p.get("start_time"), "location": p.get("location",""),
                     "added_by": "PAC System", "notes": f"Chair: {p.get('chair','—')}",
                     "id": f"pac_{p['id']}"})
+    return out
+
+def db_trades(d_from=None, d_to=None):
+    """Pull ONLY the public-safe fields for tradesperson/contractor bookings.
+    Full detail (company, contact, phone, internal notes) lives in
+    56_Trade_Bookings.py and is never requested here."""
+    try:
+        q = supabase.table("trade_bookings").select(
+            "id,booking_date,start_time,end_time,display_category,work_summary,status"
+        ).neq("status", "Cancelled")
+        if d_from: q = q.gte("booking_date", str(d_from))
+        if d_to:   q = q.lte("booking_date", str(d_to))
+        return q.execute().data or []
+    except Exception as _tb_err:
+        if st.session_state.get("is_admin"):
+            st.sidebar.warning(f"⚠️ Trade bookings query failed: {_tb_err}")
+        return []
+
+def trade_events(d_from=None, d_to=None):
+    out = []
+    for t in db_trades(d_from, d_to):
+        category = t.get("display_category") or "Onsite Works"
+        summary  = t.get("work_summary") or ""
+        title    = f"{category} - {summary}" if summary else category
+        out.append({
+            "id": f"trade_{t['id']}", "title": title, "event_type": "Trade/Contractor",
+            "event_date": t.get("booking_date"), "end_date": None,
+            "start_time": t.get("start_time"), "end_time": t.get("end_time"),
+            "location": "", "added_by": "Trade Bookings", "notes": "",
+            "program": "", "student_initials": "",
+        })
     return out
 
 _DAY_TO_INT  = {"Monday":0,"Tuesday":1,"Wednesday":2,"Thursday":3,"Friday":4,"Saturday":5,"Sunday":6}
@@ -464,12 +496,13 @@ def render_detail_card(ev):
 def render_event_row(ev, key_prefix="m"):
     eid   = ev.get("id","")
     pac   = str(eid).startswith("pac_")
+    trade = str(eid).startswith("trade_")
     sched = ev.get("_from_schedule", False)
     col, bg, cfg = _ev_style(ev)
     tr    = fmt_time(ev.get("start_time",""))
     if ev.get("end_time"): tr += f" – {fmt_time(ev['end_time'])}"
-    can_edit = (st.session_state.is_admin or ev.get("event_type") in STUDENT_EVENT_TYPES) and not pac and not sched
-    can_del  = st.session_state.is_admin and not pac and not sched
+    can_edit = (st.session_state.is_admin or ev.get("event_type") in STUDENT_EVENT_TYPES) and not pac and not sched and not trade
+    can_del  = st.session_state.is_admin and not pac and not sched and not trade
     is_exp   = st.session_state.selected_event_id == eid
 
     ev_cols = st.columns([7, 1, 1, 1])
@@ -634,7 +667,7 @@ tab_month, tab_week, tab_list, tab_students, tab_weekoverview = st.tabs(["📅 M
 with tab_month:
     ts = str(today); ss = str(st.session_state.selected_date)
     _mo_start = date(yr, mo, 1); _mo_end = date(yr, mo, 28) + timedelta(days=4)
-    idx = ev_index(db_events(_mo_start, _mo_end) + schedule_events(_mo_start, _mo_end))
+    idx = ev_index(db_events(_mo_start, _mo_end) + schedule_events(_mo_start, _mo_end) + trade_events(_mo_start, _mo_end))
 
     hcols = st.columns(7)
     for i, dn in enumerate(["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]):
@@ -668,7 +701,7 @@ with tab_month:
     st.markdown("---")
 
     sel   = st.session_state.selected_date
-    d_evs = db_events(sel, sel) + schedule_events(sel, sel) + pac_events(db_pac(), sel, sel)
+    d_evs = db_events(sel, sel) + schedule_events(sel, sel) + pac_events(db_pac(), sel, sel) + trade_events(sel, sel)
     d_evs.sort(key=lambda x: str(x.get("start_time","")))
     st.markdown(f"### {'📍 ' if sel==today else ''}📅 {sel.strftime('%A %-d %B %Y')}")
     if not d_evs:
@@ -712,7 +745,7 @@ with tab_week:
             st.session_state.cal_week_start = today - timedelta(days=today.weekday())
             select_day(today); st.rerun()
 
-    wevs = db_events(ws, we) + schedule_events(ws, we) + pac_events(db_pac(), ws, we)
+    wevs = db_events(ws, we) + schedule_events(ws, we) + pac_events(db_pac(), ws, we) + trade_events(ws, we)
     widx = ev_index(wevs)
     ts   = str(today); ss = str(st.session_state.selected_date)
     dnames = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
@@ -742,7 +775,7 @@ with tab_week:
     st.markdown("---")
 
     sel   = st.session_state.selected_date
-    d_evs = db_events(sel, sel) + schedule_events(sel, sel) + pac_events(db_pac(), sel, sel)
+    d_evs = db_events(sel, sel) + schedule_events(sel, sel) + pac_events(db_pac(), sel, sel) + trade_events(sel, sel)
     d_evs.sort(key=lambda x: str(x.get("start_time","")))
     st.markdown(f"### {'📍 ' if sel==today else ''}📅 {sel.strftime('%A %-d %B %Y')}")
     if not d_evs:
@@ -778,7 +811,7 @@ with tab_list:
         st.info("🔐 **Sign in via the sidebar** to add or edit events.", icon="ℹ️")
 
     st.markdown("---")
-    levs = [e for e in (db_events(ls, le) + schedule_events(ls, le) + pac_events(db_pac(), ls, le))
+    levs = [e for e in (db_events(ls, le) + schedule_events(ls, le) + pac_events(db_pac(), ls, le) + trade_events(ls, le))
             if e.get("event_type") in tf]
     levs.sort(key=lambda x: (str(x.get("event_date","")), str(x.get("start_time",""))))
 
@@ -1467,7 +1500,7 @@ with tab_weekoverview:
     st.markdown(f"<h4 style='text-align:center;color:#1A7A7A;margin:0.25rem 0 1rem;'>{week_label}</h4>", unsafe_allow_html=True)
 
     # ── Fetch data for the week ────────────────────────────────────────────────
-    ov_events    = db_events(ov_start, ov_end) + schedule_events(ov_start, ov_end)
+    ov_events    = db_events(ov_start, ov_end) + schedule_events(ov_start, ov_end) + trade_events(ov_start, ov_end)
     ov_index     = ev_index(ov_events)
     ov_days      = [ov_start + timedelta(days=i) for i in range(5)]
 
