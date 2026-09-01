@@ -508,6 +508,44 @@ def load_todays_meeting_room_bookings(for_date):
     except Exception:
         return []
 
+def load_todays_trade_bookings(for_date):
+    """Load tradesperson/contractor bookings for a given date — public-safe only.
+    Full detail (company, contact, phone, internal notes) lives in
+    48_Trade_Bookings.py and is never requested here."""
+    try:
+        sb = _get_sb()
+        response = (
+            sb.table("trade_bookings")
+            .select("id,booking_date,start_time,end_time,display_category,work_summary,status")
+            .eq("booking_date", str(for_date))
+            .neq("status", "Cancelled")
+            .execute()
+        )
+        rows = response.data or []
+        return sorted(rows, key=lambda x: str(x.get("start_time") or ""))
+    except Exception:
+        return []
+
+def trade_bookings_as_visitor_rows(for_date):
+    """Trade/contractor bookings reframed as Visitors-on-Site rows — same
+    sanitized fields as everywhere else (no company/contact/phone)."""
+    out = []
+    for b in load_todays_trade_bookings(for_date):
+        category = b.get("display_category") or "Onsite Works"
+        summary = b.get("work_summary") or ""
+        label = f"{category} - {summary}" if summary else category
+        start_t = (b.get("start_time") or "")[:5]
+        end_t = (b.get("end_time") or "")[:5]
+        out.append({
+            "Visitor Name": f"🔧 {label}",
+            "Reason": "Trade/Contractor",
+            "Staff Responsible": b.get("booked_by") or "",
+            "Arriving": start_t,
+            "Departing": end_t,
+            "Location": b.get("location_onsite") or "",
+        })
+    return out
+
 def load_notices(for_date=None):
     try:
         q = _get_sb().table("daily_notices").select("*").order("created_at", desc=False)
@@ -765,7 +803,7 @@ if params.get("display") == "true":
         kitchen = sr.get("kitchen_duties","") or "\u2014"
         st.markdown(f'<div class="dp"><div class="dp-header amber">\u2b50 Staff Responsibilities</div><div class="dp-body"><div style="margin-bottom:.35rem;"><span class="kitchen-val">\U0001f373 Kitchen: {kitchen}</span></div><div style="margin-bottom:.2rem;"><span class="resp-label">\U0001f4cc PD Focus</span><br><span class="resp-val">{sr.get("meeting_pd_focus","") or "\u2014"}</span></div><div style="margin-bottom:.2rem;"><span class="resp-label">\U0001fa91 Chair</span><br><span class="resp-val">{sr.get("chair","") or "\u2014"}</span></div><div><span class="resp-label">\U0001f4dd Minutes</span><br><span class="resp-val">{sr.get("minutes","") or "\u2014"}</span></div></div></div>', unsafe_allow_html=True)
 
-    _vis_rows = [r for r in d_data.get("visitors_on_site", []) if any(r.get(k,"") for k in ["Visitor Name","Reason","Staff Responsible"])]
+    _vis_rows = [r for r in d_data.get("visitors_on_site", []) if any(r.get(k,"") for k in ["Visitor Name","Reason","Staff Responsible"])] + trade_bookings_as_visitor_rows(today)
     if _vis_rows:
         _vis_html = "".join([f'<tr><td><strong style="color:#1a2e44;">{r.get("Visitor Name","")}</strong></td><td style="font-size:.7rem;">{r.get("Reason","")}</td><td style="font-size:.7rem;">{r.get("Staff Responsible","")}</td><td style="font-size:.7rem;">{r.get("Arriving","")}</td><td style="font-size:.7rem;">{r.get("Departing","")}</td><td style="font-size:.7rem;">{r.get("Location","")}</td></tr>' for r in _vis_rows])
         st.markdown(f'<div class="dp"><div class="dp-header green">👥 Visitors</div><div class="dp-body"><table class="dt"><tr><th>Visitor</th><th>Reason</th><th>Staff</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>{_vis_html}</table></div></div>', unsafe_allow_html=True)
@@ -1068,6 +1106,7 @@ with page_tab:
             st.markdown('</div></div>', unsafe_allow_html=True)
 
             st.markdown('<div class="section-card"><div class="section-card-header green"><h3>\U0001f465 Visitors on Site</h3></div><div class="section-card-body">', unsafe_allow_html=True)
+            _trade_vis_rows = trade_bookings_as_visitor_rows(current_date)
             if edit:
                 _vis_raw = bulletin_data.get("visitors_on_site") or []
                 if not _vis_raw:
@@ -1076,10 +1115,17 @@ with page_tab:
                 vis_edited = st.data_editor(vis_df, key="vis_editor", hide_index=True, use_container_width=True, num_rows="dynamic",
                     column_config={"Reason": st.column_config.SelectboxColumn("Reason", options=VISITOR_REASON_OPTIONS, required=False)})
                 bulletin_data["visitors_on_site"] = vis_edited.to_dict("records")
+                if _trade_vis_rows:
+                    st.caption("🔧 Auto-added from Trade Bookings — edit or cancel these there, not here:")
+                    st.markdown('<table class="data-table"><tr><th>Visitor</th><th>Reason</th><th>Staff Responsible</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>'+"".join([f"<tr><td><strong>{r.get('Visitor Name','')}</strong></td><td>{r.get('Reason','')}</td><td>{r.get('Staff Responsible','')}</td><td>{r.get('Arriving','')}</td><td>{r.get('Departing','')}</td><td>{r.get('Location','')}</td></tr>" for r in _trade_vis_rows])+"</table>", unsafe_allow_html=True)
+                    st.markdown('<div style="margin-top:0.4rem;font-size:0.75rem;color:#6b7280;">📌 <a href="/Trade_Bookings" target="_self" style="color:#1a2e44;text-decoration:none;font-weight:600;">Manage Trade Bookings →</a></div>', unsafe_allow_html=True)
             else:
-                vis_rows = bulletin_data.get("visitors_on_site", []); has_vis = any(any(v for v in r.values()) for r in vis_rows)
+                vis_rows = bulletin_data.get("visitors_on_site", []) + _trade_vis_rows
+                has_vis = any(any(v for v in r.values()) for r in vis_rows)
                 if has_vis: st.markdown('<table class="data-table"><tr><th>Visitor</th><th>Reason</th><th>Staff Responsible</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>'+"".join([f"<tr><td><strong>{r.get('Visitor Name','')}</strong></td><td>{r.get('Reason','')}</td><td>{r.get('Staff Responsible','')}</td><td>{r.get('Arriving','')}</td><td>{r.get('Departing','')}</td><td>{r.get('Location','')}</td></tr>" for r in vis_rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
                 else: st.markdown('<div class="empty-state"><div class="icon">\U0001f6b6</div>No visitors today</div>', unsafe_allow_html=True)
+                if not _trade_vis_rows:
+                    st.markdown('<div style="margin-top:0.4rem;font-size:0.75rem;color:#6b7280;">📌 <a href="/Trade_Bookings" target="_self" style="color:#1a2e44;text-decoration:none;font-weight:600;">Book a Tradesperson →</a></div>', unsafe_allow_html=True)
             st.markdown('</div></div>', unsafe_allow_html=True)
 
     with s2:
