@@ -27,12 +27,19 @@ tab already) - this way Request / Return / Register always render even
 before anyone has entered the admin password.
 """
 
+import io
+import urllib.request
+from zoneinfo import ZoneInfo
+
 import streamlit as st
 import pandas as pd
 from datetime import date, datetime
 from supabase import create_client
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfgen import canvas
 
-from staff_auth import require_staff_auth
 try:
     from confidential_auth import require_confidential_auth
 except ImportError:
@@ -45,6 +52,35 @@ except ImportError:
             st.rerun()
         st.stop()
         return False
+
+ADELAIDE_TZ = ZoneInfo("Australia/Adelaide")
+
+
+def now_iso() -> str:
+    """Current time in Adelaide, saved with its UTC offset so it's unambiguous."""
+    return datetime.now(ADELAIDE_TZ).isoformat()
+
+
+def format_dt(value) -> str:
+    """Formats a stored timestamp for display in Adelaide time, human-readable
+    (e.g. 31/08/2026 02:15 PM) instead of a raw ISO string or epoch number."""
+    if not value:
+        return ""
+    try:
+        dt = pd.to_datetime(value, utc=True).tz_convert(ADELAIDE_TZ)
+        return dt.strftime("%d/%m/%Y %I:%M %p")
+    except Exception:
+        return str(value)
+
+
+def format_date(value) -> str:
+    """Formats a stored date for display as dd/mm/yyyy."""
+    if not value:
+        return ""
+    try:
+        return pd.to_datetime(value).strftime("%d/%m/%Y")
+    except Exception:
+        return str(value)
 
 # ---- config -------------------------------------------------------------
 REQUEST_TABLE = "credit_card_requests"
@@ -154,10 +190,91 @@ def card_tickboxes(card_list: list[str], key_prefix: str) -> list[str]:
     return picked
 
 
+def _fetch_bytes(url: str, timeout: int = 15) -> bytes:
+    with urllib.request.urlopen(url, timeout=timeout) as resp:
+        return resp.read()
+
+
+def build_return_form_pdf(row: dict) -> bytes:
+    """Recreates the paper Form 2 layout as a PDF for one return, with the
+    receipt image(s) shown underneath the details — used from the admin
+    'View & Download' tab so a receipt can be sighted and filed without
+    opening Supabase directly."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    width, height = A4
+
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(2 * cm, height - 2 * cm, "Cowandilla Learning Centre")
+    c.setFont("Helvetica", 13)
+    c.drawString(2 * cm, height - 2.8 * cm, "Returning Credit Card — Form 2")
+
+    y = height - 4 * cm
+    fields = [
+        ("Staff Member", row.get("staff_member", "")),
+        ("Card(s)", ", ".join(row.get("card_names") or [])),
+        ("Date on receipt", format_date(row.get("receipt_date"))),
+        ("Total on receipt", f"${row.get('total_amount', 0):.2f}"),
+        ("Notes", (row.get("notes") or "")[:90]),
+        ("Status", row.get("status", "")),
+        ("Submitted", format_dt(row.get("submitted_at"))),
+        ("Admin approved by", row.get("admin_approved_by") or ""),
+        ("Admin approved at", format_dt(row.get("admin_approved_at"))),
+    ]
+    for label, value in fields:
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(2 * cm, y, f"{label}:")
+        c.setFont("Helvetica", 10)
+        c.drawString(6 * cm, y, str(value))
+        y -= 0.7 * cm
+
+    y -= 0.4 * cm
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(2 * cm, y, "Attached receipt(s):")
+    y -= 0.3 * cm
+
+    urls = row.get("receipt_urls") or ([row["receipt_url"]] if row.get("receipt_url") else [])
+    for url in urls:
+        if not url:
+            continue
+        try:
+            ext = url.split("?")[0].split(".")[-1].lower()
+            if ext == "pdf":
+                if y < 3 * cm:
+                    c.showPage()
+                    y = height - 2 * cm
+                c.setFont("Helvetica-Oblique", 9)
+                c.drawString(2 * cm, y, f"(Receipt attached as a PDF — see: {url[:75]})")
+                y -= 1 * cm
+                continue
+
+            img_bytes = _fetch_bytes(url)
+            img = ImageReader(io.BytesIO(img_bytes))
+            iw, ih = img.getSize()
+            max_w, max_h = width - 4 * cm, 13 * cm
+            scale = min(max_w / iw, max_h / ih, 1)
+            draw_w, draw_h = iw * scale, ih * scale
+            if y - draw_h < 2 * cm:
+                c.showPage()
+                y = height - 2 * cm
+            c.drawImage(img, 2 * cm, y - draw_h, width=draw_w, height=draw_h, preserveAspectRatio=True)
+            y -= draw_h + 0.7 * cm
+        except Exception as e:
+            c.setFont("Helvetica-Oblique", 9)
+            c.drawString(2 * cm, y, f"(Could not load this receipt: {e})")
+            y -= 1 * cm
+
+    c.save()
+    buf.seek(0)
+    return buf.getvalue()
+
+
 # ---- page ---------------------------------------------------------------
 st.set_page_config(page_title="Credit Card Request & Return", page_icon="💳", layout="wide")
 
-require_staff_auth("Credit Card Request & Return", "💳", "Cowandilla Learning Centre — LBU Staff")
+# NOTE: staff login intentionally removed at Candice's request — anyone with
+# the portal link can open Request/Return/Register. The Admin tab still
+# requires the confidential/admin password via require_confidential_auth().
 
 st.title("💳 Credit Card Request & Return")
 st.caption("Electronic Form 1 (Requesting) and Form 2 (Returning)")
@@ -205,7 +322,7 @@ with tab_request:
                     "approx_cost": req_cost,
                     "explanation": req_reason.strip(),
                     "status": REQ_PENDING,
-                    "requested_at": datetime.now().isoformat(),
+                    "requested_at": now_iso(),
                 }
             )
             st.success(f"Request submitted for {req_staff} — awaiting admin approval.")
@@ -230,7 +347,7 @@ with tab_return:
     if not open_requests.empty:
         options = {
             row["id"]: f"{', '.join(row.get('card_names') or [])} — approx "
-            f"${row['approx_cost']:.2f} — requested {row['requested_at'][:10]}"
+            f"${row['approx_cost']:.2f} — requested {format_date(row['requested_at'])}"
             for _, row in open_requests.iterrows()
         }
         picked_id = st.selectbox(
@@ -288,7 +405,7 @@ with tab_return:
                         "receipt_url": receipt_urls[0] if receipt_urls else None,
                         "receipt_urls": receipt_urls,
                         "status": RET_PENDING,
-                        "submitted_at": datetime.now().isoformat(),
+                        "submitted_at": now_iso(),
                     }
                 )
             st.success(f"Return submitted for {ret_staff} — awaiting admin sign-off.")
@@ -303,18 +420,32 @@ with tab_register:
         df = fetch_requests(None if status_filter == "All" else status_filter)
         cols = ["staff_member", "card_names", "approx_cost", "explanation", "status",
                 "requested_at", "admin_approved_by", "admin_approved_at"]
+        dt_cols, date_cols = ["requested_at", "admin_approved_at"], []
     else:
         status_filter = st.selectbox("Filter by status", ["All", RET_PENDING, RET_APPROVED, RET_RETURNED])
         df = fetch_submissions(None if status_filter == "All" else status_filter)
         cols = ["staff_member", "card_names", "receipt_date", "total_amount", "status",
                 "submitted_at", "admin_approved_by", "admin_approved_at", "notes"]
+        dt_cols, date_cols = ["submitted_at", "admin_approved_at"], ["receipt_date"]
 
     if df.empty:
         st.write("No records yet.")
     else:
         display_cols = [c for c in cols if c in df.columns]
-        st.dataframe(df[display_cols], use_container_width=True, hide_index=True)
-        csv = df[display_cols].to_csv(index=False).encode("utf-8")
+        disp_df = df[display_cols].copy()
+        if "card_names" in disp_df.columns:
+            disp_df["card_names"] = disp_df["card_names"].apply(
+                lambda v: ", ".join(v) if isinstance(v, list) else (v or "")
+            )
+        for c in dt_cols:
+            if c in disp_df.columns:
+                disp_df[c] = disp_df[c].apply(format_dt)
+        for c in date_cols:
+            if c in disp_df.columns:
+                disp_df[c] = disp_df[c].apply(format_date)
+
+        st.dataframe(disp_df, use_container_width=True, hide_index=True)
+        csv = disp_df.to_csv(index=False).encode("utf-8")
         st.download_button(
             "⬇️ Download as CSV",
             csv,
@@ -328,7 +459,9 @@ with tab_admin:
     require_confidential_auth("Credit Card Request & Return — Admin", "🔒", "")
 
     admin_section = st.radio(
-        "Section", ["Approve Requests", "Approve Returns", "Manage Staff & Cards"], horizontal=True
+        "Section",
+        ["Approve Requests", "Approve Returns", "View & Download Forms", "Manage Staff & Cards"],
+        horizontal=True,
     )
 
     if admin_section == "Approve Requests":
@@ -342,14 +475,14 @@ with tab_admin:
                     with c1:
                         cards = ", ".join(row.get("card_names") or [])
                         st.markdown(f"**{row['staff_member']}** — {cards} — approx ${row['approx_cost']:.2f}")
-                        st.caption(f"Requested {row['requested_at'][:16]}")
+                        st.caption(f"Requested {format_dt(row['requested_at'])}")
                         st.write(row.get("explanation", ""))
                     with c2:
                         if st.button("✅ Approve", key=f"req_approve_{row['id']}"):
                             update_request(row["id"], {
                                 "status": REQ_APPROVED,
                                 "admin_approved_by": st.session_state.get("admin_name", "Admin"),
-                                "admin_approved_at": datetime.now().isoformat(),
+                                "admin_approved_at": now_iso(),
                             })
                             st.rerun()
                         if st.button("❌ Decline", key=f"req_decline_{row['id']}"):
@@ -367,7 +500,7 @@ with tab_admin:
                     with c1:
                         cards = ", ".join(row.get("card_names") or [])
                         st.markdown(f"**{row['staff_member']}** — {cards} — ${row['total_amount']:.2f}")
-                        st.caption(f"Receipt dated {row['receipt_date']} · submitted {row['submitted_at'][:16]}")
+                        st.caption(f"Receipt dated {format_date(row['receipt_date'])} · submitted {format_dt(row['submitted_at'])}")
                         if row.get("notes"):
                             st.write(row["notes"])
                         urls = row.get("receipt_urls") or ([row["receipt_url"]] if row.get("receipt_url") else [])
@@ -379,7 +512,7 @@ with tab_admin:
                             update_submission(row["id"], {
                                 "status": RET_APPROVED,
                                 "admin_approved_by": st.session_state.get("admin_name", "Admin"),
-                                "admin_approved_at": datetime.now().isoformat(),
+                                "admin_approved_at": now_iso(),
                             })
                             if row.get("request_id"):
                                 update_request(int(row["request_id"]), {"status": "Completed"})
@@ -387,6 +520,46 @@ with tab_admin:
                         if st.button("↩️ Return for correction", key=f"ret_return_{row['id']}"):
                             update_submission(row["id"], {"status": RET_RETURNED})
                             st.rerun()
+
+    elif admin_section == "View & Download Forms":
+        dl_status = st.selectbox(
+            "Filter by status", ["All", RET_PENDING, RET_APPROVED, RET_RETURNED], key="dl_filter"
+        )
+        dl_df = fetch_submissions(None if dl_status == "All" else dl_status)
+        if dl_df.empty:
+            st.write("No returns to show.")
+        else:
+            for _, row in dl_df.iterrows():
+                with st.container(border=True):
+                    cards = ", ".join(row.get("card_names") or [])
+                    st.markdown(
+                        f"**{row['staff_member']}** — {cards} — ${row['total_amount']:.2f} — *{row['status']}*"
+                    )
+                    st.caption(
+                        f"Receipt dated {format_date(row.get('receipt_date'))} · "
+                        f"submitted {format_dt(row.get('submitted_at'))}"
+                    )
+                    if row.get("notes"):
+                        st.write(row["notes"])
+
+                    pdf_key = f"pdf_bytes_{row['id']}"
+                    gen_col, dl_col = st.columns([1, 1])
+                    with gen_col:
+                        if st.button("📄 Generate form", key=f"gen_{row['id']}"):
+                            with st.spinner("Building form with receipt attached..."):
+                                st.session_state[pdf_key] = build_return_form_pdf(row)
+                    with dl_col:
+                        if pdf_key in st.session_state:
+                            st.download_button(
+                                "⬇️ Download form (PDF)",
+                                st.session_state[pdf_key],
+                                file_name=(
+                                    f"CreditCardReturn_{str(row['staff_member']).replace(' ', '_')}"
+                                    f"_{row['id']}.pdf"
+                                ),
+                                mime="application/pdf",
+                                key=f"dl_{row['id']}",
+                            )
 
     else:  # Manage Staff & Cards
         m1, m2 = st.columns(2)
