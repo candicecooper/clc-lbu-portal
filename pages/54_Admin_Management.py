@@ -94,7 +94,7 @@ a new attack surface, it just keeps the panel out of casual browsing.
 import re
 import streamlit as st
 import os
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from uuid import uuid4
 
 # ── Supabase client (fails to a read-only "offline" mode if unavailable) ───
@@ -102,6 +102,27 @@ try:
     from supabase import create_client
 except Exception:
     create_client = None
+
+# ── Timezone — this portal is for one South Australian school, so "now"
+# always means Adelaide local time, regardless of what timezone the Render
+# server itself happens to run in (it's UTC by default) or what a school
+# device's own clock is set to. Everything that stamps or displays a time
+# (the "Done by X · time" note, the 2:45pm overdue cutoff) goes through
+# ADELAIDE_TZ so it's correct no matter where the code is running.
+# Adelaide observes daylight saving (ACST UTC+9:30 / ACDT UTC+10:30) --
+# zoneinfo handles that switch automatically using the system's tzdata. If
+# tzdata isn't installed (rare on a minimal server image -- `pip install
+# tzdata` fixes it), fall back to a fixed ACST offset rather than crashing;
+# this just won't observe daylight saving in that fallback case.
+try:
+    from zoneinfo import ZoneInfo
+    ADELAIDE_TZ = ZoneInfo("Australia/Adelaide")
+except Exception:
+    ADELAIDE_TZ = timezone(timedelta(hours=9, minutes=30))
+
+
+def adelaide_now():
+    return datetime.now(ADELAIDE_TZ)
 
 # ── Optional near-live refresh across users (fails silently if unavailable) ─
 try:
@@ -378,8 +399,10 @@ ADMIN_DEADLINE = time(14, 45)  # 2:45pm
 
 def is_past_admin_deadline():
     """A daily job still unticked after this time flags itself on the
-    Today tab — matches the old admin-hours afternoon cutoff."""
-    return datetime.now().time() >= ADMIN_DEADLINE
+    Today tab — matches the old admin-hours afternoon cutoff. Always
+    checked against Adelaide local time (see adelaide_now()), not whatever
+    timezone the server happens to be running in."""
+    return adelaide_now().time() >= ADMIN_DEADLINE
 
 
 def monday_of(d):
@@ -399,11 +422,19 @@ def format_day_label(d):
 
 
 def format_time(iso_ts):
+    """iso_ts is stored as datetime.utcnow().isoformat() (see set_done /
+    add_adhoc_job) -- a naive timestamp with no timezone marker, but it's
+    always UTC. Mark it as UTC explicitly, then convert to Adelaide local
+    time before displaying -- otherwise this prints the raw UTC hour as if
+    it were already local, which is wrong by 9.5-10.5 hours."""
     if not iso_ts:
         return ""
     try:
         ts = iso_ts.replace("Z", "+00:00")
         dt = datetime.fromisoformat(ts)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.astimezone(ADELAIDE_TZ)
         return dt.strftime("%-I:%M%p").lower()
     except Exception:
         return ""
