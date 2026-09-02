@@ -781,6 +781,13 @@ st.markdown("---")
 # widgets seeded from that meeting's own saved data.
 _scope = str(st.session_state.current_staff_meeting_id or "new")
 
+# Guards the silent autosave further down: if any saved JSON field (agenda
+# items, meeting attachments, PD attachments) fails to parse, we do NOT want
+# autosave writing an empty/default value back over whatever is actually in
+# the database — that would silently and permanently erase it. Any failed
+# load below flips this to False, which skips autosave for this run.
+_autosave_safe = True
+
 # ── Staff View / Edit toggle ────────────────────────────────────────────────
 # A front-facing, read-only mode for general staff — shows what's relevant
 # to attend/prepare for the meeting without the manager's edit boxes,
@@ -1160,8 +1167,11 @@ with tab1:
     if selected_record and selected_record.get('agenda_items'):
         try:
             agenda_data = json.loads(selected_record['agenda_items']) if isinstance(selected_record['agenda_items'], str) else selected_record['agenda_items']
-        except:
+        except Exception as e:
             agenda_data = {}
+            _autosave_safe = False
+            st.error(f"⚠️ Could not read this meeting's saved agenda data ({e}) — autosave is paused for "
+                     f"this session so it doesn't overwrite it. Please check the data before saving manually.")
     else:
         agenda_data = {}
 
@@ -1739,8 +1749,11 @@ with st.expander("📁 Attach Files to Meeting", expanded=False):
     if selected_record and selected_record.get('meeting_attachments'):
         try:
             meeting_attachments = json.loads(selected_record['meeting_attachments']) if isinstance(selected_record['meeting_attachments'], str) else selected_record['meeting_attachments']
-        except:
+        except Exception as e:
             meeting_attachments = []
+            _autosave_safe = False
+            st.error(f"⚠️ Could not read this meeting's saved attachments ({e}) — autosave is paused for "
+                     f"this session so it doesn't overwrite them. Please check the data before saving manually.")
     else:
         meeting_attachments = []
     
@@ -1919,8 +1932,11 @@ Format as clear, structured notes."""
     if selected_record and selected_record.get('pd_attachments'):
         try:
             pd_attachments = json.loads(selected_record['pd_attachments']) if isinstance(selected_record['pd_attachments'], str) else selected_record['pd_attachments']
-        except:
+        except Exception as e:
             pd_attachments = []
+            _autosave_safe = False
+            st.error(f"⚠️ Could not read this meeting's saved PD attachments ({e}) — autosave is paused for "
+                     f"this session so it doesn't overwrite them. Please check the data before saving manually.")
     else:
         pd_attachments = []
     
@@ -2030,7 +2046,10 @@ _AUTOSAVE_MIN_CONTENT = bool(
     or additional_items
 )
 try:
-    if st.session_state.current_staff_meeting_id:
+    if not _autosave_safe:
+        st.caption("💾 Autosave paused — see the warning above. Existing data won't be touched "
+                   "until you save manually with 💾 Save Meeting.")
+    elif st.session_state.current_staff_meeting_id:
         supabase.table('staff_meetings').update(meeting_data).eq(
             'id', st.session_state.current_staff_meeting_id
         ).execute()
