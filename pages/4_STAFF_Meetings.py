@@ -701,6 +701,26 @@ def _render_staff_view(meeting: dict):
         st.caption("No PD attachments recorded.")
 
 
+def _persist_field_now(field_name: str, value) -> bool:
+    """Immediately write ONE field to the current meeting record in Supabase.
+    Needed right before any st.rerun() call: rerun() halts the script
+    immediately, so it never reaches the autosave code further down the
+    page — anything appended/removed from a plain local list (pd_attachments,
+    meeting_attachments, actions) just before a rerun would otherwise only
+    ever have existed in that one script run's memory and never actually
+    reach the database. Returns True if saved."""
+    if not st.session_state.current_staff_meeting_id:
+        return False
+    try:
+        supabase.table('staff_meetings').update({field_name: value}).eq(
+            'id', st.session_state.current_staff_meeting_id
+        ).execute()
+        return True
+    except Exception as e:
+        st.error(f"⚠️ Couldn't save this change ({e}). Click 'Save Meeting' at the bottom to retry.")
+        return False
+
+
 # ── Session state ──────────────────────────────────────────────────────────────
 if 'current_staff_meeting_id' not in st.session_state:
     st.session_state.current_staff_meeting_id = None
@@ -1689,6 +1709,7 @@ JSON array of actions:"""
                                         "done": False
                                     })
                                 st.success(f"Added {len(extracted_actions)} actions!")
+                                _persist_field_now("actions", json.dumps(actions))
                                 st.rerun()
                         else:
                             st.info("No action items found in minutes")
@@ -1708,6 +1729,7 @@ if actions:
         with col_b:
             if st.button("🗑️", key=f"delete_action_{idx}"):
                 actions.pop(idx)
+                _persist_field_now("actions", json.dumps(actions))
                 st.rerun()
 
 st.write("**Add New Action:**")
@@ -1733,6 +1755,7 @@ with col_a4:
                 "due_date": str(new_due) if new_due else "",
                 "done": False
             })
+            _persist_field_now("actions", json.dumps(actions))
             st.rerun()
 
 st.markdown("---")
@@ -1767,6 +1790,7 @@ with st.expander("📁 Attach Files to Meeting", expanded=False):
             with col_m2:
                 if st.button("🗑️", key=f"delete_meeting_attachment_{idx}"):
                     meeting_attachments.pop(idx)
+                    _persist_field_now("meeting_attachments", json.dumps(meeting_attachments))
                     st.rerun()
     
     # Add multiple attachments at once
@@ -1799,8 +1823,12 @@ with st.expander("📁 Attach Files to Meeting", expanded=False):
                     "uploaded_date": str(datetime.date.today())
                 })
             st.success(f"✅ Successfully added {len(meeting_uploaded_files)} file(s) to meeting!")
-            st.info("💡 Files recorded. Click 'Save Meeting' at the bottom to save changes.")
             st.info("ℹ️ Note: File metadata saved. For full file storage, integrate with Supabase Storage.")
+            if st.session_state.current_staff_meeting_id:
+                _persist_field_now("meeting_attachments", json.dumps(meeting_attachments))
+            else:
+                st.info("💡 This is a new, unsaved meeting — click 'Save Meeting' at the bottom to save it "
+                        "(including these files) for the first time.")
             st.rerun()
 
 st.markdown("---")
@@ -1954,6 +1982,7 @@ Format as clear, structured notes."""
             with col_att2:
                 if st.button("🗑️", key=f"delete_pd_attachment_{idx}"):
                     pd_attachments.pop(idx)
+                    _persist_field_now("pd_attachments", json.dumps(pd_attachments))
                     st.rerun()
     
     # Add multiple attachments at once
@@ -2000,7 +2029,11 @@ Format as clear, structured notes."""
                 )
             else:
                 st.success(f"✅ {len(uploaded_files)} file(s) added — they can be opened from PD Attachments and from Staff View.")
-            st.info("💡 Click 'Save Meeting' at the bottom to save changes.")
+            if st.session_state.current_staff_meeting_id:
+                _persist_field_now("pd_attachments", json.dumps(pd_attachments))
+            else:
+                st.info("💡 This is a new, unsaved meeting — click 'Save Meeting' at the bottom to save it "
+                        "(including these files) for the first time.")
             st.rerun()
 
 st.markdown("---")
