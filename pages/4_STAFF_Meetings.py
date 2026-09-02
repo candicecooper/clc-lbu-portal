@@ -765,13 +765,24 @@ st.markdown("---")
 
 st.subheader("📅 Select Meeting")
 
-# Fetch existing meetings
+# Fetch existing meetings — cache the last successful fetch, and fall back to
+# it on a transient failure instead of emptying the list. Discarding the list
+# on a one-off network hiccup would shrink the dropdown down to just "➕ New
+# Meeting", which no longer contains whatever meeting you had selected — so
+# the dropdown silently resets to "New Meeting" and wipes
+# current_staff_meeting_id right as something (like a PD attachment save)
+# might be relying on it still being set.
 try:
     result = supabase.table('staff_meetings').select('*').order('meeting_date', desc=True).limit(20).execute()
     existing_meetings = result.data if result.data else []
+    st.session_state['_cached_existing_meetings'] = existing_meetings
 except Exception as e:
-    st.warning(f"Could not load meetings: {e}")
-    existing_meetings = []
+    existing_meetings = st.session_state.get('_cached_existing_meetings', [])
+    if existing_meetings:
+        st.warning(f"⚠️ Could not refresh the meeting list just now ({e}) — showing the last known "
+                   f"list so your current selection isn't lost. Try again shortly.")
+    else:
+        st.warning(f"Could not load meetings: {e}")
 
 meeting_options = ["➕ New Meeting"] + [
     f"{m['meeting_date']} - T{m.get('term', '?')} W{m.get('week_number', '?')} - {m.get('minute_taker', 'Unknown')}"
