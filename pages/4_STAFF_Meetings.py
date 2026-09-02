@@ -560,7 +560,9 @@ def _upload_pd_attachment(file, scope: str):
     """Upload one PD attachment's bytes to Supabase Storage. Returns
     (public_url, storage_path), or (None, None) if the upload failed (e.g.
     the bucket doesn't exist yet) — callers fall back to storing just the
-    file's metadata in that case, same as before this existed."""
+    file's metadata in that case. On failure, stashes the real error in
+    session_state (shown at the top of the page) instead of failing silently,
+    since a generic bucket-missing warning wasn't enough to diagnose this."""
     try:
         safe_name = re.sub(r'[^A-Za-z0-9._-]+', '_', file.name)
         path = f"{scope}/{int(time.time())}_{safe_name}"
@@ -575,7 +577,10 @@ def _upload_pd_attachment(file, scope: str):
         else:
             url = url_result.get('publicURL') or url_result.get('publicUrl')
         return url, path
-    except Exception:
+    except Exception as e:
+        st.session_state['_last_persist_error'] = (
+            f"Uploading '{file.name}' to Storage bucket '{PD_ATTACHMENTS_BUCKET}' failed: {e}"
+        )
         return None, None
 
 
