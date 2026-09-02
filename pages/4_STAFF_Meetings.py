@@ -458,6 +458,95 @@ STANDING_AGENDA_ITEMS = [
     "Finance"
 ]
 
+# ── Staff roster ──────────────────────────────────────────────────────────────
+# EDIT THIS LIST to match the current CLC-LBU staff list — add/remove/rename
+# names here and every clickable attendance/agenda picker below updates
+# automatically. Anyone not on this list can still be added via the "Other"
+# field next to each picker.
+STAFF_MEMBERS = [
+    "Candice Cooper",
+    "Susan Furga",
+    "Annette Balestrin",
+    "Ben Selga",
+    "Ben Sutton",
+    "Brenton",
+    "Caitie",
+    "Cheryl",
+    "Jacqui",
+    "Naomi",
+    "Tom",
+    "Vinnie",
+]
+
+
+def _split_names(text: str, roster) -> tuple[list, str]:
+    """Split a stored comma/newline-separated names string into (names found
+    in roster, remaining text). Used to seed the click-to-select pickers from
+    older free-text Attendees/Apologies data without losing anything."""
+    if not text:
+        return [], ""
+    raw = [n.strip() for n in re.split(r'[,\n]', text) if n.strip()]
+    matched = [n for n in roster if n in raw]
+    other = [n for n in raw if n not in roster]
+    return matched, ", ".join(other)
+
+
+def _attendance_picker(present_label: str, absent_label: str, default_present: str,
+                        default_absent: str, key_prefix: str, roster=STAFF_MEMBERS) -> tuple[str, str]:
+    """Click-to-select staff attendance for a Present/Absent pair (used for
+    both the meeting attendance and the PD attendance). Returns
+    (present_text, absent_text) as the same comma-separated string format
+    the rest of the tool already stores, so nothing downstream needs to
+    change."""
+    present_matched, present_other = _split_names(default_present, roster)
+    absent_matched, absent_other = _split_names(default_absent, roster)
+
+    col_p, col_a = st.columns(2)
+    with col_p:
+        st.caption(f"Click to select — {present_label}")
+        present_selected = st.multiselect(
+            present_label, options=roster, default=present_matched,
+            key=f"{key_prefix}_present_ms", label_visibility="collapsed"
+        )
+        other_present = st.text_input(
+            f"Other {present_label.lower()} (not on the list)", value=present_other,
+            key=f"{key_prefix}_present_other", placeholder="Type any other name(s), comma separated"
+        )
+    with col_a:
+        st.caption(f"Click to select — {absent_label}")
+        absent_selected = st.multiselect(
+            absent_label, options=roster, default=absent_matched,
+            key=f"{key_prefix}_absent_ms", label_visibility="collapsed"
+        )
+        other_absent = st.text_input(
+            f"Other {absent_label.lower()} (not on the list)", value=absent_other,
+            key=f"{key_prefix}_absent_other", placeholder="Type any other name(s), comma separated"
+        )
+
+    overlap = set(present_selected) & set(absent_selected)
+    if overlap:
+        st.warning(f"⚠️ Listed as both {present_label.lower()} and {absent_label.lower()}: "
+                   f"{', '.join(sorted(overlap))} — remove from one list.")
+
+    present_final = ", ".join(present_selected + ([other_present.strip()] if other_present.strip() else []))
+    absent_final = ", ".join(absent_selected + ([other_absent.strip()] if other_absent.strip() else []))
+    return present_final, absent_final
+
+
+def _normalise_agenda_entry(entry) -> dict:
+    """Return {"item": ..., "staff": ...} regardless of whether `entry` is
+    already a dict (new format) or an older plain string — including the
+    "📌 text — submitted by Name" strings the Load Staff Submissions button
+    used to produce, so nothing already saved is lost or garbled."""
+    if isinstance(entry, dict):
+        return {"item": entry.get("item", ""), "staff": entry.get("staff", "") or "Unknown"}
+    text = str(entry)
+    m = re.match(r'^(?:📌\s*)?(.*?)\s*—\s*submitted by\s*(.+)$', text)
+    if m:
+        return {"item": m.group(1).strip(), "staff": m.group(2).strip()}
+    return {"item": text.strip(), "staff": "Unknown"}
+
+
 # ── Session state ──────────────────────────────────────────────────────────────
 if 'current_staff_meeting_id' not in st.session_state:
     st.session_state.current_staff_meeting_id = None
@@ -809,12 +898,10 @@ with tab1:
     st.subheader("👥 Attendance")
     
     default_attendees = selected_record.get('attendees', '') if selected_record else ''
-    attendees = st.text_area("Attendees Present", value=default_attendees, height=80, key="attendees", 
-                             placeholder="List staff members present...")
-    
     default_apologies = selected_record.get('apologies', '') if selected_record else ''
-    apologies = st.text_area("Apologies", value=default_apologies, height=60, key="apologies",
-                             placeholder="List staff members with apologies...")
+    attendees, apologies = _attendance_picker(
+        "Present", "Apologies", default_attendees, default_apologies, key_prefix="meeting_attendance"
+    )
     
     st.markdown("---")
     
@@ -935,10 +1022,12 @@ with tab1:
                                              .select('*').eq('status', 'pending').execute()
                 if pending_result.data:
                     loaded_count = 0
+                    existing_pairs = {(e["item"], e["staff"]) for e in
+                                       (_normalise_agenda_entry(x) for x in additional_items)}
                     for item in pending_result.data:
-                        label = f"📌 {item['item_text']}  — submitted by {item['submitted_by']}"
-                        if label not in additional_items:
-                            additional_items.append(label)
+                        new_entry = {"item": item['item_text'], "staff": item['submitted_by']}
+                        if (new_entry["item"], new_entry["staff"]) not in existing_pairs:
+                            additional_items.append(new_entry)
                             loaded_count += 1
                         supabase_ops.table('staff_agenda_items') \
                                     .update({'status': 'added'}).eq('id', item['id']).execute()
@@ -973,13 +1062,17 @@ with tab1:
             unsafe_allow_html=True
         )
         items_to_remove = []
-        for i, item_text in enumerate(additional_items):
+        for i, raw_entry in enumerate(additional_items):
+            entry = _normalise_agenda_entry(raw_entry)
             col_item, col_del = st.columns([11, 1])
             with col_item:
                 st.markdown(
                     f'<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;'
-                    f'padding:10px 14px;font-family:Segoe UI,Arial,sans-serif;font-size:14px;'
-                    f'color:#14532d;margin-bottom:4px;">{item_text}</div>',
+                    f'padding:10px 14px;font-family:Segoe UI,Arial,sans-serif;margin-bottom:4px;">'
+                    f'<div style="font-size:14px;color:#14532d;">📌 {entry["item"]}</div>'
+                    f'<div style="font-size:12px;color:#4b7c63;margin-top:3px;">'
+                    f'🧑 Submitted by: {entry["staff"]}</div>'
+                    f'</div>',
                     unsafe_allow_html=True
                 )
             with col_del:
@@ -1008,15 +1101,25 @@ with tab1:
         st.session_state['_clear_new_agenda_item'] = False
 
     st.write("")
-    col_new, col_add = st.columns([4, 1])
+    col_new, col_staff, col_add = st.columns([3, 2, 1])
     with col_new:
         new_item = st.text_input("Add an agenda item", key="new_agenda_item",
                                  placeholder="Type item and click Add →",
                                  label_visibility="collapsed")
+    with col_staff:
+        _staff_options = STAFF_MEMBERS + ["Other / not listed"]
+        new_item_staff = st.selectbox("Raised by", options=_staff_options,
+                                      key="new_agenda_item_staff", label_visibility="collapsed")
+        if new_item_staff == "Other / not listed":
+            new_item_staff = st.text_input("Name", key="new_agenda_item_staff_other",
+                                           placeholder="Type name", label_visibility="collapsed")
     with col_add:
         if st.button("➕ Add", key="add_agenda_item", use_container_width=True):
             if new_item.strip():
-                additional_items.append(new_item.strip())
+                additional_items.append({
+                    "item": new_item.strip(),
+                    "staff": (new_item_staff or "").strip() or "Unknown"
+                })
                 st.session_state[ss_key] = additional_items
                 st.session_state['_clear_new_agenda_item'] = True
                 st.rerun()
@@ -1525,19 +1628,14 @@ with st.expander("📚 PD Session Details", expanded=True):
                              placeholder="e.g. Sounds-Write Introduction, Berry Street Module 3, WHS Refresher…")
 
     st.write("**PD Attendance** (Auto-filled from meeting attendance - edit if needed)")
-    
-    col_pd1, col_pd2 = st.columns(2)
-    
-    with col_pd1:
-        # Pre-fill with meeting attendees but allow editing
-        default_pd_attendees = selected_record.get('pd_attendees', attendees) if selected_record else attendees
-        pd_attendees = st.text_area("PD Attendees", value=default_pd_attendees, height=80, key="pd_attendees",
-                                   placeholder="Staff who attended PD session...")
-    
-    with col_pd2:
-        default_pd_absent = selected_record.get('pd_absent', apologies) if selected_record else apologies
-        pd_absent = st.text_area("PD Absentees/Left Early", value=default_pd_absent, height=80, key="pd_absent",
-                                placeholder="Staff who missed PD or left early...")
+
+    # Pre-fill with meeting attendees but allow editing
+    default_pd_attendees = selected_record.get('pd_attendees', attendees) if selected_record else attendees
+    default_pd_absent = selected_record.get('pd_absent', apologies) if selected_record else apologies
+    pd_attendees, pd_absent = _attendance_picker(
+        "PD Attendees", "PD Absent/Left Early", default_pd_attendees, default_pd_absent,
+        key_prefix="pd_attendance"
+    )
     
     st.markdown("---")
     
@@ -1720,6 +1818,37 @@ meeting_data = {
     "pd_title": pd_title.strip() if pd_title else '',
     "pd_attachments": json.dumps(pd_attachments) if pd_attachments else '[]'
 }
+
+# ── Silent autosave ────────────────────────────────────────────────────────
+# Render's free/starter tier spins the app down after a period of inactivity;
+# when that happens the whole Streamlit session — including anything typed
+# into Minutes that hadn't been saved yet — is lost. Rather than relying on
+# the "Save Meeting" button being clicked before that happens, this saves the
+# current form state to Supabase on every interaction (every widget change
+# already triggers a script rerun, so this runs then too), so at most the
+# very last unsaved keystroke is ever at risk instead of the whole session.
+_AUTOSAVE_MIN_CONTENT = bool(
+    meeting_data.get("minutes", "").strip()
+    or meeting_data.get("attendees", "").strip()
+    or meeting_data.get("apologies", "").strip()
+    or meeting_data.get("minute_taker", "").strip()
+    or additional_items
+)
+try:
+    if st.session_state.current_staff_meeting_id:
+        supabase.table('staff_meetings').update(meeting_data).eq(
+            'id', st.session_state.current_staff_meeting_id
+        ).execute()
+        st.caption(f"💾 Autosaved {datetime.datetime.now().strftime('%H:%M:%S')}")
+    elif _AUTOSAVE_MIN_CONTENT:
+        # Only auto-create a record once there's something worth keeping —
+        # avoids littering the table with blank drafts from just opening the page.
+        _autosave_result = supabase.table('staff_meetings').insert(meeting_data).execute()
+        if _autosave_result.data:
+            st.session_state.current_staff_meeting_id = _autosave_result.data[0]['id']
+            st.caption(f"💾 Autosaved {datetime.datetime.now().strftime('%H:%M:%S')} (new draft created)")
+except Exception as _autosave_err:
+    st.caption(f"⚠️ Autosave failed — click 💾 Save Meeting below to save manually ({_autosave_err})")
 
 col_dl, col_save = st.columns([1, 2])
 with col_dl:
