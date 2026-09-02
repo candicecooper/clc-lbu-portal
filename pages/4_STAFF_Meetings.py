@@ -547,6 +547,160 @@ def _normalise_agenda_entry(entry) -> dict:
     return {"item": text.strip(), "staff": "Unknown"}
 
 
+# ── PD attachment storage ───────────────────────────────────────────────────
+# Uploaded PD files are stored in this Supabase Storage bucket so they can
+# actually be opened later (from Staff View or the edit form) — a bucket
+# with this exact name needs to exist in the MEETINGS Supabase project
+# (Storage → New bucket → Public) for uploads to succeed. If it doesn't
+# exist yet, uploads fall back to metadata-only (same as before) and warn.
+PD_ATTACHMENTS_BUCKET = "pd-attachments"
+
+
+def _upload_pd_attachment(file, scope: str):
+    """Upload one PD attachment's bytes to Supabase Storage. Returns
+    (public_url, storage_path), or (None, None) if the upload failed (e.g.
+    the bucket doesn't exist yet) — callers fall back to storing just the
+    file's metadata in that case, same as before this existed."""
+    try:
+        safe_name = re.sub(r'[^A-Za-z0-9._-]+', '_', file.name)
+        path = f"{scope}/{int(time.time())}_{safe_name}"
+        supabase.storage.from_(PD_ATTACHMENTS_BUCKET).upload(
+            path, file.getvalue(), {"content-type": file.type or "application/octet-stream"}
+        )
+        url_result = supabase.storage.from_(PD_ATTACHMENTS_BUCKET).get_public_url(path)
+        # supabase-py has returned either a plain string or a dict across
+        # versions — handle both so this doesn't silently break on upgrade.
+        if isinstance(url_result, str):
+            url = url_result
+        else:
+            url = url_result.get('publicURL') or url_result.get('publicUrl')
+        return url, path
+    except Exception:
+        return None, None
+
+
+def _render_staff_view(meeting: dict):
+    """Read-only, front-facing summary of a saved meeting for general staff —
+    no edit boxes, no Save/Delete, no AI/transcript tooling. Shows: meeting
+    details, attendance, Acknowledgement of Country (openable either way),
+    the week's icebreaker, standing agenda items with their notes, the
+    additional agenda items, and the PD component with openable attachments."""
+    st.markdown("---")
+    st.subheader(
+        f"📅 {meeting.get('meeting_date', '')} · {normalise_term_long(meeting.get('term', ''))} · "
+        f"Week {meeting.get('week_number', '')}"
+    )
+    if meeting.get('minute_taker'):
+        st.caption(f"Minute Taker: {meeting['minute_taker']}")
+
+    st.markdown("---")
+    st.markdown("### 👥 Attendance")
+    col_p, col_a = st.columns(2)
+    with col_p:
+        st.markdown("**Present**")
+        st.write(meeting.get('attendees', '') or "—")
+    with col_a:
+        st.markdown("**Apologies**")
+        st.write(meeting.get('apologies', '') or "—")
+
+    st.markdown("---")
+    st.markdown("### 🪃 Acknowledgement of Country")
+    _video_url = os.environ.get("ACKNOWLEDGEMENT_VIDEO_URL", "") or st.secrets.get("ACKNOWLEDGEMENT_VIDEO_URL", "")
+    col_v, col_t = st.columns(2)
+    with col_v:
+        with st.expander("📹 Watch the video"):
+            if _video_url:
+                st.video(_video_url)
+            else:
+                st.info("Video not configured for this meeting.")
+    with col_t:
+        with st.expander("📄 Read the text version"):
+            st.markdown("""
+            *"Before we begin, I acknowledge the Kaurna people as the Traditional Custodians of this land, and pay my respects to their Elders past, present, and emerging.*
+
+            *As a Learning and Behaviour Unit, we recognise that many of our students carry trauma — and we acknowledge the particular trauma that colonisation has caused and continues to cause for Aboriginal and Torres Strait Islander peoples.*
+
+            *We are committed to trauma-informed, culturally responsive practice that honours the strengths, resilience, and cultures of all our students and their families.*
+
+            *I extend my respect to any Aboriginal and Torres Strait Islander people present today."*
+            """)
+    if meeting.get('acknowledgement_done'):
+        st.success(f"✅ Completed — led by {meeting.get('acknowledgement_by', '') or 'not recorded'}")
+    else:
+        st.info("Not marked as completed for this meeting.")
+
+    st.markdown("---")
+    st.markdown("### 🎯 Icebreaker / BSEM Activity")
+    try:
+        week_idx = (int(meeting.get('week_number') or 1) - 1) % len(BSEM_ICEBREAKERS)
+        icebreaker = BSEM_ICEBREAKERS[week_idx]
+        st.markdown(f"**{icebreaker['name']}** _({icebreaker['time']})_")
+        st.write(icebreaker['instructions'])
+    except Exception:
+        pass
+    if (meeting.get('icebreaker') or '').strip():
+        st.caption(f"Notes: {meeting['icebreaker']}")
+
+    st.markdown("---")
+    st.markdown("### 📑 Agenda")
+    try:
+        agenda_data = json.loads(meeting['agenda_items']) if isinstance(meeting.get('agenda_items'), str) else (meeting.get('agenda_items') or {})
+    except Exception:
+        agenda_data = {}
+
+    st.markdown("**Standing Items**")
+    for item in STANDING_AGENDA_ITEMS:
+        notes = (agenda_data.get(item) or '').strip()
+        with st.expander(f"📌 {item}"):
+            st.write(notes if notes else "Nothing recorded for this item.")
+
+    additional = agenda_data.get('additional_agenda', [])
+    if additional:
+        st.write("")
+        st.markdown("**Additional Agenda Items**")
+        for raw_entry in additional:
+            entry = _normalise_agenda_entry(raw_entry)
+            st.markdown(
+                f'<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;'
+                f'padding:10px 14px;font-family:Segoe UI,Arial,sans-serif;margin-bottom:6px;">'
+                f'<div style="font-size:14px;color:#14532d;">📌 {entry["item"]}</div>'
+                f'<div style="font-size:12px;color:#4b7c63;margin-top:3px;">🧑 Submitted by: {entry["staff"]}</div>'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+
+    st.markdown("---")
+    st.markdown("### 🎓 Professional Development")
+    st.markdown(f"**{meeting.get('pd_title', '') or 'No PD title recorded'}**")
+    col_pa, col_pb = st.columns(2)
+    with col_pa:
+        st.markdown("**PD Attendees**")
+        st.write(meeting.get('pd_attendees', '') or "—")
+    with col_pb:
+        st.markdown("**PD Absent / Left Early**")
+        st.write(meeting.get('pd_absent', '') or "—")
+
+    try:
+        pd_attachments = json.loads(meeting['pd_attachments']) if isinstance(meeting.get('pd_attachments'), str) else (meeting.get('pd_attachments') or [])
+    except Exception:
+        pd_attachments = []
+
+    if pd_attachments:
+        st.write("")
+        st.markdown("**PD Attachments / Resources**")
+        for att in pd_attachments:
+            name = att.get('name') or att.get('filename') or 'Attachment'
+            desc = att.get('description', '')
+            url = att.get('url')
+            if url:
+                st.markdown(f"📎 [{name}]({url})" + (f" — {desc}" if desc else ""))
+            else:
+                st.caption(f"📎 {name}" + (f" — {desc}" if desc else "") +
+                          " _(uploaded before file storage was set up — ask for a copy directly)_")
+    else:
+        st.caption("No PD attachments recorded.")
+
+
 # ── Session state ──────────────────────────────────────────────────────────────
 if 'current_staff_meeting_id' not in st.session_state:
     st.session_state.current_staff_meeting_id = None
@@ -626,6 +780,26 @@ st.markdown("---")
 # keys by meeting id means picking a different meeting gets a fresh set of
 # widgets seeded from that meeting's own saved data.
 _scope = str(st.session_state.current_staff_meeting_id or "new")
+
+# ── Staff View / Edit toggle ────────────────────────────────────────────────
+# A front-facing, read-only mode for general staff — shows what's relevant
+# to attend/prepare for the meeting without the manager's edit boxes,
+# AI/transcript tooling, or Save/Delete controls.
+if selected_record:
+    view_mode = st.radio(
+        "Mode", options=["✏️ Edit (Manager)", "👁️ Staff View"],
+        horizontal=True, key=f"page_mode_{_scope}",
+        label_visibility="collapsed"
+    )
+else:
+    view_mode = "✏️ Edit (Manager)"
+    st.caption("💡 Staff View becomes available once a saved meeting is selected above.")
+
+if selected_record and view_mode == "👁️ Staff View":
+    _render_staff_view(selected_record)
+    st.stop()
+
+st.markdown("---")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TABS: CURRENT MEETING / ARCHIVE
@@ -1756,7 +1930,11 @@ Format as clear, structured notes."""
         for idx, attachment in enumerate(pd_attachments):
             col_att1, col_att2 = st.columns([4, 1])
             with col_att1:
-                st.write(f"📎 {attachment.get('name', 'Unnamed file')} ({attachment.get('filename', '')}) - {attachment.get('description', 'No description')}")
+                _label = f"📎 {attachment.get('name', 'Unnamed file')} ({attachment.get('filename', '')}) - {attachment.get('description', 'No description')}"
+                if attachment.get('url'):
+                    st.markdown(f"[{_label}]({attachment['url']})")
+                else:
+                    st.write(_label)
             with col_att2:
                 if st.button("🗑️", key=f"delete_pd_attachment_{idx}"):
                     pd_attachments.pop(idx)
@@ -1782,18 +1960,31 @@ Format as clear, structured notes."""
                                          placeholder="E.g., Restorative Practices Resources")
         
         if st.button("➕ Add All Files", key="add_all_pd_attachments", type="secondary"):
-            for file in uploaded_files:
-                pd_attachments.append({
-                    "name": file.name,
-                    "description": batch_description if batch_description else "",
-                    "filename": file.name,
-                    "size": file.size,
-                    "type": file.type,
-                    "uploaded_date": str(datetime.date.today())
-                })
-            st.success(f"✅ Successfully added {len(uploaded_files)} file(s) to PD!")
-            st.info("💡 Files recorded. Click 'Save Meeting' at the bottom to save changes.")
-            st.info("ℹ️ Note: File metadata saved. For full file storage, integrate with Supabase Storage.")
+            _upload_failures = 0
+            with st.spinner("Uploading files…"):
+                for file in uploaded_files:
+                    url, storage_path = _upload_pd_attachment(file, _scope)
+                    if url is None:
+                        _upload_failures += 1
+                    pd_attachments.append({
+                        "name": file.name,
+                        "description": batch_description if batch_description else "",
+                        "filename": file.name,
+                        "size": file.size,
+                        "type": file.type,
+                        "uploaded_date": str(datetime.date.today()),
+                        "url": url,
+                        "storage_path": storage_path
+                    })
+            if _upload_failures:
+                st.warning(
+                    f"⚠️ {_upload_failures} file(s) were recorded but couldn't be uploaded for opening later "
+                    f"— create a public Storage bucket named `{PD_ATTACHMENTS_BUCKET}` in the MEETINGS "
+                    f"Supabase project (Storage → New bucket → Public) and re-upload them."
+                )
+            else:
+                st.success(f"✅ {len(uploaded_files)} file(s) added — they can be opened from PD Attachments and from Staff View.")
+            st.info("💡 Click 'Save Meeting' at the bottom to save changes.")
             st.rerun()
 
 st.markdown("---")
