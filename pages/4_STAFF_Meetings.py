@@ -715,16 +715,30 @@ def _persist_field_now(field_name: str, value) -> bool:
     page — anything appended/removed from a plain local list (pd_attachments,
     meeting_attachments, actions) just before a rerun would otherwise only
     ever have existed in that one script run's memory and never actually
-    reach the database. Returns True if saved."""
+    reach the database. Returns True if saved. On failure, stashes a message
+    in session_state (shown at the top of the page on the next render) rather
+    than calling st.error() directly here — a message shown in this same run,
+    right before the caller's st.rerun(), can flash by before it's visible."""
     if not st.session_state.current_staff_meeting_id:
+        st.session_state['_last_persist_error'] = (
+            f"Tried to save '{field_name}' but no meeting is selected/saved yet."
+        )
         return False
     try:
-        supabase.table('staff_meetings').update({field_name: value}).eq(
+        result = supabase.table('staff_meetings').update({field_name: value}).eq(
             'id', st.session_state.current_staff_meeting_id
         ).execute()
+        if not result.data:
+            st.session_state['_last_persist_error'] = (
+                f"Saving '{field_name}' ran but Supabase returned no updated row for meeting id "
+                f"{st.session_state.current_staff_meeting_id} — the row may not exist, or Row Level "
+                f"Security may be silently blocking the write."
+            )
+            return False
+        st.session_state['_last_persist_success'] = f"'{field_name}' saved just now."
         return True
     except Exception as e:
-        st.error(f"⚠️ Couldn't save this change ({e}). Click 'Save Meeting' at the bottom to retry.")
+        st.session_state['_last_persist_error'] = f"Couldn't save '{field_name}' ({e})."
         return False
 
 
@@ -807,6 +821,18 @@ st.markdown("---")
 # keys by meeting id means picking a different meeting gets a fresh set of
 # widgets seeded from that meeting's own saved data.
 _scope = str(st.session_state.current_staff_meeting_id or "new")
+
+# Show the result of the last immediate-save (attachments/actions) from the
+# PREVIOUS run — stashed in session_state because the st.rerun() called right
+# after that save halts the script instantly, so a message shown in that same
+# run can flash by before it's ever visible. Showing it here, at the very top
+# of the next render, guarantees it's actually seen.
+_last_err = st.session_state.pop('_last_persist_error', None)
+if _last_err:
+    st.error(f"⚠️ {_last_err}")
+_last_ok = st.session_state.pop('_last_persist_success', None)
+if _last_ok:
+    st.success(f"💾 {_last_ok}")
 
 # Guards the silent autosave further down: if any saved JSON field (agenda
 # items, meeting attachments, PD attachments) fails to parse, we do NOT want
@@ -1962,6 +1988,17 @@ Format as clear, structured notes."""
     
     # PD Attachments
     st.write("**PD Attachments / Resources:**")
+
+    # Show the result of the last Add/Save attempt — stored in session_state
+    # rather than shown inline, because st.rerun() right after adding files
+    # halts the script immediately, so a message shown in that same run can
+    # flash by too fast to read. This survives the rerun instead.
+    _last_pd_result = st.session_state.pop('_pd_attach_last_result', None)
+    if _last_pd_result:
+        if _last_pd_result['ok']:
+            st.success(_last_pd_result['message'])
+        else:
+            st.error(_last_pd_result['message'])
     
     # Load existing attachments
     if selected_record and selected_record.get('pd_attachments'):
