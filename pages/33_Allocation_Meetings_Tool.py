@@ -279,6 +279,17 @@ def num_or_none(value):
     value = str(value).strip()
     return value if value else None
 
+def clean_num_display(value):
+    """Display helper: the extension_weeks column stores whole numbers as e.g. 2.0 —
+    show '2' instead of '2.0' without changing what's actually stored."""
+    if value is None or value == "":
+        return "?"
+    try:
+        f = float(value)
+        return str(int(f)) if f == int(f) else str(f)
+    except (TypeError, ValueError):
+        return str(value)
+
 def parse_stored_date(value):
     """Turn a stored ISO date string back into a date object for a date_input default."""
     if not value:
@@ -998,7 +1009,10 @@ with tab2:
             return True
 
         def _has_pending_request(r):
-            return bool(r.get("extension_weeks") or r.get("proposed_extension_finish_date")) and not r.get("extension_status")
+            # extension_date is only ever set when a decision is actually recorded through this
+            # tool — extension_status can hold leftover "Not Approved" junk from the old Excel
+            # import even when no real decision has ever been made, so it can't be trusted here.
+            return bool(r.get("extension_weeks") or r.get("proposed_extension_finish_date")) and not r.get("extension_date")
 
         allocated_data = [r for r in all_students.data if _is_active(r)]
 
@@ -1055,7 +1069,7 @@ with tab2:
                             else:
                                 st.session_state["last_extension_saved"] = {
                                     "name": result.data[0].get("student_name"),
-                                    "detail": f"Request logged, {result.data[0].get('extension_weeks') or '?'} weeks requested",
+                                    "detail": f"Request logged, {clean_num_display(result.data[0].get('extension_weeks'))} weeks requested",
                                     "when": datetime.now().strftime("%I:%M %p"),
                                 }
                                 st.rerun()
@@ -1118,7 +1132,7 @@ with tab2:
                                 st.session_state["last_extension_saved"] = {
                                     "name": result.data[0].get("student_name"),
                                     "detail": f"Decision: {result.data[0].get('extension_status')}, "
-                                              f"{result.data[0].get('extension_weeks') or '?'} weeks",
+                                              f"{clean_num_display(result.data[0].get('extension_weeks'))} weeks",
                                     "when": datetime.now().strftime("%I:%M %p"),
                                 }
                                 st.rerun()
