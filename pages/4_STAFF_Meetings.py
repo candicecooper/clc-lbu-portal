@@ -682,8 +682,9 @@ def _render_staff_view(meeting: dict):
 
     try:
         pd_attachments = json.loads(meeting['pd_attachments']) if isinstance(meeting.get('pd_attachments'), str) else (meeting.get('pd_attachments') or [])
-    except Exception:
+    except Exception as e:
         pd_attachments = []
+        st.error(f"⚠️ Could not read this meeting's PD attachments data ({e}).")
 
     if pd_attachments:
         st.write("")
@@ -699,6 +700,12 @@ def _render_staff_view(meeting: dict):
                           " _(uploaded before file storage was set up — ask for a copy directly)_")
     else:
         st.caption("No PD attachments recorded.")
+
+    with st.expander("🔧 Debug: raw PD attachments data (temporary — tell Claude what this shows)"):
+        st.write("Raw value from the database (`meeting['pd_attachments']`):")
+        st.code(repr(meeting.get('pd_attachments')))
+        st.write("Parsed as a list:")
+        st.json(pd_attachments)
 
 
 def _persist_field_now(field_name: str, value) -> bool:
@@ -1984,6 +1991,13 @@ Format as clear, structured notes."""
                     pd_attachments.pop(idx)
                     _persist_field_now("pd_attachments", json.dumps(pd_attachments))
                     st.rerun()
+
+    with st.expander("🔧 Debug: raw PD attachments data (temporary — tell Claude what this shows)"):
+        st.write(f"`current_staff_meeting_id` = `{st.session_state.current_staff_meeting_id}`")
+        st.write("Raw value from the database (`selected_record['pd_attachments']`):")
+        st.code(repr(selected_record.get('pd_attachments')) if selected_record else "no meeting selected")
+        st.write("Local `pd_attachments` list this run:")
+        st.json(pd_attachments)
     
     # Add multiple attachments at once
     st.write("**Add New Attachments:**")
@@ -2030,7 +2044,11 @@ Format as clear, structured notes."""
             else:
                 st.success(f"✅ {len(uploaded_files)} file(s) added — they can be opened from PD Attachments and from Staff View.")
             if st.session_state.current_staff_meeting_id:
-                _persist_field_now("pd_attachments", json.dumps(pd_attachments))
+                _saved_ok = _persist_field_now("pd_attachments", json.dumps(pd_attachments))
+                if _saved_ok:
+                    st.info(f"💾 Saved to the database just now (meeting id `{st.session_state.current_staff_meeting_id}`).")
+                else:
+                    st.error("⚠️ Save did not go through — see the error above.")
             else:
                 st.info("💡 This is a new, unsaved meeting — click 'Save Meeting' at the bottom to save it "
                         "(including these files) for the first time.")
