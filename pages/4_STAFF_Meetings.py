@@ -991,14 +991,6 @@ with tab1:
     else:
         agenda_data = {}
 
-    # Pre-populate the additional items text area from saved data
-    # (only if session state hasn't been set yet for this meeting)
-    _saved_additional = agenda_data.get('additional_agenda', [])
-    _ss_key = f"agenda_loaded_{st.session_state.current_staff_meeting_id}"
-    if _saved_additional and not st.session_state.get(_ss_key):
-        st.session_state['simple_agenda_items'] = "\n".join(_saved_additional)
-        st.session_state[_ss_key] = True
-    
     for item in STANDING_AGENDA_ITEMS:
         with st.expander(f"📌 {item}"):
             agenda_data[item] = st.text_area(
