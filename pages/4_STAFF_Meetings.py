@@ -615,6 +615,18 @@ else:
 
 st.markdown("---")
 
+# ── Form scope ────────────────────────────────────────────────────────────────
+# Every widget below that is seeded from `selected_record` (dates, minute
+# taker, attendance, agenda notes, minutes sections, PD fields, etc.) has its
+# key suffixed with this scope. Without it, Streamlit keeps a widget's
+# session_state value from whatever was previously typed and ignores the new
+# `value=` argument on rerun — so switching the meeting picker above to a
+# different saved meeting would keep showing the PREVIOUS meeting's Minutes,
+# Attendance, etc. instead of loading the one you just selected. Scoping the
+# keys by meeting id means picking a different meeting gets a fresh set of
+# widgets seeded from that meeting's own saved data.
+_scope = str(st.session_state.current_staff_meeting_id or "new")
+
 # ══════════════════════════════════════════════════════════════════════════════
 # TABS: CURRENT MEETING / ARCHIVE
 # ══════════════════════════════════════════════════════════════════════════════
@@ -758,16 +770,16 @@ with tab1:
     _term_idx  = _term_opts.index(normalise_term_short(default_term)) if normalise_term_short(default_term) in _term_opts else 1
 
     with col1:
-        meeting_date = st.date_input("Meeting Date", value=default_date, key="staff_date")
+        meeting_date = st.date_input("Meeting Date", value=default_date, key=f"staff_date_{_scope}")
 
     with col2:
-        term = st.selectbox("Term", options=_term_opts, index=_term_idx, key="staff_term")
+        term = st.selectbox("Term", options=_term_opts, index=_term_idx, key=f"staff_term_{_scope}")
     
     with col3:
-        week_number = st.number_input("Week Number", min_value=1, max_value=11, value=default_week, key="staff_week")
+        week_number = st.number_input("Week Number", min_value=1, max_value=11, value=default_week, key=f"staff_week_{_scope}")
     
     default_minute_taker = selected_record.get('minute_taker', '') if selected_record else ''
-    minute_taker = st.text_input("Minute Taker", value=default_minute_taker, key="minute_taker")
+    minute_taker = st.text_input("Minute Taker", value=default_minute_taker, key=f"minute_taker_{_scope}")
     
     st.markdown("---")
     # ══════════════════════════════════════════════════════════════════════════════
@@ -900,7 +912,7 @@ with tab1:
     default_attendees = selected_record.get('attendees', '') if selected_record else ''
     default_apologies = selected_record.get('apologies', '') if selected_record else ''
     attendees, apologies = _attendance_picker(
-        "Present", "Apologies", default_attendees, default_apologies, key_prefix="meeting_attendance"
+        "Present", "Apologies", default_attendees, default_apologies, key_prefix=f"meeting_attendance_{_scope}"
     )
     
     st.markdown("---")
@@ -934,8 +946,8 @@ with tab1:
         """)
         st.caption("Chair can read this aloud at the start of the meeting")
     
-    acknowledgement_done = st.checkbox("✅ Acknowledgement completed", value=selected_record.get('acknowledgement_done', False) if selected_record else False)
-    acknowledgement_by = st.text_input("Led by", value=selected_record.get('acknowledgement_by', '') if selected_record else '', placeholder="Who led the Acknowledgement?")
+    acknowledgement_done = st.checkbox("✅ Acknowledgement completed", value=selected_record.get('acknowledgement_done', False) if selected_record else False, key=f"acknowledgement_done_{_scope}")
+    acknowledgement_by = st.text_input("Led by", value=selected_record.get('acknowledgement_by', '') if selected_record else '', placeholder="Who led the Acknowledgement?", key=f"acknowledgement_by_{_scope}")
     
     st.markdown("---")
     
@@ -957,7 +969,7 @@ with tab1:
                                     value=selected_record.get('icebreaker', '') if selected_record else '',
                                     height=80, 
                                     placeholder="Any notes about how the icebreaker went...",
-                                    key="icebreaker")
+                                    key=f"icebreaker_{_scope}")
     
     st.markdown("---")
     
@@ -993,7 +1005,7 @@ with tab1:
                 f"Notes for {item}", 
                 value=agenda_data.get(item, ''),
                 height=100,
-                key=f"agenda_{item.replace(' ', '_')}",
+                key=f"agenda_{item.replace(' ', '_')}_{_scope}",
                 placeholder=f"Add information/updates for {item}..."
             )
     
@@ -1142,12 +1154,12 @@ with tab1:
         
         minutes_method = st.radio("Minutes Entry Method",
                                   options=["✍️ Manual Entry", "🤖 AI from Transcript"],
-                                  horizontal=True, key="minutes_entry_method")
+                                  horizontal=True, key=f"minutes_entry_method_{_scope}")
         
         if minutes_method == "✍️ Manual Entry":
             st.caption("Enter notes for each standing item. Leave a section blank if it wasn't discussed.")
             seed = _parse_minutes_sections(minutes)
-            section_values = _render_minutes_section_fields(seed, key_prefix="manual_section")
+            section_values = _render_minutes_section_fields(seed, key_prefix=f"manual_section_{_scope}")
             minutes = _build_minutes_from_sections(section_values)
         
         else:  # AI from Transcript
@@ -1371,12 +1383,12 @@ MEETING SYNTHESIS:
                             # The synthesis already merges any multi-part transcript (Step 1
                             # appends rather than overwrites), so a single classification pass
                             # over the whole thing can just replace the draft sections outright.
-                            st.session_state["ai_section_values"] = new_sections
+                            st.session_state[f"ai_section_values_{_scope}"] = new_sections
                             # Sync the edit widgets too — once a widget key exists in
                             # session_state, its `value=` argument is ignored on rerun,
                             # so this is what actually updates what's shown for editing.
                             for key, _ in MEETING_SECTIONS:
-                                st.session_state[f"ai_section_manual_{key}"] = new_sections[key]
+                                st.session_state[f"ai_section_manual_{_scope}_{key}"] = new_sections[key]
 
                             st.success("✅ Minutes generated — review the sections below before saving.")
 
@@ -1389,19 +1401,19 @@ MEETING SYNTHESIS:
                 st.caption("Complete Step 1 above to produce a synthesis, then generate structured minutes from it.")
 
             # ── Review and edit the generated sections before saving ──────────
-            if st.session_state.get("ai_section_values"):
+            if st.session_state.get(f"ai_section_values_{_scope}"):
                 st.markdown("---")
                 st.markdown("#### ✏️ Review and edit before saving")
                 col_edit, col_clear = st.columns([5, 1])
                 with col_clear:
                     st.markdown("<br>", unsafe_allow_html=True)
-                    if st.button("🗑️ Clear draft", key="clear_ai_sections"):
-                        st.session_state["ai_section_values"] = None
+                    if st.button("🗑️ Clear draft", key=f"clear_ai_sections_{_scope}"):
+                        st.session_state[f"ai_section_values_{_scope}"] = None
                         for key, _ in MEETING_SECTIONS:
-                            st.session_state.pop(f"ai_section_manual_{key}", None)
+                            st.session_state.pop(f"ai_section_manual_{_scope}_{key}", None)
                         st.rerun()
-                seed = st.session_state.get("ai_section_values", {})
-                section_values = _render_minutes_section_fields(seed, key_prefix="ai_section_manual")
+                seed = st.session_state.get(f"ai_section_values_{_scope}", {})
+                section_values = _render_minutes_section_fields(seed, key_prefix=f"ai_section_manual_{_scope}")
                 minutes = _build_minutes_from_sections(section_values)
             else:
                 st.info("Paste or upload a transcript, then run Step 1 and Step 2 above to fill in "
@@ -1624,7 +1636,7 @@ with st.expander("📚 PD Session Details", expanded=True):
 
     # PD Title
     default_pd_title = selected_record.get('pd_title', '') if selected_record else ''
-    pd_title = st.text_input("PD Session Title", value=default_pd_title, key="pd_title",
+    pd_title = st.text_input("PD Session Title", value=default_pd_title, key=f"pd_title_{_scope}",
                              placeholder="e.g. Sounds-Write Introduction, Berry Street Module 3, WHS Refresher…")
 
     st.write("**PD Attendance** (Auto-filled from meeting attendance - edit if needed)")
@@ -1634,7 +1646,7 @@ with st.expander("📚 PD Session Details", expanded=True):
     default_pd_absent = selected_record.get('pd_absent', apologies) if selected_record else apologies
     pd_attendees, pd_absent = _attendance_picker(
         "PD Attendees", "PD Absent/Left Early", default_pd_attendees, default_pd_absent,
-        key_prefix="pd_attendance"
+        key_prefix=f"pd_attendance_{_scope}"
     )
     
     st.markdown("---")
@@ -1646,10 +1658,10 @@ with st.expander("📚 PD Session Details", expanded=True):
     pd_notes = selected_record.get('pd_notes', '') if selected_record else ''
     
     pd_method = st.radio("Choose entry method", options=["✍️ Manual Entry", "🤖 AI from Transcript"], 
-                       horizontal=True, key="pd_method")
+                       horizontal=True, key=f"pd_method_{_scope}")
     
     if pd_method == "✍️ Manual Entry":
-        pd_notes = st.text_area("PD Main Points / Notes", value=pd_notes, height=300, key="pd_notes",
+        pd_notes = st.text_area("PD Main Points / Notes", value=pd_notes, height=300, key=f"pd_notes_{_scope}",
                                placeholder="Document key points from the PD session...")
     
     else:  # AI from Transcript
