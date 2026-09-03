@@ -54,7 +54,8 @@ ATTACH_WARNING = (
 ATTACH_ACK = ("I confirm this file contains no student personal information or photos — "
               "anything identifying has gone to EMS.")
 
-SMARTAR_TABLE = "smartar_students"
+SMARTAR_TABLE = "smartar_students"       # legacy — no longer read
+REGISTER_TABLE = "student_register"      # single source of truth for students
 SMARTAR_NAME_COLS = ["student_name", "name", "full_name", "student"]
 
 COMM_TYPES = ["Phone call", "Text message", "Email", "Letter / mail",
@@ -539,6 +540,34 @@ def normalise_program(val):
 SMARTAR_ID_COLS = ["id", "student_id", "uuid", "pk"]
 
 
+def fetch_register_students(client):
+    """Active students from the Student Register (the single front door).
+    Returns (list of (id, initials, program), error)."""
+    try:
+        rows = (client.table(REGISTER_TABLE).select("*")
+                .eq("status", "active").order("initials").execute().data or [])
+    except Exception as e:
+        return [], str(e)
+    out = []
+    for r in rows:
+        ini = (r.get("initials") or "").strip().upper()
+        if not ini:
+            continue
+        prog = normalise_program(r.get("program"))
+        out.append((str(r.get("id")), ini, prog))
+    return out, None
+
+
+def register_archived_initials(client):
+    """Initials of students the register has archived — so they drop out here too."""
+    try:
+        rows = (client.table(REGISTER_TABLE).select("initials,status")
+                .eq("status", "archived").execute().data or [])
+        return {(r.get("initials") or "").strip().upper() for r in rows if r.get("initials")}
+    except Exception:
+        return set()
+
+
 def fetch_smartar_names(sb):
     """Return (list of (sid, name, program), error). sid is a stable SMARTAR key."""
     if sb is None:
@@ -600,77 +629,50 @@ def save_code(client, sid, code):
         pass
 
 
-def build_active_students(op_client, smartar_client):
-    archived = set(get_archived_codes(op_client))
+def build_active_students(op_client, smartar_client=None):
+    """Student list now comes from the Student Register (single source of truth).
+    Register initials ARE the code (register already keeps them unique among
+    active students). Students archived in the register are hidden here too."""
+    comm_archived = set(get_archived_codes(op_client))          # archived in this tool
+    reg_archived = register_archived_initials(op_client)        # archived in the register
+    archived = comm_archived | reg_archived
     comm_codes = set(get_codes(op_client))
-    smartar_students, err = fetch_smartar_names(smartar_client)
-    status = {"connected": smartar_client is not None and err is None,
-              "count": len(smartar_students), "error": err,
-              "with_program": sum(1 for _, _, p in smartar_students if p),
-              "no_program": sum(1 for _, _, p in smartar_students if not p),
-              "hidden": 0, "new": 0}
 
-    pinned = get_code_map(op_client)          # sid -> already-assigned code
-    taken = set(pinned.values())
-    options, seen_codes = [], set()
-    hidden = new_count = 0
+    reg_students, err = fetch_register_students(op_client)
+    status = {"connected": err is None, "count": len(reg_students), "error": err,
+              "with_program": sum(1 for _, _, p in reg_students if p),
+              "no_program": sum(1 for _, _, p in reg_students if not p),
+              "source": "register", "hidden": 0, "new": 0, "unregistered": 0}
 
-    for sid, nm, prog in smartar_students:
-        # 1) if this student already has a pinned code, reuse it
-        code = pinned.get(sid)
-
-        # 1a) upgrade a program-less code once SMARTAR sets a program — but only
-        #     while the student has no logs yet (so nothing gets detached)
-        if code and prog and program_of(code) == "" and code not in comm_codes \
-                and code not in archived:
-            base = initials_from_name(nm)
-            cand = f"{base}-{prog}"
-            if cand not in taken:
-                taken.discard(code)
-                save_code(op_client, sid, cand)
-                code = cand
-                taken.add(code)
-
-        if not code:
-            base = initials_from_name(nm)
-            if not base:
-                continue
-            cand = f"{base}-{prog}" if prog else base
-            # add a number only if that exact code is taken by a DIFFERENT student
-            c, i = cand, 2
-            while c in taken:
-                c = f"{cand}-{i}"
-                i += 1
-            code = c
-            save_code(op_client, sid, code)   # pin it for good
-            taken.add(code)
-            new_count += 1
-
-        if code in archived:
+    options, seen_codes, hidden = [], set(), 0
+    reg_codes = set()
+    for _rid, ini, prog in reg_students:
+        code = f"{ini}-{prog}" if prog else ini
+        reg_codes.add(code)
+        reg_codes.add(ini)                     # tolerate older logs stored under bare initials
+        if code in archived or ini in archived:
             hidden += 1
             continue
-        _disp = display_name(nm)
         tag = "" if prog else "  ⚠️ no program set"
-        # if the "name" is just the initials that the code is built from, don't
-        # print it twice — show the code alone (e.g. 'AM-JP' not 'AM — AM-JP')
-        if _disp.upper() == base_of(code):
-            options.append((f"{code}{tag}", code))
-        else:
-            options.append((f"{_disp} — {code}{tag}", code))
+        options.append((f"{code}{tag}", code))
         seen_codes.add(code)
 
+    # logs saved under a code the register doesn't (yet) have -> flag for merging,
+    # never silently create a student
+    unreg = 0
     for c in sorted(comm_codes):
         if c in archived or c in seen_codes:
             continue
-        options.append((f"{c}  (existing entry)", c))
+        if base_of(c) in {base_of(x) for x in reg_codes}:
+            continue                            # same student under a slightly different code
+        options.append((f"{c}  (not on register)", c))
         seen_codes.add(c)
+        unreg += 1
 
     status["hidden"] = hidden
-    status["new"] = new_count
+    status["unregistered"] = unreg
     options.sort(key=lambda x: x[0].lower())
     return options, status
-
-
 def suggest_code(base, existing):
     base = (base or "").strip().upper()
     existing_up = {c.upper() for c in existing}
@@ -1049,13 +1051,12 @@ with st.expander("🔧 Connection & setup check" + ("  ⚠️ action needed" if 
                    "then refresh this page. If that project does NOT contain your other portal "
                    "tables, you're in the wrong project — match it to the URL shown above.")
 
-smartar = get_smartar_client()
-active_options, smartar_status = build_active_students(client, smartar)
+active_options, reg_status = build_active_students(client)
 code_to_label = {}
 for lbl, code in active_options:
     code_to_label.setdefault(code, lbl)
 
-# local display labels override the SMARTAR-derived label everywhere
+# local display labels override the register-derived label everywhere
 _local_labels = get_labels(client)
 for _c, _l in _local_labels.items():
     if _l:
@@ -1077,32 +1078,27 @@ with tab_log:
     _wn = st.session_state.pop("flash_warn", None)
     if _wn:
         st.warning(_wn)
-    with st.expander("SMARTAR connection status", expanded=False):
-        if not smartar_status["connected"]:
-            st.write("⚠️ Not reading from SMARTAR — using existing students + manual add. "
-                     f"Detail: `{smartar_status['error'] or 'no SMARTAR secrets found'}`")
+    with st.expander("Student register status", expanded=False):
+        if not reg_status["connected"]:
+            st.write("⚠️ Could not read the Student Register. "
+                     f"Detail: `{reg_status['error']}`")
         else:
-            st.write(f"✅ Pulled **{smartar_status['count']}** student(s) from `{SMARTAR_TABLE}`.")
-            _wp = smartar_status.get("with_program", 0)
-            if _wp:
-                st.write(f"🏷️ **{_wp}** have a program (JP/PY/SY), so their code reads like `AD-PY`.")
-            else:
-                st.write("🏷️ No program (JP/PY/SY) found in SMARTAR, so codes are initials only. "
-                         "If SMARTAR does store this, tell me the column name and I'll map it.")
-            _np = smartar_status.get("no_program", 0)
+            st.write(f"✅ **{reg_status['count']}** active student(s) from the "
+                     "**Student Register** (`student_register`). This is the only place "
+                     "students are added — add new students there, and they appear here.")
+            _np = reg_status.get("no_program", 0)
             if _np:
-                st.write(f"⚠️ **{_np}** student(s) have **no program set** — they appear under "
-                         "**Unassigned** on the Students tab, not in a JP/PY/SY column. "
-                         "Set their program in SMARTAR and they'll move across automatically.")
-            _new = smartar_status.get("new", 0)
-            if _new:
-                st.write(f"🆕 Assigned a code to **{_new}** newly-registered student(s) this load.")
-            _hid = smartar_status.get("hidden", 0)
+                st.write(f"⚠️ **{_np}** registered student(s) have **no program set** — "
+                         "they show under **Unassigned**. Set their program in the register.")
+            _un = reg_status.get("unregistered", 0)
+            if _un:
+                st.write(f"📌 **{_un}** code(s) here have logs but are **not on the "
+                         "register** — shown as *(not on register)*. Register the student, "
+                         "then use **Merge** on the Students tab to fold the logs across.")
+            _hid = reg_status.get("hidden", 0)
             if _hid:
-                st.write(f"🗄️ **{_hid}** SMARTAR student(s) are hidden here because that exact "
-                         "code was archived or removed. If someone new is missing, check the "
-                         "Archive tab in case an old student shared their code — then unarchive "
-                         "or give the new student a distinct code.")
+                st.write(f"🗄️ **{_hid}** student(s) hidden (archived in the register "
+                         "or here).")
         if st.button("🔄 Refresh student list", key="log_refresh"):
             st.cache_resource.clear()
             st.rerun()
@@ -1245,11 +1241,11 @@ with tab_students:
 
     st.divider()
     st.divider()
-    _dups = [(lbl, c) for (lbl, c) in active_options if "(existing entry)" in lbl]
+    _dups = [(lbl, c) for (lbl, c) in active_options if "(not on register)" in lbl]
     with st.expander(f"🔀 Merge duplicate folders into registered students"
                      f"{'  ⚠️ ' + str(len(_dups)) + ' found' if _dups else ''}",
                      expanded=bool(_dups)):
-        st.caption("A **(existing entry)** folder is a leftover from before a student was "
+        st.caption("A **(not on register)** folder has logs but no matching register entry "
                    "registered properly. Move its logs into the registered student and it's "
                    "retired — no more duplicates.")
         if not _dups:
@@ -1258,7 +1254,7 @@ with tab_students:
             s_src = st.selectbox("Duplicate to move FROM", [c for _, c in _dups], key="msrc2")
             _sn = len(fetch_records(client, code=s_src))
             _tg = [(lbl, c) for (lbl, c) in active_options
-                   if "(existing entry)" not in lbl and c != s_src]
+                   if "(not on register)" not in lbl and c != s_src]
             s_tgt = st.selectbox("Registered student to move INTO", [c for _, c in _tg],
                                  format_func=lambda c: code_to_label.get(c, c), key="mtgt2")
             st.caption(f"{_sn} record(s) will move into **{code_to_label.get(s_tgt, s_tgt)}**.")
@@ -1523,55 +1519,11 @@ with tab_view:
                 except Exception as e:
                     st.error(f"Could not rename: {e}")
 
-    with st.expander("🩹 Fix double-abbreviated codes (e.g. PH → P-PY)"):
-        st.caption("Older codes were built by abbreviating an already-short SMARTAR name "
-                   "twice (so 'PH' became 'P-PY'). This recomputes them correctly and moves "
-                   "any records across. Safe to run — it only changes codes that are wrong.")
-        _smart, _serr = fetch_smartar_names(smartar)
-        _pins = get_code_map(client)
-        _fixes = []
-        for sid, nm, prog in _smart:
-            old = _pins.get(sid)
-            if not old:
-                continue
-            base = initials_from_name(nm)
-            want = f"{base}-{prog}" if prog else base
-            if program_of(old) and not prog:
-                want = old  # don't strip a program we can't re-derive
-            if want and want != old and base_of(old) != base:
-                _fixes.append((old, want, display_name(nm)))
-        if not _fixes:
-            st.caption("✅ No double-abbreviated codes found.")
-        else:
-            st.write(f"Found **{len(_fixes)}** code(s) to fix:")
-            for old, want, nm in _fixes:
-                st.write(f"• {nm}: `{old}` → `{want}`")
-            if st.button("Fix all", key="fix_codes"):
-                done = 0
-                for old, want, nm in _fixes:
-                    try:
-                        # if target already exists, merge; else rename
-                        if want in get_codes(client) or want in {c for _, c in active_options}:
-                            merge_students(client, old, want)
-                        else:
-                            client.table(TABLE_NAME).update(
-                                {"student_initials": want}).eq("student_initials", old).execute()
-                        # re-pin to the corrected code
-                        for sid, nm2, prog2 in _smart:
-                            if _pins.get(sid) == old:
-                                save_code(client, sid, want)
-                                break
-                        done += 1
-                    except Exception as e:
-                        st.error(f"{old}: {e}")
-                st.success(f"Fixed {done} code(s).")
-                st.rerun()
-
     with st.expander("🔀 Merge a duplicate into a registered student"):
-        st.caption("Fold a leftover **(existing entry)** folder into the proper student "
+        st.caption("Fold a **(not on register)** folder into the proper registered student "
                    "created through the register. All its logs and attachments move across "
                    "and the duplicate is retired.")
-        _legacy = [c for (lbl, c) in active_options if "(existing entry)" in lbl]
+        _legacy = [c for (lbl, c) in active_options if "(not on register)" in lbl]
         if not _legacy:
             st.caption("✅ No leftover duplicate folders — every code is a registered student.")
         else:
@@ -1579,7 +1531,7 @@ with tab_view:
             _sn = len(fetch_records(client, code=src))
             st.caption(f"{_sn} record(s) on **{src}** will move.")
             _targets = [c for (lbl, c) in active_options
-                        if "(existing entry)" not in lbl and c != src]
+                        if "(not on register)" not in lbl and c != src]
             tgt = st.selectbox("Registered student to move INTO", _targets,
                                format_func=lambda c: code_to_label.get(c, c), key="mg_tgt")
             _tn = len(fetch_records(client, code=tgt)) if tgt else 0
