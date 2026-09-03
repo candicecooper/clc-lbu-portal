@@ -773,7 +773,7 @@ st.subheader("📅 Select Meeting")
 # current_staff_meeting_id right as something (like a PD attachment save)
 # might be relying on it still being set.
 try:
-    result = supabase.table('staff_meetings').select('*').order('meeting_date', desc=True).limit(20).execute()
+    result = supabase.table('staff_meetings').select('*').order('meeting_date', desc=True).limit(100).execute()
     existing_meetings = result.data if result.data else []
     st.session_state['_cached_existing_meetings'] = existing_meetings
 except Exception as e:
@@ -785,7 +785,8 @@ except Exception as e:
         st.warning(f"Could not load meetings: {e}")
 
 meeting_options = ["➕ New Meeting"] + [
-    f"{m['meeting_date']} - T{m.get('term', '?')} W{m.get('week_number', '?')} - {m.get('minute_taker', 'Unknown')}"
+    f"{m['meeting_date']} - T{m.get('term', '?')} W{m.get('week_number', '?')} - "
+    f"{m.get('minute_taker', 'Unknown')} (id {m['id']})"
     for m in existing_meetings
 ]
 
@@ -2142,13 +2143,16 @@ meeting_data = {
 # current form state to Supabase on every interaction (every widget change
 # already triggers a script rerun, so this runs then too), so at most the
 # very last unsaved keystroke is ever at risk instead of the whole session.
-_AUTOSAVE_MIN_CONTENT = bool(
-    meeting_data.get("minutes", "").strip()
-    or meeting_data.get("attendees", "").strip()
-    or meeting_data.get("apologies", "").strip()
-    or meeting_data.get("minute_taker", "").strip()
-    or additional_items
-)
+#
+# IMPORTANT: this only ever UPDATEs an already-saved meeting. It used to also
+# silently INSERT a brand new row whenever current_staff_meeting_id was None
+# but the form had content — intended for a genuinely new, not-yet-saved
+# meeting. But if the meeting selection ever got reset for any other reason
+# (a transient fetch failure, a dropdown mismatch) while you had an existing
+# meeting's content on screen, that same fallback would silently create a
+# DUPLICATE of that meeting instead of doing nothing — which is what produced
+# the duplicate T3 Week 7 records. Creating a new meeting now only ever
+# happens when you explicitly click "💾 Save Meeting" below.
 try:
     if not _autosave_safe:
         st.caption("💾 Autosave paused — see the warning above. Existing data won't be touched "
@@ -2158,13 +2162,9 @@ try:
             'id', st.session_state.current_staff_meeting_id
         ).execute()
         st.caption(f"💾 Autosaved {datetime.datetime.now().strftime('%H:%M:%S')}")
-    elif _AUTOSAVE_MIN_CONTENT:
-        # Only auto-create a record once there's something worth keeping —
-        # avoids littering the table with blank drafts from just opening the page.
-        _autosave_result = supabase.table('staff_meetings').insert(meeting_data).execute()
-        if _autosave_result.data:
-            st.session_state.current_staff_meeting_id = _autosave_result.data[0]['id']
-            st.caption(f"💾 Autosaved {datetime.datetime.now().strftime('%H:%M:%S')} (new draft created)")
+    else:
+        st.caption("💾 Autosave will begin once this meeting is saved for the first time — "
+                   "click 💾 Save Meeting below.")
 except Exception as _autosave_err:
     st.caption(f"⚠️ Autosave failed — click 💾 Save Meeting below to save manually ({_autosave_err})")
 
