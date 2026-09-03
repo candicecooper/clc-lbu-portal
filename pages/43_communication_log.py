@@ -419,6 +419,29 @@ def set_label(client, code, label):
         on_conflict="student_initials").execute()
 
 
+def merge_students(client, source, target):
+    """Fold all of `source`'s records, attachments and archive/label rows into
+    `target`, then retire the source code. Returns the number of records moved."""
+    moved = len(fetch_records(client, code=source))
+    # communications (attachments follow via their comm_id, so they move too)
+    client.table(TABLE_NAME).update(
+        {"student_initials": target}).eq("student_initials", source).execute()
+    # if a label was set on the source and target has none, carry it over
+    try:
+        _labs = get_labels(client)
+        if _labs.get(source) and not _labs.get(target):
+            set_label(client, target, _labs[source])
+        client.table(LABEL_TABLE).delete().eq("student_initials", source).execute()
+    except Exception:
+        pass
+    # clear any archive/removal flag left on the source
+    try:
+        client.table(ARCHIVE_TABLE).delete().eq("student_initials", source).execute()
+    except Exception:
+        pass
+    return moved
+
+
 def hide_students(client, codes):
     """Hide students from this tool (no records to archive). Marked in the archive
     table with the three confirmations FALSE so they're distinguishable from
@@ -1186,6 +1209,33 @@ with tab_students:
                     st.rerun()
 
     st.divider()
+    st.divider()
+    _dups = [(lbl, c) for (lbl, c) in active_options if "(existing entry)" in lbl]
+    with st.expander(f"🔀 Merge duplicate folders into registered students"
+                     f"{'  ⚠️ ' + str(len(_dups)) + ' found' if _dups else ''}",
+                     expanded=bool(_dups)):
+        st.caption("A **(existing entry)** folder is a leftover from before a student was "
+                   "registered properly. Move its logs into the registered student and it's "
+                   "retired — no more duplicates.")
+        if not _dups:
+            st.caption("✅ None — every student here came through the register.")
+        else:
+            s_src = st.selectbox("Duplicate to move FROM", [c for _, c in _dups], key="msrc2")
+            _sn = len(fetch_records(client, code=s_src))
+            _tg = [(lbl, c) for (lbl, c) in active_options
+                   if "(existing entry)" not in lbl and c != s_src]
+            s_tgt = st.selectbox("Registered student to move INTO", [c for _, c in _tg],
+                                 format_func=lambda c: code_to_label.get(c, c), key="mtgt2")
+            st.caption(f"{_sn} record(s) will move into **{code_to_label.get(s_tgt, s_tgt)}**.")
+            m_ok = st.checkbox("Confirm merge", key="mok2")
+            if st.button("Merge", key="mgo2", disabled=not (s_tgt and m_ok)):
+                try:
+                    n = merge_students(client, s_src, s_tgt)
+                    st.success(f"Merged {n} record(s) into {code_to_label.get(s_tgt, s_tgt)}.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Could not merge: {e}")
+
     with st.expander("🧹 Clean up — remove test students or ones with no entries"):
         _empty = [(lbl, code) for lbl, code in active_options
                   if code not in _archived and _counts_by_code.get(code, 0) == 0]
@@ -1437,6 +1487,36 @@ with tab_view:
                     st.rerun()
                 except Exception as e:
                     st.error(f"Could not rename: {e}")
+
+    with st.expander("🔀 Merge a duplicate into a registered student"):
+        st.caption("Fold a leftover **(existing entry)** folder into the proper student "
+                   "created through the register. All its logs and attachments move across "
+                   "and the duplicate is retired.")
+        _legacy = [c for (lbl, c) in active_options if "(existing entry)" in lbl]
+        if not _legacy:
+            st.caption("✅ No leftover duplicate folders — every code is a registered student.")
+        else:
+            src = st.selectbox("Duplicate folder to move FROM", _legacy, key="mg_src")
+            _sn = len(fetch_records(client, code=src))
+            st.caption(f"{_sn} record(s) on **{src}** will move.")
+            _targets = [c for (lbl, c) in active_options
+                        if "(existing entry)" not in lbl and c != src]
+            tgt = st.selectbox("Registered student to move INTO", _targets,
+                               format_func=lambda c: code_to_label.get(c, c), key="mg_tgt")
+            _tn = len(fetch_records(client, code=tgt)) if tgt else 0
+            if tgt:
+                st.caption(f"**{code_to_label.get(tgt, tgt)}** currently has {_tn} record(s); "
+                           f"will have {_tn + _sn} after the merge.")
+            mg_ok = st.checkbox(f"Confirm merging {src} into {code_to_label.get(tgt, tgt)}"
+                                if tgt else "Confirm merge", key="mg_ok")
+            if st.button("Merge", key="mg_go", disabled=not (tgt and mg_ok)):
+                try:
+                    n = merge_students(client, src, tgt)
+                    st.success(f"Merged {n} record(s) from {src} into "
+                               f"{code_to_label.get(tgt, tgt)}. The duplicate is gone.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Could not merge: {e}")
 
     try:
         _total = len(fetch_records(client))
