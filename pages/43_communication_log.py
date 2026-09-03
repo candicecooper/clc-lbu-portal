@@ -474,9 +474,38 @@ def unarchive_student(client, code):
 # ----------------------------------------------------------------------------
 # SMARTAR STUDENTS
 # ----------------------------------------------------------------------------
+def _looks_like_initials(name):
+    """True if the SMARTAR 'name' is already an initials/short code rather than a
+    real name — e.g. 'PH', 'A.M.', 'M.H.C.', 'SR'. Then we shouldn't abbreviate it
+    again."""
+    s = str(name or "").strip()
+    if not s:
+        return False
+    letters = re.sub(r"[^A-Za-z]", "", s)
+    # no spaces, short, and either dotted (A.M.) or all short caps (PH, SR, MHC)
+    if " " in s:
+        return False
+    if "." in s and len(letters) <= 4:
+        return True
+    if len(letters) <= 4 and s.upper() == s:
+        return True
+    return False
+
+
 def initials_from_name(name):
-    parts = re.findall(r"[A-Za-z]+", name or "")
+    s = str(name or "").strip()
+    if _looks_like_initials(s):
+        return re.sub(r"[^A-Za-z]", "", s).upper()   # use as-is, don't re-abbreviate
+    parts = re.findall(r"[A-Za-z]+", s)
     return "".join(p[0] for p in parts[:3]).upper()
+
+
+def display_name(name):
+    """Tidy the name shown on the button: strip trailing dots on initials."""
+    s = str(name or "").strip()
+    if _looks_like_initials(s):
+        return re.sub(r"[^A-Za-z]", "", s).upper()   # 'A.M.' -> 'AM', 'PH' -> 'PH'
+    return s
 
 
 SMARTAR_PROG_COLS = ["program", "programme", "sub_school", "subschool", "cohort",
@@ -620,8 +649,14 @@ def build_active_students(op_client, smartar_client):
         if code in archived:
             hidden += 1
             continue
+        _disp = display_name(nm)
         tag = "" if prog else "  ⚠️ no program set"
-        options.append((f"{nm} — {code}{tag}", code))
+        # if the "name" is just the initials that the code is built from, don't
+        # print it twice — show the code alone (e.g. 'AM-JP' not 'AM — AM-JP')
+        if _disp.upper() == base_of(code):
+            options.append((f"{code}{tag}", code))
+        else:
+            options.append((f"{_disp} — {code}{tag}", code))
         seen_codes.add(code)
 
     for c in sorted(comm_codes):
@@ -1487,6 +1522,50 @@ with tab_view:
                     st.rerun()
                 except Exception as e:
                     st.error(f"Could not rename: {e}")
+
+    with st.expander("🩹 Fix double-abbreviated codes (e.g. PH → P-PY)"):
+        st.caption("Older codes were built by abbreviating an already-short SMARTAR name "
+                   "twice (so 'PH' became 'P-PY'). This recomputes them correctly and moves "
+                   "any records across. Safe to run — it only changes codes that are wrong.")
+        _smart, _serr = fetch_smartar_names(smartar)
+        _pins = get_code_map(client)
+        _fixes = []
+        for sid, nm, prog in _smart:
+            old = _pins.get(sid)
+            if not old:
+                continue
+            base = initials_from_name(nm)
+            want = f"{base}-{prog}" if prog else base
+            if program_of(old) and not prog:
+                want = old  # don't strip a program we can't re-derive
+            if want and want != old and base_of(old) != base:
+                _fixes.append((old, want, display_name(nm)))
+        if not _fixes:
+            st.caption("✅ No double-abbreviated codes found.")
+        else:
+            st.write(f"Found **{len(_fixes)}** code(s) to fix:")
+            for old, want, nm in _fixes:
+                st.write(f"• {nm}: `{old}` → `{want}`")
+            if st.button("Fix all", key="fix_codes"):
+                done = 0
+                for old, want, nm in _fixes:
+                    try:
+                        # if target already exists, merge; else rename
+                        if want in get_codes(client) or want in {c for _, c in active_options}:
+                            merge_students(client, old, want)
+                        else:
+                            client.table(TABLE_NAME).update(
+                                {"student_initials": want}).eq("student_initials", old).execute()
+                        # re-pin to the corrected code
+                        for sid, nm2, prog2 in _smart:
+                            if _pins.get(sid) == old:
+                                save_code(client, sid, want)
+                                break
+                        done += 1
+                    except Exception as e:
+                        st.error(f"{old}: {e}")
+                st.success(f"Fixed {done} code(s).")
+                st.rerun()
 
     with st.expander("🔀 Merge a duplicate into a registered student"):
         st.caption("Fold a leftover **(existing entry)** folder into the proper student "
