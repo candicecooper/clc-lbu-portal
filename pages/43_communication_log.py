@@ -542,18 +542,26 @@ SMARTAR_ID_COLS = ["id", "student_id", "uuid", "pk"]
 
 def fetch_register_students(client):
     """Active students from the Student Register (the single front door).
+    'Active' = every row NOT archived — a blank/null status counts as active,
+    which is how the register itself treats new students (it doesn't write a
+    status on insert, relying on the column default).
     Returns (list of (id, initials, program), error)."""
     try:
         rows = (client.table(REGISTER_TABLE).select("*")
-                .eq("status", "active").order("initials").execute().data or [])
+                .order("initials").execute().data or [])
     except Exception as e:
         return [], str(e)
     out = []
     for r in rows:
+        status = str(r.get("status") or "").strip().lower()
+        if status == "archived":
+            continue
         ini = (r.get("initials") or "").strip().upper()
         if not ini:
             continue
-        prog = normalise_program(r.get("program"))
+        prog = (r.get("program") or "").strip().upper()   # register stores JP/PY/SY directly
+        if prog not in ("JP", "PY", "SY"):
+            prog = normalise_program(r.get("program"))     # tolerate other spellings
         out.append((str(r.get("id")), ini, prog))
     return out, None
 
@@ -1099,6 +1107,18 @@ with tab_log:
             if _hid:
                 st.write(f"🗄️ **{_hid}** student(s) hidden (archived in the register "
                          "or here).")
+        with st.expander("🔍 See exactly what the register returns"):
+            try:
+                _raw = (client.table(REGISTER_TABLE).select("*")
+                        .order("initials").execute().data or [])
+                st.caption(f"{len(_raw)} row(s) in `student_register`. "
+                           "A blank status counts as active.")
+                _tbl = [{"initials": r.get("initials"), "program": r.get("program"),
+                         "status": r.get("status") if r.get("status") is not None else "(blank)"}
+                        for r in _raw]
+                st.dataframe(pd.DataFrame(_tbl), use_container_width=True, hide_index=True)
+            except Exception as _re:
+                st.write(f"Could not read the register: `{_re}`")
         if st.button("🔄 Refresh student list", key="log_refresh"):
             st.cache_resource.clear()
             st.rerun()
