@@ -2,10 +2,12 @@ import streamlit as st
 
 # ── Document Archive integration (fails silently if unavailable) ──────────
 try:
-    from archive_utils import archive_once, initials_from_name
+    from archive_utils import archive_once, archive_document, initials_from_name
 except Exception:
     def archive_once(*_a, **_k):
         pass
+    def archive_document(**_k):
+        return None
     def initials_from_name(name):
         parts = [p for p in str(name or "").replace("_", " ").split() if p]
         return "".join(p[0].upper() for p in parts[:2]) or None
@@ -841,10 +843,21 @@ elif view == "📋 Goal Builder":
 
     # ── Manage Students ───────────────────────────────────────────────────────
     with tab_students:
-        st.subheader("Students")
-        st.info("➕ **Students are added in the Student Register only.** "
-                "Register a student there and they appear here automatically. "
-                "This keeps the register, SMARTAR and the Communication Log in step.")
+        st.subheader("Add New Student")
+        c1, c2, c3 = st.columns([3, 1, 1])
+        new_name = c1.text_input("Student first name", key="new_student_name")
+        new_prog = c2.selectbox("Program", PROGRAMS, key="new_prog")
+        if c3.button("Add Student", type="primary"):
+            if new_name.strip():
+                sb.table("smartar_students").insert({
+                    "student_name": new_name.strip(),
+                    "program":      new_prog,
+                    "active":       True,
+                }).execute()
+                st.success(f"✅ {new_name.strip()} added to {new_prog}.")
+                st.rerun()
+            else:
+                st.warning("Please enter a student name.")
 
         st.subheader("Current Students")
         students = get_students()
@@ -1878,8 +1891,7 @@ Use trauma-informed, strengths-based language referencing the BSEM framework (Re
             with st.spinner("Building PDF…"):
                 pdf_bytes = make_student_pdf(selected_name, goal_chart_list)
             _ini = initials_from_name(selected_name)
-            archive_once(
-                f"smartar_pdf_{selected_name}_{datetime.now():%Y%m%d}",
+            _saved = archive_document(
                 source_tool="SMARTAR Goal Builder",
                 doc_type="SMARTAR Goals",
                 title=f"SMARTAR Progress Report — {_ini} — {datetime.now():%d %b %Y}",
@@ -1888,6 +1900,13 @@ Use trauma-informed, strengths-based language referencing the BSEM framework (Re
                 student_initials=_ini,
                 created_by=st.session_state.get("user_email", "unknown"),
             )
+            if _saved:
+                st.success(f"🗄️ Saved to {_ini}'s Document Archive folder.")
+            else:
+                st.error("⚠️ Could NOT save to the Document Archive — the report was NOT "
+                         "filed. This is usually a database permission (RLS) issue on the "
+                         "document_archive table or the document-archive storage bucket. "
+                         "You can still download the PDF below, but it is not in the archive.")
             st.download_button(
                 "⬇️ Download PDF",
                 data=pdf_bytes,
@@ -1910,9 +1929,25 @@ elif view == "⚙️ Admin Panel":
 
     # -- Manage Students --------------------------------------------------------
     with tab_students:
-        st.subheader("Students")
-        st.info("➕ **Students are added in the Student Register only** — not here. "
-                "Registering a student there adds them to SMARTAR automatically.")
+        st.subheader("Add New Student")
+        col1, col2, col3 = st.columns([3, 1, 1])
+        new_sname = col1.text_input("Student name", key="admin_new_student")
+        new_sprog = col2.selectbox("Program", PROGRAMS, key="admin_new_prog")
+        if col3.button("Add Student", type="primary", key="admin_add_student"):
+            if new_sname.strip():
+                try:
+                    sb.table("smartar_students").insert({
+                        "student_name":    new_sname.strip(),
+                        "program":         new_sprog,
+                        "active":          True,
+                        "placement_ended": False,
+                    }).execute()
+                    st.success(f"Added {new_sname.strip()} to {new_sprog}.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
+            else:
+                st.warning("Please enter a student name.")
 
         st.markdown("---")
         st.caption("Active = on placement. Archived = goal archived, student still accessible. Placement Ended = student left CLC, hidden from tools but data preserved.")
