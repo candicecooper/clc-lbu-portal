@@ -841,21 +841,10 @@ elif view == "📋 Goal Builder":
 
     # ── Manage Students ───────────────────────────────────────────────────────
     with tab_students:
-        st.subheader("Add New Student")
-        c1, c2, c3 = st.columns([3, 1, 1])
-        new_name = c1.text_input("Student first name", key="new_student_name")
-        new_prog = c2.selectbox("Program", PROGRAMS, key="new_prog")
-        if c3.button("Add Student", type="primary"):
-            if new_name.strip():
-                sb.table("smartar_students").insert({
-                    "student_name": new_name.strip(),
-                    "program":      new_prog,
-                    "active":       True,
-                }).execute()
-                st.success(f"✅ {new_name.strip()} added to {new_prog}.")
-                st.rerun()
-            else:
-                st.warning("Please enter a student name.")
+        st.subheader("Students")
+        st.info("➕ **Students are added in the Student Register only.** "
+                "Register a student there and they appear here automatically. "
+                "This keeps the register, SMARTAR and the Communication Log in step.")
 
         st.subheader("Current Students")
         students = get_students()
@@ -1921,25 +1910,9 @@ elif view == "⚙️ Admin Panel":
 
     # -- Manage Students --------------------------------------------------------
     with tab_students:
-        st.subheader("Add New Student")
-        col1, col2, col3 = st.columns([3, 1, 1])
-        new_sname = col1.text_input("Student name", key="admin_new_student")
-        new_sprog = col2.selectbox("Program", PROGRAMS, key="admin_new_prog")
-        if col3.button("Add Student", type="primary", key="admin_add_student"):
-            if new_sname.strip():
-                try:
-                    sb.table("smartar_students").insert({
-                        "student_name":    new_sname.strip(),
-                        "program":         new_sprog,
-                        "active":          True,
-                        "placement_ended": False,
-                    }).execute()
-                    st.success(f"Added {new_sname.strip()} to {new_sprog}.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {e}")
-            else:
-                st.warning("Please enter a student name.")
+        st.subheader("Students")
+        st.info("➕ **Students are added in the Student Register only** — not here. "
+                "Registering a student there adds them to SMARTAR automatically.")
 
         st.markdown("---")
         st.caption("Active = on placement. Archived = goal archived, student still accessible. Placement Ended = student left CLC, hidden from tools but data preserved.")
