@@ -2,7 +2,7 @@ import streamlit as st
 
 # ── Document Archive integration (fails silently if unavailable) ──────────
 try:
-    from archive_utils import archive_document, fetch_archive, initials_from_name
+    from archive_utils import archive_document, fetch_archive, initials_from_name, fetch_register
 except Exception:
     def archive_document(**_k):
         return None
@@ -11,6 +11,8 @@ except Exception:
     def initials_from_name(name):
         parts = [p for p in str(name or "").replace("_", " ").split() if p]
         return "".join(p[0].upper() for p in parts[:2]) or None
+    def fetch_register(status="active"):
+        return []
 
 from supabase import create_client
 import json
@@ -706,11 +708,62 @@ with tab_new:
 
     if st.session_state.saved_ok:
         st.success("✅ Overview saved successfully!")
+
+        _rec = st.session_state.get("just_saved_overview")
+        if _rec:
+            _ini = initials_from_name(_rec.get("student_name", ""))
+            _filed = st.session_state.setdefault("_sov_filed", set())
+            _gkey = f"sov_{_ini}_{_rec.get('overview_date')}"
+            if _gkey in _filed:
+                st.info("🗄️ This overview has been saved to the student's archive.")
+            elif not _ini:
+                st.warning("📁 Not linked to a registered student, so it can't be filed to a "
+                           "folder. Pick a registered student next time to enable archiving.")
+            else:
+                st.warning(f"📁 **Save this Sensory Overview to {_ini}'s archive?** "
+                           "It won't be filed until you confirm.")
+                _pv = fetch_archive(student_initials=_ini, doc_type="Sensory Overview",
+                                    include_confidential=True)
+                _sup = False
+                if _pv:
+                    _md = st.radio("A Sensory Overview is already in this student's folder:",
+                                   ["Replace previous version", "Keep both"],
+                                   horizontal=True, key=f"sovmode_{_gkey}")
+                    _sup = (_md == "Replace previous version")
+                pa, pb = st.columns(2)
+                with pa:
+                    if st.button(f"✅ Save to {_ini}'s archive", type="primary",
+                                 use_container_width=True, key=f"sovyes_{_gkey}"):
+                        try:
+                            _bytes = generate_word_report(_rec)
+                            _saved = archive_document(
+                                source_tool="Sensory Overview",
+                                doc_type="Sensory Overview",
+                                title=f"Sensory Overview — {_ini} — {_rec.get('overview_date')}",
+                                file_bytes=_bytes,
+                                filename=f"sensory_{_ini}_{_rec.get('overview_date')}.docx",
+                                student_initials=_ini,
+                                created_by=st.session_state.get("user_email", "unknown"),
+                                supersede=_sup,
+                            )
+                            if _saved:
+                                _filed.add(_gkey)
+                                st.success("Saved to the Document Archive.")
+                                st.rerun()
+                            else:
+                                st.error("Could not save to the archive.")
+                        except Exception as _ae:
+                            st.error(f"Could not save to the archive: {_ae}")
+                with pb:
+                    if st.button("Not yet", use_container_width=True, key=f"sovno_{_gkey}"):
+                        st.caption("Not filed — you'll be asked again next time.")
+
         if st.button("Start another overview"):
             st.session_state.responses = {sec: {it: False for it in m["items"]} for sec, m in SECTIONS.items()}
             st.session_state.saved_ok        = False
             st.session_state.editing_mode    = False
             st.session_state.edit_record_id  = None
+            st.session_state.pop("just_saved_overview", None)
             st.rerun()
 
     # Editing mode banner
@@ -731,13 +784,40 @@ with tab_new:
 
         sc1, sc2, sc3 = st.columns(3)
         with sc1:
-            student_name = st.text_input(
-                "Student name *",
-                value=st.session_state.get("edit_student", deep_link_name or ""),
-                placeholder="Full name",
-            )
+            try:
+                _reg = fetch_register("active")
+            except Exception:
+                _reg = []
+            _reg_opts = sorted({(r.get("initials") or "").strip().upper() for r in _reg
+                                if r.get("initials")})
+            _reg_prog = {(r.get("initials") or "").strip().upper(): (r.get("program") or "")
+                         for r in _reg}
+            _OTHER = "Other / not on register"
+            _edit_name = st.session_state.get("edit_student", deep_link_name or "")
+            _picklist = _reg_opts + [_OTHER]
+            _pick = st.selectbox(
+                "Registered student *", _picklist,
+                index=(_picklist.index(_edit_name) if _edit_name in _reg_opts else 0),
+                help="Students are added in the Student Register. Pick one to tie this "
+                     "overview to their record and file it to their folder.")
+            if _pick != _OTHER:
+                student_name = _pick
+                _picked_prog = _reg_prog.get(_pick, "")
+                if not _reg_opts:
+                    st.info("No active students on the register — use 'Other' to proceed.")
+            else:
+                student_name = st.text_input(
+                    "Student name *",
+                    value=_edit_name if _edit_name not in _reg_opts else "",
+                    placeholder="Full name (not on register)")
+                _picked_prog = ""
+                st.caption("⚠️ Not on the register — register the student so this files to "
+                           "the right folder.")
         with sc2:
-            program = st.selectbox("Program *", ["— Select —", "JP", "PY", "SY"])
+            _progs = ["— Select —", "JP", "PY", "SY"]
+            program = st.selectbox(
+                "Program *", _progs,
+                index=(_progs.index(_picked_prog) if _picked_prog in _progs else 0))
         with sc3:
             completed_by = st.text_input(
                 "Completed by *",
@@ -895,6 +975,7 @@ with tab_new:
                         # Insert new record
                         supabase.table("sensory_overviews").insert(payload).execute()
                     st.session_state.saved_ok       = True
+                    st.session_state["just_saved_overview"] = payload
                     st.session_state.editing_mode   = False
                     st.session_state.edit_record_id = None
                     st.rerun()
