@@ -383,6 +383,47 @@ with tab_current:
                         "to the Archived Students tab and can be reactivated "
                         "if the student returns."
                     )
+
+                    # ── Document completeness check ──────────────────────────
+                    _EXPECTED = [
+                        ("Behaviour Report", "Behaviour Summary"),
+                        ("Sensory Overview", "Sensory Overview"),
+                        ("Safety & Risk Plan", "Safety & Risk Plan"),
+                        ("Communication Log Export", "Communication Log (auto-files on archive)"),
+                    ]
+                    try:
+                        _sdocs = fetch_archive(student_initials=s["initials"],
+                                               include_confidential=True, limit=1000)
+                    except Exception:
+                        _sdocs = []
+                    _have = {d.get("doc_type") for d in _sdocs}
+                    st.markdown("**Document folder check** — what's on file for "
+                                f"**{s['initials']}**:")
+                    _missing = []
+                    for _dt, _label in _EXPECTED:
+                        if _dt in _have:
+                            _n = sum(1 for d in _sdocs if d.get("doc_type") == _dt)
+                            st.markdown(f"- ✅ {_label}  ·  {_n} on file")
+                        elif _dt == "Communication Log Export":
+                            st.markdown(f"- ⏳ {_label}")
+                        else:
+                            st.markdown(f"- ❌ **{_label} — not in the archive**")
+                            _missing.append(_label)
+                    _other = [d for d in _sdocs
+                              if d.get("doc_type") not in {e[0] for e in _EXPECTED}]
+                    if _other:
+                        st.caption(f"Plus {len(_other)} other document(s) on file.")
+                    if _missing:
+                        st.error(
+                            "Missing: **" + ", ".join(_missing) + "**. If these exist, "
+                            "open each tool and use its *Save to archive* prompt before "
+                            "archiving — the folder is the permanent record once the "
+                            "student leaves. You can still archive without them if they "
+                            "genuinely don't apply."
+                        )
+                    else:
+                        st.success("All key documents are on file.")
+
                     ad1, ad2, ad3 = st.columns([2, 1, 2])
                     with ad1:
                         arch_exit = st.date_input(
