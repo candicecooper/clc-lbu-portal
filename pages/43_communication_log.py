@@ -1208,24 +1208,17 @@ with tab_log:
             st.cache_resource.clear()
             st.rerun()
 
-    mode = st.radio("Student", ["Choose existing", "Add new"], horizontal=True, key="student_mode")
+    st.caption("Students are added in the **Student Register** only. If someone's missing "
+               "here, register them first — then click Refresh above.")
     student_code = None
-    if mode == "Choose existing":
-        if active_options:
-            idx = st.selectbox("Student", range(len(active_options)),
-                               format_func=lambda i: active_options[i][0], key="log_pick")
-            student_code = active_options[idx][1]
-            st.caption(f"Will be stored as initials: **{student_code}**")
-        else:
-            st.info("No students available yet — switch to **Add new**.")
+    _pickable = [(lbl, c) for (lbl, c) in active_options if "(not on register)" not in lbl]
+    if _pickable:
+        idx = st.selectbox("Student", range(len(_pickable)),
+                           format_func=lambda i: _pickable[i][0], key="log_pick")
+        student_code = _pickable[idx][1]
+        st.caption(f"Will be stored as initials: **{student_code}**")
     else:
-        existing = [c for (_, c) in active_options] + get_codes(client)
-        raw = st.text_input("New student initials / code",
-                            help="e.g. JS. If two students share initials, use JS2.").strip().upper()
-        student_code = raw or None
-        if raw and raw in {c.upper() for c in existing}:
-            st.warning(f"⚠️ **{raw}** already exists. If this is a *different* student, "
-                       f"use a distinct code like **{suggest_code(raw, existing)}**.")
+        st.info("No registered students yet. Add them in the Student Register, then Refresh.")
 
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -1311,8 +1304,12 @@ with tab_students:
     _archived = set(get_archived_codes(client))
     _groups = {p: [] for p in PROGRAMS}
     _groups["Unassigned"] = []
+    _groups["Not on register"] = []
     for lbl, code in active_options:
         if code in _archived:
+            continue
+        if "(not on register)" in lbl:
+            _groups["Not on register"].append((lbl, code))
             continue
         p = program_of(code) or "Unassigned"
         _groups.setdefault(p, []).append((lbl, code))
@@ -1330,8 +1327,9 @@ with tab_students:
               "SY": "Senior Years", "Unassigned": "Unassigned / older codes"}
     _sel = st.session_state.get("sel_student")
 
-    cols = st.columns(len(PROGRAMS) + (1 if _groups.get("Unassigned") else 0))
-    for i, p in enumerate(PROGRAMS + (["Unassigned"] if _groups.get("Unassigned") else [])):
+    _prog_cols = PROGRAMS + (["Unassigned"] if _groups.get("Unassigned") else [])
+    cols = st.columns(len(_prog_cols))
+    for i, p in enumerate(_prog_cols):
         with cols[i]:
             st.markdown(f"**{_names.get(p, p)}**")
             grp = sorted(_groups.get(p, []), key=lambda x: x[0].lower())
@@ -1343,6 +1341,18 @@ with tab_students:
                 if st.button(f"{_shown}  ({n})", key=f"stu_{code}", use_container_width=True):
                     st.session_state["sel_student"] = code
                     st.rerun()
+
+    if _groups.get("Not on register"):
+        st.markdown("---")
+        st.markdown("**⚠️ Not on register** — these have logs but no register entry. "
+                    "Register the student, then use **Merge** below to fold their logs onto "
+                    "the proper record. You can view them but not add new entries.")
+        for lbl, code in sorted(_groups["Not on register"], key=lambda x: x[0].lower()):
+            n = _counts_by_code.get(code, 0)
+            if st.button(f"{code}  ({n})  — not on register", key=f"stu_{code}",
+                         use_container_width=True):
+                st.session_state["sel_student"] = code
+                st.rerun()
 
     st.divider()
     st.divider()
@@ -1518,7 +1528,16 @@ with tab_students:
                 except Exception as e:
                     st.error(f"Could not change the code: {e}")
 
-        with st.expander("➕ Add an entry for this student", expanded=not _recs):
+        _is_registered = _sel in {c for (lbl, c) in active_options
+                                  if "(not on register)" not in lbl}
+        if not _is_registered:
+            st.warning("⚠️ This student isn't on the register, so new entries are disabled. "
+                       "Register them in the Student Register, then use **Merge** (below) to "
+                       "move these existing logs onto the proper record.")
+        with st.expander("➕ Add an entry for this student",
+                         expanded=(_is_registered and not _recs)):
+            if not _is_registered:
+                st.info("Register this student first to add entries.")
             q1, q2, q3 = st.columns(3)
             with q1:
                 q_date = st.date_input("Date", value=date.today(), key="q_date")
@@ -1542,7 +1561,8 @@ with tab_students:
                                   placeholder="e.g. Newsletter or info sheet")
             q_ack = st.checkbox(ATTACH_ACK, key=f"q_ack_{st.session_state.q_seed}") if q_files else False
 
-            if st.button("💾 Save entry", type="primary", key="q_save"):
+            if st.button("💾 Save entry", type="primary", key="q_save",
+                         disabled=not _is_registered):
                 if not q_sum.strip():
                     st.error("Please add a summary.")
                 elif q_files and not q_ack:
