@@ -22,13 +22,15 @@ import streamlit as st
 
 # ── Document Archive integration (fails silently if unavailable) ──────────
 try:
-    from archive_utils import archive_once, initials_from_name
+    from archive_utils import archive_once, initials_from_name, fetch_register
 except Exception:
     def archive_once(*_a, **_k):
         pass
     def initials_from_name(name):
         parts = [p for p in str(name or "").replace("_", " ").split() if p]
         return "".join(p[0].upper() for p in parts[:2]) or None
+    def fetch_register(status="active"):
+        return []
 
 import json, os, io, time
 from datetime import date, datetime
@@ -132,6 +134,47 @@ def groq_ai_call(prompt, max_tokens=1500, temperature=0.1, api_key=None, system=
     raise last_err
 
 GROQ_KEY = st.secrets.get("GROQ_API_KEY", os.environ.get("GROQ_API_KEY", ""))
+
+
+def archive_prompt(*, guard_key, doc_bytes, filename, title, initials, plan_date):
+    """After a plan is generated, nag the staff member to file it to the
+    student's Document Archive. Shows Confirm / Not yet. 'Not yet' leaves it
+    unfiled so the prompt returns next time. Stops once filed this session."""
+    filed = st.session_state.setdefault("_srp_filed", set())
+    if guard_key in filed:
+        st.success("✅ This plan has been saved to the student's archive.")
+        return
+    if not initials:
+        st.warning("📁 This plan isn't linked to a registered student, so it can't be "
+                   "filed to a student folder. Pick a registered student in Step 1 to enable "
+                   "archiving.")
+        return
+    st.markdown("---")
+    st.warning(f"📁 **Save this Safety & Risk Plan to {initials}'s archive?** "
+               "It won't be filed until you confirm.")
+    a1, a2 = st.columns(2)
+    with a1:
+        if st.button(f"✅ Save to {initials}'s archive", type="primary",
+                     use_container_width=True, key=f"arch_yes_{guard_key}"):
+            try:
+                archive_once(
+                    guard_key,
+                    source_tool="Safety & Risk Plan Builder",
+                    doc_type="Safety & Risk Plan",
+                    title=title,
+                    file_bytes=doc_bytes,
+                    filename=filename,
+                    student_initials=initials,
+                    created_by=st.session_state.get("user_email", "unknown"),
+                )
+                filed.add(guard_key)
+                st.success(f"✅ Saved to {initials}'s Document Archive.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Could not save to the archive: {e}")
+    with a2:
+        if st.button("Not yet", use_container_width=True, key=f"arch_no_{guard_key}"):
+            st.caption("Not filed — you'll be asked again next time you generate the plan.")
 
 # ── CLC standard risk categories (from revised plan) ──────────────────────────
 CLC_RISK_TEMPLATES = [
@@ -508,7 +551,7 @@ def init_state():
         "step": 1,
         "mode": "wizard",            # "wizard" or "express"
         "student": {
-            "name":"","dob":"","age":"","edsas":"","program":"JP",
+            "name":"","dob":"","age":"","edsas":"","program":"JP","initials":"",
             "home_school":"","key_staff":"","clc_context":"",
             "plan_date": str(date.today()),"medical_notes":"",
         },
@@ -1189,6 +1232,37 @@ if st.session_state.step == 1:
     s = st.session_state.student
 
     st.markdown('<div class="sec-head">Student Details</div>', unsafe_allow_html=True)
+
+    # ── Start from a registered student (the register is the front door) ──────
+    try:
+        _reg = fetch_register("active")
+    except Exception:
+        _reg = []
+    _reg_opts = sorted({(r.get("initials") or "").strip().upper() for r in _reg
+                        if r.get("initials")})
+    _reg_prog = {(r.get("initials") or "").strip().upper(): (r.get("program") or "")
+                 for r in _reg}
+    _OTHER = "Other / not on the register"
+    _picklist = _reg_opts + [_OTHER]
+    _prev = s.get("initials", "")
+    _default_ix = _picklist.index(_prev) if _prev in _reg_opts else 0
+    _pick = st.selectbox(
+        "Registered student *", _picklist, index=_default_ix,
+        help="Students are added in the Student Register. Pick one here to tie this "
+             "plan to their record. Use 'Other' only for someone not yet registered.")
+    if _pick != _OTHER:
+        s["initials"] = _pick
+        _p = _reg_prog.get(_pick, "")
+        if _p in ("JP", "PY", "SY"):
+            s["program"] = _p
+        if not _reg_opts:
+            st.info("No active students found on the register — check the register, or "
+                    "use 'Other' to proceed.")
+    else:
+        s["initials"] = ""
+        st.caption("⚠️ Not on the register — please register this student when you can, "
+                   "so the plan files to the right folder.")
+
     c1, c2 = st.columns(2)
     with c1:
         s["name"]  = st.text_input("Full name *", value=s["name"])
@@ -2161,22 +2235,21 @@ elif st.session_state.step == 7:
 
     safe = student['name'].replace(" ","_").replace("/","")
     fname = f"Safety_Risk_Plan_{safe}_CLC_{student['plan_date'].replace('/','')}.docx"
-    _ini = initials_from_name(student['name'])
+    # student initials come from the register pick (Step 1); fall back to derived
+    _ini = (student.get("initials") or "").strip().upper() or initials_from_name(student['name'])
+    _doc_bytes = buf.getvalue() if hasattr(buf, "getvalue") else buf
     st.download_button("⬇️  Download Safety & Risk Plan (.docx)",
                        data=buf, file_name=fname,
                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                       type="primary", use_container_width=True,
-                       on_click=archive_once,
-                       args=(f"srp_{_ini}_{student['plan_date']}",),
-                       kwargs=dict(
-                           source_tool="Safety & Risk Plan Builder",
-                           doc_type="Safety & Risk Plan",
-                           title=f"Safety & Risk Plan — {_ini} — {student['plan_date']}",
-                           file_bytes=buf.getvalue() if hasattr(buf, "getvalue") else buf,
-                           filename=f"Safety_Risk_Plan_{_ini}_CLC_{student['plan_date'].replace('/','')}.docx",
-                           student_initials=_ini,
-                           created_by=st.session_state.get("user_email", "unknown"),
-                       ))
+                       type="primary", use_container_width=True)
+    archive_prompt(
+        guard_key=f"srp_{_ini}_{student['plan_date']}",
+        doc_bytes=_doc_bytes,
+        filename=f"Safety_Risk_Plan_{_ini}_CLC_{student['plan_date'].replace('/','')}.docx",
+        title=f"Safety & Risk Plan — {_ini} — {student['plan_date']}",
+        initials=_ini,
+        plan_date=student['plan_date'],
+    )
 
     st.markdown("<br>", unsafe_allow_html=True)
     col_a, col_b = st.columns(2)
@@ -2687,22 +2760,21 @@ elif st.session_state.step == 7:
     # ── Download ──────────────────────────────────────────────────────────────
     safe  = student['name'].replace(" ","_").replace("/","")
     fname = f"Safety_Risk_Plan_{safe}_CLC_{student['plan_date'].replace('/','')}.docx"
-    _ini = initials_from_name(student['name'])
+    # student initials come from the register pick (Step 1); fall back to derived
+    _ini = (student.get("initials") or "").strip().upper() or initials_from_name(student['name'])
+    _doc_bytes = buf.getvalue() if hasattr(buf, "getvalue") else buf
     st.download_button("⬇️  Download Safety & Risk Plan (.docx)",
                        data=buf, file_name=fname,
                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                       type="primary", use_container_width=True,
-                       on_click=archive_once,
-                       args=(f"srp_{_ini}_{student['plan_date']}",),
-                       kwargs=dict(
-                           source_tool="Safety & Risk Plan Builder",
-                           doc_type="Safety & Risk Plan",
-                           title=f"Safety & Risk Plan — {_ini} — {student['plan_date']}",
-                           file_bytes=buf.getvalue() if hasattr(buf, "getvalue") else buf,
-                           filename=f"Safety_Risk_Plan_{_ini}_CLC_{student['plan_date'].replace('/','')}.docx",
-                           student_initials=_ini,
-                           created_by=st.session_state.get("user_email", "unknown"),
-                       ))
+                       type="primary", use_container_width=True)
+    archive_prompt(
+        guard_key=f"srp_{_ini}_{student['plan_date']}",
+        doc_bytes=_doc_bytes,
+        filename=f"Safety_Risk_Plan_{_ini}_CLC_{student['plan_date'].replace('/','')}.docx",
+        title=f"Safety & Risk Plan — {_ini} — {student['plan_date']}",
+        initials=_ini,
+        plan_date=student['plan_date'],
+    )
 
     st.markdown("<br>", unsafe_allow_html=True)
     col_a, col_b, col_c = st.columns(3)
