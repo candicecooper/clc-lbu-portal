@@ -102,22 +102,33 @@ def get_client():
         return None
 
 
+def _cred(name):
+    """Same lookup the register uses: environment variable first, then secrets."""
+    import os
+    val = os.environ.get(name)
+    if val:
+        return val
+    return _get_secret(name)
+
+
 def get_register_client():
-    """The Student Register lives in its own project — archive_utils tries the
-    SUPABASE_*_STUDENTS credentials first, then the default, then _MEETINGS,
-    verifying each against the student_register table. We do the same. Never
-    raises — returns (None, None, None) if nothing works, so the page still loads."""
+    """Resolve the register's project the SAME way archive_utils does: try the
+    _STUDENTS credentials, then default, then _MEETINGS, and accept the FIRST
+    project that has the `document_archive` table — that's the register/students
+    project. (Verifying against student_register was wrong: an empty
+    student_register also exists in the default project, so we were landing
+    there.) Reads os.environ first, then st.secrets. Never raises."""
     try:
         for suffix in ("_STUDENTS", "", "_MEETINGS"):
-            url = _get_secret(f"SUPABASE_URL{suffix}")
-            key = (_get_secret(f"SUPABASE_KEY{suffix}")
-                   or _get_secret(f"SUPABASE_SERVICE_KEY{suffix}")
-                   or _get_secret(f"SUPABASE_ANON_KEY{suffix}"))
+            url = _cred(f"SUPABASE_URL{suffix}")
+            key = (_cred(f"SUPABASE_KEY{suffix}")
+                   or _cred(f"SUPABASE_SERVICE_KEY{suffix}")
+                   or _cred(f"SUPABASE_ANON_KEY{suffix}"))
             if not url or not key:
                 continue
             try:
                 c = create_client(url, key)
-                c.table(REGISTER_TABLE).select("id").limit(1).execute()
+                c.table("document_archive").select("id").limit(1).execute()
                 return c, (suffix or "(default)"), url
             except Exception:
                 continue
@@ -1050,7 +1061,7 @@ if client is None:
     st.stop()
 
 # --- Connection & setup check ------------------------------------------------
-_req_tables = [TABLE_NAME, ARCHIVE_TABLE, ATTACH_TABLE, LABEL_TABLE, CODEMAP_TABLE]
+_req_tables = [TABLE_NAME, ARCHIVE_TABLE, ATTACH_TABLE, LABEL_TABLE]
 _checks = {t: check_table(client, t) for t in _req_tables}
 _missing = [t for t, (ok, _) in _checks.items() if not ok]
 with st.expander("🔧 Connection & setup check" + ("  ⚠️ action needed" if _missing else "  ✅ all good"),
@@ -1083,6 +1094,29 @@ with st.expander("🔧 Connection & setup check" + ("  ⚠️ action needed" if 
         st.warning("Open the project shown above → SQL editor → run the CREATE TABLE block, "
                    "then refresh this page. If that project does NOT contain your other portal "
                    "tables, you're in the wrong project — match it to the URL shown above.")
+    # --- Student Register connection (separate project) ---
+    st.markdown("---")
+    try:
+        _rc0, _lbl0, _url0 = get_register_client()
+    except Exception:
+        _rc0, _lbl0, _url0 = None, None, None
+    if _rc0 is None:
+        st.write("❌ **Student Register** — could not connect. This app is missing the "
+                 "register's credentials (`SUPABASE_URL_STUDENTS` / `SUPABASE_KEY_STUDENTS`). "
+                 "Copy them from your Student Register app into this app's environment.")
+    else:
+        try:
+            _rows0 = (_rc0.table(REGISTER_TABLE).select("initials").execute().data or [])
+            if _rows0:
+                st.write(f"✅ **Student Register** — connected via {_lbl0} (`{_url0}`), "
+                         f"**{len(_rows0)}** student(s) visible.")
+            else:
+                st.write(f"⚠️ **Student Register** — connected via {_lbl0} (`{_url0}`) but "
+                         f"`{REGISTER_TABLE}` returned **0 rows**. Likely this app's key can't "
+                         "read the table (RLS) — it may need the register's SERVICE key, or a "
+                         "read policy for anon on `student_register`.")
+        except Exception as _re0:
+            st.write(f"⚠️ **Student Register** — connected but read failed: `{_re0}`")
 
 try:
     reg_client, reg_conn_label, reg_conn_url = get_register_client()
@@ -1149,19 +1183,27 @@ with tab_log:
             if _hid:
                 st.write(f"🗄️ **{_hid}** student(s) hidden (archived in the register "
                          "or here).")
-        with st.expander("🔍 See exactly what the register returns"):
+        with st.expander("🔍 See exactly what the register returns", expanded=True):
+            _rc = reg_client or client
             try:
-                _rc = reg_client or client
                 _raw = (_rc.table(REGISTER_TABLE).select("*")
                         .order("initials").execute().data or [])
-                st.caption(f"{len(_raw)} row(s) in `student_register`. "
-                           "A blank status counts as active.")
-                _tbl = [{"initials": r.get("initials"), "program": r.get("program"),
-                         "status": r.get("status") if r.get("status") is not None else "(blank)"}
-                        for r in _raw]
-                st.dataframe(pd.DataFrame(_tbl), use_container_width=True, hide_index=True)
+                if not _raw:
+                    st.warning(f"Connected to `{reg_conn_url or 'this project'}`, but "
+                               f"`{REGISTER_TABLE}` returned **0 rows**. Either this isn't the "
+                               "project the register writes to, or the anon key can't read the "
+                               "table (RLS). The register on its own page may be using a "
+                               "service key that this app doesn't have.")
+                else:
+                    st.caption(f"{len(_raw)} row(s) in `{REGISTER_TABLE}` "
+                               f"(via {reg_conn_label} — `{reg_conn_url}`). "
+                               "A blank status counts as active.")
+                    _tbl = [{"initials": r.get("initials"), "program": r.get("program"),
+                             "status": r.get("status") if r.get("status") is not None else "(blank)"}
+                            for r in _raw]
+                    st.dataframe(pd.DataFrame(_tbl), use_container_width=True, hide_index=True)
             except Exception as _re:
-                st.write(f"Could not read the register: `{_re}`")
+                st.error(f"Reading `{REGISTER_TABLE}` failed: `{_re}`")
         if st.button("🔄 Refresh student list", key="log_refresh"):
             st.cache_resource.clear()
             st.rerun()
