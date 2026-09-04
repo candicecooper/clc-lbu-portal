@@ -11,6 +11,43 @@ except Exception:
         parts = [p for p in str(name or "").replace("_", " ").split() if p]
         return "".join(p[0].upper() for p in parts[:2]) or None
 
+
+def _behaviour_archive_prompt(*, guard_key, doc_bytes, filename, title, initials):
+    """Nag the staff member to file a generated report to the student's archive.
+    Confirm / Not yet; 'Not yet' leaves it unfiled so it asks again next time."""
+    filed = st.session_state.setdefault("_beh_filed", set())
+    if guard_key in filed:
+        st.success("🗄️ This report has been saved to the student's archive.")
+        return
+    if not initials:
+        st.warning("📁 No student initials, so this can't be filed to a folder.")
+        return
+    st.warning(f"📁 **Save this report to {initials}'s archive?** "
+               "It won't be filed until you confirm.")
+    _a, _b = st.columns(2)
+    with _a:
+        if st.button(f"✅ Save to {initials}'s archive", type="primary",
+                     use_container_width=True, key=f"beharc_yes_{guard_key}"):
+            try:
+                archive_once(
+                    guard_key,
+                    source_tool="Behaviour Support Tool",
+                    doc_type="Behaviour Report",
+                    title=title,
+                    file_bytes=doc_bytes,
+                    filename=filename,
+                    student_initials=initials,
+                    created_by=st.session_state.get("user_email", "unknown"),
+                )
+                filed.add(guard_key)
+                st.success(f"✅ Saved to {initials}'s Document Archive.")
+                st.rerun()
+            except Exception as _e:
+                st.error(f"Could not save to the archive: {_e}")
+    with _b:
+        if st.button("Not yet", use_container_width=True, key=f"beharc_no_{guard_key}"):
+            st.caption("Not filed — you'll be asked again next time you generate it.")
+
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -5965,21 +6002,18 @@ def render_student_analysis_page():
                 student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level)
         if docx_file:
             _ini = initials_from_name(student['name'])
+            _beh_bytes = docx_file.getvalue() if hasattr(docx_file, "getvalue") else docx_file
             st.download_button("📄 Behaviour Summary (Word)", docx_file,
                 file_name=f"BehaviourSummary_{student['name'].replace(" ", "_")}_{datetime.now().strftime("%Y%m%d")}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True,
-                on_click=archive_once,
-                args=(f"behsum_{student.get('id','x')}_{datetime.now():%Y%m%d}",),
-                kwargs=dict(
-                    source_tool="Behaviour Support Tool",
-                    doc_type="Behaviour Report",
-                    title=f"Behaviour Summary — {_ini} — {datetime.now():%d %b %Y}",
-                    file_bytes=docx_file.getvalue() if hasattr(docx_file, "getvalue") else docx_file,
-                    filename=f"BehaviourSummary_{_ini}_{datetime.now():%Y%m%d}.docx",
-                    student_initials=_ini,
-                    created_by=st.session_state.get("user_email", "unknown"),
-                ))
+                use_container_width=True)
+            _behaviour_archive_prompt(
+                guard_key=f"behsum_{student.get('id','x')}_{datetime.now():%Y%m%d}",
+                doc_bytes=_beh_bytes,
+                filename=f"BehaviourSummary_{_ini}_{datetime.now():%Y%m%d}.docx",
+                title=f"Behaviour Summary — {_ini} — {datetime.now():%d %b %Y}",
+                initials=_ini,
+            )
 
     st.markdown("---")
     col1, col2 = st.columns(2)
@@ -6478,42 +6512,10 @@ def render_admin_portal():
         else:
             st.info("No active students. Add students below.")
 
-        with st.expander("➕ Add New Student", expanded=False):
-            with st.form("add_student_form"):
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    new_first_name = st.text_input("First Name *", placeholder="Boston")
-                    new_last_name  = st.text_input("Last Name *", placeholder="Murphy")
-                    new_grade      = st.selectbox("Grade *", ["R","Y1","Y2","Y3","Y4","Y5","Y6","Y7","Y8","Y9","Y10","Y11","Y12"])
-                with col2:
-                    new_edid = st.text_input("EDID *", placeholder="ED123456")
-                    new_dob  = st.date_input("Date of Birth *", value=date(2015, 1, 1))
-                with col3:
-                    new_program         = st.selectbox("Program *", ["JP", "PY", "SY"])
-                    new_placement_start = st.date_input("Placement Start Date *", value=date.today())
-                with col4:
-                    st.write("")
-                    new_placement_end = st.date_input("Placement End Date (Optional)", value=None)
-                student_submitted = st.form_submit_button("Add Student", type="primary")
-            if student_submitted:
-                if not new_first_name or not new_last_name or not new_edid or not new_grade or not new_program:
-                    st.error("Please complete all required fields marked with *")
-                else:
-                    new_student = {
-                        "id": f"stu_{uuid.uuid4().hex[:8]}",
-                        "first_name": new_first_name.strip(), "last_name": new_last_name.strip(),
-                        "name": f"{new_first_name.strip()} {new_last_name.strip()}",
-                        "edid": new_edid.strip(), "grade": new_grade, "dob": new_dob.isoformat(),
-                        "program": new_program, "placement_start": new_placement_start.isoformat(),
-                        "placement_end": new_placement_end.isoformat() if new_placement_end else None,
-                        "archived": False
-                    }
-                    if save_student_to_db(new_student):
-                        st.session_state.students = load_students_from_db()
-                        st.success(f"✅ Added {new_student['name']} to {new_program}")
-                        st.rerun()
-                    else:
-                        st.error("❌ Failed to save student to database")
+        st.info("➕ **Students are added in the Student Register only.** "
+                "Register a student there and they sync into this tool automatically. "
+                "This keeps the register, SMARTAR, Sensory and Communication Log in step. "
+                "If a newly-registered student isn't here yet, reload the page.")
 
         st.markdown("### Current Students")
         for program in ["JP", "PY", "SY"]:
