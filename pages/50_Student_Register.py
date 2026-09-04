@@ -386,6 +386,7 @@ with tab_current:
 
                     # ── Document completeness check ──────────────────────────
                     _EXPECTED = [
+                        ("SMARTAR Goals", "SMARTAR Goal Report"),
                         ("Behaviour Report", "Behaviour Summary"),
                         ("Sensory Overview", "Sensory Overview"),
                         ("Safety & Risk Plan", "Safety & Risk Plan"),
