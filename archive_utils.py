@@ -420,19 +420,23 @@ def sync_behaviour_create(initials, program=None, start_date=None,
         return "failed"
 
 
-def sync_behaviour_archive(initials, exit_date=None) -> None:
-    """Mark matching Behaviour-tool students archived. Never raises."""
+def sync_behaviour_archive(initials, exit_date=None) -> int:
+    """Mark matching Behaviour-tool students archived. Returns count updated.
+    Never raises."""
     try:
         client = _get_client()
         payload = {"archived": True}
         if exit_date:
             payload["placement_end"] = str(exit_date)
+        n = 0
         for r in _behaviour_find(client, initials.strip().upper()):
             client.table(BEHAVIOUR_STUDENTS_TABLE).update(payload).eq(
                 "id", r["id"]
             ).execute()
+            n += 1
+        return n
     except Exception:
-        pass
+        return -1  # -1 = errored (distinct from 0 = matched nothing)
 
 
 def sync_behaviour_reactivate(initials) -> None:
@@ -497,15 +501,17 @@ def sync_smartar_create(initials, program=None) -> str:
         return "failed"
 
 
-def sync_smartar_archive(initials) -> None:
-    """Deactivate the student in SMARTAR. Never raises."""
+def sync_smartar_archive(initials) -> int:
+    """Deactivate the student in SMARTAR. Returns rows matched (0 = no match,
+    -1 = errored). Never raises."""
     try:
         client = _get_client()
-        client.table("smartar_students").update({"active": False}).eq(
+        res = client.table("smartar_students").update({"active": False}).eq(
             "student_name", initials.strip().upper()
         ).execute()
+        return len(res.data or [])
     except Exception:
-        pass
+        return -1
 
 
 def sync_smartar_reactivate(initials) -> None:
@@ -540,7 +546,7 @@ def archive_commlog_export(initials, created_by: str = "auto (end of placement)"
             .eq("student_initials", ini).order("comm_date").execute()
         ).data or []
         if not rows:
-            return None
+            return "empty"   # nothing to file — not a failure
 
         from io import BytesIO
         from openpyxl import Workbook
@@ -710,13 +716,36 @@ def set_student_status(record_id: str, status: str, exit_date=None) -> bool:
         ini = row.data[0]["initials"] if row.data else None
         if ini:
             if status == "archived":
-                sync_behaviour_archive(ini, exit_date)
-                sync_smartar_archive(ini)
-                if archive_commlog_export(ini):
-                    try:
-                        st.toast("🗄️ Communication log filed in the archive")
-                    except Exception:
-                        pass
+                _bh = sync_behaviour_archive(ini, exit_date)
+                _sm = sync_smartar_archive(ini)
+                _warn = []
+                if _bh == 0:
+                    _warn.append("Behaviour tool (no matching student found)")
+                elif _bh == -1:
+                    _warn.append("Behaviour tool (error)")
+                if _sm == 0:
+                    _warn.append("SMARTAR (no matching student found)")
+                elif _sm == -1:
+                    _warn.append("SMARTAR (error)")
+                try:
+                    if _warn:
+                        st.warning("⚠️ Archived in the register, but could not confirm "
+                                   "archiving in: " + "; ".join(_warn) + ". Check those "
+                                   "tools so the student isn't left active there.")
+                except Exception:
+                    pass
+                _cl = archive_commlog_export(ini)
+                try:
+                    if _cl == "empty":
+                        st.info("ℹ️ No communication log entries to file for this student.")
+                    elif _cl:
+                        st.success("🗄️ Communication log filed in the archive.")
+                    else:
+                        st.error("⚠️ Communication log could NOT be filed to the archive "
+                                 "(likely a permission/RLS issue). The student is archived, "
+                                 "but check the Document Archive and re-file if needed.")
+                except Exception:
+                    pass
             else:
                 sync_behaviour_reactivate(ini)
                 sync_smartar_reactivate(ini)
