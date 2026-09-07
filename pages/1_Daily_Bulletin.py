@@ -46,15 +46,36 @@ html,body,[data-testid="stAppViewContainer"]{background:#f0f4f0!important;font-f
 .bulletin-date-main{font-family:'Playfair Display',serif;font-size:2rem;color:white;font-weight:700;line-height:1.1}
 .bulletin-date-sub{font-size:.85rem;color:rgba(255,255,255,0.75);margin-top:.25rem;font-weight:400}
 .content-area{padding:1.5rem 2rem 3rem;max-width:1600px;margin:0 auto}
+/* ── Editing cue that's visible everywhere on the page, not just the
+   top bar — a soft amber wash on the whole working area plus an
+   amber left-edge on every card, so it's never ambiguous whether
+   you're looking at the live bulletin or a draft. ─────────────── */
+.content-area.editing{background:#fdf8ee}
+.content-area.editing .section-card{border-left:4px solid #e8a125}
+.hero-edit-badge{position:absolute;top:16px;right:22px;z-index:2;background:#e8a125;color:#1a2e44;font-size:.68rem;font-weight:800;letter-spacing:.06em;padding:.3rem .8rem;border-radius:20px;box-shadow:0 2px 6px rgba(0,0,0,0.15)}
+/* ── Unified header control bar ───────────────────────────────
+   Replaces three separately-boxed banners (week nav / jump-to-date /
+   button row) stacked on top of each other with one calmer container,
+   so the page reads as "hero, then one control strip" rather than a
+   pile of cards before you even reach content. */
+.header-bar{background:white;border-radius:0 0 14px 14px;padding:.65rem 1.5rem .85rem;margin-bottom:1rem;box-shadow:0 2px 10px rgba(0,0,0,0.05)}
+.header-bar .week-label{text-align:center;padding:.45rem 0;font-size:.78rem;font-weight:600}
 .section-card{background:white;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.06);overflow:hidden;margin-bottom:1.25rem}
 .section-card-header{padding:.6rem 1rem;display:flex;align-items:center;gap:.5rem}
+/* ── Palette refresh ──────────────────────────────────────────
+   Previously 7 near-random header colors (green/navy/brown/blue/
+   purple/slate/red) with no shared meaning — busy without being
+   informative. Down to 4 colors that each mean something:
+   green = people/presence on site, navy = general information
+   (the default), amber = a highlighted/responsibility item, red =
+   a change or alert that needs a second look. */
 .section-card-header.green{background:#6BBF4E}
-.section-card-header.navy{background:#1a2e44}
-.section-card-header.brown{background:#A67C6A}
+.section-card-header.navy,
+.section-card-header.brown,
+.section-card-header.blue,
+.section-card-header.purple,
+.section-card-header.slate{background:#1a2e44}
 .section-card-header.amber{background:#e8a125}
-.section-card-header.blue{background:#4a7fb5}
-.section-card-header.purple{background:#7a5bb5}
-.section-card-header.slate{background:#6a7f8a}
 .section-card-header.red{background:#c0392b}
 .section-card-header h3{font-size:.72rem;font-weight:700;color:white;text-transform:uppercase;letter-spacing:.1em;margin:0}
 .section-card-header.amber h3{color:#1a2e44}
@@ -119,6 +140,8 @@ label[data-testid="stWidgetLabel"] p{font-size:.72rem!important;font-weight:600!
   [data-testid="stHorizontalBlock"]>div[data-testid="column"]{width:100%!important;flex:1 1 100%!important;min-width:100%!important}
   .stButton button{font-size:.92rem!important;padding:.65rem .5rem!important;min-height:2.6rem}
   .glance-chip{flex:1 1 calc(50% - .6rem)}
+  .header-bar{padding:.5rem 1rem .65rem;border-radius:0 0 10px 10px}
+  .hero-edit-badge{position:static;display:inline-block;margin-bottom:.5rem}
 }
 </style>
 """, unsafe_allow_html=True)
@@ -994,16 +1017,22 @@ with page_tab:
     fact = bulletin_data.get("fun_fact","")
     fact_clean = _html.escape(_re.sub(r'<[^>]+>', '', fact)).strip()
     fun_fact_html = (f'<div style="background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.2);border-radius:12px;padding:.65rem 1rem;max-width:480px;"><div style="font-size:.65rem;color:rgba(255,255,255,0.6);letter-spacing:.1em;text-transform:uppercase;margin-bottom:.2rem;">\U0001f4a1 Fun Fact</div><div style="font-size:.85rem;color:white;font-weight:500;line-height:1.4;">{fact_clean}</div></div>') if fact_clean else ""
-    st.markdown(f"""<div class="bulletin-hero"><div class="bulletin-hero-inner"><div><div class="bulletin-date-label">{term_label(current_date)}</div><div class="bulletin-date-main">{current_date.strftime("%A %-d %B")}</div><div class="bulletin-date-sub">{current_date.strftime("%Y")}</div></div>{fun_fact_html}</div></div>""", unsafe_allow_html=True)
+    edit_badge_html = '<div class="hero-edit-badge">\u270f\ufe0f EDITING</div>' if edit else ""
+    st.markdown(f"""<div class="bulletin-hero">{edit_badge_html}<div class="bulletin-hero-inner"><div><div class="bulletin-date-label">{term_label(current_date)}</div><div class="bulletin-date-main">{current_date.strftime("%A %-d %B")}</div><div class="bulletin-date-sub">{current_date.strftime("%Y")}</div></div>{fun_fact_html}</div></div>""", unsafe_allow_html=True)
 
-    st.markdown('<div style="background:white;border-bottom:2px solid #e8f0e3;padding:.4rem 1rem 0;">', unsafe_allow_html=True)
+    # \u2500\u2500 Unified header control bar \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    # Was three separately-boxed banners (week nav / jump-to-date /
+    # edit-save-logout buttons) stacked on top of each other. Now one
+    # container: week navigation on top, then a single button row that
+    # folds "jump to date" in as a compact widget instead of its own box.
+    st.markdown('<div class="header-bar">', unsafe_allow_html=True)
     nav_l, nav_m, nav_r = st.columns([1,4,1])
     with nav_l:
         if st.button("\u2190 Prev Week", key="prev_week", use_container_width=True): st.session_state.selected_date = week[0] - timedelta(days=7); st.rerun()
     with nav_m:
         wls = f"Week of {week[0].strftime('%-d %b')} \u2013 {week[-1].strftime('%-d %b %Y')}"
         if date.today() in week: wls += " \u00b7 This Week"
-        st.markdown(f'<div style="text-align:center;padding:.45rem 0;font-size:.78rem;font-weight:600;color:{"#4a8f33" if date.today() in week else "#5a6e5a"};">{wls}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="week-label" style="color:{"#4a8f33" if date.today() in week else "#5a6e5a"};">{wls}</div>', unsafe_allow_html=True)
     with nav_r:
         if st.button("Next Week \u2192", key="next_week", use_container_width=True): st.session_state.selected_date = week[0] + timedelta(days=7); st.rerun()
     day_cols = st.columns(5)
@@ -1011,47 +1040,61 @@ with page_tab:
         with day_cols[i]:
             lbl = d.strftime("%a %-d %b") + (" \u25c9" if d == date.today() else "")
             if st.button(lbl, key=f"day_{d}", use_container_width=True, type="primary" if d==current_date else "secondary"): st.session_state.selected_date = d; st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown('<div style="background:#f8fdf6;border:1.5px solid #d8ead2;border-radius:10px;padding:.6rem 1rem;margin:.75rem 0;">', unsafe_allow_html=True)
-    jump_col1, jump_col2, jump_col3 = st.columns([1,2,1])
-    with jump_col1: st.markdown('<div style="font-size:.8rem;font-weight:600;color:#4a8f33;padding-top:.5rem;">\U0001f4c5 Jump to Date:</div>', unsafe_allow_html=True)
-    with jump_col2: jump_date = st.date_input("Select date", value=current_date, key="jump_date_picker", label_visibility="collapsed")
-    with jump_col3:
-        if st.button("\u2192 Go", key="jump_to_date", use_container_width=True, type="primary"): st.session_state.selected_date = jump_date; st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
 
     if st.session_state.pop("_save_ok", False):
         st.success("\u2705 Bulletin saved successfully!")
 
-    ctrl_cols = st.columns([1,1,1,3,1])
+    st.markdown('<hr style="border:none;border-top:1.5px solid #eef3ec;margin:.75rem 0 .6rem;">', unsafe_allow_html=True)
     if st.session_state.authenticated:
+        ctrl_cols = st.columns([1,1,1,1.6,1])
         with ctrl_cols[0]:
             if st.button("\u270f\ufe0f Edit" if not edit else "\U0001f441\ufe0f View", type="primary" if not edit else "secondary", use_container_width=True): st.session_state.edit_mode = not st.session_state.edit_mode; st.rerun()
         with ctrl_cols[1]:
             if edit and st.button("\U0001f4be Save", type="primary", use_container_width=True): st.session_state["_pending_save"] = True
         with ctrl_cols[2]:
             if st.button("\U0001f6aa Logout", type="secondary", use_container_width=True): st.session_state.authenticated = False; st.session_state.edit_mode = False; st.rerun()
+        with ctrl_cols[3]:
+            # Key is tied to current_date so the widget re-seeds itself to
+            # value=current_date whenever the date changes via ANY control
+            # (prev/next week, a day pill, or a previous jump) — otherwise
+            # a stale picker value from an earlier pick would silently
+            # override navigation done through those other controls on the
+            # very next rerun.
+            jump_date = st.date_input("Jump to date", value=current_date, key=f"jump_date_picker_{current_date}", label_visibility="collapsed")
+            if jump_date != current_date: st.session_state.selected_date = jump_date; st.rerun()
+        with ctrl_cols[4]:
+            st.markdown('<a href="/Daily_Bulletin?display=true" target="_blank" style="display:block;text-align:center;background:#1a2e44;color:white;font-weight:600;font-size:.8rem;padding:.45rem .75rem;border-radius:8px;text-decoration:none;white-space:nowrap;">\U0001f4fa Staff Room</a>', unsafe_allow_html=True)
     else:
+        ctrl_cols = st.columns([1,1.6,1])
         with ctrl_cols[0]:
             if st.button("\U0001f510 Staff Login", type="secondary", use_container_width=True): st.session_state.show_inline_login = not st.session_state.get("show_inline_login", False); st.rerun()
-    with ctrl_cols[4]:
-        st.markdown('<a href="/Daily_Bulletin?display=true" target="_blank" style="display:block;text-align:center;background:#1a2e44;color:white;font-weight:600;font-size:.8rem;padding:.45rem .75rem;border-radius:8px;text-decoration:none;white-space:nowrap;">\U0001f4fa Staff Room</a>', unsafe_allow_html=True)
+        with ctrl_cols[1]:
+            # Key is tied to current_date so the widget re-seeds itself to
+            # value=current_date whenever the date changes via ANY control
+            # (prev/next week, a day pill, or a previous jump) — otherwise
+            # a stale picker value from an earlier pick would silently
+            # override navigation done through those other controls on the
+            # very next rerun.
+            jump_date = st.date_input("Jump to date", value=current_date, key=f"jump_date_picker_{current_date}", label_visibility="collapsed")
+            if jump_date != current_date: st.session_state.selected_date = jump_date; st.rerun()
+        with ctrl_cols[2]:
+            st.markdown('<a href="/Daily_Bulletin?display=true" target="_blank" style="display:block;text-align:center;background:#1a2e44;color:white;font-weight:600;font-size:.8rem;padding:.45rem .75rem;border-radius:8px;text-decoration:none;white-space:nowrap;">\U0001f4fa Staff Room</a>', unsafe_allow_html=True)
 
     if not st.session_state.authenticated and st.session_state.get("show_inline_login", False):
-        with st.container():
-            st.markdown('<div style="background:#f0f7eb;border:1.5px solid #6BBF4E;border-radius:10px;padding:1rem 1.25rem;margin:.5rem 0 .75rem;">', unsafe_allow_html=True)
-            lc1, lc2, lc3 = st.columns([3,1,1])
-            with lc1: quick_pw = st.text_input("Staff password", type="password", key="inline_pw", label_visibility="collapsed", placeholder="Enter staff password\u2026")
-            with lc2:
-                if st.button("\U0001f513 Login", type="primary", use_container_width=True, key="inline_login_btn"):
-                    if quick_pw == ADMIN_PASSWORD: st.session_state.authenticated = True; st.session_state.edit_mode = True; st.session_state.show_inline_login = False; st.rerun()
-                    else: st.error("Incorrect password")
-            with lc3:
-                if st.button("Cancel", type="secondary", use_container_width=True, key="inline_cancel"): st.session_state.show_inline_login = False; st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div style="background:#f0f7eb;border:1.5px solid #6BBF4E;border-radius:10px;padding:1rem 1.25rem;margin-top:.75rem;">', unsafe_allow_html=True)
+        lc1, lc2, lc3 = st.columns([3,1,1])
+        with lc1: quick_pw = st.text_input("Staff password", type="password", key="inline_pw", label_visibility="collapsed", placeholder="Enter staff password\u2026")
+        with lc2:
+            if st.button("\U0001f513 Login", type="primary", use_container_width=True, key="inline_login_btn"):
+                if quick_pw == ADMIN_PASSWORD: st.session_state.authenticated = True; st.session_state.edit_mode = True; st.session_state.show_inline_login = False; st.rerun()
+                else: st.error("Incorrect password")
+        with lc3:
+            if st.button("Cancel", type="secondary", use_container_width=True, key="inline_cancel"): st.session_state.show_inline_login = False; st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="content-area">', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)  # close header-bar
+
+    st.markdown(f'<div class="content-area{" editing" if edit else ""}">', unsafe_allow_html=True)
 
     # \u2500\u2500 Quick-jump nav bar \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     # Replaces the old nested tab bar (s1-s4): the whole bulletin now
@@ -1209,9 +1252,9 @@ with page_tab:
                     st.markdown(transition_bar_html(_trans_names), unsafe_allow_html=True)
                 st.markdown('</div></div>', unsafe_allow_html=True)
 
-        render_travel_card(jp_col, "travel_jp", "\U0001f7e6 Junior Primary \u2013 Travel", "#4a7fb5")
-        render_travel_card(py_col, "travel_py", "\U0001f7e3 Primary Years \u2013 Travel", "#7a5bb5")
-        render_travel_card(sy_col, "travel_sy", "\U0001f7eb Senior Years \u2013 Travel", "#8c6a4f")
+        render_travel_card(jp_col, "travel_jp", "\U0001f7e6 Junior Primary \u2013 Travel", "#3d5d80")
+        render_travel_card(py_col, "travel_py", "\U0001f7e3 Primary Years \u2013 Travel", "#5b4a75")
+        render_travel_card(sy_col, "travel_sy", "\U0001f7eb Senior Years \u2013 Travel", "#7a5c3f")
 
         st.markdown('<div style="font-size:.8rem;font-weight:600;color:#c0392b;margin:.75rem 0 .5rem;">\U0001f504 Travel Plan Changes \u2014 update if a student\u2019s plan changes during the day</div>', unsafe_allow_html=True)
         st.markdown('<div class="section-card"><div class="section-card-header red"><h3>\U0001f504 Travel Plan Changes</h3></div><div class="section-card-body">', unsafe_allow_html=True)
