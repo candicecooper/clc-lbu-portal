@@ -86,7 +86,40 @@ label[data-testid="stWidgetLabel"] p{font-size:.72rem!important;font-weight:600!
 .empty-state{text-align:center;padding:2rem;color:#9ab09a;font-size:.85rem}
 .empty-state .icon{font-size:2rem;margin-bottom:.5rem}
 .auth-gate{max-width:400px;margin:4rem auto;background:white;border-radius:16px;padding:2.5rem;box-shadow:0 8px 32px rgba(0,0,0,0.1);text-align:center}
-@media(max-width:768px){.bulletin-date-main{font-size:1.4rem}.content-area{padding:1rem}}
+/* ── Quick-jump section nav (replaces nested tabs) ─────────── */
+.quicknav{position:sticky;top:56px;z-index:900;background:white;border-bottom:2px solid #e8f0e3;padding:.55rem 2rem;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;box-shadow:0 2px 8px rgba(0,0,0,0.05)}
+.quicknav.editing{background:#fff8e6;border-bottom-color:#e8a125}
+.quicknav a{background:#f4f8f2;color:#4a6640;font-size:.78rem;font-weight:600;padding:.4rem .8rem;border-radius:20px;text-decoration:none;border:1.5px solid #e0e8dc;white-space:nowrap}
+.quicknav a:hover{background:#6BBF4E;color:white;border-color:#6BBF4E}
+.quicknav.editing a{background:white;border-color:#e8c090}
+.quicknav-tag{font-size:.72rem;font-weight:800;color:#92400e;background:#fde68a;padding:.35rem .7rem;border-radius:20px;letter-spacing:.03em;white-space:nowrap;margin-left:auto}
+.section-anchor{position:relative;top:-116px;visibility:hidden}
+/* ── Today at a glance ──────────────────────────────────────── */
+.glance-strip{display:flex;gap:.6rem;flex-wrap:wrap;margin:0 0 1rem}
+.glance-chip{background:white;border:1.5px solid #e0e8dc;border-radius:12px;padding:.55rem 1rem;display:flex;align-items:center;gap:.6rem;text-decoration:none;box-shadow:0 1px 4px rgba(0,0,0,0.05)}
+.glance-chip .num{font-size:1.25rem;font-weight:800;color:#1a2e44;line-height:1}
+.glance-chip .lbl{font-size:.7rem;font-weight:700;color:#7a907a;text-transform:uppercase;letter-spacing:.04em}
+.glance-chip.zero{opacity:.55}
+.glance-chip.zero .num{color:#4a8f33}
+.glance-chip.alert{border-color:#c0392b;background:#fdecea}
+.glance-chip.alert .num{color:#c0392b}
+/* ── Section dividers (replace the old nested tab bar) ─────── */
+.section-divider{display:flex;align-items:center;gap:.65rem;margin:2rem 0 1rem}
+.section-divider .num-badge{background:#1a2e44;color:white;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:800;flex-shrink:0}
+.section-divider h2{font-size:1.1rem;font-weight:700;color:#1a2e44;margin:0}
+.section-divider .rule{flex:1;height:2px;background:#e0e8dc}
+/* ── Mobile responsiveness ──────────────────────────────────── */
+@media(max-width:768px){
+  .bulletin-date-main{font-size:1.4rem}
+  .content-area{padding:1rem .75rem 2rem}
+  .top-nav{padding:0 1rem}
+  .quicknav{padding:.5rem 1rem;top:56px}
+  .section-anchor{top:-150px}
+  [data-testid="stHorizontalBlock"]{flex-wrap:wrap!important}
+  [data-testid="stHorizontalBlock"]>div[data-testid="column"]{width:100%!important;flex:1 1 100%!important;min-width:100%!important}
+  .stButton button{font-size:.92rem!important;padding:.65rem .5rem!important;min-height:2.6rem}
+  .glance-chip{flex:1 1 calc(50% - .6rem)}
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -190,6 +223,47 @@ def transition_bar_html(names, compact=False):
     return (f'<div style="margin-top:.35rem;background:#fff3e0;border:1px solid #e8a125;border-radius:6px;'
             f'padding:{pad};font-size:{size};color:#7a5200;font-weight:600;line-height:1.3;">'
             f'\U0001f504 On Transition: {", ".join(names)}</div>')
+
+# ── TODAY AT A GLANCE ────────────────────────────────────────
+# One-line summary chips shown right under the hero header, so staff can
+# tell at a single glance whether anything today needs attention — without
+# clicking into any section. Each chip links to the section anchor that has
+# the detail. Replaces having to open every section just to check.
+def render_glance_strip(bulletin_data, notices_count, program_change_count):
+    staff_n    = len([r for r in bulletin_data.get("staff_absent", [])   if (r.get("Staff Member") or "").strip() or (r.get("TRT") or "").strip()])
+    student_n  = len([r for r in bulletin_data.get("student_absent", []) if (r.get("Student") or "").strip()])
+    excursion_n = len([r for r in bulletin_data.get("excursions", [])       if any(v for v in r.values())])
+    visitor_n   = len([r for r in bulletin_data.get("visitors_on_site", []) if any(v for v in r.values())])
+    travel_chg_n = len([r for r in bulletin_data.get("travel_changes", [])  if any(v for v in r.values())])
+
+    def chip(anchor, icon, n, label, alert=False):
+        cls = "alert" if (alert and n) else ("zero" if not n else "")
+        return (f'<a class="glance-chip {cls}" href="#{anchor}">{icon}'
+                f'<span class="num">{n}</span><span class="lbl">{label}</span></a>')
+
+    chips = []
+    if notices_count:
+        chips.append(chip("sec-notices", "\U0001f4e2", notices_count, "Notices"))
+    chips += [
+        chip("sec-staff", "\U0001f645", staff_n, "Staff Absent"),
+        chip("sec-staff", "\U0001f392", student_n, "Students Absent"),
+        chip("sec-staff", "\U0001f68c", excursion_n, "Excursions"),
+        chip("sec-staff", "\U0001f465", visitor_n, "Visitors"),
+        chip("sec-travel", "\U0001f504", travel_chg_n, "Travel Changes", alert=True),
+        chip("sec-program", "\U0001f4ca", program_change_count, "Program Changes"),
+    ]
+    st.markdown(f'<div class="glance-strip">{"".join(chips)}</div>', unsafe_allow_html=True)
+
+def section_divider(anchor_id, num, icon, title):
+    """Big, clearly-labelled section header with a jump-target anchor — used
+    in place of the old nested tab bar so the whole bulletin is one flowing,
+    scannable page instead of tabs-within-a-tab."""
+    st.markdown(
+        f'<div id="{anchor_id}" class="section-anchor"></div>'
+        f'<div class="section-divider"><div class="num-badge">{num}</div>'
+        f'<h2>{icon} {title}</h2><div class="rule"></div></div>',
+        unsafe_allow_html=True
+    )
 
 def default_bulletin():
     return {
@@ -508,46 +582,6 @@ def load_todays_meeting_room_bookings(for_date):
     except Exception:
         return []
 
-def load_todays_trade_bookings(for_date):
-    """Load tradesperson/contractor bookings for a given date — public-safe only.
-    Full detail (company, contact, phone, internal notes) lives in
-    56_Trade_Bookings.py and is never requested here."""
-    try:
-        sb = _get_sb()
-        response = (
-            sb.table("trade_bookings")
-            .select("id,booking_date,start_time,end_time,display_category,work_summary,status")
-            .eq("booking_date", str(for_date))
-            .neq("status", "Cancelled")
-            .execute()
-        )
-        rows = response.data or []
-        st.session_state["_trade_bookings_last_error"] = None
-        return sorted(rows, key=lambda x: str(x.get("start_time") or ""))
-    except Exception as _tb_err:
-        st.session_state["_trade_bookings_last_error"] = str(_tb_err)
-        return []
-
-def trade_bookings_as_visitor_rows(for_date):
-    """Trade/contractor bookings reframed as Visitors-on-Site rows — same
-    sanitized fields as everywhere else (no company/contact/phone)."""
-    out = []
-    for b in load_todays_trade_bookings(for_date):
-        category = b.get("display_category") or "Onsite Works"
-        summary = b.get("work_summary") or ""
-        label = f"{category} - {summary}" if summary else category
-        start_t = (b.get("start_time") or "")[:5]
-        end_t = (b.get("end_time") or "")[:5]
-        out.append({
-            "Visitor Name": f"🔧 {label}",
-            "Reason": "Trade/Contractor",
-            "Staff Responsible": b.get("booked_by") or "",
-            "Arriving": start_t,
-            "Departing": end_t,
-            "Location": b.get("location_onsite") or "",
-        })
-    return out
-
 def load_notices(for_date=None):
     try:
         q = _get_sb().table("daily_notices").select("*").order("created_at", desc=False)
@@ -805,7 +839,7 @@ if params.get("display") == "true":
         kitchen = sr.get("kitchen_duties","") or "\u2014"
         st.markdown(f'<div class="dp"><div class="dp-header amber">\u2b50 Staff Responsibilities</div><div class="dp-body"><div style="margin-bottom:.35rem;"><span class="kitchen-val">\U0001f373 Kitchen: {kitchen}</span></div><div style="margin-bottom:.2rem;"><span class="resp-label">\U0001f4cc PD Focus</span><br><span class="resp-val">{sr.get("meeting_pd_focus","") or "\u2014"}</span></div><div style="margin-bottom:.2rem;"><span class="resp-label">\U0001fa91 Chair</span><br><span class="resp-val">{sr.get("chair","") or "\u2014"}</span></div><div><span class="resp-label">\U0001f4dd Minutes</span><br><span class="resp-val">{sr.get("minutes","") or "\u2014"}</span></div></div></div>', unsafe_allow_html=True)
 
-    _vis_rows = [r for r in d_data.get("visitors_on_site", []) if any(r.get(k,"") for k in ["Visitor Name","Reason","Staff Responsible"])] + trade_bookings_as_visitor_rows(today)
+    _vis_rows = [r for r in d_data.get("visitors_on_site", []) if any(r.get(k,"") for k in ["Visitor Name","Reason","Staff Responsible"])]
     if _vis_rows:
         _vis_html = "".join([f'<tr><td><strong style="color:#1a2e44;">{r.get("Visitor Name","")}</strong></td><td style="font-size:.7rem;">{r.get("Reason","")}</td><td style="font-size:.7rem;">{r.get("Staff Responsible","")}</td><td style="font-size:.7rem;">{r.get("Arriving","")}</td><td style="font-size:.7rem;">{r.get("Departing","")}</td><td style="font-size:.7rem;">{r.get("Location","")}</td></tr>' for r in _vis_rows])
         st.markdown(f'<div class="dp"><div class="dp-header green">👥 Visitors</div><div class="dp-body"><table class="dt"><tr><th>Visitor</th><th>Reason</th><th>Staff</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>{_vis_html}</table></div></div>', unsafe_allow_html=True)
@@ -934,6 +968,10 @@ st.markdown(f'<div class="top-nav"><div class="top-nav-left"><div class="top-nav
 
 current_date = st.session_state.selected_date
 bulletin_data = load_bulletin(current_date)
+# Hoisted so both the "at a glance" strip and the Program Changes section
+# below use the same single fetch instead of loading twice.
+_pcm_changes_today = load_pc_manager_changes(current_date)
+_admin_notices_today = load_notices(for_date=current_date)
 
 page_tab, quickadd_tab, archive_tab, login_tab = st.tabs(["\U0001f4cb Bulletin", "\U0001f4dd Quick Add", "\U0001f5c2\ufe0f Archive", "\U0001f510 Staff"])
 
@@ -1015,8 +1053,32 @@ with page_tab:
 
     st.markdown('<div class="content-area">', unsafe_allow_html=True)
 
-    _admin_notices = load_notices(for_date=current_date)
+    # \u2500\u2500 Quick-jump nav bar \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    # Replaces the old nested tab bar (s1-s4): the whole bulletin now
+    # flows as one page, and this sticky strip lets staff jump straight
+    # to a section instead of clicking through tabs-within-a-tab.
+    _quicknav_class = "quicknav editing" if edit else "quicknav"
+    _quicknav_tag = '<span class="quicknav-tag">\u270f\ufe0f Editing</span>' if edit else ""
+    _quicknav_links = ['<a href="#sec-notices">\U0001f4e2 Notices</a>'] if (_admin_notices_today or edit) else []
+    _quicknav_links += [
+        '<a href="#sec-staff">\U0001f465 Staff &amp; Meetings</a>',
+        '<a href="#sec-travel">\U0001f68c Travel &amp; Vehicles</a>',
+        '<a href="#sec-responsibilities">\U0001f4cc Responsibilities &amp; NIT</a>',
+        '<a href="#sec-program">\U0001f4ca Program Changes</a>',
+    ]
+    st.markdown(
+        f'<div class="{_quicknav_class}">{"".join(_quicknav_links)}{_quicknav_tag}</div>',
+        unsafe_allow_html=True
+    )
+
+    # \u2500\u2500 Today at a glance \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    # One-line summary chips so staff can tell at a glance whether
+    # anything today needs attention, without opening every section.
+    render_glance_strip(bulletin_data, len(_admin_notices_today), len(_pcm_changes_today))
+
+    _admin_notices = _admin_notices_today
     if _admin_notices or edit:
+        st.markdown('<div id="sec-notices" class="section-anchor"></div>', unsafe_allow_html=True)
         st.markdown('<div class="section-card"><div class="section-card-header green"><h3>\U0001f4dd Staff Notices</h3></div><div class="section-card-body">', unsafe_allow_html=True)
         if _admin_notices:
             for _n in _admin_notices:
@@ -1032,9 +1094,8 @@ with page_tab:
             st.markdown('<div style="text-align:center;padding:1rem;color:#9ab09a;font-size:.85rem;">No notices today \u2014 staff can add via the \U0001f4dd Quick Add tab</div>', unsafe_allow_html=True)
         st.markdown('</div></div>', unsafe_allow_html=True)
 
-    s1, s2, s3, s4 = st.tabs(["\U0001f465 Staff & Meetings","\U0001f68c Travel & Vehicles","\U0001f4cc Responsibilities & NIT","\U0001f4ca Program Changes"])
-
-    with s1:
+    section_divider("sec-staff", 1, "\U0001f465", "Staff & Meetings")
+    if True:
         import pandas as pd
         if edit:
             auto_fact = daily_fun_fact(current_date); current_fact = (bulletin_data.get("fun_fact") or "").strip()
@@ -1108,7 +1169,6 @@ with page_tab:
             st.markdown('</div></div>', unsafe_allow_html=True)
 
             st.markdown('<div class="section-card"><div class="section-card-header green"><h3>\U0001f465 Visitors on Site</h3></div><div class="section-card-body">', unsafe_allow_html=True)
-            _trade_vis_rows = trade_bookings_as_visitor_rows(current_date)
             if edit:
                 _vis_raw = bulletin_data.get("visitors_on_site") or []
                 if not _vis_raw:
@@ -1117,22 +1177,14 @@ with page_tab:
                 vis_edited = st.data_editor(vis_df, key="vis_editor", hide_index=True, use_container_width=True, num_rows="dynamic",
                     column_config={"Reason": st.column_config.SelectboxColumn("Reason", options=VISITOR_REASON_OPTIONS, required=False)})
                 bulletin_data["visitors_on_site"] = vis_edited.to_dict("records")
-                if _trade_vis_rows:
-                    st.caption("🔧 Auto-added from Trade Bookings — edit or cancel these there, not here:")
-                    st.markdown('<table class="data-table"><tr><th>Visitor</th><th>Reason</th><th>Staff Responsible</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>'+"".join([f"<tr><td><strong>{r.get('Visitor Name','')}</strong></td><td>{r.get('Reason','')}</td><td>{r.get('Staff Responsible','')}</td><td>{r.get('Arriving','')}</td><td>{r.get('Departing','')}</td><td>{r.get('Location','')}</td></tr>" for r in _trade_vis_rows])+"</table>", unsafe_allow_html=True)
-                    st.markdown('<div style="margin-top:0.4rem;font-size:0.75rem;color:#6b7280;">📌 <a href="/Trade_Bookings" target="_self" style="color:#1a2e44;text-decoration:none;font-weight:600;">Manage Trade Bookings →</a></div>', unsafe_allow_html=True)
-                elif st.session_state.get("_trade_bookings_last_error"):
-                    st.warning(f"⚠️ Couldn't load trade bookings: {st.session_state['_trade_bookings_last_error']}")
             else:
-                vis_rows = bulletin_data.get("visitors_on_site", []) + _trade_vis_rows
-                has_vis = any(any(v for v in r.values()) for r in vis_rows)
+                vis_rows = bulletin_data.get("visitors_on_site", []); has_vis = any(any(v for v in r.values()) for r in vis_rows)
                 if has_vis: st.markdown('<table class="data-table"><tr><th>Visitor</th><th>Reason</th><th>Staff Responsible</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>'+"".join([f"<tr><td><strong>{r.get('Visitor Name','')}</strong></td><td>{r.get('Reason','')}</td><td>{r.get('Staff Responsible','')}</td><td>{r.get('Arriving','')}</td><td>{r.get('Departing','')}</td><td>{r.get('Location','')}</td></tr>" for r in vis_rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
                 else: st.markdown('<div class="empty-state"><div class="icon">\U0001f6b6</div>No visitors today</div>', unsafe_allow_html=True)
-                if not _trade_vis_rows:
-                    st.markdown('<div style="margin-top:0.4rem;font-size:0.75rem;color:#6b7280;">📌 <a href="/Trade_Bookings" target="_self" style="color:#1a2e44;text-decoration:none;font-weight:600;">Book a Tradesperson →</a></div>', unsafe_allow_html=True)
             st.markdown('</div></div>', unsafe_allow_html=True)
 
-    with s2:
+    section_divider("sec-travel", 2, "\U0001f68c", "Travel & Vehicles")
+    if True:
         import pandas as pd
         st.markdown('<div style="font-size:.8rem;font-weight:600;color:#4a6640;margin-bottom:.5rem;">\U0001f4c5 Planned Travel \u2014 expected arrivals &amp; departures</div>', unsafe_allow_html=True)
         jp_col, py_col, sy_col = st.columns(3)
@@ -1217,7 +1269,8 @@ with page_tab:
             else: st.markdown('<div class="empty-state"><div class="icon">\U0001f697</div>No vehicle bookings today</div>', unsafe_allow_html=True)
         st.markdown('</div></div>', unsafe_allow_html=True)
 
-    with s3:
+    section_divider("sec-responsibilities", 3, "\U0001f4cc", "Responsibilities & NIT")
+    if True:
         resp_col, nit_col, room_col = st.columns(3)
         with resp_col:
             st.markdown('<div class="section-card"><div class="section-card-header amber"><h3>\u2b50 Staff Responsibilities</h3></div><div class="section-card-body">', unsafe_allow_html=True)
@@ -1264,7 +1317,8 @@ with page_tab:
 
             st.markdown('</div></div>', unsafe_allow_html=True)
 
-    with s4:
+    section_divider("sec-program", 4, "\U0001f4ca", "Program Changes")
+    if True:
         st.markdown(
             '<div style="background:#fff8f0;border:1.5px solid #e8c090;border-radius:10px;'
             'padding:.75rem 1rem;margin-bottom:.75rem;">'
@@ -1278,7 +1332,7 @@ with page_tab:
             '</div>',
             unsafe_allow_html=True
         )
-        _pcm_changes = load_pc_manager_changes(current_date)
+        _pcm_changes = _pcm_changes_today
         if not _pcm_changes:
             st.markdown(
                 '<div style="text-align:center;padding:1.25rem;color:#9ab09a;font-size:.85rem;'
