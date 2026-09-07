@@ -1,53 +1,5 @@
 from theme import apply_clc_theme
 import streamlit as st
-
-# ── Document Archive integration (fails silently if unavailable) ──────────
-try:
-    from archive_utils import archive_once, initials_from_name
-except Exception:
-    def archive_once(*_a, **_k):
-        pass
-    def initials_from_name(name):
-        parts = [p for p in str(name or "").replace("_", " ").split() if p]
-        return "".join(p[0].upper() for p in parts[:2]) or None
-
-
-def _behaviour_archive_prompt(*, guard_key, doc_bytes, filename, title, initials):
-    """Nag the staff member to file a generated report to the student's archive.
-    Confirm / Not yet; 'Not yet' leaves it unfiled so it asks again next time."""
-    filed = st.session_state.setdefault("_beh_filed", set())
-    if guard_key in filed:
-        st.success("🗄️ This report has been saved to the student's archive.")
-        return
-    if not initials:
-        st.warning("📁 No student initials, so this can't be filed to a folder.")
-        return
-    st.warning(f"📁 **Save this report to {initials}'s archive?** "
-               "It won't be filed until you confirm.")
-    _a, _b = st.columns(2)
-    with _a:
-        if st.button(f"✅ Save to {initials}'s archive", type="primary",
-                     use_container_width=True, key=f"beharc_yes_{guard_key}"):
-            try:
-                archive_once(
-                    guard_key,
-                    source_tool="Behaviour Support Tool",
-                    doc_type="Behaviour Report",
-                    title=title,
-                    file_bytes=doc_bytes,
-                    filename=filename,
-                    student_initials=initials,
-                    created_by=st.session_state.get("user_email", "unknown"),
-                )
-                filed.add(guard_key)
-                st.success(f"✅ Saved to {initials}'s Document Archive.")
-                st.rerun()
-            except Exception as _e:
-                st.error(f"Could not save to the archive: {_e}")
-    with _b:
-        if st.button("Not yet", use_container_width=True, key=f"beharc_no_{guard_key}"):
-            st.caption("Not filed — you'll be asked again next time you generate it.")
-
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -83,62 +35,6 @@ def init_supabase() -> Client:
         return None
 
 supabase: Client = init_supabase()
-
-# ══════════════════════════════════════════════════════════════════════════
-# RESILIENT GROQ AI HELPER
-# Fixes the recurring portal-wide Groq issue (Aug 2026), which turned out to
-# have two stacked causes:
-#   1) A stale groq/httpx combo can raise
-#      "Client.__init__() got an unexpected keyword argument 'proxies'" on
-#      client creation — worked around by retrying with an explicit http_client.
-#   2) Groq retired "llama-3.3-70b-versatile" for free/dev-tier accounts
-#      (16 Aug 2026), so any call hardcoded to that model can start failing
-#      with a model-not-found/decommissioned error — worked around by trying
-#      a small chain of current models instead of one hardcoded name.
-# It also self-heals 413 "request too large" errors by halving max_tokens
-# and retrying, instead of failing outright.
-# Use groq_ai_call(prompt, ...) anywhere in this file instead of building a
-# Groq client / calling chat.completions.create directly.
-# ══════════════════════════════════════════════════════════════════════════
-_GROQ_MODEL_CHAIN = ["openai/gpt-oss-120b", "qwen/qwen3.6-27b", "llama-3.3-70b-versatile"]
-
-def _get_groq_client(api_key):
-    from groq import Groq
-    try:
-        return Groq(api_key=api_key)
-    except TypeError:
-        # Older/newer groq+httpx combo mismatch (the "proxies" kwarg error).
-        import httpx
-        return Groq(api_key=api_key, http_client=httpx.Client())
-
-def groq_ai_call(prompt, max_tokens=1500, temperature=0.1, api_key=None):
-    """Resilient Groq chat-completion call. Returns the response text (str).
-    Raises the last error encountered if every model/retry combination fails."""
-    api_key = api_key or st.secrets.get("GROQ_API_KEY", "")
-    if not api_key:
-        raise RuntimeError("Groq API key not configured.")
-    client = _get_groq_client(api_key)
-
-    last_err = None
-    for model in _GROQ_MODEL_CHAIN:
-        tokens = max_tokens
-        for _attempt in range(2):  # original size, then one halved retry
-            try:
-                resp = client.chat.completions.create(
-                    model=model,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=tokens,
-                    temperature=temperature,
-                )
-                return resp.choices[0].message.content.strip()
-            except Exception as e:
-                last_err = e
-                msg = str(e).lower()
-                if "413" in msg or "too large" in msg:
-                    tokens = max(256, tokens // 2)
-                    continue  # retry same model with a smaller token budget
-                break  # any other error: move on to the next model in the chain
-    raise last_err
 
 st.set_page_config(page_title="CLC Behaviour Support", page_icon="📊", layout="wide", initial_sidebar_state="collapsed")
 
@@ -225,12 +121,6 @@ ANTECEDENTS = [
     "Transition - from play/yard to classroom",
     "Transition - from home to the program",
     "Transition - off a device",
-    "Transition - from carpark to CLC on arrival",
-    "Transition - from CLC to carpark",
-    "Transition - separating from parent/caregiver to CLC",
-    "Transition - from preferred to non-preferred activity",
-    "Transition - recess/lunch play back into class",
-    "Transition - class teacher to NIT/TRT teacher",
     "--- INSTRUCTIONS ---",
     "Instructions - following instructions given by an adult",
     "Instructions - following task demands",
@@ -308,44 +198,12 @@ def get_clinical_behaviour(raw: str) -> str:
     return raw
 
 INTERVENTIONS = ["CPI Supportive stance", "Offered break", "Reduced demand", "Provided choices",
-                "Removed audience", "Visual supports", "Co-regulation", "Prompted coping skill", "Redirection",
-                "Lock down called", "Distraction", "Providing Time"]
-LOCATIONS = ["JP Room", "PY Room", "SY Room", "Yard", "Playground", "Library", "Kitchen", "Office", 
-             "Student Gate", "Toilets", "Transition area", "CLC carpark", "Outside of CLC admin entrance", 
-             "JP spillout room", "SY spillout room", "PY spillout room", "Other"]
+                "Removed audience", "Visual supports", "Co-regulation", "Prompted coping skill", "Redirection"]
+LOCATIONS = ["JP Room", "PY Room", "SY Room", "Yard", "Playground", "Library", "Kitchen", "Office", "Student Gate", "Toilets", "Transition area", "Other"]
 VALID_PAGES = ["login", "landing", "program_students", "incident_log", "critical_incident", "review_critical", "leader_approve_critical", "student_analysis", "student_dashboard", "admin_portal"]
 
 HYPOTHESIS_FUNCTIONS = ["To get", "To avoid"]
 HYPOTHESIS_ITEMS = ["Tangible", "Activity", "Sensory", "Attention"]
-
-def generate_time_options():
-    """Generate time options in 5-minute intervals from 8:00am to 3:30pm"""
-    times = []
-    # Start at 8:00am (hour=8) and end at 3:30pm (hour=15, minute=30)
-    for hour in range(8, 16):  # 8am to 3pm (hour 15)
-        for minute in range(0, 60, 5):
-            # Stop at 3:30pm
-            if hour == 15 and minute > 30:
-                break
-            t = time(hour, minute)
-            times.append(t.strftime("%H:%M:%S"))
-    return times
-
-def location_contains(location_field, target_location):
-    """Check if a location field (string or list) contains the target location"""
-    if isinstance(location_field, list):
-        return target_location in location_field
-    elif isinstance(location_field, str):
-        return location_field == target_location
-    return False
-
-def format_location_display(location_field):
-    """Format location field (string or list) for display"""
-    if isinstance(location_field, list):
-        return ", ".join(location_field) if location_field else "N/A"
-    elif isinstance(location_field, str):
-        return location_field if location_field else "N/A"
-    return "N/A"
 
 def format_time_12hr(time_str):
     try:
@@ -817,18 +675,23 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
                         str(int(v)), ha='center', va='bottom', fontsize=9, fontweight='bold', color='#0f172a')
         base_ax_style(ax)
         plt.tight_layout(pad=0.4)
-        # Compute a plain-language range for average daily incidents
-        _avg_low  = int(_fi_avg_per_day_bap)
-        _avg_high = _avg_low + 1 if (_fi_avg_per_day_bap - _avg_low) >= 0.25 else _avg_low
-        _avg_range_str = (f"between {_avg_low} and {_avg_high}"
-                          if _avg_high > _avg_low else f"around {_avg_low}")
         add_chart(doc, fig,
             f"Daily totals across {_fi_total_days_bap} school days. "
             f"Incidents occurred on {_fi_incident_days_bap} days ({_fi_zero_days_bap} incident-free). "
-            f"On days with incidents, average {_avg_range_str} per day — "
-            "from the analysis of these days a number of variables may play a part, such as changes to "
-            "the environment, staffing, timetable, or demands on those days. "
-            "Proactive regulation support at the start of each day is recommended.")
+            f"On days with incidents, average was {_fi_avg_per_day_bap:.1f} per day "
+            f"(peak: {_fi_max_day_bap}). "
+            + (f"{_fi_high_days_bap} day(s) had 3 or more incidents — "
+               "these are high-demand days requiring retrospective review: what was different about "
+               "the environment, staffing, timetable, or demands on those days? "
+               if _fi_high_days_bap > 0 else "") +
+            (f"There are {_fi_consec_bap} instance(s) of consecutive incident days — "
+             "consecutive high-incident days indicate the student did not have sufficient recovery time "
+             "between episodes, or a systemic stressor was sustained across multiple days. "
+             "Proactive regulation support at the start of each day is strongly indicated. "
+             if _fi_consec_bap >= 2 else "") +
+            f"Incident-free days ({_fi_zero_days_bap}) are equally important — "
+            "what proactive conditions were in place on those days? Replicating them on high-risk days "
+            "is one of the most effective preventive strategies available.")
 
         beh_counts = full_df["behaviour_type"].value_counts().head(6)
         # Use clinical terminology and filter out raw ABCH narratives (>80 chars)
@@ -855,15 +718,18 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         base_ax_style(ax)
         plt.tight_layout(pad=0.4)
         add_chart(doc, fig,
-            f"The most frequently occurring behaviour is {_bap_beh_labels[0] if _bap_beh_labels else 'Unknown'}. "
+            f"The most frequently occurring behaviour is {_bap_beh_labels[0] if _bap_beh_labels else 'Unknown'} "
+            f"({_bap_beh_vals[0] if _bap_beh_vals else 0} of {len(full_df)} incidents, "
+            f"{int((_bap_beh_vals[0] if _bap_beh_vals else 0)/max(len(full_df),1)*100)}% of total). "
             + (f"A wide range of behaviour types ({len(_bap_beh_labels)} types shown) indicates a broad stress response — "
                "the student is communicating distress through multiple channels. "
                "Foundational Body domain regulation supports (sensory regulation, movement breaks, "
                "predictable routines) should be the primary focus rather than behaviour-by-behaviour intervention. "
                if len(_bap_beh_labels) >= 4 else
-               "This indicates the student is using a predictable response to communicate a particular unmet need. "
-               "This supports targeted functional intervention: through identifying the function, "
-               "teaching an alternative, and pre-empting the trigger. ") +
+               "A narrow behaviour profile (1-2 types) suggests a specific, consistent function — "
+               "the student is using a predictable response to communicate a particular unmet need. "
+               "This supports targeted functional intervention: identify the function, "
+               "teach an alternative, and pre-empt the trigger. ") +
             "Behaviours are described using consistent, observable language to support shared understanding across the team.")
 
         ant_counts = full_df["antecedent"].value_counts().head(6)
@@ -890,13 +756,17 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         base_ax_style(ax)
         plt.tight_layout(pad=0.4)
         add_chart(doc, fig,
-            f"The most frequent trigger is '{wrap_labels([top_ant], width=60)[0]}' — "
-            "by modifying what happens before the trigger occurs is more effective than any consequence-based response. "
+            f"The most frequent trigger is '{wrap_labels([top_ant], width=60)[0]}' "
+            f"({int(ant_counts.values[0])} of {len(full_df)} incidents, "
+            f"{int(ant_counts.values[0]/max(len(full_df),1)*100)}% of total). "
+            "Antecedent-stage intervention — modifying what happens before the trigger occurs — "
+            "is consistently more effective than any consequence-based response. "
             "The goal is either to reduce or modify the trigger itself, or to build the student's "
             "capacity to tolerate it through graduated exposure and skill-building. "
-            "Triggers occurring around peer interaction, instruction, or transitions can be directly modified by staff. "
+            "Triggers that cluster around peer interaction, instruction, or transitions point to "
+            "specific environmental conditions that can be directly modified by staff. "
             "Sensory triggers indicate the nervous system is overloaded before behaviour emerges — "
-            "therefore a sensory break is the most direct preventive intervention.")
+            "a sensory audit and proactive sensory breaks are the most direct preventive intervention.")
 
         doc.add_page_break()
 
@@ -932,24 +802,34 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         peak_name = session_order[peak_idx]
         add_chart(doc, fig,
             f"Peak session: {SESSION_LABELS[peak_name].replace(chr(10),' ')} — "
+            f"{int(session_counts[peak_name])} of {len(full_df)} incidents "
+            f"({int(session_counts[peak_name]/max(len(full_df),1)*100)}%). "
             + ({"Morning":
                 "Morning peaks frequently reflect difficulty with the transition from home, "
                 "low readiness to engage, or unmet overnight and morning needs (hunger, sleep disruption, "
                 "sensory dysregulation on arrival). A structured, low-demand arrival routine with a "
-                "trusted adult check-in is the most effective morning intervention.",
+                "trusted adult check-in is the most effective morning intervention. "
+                "Consider: has the student eaten? Have there been any household stressors? "
+                "A predictable, warm, unhurried start to the day reduces cortisol and builds regulatory capacity "
+                "before academic demands are introduced.",
                 "Middle":
                 "Middle-of-day peaks reflect cumulative fatigue — the student has been managing demands "
                 "since arrival and regulatory capacity is depleted. Lunch and transition periods introduce "
                 "unstructured time which can be particularly challenging. "
-                "A mid-day sensory or movement break and reduced demand around the lunch break are "
-                "high-priority strategies.",
+                "A mid-day sensory or movement break, a quiet opt-out space, and reduced demand "
+                "before and after the lunch break are high-priority strategies. "
+                "Pre-teach the transition into and out of lunch with explicit expectations and a visual schedule.",
                 "Afternoon":
                 "Afternoon peaks often reflect end-of-day fatigue, anticipatory anxiety about the transition "
                 "home, or the accumulation of the day's regulatory demands. "
-                "A structured, predictable end-of-day routine — including a positive closure activity and "
-                "advance notice of tomorrow's schedule — reduces afternoon escalation.",
+                "A structured, predictable end-of-day routine — including a debrief, a positive closure "
+                "activity, and advance notice of tomorrow's schedule — reduces afternoon escalation. "
+                "Consider the student's home situation: if the transition home is anxiety-provoking, "
+                "this may manifest as afternoon behaviour at school.",
                }.get(peak_name,
-                "Review the specific conditions of this session and schedule targeted proactive support.")))
+                "Review the specific conditions of this session and schedule targeted proactive support. "
+                "Identify what is different about the lowest-incident session and replicate those conditions.")) +
+            f" Lowest-frequency session provides a template: identify what differs structurally and replicate.")
 
         loc_counts = full_df["location"].value_counts().head(6)
         labels_loc = wrap_labels(list(loc_counts.index[::-1]))
@@ -972,15 +852,21 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         base_ax_style(ax)
         plt.tight_layout(pad=0.4)
         add_chart(doc, fig,
-            f"Highest-frequency location: {normalise_location(top_loc)}. "
+            f"Highest-frequency location: {normalise_location(top_loc)} "
+            f"({int(loc_counts.values[-1])} of {len(full_df)} incidents, "
+            f"{int(loc_counts.values[-1]/max(len(full_df),1)*100)}% of total). "
+            "Location clustering signals that specific environmental conditions are contributing to behaviour. "
             + ({"jp room": "Classroom behaviour often reflects academic demand, seating arrangements, "
-                "peer noise, or non-preferred tasks.",
+                "peer noise, or non-preferred task presentation. Review the physical layout, "
+                "sensory conditions, and demand level of activities occurring at the time of incidents.",
                 "py room": "Classroom behaviour often reflects academic demand, seating arrangements, "
-                "peer noise, or non-preferred tasks.",
+                "peer noise, or non-preferred task presentation. Review the physical layout, "
+                "sensory conditions, and demand level of activities occurring at the time of incidents.",
                 "sy room": "Classroom behaviour often reflects academic demand, seating arrangements, "
-                "peer noise, or non-preferred tasks.",
+                "peer noise, or non-preferred task presentation. Review the physical layout, "
+                "sensory conditions, and demand level of activities occurring at the time of incidents.",
                 "yard":    "Yard incidents reflect unstructured time, peer conflict, sensory overload, "
-                "and reduced adult proximity. Increased supervision, structured activities, "
+                "and reduced adult proximity. Increased supervision ratios, structured yard activities, "
                 "and a clear opt-out space are recommended.",
                 "kitchen": "Kitchen incidents may reflect access to food as a motivator, transitions "
                 "in/out of the space, or sensory factors around meal/snack time. "
@@ -990,7 +876,10 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
                 "Review supervision and transition routines.",
                }.get(normalise_location(top_loc).lower(),
                "Conduct an environmental audit of this location — review noise level, crowding, "
-               "supervision ratio, demand level, and transition patterns in and out of the space.")))
+               "supervision ratio, demand level, and transition patterns in and out of the space. ")) +
+            "An environmental audit of this location is the most direct preventive action. "
+            "Also note whether this hotspot coincides with the peak time of day — "
+            "if so, the combination creates a compounding risk window requiring an immediate targeted plan.")
 
         # WoT for incidents: yellow/orange=coping (L1-3), red=outside window (L4-5)
         sev_colours = {1:'#eab308',2:'#eab308',3:'#f97316',4:'#ef4444',5:'#7f1d1d'}
@@ -1039,22 +928,31 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         elif len(full_df) > 0:
             direction = "insufficient data for trend"
         add_chart(doc, fig,
-            f"Severity trajectory: {direction}. "
+            f"Severity trajectory: {direction} (early average {e_avg:.1f} → recent average {r_avg:.1f}). "
             + ({
                "reducing": (
-                   "Average severity has reduced across the data period — a meaningful positive indicator. "
-                   "The student is experiencing less intense episodes over time. "
-                   "Document what has changed and ensure those conditions are deliberately sustained."
+                   f"Average severity has reduced by {abs(round(r_avg-e_avg,1))} levels across the data period. "
+                   "This is a meaningful positive indicator — the student is experiencing less intense episodes over time. "
+                   "This may reflect improved regulatory capacity, more effective proactive supports, or a stronger "
+                   "relational foundation with key staff. Document specifically what has changed and ensure those "
+                   "conditions are deliberately sustained — gains in regulation can reverse quickly if supports "
+                   "are reduced or key staff change."
                ),
                "stable": (
                    "Severity has remained stable across the data period. "
-                   "Current supports are maintaining a consistent level of functioning. "
-                   "Consider whether a targeted strategy shift is needed to move the trajectory downward."
+                   "Current supports are maintaining a consistent level of functioning — not a deterioration, "
+                   "but not a recovery. Consider whether support intensity matches the student's needs, "
+                   "or whether a targeted strategy shift is needed to move the trajectory downward. "
+                   "A case review or consultation with an external specialist may be appropriate "
+                   "if this pattern has held across multiple terms."
                ),
                "increasing": (
-                   "Average severity has increased — current supports may need review. "
-                   "Consider a case conference, updated safety plan, and environmental audit. "
-                   "Check whether external stressors are contributing."
+                   f"Average severity has increased by {abs(round(r_avg-e_avg,1))} levels — "
+                   "the most significant finding in this analysis. Current supports are insufficient. "
+                   "Recommended immediate actions: case conference, updated safety plan, "
+                   "sensory and environmental audit, review of staffing consistency and relational supports, "
+                   "and consideration of specialist referral. Also check whether external stressors "
+                   "(family changes, transitions, health factors) are contributing."
                ),
               }.get(direction, "")) +
             " Yellow zone (L1–L3) = Coping. Red zone (L4–L5) = Outside window. "
@@ -1094,10 +992,17 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             _dow_low_bap = _dow_bap[_dow_bap > 0].idxmin() if (_dow_bap > 0).any() else ""
             add_chart(doc, fig,
                 f"Peak incident day: {_dow_peak_bap} ({_dow_peak_n_bap} incidents). "
-                "This may indicate reduced capacity toward the end of the week, potentially linked to "
-                "fatigue, cumulative demands, or reduced regulation after several days of program participation. "
-                "Review the timetable for the peak day: are there specific subjects, transitions, or staffing "
-                "changes unique to that day that may be contributing?")
+                "Day-of-week patterns point to timetable-specific triggers. "
+                "The recommended action is to review the full timetable for the peak day: "
+                "which subjects, staff members, peer groupings, or transitions are unique to that day? "
+                "Is there a particular subject that is cognitively demanding or non-preferred? "
+                "Is there a staffing change (e.g. a relief teacher, a different support worker)? "
+                "Is there an unstructured or transition-heavy period that does not appear on other days? "
+                + (f"The lowest-incident day is {_dow_low_bap} — "
+                   "this day provides a template for what effective conditions look like. "
+                   "Identify what is structurally different and deliberately replicate those conditions "
+                   "on high-risk days. This is one of the highest-leverage preventive strategies available. "
+                   if _dow_low_bap and _dow_low_bap != _dow_peak_bap else ""))
 
         # ── Chart 8: Escalation Rate by Behaviour ────────────────────────
         doc.add_paragraph().paragraph_format.space_after = Pt(4)
@@ -1201,19 +1106,25 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             _outside_n = int((full_df["severity"] > 3).sum())
             _c_pct = int(_coping_n / len(full_df) * 100) if len(full_df) else 0
             add_chart(doc, fig,
+                f"{_c_pct}% of all incidents ({_coping_n} of {len(full_df)}) occurred within the Coping zone (L1–L3). "
                 "This chart shows how each behaviour type is distributed across Window of Tolerance zones. "
-                "Colour key: yellow = L1–L2 (low-level, student managing); "
-                "orange = L3 (coping, approaching edge); red = L4–L5 (significant dysregulation). "
-                "Behaviours with a high proportion of yellow/orange are responsive to proactive supports and de-escalation. "
+                "Colour key: yellow = L1-2 Coping (low-level behaviour, student managing); "
+                "orange = L3 Coping, approaching edge; red = L4-5 Outside window (significant dysregulation). "
+                "Behaviours with a high proportion of yellow/orange are being managed within the Coping zone — "
+                "these are responsive to proactive supports and de-escalation strategies. "
                 "Behaviours with a high proportion of red indicate the student is regularly moving "
-                "outside their window with that specific behaviour — these require urgent antecedent intervention "
-                "and a robust safety plan. "
-                "A critical incident classification does not automatically mean outside the window. "
-                + ("All logged incidents remained within the Coping zone — a strong positive indicator. "
+                "outside their window with this specific behaviour — these require urgent antecedent intervention, "
+                "a robust safety plan, and a clear post-incident relational repair protocol. "
+                "Important: a critical incident classification does not automatically mean outside the window — "
+                "many critical incidents are logged at L3 (Coping, approaching edge). "
+                + (f"The remaining {100-_c_pct}% ({_outside_n} incidents) reached the outside-window zone (L4-5). "
+                   "Post-incident repair — re-establishing relational safety before returning to learning — "
+                   "is essential after every outside-window episode. "
+                   "Review what proactive conditions were absent on those days. "
+                   if _outside_n > 0 else
+                   "All logged incidents remained within the Coping zone — a strong positive indicator. "
                    "Current staff responses are successfully preventing escalation to full dysregulation. "
-                   if _outside_n == 0 else
-                   "Episodes in the outside-window zone require post-incident relational repair "
-                   "before returning to learning."))
+                   "Document and sustain current proactive strategies explicitly. "))
 
         section_header(doc, "FUNCTIONAL HYPOTHESIS")
         p_sp3 = doc.add_paragraph(); p_sp3.paragraph_format.space_after = Pt(4)
@@ -1227,7 +1138,7 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         d_pct = int(len(full_df[full_df['session']=='Middle'])   / total * 100) if total else 0
         a_pct = int(len(full_df[full_df['session']=='Afternoon'])/ total * 100) if total else 0
         for line in [
-            f"Based on recorded incidents, {student['name']} experiences the most difficulty "
+            f"Based on {total} recorded incidents, {student['name']} experiences the most difficulty "
             f"when '{wrap_labels([top_ant], 70)[0]}' occurs. This happens most frequently in {top_loc}, "
             f"particularly during the {top_session} session "
             f"(Morning {m_pct}% / Middle of day {d_pct}% / Afternoon {a_pct}%).",
@@ -1580,7 +1491,7 @@ def load_staff_from_db():
             })
         return staff
     except Exception as e:
-        st.error(f"Error loading staff: {e}")
+        print(f"[load_staff_from_db error]: {e}")  # log to Render logs, not UI
         return []
 
 def save_staff_to_db(staff_member):
@@ -1857,7 +1768,7 @@ Student: {student['name']} (Grade {student['grade']})
 Program: {PROGRAM_NAMES.get(student['program'], student['program'])}
 
 INCIDENT SUMMARY:
-Location: {format_location_display(primary.get('location', 'N/A'))}
+Location: {primary.get('location', 'N/A')}
 Time: {primary.get('time', 'N/A')}
 Behaviour: {primary.get('behaviour', 'N/A')}
 
@@ -2034,8 +1945,12 @@ def login_user(email: str, password: str) -> bool:
                 st.session_state.current_page = "landing"
                 return True
     for staff in st.session_state.staff:
-        if staff.get("email", "").lower() != email:
+        # Match by email OR by name (case-insensitive)
+        _staff_email = staff.get("email", "").lower()
+        _staff_name  = staff.get("name", "").lower()
+        if _staff_email != email and _staff_name != email:
             continue
+        # Try bcrypt hash first
         stored_hash = staff.get("password_hash", "")
         if stored_hash:
             try:
@@ -2047,7 +1962,8 @@ def login_user(email: str, password: str) -> bool:
                     return True
             except Exception:
                 pass
-        if staff.get("password") == password:
+        # Try plaintext password
+        if staff.get("password") and staff.get("password") == password:
             st.session_state.logged_in = True
             st.session_state.current_user = staff
             st.session_state.current_page = "landing"
@@ -2130,7 +2046,19 @@ def render_login_page():
                     st.success(f"Welcome {st.session_state.current_user['name']}!")
                     st.rerun()
                 else:
-                    st.error("Invalid credentials. Contact your admin to reset your password.")
+                    _staff_count = len(st.session_state.get("staff", []))
+                    if _staff_count == 0:
+                        st.error(
+                            "⚠️ Could not load staff records from the database. "
+                            "Check your Supabase connection on Render. "
+                            "If Supabase is connected, try the admin bypass: "
+                            "use the admin email and password from your Render environment variables."
+                        )
+                    else:
+                        st.error(
+                            f"Incorrect email or password ({_staff_count} staff records loaded). "
+                            "Check your email address and password, or contact your admin to reset."
+                        )
         st.markdown("<p style='text-align:center; color:#8aabab; font-size:0.8rem; margin-top:1rem;'>For access issues contact your program administrator</p>", unsafe_allow_html=True)
 
 
@@ -2375,23 +2303,13 @@ def render_incident_log_page():
         col1, col2 = st.columns(2)
         with col1:
             inc_date = st.date_input("Date *", value=date.today(), key="inc_date")
-            # Generate time options in 5-minute intervals
-            time_options = generate_time_options()
-            # Round current time to nearest 5 minutes
-            now = datetime.now()
-            current_minutes = (now.minute // 5) * 5
-            current_time_str = time(now.hour, current_minutes).strftime("%H:%M:%S")
-            default_time_idx = time_options.index(current_time_str) if current_time_str in time_options else 0
-            inc_time_str = st.selectbox(
+            inc_time = st.time_input(
                 "Time * ← update this",
-                options=time_options,
-                index=default_time_idx,
-                format_func=lambda x: datetime.strptime(x, "%H:%M:%S").strftime("%I:%M %p"),
+                value=datetime.now().time(),
                 key="inc_time",
-                help="Time defaults to now (rounded to nearest 5 minutes) — adjust if the incident was earlier"
+                help="Time defaults to now — adjust if the incident was earlier"
             )
-            inc_time = datetime.strptime(inc_time_str, "%H:%M:%S").time()
-            location = st.multiselect("Location * (select one or more)", LOCATIONS, default=[], key="inc_loc")
+            location = st.selectbox("Location *", [""] + LOCATIONS, index=_loc_idx(), key="inc_loc")
         with col2:
             behaviour = st.selectbox("Behaviour Type *", [""] + BEHAVIOUR_TYPES, index=_beh_idx(), key="inc_beh")
             antecedent = st.selectbox("Antecedent/Trigger *", [""] + ANTECEDENTS, index=_ant_idx(), key="inc_ant")
@@ -2479,7 +2397,7 @@ def render_critical_incident_page():
             st.markdown(f"**Date:** {quick_inc['date']}")
             st.markdown(f"**Time:** {format_time_12hr(quick_inc['time'])}")
         with col3:
-            st.markdown(f"**Location:** {format_location_display(quick_inc['location'])}")
+            st.markdown(f"**Location:** {quick_inc['location']}")
             st.markdown(f"**Session:** {quick_inc['session']}")
         with col4:
             st.markdown(f"**Severity:** {quick_inc['severity']}")
@@ -2503,7 +2421,7 @@ def render_critical_incident_page():
     with col_subheader[5]: st.caption("HYPOTHESIS (Function)")
     col_inputs1 = st.columns([1, 1, 1, 1, 2, 2])
     with col_inputs1[0]:
-        location_1 = st.text_input("", value=format_location_display(quick_inc['location']), key="loc_1", label_visibility="collapsed")
+        location_1 = st.text_input("", value=quick_inc['location'], key="loc_1", label_visibility="collapsed")
     with col_inputs1[1]:
         context_1 = st.text_area("", placeholder="What was going on before?", key="context_1", height=100, label_visibility="collapsed")
     with col_inputs1[2]:
@@ -2748,7 +2666,7 @@ def render_review_critical_page():
             st.markdown(f"**Status:** {critical.get('status', 'draft').replace('_', ' ').title()}")
     st.markdown("---")
     with st.expander("📍 ANTECEDENT", expanded=True):
-        st.markdown(f"**Location:** {format_location_display(primary.get('location', 'N/A'))}")
+        st.markdown(f"**Location:** {primary.get('location', 'N/A')}")
         st.markdown(f"**Time:** {primary.get('time', 'N/A')}")
         st.markdown(f"**Context:** {primary.get('context', 'N/A')}")
     with st.expander("🎯 BEHAVIOUR", expanded=True):
@@ -2762,7 +2680,7 @@ def render_review_critical_page():
         st.markdown("---")
         for idx, entry in enumerate(additional):
             with st.expander(f"Continuation Entry {idx + 1}"):
-                st.markdown(f"**Location:** {format_location_display(entry.get('location', 'N/A'))}")
+                st.markdown(f"**Location:** {entry.get('location', 'N/A')}")
                 st.markdown(f"**Time:** {entry.get('time', 'N/A')}")
                 st.markdown(f"**Context:** {entry.get('context', 'N/A')}")
                 st.markdown(f"**Behaviour:** {entry.get('behaviour', 'N/A')}")
@@ -2849,7 +2767,7 @@ def render_leader_approve_critical_page():
     primary = critical.get('ABCH_primary', {})
     with st.expander("📋 View Complete ABCH Form"):
         st.markdown(f"**Severity:** {critical.get('severity', 'N/A')}")
-        st.markdown(f"**Location:** {format_location_display(primary.get('location', 'N/A'))}")
+        st.markdown(f"**Location:** {primary.get('location', 'N/A')}")
         st.markdown(f"**Behaviour:** {primary.get('behaviour', 'N/A')}")
         st.markdown(f"**Hypothesis:** {primary.get('hypothesis', 'N/A')}")
         for outcome in critical.get('intended_outcomes', []):
@@ -3126,7 +3044,9 @@ def render_student_analysis_page():
                     if GROQ_KEY:
                         with st.spinner("AI extracting sensory themes — this takes a few seconds..."):
                             try:
+                                from groq import Groq as _GQ
                                 import json as _sjs
+                                _gc = _GQ(api_key=GROQ_KEY)
                                 _so_prompt = (
                                     "You are an occupational therapist and behaviour support specialist. "
                                     f"Extract a structured sensory profile from this document for student: {student['name']}. "
@@ -3140,7 +3060,12 @@ def render_student_analysis_page():
                                     '"summary":"2-3 sentence clinical summary"}'
                                     f" Document: {_so_raw[:4000]}"
                                 )
-                                _so_json = groq_ai_call(_so_prompt, max_tokens=1500, temperature=0.1, api_key=GROQ_KEY)
+                                _so_resp = _gc.chat.completions.create(
+                                    model="llama-3.3-70b-versatile",
+                                    messages=[{"role": "user", "content": _so_prompt}],
+                                    max_tokens=1500, temperature=0.1
+                                )
+                                _so_json = _so_resp.choices[0].message.content.strip()
                                 _so_json = _so_json.replace("```json", "").replace("```", "").strip()
                                 _so_parsed = _sjs.loads(_so_json)
                                 st.session_state[_so_key] = _so_parsed
@@ -4439,35 +4364,12 @@ def render_student_analysis_page():
         st.markdown("#### E — Behaviour by Location")
         st.caption("Where each behaviour occurs most frequently.")
         if "location" in full_df.columns:
-            # Expand location lists into separate rows for proper counting
-            _loc_rows = []
-            for _, row in full_df.iterrows():
-                locs = row.get("location", [])
-                # Handle both string and list formats
-                if isinstance(locs, str):
-                    try: 
-                        locs = json.loads(locs)
-                    except: 
-                        locs = [locs] if locs else []
-                elif not isinstance(locs, list):
-                    locs = [locs] if locs else []
-                beh = row.get("behaviour_type", "")
-                if beh and beh in all_behaviours:
-                    for loc in locs:
-                        _loc_str = str(loc).strip()
-                        if _loc_str and _loc_str.lower() not in ("nan", "none", "", "null"):
-                            _loc_rows.append({"behaviour": beh, "location": _loc_str})
-            
-            if _loc_rows:
-                _loc_df = pd.DataFrame(_loc_rows)
-                _top_locs = _loc_df["location"].value_counts().head(6).index.tolist()
-            else:
-                _top_locs = []
-                
+            _top_locs = [l for l in full_df["location"].value_counts().head(6).index.tolist()
+                         if l and str(l).strip()]
             if _top_locs:
                 _bloc_z, _bloc_text, _bloc_y = [], [], []
                 for b in all_behaviours:
-                    bdf = _loc_df[_loc_df["behaviour"] == b]
+                    bdf = full_df[full_df["behaviour_type"] == b]
                     rz = [int((bdf["location"] == loc).sum()) for loc in _top_locs]
                     rt = [str(n) if n > 0 else "" for n in rz]
                     if any(v > 0 for v in rz):
@@ -5109,67 +5011,37 @@ def render_student_analysis_page():
     st.markdown("---")
 
     st.markdown("### 📍 Location Hotspots")
-    # Expand location lists for proper counting
-    _all_loc_rows = []
-    for _, row in full_df.iterrows():
-        locs = row.get("location", [])
-        if isinstance(locs, str):
-            try: 
-                locs = json.loads(locs)
-            except: 
-                locs = [locs] if locs else []
-        elif not isinstance(locs, list):
-            locs = [locs] if locs else []
-        
-        for loc in locs:
-            _loc_str = str(loc).strip()
-            if _loc_str and _loc_str.lower() not in ("nan", "none", "", "null"):
-                _all_loc_rows.append({
-                    "location": _loc_str,
-                    "is_critical": row.get("is_critical", False)
-                })
-    
-    if _all_loc_rows:
-        _all_loc_df = pd.DataFrame(_all_loc_rows)
-        all_locations = _all_loc_df["location"].value_counts().head(6).index.tolist()
-        quick_loc_counts = [len(_all_loc_df[(_all_loc_df["location"] == loc) & (_all_loc_df["is_critical"] == False)]) for loc in all_locations]
-        crit_loc_counts  = [len(_all_loc_df[(_all_loc_df["location"] == loc) & (_all_loc_df["is_critical"] == True)]) for loc in all_locations]
-    else:
-        all_locations = []
-        quick_loc_counts = []
-        crit_loc_counts = []
-    
+    all_locations = full_df["location"].value_counts().head(6).index.tolist()
+    quick_loc_counts = [len(quick_only_df[quick_only_df["location"] == loc]) if not quick_only_df.empty else 0 for loc in all_locations]
+    crit_loc_counts  = [len(crit_only_df[crit_only_df["location"] == loc]) if not crit_only_df.empty else 0 for loc in all_locations]
+    fig5 = go.Figure()
+    fig5.add_trace(go.Bar(y=all_locations, x=quick_loc_counts, name='Regular', orientation='h',
+        marker=dict(color='#3b82f6'), text=quick_loc_counts, textposition='inside',
+        textfont=dict(color='white', size=11, family='Arial Black')))
+    fig5.add_trace(go.Bar(y=all_locations, x=crit_loc_counts, name='Critical', orientation='h',
+        marker=dict(color='#ef4444'), text=crit_loc_counts, textposition='inside',
+        textfont=dict(color='white', size=11, family='Arial Black')))
+    fig5.update_layout(height=350, barmode='stack', xaxis_title="<b>Incident Count</b>",
+        plot_bgcolor='#f8fafc', paper_bgcolor='white', font=dict(color='#0f172a', size=12, family='Arial'),
+        xaxis=dict(tickmode='linear', tick0=0, dtick=1, gridcolor='#e2e8f0', showline=True, linewidth=2, linecolor='#cbd5e1'),
+        yaxis=dict(showline=True, linewidth=2, linecolor='#cbd5e1'),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    st.plotly_chart(fig5, use_container_width=True)
     if all_locations:
-        fig5 = go.Figure()
-        fig5.add_trace(go.Bar(y=all_locations, x=quick_loc_counts, name='Regular', orientation='h',
-            marker=dict(color='#3b82f6'), text=quick_loc_counts, textposition='inside',
-            textfont=dict(color='white', size=11, family='Arial Black')))
-        fig5.add_trace(go.Bar(y=all_locations, x=crit_loc_counts, name='Critical', orientation='h',
-            marker=dict(color='#ef4444'), text=crit_loc_counts, textposition='inside',
-            textfont=dict(color='white', size=11, family='Arial Black')))
-        fig5.update_layout(height=350, barmode='stack', xaxis_title="<b>Incident Count</b>",
-            plot_bgcolor='#f8fafc', paper_bgcolor='white', font=dict(color='#0f172a', size=12, family='Arial'),
-            xaxis=dict(tickmode='linear', tick0=0, dtick=1, gridcolor='#e2e8f0', showline=True, linewidth=2, linecolor='#cbd5e1'),
-            yaxis=dict(showline=True, linewidth=2, linecolor='#cbd5e1'),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-        st.plotly_chart(fig5, use_container_width=True)
-        if all_locations:
-            _lh_top = normalise_location(all_locations[0])
-            _lh_top_n = quick_loc_counts[0] + crit_loc_counts[0]
-            _lh_pct = int(_lh_top_n / len(full_df) * 100) if len(full_df) else 0
-            st.markdown(
-                f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;"
-                f"border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
-                f"<b>📊 What this shows:</b> "
-                f"<b>{_lh_top}</b> is the highest-frequency incident location ({_lh_pct}% of all incidents). "
-                "This may reflect specific environmental conditions — crowding, noise levels, "
-                "supervision ratios, or transition demands — that warrant targeted modification. "
-                "Where a single location dominates, environmental audit and proactive supervision "
-                "strategies for that space should be the first priority.</div>",
-                unsafe_allow_html=True
-            )
-    else:
-        st.info("No location data available for analysis.")
+        _lh_top = normalise_location(all_locations[0])
+        _lh_top_n = quick_loc_counts[0] + crit_loc_counts[0]
+        _lh_pct = int(_lh_top_n / len(full_df) * 100) if len(full_df) else 0
+        st.markdown(
+            f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;"
+            f"border-radius:6px;padding:.55rem .9rem;font-size:.82rem;color:#1e293b;'>"
+            f"<b>📊 What this shows:</b> "
+            f"<b>{_lh_top}</b> is the highest-frequency incident location ({_lh_pct}% of all incidents). "
+            "This may reflect specific environmental conditions — crowding, noise levels, "
+            "supervision ratios, or transition demands — that warrant targeted modification. "
+            "Where a single location dominates, environmental audit and proactive supervision "
+            "strategies for that space should be the first priority.</div>",
+            unsafe_allow_html=True
+        )
     st.markdown("---")
 
     st.markdown("### ⏰ Time of Day Patterns")
@@ -5421,25 +5293,6 @@ def render_student_analysis_page():
 
     st.markdown("---")
 
-    # ── Sensory overview variables (re-read from session_state for Teaching / Support lenses)
-    _so_data_lens  = st.session_state.get(f"sensory_overview_{student_id}", {})
-    _has_sensory   = bool(_so_data_lens)
-    _so_summary    = _so_data_lens.get("summary", "") or ""
-    _so_recs       = _so_data_lens.get("recommendations", []) or []
-    _so_seeking    = _so_data_lens.get("sensory_seeking", []) or []
-    _so_strategies = _so_data_lens.get("regulation_strategies", []) or []
-    _so_avoiding   = _so_data_lens.get("sensory_avoiding", []) or []
-    _so_triggers   = _so_data_lens.get("triggers", []) or []
-    _sens_kw_lens  = ["noise","sound","crowd","touch","bright","light","texture",
-                      "smell","movement","propriocep","vestibular","tactile",
-                      "auditory","visual","sensory","hungry","food","thirsty"]
-    _n_sensory_ants   = (
-        int(full_df["antecedent"].dropna().str.lower()
-            .apply(lambda a: any(kw in a for kw in _sens_kw_lens)).sum())
-        if "antecedent" in full_df.columns and len(full_df) > 0 else 0
-    )
-    _sensory_prominent = _n_sensory_ants >= max(1, int(len(full_df) * 0.25))
-
     # ══════════════════════════════════════════════════════════════════════════
     # TEACHING LENS
     # ══════════════════════════════════════════════════════════════════════════
@@ -5654,10 +5507,6 @@ def render_student_analysis_page():
     st.markdown("### 🗑️ Delete an Incident")
     st.caption("Remove an incorrectly logged or duplicate incident from this student's full data set. This includes regular incidents AND critical incidents. Deletions are permanent and will affect all charts and analysis.")
 
-    # Show deletion success banner if set by a previous rerun
-    if st.session_state.get("incident_deleted_msg"):
-        st.success(st.session_state.pop("incident_deleted_msg"))
-
     reg_incidents = [i for i in st.session_state.incidents if i["student_id"] == student_id]
     crit_incidents = [c for c in st.session_state.critical_incidents if c["student_id"] == student_id]
 
@@ -5666,7 +5515,7 @@ def render_student_analysis_page():
         combined.append({
             "id": i["id"],
             "type": "regular",
-            "label": f"[REGULAR]  {i.get('date','?')}  {i.get('time','')[:5]}  |  {i.get('behaviour_type','—')}  |  Severity {i.get('severity','?')}  |  {format_location_display(i.get('location','—'))}",
+            "label": f"[REGULAR]  {i.get('date','?')}  {i.get('time','')[:5]}  |  {i.get('behaviour_type','—')}  |  Severity {i.get('severity','?')}  |  {i.get('location','—')}",
             "date": i.get("date",""),
         })
     for c in crit_incidents:
@@ -5675,7 +5524,7 @@ def render_student_analysis_page():
         combined.append({
             "id": c["id"],
             "type": "critical",
-            "label": f"[CRITICAL]  {created}  {primary.get('time','')[:5]}  |  {primary.get('behaviour','Behaviour not recorded')[:50]}  |  {format_location_display(primary.get('location','—'))}",
+            "label": f"[CRITICAL]  {created}  {primary.get('time','')[:5]}  |  {primary.get('behaviour','Behaviour not recorded')[:50]}  |  {primary.get('location','—')}",
             "date": created,
         })
 
@@ -5739,10 +5588,6 @@ def render_student_analysis_page():
                     st.rerun()
 
         else:
-            # Show success banner BEFORE the confirmation UI if deletion just completed
-            if st.session_state.get("incident_deleted_msg"):
-                st.success(st.session_state.pop("incident_deleted_msg"))
-
             st.error(
                 f"**Step 2 of 2 — FINAL CONFIRMATION**\n\n"
                 f"Click the red button below to permanently delete this record from the database. "
@@ -5752,39 +5597,25 @@ def render_student_analysis_page():
             with col_final:
                 if st.button("🔴 YES — permanently delete this incident", type="primary",
                              key=f"final_del_{selected_id}", use_container_width=True):
+                    deleted = False
                     if supabase:
                         try:
                             table = "critical_incidents" if selected_type == "critical" else "incidents"
-                            response = supabase.table(table).delete().eq("id", selected_id).execute()
-                            # response.data contains the deleted rows — empty means RLS blocked it
-                            if response.data:
-                                # Strip from session_state cache
-                                if selected_type == "regular":
-                                    st.session_state.incidents = [
-                                        i for i in st.session_state.incidents if i["id"] != selected_id
-                                    ]
-                                else:
-                                    st.session_state.critical_incidents = [
-                                        c for c in st.session_state.critical_incidents if c["id"] != selected_id
-                                    ]
-                                for k in [confirm_key, confirm2_key, f"confirm_chk_{selected_id}",
-                                          "delete_incident_select"]:
-                                    st.session_state.pop(k, None)
-                                # Store message in session_state so it survives the rerun
-                                st.session_state["incident_deleted_msg"] = (
-                                    f"✅ Incident deleted — removed from {student['name']}'s record."
-                                )
-                                st.rerun()
-                            else:
-                                st.error(
-                                    "❌ Deletion was not completed — the database did not confirm the record "
-                                    "was removed. This is usually a permissions issue. Please contact your "
-                                    "portal administrator."
-                                )
+                            supabase.table(table).delete().eq("id", selected_id).execute()
+                            deleted = True
                         except Exception as e:
-                            st.error(f"❌ Delete failed: {e}")
+                            st.error(f"Delete failed: {e}")
                     else:
-                        st.error("❌ No database connection. Cannot delete.")
+                        deleted = True
+                    if deleted:
+                        if selected_type == "regular":
+                            st.session_state.incidents = [i for i in st.session_state.incidents if i["id"] != selected_id]
+                        else:
+                            st.session_state.critical_incidents = [c for c in st.session_state.critical_incidents if c["id"] != selected_id]
+                        for k in [confirm_key, confirm2_key, f"confirm_chk_{selected_id}"]:
+                            st.session_state.pop(k, None)
+                        st.success("✅ Incident permanently deleted and removed from the data set.")
+                        st.rerun()
             with col_back:
                 if st.button("❌ Cancel — keep this incident", key=f"cancel2_{selected_id}", use_container_width=True):
                     for k in [confirm_key, confirm2_key]:
@@ -5815,7 +5646,7 @@ def render_student_analysis_page():
                 f"{inc.get('date','?')}  {t}  |  "
                 f"{inc.get('behaviour_type','—')}  |  "
                 f"Sev {inc.get('severity','?')}  |  "
-                f"{format_location_display(inc.get('location','—'))}"
+                f"{inc.get('location','—')}"
             )
 
         _relog_options = {_relog_label(i): i for i in _relog_incidents}
@@ -5854,35 +5685,13 @@ def render_student_analysis_page():
                 rl_date = st.date_input(
                     "Date *", value=date.today(), key="rl_date"
                 )
-                # Generate time options in 5-minute intervals
-                time_options = generate_time_options()
-                # Parse default time from source incident
-                try:
-                    _default_time_str = (_src_inc.get("time") or "09:00:00")[:8]
-                    _dt = datetime.strptime(_default_time_str, "%H:%M:%S")
-                    # Round to nearest 5 minutes
-                    _rounded_minutes = (_dt.minute // 5) * 5
-                    _default_time_formatted = time(_dt.hour, _rounded_minutes).strftime("%H:%M:%S")
-                    _default_idx = time_options.index(_default_time_formatted) if _default_time_formatted in time_options else 0
-                except Exception:
-                    _default_idx = 0
-                rl_time_str = st.selectbox(
-                    "Time *",
-                    options=time_options,
-                    index=_default_idx,
-                    format_func=lambda x: datetime.strptime(x, "%H:%M:%S").strftime("%I:%M %p"),
-                    key="rl_time"
+                rl_time = st.time_input(
+                    "Time *", value=_default_time, key="rl_time"
                 )
-                rl_time = datetime.strptime(rl_time_str, "%H:%M:%S").time()
-                # Handle location as list or string from source
-                _src_location = _src_inc.get("location", [])
-                if isinstance(_src_location, str):
-                    _src_location = [_src_location] if _src_location else []
-                _valid_locs = [loc for loc in _src_location if loc in LOCATIONS]
-                rl_location = st.multiselect(
-                    "Location * (select one or more)",
+                rl_location = st.selectbox(
+                    "Location *",
                     LOCATIONS,
-                    default=_valid_locs,
+                    index=LOCATIONS.index(_src_inc["location"]) if _src_inc.get("location") in LOCATIONS else 0,
                     key="rl_location"
                 )
             with rl_col2:
@@ -6001,19 +5810,10 @@ def render_student_analysis_page():
             docx_file = generate_behaviour_analysis_plan_docx(
                 student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level)
         if docx_file:
-            _ini = initials_from_name(student['name'])
-            _beh_bytes = docx_file.getvalue() if hasattr(docx_file, "getvalue") else docx_file
             st.download_button("📄 Behaviour Summary (Word)", docx_file,
                 file_name=f"BehaviourSummary_{student['name'].replace(" ", "_")}_{datetime.now().strftime("%Y%m%d")}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True)
-            _behaviour_archive_prompt(
-                guard_key=f"behsum_{student.get('id','x')}_{datetime.now():%Y%m%d}",
-                doc_bytes=_beh_bytes,
-                filename=f"BehaviourSummary_{_ini}_{datetime.now():%Y%m%d}.docx",
-                title=f"Behaviour Summary — {_ini} — {datetime.now():%d %b %Y}",
-                initials=_ini,
-            )
 
     st.markdown("---")
     col1, col2 = st.columns(2)
@@ -6250,11 +6050,13 @@ def render_student_dashboard():
             return
         with st.spinner("AI is reading your document..."):
             try:
+                from groq import Groq as GroqClient
                 import json as _json
+                client = GroqClient(api_key=GROQ_KEY)
                 prompt = f"""You are a behaviour support data analyst for Cowandilla Learning Centre, Learning & Behaviour Unit.
 The following document describes ONE critical incident involving student: {student_name}.
 Extract the incident as a single JSON object with this exact structure:
-{{"date":"YYYY-MM-DD","severity":3,"sapol_reference":"reference number or null","outcomes":["list","of","outcomes"],"primary":{{"time":"time","location":"location","context":"antecedent context","behaviour":"narrative description of what happened","behaviour_type":"CANONICAL LABEL — see list below","consequence":"staff response"}},"additional_entries":[{{"time":"time","location":"location","context":"antecedent","behaviour":"behaviour narrative","behaviour_type":"canonical label","consequence":"consequence","hypothesis":""}}],"notes":"any other relevant context"}}
+{"date":"YYYY-MM-DD","severity":3,"sapol_reference":"reference number or null","outcomes":["list","of","outcomes"],"primary":{"time":"time","location":"location","context":"antecedent context","behaviour":"narrative description of what happened","behaviour_type":"CANONICAL LABEL — see list below","consequence":"staff response"},"additional_entries":[{"time":"time","location":"location","context":"antecedent","behaviour":"behaviour narrative","behaviour_type":"canonical label","consequence":"consequence","hypothesis":""}],"notes":"any other relevant context"}
 
 CANONICAL BEHAVIOUR TYPES — behaviour_type MUST be one of these exact strings:
 Verbal refusal of instruction | Task refusal / passive non-compliance | Shutdown / complete withdrawal | Selective mutism / non-responsiveness | Unsanctioned departure (elopement) | Absconding from school grounds | Hiding or avoiding adult proximity | Inappropriate vocalisation / noises | Disruptive verbal commentary | Interrupting / calling out | Property misuse or interference | Verbal aggression toward peer | Verbal aggression toward adult | Physical aggression toward peer | Physical aggression toward adult | Threatening behaviour | Property destruction | Throwing objects | Self-injurious behaviour | Dysregulated emotional expression | Other (specify in description)
@@ -6265,8 +6067,11 @@ Rules:
 - behaviour is the narrative/description; behaviour_type is the clinical classification.
 - Return ONLY valid JSON, no markdown fences, no extra text.
 Document: {doc_text}"""
-                raw = groq_ai_call(prompt, max_tokens=3000, temperature=0.1, api_key=GROQ_KEY)
-                raw = raw.replace("```json","").replace("```","").strip()
+                response = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=3000, temperature=0.1)
+                raw = response.choices[0].message.content.strip().replace("```json","").replace("```","").strip()
                 extracted = _json.loads(raw)
                 if isinstance(extracted, list):
                     extracted = extracted[0] if extracted else {}
@@ -6409,60 +6214,31 @@ Document: {doc_text}"""
             if st.button("💾 Save as Critical Incident", type="primary", key="save_ai_extracted", use_container_width=True):
                 try:
                     outcomes_raw = inc.get("outcomes", "")
-                    outcomes_list = (
-                        [o.strip() for o in outcomes_raw.split(",") if o.strip()]
-                        if isinstance(outcomes_raw, str) else (outcomes_raw or [])
-                    )
+                    outcomes_list = [o.strip() for o in outcomes_raw.split(",") if o.strip()] if isinstance(outcomes_raw, str) else outcomes_raw
                     primary_data = inc.get("primary", {})
                     additional_data = inc.get("additional_entries", [])
                     sapol_ref = inc.get("sapol_reference", "") or None
-                    if sapol_ref == "":
-                        sapol_ref = None
-
-                    inc_date_str = inc.get("date", str(date.today()))
-
-                    # Build in the format save_critical_incident_to_db expects
+                    if sapol_ref == "": sapol_ref = None
                     record = {
-                        "student_id":       student_id,
-                        "severity":         int(inc.get("severity", 3)),
-                        "reported_by":      st.session_state.current_user.get("id"),
-                        "completed_by_id":  st.session_state.current_user.get("id"),
-                        "completed_at":     f"{inc_date_str}T00:00:00",
-                        "ABCH_primary": {
-                            "location":    primary_data.get("location", ""),
-                            "context":     primary_data.get("context", ""),
-                            "time":        primary_data.get("time", ""),
-                            "behaviour":   (primary_data.get("behaviour_type") or primary_data.get("behaviour", "")).strip(),
-                            "consequence": primary_data.get("consequence", ""),
-                            "hypothesis":  "",
-                        },
-                        "ABCH_additional":    additional_data,
-                        "intended_outcomes":  outcomes_list,
-                        "sapol_reference":    sapol_ref,
-                        "admin_summary":      inc.get("notes", ""),
-                        "status":             "historical",
-                        "audit_trail":        [],   # list — save_critical_incident_to_db will json.dumps() it
-                        "include_audit_in_report": False,
+                        "student_id": student_id, "severity": int(inc.get("severity", 3)),
+                        "reported_by": st.session_state.current_user.get("id"),
+                        "created_at": f"{inc.get('date', str(date.today()))}T00:00:00",
+                        "primary_location": primary_data.get("location", ""),
+                        "primary_context": primary_data.get("context", ""),
+                        "primary_time": primary_data.get("time", ""),
+                        "primary_behaviour": (primary_data.get("behaviour_type") or primary_data.get("behaviour", "")).strip(),
+                        "primary_consequence": primary_data.get("consequence", ""),
+                        "additional_entries": additional_data, "outcomes": outcomes_list,
+                        "sapol_reference": sapol_ref, "admin_summary": inc.get("notes", ""),
+                        "status": "historical", "audit_trail": "[]", "include_audit_in_report": False,
                     }
-
-                    if save_critical_incident_to_db(record):
-                        # Back-date created_at to the historical incident date
-                        # (Supabase auto-sets it to now() on insert, so we update separately)
-                        if record.get("id"):
-                            try:
-                                supabase.table("critical_incidents").update(
-                                    {"created_at": f"{inc_date_str}T00:00:00+00:00"}
-                                ).eq("id", record["id"]).execute()
-                            except Exception:
-                                pass  # Non-critical — incident is saved even if back-date fails
-
-                        st.success(f"✅ Saved to {student['name']}'s record!")
-                        st.session_state["ai_extracted_incident"] = None
-                        for _key in ["critical_incidents", "incidents"]:
-                            if _key in st.session_state:
-                                del st.session_state[_key]
-                        st.rerun()
-
+                    supabase.table("critical_incidents").insert(record).execute()
+                    st.success(f"✅ Saved to {student['name']}'s record!")
+                    st.session_state["ai_extracted_incident"] = None
+                    for _key in ["critical_incidents", "incidents"]:
+                        if _key in st.session_state:
+                            del st.session_state[_key]
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Error saving: {e}")
         with clear_col:
@@ -6512,10 +6288,42 @@ def render_admin_portal():
         else:
             st.info("No active students. Add students below.")
 
-        st.info("➕ **Students are added in the Student Register only.** "
-                "Register a student there and they sync into this tool automatically. "
-                "This keeps the register, SMARTAR, Sensory and Communication Log in step. "
-                "If a newly-registered student isn't here yet, reload the page.")
+        with st.expander("➕ Add New Student", expanded=False):
+            with st.form("add_student_form"):
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    new_first_name = st.text_input("First Name *", placeholder="Boston")
+                    new_last_name  = st.text_input("Last Name *", placeholder="Murphy")
+                    new_grade      = st.selectbox("Grade *", ["R","Y1","Y2","Y3","Y4","Y5","Y6","Y7","Y8","Y9","Y10","Y11","Y12"])
+                with col2:
+                    new_edid = st.text_input("EDID *", placeholder="ED123456")
+                    new_dob  = st.date_input("Date of Birth *", value=date(2015, 1, 1))
+                with col3:
+                    new_program         = st.selectbox("Program *", ["JP", "PY", "SY"])
+                    new_placement_start = st.date_input("Placement Start Date *", value=date.today())
+                with col4:
+                    st.write("")
+                    new_placement_end = st.date_input("Placement End Date (Optional)", value=None)
+                student_submitted = st.form_submit_button("Add Student", type="primary")
+            if student_submitted:
+                if not new_first_name or not new_last_name or not new_edid or not new_grade or not new_program:
+                    st.error("Please complete all required fields marked with *")
+                else:
+                    new_student = {
+                        "id": f"stu_{uuid.uuid4().hex[:8]}",
+                        "first_name": new_first_name.strip(), "last_name": new_last_name.strip(),
+                        "name": f"{new_first_name.strip()} {new_last_name.strip()}",
+                        "edid": new_edid.strip(), "grade": new_grade, "dob": new_dob.isoformat(),
+                        "program": new_program, "placement_start": new_placement_start.isoformat(),
+                        "placement_end": new_placement_end.isoformat() if new_placement_end else None,
+                        "archived": False
+                    }
+                    if save_student_to_db(new_student):
+                        st.session_state.students = load_students_from_db()
+                        st.success(f"✅ Added {new_student['name']} to {new_program}")
+                        st.rerun()
+                    else:
+                        st.error("❌ Failed to save student to database")
 
         st.markdown("### Current Students")
         for program in ["JP", "PY", "SY"]:
@@ -7185,6 +6993,9 @@ def render_admin_portal():
                             if GROQ_KEY:
                                 with st.spinner(f"AI classifying {len(_ambiguous)} ambiguous record(s)..."):
                                     try:
+                                        from groq import Groq as _GC
+                                        import json as _jmod
+                                        _gc = _GC(api_key=GROQ_KEY)
                                         _canonical_list = [b for b in BEHAVIOUR_TYPES if not b.startswith("---")]
                                         for _amb in _ambiguous:
                                             _ai_prompt = (
@@ -7194,9 +7005,12 @@ def render_admin_portal():
                                                 f"Behaviour description: {_amb['raw'][:300]}\n\n"
                                                 "Labels:\n" + "\n".join(f"- {l}" for l in _canonical_list)
                                             )
-                                            _ai_label = groq_ai_call(
-                                                _ai_prompt, max_tokens=60, temperature=0, api_key=GROQ_KEY
-                                            ).strip("-").strip()
+                                            _ai_r = _gc.chat.completions.create(
+                                                model="llama-3.3-70b-versatile",
+                                                messages=[{"role":"user","content":_ai_prompt}],
+                                                max_tokens=60, temperature=0
+                                            )
+                                            _ai_label = _ai_r.choices[0].message.content.strip().strip("-").strip()
                                             if _ai_label in _known_types:
                                                 _amb["suggested"] = _ai_label
                                                 _amb["ai"] = True
@@ -7351,25 +7165,12 @@ def render_quick_incident_log():
         with _dc1:
             _inc_date = st.date_input("📅 Date *", value=date.today())
         with _dc2:
-            # Generate time options in 5-minute intervals
-            time_options = generate_time_options()
-            # Round current time to nearest 5 minutes
-            now = datetime.now()
-            current_minutes = (now.minute // 5) * 5
-            current_time_str = time(now.hour, current_minutes).strftime("%H:%M:%S")
-            default_time_idx = time_options.index(current_time_str) if current_time_str in time_options else 0
-            _inc_time_str = st.selectbox(
-                "🕐 Time *",
-                options=time_options,
-                index=default_time_idx,
-                format_func=lambda x: datetime.strptime(x, "%H:%M:%S").strftime("%I:%M %p"),
-                key="ql_time"
-            )
-            _inc_time = datetime.strptime(_inc_time_str, "%H:%M:%S").time()
+            _inc_time = st.time_input("🕐 Time *",
+                value=datetime.now().replace(second=0, microsecond=0).time())
         with _dc3:
             _sess_lbl = st.selectbox("⏰ Session *", list(_SESSIONS_QL.keys()))
 
-        _location = st.multiselect("📍 Location * (select one or more)", LOCATIONS)
+        _location = st.selectbox("📍 Location *", LOCATIONS)
 
         st.markdown("<hr style='margin:.5rem 0;border-color:#e2e8f0;'>", unsafe_allow_html=True)
 
