@@ -8,7 +8,7 @@ Consequence) running across the page.
 
 Also supports re-uploading a hand-edited copy of a previously generated
 report: it reads the edited Word document back in and rebuilds it, and can
-call Claude to re-derive the AI-Generated Hypothesis / Incident Summary /
+call Groq to re-derive the AI-Generated Hypothesis / Incident Summary /
 Tagging from the edited phases, noting plainly whether the edits actually
 changed the picture.
 
@@ -21,13 +21,13 @@ database write. Student-identifiable text should only ever exist in EdChat
 The ONE exception is the optional "Recreate after manual edits" feature:
 clicking "Recreate with updated hypothesis" sends the edited phase text
 (location/context/time/behaviour/consequence and student name) to the
-Claude API to regenerate the hypothesis. Nothing else in this tool makes
+Groq API to regenerate the hypothesis. Nothing else in this tool makes
 any outbound call, and this one only fires when that button is explicitly
 clicked — never automatically.
 
 Drop this file into the portal's `pages/` folder alongside the other
 numbered tools (e.g. as 47_ABCH_Report_Formatter.py). Requires
-ANTHROPIC_API_KEY configured as a secret/env var for the rejig feature —
+GROQ_API_KEY configured as a secret/env var for the rejig feature —
 the rest of the tool works without it.
 """
 
@@ -48,10 +48,10 @@ from docx.table import Table as DocxTable
 from docx.text.paragraph import Paragraph as DocxParagraph
 
 try:
-    import anthropic
-    _ANTHROPIC_AVAILABLE = True
+    from groq import Groq
+    _GROQ_AVAILABLE = True
 except ImportError:
-    _ANTHROPIC_AVAILABLE = False
+    _GROQ_AVAILABLE = False
 
 st.set_page_config(page_title="ABCH Report Formatter", page_icon="📋", layout="wide")
 
@@ -342,7 +342,7 @@ HEADING_ALIASES = {
     "REPORTING STAFF": "reporting_staff",
     "WITNESSES": "witnesses",
     "OTHER STUDENTS INVOLVED": "other_students",
-    "INCIDENT TIMELINE": "timeline",   # matches "INCIDENT TIMELINE – ABC-H" via startswith
+    "INCIDENT TIMELINE": "timeline",
     "HYPOTHESIS INPUT": "hypothesis_input",
     "HARM / OUTCOMES": "harm",
     "HARM/OUTCOMES": "harm",
@@ -352,177 +352,262 @@ HEADING_ALIASES = {
     "NOTIFICATIONS": "notifications",
     "STAFF DECLARATION": "declaration",
     "AI-GENERATED HYPOTHESIS": "hypothesis",
-    "INCIDENT SUMMARY": "irms",       # matches "INCIDENT SUMMARY (IRMS)" via startswith
+    "INCIDENT SUMMARY": "irms",
     "INCIDENT TAGGING": "tagging",
     "FINAL MESSAGE": "final",
+    "LEADERSHIP SIGNATURE": "leadership",
 }
 
-PHASE_START = re.compile(r"^(PHASE|EVENT)\s*\d+", re.IGNORECASE)
-
-# Fixed labels used outside the ABC phase blocks — matched literally, longest
-# first, so "Behaviour Type" never gets swallowed by a generic "Behaviour" match.
-GENERIC_LABELS = [
-    "Other students involved", "Home School", "EDSAS ID", "Program", "DOB",
-    "Witnesses", "Name", "Student Name", "Date of Birth", "Year Level",
-    "Incident Date", "Incident End Time", "Incident Time", "Time", "Location(s)", "Location",
-    "Reporting Staff", "Date", "Day",
-    "ED155 required", "ED155 completed", "ED155 number",
-    "Emergency services involved", "SAPOL reference number", "Service",
-    "Parent/Carer informed", "Time informed", "Informed by", "Others notified", "Method",
-    "Report completed on", "Signed",
-    "Why behaviour continued", "Key insight", "Pattern", "Function",
-    "Trigger Type", "Behaviour Type", "Escalation Level",
+# Headings are found by searching for these patterns ANYWHERE in the raw
+# text — not anchored to the start of a line. Real pasted reports are
+# sometimes flattened so a whole section runs on as one paragraph with no
+# line breaks at all (e.g. "STUDENT DETAILS Staff name: Ben Sutton
+# Incident Date: ..."), so line-anchored heading detection misses this
+# entirely. Each pattern's match is the heading itself; content is
+# whatever lies between this heading's end and the next heading's start.
+_HEADING_BASE_PATTERNS = [
+    (r"INCIDENT\s+TIMELINE(?:\s*[–\-]\s*ABC-?H)?", "timeline"),
+    (r"INCIDENT\s+SUMMARY(?:\s*\(IRMS\))?", "irms"),
+    (r"HARM\s*/\s*OUTCOMES", "harm"),
+    (r"\bSTUDENT\s+DETAILS\b", "student"),
+    (r"\bINCIDENT\s+DETAILS\b", "incident"),
+    (r"\bREPORTING\s+STAFF\b", "reporting_staff"),
+    (r"\bWITNESSES\b", "witnesses"),
+    (r"\bOTHER\s+STUDENTS\s+INVOLVED\b", "other_students"),
+    (r"\bHYPOTHESIS\s+INPUT\b", "hypothesis_input"),
+    (r"\bED155\b", "ed155"),
+    (r"\bEMERGENCY\s+SERVICES\b", "emergency"),
+    (r"\bSTAFF\s+RESPONSES\b", "staff_responses"),
+    (r"\bNOTIFICATIONS\b", "notifications"),
+    (r"\bSTAFF\s+DECLARATION\b", "declaration"),
+    (r"\bAI-GENERATED\s+HYPOTHESIS\b", "hypothesis"),
+    (r"\bINCIDENT\s+TAGGING\b", "tagging"),
+    (r"\bLEADERSHIP\s+SIGNATURE\b", "leadership"),
+    (r"\bFINAL\s+MESSAGE\b", "final"),
 ]
-GENERIC_LABELS.sort(key=len, reverse=True)
-GENERIC_RE = re.compile(
-    r"^\s*(" + "|".join(re.escape(l) for l in GENERIC_LABELS) + r")\s*:\s*(.*)$",
-    re.IGNORECASE,
-)
+# A heading phrase is only treated as a SECTION BOUNDARY when it is NOT
+# immediately followed by a colon — several of these phrases (Witnesses,
+# Reporting Staff, ED155...) can also appear as an inline "Label: value"
+# field within another section (e.g. "INCIDENT DETAILS Witnesses: Roisin
+# Mcilduff..."), and without this guard the heading-scan would wrongly
+# treat that inline label as a new section start, fragmenting the real
+# section's content around it.
+_HEADING_PATTERNS = [
+    (re.compile(rf"(?:{base})(?!\s*:)", re.IGNORECASE), key)
+    for base, key in _HEADING_BASE_PATTERNS
+]
+
+PHASE_MARKER_RE = re.compile(r"\bPHASE\s*(\d+)\b|\bEVENT\s*(\d+)\b", re.IGNORECASE)
 
 
-def parse_block_text(lines):
-    """For headings whose entire content is free text with no 'Label:'
-    lines (e.g. WITNESSES, OTHER STUDENTS INVOLVED, STAFF RESPONSES) —
-    join the non-empty lines with a newline so each stays its own
-    paragraph (e.g. two witness names on two lines), matching the
-    official template's style rather than flattening into one sentence."""
-    return "\n".join(ln.strip() for ln in lines if ln.strip())
+def parse_block_text(blob):
+    """For sections that are pure free text (WITNESSES, OTHER STUDENTS
+    INVOLVED, STAFF RESPONSES, HARM/OUTCOMES, IRMS summary) — just clean
+    up the whitespace at the edges. Internal structure (or lack of it) is
+    left exactly as given."""
+    return (blob or "").strip()
 
-# ABC phase field labels — matched separately so "Behaviour (Student):" etc.
-# always canonicalise to the plain field name. "Context" and "Antecedent" are
-# the same thing on the official template (a merged "Context / Antecedent"
-# label going forward) — both patterns map to the same canonical key so
-# older-format pasted reports (with the two as separate fields) still merge
-# correctly.
-PHASE_FIELD_PATTERNS = [
-    ("Time", re.compile(r"^\s*Time\s*:\s*(.*)$", re.IGNORECASE)),
-    ("Location", re.compile(r"^\s*Location\s*:\s*(.*)$", re.IGNORECASE)),
-    ("Context", re.compile(r"^\s*Context\s*/?\s*Antecedent[^:]*:\s*(.*)$", re.IGNORECASE)),
-    ("Context", re.compile(r"^\s*Context\s*:\s*(.*)$", re.IGNORECASE)),
-    ("Context", re.compile(r"^\s*Antecedent[^:]*:\s*(.*)$", re.IGNORECASE)),
-    ("Behaviour", re.compile(r"^\s*Behaviour[^:]*:\s*(.*)$", re.IGNORECASE)),
-    ("Consequence", re.compile(r"^\s*Consequence[^:]*:\s*(.*)$", re.IGNORECASE)),
+
+def scan_labeled_fields(text, label_defs, join_with="\n"):
+    """Position-based label scan: find every occurrence of any label in
+    label_defs ANYWHERE in `text` — not anchored to line starts, since
+    real reports are sometimes pasted with every field crammed onto one
+    line with no breaks at all. Slice the text between consecutive label
+    positions to get each field's value. A label may be followed by a
+    short parenthetical explanation before the colon (e.g.
+    'Behaviour (Student):', 'Context / Antecedent (what was going on
+    before the behaviour):') — consumed automatically as part of the
+    label, not treated as content. If the same canonical field is matched
+    more than once (e.g. an older report with separate 'Context:' and
+    'Antecedent:' lines), the values are joined with `join_with` rather
+    than the second overwriting the first."""
+    if not text:
+        return {}
+    alt = "|".join(f"(?:{p})" for p, _ in label_defs)
+    label_re = re.compile(
+        rf"(?<![A-Za-z0-9])(?:{alt})\s*(?:\([^)]{{0,200}}\))?\s*:\s*",
+        re.IGNORECASE,
+    )
+    # Re-derive the plain label text per match (without the trailing
+    # parenthetical/colon) so we can resolve which pattern it came from.
+    label_only_re = re.compile(rf"(?<![A-Za-z0-9])({alt})", re.IGNORECASE)
+
+    matches = list(label_re.finditer(text))
+    if not matches:
+        return {}
+
+    def _canonical_for(start_pos):
+        m2 = label_only_re.match(text, start_pos)
+        if not m2:
+            return None
+        label_text = m2.group(1)
+        for p, c in label_defs:
+            if re.fullmatch(p, label_text, re.IGNORECASE):
+                return c
+        return None
+
+    result = {}
+    for i, m in enumerate(matches):
+        canonical = _canonical_for(m.start())
+        if canonical is None:
+            continue
+        val_start = m.end()
+        val_end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        value = text[val_start:val_end].strip()
+        if canonical in result and result[canonical]:
+            result[canonical] = result[canonical] + join_with + value if value else result[canonical]
+        else:
+            result[canonical] = value
+    return result
+
+
+# Header fields (student + incident + reporting staff) — scanned together
+# from a combined blob, since the bot doesn't reliably keep incident-level
+# fields (like Incident Date/Time) under the "right" heading. Routing into
+# student vs incident buckets happens afterwards, by field name.
+HEADER_FIELD_DEFS = [
+    (r"Other\s+students\s+involved", "Other students involved"),
+    (r"Home\s+School", "Home School"),
+    (r"EDSAS\s+ID", "EDSAS ID"),
+    (r"Student\s+[Nn]ame", "Name"),
+    (r"Date\s+of\s+Birth", "DOB"),
+    (r"DOB", "DOB"),
+    (r"Program", "Program"),
+    (r"Year\s+Level", "Year Level"),
+    (r"Witnesses", "Witnesses"),
+    (r"Staff\s+name", "Staff name"),
+    (r"Name", "Name"),
+    (r"Incident\s+End\s+Time", "Incident End Time"),
+    (r"Incident\s+Time", "Incident Time"),
+    (r"Incident\s+Date", "Incident Date"),
+    (r"Location", "Location"),
+    (r"Reporting\s+Staff", "Reporting Staff"),
+    (r"Date", "Date"),
+    (r"Day", "Day"),
+    (r"Time", "Incident Time"),
+]
+
+STUDENT_FIELD_NAMES = {
+    "Other students involved", "Home School", "EDSAS ID", "Name", "DOB",
+    "Program", "Year Level", "Witnesses",
+}
+
+# ABC-H phase fields — scanned per-phase, within that phase's own text
+# slice only (so "Location" etc. never bleeds across phases).
+PHASE_FIELD_DEFS = [
+    (r"Context\s*/\s*Antecedent[^:()]*", "Context"),
+    (r"Antecedent[^:()]*", "Context"),
+    (r"Context", "Context"),
+    (r"Behaviour[^:()]*", "Behaviour"),
+    (r"Consequence[^:()]*", "Consequence"),
+    (r"CPI\s*Level", "CPI Level"),
+    (r"Response", "Response"),
+    (r"Location", "Location"),
+    (r"Time", "Time"),
+]
+
+# Fields used in the tail sections (ED155, Emergency, Notifications,
+# Declaration, Hypothesis Input, AI-Generated Hypothesis, Tagging) — one
+# shared list is safe since each section's text is already isolated by
+# heading position before scanning, so there's no cross-section collision
+# even though e.g. "Function" appears in more than one section.
+TAIL_FIELD_DEFS = [
+    (r"ED155\s+required", "ED155 required"),
+    (r"ED155\s+completed", "ED155 completed"),
+    (r"ED155\s+number", "ED155 number"),
+    (r"Emergency\s+services\s+involved", "Emergency services involved"),
+    (r"SAPOL\s+reference\s+number", "SAPOL reference number"),
+    (r"Service", "Service"),
+    (r"Parent/Carer\s+informed", "Parent/Carer informed"),
+    (r"To\s+be\s+informed\s+by", "Informed by"),
+    (r"Informed\s+by", "Informed by"),
+    (r"Time\s+to\s+inform", "Time informed"),
+    (r"Time\s+informed", "Time informed"),
+    (r"Others\s+notified", "Others notified"),
+    (r"Method", "Method"),
+    (r"Report\s+completed\s+on", "Report completed on"),
+    (r"Signed", "Signed"),
+    (r"Why\s+behaviour\s+continued", "Why behaviour continued"),
+    (r"Key\s+insight", "Key insight"),
+    (r"Pattern", "Pattern"),
+    (r"Function", "Function"),
+    (r"Trigger\s+Type", "Trigger Type"),
+    (r"Behaviour\s+Type", "Behaviour Type"),
+    (r"Escalation\s+Level", "Escalation Level"),
 ]
 
 
 def split_sections(text):
-    """Return dict: section_key -> list of raw lines (in original order)."""
-    lines = [ln.rstrip() for ln in text.splitlines()]
-    sections = {}
-    current_key = "preamble"
-    sections[current_key] = []
-    for ln in lines:
-        stripped = ln.strip()
-        upper = stripped.upper()
-        matched_key = None
-        for alias, key in HEADING_ALIASES.items():
-            if upper == alias:
-                matched_key = key
-                break
-            rest = upper[len(alias):]
-            # Heading continuation e.g. "INCIDENT TIMELINE – ABC-H" or
-            # "INCIDENT SUMMARY (IRMS)": alias immediately followed by a
-            # space + dash/paren, with no colon anywhere on the line (a
-            # real field line like "ED155 required: Yes" has a colon).
-            if upper.startswith(alias) and ":" not in upper and re.match(r"^\s*[–\-(]", rest):
-                matched_key = key
-                break
-        if matched_key:
-            current_key = matched_key
-            sections.setdefault(current_key, [])
+    """Find all known headings anywhere in the text (position-based) and
+    slice the text between consecutive heading positions to get each
+    section's raw content. Returns dict: section_key -> content string."""
+    matches = []
+    for pattern, key in _HEADING_PATTERNS:
+        for m in pattern.finditer(text):
+            matches.append((m.start(), m.end(), key))
+    matches.sort(key=lambda t: t[0])
+
+    deduped = []
+    last_end = -1
+    used_keys = set()
+    for start, end, key in matches:
+        if start < last_end:
             continue
-        sections.setdefault(current_key, []).append(ln)
+        if key in used_keys:
+            # Each section heading is only meant to appear once per
+            # report. A later, incidental mention of the same phrase in
+            # free text (e.g. "...ED155 completed, SAPOL involvement
+            # pending" inside the IRMS summary, long after the real ED155
+            # section) is content, not a second real heading — treating
+            # it as one would both truncate the section it's actually in
+            # and dump unrelated text into the real section above.
+            continue
+        deduped.append((start, end, key))
+        last_end = end
+        used_keys.add(key)
+
+    sections = {"preamble": text[: deduped[0][0]] if deduped else text}
+    for i, (start, end, key) in enumerate(deduped):
+        content_start = end
+        content_end = deduped[i + 1][0] if i + 1 < len(deduped) else len(text)
+        chunk = text[content_start:content_end].strip()
+        if sections.get(key):
+            sections[key] = sections[key] + "\n" + chunk
+        else:
+            sections[key] = chunk
     return sections
 
 
-def parse_generic_labeled_lines(lines):
-    """Walk lines using the fixed GENERIC_LABELS list. Whenever a
-    'Label: value' line is hit, start a new field, appending following
-    non-label lines to that field's value until the next label."""
-    result = {}
-    current_key = None
-    for ln in lines:
-        stripped = ln.strip()
-        if not stripped:
-            continue
-        m = GENERIC_RE.match(stripped)
-        if m:
-            raw_label = m.group(1)
-            canonical = next(
-                (l for l in GENERIC_LABELS if l.lower() == raw_label.lower()), raw_label
-            )
-            value = m.group(2).strip()
-            result[canonical] = value
-            current_key = canonical
-        else:
-            if current_key:
-                result[current_key] = (result[current_key] + " " + stripped).strip()
-    return result
-
-
-def parse_phase_labeled_lines(lines):
-    """Same idea as parse_generic_labeled_lines but for the ABC-H phase
-    fields (Time/Location/Context-Antecedent/Behaviour/Consequence), which
-    may have parenthetical suffixes like 'Behaviour (Student):'. "Context"
-    and "Antecedent" share one canonical key — if a report has both as
-    separate lines (older format), the second is appended rather than
-    overwriting the first.
-
-    Continuation lines are joined with "\\n", not a space — on the real
-    ABC-H template each distinct action or quote is its own paragraph
-    within the cell (e.g. "Octavia said X" / "Octavia then did Y" as two
-    lines), and flattening them into one run-on paragraph loses that."""
-    result = {}
-    current_key = None
-    for ln in lines:
-        stripped = ln.strip()
-        if not stripped:
-            continue
-        matched = False
-        for key, pattern in PHASE_FIELD_PATTERNS:
-            m = pattern.match(stripped)
-            if m:
-                value = m.group(1).strip()
-                if key in result and result[key]:
-                    result[key] = result[key] + "\n" + value if value else result[key]
-                else:
-                    result[key] = value
-                current_key = key
-                matched = True
-                break
-        if not matched and current_key:
-            result[current_key] = result[current_key] + "\n" + stripped if result[current_key] else stripped
-    return result
-
-
-def parse_phases(timeline_lines):
-    """Split the timeline block into phases and parse each."""
-    phases = []
-    current_lines = []
-    current_num = None
-    for ln in timeline_lines:
-        if PHASE_START.match(ln.strip()):
-            if current_lines and current_num is not None:
-                phases.append((current_num, current_lines))
-            num_match = re.search(r"\d+", ln)
-            current_num = num_match.group(0) if num_match else str(len(phases) + 1)
-            current_lines = []
-        else:
-            if current_num is not None:
-                current_lines.append(ln)
-    if current_lines and current_num is not None:
-        phases.append((current_num, current_lines))
+def parse_phases(timeline_text):
+    """Split the timeline text into phases by PHASE/EVENT marker position
+    (not line position) and extract each phase's fields."""
+    matches = list(PHASE_MARKER_RE.finditer(timeline_text or ""))
+    phases_raw = []
+    for i, m in enumerate(matches):
+        num = m.group(1) or m.group(2)
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(timeline_text)
+        phases_raw.append((num, timeline_text[start:end]))
 
     parsed_phases = []
-    for num, lines in phases:
-        fields = parse_phase_labeled_lines(lines)
+    for num, blob in phases_raw:
+        fields = scan_labeled_fields(blob, PHASE_FIELD_DEFS)
+        consequence = fields.get("Consequence", "")
+        extras = []
+        if fields.get("CPI Level"):
+            extras.append(f"CPI Level: {fields['CPI Level']}")
+        if fields.get("Response"):
+            extras.append(f"Response: {fields['Response']}")
+        if extras:
+            extra_text = "\n".join(extras)
+            consequence = f"{consequence}\n{extra_text}".strip() if consequence else extra_text
         parsed_phases.append({
             "number": num or str(len(parsed_phases) + 1),
             "Time": fields.get("Time", ""),
             "Location": fields.get("Location", ""),
             "Context": fields.get("Context", ""),
             "Behaviour": fields.get("Behaviour", ""),
-            "Consequence": fields.get("Consequence", ""),
+            "Consequence": consequence,
         })
     return parsed_phases
 
@@ -530,16 +615,31 @@ def parse_phases(timeline_lines):
 def parse_report(raw_text):
     sections = split_sections(raw_text)
 
-    student = parse_generic_labeled_lines(sections.get("student", []))
-    # Normalise label variants the bot may use to the canonical field name.
-    if not student.get("Name") and student.get("Student Name"):
-        student["Name"] = student.pop("Student Name")
-    if not student.get("DOB") and student.get("Date of Birth"):
-        student["DOB"] = student.pop("Date of Birth")
+    # Header blob: combine STUDENT DETAILS + INCIDENT DETAILS + REPORTING
+    # STAFF text before scanning — the bot doesn't reliably keep
+    # incident-level fields (like Incident Date/Time) under the "right"
+    # heading, so fields are routed by NAME, not by which heading the
+    # text happened to sit under.
+    header_blob = "\n".join(
+        sections.get(k, "") for k in ("student", "incident")
+    )
+    header_fields = scan_labeled_fields(header_blob, HEADER_FIELD_DEFS)
+
+    student = {}
+    incident = {}
+    for key, value in header_fields.items():
+        if not value:
+            continue
+        if key in STUDENT_FIELD_NAMES:
+            student[key] = value
+        elif key == "Staff name":
+            incident.setdefault("Reporting Staff", value)
+        else:
+            incident[key] = value
 
     # WITNESSES / OTHER STUDENTS INVOLVED sometimes come as their own
     # heading with free-text content underneath, rather than inline
-    # "Witnesses:" / "Other students involved:" fields.
+    # fields inside STUDENT/INCIDENT DETAILS.
     if sections.get("witnesses") and not student.get("Witnesses"):
         val = parse_block_text(sections["witnesses"])
         if val:
@@ -548,43 +648,44 @@ def parse_report(raw_text):
         val = parse_block_text(sections["other_students"])
         if val:
             student["Other students involved"] = val
+    if sections.get("reporting_staff") and not incident.get("Reporting Staff"):
+        # The REPORTING STAFF section is sometimes just a bare name with
+        # no label at all (e.g. "REPORTING STAFF\nBen Sutton"). Fall back
+        # to using the whole section as the name, but only if it's short
+        # and has no colon in it — otherwise it's not just a name.
+        raw_rep = sections["reporting_staff"].strip()
+        if raw_rep and len(raw_rep) < 60 and ":" not in raw_rep:
+            incident["Reporting Staff"] = raw_rep
 
-    incident = parse_generic_labeled_lines(sections.get("incident", []))
-    if not incident.get("Incident Time") and incident.get("Time"):
-        incident["Incident Time"] = incident.pop("Time")
-    if not incident.get("Location") and incident.get("Location(s)"):
-        incident["Location"] = incident.pop("Location(s)")
     # Date + Day sometimes come as separate fields instead of one
     # "Incident Date" field.
-    if not incident.get("Incident Date") and incident.get("Date"):
-        date_val = incident.pop("Date")
-        day_val = incident.pop("Day", "")
+    if incident.get("Date") and not incident.get("Incident Date"):
+        date_val = incident.get("Date")
+        day_val = incident.get("Day", "")
         incident["Incident Date"] = f"{date_val} ({day_val})" if day_val else date_val
-    if sections.get("reporting_staff") and not incident.get("Reporting Staff"):
-        rep = parse_block_text(sections["reporting_staff"])
-        if rep:
-            incident["Reporting Staff"] = rep
+    incident.pop("Date", None)
+    incident.pop("Day", None)
 
-    phases = parse_phases(sections.get("timeline", []))
+    phases = parse_phases(sections.get("timeline", ""))
 
-    harm = " ".join(x.strip() for x in sections.get("harm", []) if x.strip())
+    harm = parse_block_text(sections.get("harm", ""))
 
-    ed155 = parse_generic_labeled_lines(sections.get("ed155", []))
-    emergency_lines = [x.strip() for x in sections.get("emergency", []) if x.strip()]
-    emergency = parse_generic_labeled_lines(sections.get("emergency", []))
-    if not emergency and emergency_lines:
-        emergency = " ".join(emergency_lines)
+    ed155 = scan_labeled_fields(sections.get("ed155", ""), TAIL_FIELD_DEFS)
+    emergency_blob = sections.get("emergency", "")
+    emergency = scan_labeled_fields(emergency_blob, TAIL_FIELD_DEFS)
+    if not emergency and emergency_blob.strip():
+        emergency = emergency_blob.strip()
 
-    staff_responses = parse_block_text(sections.get("staff_responses", []))
-    notifications = parse_generic_labeled_lines(sections.get("notifications", []))
-    declaration = parse_generic_labeled_lines(sections.get("declaration", []))
+    staff_responses = parse_block_text(sections.get("staff_responses", ""))
+    notifications = scan_labeled_fields(sections.get("notifications", ""), TAIL_FIELD_DEFS)
+    declaration = scan_labeled_fields(sections.get("declaration", ""), TAIL_FIELD_DEFS)
 
     # HYPOTHESIS INPUT is the staff member's own GET/AVOID call, distinct
     # from the AI-GENERATED HYPOTHESIS section further down.
-    hypothesis_input = parse_generic_labeled_lines(sections.get("hypothesis_input", []))
-    hypothesis = parse_generic_labeled_lines(sections.get("hypothesis", []))
-    irms = " ".join(x.strip() for x in sections.get("irms", []) if x.strip())
-    tagging = parse_generic_labeled_lines(sections.get("tagging", []))
+    hypothesis_input = scan_labeled_fields(sections.get("hypothesis_input", ""), TAIL_FIELD_DEFS)
+    hypothesis = scan_labeled_fields(sections.get("hypothesis", ""), TAIL_FIELD_DEFS)
+    irms = parse_block_text(sections.get("irms", ""))
+    tagging = scan_labeled_fields(sections.get("tagging", ""), TAIL_FIELD_DEFS)
 
     return {
         "student": student,
@@ -601,6 +702,7 @@ def parse_report(raw_text):
         "irms": irms,
         "tagging": tagging,
     }
+
 
 
 # ----------------------------------------------------------------------
@@ -735,18 +837,60 @@ def docx_to_report_text(file_bytes):
     return "\n".join(out_lines)
 
 
+GROQ_MODEL_CHAIN = ["openai/gpt-oss-120b", "qwen/qwen3.6-27b", "llama-3.3-70b-versatile"]
+
+
+def _make_groq_client():
+    """Groq client creation has hit a recurring portal-wide issue: a stale
+    cached `groq` wheel + newer `httpx` raises
+    `Client.__init__() got an unexpected keyword argument 'proxies'`.
+    Fall back to an explicitly-built httpx.Client() if that happens."""
+    try:
+        return Groq()
+    except TypeError as e:
+        if "proxies" not in str(e):
+            raise
+        import httpx
+        return Groq(http_client=httpx.Client())
+
+
+def _groq_chat_call(client, model, prompt, max_tokens=1000):
+    """One Groq call, with the Qwen-specific thinking-token suppression and
+    a self-healing retry that halves max_tokens on a 'too large' error
+    instead of repeating the identical oversized request."""
+    kwargs = dict(
+        model=model,
+        max_tokens=max_tokens,
+        temperature=0.2,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    if model.startswith("qwen/"):
+        kwargs["reasoning_effort"] = "none"
+    try:
+        response = client.chat.completions.create(**kwargs)
+    except Exception as e:
+        if "too large" in str(e).lower() and max_tokens > 500:
+            kwargs["max_tokens"] = max_tokens // 2
+            response = client.chat.completions.create(**kwargs)
+        else:
+            raise
+    return response.choices[0].message.content
+
+
 def rejig_hypothesis_with_ai(parsed, original_hypothesis=None):
-    """Call Claude to re-derive the AI-Generated Hypothesis / IRMS summary
+    """Call Groq to re-derive the AI-Generated Hypothesis / IRMS summary
     / tagging from the (possibly edited) phases, and say plainly whether
     the edits actually changed the picture. Returns (updated_dict, note)
-    or (None, error_message) if the call couldn't be made."""
-    if not _ANTHROPIC_AVAILABLE:
-        return None, "The anthropic package isn't installed in this environment."
+    or (None, error_message) if the call couldn't be made. Uses Groq
+    (with the portal's confirmed-working model fallback chain) rather
+    than a paid API, since this tool is used by many staff."""
+    if not _GROQ_AVAILABLE:
+        return None, "The groq package isn't installed in this environment."
 
     try:
-        client = anthropic.Anthropic()
+        client = _make_groq_client()
     except Exception as e:
-        return None, f"Couldn't set up the Claude client ({e}). Check ANTHROPIC_API_KEY is configured."
+        return None, f"Couldn't set up the Groq client ({e}). Check GROQ_API_KEY is configured."
 
     phase_text = "\n\n".join(
         f"Phase {p.get('number')}\nLocation: {p.get('Location','')}\n"
@@ -788,15 +932,18 @@ BEHAVIOUR TYPE: [short phrase]
 TAGGING FUNCTION: [short phrase]
 ESCALATION LEVEL: [one of: Anxiety / Defensive / Risk Behaviour / Tension Reduction — or a range like "Defensive to Risk Behaviour" — using CPI's Crisis Development Model, based on the highest level reached across the phases]"""
 
-    try:
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1000,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = "".join(b.text for b in response.content if hasattr(b, "text"))
-    except Exception as e:
-        return None, f"Claude API call failed: {e}"
+    text = None
+    last_error = None
+    for model in GROQ_MODEL_CHAIN:
+        try:
+            text = _groq_chat_call(client, model, prompt, max_tokens=1000)
+            break
+        except Exception as e:
+            last_error = e
+            continue
+
+    if text is None:
+        return None, f"Groq API call failed on all models: {last_error}"
 
     def _extract(label):
         m = re.search(rf"^{re.escape(label)}:\s*(.*)$", text, re.MULTILINE)
@@ -917,7 +1064,7 @@ st.caption(
 )
 st.caption(
     "⚠️ Unlike the rest of this tool, clicking **Recreate with updated hypothesis** "
-    "sends the edited phase content (and student name) to the Claude API to "
+    "sends the edited phase content (and student name) to the Groq API to "
     "regenerate the hypothesis. Nothing is sent anywhere else, and nothing is sent "
     "unless you click that button."
 )
