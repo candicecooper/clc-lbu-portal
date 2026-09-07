@@ -94,8 +94,138 @@ a new attack surface, it just keeps the panel out of casual browsing.
 import re
 import streamlit as st
 import os
+from io import BytesIO
 from datetime import date, datetime, time, timedelta, timezone
 from uuid import uuid4
+
+# ── Reference Docs (printable staff guides) ──────────────────────────────────
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer, Table,
+                                    TableStyle, HRFlowable)
+    _HAS_RL = True
+except Exception:
+    _HAS_RL = False
+
+
+def _build_reference_pdf(title, subtitle, sections, reminders):
+    """sections = [(heading, [step, ...]), ...]. Returns one-page PDF bytes."""
+    if not _HAS_RL:
+        return None
+    _TEAL = colors.HexColor("#1F4E5F")
+    _LIGHT = colors.HexColor("#EAF1F3")
+    _GREY = colors.HexColor("#5b6b70")
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=14*mm, rightMargin=14*mm,
+                            topMargin=12*mm, bottomMargin=10*mm)
+    h1 = ParagraphStyle("h1", fontName="Helvetica-Bold", fontSize=17, textColor=_TEAL)
+    sub = ParagraphStyle("sub", fontSize=8.5, textColor=_GREY, spaceAfter=4)
+    boxh = ParagraphStyle("boxh", fontSize=10.5, textColor=colors.white,
+                          fontName="Helvetica-Bold", leading=13)
+    stp = ParagraphStyle("stp", fontSize=8.7, leading=11.5)
+    note = ParagraphStyle("note", fontSize=7.8, leading=10, textColor=_GREY)
+    story = [Paragraph(title, h1), Paragraph(subtitle, sub),
+             HRFlowable(width="100%", thickness=1, color=_TEAL, spaceAfter=6)]
+    for heading, steps in sections:
+        hb = Table([[Paragraph(heading, boxh)]], colWidths=[doc.width])
+        hb.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), _TEAL),
+                                ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                                ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
+        story += [hb, Spacer(1, 3)]
+        rows = [[Paragraph(f"<b>{i+1}.</b>", stp), Paragraph(x, stp)]
+                for i, x in enumerate(steps)]
+        bt = Table(rows, colWidths=[8*mm, doc.width - 8*mm])
+        bt.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
+                                ("BACKGROUND", (0, 0), (-1, -1), _LIGHT),
+                                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                                ("LINEBELOW", (0, 0), (-1, -2), 0.4, colors.white)]))
+        story += [bt, Spacer(1, 7)]
+    if reminders:
+        story.append(HRFlowable(width="100%", thickness=1, color=_TEAL, spaceAfter=4))
+        rt = Table([[Paragraph(r, note)] for r in reminders], colWidths=[doc.width])
+        rt.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), _LIGHT),
+                                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                                ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]))
+        story.append(rt)
+    doc.build(story)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+# ---- Reference doc definitions (edit the text here to update a guide) ----
+REFERENCE_DOCS = {
+    "student_workflow": {
+        "menu": "🧑‍🎓 Student Workflow — new / ending / extended",
+        "title": "Student Workflow — Quick Reference",
+        "subtitle": "Cowandilla Learning Centre (LBU) • The Student Register is the "
+                    "ONLY place students are added. Everything else follows from it.",
+        "sections": [
+            ("① Setting up a NEW student", [
+                "Open the <b>Student Register</b>. This is the only place a student is created — "
+                "never add a student in SMARTAR, Behaviour, Sensory or the Communication Log.",
+                "Enter their details: <b>initials</b>, <b>program (JP / PY / SY)</b>, year level "
+                "and start date. If two students share initials, add the <b>second letter of the "
+                "surname</b> to tell them apart (e.g. <b>B.Hi</b> for a second B.H.).",
+                "Save. The register automatically adds them to <b>SMARTAR</b>, the <b>Behaviour</b> "
+                "tool and creates their <b>Document Archive</b> folder.",
+                "Check the confirmation lists the tools. If one is missing, reload and try again.",
+                "Give it a minute, then confirm they appear in the other tools (reload if needed).",
+            ]),
+            ("② When a placement is ENDING", [
+                "<b>File documents first.</b> SMARTAR: open it → the student → <b>Generate PDF "
+                "Report</b> (wait for the green ‘Saved’ message).",
+                "Behaviour: generate the Behaviour Summary → <b>Save to [student]'s archive</b>.",
+                "Sensory &amp; Safety/Risk: if they have one, generate it → <b>Save to archive</b>.",
+                "The Communication Log files itself in the next step — you don't save it manually.",
+                "Then in the <b>Student Register</b>, click <b>Archive</b> on the student.",
+                "Read the <b>document folder check</b>: green ✅ = on file, red ❌ = missing "
+                "(go file it first). Then <b>Yes, archive</b>. Watch for green confirmations "
+                "and no red warnings.",
+            ]),
+            ("③ When a placement is EXTENDED", [
+                "Open the <b>Student Register</b> and find the student — they stay <b>active</b>, "
+                "do NOT archive them.",
+                "Use <b>Extend</b> to update their planned exit date to the new date.",
+                "Save. Nothing else to do — an extension only changes the date; no re-filing.",
+            ]),
+        ],
+        "reminders": [
+            "<b>Golden rule:</b> add students in the Register only.",
+            "<b>Before archiving:</b> file SMARTAR, Behaviour, Sensory &amp; Risk documents.",
+            "<b>Trust the messages:</b> green = saved, red = not saved (fix it).",
+            "<b>Extending ≠ archiving:</b> just change the exit date.",
+        ],
+    },
+    "admin_setup": {
+        "menu": "🗂️ Admin Set-up & Onboarding (DRAFT)",
+        "title": "Admin Set-up & Onboarding — Quick Reference",
+        "subtitle": "Cowandilla Learning Centre (LBU) • DRAFT — content to be confirmed.",
+        "sections": [
+            ("① Start-of-year set-up", [
+                "[To be confirmed — e.g. roll over the roster, add new staff names, "
+                "review recurring admin jobs.]",
+            ]),
+            ("② Onboarding a new staff member", [
+                "[To be confirmed — e.g. how they get portal access, which tools they need, "
+                "who shows them the Register and archiving workflow.]",
+            ]),
+            ("③ Recurring admin jobs", [
+                "[To be confirmed — daily / weekly / term admin responsibilities.]",
+            ]),
+        ],
+        "reminders": [
+            "This guide is a draft — send the set-up steps to complete it.",
+        ],
+    },
+}
 
 # ── Supabase client (fails to a read-only "offline" mode if unavailable) ───
 try:
@@ -1349,7 +1479,8 @@ if viewing_staff:
 # ══════════════════════════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════════════════════════
-tab_checklist, tab_week = st.tabs(["📋 Today", "📅 This Week"], key="main_tabs")
+tab_checklist, tab_week, tab_refs = st.tabs(
+    ["📋 Today", "📅 This Week", "📚 Reference Docs"], key="main_tabs")
 
 # ── Today tab ───────────────────────────────────────────────────────────────
 with tab_checklist:
@@ -1560,6 +1691,45 @@ with tab_week:
             if new_val != checked:
                 set_done(t["id"], key, new_val, st.session_state.current_user or "Unknown")
                 st.rerun()
+
+# ── Reference Docs tab ───────────────────────────────────────────────────────
+with tab_refs:
+    st.subheader("📚 Reference Docs")
+    st.caption("Printable staff guides for the portal's workflows. Read on screen, or "
+               "download as a one-page PDF to print and keep by the desk.")
+    _keys = list(REFERENCE_DOCS.keys())
+    _choice = st.radio("Guide", _keys,
+                       format_func=lambda k: REFERENCE_DOCS[k]["menu"],
+                       key="ref_choice")
+    _d = REFERENCE_DOCS[_choice]
+
+    if _HAS_RL:
+        try:
+            _pdf = _build_reference_pdf(_d["title"], _d["subtitle"],
+                                        _d["sections"], _d["reminders"])
+            st.download_button(
+                "⬇️ Download / print this guide (PDF)", data=_pdf,
+                file_name=_d["title"].split(" — ")[0].replace(" ", "_") + "_QuickRef.pdf",
+                mime="application/pdf", type="primary")
+        except Exception as _pe:
+            st.error(f"Could not build the PDF: {_pe}")
+    else:
+        st.info("PDF download needs 'reportlab' in requirements.txt. You can still read "
+                "the guide below.")
+
+    st.markdown("---")
+    st.markdown(f"### {_d['title']}")
+    st.caption(_d["subtitle"].replace("•", "·"))
+    for _heading, _steps in _d["sections"]:
+        st.markdown(f"**{_heading}**")
+        for _i, _s in enumerate(_steps, 1):
+            st.markdown(f"{_i}. {_s}", unsafe_allow_html=True)
+        st.write("")
+    if _d.get("reminders"):
+        st.markdown("---")
+        for _r in _d["reminders"]:
+            st.markdown(f"- {_r}", unsafe_allow_html=True)
+
 
 st.markdown("---")
 st.caption(
