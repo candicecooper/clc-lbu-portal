@@ -1498,24 +1498,33 @@ def save_staff_to_db(staff_member):
     if not supabase:
         return False
     try:
-        data = {
-            "name":                    staff_member.get('name', ''),
-            "email":                   staff_member.get('email', ''),
-            "password":                staff_member.get('password'),
-            "password_hash":           staff_member.get('password_hash') or None,
-            "role":                    staff_member.get('role', ''),
-            "program":                 staff_member.get('program'),
-            "phone":                   staff_member.get('phone'),
-            "notes":                   staff_member.get('notes'),
-            "receive_critical_emails": staff_member.get('receive_critical_emails', True),
+        sid   = str(staff_member.get("id", ""))
+        email = staff_member.get("email", "").strip()
+        data  = {
+            "name":                    staff_member.get("name", ""),
+            "email":                   email,
+            "password":                staff_member.get("password"),
+            "password_hash":           staff_member.get("password_hash") or None,
+            "role":                    staff_member.get("role", ""),
+            "program":                 staff_member.get("program"),
+            "phone":                   staff_member.get("phone"),
+            "notes":                   staff_member.get("notes"),
+            "receive_critical_emails": staff_member.get("receive_critical_emails", True),
         }
-        sid = staff_member.get('id', '')
-        if sid and not str(sid).startswith('staff_'):
+        if sid and not sid.startswith("staff_"):
             # Real Supabase UUID — always UPDATE
-            supabase.table('staff').update(data).eq('id', sid).execute()
+            supabase.table("staff").update(data).eq("id", sid).execute()
         else:
-            # New local ID — INSERT (without id; Supabase generates one)
-            supabase.table('staff').insert(data).execute()
+            # New staff — check if email already exists first
+            _existing = supabase.table("staff").select("id").eq(
+                "email", email).limit(1).execute()
+            if _existing.data:
+                # Email exists — UPDATE that record instead of inserting
+                _existing_id = _existing.data[0]["id"]
+                supabase.table("staff").update(data).eq("id", _existing_id).execute()
+            else:
+                # Genuinely new — INSERT
+                supabase.table("staff").insert(data).execute()
         return True
     except Exception as e:
         st.error(f"Error saving staff: {e}")
