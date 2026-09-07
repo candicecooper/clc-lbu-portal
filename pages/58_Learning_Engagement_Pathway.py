@@ -6,17 +6,27 @@ Click-to-fill tool: captures HOW a student engages, so the instructional
 METHOD (not the task) can be tracked, reused, and replicated across
 subjects/staff. Rolls up into a SMARTAR/GAS-aligned report.
 
+Wired into the shared student_register / document_archive module
+(archive_utils.py) — same pattern as Student Register, SMARTAR Goal
+Builder, Behaviour Support, etc. Students are identified by INITIALS
+only, never full names, matching the rest of the portal.
+
 Uses st.pills() and st.segmented_control() for real pill/toggle buttons
 instead of dropdowns and radio dots — these need streamlit>=1.36 in
 requirements.txt. If Render is pinned to an older version, bump it there
 first or these widgets will fail to import.
 
+Still needs from you: the shared AI helper's import path (e.g.
+groq_ai_call) to wire the "Draft evidence summary" button — everything
+else below is fully wired against the real archive_utils.py / student
+register you shared.
+
 --------------------------------------------------------------------------
-SUPABASE SCHEMA — run once against your students project (the one holding
-student_register), before deploying this page. Adjust the student_register
-column names below (marked ASSUMED) to match your real schema — I don't
-have visibility into your actual table structure, only the naming pattern
-you've described elsewhere (initials + program, e.g. "AD-PY").
+SUPABASE SCHEMA — run once in the SAME project archive_utils.py connects
+to (check the Connection info expander in Student Register to confirm
+which project that is), before deploying this page. student_id below is
+the student's INITIALS (text), matching how document_archive and the
+register both key students — no separate id lookup needed.
 --------------------------------------------------------------------------
 
 create table if not exists pathway_method_bank (
@@ -29,7 +39,7 @@ create table if not exists pathway_method_bank (
 );
 
 create table if not exists pathway_profile (
-    student_id text primary key,           -- ASSUMED: student_register.id or code
+    student_id text primary key,           -- student initials, e.g. 'AD'
     regulation_state text[] default '{}',
     sensory_preferences text[] default '{}',
     relational_trust text[] default '{}',
@@ -72,23 +82,42 @@ create table if not exists pathway_roll_up (
 );
 """
 
-import streamlit as st
+import io
 from datetime import date
-from supabase import create_client
-import os
 
-# ---- shared portal modules (already exist elsewhere in the repo) ----
-from staff_auth import require_staff_login  # same gate used by other non-confidential tools
-# from archive_utils import save_to_archive  # TODO: wire once confirmed — see note at bottom
+import streamlit as st
 
-st.set_page_config(page_title="Learning Engagement & Transfer Pathway", layout="wide")
-require_staff_login()
+from archive_utils import (
+    archive_document,
+    connected_project,
+    fetch_register,
+    _get_client,  # reuse the same self-locating Supabase client as the rest of the archive module
+)
 
-# ---- Supabase connections ----
-# Students project (holds student_register) — reuse existing env var pattern
-sb_students = create_client(os.environ["SUPABASE_URL_STUDENTS"], os.environ["SUPABASE_KEY_STUDENTS"])
-# This tool's own tables live wherever you choose — defaulting to the students project too
-sb = sb_students
+st.set_page_config(page_title="Learning Engagement & Transfer Pathway", page_icon="\U0001f9ed", layout="wide")
+
+try:
+    from theme import apply_theme
+    apply_theme()
+except Exception:
+    pass
+
+try:
+    from auth import require_login
+    require_login()
+except Exception:
+    pass
+
+user_email = st.session_state.get("user_email", "unknown")
+sb = _get_client()
+
+with st.expander("\U0001f527 Connection info (for setup/troubleshooting)"):
+    st.code(connected_project())
+    st.caption(
+        "This is the Supabase project the archive module is connected to — "
+        "run the SQL block in this file's docstring against the SAME "
+        "project so student initials line up with the register."
+    )
 
 # ---- constant option banks (click, don't type) ----
 REGULATION_OPTIONS = [
@@ -134,28 +163,22 @@ def chip_picker(label, options, existing, key):
     extra_items = [e.strip() for e in extra.split(",") if e.strip()]
     return list(chosen) + extra_items
 
-# ---- student picker (initials + program only — no full names in this tool) ----
-@st.cache_data(ttl=60)
-def load_students():
-    # ASSUMED columns: id, initials, program, status — adjust to your real student_register schema
-    res = sb_students.table("student_register").select("id, initials, program, status").execute()
-    return [r for r in res.data if r.get("status", "active") == "active"]
-
-students = load_students()
-student_labels = {f"{s['initials']}-{s['program']}": s["id"] for s in students}
+# ---- student picker — reuses the shared register, same as every other tool ----
+students = fetch_register("active")
+student_labels = {f"{s['initials']}-{s.get('program') or '?'}": s["initials"] for s in students}
 if not student_labels:
-    st.warning("No active students found in student_register — check column names match your schema.")
+    st.info("No active students on the register yet — add them in Student Register first.")
     st.stop()
 
 st.title("Learning Engagement & Transfer Pathway")
 st.caption("Capture HOW a student engages, so the teaching METHOD can be replicated — not duplicated.")
 
 selected_label = st.selectbox("Student", sorted(student_labels.keys()))
-student_id = student_labels[selected_label]
+student_id = student_labels[selected_label]  # student's initials
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "1 · Engagement Profile", "2 · Method Signature", "3 · Transfer Mapping",
-    "4 · Application Log", "5 · Reporting Roll-up",
+    "1 \u00b7 Engagement Profile", "2 \u00b7 Method Signature", "3 \u00b7 Transfer Mapping",
+    "4 \u00b7 Application Log", "5 \u00b7 Reporting Roll-up",
 ])
 
 # ================= TAB 1 — Engagement Profile =================
@@ -179,7 +202,7 @@ with tab1:
 # ================= TAB 2 — Method Signature =================
 with tab2:
     st.subheader("The transferable teaching move")
-    st.caption("Blue = Universal (works for most students) · Yellow = Targeted (specific to this student)")
+    st.caption("Blue = Universal (works for most students) \u00b7 Yellow = Targeted (specific to this student)")
 
     bank = sb.table("pathway_method_bank").select("*").order("instructional_move").execute().data
     bank_labels = {f"{m['instructional_move']} ({m['observed_context']})": m for m in bank}
@@ -215,8 +238,8 @@ with tab2:
     attached = sb.table("pathway_student_methods").select("id, method_id, pathway_method_bank(*)").eq("student_id", student_id).execute().data
     for a in attached:
         m = a["pathway_method_bank"]
-        colour = "🔵" if m["universal_or_targeted"] == "Universal" else "🟡"
-        st.write(f"{colour} **{m['instructional_move']}** — {m['observed_context']} · {', '.join(m['ac_capabilities'])}")
+        colour = "\U0001f535" if m["universal_or_targeted"] == "Universal" else "\U0001f7e1"
+        st.write(f"{colour} **{m['instructional_move']}** — {m['observed_context']} \u00b7 {', '.join(m['ac_capabilities'])}")
 
 # ================= TAB 3 — Transfer Mapping =================
 with tab3:
@@ -290,10 +313,11 @@ with tab5:
 
     smartar_goal = st.text_input("Linked SMARTAR / GAS goal", value=existing_rollup.get("linked_smartar_goal", ""))
 
-    if st.button("✨ Draft evidence summary from logged data"):
-        # Uses the portal's shared Groq/Claude helper — see groq_ai_call() pattern used elsewhere in the repo
+    if st.button("\u2728 Draft evidence summary from logged data"):
+        # TODO: point this at the portal's actual shared AI helper (e.g. groq_ai_call) —
+        # not present in archive_utils.py / Student Register, so still needs its import path.
         try:
-            from ai_helpers import groq_ai_call  # TODO: confirm actual import path in your repo
+            from ai_helpers import groq_ai_call
             prompt = (
                 "Summarise, in 2-3 sentences for a staff report, the evidence that this teaching "
                 f"method has transferred across contexts. Contexts replicated: {sorted(replicated_contexts)}. "
@@ -315,10 +339,74 @@ with tab5:
         st.success("Saved.")
 
     st.divider()
-    if st.button("📄 Export to Word"):
-        st.info("Word export mirrors the CLC-LBU_Learning_Engagement_Transfer_Pathway.docx layout — "
-                "wire this to python-docx using the same section structure once this page is deployed. "
-                "Add python-docx to requirements.txt if not already present.")
 
-    # TODO: once confirmed, wire archive_utils.save_to_archive(...) here, following the
-    # same pattern as SMARTAR Goal Builder / Behaviour Support / Communication Log.
+    def build_docx() -> bytes:
+        """Build a Word report mirroring the CLC-LBU_Learning_Engagement_Transfer_Pathway.docx
+        template, filled with this student's live data."""
+        from docx import Document
+        from docx.shared import Pt, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+        NAVY = RGBColor(0x1F, 0x38, 0x64)
+        doc = Document()
+
+        doc.add_heading("Learning Engagement & Transfer Pathway", level=0)
+        p = doc.add_paragraph(f"Student: {student_id}   \u00b7   Program: {selected_label.split('-')[-1]}")
+        p.runs[0].font.size = Pt(11)
+
+        doc.add_heading("Part 1 \u2014 Engagement Profile", level=1)
+        for label_, vals in [
+            ("Regulation state", existing.get("regulation_state", [])),
+            ("Sensory preferences", existing.get("sensory_preferences", [])),
+            ("Relational trust (PACE)", existing.get("relational_trust", [])),
+            ("Environmental needs", existing.get("environmental_needs", [])),
+        ]:
+            doc.add_paragraph(f"{label_}: {', '.join(vals) or '\u2014'}")
+
+        doc.add_heading("Part 2 \u2014 Method Signatures", level=1)
+        for a in attached:
+            m = a["pathway_method_bank"]
+            doc.add_paragraph(
+                f"[{m['universal_or_targeted']}] {m['instructional_move']} "
+                f"\u2014 {m['observed_context']} \u00b7 {', '.join(m['ac_capabilities'])}"
+            )
+
+        doc.add_heading("Part 4 \u2014 Application Log", level=1)
+        table = doc.add_table(rows=1, cols=5)
+        table.style = "Light Grid Accent 1"
+        hdr = table.rows[0].cells
+        for i, h in enumerate(["Date", "Staff", "Context", "Held up?", "Adaptation"]):
+            hdr[i].text = h
+        for e in all_logs:
+            row = table.add_row().cells
+            row[0].text = str(e.get("log_date") or "")
+            row[1].text = str(e.get("staff") or "")
+            row[2].text = str(e.get("context_applied") or "")
+            row[3].text = str(e.get("held_up") or "")
+            row[4].text = str(e.get("adaptation_needed") or "")
+
+        doc.add_heading("Part 5 \u2014 Reporting Roll-up", level=1)
+        doc.add_paragraph(f"Contexts replicated in: {len(replicated_contexts)} ({', '.join(sorted(replicated_contexts)) or '\u2014'})")
+        doc.add_paragraph(f"Linked SMARTAR / GAS goal: {smartar_goal or '\u2014'}")
+        doc.add_paragraph(f"Evidence of transfer: {evidence or '\u2014'}")
+        doc.add_paragraph(f"Next steps: {next_steps or '\u2014'}")
+
+        buf = io.BytesIO()
+        doc.save(buf)
+        return buf.getvalue()
+
+    if st.button("\U0001f4c4 Generate & save to archive"):
+        file_bytes = build_docx()
+        filename = f"Learning_Engagement_Pathway_{student_id}.docx"
+        rec = archive_document(
+            source_tool="Learning Engagement Pathway",
+            doc_type="Other",  # consider adding "Learning Engagement Pathway" to DOC_TYPES in archive_utils.py
+            title=f"Learning Engagement & Transfer Pathway \u2014 {student_id}",
+            file_bytes=file_bytes,
+            filename=filename,
+            student_initials=student_id,
+            created_by=user_email,
+        )
+        st.download_button("\u2b07\ufe0f Download Word doc", data=file_bytes, file_name=filename)
+        if rec:
+            st.success("Saved to Document Archive.")
