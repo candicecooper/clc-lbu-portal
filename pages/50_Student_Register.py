@@ -136,14 +136,15 @@ with tab_add:
     st.write(
         "Complete this when a student **first arrives** at the centre. "
         "Enter their **initials** (first name + surname, e.g. JT) and "
-        "program. If two students would clash, add a third letter "
-        "(e.g. first two letters of the surname)."
+        "program. If two students share initials, add the **second letter of "
+        "the surname** to tell them apart (e.g. **B.Hi** for a second student "
+        "with initials B.H.)."
     )
     with st.form("add_student", clear_on_submit=True):
         a1, a2 = st.columns(2)
         with a1:
-            ns_initials = st.text_input("Student initials *", max_chars=4,
-                                        placeholder="e.g. JT")
+            ns_initials = st.text_input("Student initials *", max_chars=6,
+                                        placeholder="e.g. JT  (or B.Hi if initials clash)")
             ns_program = st.selectbox("Program *", PROGRAMS)
             ns_year = st.number_input("Year level *", min_value=0, max_value=12,
                                       value=0, help="Reception = 0")
