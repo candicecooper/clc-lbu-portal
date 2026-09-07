@@ -31,7 +31,15 @@ html,body,[data-testid="stAppViewContainer"]{background:#f0f4f0!important;font-f
 [data-testid="stHeader"]{display:none}
 [data-testid="stSidebar"]{display:none}
 #MainMenu,footer,.stDeployButton{display:none}
-.main .block-container{padding:0!important;max-width:100%!important}
+/* Was `.main .block-container` — this Streamlit version has no `.main`
+   ancestor class any more, so that selector matched nothing and the
+   page has been carrying Streamlit's default ~6rem/5rem/10rem block
+   padding this whole time (confirmed by measuring the live preview).
+   Target the real testid instead, with the class kept as a fallback. */
+[data-testid="stMainBlockContainer"],.block-container{padding:0 1.5rem 2rem!important;max-width:1600px!important;margin:0 auto!important}
+/* The bars below want to run edge-to-edge despite that new side padding —
+   same bleed trick as the header-bar's own vertical margin below. */
+.top-nav,.quicknav,.bulletin-hero,.st-key-header_bar{margin-left:-1.5rem;margin-right:-1.5rem}
 .top-nav{background:#1a2e44;padding:0 2rem;height:56px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:1000;box-shadow:0 2px 12px rgba(0,0,0,0.2)}
 .top-nav-left{display:flex;align-items:center;gap:.75rem}
 .top-nav-logo{width:32px;height:32px;background:linear-gradient(135deg,#6BBF4E,#4a8f33);border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:800;color:white;font-size:.85rem}
@@ -45,41 +53,56 @@ html,body,[data-testid="stAppViewContainer"]{background:#f0f4f0!important;font-f
 .bulletin-date-label{font-family:'DM Mono',monospace;font-size:.7rem;color:rgba(255,255,255,0.7);letter-spacing:.12em;text-transform:uppercase;margin-bottom:.3rem}
 .bulletin-date-main{font-family:'Playfair Display',serif;font-size:2rem;color:white;font-weight:700;line-height:1.1}
 .bulletin-date-sub{font-size:.85rem;color:rgba(255,255,255,0.75);margin-top:.25rem;font-weight:400}
-.content-area{padding:1.5rem 2rem 3rem;max-width:1600px;margin:0 auto}
-/* ── Editing cue that's visible everywhere on the page, not just the
-   top bar — a soft amber wash on the whole working area plus an
-   amber left-edge on every card, so it's never ambiguous whether
-   you're looking at the live bulletin or a draft. ─────────────── */
-.content-area.editing{background:#fdf8ee}
-.content-area.editing .section-card{border-left:4px solid #e8a125}
+/* .content-area itself carries no layout CSS any more — it's a div
+   opened by one st.markdown() call and never closed by a matching one,
+   so (like every other st.markdown-only "wrapper" in the old code) it
+   renders as an empty, self-closing fragment that never actually wraps
+   the real content after it. Real padding/max-width/centering now live
+   on [data-testid="stMainBlockContainer"] above, which is a genuine
+   ancestor of everything on the page. The class stays in the markup
+   only as a hook for the .editing variant below, applied via a
+   conditional <style> block injected right where `edit` is known
+   (see EDIT_MODE_CSS) rather than a descendant selector — the same
+   phantom-div problem means `.content-area.editing sometyzhing` can
+   never match a real descendant either, no matter what selector is
+   used to try to reach through it. ────────────────────────────── */
 .hero-edit-badge{position:absolute;top:16px;right:22px;z-index:2;background:#e8a125;color:#1a2e44;font-size:.68rem;font-weight:800;letter-spacing:.06em;padding:.3rem .8rem;border-radius:20px;box-shadow:0 2px 6px rgba(0,0,0,0.15)}
 /* ── Unified header control bar ───────────────────────────────
    Replaces three separately-boxed banners (week nav / jump-to-date /
    button row) stacked on top of each other with one calmer container,
    so the page reads as "hero, then one control strip" rather than a
    pile of cards before you even reach content. */
-.header-bar{background:white;border-radius:0 0 14px 14px;padding:.65rem 1.5rem .85rem;margin-bottom:1rem;box-shadow:0 2px 10px rgba(0,0,0,0.05)}
-.header-bar .week-label{text-align:center;padding:.45rem 0;font-size:.78rem;font-weight:600}
-.section-card{background:white;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.06);overflow:hidden;margin-bottom:1.25rem}
-.section-card-header{padding:.6rem 1rem;display:flex;align-items:center;gap:.5rem}
+.st-key-header_bar{background:white;border-radius:0 0 14px 14px;padding:.65rem 1.5rem .85rem;margin-bottom:-2rem;box-shadow:0 2px 10px rgba(0,0,0,0.05);border:none;position:relative;z-index:2}
+.st-key-header_bar .week-label{text-align:center;padding:.45rem 0;font-size:.78rem;font-weight:600}
 /* ── Palette refresh ──────────────────────────────────────────
    Previously 7 near-random header colors (green/navy/brown/blue/
    purple/slate/red) with no shared meaning — busy without being
    informative. Down to 4 colors that each mean something:
    green = people/presence on site, navy = general information
    (the default), amber = a highlighted/responsibility item, red =
-   a change or alert that needs a second look. */
-.section-card-header.green{background:#6BBF4E}
-.section-card-header.navy,
-.section-card-header.brown,
-.section-card-header.blue,
-.section-card-header.purple,
-.section-card-header.slate{background:#1a2e44}
-.section-card-header.amber{background:#e8a125}
-.section-card-header.red{background:#c0392b}
-.section-card-header h3{font-size:.72rem;font-weight:700;color:white;text-transform:uppercase;letter-spacing:.1em;margin:0}
-.section-card-header.amber h3{color:#1a2e44}
-.section-card-body{padding:.75rem}
+   a change or alert that needs a second look. Applied via
+   .card-header (see the `card()` helper) rather than the old
+   .section-card-header, which no longer has any markup using it.
+/* ── Real card container (st.container(border=True)-based) ──────
+   .card-header bleeds out to the edges of Streamlit's own bordered
+   container using a negative margin equal to its default padding, so
+   the colored strip reaches edge-to-edge while the body content below
+   keeps that same padding naturally (no extra wrapper div needed).
+   Targeted by the container's own st-key-card_* class rather than
+   [data-testid="stVerticalBlockBorderWrapper"] — this Streamlit
+   version applies border/radius directly to the stVerticalBlock
+   element itself and never renders that wrapper div, so a selector
+   built around it silently matches nothing. */
+div.stVerticalBlock[class*="st-key-card_"]{
+    border-radius:12px!important;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06);border-color:#e9eee7!important;
+}
+.card-header{margin:-1rem -1rem .75rem;padding:.5rem 1rem;display:flex;align-items:center;gap:.5rem;
+    height:2.15rem;overflow:hidden;line-height:1.15;font-size:.72rem;font-weight:700;color:white;
+    text-transform:uppercase;letter-spacing:.1em;white-space:nowrap}
+.card-header.green{background:#6BBF4E}
+.card-header.navy,.card-header.brown,.card-header.blue,.card-header.purple,.card-header.slate{background:#1a2e44}
+.card-header.amber{background:#e8a125;color:#1a2e44}
+.card-header.red{background:#c0392b}
 .data-table{width:100%;border-collapse:collapse;font-size:.78rem}
 .data-table th{background:#f4f8f2;color:#4a6640;font-weight:600;font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;padding:.4rem .6rem;text-align:left;border-bottom:2px solid #d8ead2}
 .data-table td{padding:.4rem .6rem;border-bottom:1px solid #f0f4ee;color:#2a3a2a;vertical-align:top}
@@ -104,8 +127,12 @@ label[data-testid="stWidgetLabel"] p{font-size:.72rem!important;font-weight:600!
 .arch-card{background:white;border:1.5px solid #e0e8dc;border-left:4px solid #6BBF4E;border-radius:10px;padding:.85rem 1rem;margin-bottom:.6rem}
 .arch-card-date{font-weight:700;font-size:.9rem;color:#1a2e44}
 .arch-card-fact{font-size:.78rem;color:#7a907a;margin-top:.2rem}
-.empty-state{text-align:center;padding:2rem;color:#9ab09a;font-size:.85rem}
-.empty-state .icon{font-size:2rem;margin-bottom:.5rem}
+/* Compact single-line empty state — the old version (2rem padding, a 2rem
+   icon on its own line) cost a full card's worth of height just to say
+   "nothing here", which barely mattered when tabs hid most sections at
+   once but adds up fast now that every section is visible on one page. */
+.empty-state{text-align:center;padding:.5rem;color:#9ab09a;font-size:.8rem;display:flex;align-items:center;justify-content:center;gap:.4rem}
+.empty-state .icon{font-size:1rem;margin-bottom:0}
 .auth-gate{max-width:400px;margin:4rem auto;background:white;border-radius:16px;padding:2.5rem;box-shadow:0 8px 32px rgba(0,0,0,0.1);text-align:center}
 /* ── Quick-jump section nav (replaces nested tabs) ─────────── */
 .quicknav{position:sticky;top:56px;z-index:900;background:white;border-bottom:2px solid #e8f0e3;padding:.55rem 2rem;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;box-shadow:0 2px 8px rgba(0,0,0,0.05)}
@@ -132,7 +159,8 @@ label[data-testid="stWidgetLabel"] p{font-size:.72rem!important;font-weight:600!
 /* ── Mobile responsiveness ──────────────────────────────────── */
 @media(max-width:768px){
   .bulletin-date-main{font-size:1.4rem}
-  .content-area{padding:1rem .75rem 2rem}
+  [data-testid="stMainBlockContainer"],.block-container{padding:0 .75rem 1.5rem!important}
+  .top-nav,.quicknav,.bulletin-hero,.st-key-header_bar{margin-left:-.75rem;margin-right:-.75rem}
   .top-nav{padding:0 1rem}
   .quicknav{padding:.5rem 1rem;top:56px}
   .section-anchor{top:-150px}
@@ -140,7 +168,7 @@ label[data-testid="stWidgetLabel"] p{font-size:.72rem!important;font-weight:600!
   [data-testid="stHorizontalBlock"]>div[data-testid="column"]{width:100%!important;flex:1 1 100%!important;min-width:100%!important}
   .stButton button{font-size:.92rem!important;padding:.65rem .5rem!important;min-height:2.6rem}
   .glance-chip{flex:1 1 calc(50% - .6rem)}
-  .header-bar{padding:.5rem 1rem .65rem;border-radius:0 0 10px 10px}
+  .st-key-header_bar{padding:.5rem 1rem .65rem;border-radius:0 0 10px 10px}
   .hero-edit-badge{position:static;display:inline-block;margin-bottom:.5rem}
 }
 </style>
@@ -287,6 +315,37 @@ def section_divider(anchor_id, num, icon, title):
         f'<h2>{icon} {title}</h2><div class="rule"></div></div>',
         unsafe_allow_html=True
     )
+
+import contextlib
+
+@contextlib.contextmanager
+def card(key, color, icon, title):
+    """A bordered card with a colored header strip — used for every small
+    info card (Staff Absent, Excursions, etc).
+
+    This replaces the old pattern of opening a `<div class="section-card">`
+    in one st.markdown() call and closing it in a later one, with real
+    widgets (data_editor, buttons) in between. That pattern LOOKS like it
+    nests everything inside one box, but it doesn't: each st.markdown()
+    call renders its own isolated HTML fragment, so the opening div closes
+    itself immediately and the "card" ends up an empty sliver a few pixels
+    tall, with the header/table/table each rendering as separate
+    unbounded pieces that only look grouped because their backgrounds
+    happen to match. That was invisible at a glance but is exactly why the
+    page felt like it wasted space — every card carried extra, uncounted
+    gaps between its "header" and its actual content.
+
+    st.container(border=True, key=...) is a real Streamlit component: it
+    genuinely wraps whatever is rendered inside the `with` block, so the
+    border, radius and shadow apply to the whole card - header, table,
+    empty state, or data_editor alike - not just the header strip.
+    """
+    # `color` is either one of the shared palette classes (green/navy/amber/
+    # red/…) or a literal "#rrggbb" for the one-off travel-card accents.
+    header_attr = f'class="card-header" style="background:{color};"' if color.startswith("#") else f'class="card-header {color}"'
+    with st.container(border=True, key=f"card_{key}"):
+        st.markdown(f'<div {header_attr}>{icon} {title}</div>', unsafe_allow_html=True)
+        yield
 
 def default_bulletin():
     return {
@@ -1025,76 +1084,93 @@ with page_tab:
     # edit-save-logout buttons) stacked on top of each other. Now one
     # container: week navigation on top, then a single button row that
     # folds "jump to date" in as a compact widget instead of its own box.
-    st.markdown('<div class="header-bar">', unsafe_allow_html=True)
-    nav_l, nav_m, nav_r = st.columns([1,4,1])
-    with nav_l:
-        if st.button("\u2190 Prev Week", key="prev_week", use_container_width=True): st.session_state.selected_date = week[0] - timedelta(days=7); st.rerun()
-    with nav_m:
-        wls = f"Week of {week[0].strftime('%-d %b')} \u2013 {week[-1].strftime('%-d %b %Y')}"
-        if date.today() in week: wls += " \u00b7 This Week"
-        st.markdown(f'<div class="week-label" style="color:{"#4a8f33" if date.today() in week else "#5a6e5a"};">{wls}</div>', unsafe_allow_html=True)
-    with nav_r:
-        if st.button("Next Week \u2192", key="next_week", use_container_width=True): st.session_state.selected_date = week[0] + timedelta(days=7); st.rerun()
-    day_cols = st.columns(5)
-    for i, d in enumerate(week):
-        with day_cols[i]:
-            lbl = d.strftime("%a %-d %b") + (" \u25c9" if d == date.today() else "")
-            if st.button(lbl, key=f"day_{d}", use_container_width=True, type="primary" if d==current_date else "secondary"): st.session_state.selected_date = d; st.rerun()
+    with st.container(key="header_bar"):
+        nav_l, nav_m, nav_r = st.columns([1,4,1])
+        with nav_l:
+            if st.button("\u2190 Prev Week", key="prev_week", use_container_width=True): st.session_state.selected_date = week[0] - timedelta(days=7); st.rerun()
+        with nav_m:
+            wls = f"Week of {week[0].strftime('%-d %b')} \u2013 {week[-1].strftime('%-d %b %Y')}"
+            if date.today() in week: wls += " \u00b7 This Week"
+            st.markdown(f'<div class="week-label" style="color:{"#4a8f33" if date.today() in week else "#5a6e5a"};">{wls}</div>', unsafe_allow_html=True)
+        with nav_r:
+            if st.button("Next Week \u2192", key="next_week", use_container_width=True): st.session_state.selected_date = week[0] + timedelta(days=7); st.rerun()
+        day_cols = st.columns(5)
+        for i, d in enumerate(week):
+            with day_cols[i]:
+                lbl = d.strftime("%a %-d %b") + (" \u25c9" if d == date.today() else "")
+                if st.button(lbl, key=f"day_{d}", use_container_width=True, type="primary" if d==current_date else "secondary"): st.session_state.selected_date = d; st.rerun()
 
-    if st.session_state.pop("_save_ok", False):
-        st.success("\u2705 Bulletin saved successfully!")
+        if st.session_state.pop("_save_ok", False):
+            st.success("\u2705 Bulletin saved successfully!")
 
-    st.markdown('<hr style="border:none;border-top:1.5px solid #eef3ec;margin:.75rem 0 .6rem;">', unsafe_allow_html=True)
-    if st.session_state.authenticated:
-        ctrl_cols = st.columns([1,1,1,1.6,1])
-        with ctrl_cols[0]:
-            if st.button("\u270f\ufe0f Edit" if not edit else "\U0001f441\ufe0f View", type="primary" if not edit else "secondary", use_container_width=True): st.session_state.edit_mode = not st.session_state.edit_mode; st.rerun()
-        with ctrl_cols[1]:
-            if edit and st.button("\U0001f4be Save", type="primary", use_container_width=True): st.session_state["_pending_save"] = True
-        with ctrl_cols[2]:
-            if st.button("\U0001f6aa Logout", type="secondary", use_container_width=True): st.session_state.authenticated = False; st.session_state.edit_mode = False; st.rerun()
-        with ctrl_cols[3]:
-            # Key is tied to current_date so the widget re-seeds itself to
-            # value=current_date whenever the date changes via ANY control
-            # (prev/next week, a day pill, or a previous jump) — otherwise
-            # a stale picker value from an earlier pick would silently
-            # override navigation done through those other controls on the
-            # very next rerun.
-            jump_date = st.date_input("Jump to date", value=current_date, key=f"jump_date_picker_{current_date}", label_visibility="collapsed")
-            if jump_date != current_date: st.session_state.selected_date = jump_date; st.rerun()
-        with ctrl_cols[4]:
-            st.markdown('<a href="/Daily_Bulletin?display=true" target="_blank" style="display:block;text-align:center;background:#1a2e44;color:white;font-weight:600;font-size:.8rem;padding:.45rem .75rem;border-radius:8px;text-decoration:none;white-space:nowrap;">\U0001f4fa Staff Room</a>', unsafe_allow_html=True)
-    else:
-        ctrl_cols = st.columns([1,1.6,1])
-        with ctrl_cols[0]:
-            if st.button("\U0001f510 Staff Login", type="secondary", use_container_width=True): st.session_state.show_inline_login = not st.session_state.get("show_inline_login", False); st.rerun()
-        with ctrl_cols[1]:
-            # Key is tied to current_date so the widget re-seeds itself to
-            # value=current_date whenever the date changes via ANY control
-            # (prev/next week, a day pill, or a previous jump) — otherwise
-            # a stale picker value from an earlier pick would silently
-            # override navigation done through those other controls on the
-            # very next rerun.
-            jump_date = st.date_input("Jump to date", value=current_date, key=f"jump_date_picker_{current_date}", label_visibility="collapsed")
-            if jump_date != current_date: st.session_state.selected_date = jump_date; st.rerun()
-        with ctrl_cols[2]:
-            st.markdown('<a href="/Daily_Bulletin?display=true" target="_blank" style="display:block;text-align:center;background:#1a2e44;color:white;font-weight:600;font-size:.8rem;padding:.45rem .75rem;border-radius:8px;text-decoration:none;white-space:nowrap;">\U0001f4fa Staff Room</a>', unsafe_allow_html=True)
+        st.markdown('<hr style="border:none;border-top:1.5px solid #eef3ec;margin:.75rem 0 .6rem;">', unsafe_allow_html=True)
+        if st.session_state.authenticated:
+            ctrl_cols = st.columns([1,1,1,1.6,1])
+            with ctrl_cols[0]:
+                if st.button("\u270f\ufe0f Edit" if not edit else "\U0001f441\ufe0f View", type="primary" if not edit else "secondary", use_container_width=True): st.session_state.edit_mode = not st.session_state.edit_mode; st.rerun()
+            with ctrl_cols[1]:
+                if edit and st.button("\U0001f4be Save", type="primary", use_container_width=True): st.session_state["_pending_save"] = True
+            with ctrl_cols[2]:
+                if st.button("\U0001f6aa Logout", type="secondary", use_container_width=True): st.session_state.authenticated = False; st.session_state.edit_mode = False; st.rerun()
+            with ctrl_cols[3]:
+                # Key is tied to current_date so the widget re-seeds itself to
+                # value=current_date whenever the date changes via ANY control
+                # (prev/next week, a day pill, or a previous jump) — otherwise
+                # a stale picker value from an earlier pick would silently
+                # override navigation done through those other controls on the
+                # very next rerun.
+                jump_date = st.date_input("Jump to date", value=current_date, key=f"jump_date_picker_{current_date}", label_visibility="collapsed")
+                if jump_date != current_date: st.session_state.selected_date = jump_date; st.rerun()
+            with ctrl_cols[4]:
+                st.markdown('<a href="/Daily_Bulletin?display=true" target="_blank" style="display:block;text-align:center;background:#1a2e44;color:white;font-weight:600;font-size:.8rem;padding:.45rem .75rem;border-radius:8px;text-decoration:none;white-space:nowrap;">\U0001f4fa Staff Room</a>', unsafe_allow_html=True)
+        else:
+            ctrl_cols = st.columns([1,1.6,1])
+            with ctrl_cols[0]:
+                if st.button("\U0001f510 Staff Login", type="secondary", use_container_width=True): st.session_state.show_inline_login = not st.session_state.get("show_inline_login", False); st.rerun()
+            with ctrl_cols[1]:
+                # Key is tied to current_date so the widget re-seeds itself to
+                # value=current_date whenever the date changes via ANY control
+                # (prev/next week, a day pill, or a previous jump) — otherwise
+                # a stale picker value from an earlier pick would silently
+                # override navigation done through those other controls on the
+                # very next rerun.
+                jump_date = st.date_input("Jump to date", value=current_date, key=f"jump_date_picker_{current_date}", label_visibility="collapsed")
+                if jump_date != current_date: st.session_state.selected_date = jump_date; st.rerun()
+            with ctrl_cols[2]:
+                st.markdown('<a href="/Daily_Bulletin?display=true" target="_blank" style="display:block;text-align:center;background:#1a2e44;color:white;font-weight:600;font-size:.8rem;padding:.45rem .75rem;border-radius:8px;text-decoration:none;white-space:nowrap;">\U0001f4fa Staff Room</a>', unsafe_allow_html=True)
 
-    if not st.session_state.authenticated and st.session_state.get("show_inline_login", False):
-        st.markdown('<div style="background:#f0f7eb;border:1.5px solid #6BBF4E;border-radius:10px;padding:1rem 1.25rem;margin-top:.75rem;">', unsafe_allow_html=True)
-        lc1, lc2, lc3 = st.columns([3,1,1])
-        with lc1: quick_pw = st.text_input("Staff password", type="password", key="inline_pw", label_visibility="collapsed", placeholder="Enter staff password\u2026")
-        with lc2:
-            if st.button("\U0001f513 Login", type="primary", use_container_width=True, key="inline_login_btn"):
-                if quick_pw == ADMIN_PASSWORD: st.session_state.authenticated = True; st.session_state.edit_mode = True; st.session_state.show_inline_login = False; st.rerun()
-                else: st.error("Incorrect password")
-        with lc3:
-            if st.button("Cancel", type="secondary", use_container_width=True, key="inline_cancel"): st.session_state.show_inline_login = False; st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
+        if not st.session_state.authenticated and st.session_state.get("show_inline_login", False):
+            st.markdown('<div style="background:#f0f7eb;border:1.5px solid #6BBF4E;border-radius:10px;padding:1rem 1.25rem;margin-top:.75rem;">', unsafe_allow_html=True)
+            lc1, lc2, lc3 = st.columns([3,1,1])
+            with lc1: quick_pw = st.text_input("Staff password", type="password", key="inline_pw", label_visibility="collapsed", placeholder="Enter staff password\u2026")
+            with lc2:
+                if st.button("\U0001f513 Login", type="primary", use_container_width=True, key="inline_login_btn"):
+                    if quick_pw == ADMIN_PASSWORD: st.session_state.authenticated = True; st.session_state.edit_mode = True; st.session_state.show_inline_login = False; st.rerun()
+                    else: st.error("Incorrect password")
+            with lc3:
+                if st.button("Cancel", type="secondary", use_container_width=True, key="inline_cancel"): st.session_state.show_inline_login = False; st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown('</div>', unsafe_allow_html=True)  # close header-bar
 
-    st.markdown(f'<div class="content-area{" editing" if edit else ""}">', unsafe_allow_html=True)
+    st.markdown('<div class="content-area">', unsafe_allow_html=True)
+    if edit:
+        # Editing cue that's visible everywhere on the page, not just the
+        # top bar - a soft amber wash on the whole working area plus an
+        # amber left-edge on every card, so it's never ambiguous whether
+        # you're looking at the live bulletin or a draft. Injected as its
+        # own conditional <style> block (rather than a `.content-area.editing`
+        # descendant selector) because .content-area is a div opened by one
+        # st.markdown() call and never closed by a matching one - it renders
+        # as an empty fragment with no real descendants, so nothing inside
+        # it can ever be reached that way. Targeting real, page-wide
+        # elements directly here works regardless of that.
+        st.markdown(
+            '<style>'
+            '[data-testid="stMainBlockContainer"]{background:#fdf8ee}'
+            'div.stVerticalBlock[class*="st-key-card_"]{border-left:4px solid #e8a125}'
+            '</style>',
+            unsafe_allow_html=True
+        )
 
     # \u2500\u2500 Quick-jump nav bar \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     # Replaces the old nested tab bar (s1-s4): the whole bulletin now
@@ -1122,20 +1198,19 @@ with page_tab:
     _admin_notices = _admin_notices_today
     if _admin_notices or edit:
         st.markdown('<div id="sec-notices" class="section-anchor"></div>', unsafe_allow_html=True)
-        st.markdown('<div class="section-card"><div class="section-card-header green"><h3>\U0001f4dd Staff Notices</h3></div><div class="section-card-body">', unsafe_allow_html=True)
-        if _admin_notices:
-            for _n in _admin_notices:
-                _cat = _n.get("category","General"); _nc = NOTICE_CATS.get(_cat, NOTICE_CATS["General"]); _nid = _n.get("id","")
-                _nc1, _nc2 = st.columns([9,1])
-                with _nc1:
-                    st.markdown(f'<div style="background:white;border-radius:10px;border-left:4px solid {_nc["color"]};padding:.75rem 1rem;margin-bottom:.5rem;box-shadow:0 1px 4px rgba(0,0,0,0.06);"><div style="margin-bottom:.2rem;"><span style="background:{_nc["bg"]};color:{_nc["color"]};font-size:.65rem;font-weight:700;text-transform:uppercase;padding:.15rem .5rem;border-radius:20px;">{_nc["emoji"]} {_cat}</span><span style="font-size:.7rem;color:#9ab09a;margin-left:.5rem;">from {_n.get("submitted_by","")}</span></div><div style="font-size:.9rem;font-weight:700;color:#1a2e44;margin:.3rem 0 .2rem;">{_n.get("title","")}</div><div style="font-size:.82rem;color:#3a4a3a;line-height:1.5;">{_n.get("body","")}</div></div>', unsafe_allow_html=True)
-                with _nc2:
-                    if edit:
-                        st.write("")
-                        if st.button("\U0001f5d1\ufe0f", key=f"top_del_n_{_nid}", help="Delete notice"): delete_notice(_nid); st.rerun()
-        else:
-            st.markdown('<div style="text-align:center;padding:1rem;color:#9ab09a;font-size:.85rem;">No notices today \u2014 staff can add via the \U0001f4dd Quick Add tab</div>', unsafe_allow_html=True)
-        st.markdown('</div></div>', unsafe_allow_html=True)
+        with card("notices", "green", "\U0001f4dd", "Staff Notices"):
+            if _admin_notices:
+                for _n in _admin_notices:
+                    _cat = _n.get("category","General"); _nc = NOTICE_CATS.get(_cat, NOTICE_CATS["General"]); _nid = _n.get("id","")
+                    _nc1, _nc2 = st.columns([9,1])
+                    with _nc1:
+                        st.markdown(f'<div style="background:white;border-radius:10px;border-left:4px solid {_nc["color"]};padding:.75rem 1rem;margin-bottom:.5rem;box-shadow:0 1px 4px rgba(0,0,0,0.06);"><div style="margin-bottom:.2rem;"><span style="background:{_nc["bg"]};color:{_nc["color"]};font-size:.65rem;font-weight:700;text-transform:uppercase;padding:.15rem .5rem;border-radius:20px;">{_nc["emoji"]} {_cat}</span><span style="font-size:.7rem;color:#9ab09a;margin-left:.5rem;">from {_n.get("submitted_by","")}</span></div><div style="font-size:.9rem;font-weight:700;color:#1a2e44;margin:.3rem 0 .2rem;">{_n.get("title","")}</div><div style="font-size:.82rem;color:#3a4a3a;line-height:1.5;">{_n.get("body","")}</div></div>', unsafe_allow_html=True)
+                    with _nc2:
+                        if edit:
+                            st.write("")
+                            if st.button("\U0001f5d1\ufe0f", key=f"top_del_n_{_nid}", help="Delete notice"): delete_notice(_nid); st.rerun()
+            else:
+                st.markdown('<div style="text-align:center;padding:1rem;color:#9ab09a;font-size:.85rem;">No notices today \u2014 staff can add via the \U0001f4dd Quick Add tab</div>', unsafe_allow_html=True)
 
     section_divider("sec-staff", 1, "\U0001f465", "Staff & Meetings")
     if True:
@@ -1150,81 +1225,78 @@ with page_tab:
                 st.markdown("</div>", unsafe_allow_html=True)
             bulletin_data["fun_fact"] = new_fact
 
-        col_left, col_right = st.columns(2)
-        with col_left:
-            st.markdown('<div class="section-card"><div class="section-card-header green"><h3>\U0001f645 Staff Absent</h3></div><div class="section-card-body">', unsafe_allow_html=True)
-            if edit:
-                sa_df = pd.DataFrame(bulletin_data["staff_absent"])
-                sa_edited = st.data_editor(sa_df, key="sa_editor", hide_index=True, use_container_width=True, num_rows="dynamic")
-                bulletin_data["staff_absent"] = sa_edited.to_dict("records")
-            else:
-                _s_rows = [r for r in bulletin_data["staff_absent"] if (r.get("Staff Member") or "").strip() or (r.get("TRT") or "").strip()]
-                if _s_rows: st.markdown('<table class="data-table"><tr><th>Staff Member</th><th>TRT</th></tr>'+"".join([f"<tr><td><strong>{r.get('Staff Member','')}</strong></td><td>{r.get('TRT','')}</td></tr>" for r in _s_rows])+"</table>", unsafe_allow_html=True)
-                else: st.markdown('<div class="empty-state"><div class="icon">\u2705</div>No staff absent today</div>', unsafe_allow_html=True)
-            st.markdown('</div></div>', unsafe_allow_html=True)
+        # Three columns instead of two \u2014 real bounded cards (see `card()`)
+        # make it safe to pack the page wider instead of one long pair of
+        # stacked columns, so a normal desktop screen shows more at once.
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            with card("staff_absent", "green", "\U0001f645", "Staff Absent"):
+                if edit:
+                    sa_df = pd.DataFrame(bulletin_data["staff_absent"])
+                    sa_edited = st.data_editor(sa_df, key="sa_editor", hide_index=True, use_container_width=True, num_rows="dynamic")
+                    bulletin_data["staff_absent"] = sa_edited.to_dict("records")
+                else:
+                    _s_rows = [r for r in bulletin_data["staff_absent"] if (r.get("Staff Member") or "").strip() or (r.get("TRT") or "").strip()]
+                    if _s_rows: st.markdown('<table class="data-table"><tr><th>Staff Member</th><th>TRT</th></tr>'+"".join([f"<tr><td><strong>{r.get('Staff Member','')}</strong></td><td>{r.get('TRT','')}</td></tr>" for r in _s_rows])+"</table>", unsafe_allow_html=True)
+                    else: st.markdown('<div class="empty-state"><div class="icon">\u2705</div>No staff absent today</div>', unsafe_allow_html=True)
 
-            st.markdown('<div class="section-card"><div class="section-card-header blue"><h3>\U0001f392 Student Absent</h3></div><div class="section-card-body">', unsafe_allow_html=True)
-            if edit:
-                st_df = pd.DataFrame(bulletin_data["student_absent"])
-                st_edited = st.data_editor(st_df, key="st_editor", hide_index=True, use_container_width=True, num_rows="dynamic")
-                bulletin_data["student_absent"] = st_edited.to_dict("records")
-            else:
-                _st_rows = [r for r in bulletin_data["student_absent"] if (r.get("Student") or "").strip()]
-                if _st_rows: st.markdown('<table class="data-table"><tr><th>Student</th><th>Program</th><th>Reason</th></tr>'+"".join([f"<tr><td><strong>{r.get('Student','')}</strong></td><td>{r.get('Program','')}</td><td>{r.get('Reason','')}</td></tr>" for r in _st_rows])+"</table>", unsafe_allow_html=True)
-                else: st.markdown('<div class="empty-state"><div class="icon">\u2705</div>No students absent today</div>', unsafe_allow_html=True)
-            st.markdown('</div></div>', unsafe_allow_html=True)
+            with card("excursions", "blue", "\U0001f68c", "Excursions"):
+                if edit:
+                    df = pd.DataFrame(bulletin_data["excursions"]); edited = st.data_editor(df, key="ex_editor", hide_index=True, use_container_width=True, num_rows="dynamic"); bulletin_data["excursions"] = edited.to_dict("records")
+                else:
+                    rows = bulletin_data["excursions"]; has_data = any(any(v for v in r.values()) for r in rows)
+                    if has_data: st.markdown('<table class="data-table"><tr><th>Program</th><th>Staff</th><th>Departing</th><th>Returning</th><th>Location</th></tr>'+"".join([f"<tr><td>{r.get('Program','')}</td><td>{r.get('Staff Member','')}</td><td>{r.get('Time Departing','')}</td><td>{r.get('Time Returning','')}</td><td>{r.get('Location','')}</td></tr>" for r in rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
+                    else: st.markdown('<div class="empty-state"><div class="icon">\U0001f5fa\ufe0f</div>No excursions today</div>', unsafe_allow_html=True)
 
-            st.markdown('<div class="section-card"><div class="section-card-header blue"><h3>\U0001f68c Excursions</h3></div><div class="section-card-body">', unsafe_allow_html=True)
-            if edit:
-                df = pd.DataFrame(bulletin_data["excursions"]); edited = st.data_editor(df, key="ex_editor", hide_index=True, use_container_width=True, num_rows="dynamic"); bulletin_data["excursions"] = edited.to_dict("records")
-            else:
-                rows = bulletin_data["excursions"]; has_data = any(any(v for v in r.values()) for r in rows)
-                if has_data: st.markdown('<table class="data-table"><tr><th>Program</th><th>Staff</th><th>Departing</th><th>Returning</th><th>Location</th></tr>'+"".join([f"<tr><td>{r.get('Program','')}</td><td>{r.get('Staff Member','')}</td><td>{r.get('Time Departing','')}</td><td>{r.get('Time Returning','')}</td><td>{r.get('Location','')}</td></tr>" for r in rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
-                else: st.markdown('<div class="empty-state"><div class="icon">\U0001f5fa\ufe0f</div>No excursions today</div>', unsafe_allow_html=True)
-            st.markdown('</div></div>', unsafe_allow_html=True)
+        with col_b:
+            with card("student_absent", "blue", "\U0001f392", "Student Absent"):
+                if edit:
+                    st_df = pd.DataFrame(bulletin_data["student_absent"])
+                    st_edited = st.data_editor(st_df, key="st_editor", hide_index=True, use_container_width=True, num_rows="dynamic")
+                    bulletin_data["student_absent"] = st_edited.to_dict("records")
+                else:
+                    _st_rows = [r for r in bulletin_data["student_absent"] if (r.get("Student") or "").strip()]
+                    if _st_rows: st.markdown('<table class="data-table"><tr><th>Student</th><th>Program</th><th>Reason</th></tr>'+"".join([f"<tr><td><strong>{r.get('Student','')}</strong></td><td>{r.get('Program','')}</td><td>{r.get('Reason','')}</td></tr>" for r in _st_rows])+"</table>", unsafe_allow_html=True)
+                    else: st.markdown('<div class="empty-state"><div class="icon">\u2705</div>No students absent today</div>', unsafe_allow_html=True)
 
-            st.markdown('<div class="section-card"><div class="section-card-header brown"><h3>\U0001f4e5 Entry Meetings \u2013 Annette</h3></div><div class="section-card-body">', unsafe_allow_html=True)
-            if edit:
-                df = pd.DataFrame(bulletin_data["entry_meetings"]); edited = st.data_editor(df, key="em_editor", hide_index=True, use_container_width=True, num_rows="dynamic"); bulletin_data["entry_meetings"] = edited.to_dict("records")
-            else:
-                rows = bulletin_data["entry_meetings"]; has_data = any(any(v for v in r.values()) for r in rows)
-                if has_data: st.markdown('<table class="data-table"><tr><th>Time</th><th>Program</th><th>Student</th></tr>'+"".join([f"<tr><td>{r.get('Time','')}</td><td>{r.get('Program','')}</td><td>{r.get('Student','')}</td></tr>" for r in rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
-                else: st.markdown('<div class="empty-state"><div class="icon">\U0001f4ed</div>No entry meetings today</div>', unsafe_allow_html=True)
-            st.markdown('</div></div>', unsafe_allow_html=True)
+            with card("entry_meetings", "brown", "\U0001f4e5", "Entry Meetings \u2013 Annette"):
+                if edit:
+                    df = pd.DataFrame(bulletin_data["entry_meetings"]); edited = st.data_editor(df, key="em_editor", hide_index=True, use_container_width=True, num_rows="dynamic"); bulletin_data["entry_meetings"] = edited.to_dict("records")
+                else:
+                    rows = bulletin_data["entry_meetings"]; has_data = any(any(v for v in r.values()) for r in rows)
+                    if has_data: st.markdown('<table class="data-table"><tr><th>Time</th><th>Program</th><th>Student</th></tr>'+"".join([f"<tr><td>{r.get('Time','')}</td><td>{r.get('Program','')}</td><td>{r.get('Student','')}</td></tr>" for r in rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
+                    else: st.markdown('<div class="empty-state"><div class="icon">\U0001f4ed</div>No entry meetings today</div>', unsafe_allow_html=True)
 
-        with col_right:
-            st.markdown('<div class="section-card"><div class="section-card-header navy"><h3>\U0001f91d Staff Meetings</h3></div><div class="section-card-body">', unsafe_allow_html=True)
-            if edit:
-                df = pd.DataFrame(bulletin_data["staff_meetings"]); edited = st.data_editor(df, key="sm_editor", hide_index=True, use_container_width=True, num_rows="dynamic"); bulletin_data["staff_meetings"] = edited.to_dict("records")
-            else:
-                all_mtgs = list(bulletin_data["staff_meetings"] or []) + load_scheduled_meetings(current_date); has_data = any(any(v for v in r.values()) for r in all_mtgs)
-                if has_data: st.markdown('<table class="data-table"><tr><th>Type</th><th>Staff</th><th>Location</th><th>Depart</th><th>Return</th><th>Student</th></tr>'+"".join([f"<tr><td>{r.get('Type','')}</td><td>{r.get('Staff Member','')}</td><td>{r.get('Location','')}</td><td>{r.get('Time Departing','')}</td><td>{r.get('Time Returning','')}</td><td>{r.get('Student','')}</td></tr>" for r in all_mtgs if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
-                else: st.markdown('<div class="empty-state"><div class="icon">\U0001f4c5</div>No staff meetings today</div>', unsafe_allow_html=True)
-            st.markdown('</div></div>', unsafe_allow_html=True)
+            with card("staff_meetings", "navy", "\U0001f91d", "Staff Meetings"):
+                if edit:
+                    df = pd.DataFrame(bulletin_data["staff_meetings"]); edited = st.data_editor(df, key="sm_editor", hide_index=True, use_container_width=True, num_rows="dynamic"); bulletin_data["staff_meetings"] = edited.to_dict("records")
+                else:
+                    all_mtgs = list(bulletin_data["staff_meetings"] or []) + load_scheduled_meetings(current_date); has_data = any(any(v for v in r.values()) for r in all_mtgs)
+                    if has_data: st.markdown('<table class="data-table"><tr><th>Type</th><th>Staff</th><th>Location</th><th>Depart</th><th>Return</th><th>Student</th></tr>'+"".join([f"<tr><td>{r.get('Type','')}</td><td>{r.get('Staff Member','')}</td><td>{r.get('Location','')}</td><td>{r.get('Time Departing','')}</td><td>{r.get('Time Returning','')}</td><td>{r.get('Student','')}</td></tr>" for r in all_mtgs if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
+                    else: st.markdown('<div class="empty-state"><div class="icon">\U0001f4c5</div>No staff meetings today</div>', unsafe_allow_html=True)
 
-            st.markdown('<div class="section-card"><div class="section-card-header slate"><h3>\U0001f4ac Additional Staff Messages</h3></div><div class="section-card-body">', unsafe_allow_html=True)
-            if edit:
-                df = pd.DataFrame(bulletin_data["additional_messages"]); edited = st.data_editor(df, key="msg_editor", hide_index=True, use_container_width=True, num_rows="dynamic"); bulletin_data["additional_messages"] = edited.to_dict("records")
-            else:
-                rows = bulletin_data["additional_messages"]; has_data = any(any(v for v in r.values()) for r in rows)
-                if has_data: st.markdown('<table class="data-table"><tr><th>Staff Member</th><th>Information</th></tr>'+"".join([f"<tr><td><strong>{r.get('Staff Member','')}</strong></td><td>{r.get('Information','')}</td></tr>" for r in rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
-                else: st.markdown('<div class="empty-state"><div class="icon">\U0001f4ad</div>No additional messages</div>', unsafe_allow_html=True)
-            st.markdown('</div></div>', unsafe_allow_html=True)
+        with col_c:
+            with card("additional_messages", "slate", "\U0001f4ac", "Additional Staff Messages"):
+                if edit:
+                    df = pd.DataFrame(bulletin_data["additional_messages"]); edited = st.data_editor(df, key="msg_editor", hide_index=True, use_container_width=True, num_rows="dynamic"); bulletin_data["additional_messages"] = edited.to_dict("records")
+                else:
+                    rows = bulletin_data["additional_messages"]; has_data = any(any(v for v in r.values()) for r in rows)
+                    if has_data: st.markdown('<table class="data-table"><tr><th>Staff Member</th><th>Information</th></tr>'+"".join([f"<tr><td><strong>{r.get('Staff Member','')}</strong></td><td>{r.get('Information','')}</td></tr>" for r in rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
+                    else: st.markdown('<div class="empty-state"><div class="icon">\U0001f4ad</div>No additional messages</div>', unsafe_allow_html=True)
 
-            st.markdown('<div class="section-card"><div class="section-card-header green"><h3>\U0001f465 Visitors on Site</h3></div><div class="section-card-body">', unsafe_allow_html=True)
-            if edit:
-                _vis_raw = bulletin_data.get("visitors_on_site") or []
-                if not _vis_raw:
-                    _vis_raw = [{"Visitor Name":"","Reason":"","Staff Responsible":"","Arriving":"","Departing":"","Location":""} for _ in range(4)]
-                vis_df = pd.DataFrame(_vis_raw)
-                vis_edited = st.data_editor(vis_df, key="vis_editor", hide_index=True, use_container_width=True, num_rows="dynamic",
-                    column_config={"Reason": st.column_config.SelectboxColumn("Reason", options=VISITOR_REASON_OPTIONS, required=False)})
-                bulletin_data["visitors_on_site"] = vis_edited.to_dict("records")
-            else:
-                vis_rows = bulletin_data.get("visitors_on_site", []); has_vis = any(any(v for v in r.values()) for r in vis_rows)
-                if has_vis: st.markdown('<table class="data-table"><tr><th>Visitor</th><th>Reason</th><th>Staff Responsible</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>'+"".join([f"<tr><td><strong>{r.get('Visitor Name','')}</strong></td><td>{r.get('Reason','')}</td><td>{r.get('Staff Responsible','')}</td><td>{r.get('Arriving','')}</td><td>{r.get('Departing','')}</td><td>{r.get('Location','')}</td></tr>" for r in vis_rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
-                else: st.markdown('<div class="empty-state"><div class="icon">\U0001f6b6</div>No visitors today</div>', unsafe_allow_html=True)
-            st.markdown('</div></div>', unsafe_allow_html=True)
+            with card("visitors_on_site", "green", "\U0001f465", "Visitors on Site"):
+                if edit:
+                    _vis_raw = bulletin_data.get("visitors_on_site") or []
+                    if not _vis_raw:
+                        _vis_raw = [{"Visitor Name":"","Reason":"","Staff Responsible":"","Arriving":"","Departing":"","Location":""} for _ in range(4)]
+                    vis_df = pd.DataFrame(_vis_raw)
+                    vis_edited = st.data_editor(vis_df, key="vis_editor", hide_index=True, use_container_width=True, num_rows="dynamic",
+                        column_config={"Reason": st.column_config.SelectboxColumn("Reason", options=VISITOR_REASON_OPTIONS, required=False)})
+                    bulletin_data["visitors_on_site"] = vis_edited.to_dict("records")
+                else:
+                    vis_rows = bulletin_data.get("visitors_on_site", []); has_vis = any(any(v for v in r.values()) for r in vis_rows)
+                    if has_vis: st.markdown('<table class="data-table"><tr><th>Visitor</th><th>Reason</th><th>Staff Responsible</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>'+"".join([f"<tr><td><strong>{r.get('Visitor Name','')}</strong></td><td>{r.get('Reason','')}</td><td>{r.get('Staff Responsible','')}</td><td>{r.get('Arriving','')}</td><td>{r.get('Departing','')}</td><td>{r.get('Location','')}</td></tr>" for r in vis_rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
+                    else: st.markdown('<div class="empty-state"><div class="icon">\U0001f6b6</div>No visitors today</div>', unsafe_allow_html=True)
 
     section_divider("sec-travel", 2, "\U0001f68c", "Travel & Vehicles")
     if True:
@@ -1235,130 +1307,118 @@ with page_tab:
 
         def render_travel_card(col, key, label, color):
             with col:
-                st.markdown(f'<div class="section-card"><div class="section-card-header" style="background:{color};"><h3>{label}</h3></div><div class="section-card-body">', unsafe_allow_html=True)
-                rows = bulletin_data[key]
-                if edit:
-                    df = pd.DataFrame(rows)
-                    edited = st.data_editor(df, key=f"{key}_editor", hide_index=True, use_container_width=True, num_rows="dynamic",
-                        column_config={"Transport": st.column_config.SelectboxColumn("Transport", options=TRANSPORT_OPTIONS, required=False)})
-                    bulletin_data[key] = edited.to_dict("records")
-                else:
-                    has_data = any(any(v for v in r.values()) for r in rows)
-                    if has_data:
-                        st.markdown('<table class="data-table"><tr><th>Student</th><th>Arrives</th><th>Departs</th><th>Transport</th></tr>'+"".join([f"<tr><td>{r.get('Student','')}</td><td>{r.get('Arrival Time','')}</td><td>{r.get('Departure Time','')}</td><td>{r.get('Transport','')}</td></tr>" for r in rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
-                    else: st.markdown('<div class="empty-state"><div class="icon">\U0001f690</div>No travel today</div>', unsafe_allow_html=True)
-                _trans_names = _transition_bp.get(key, [])
-                if _trans_names:
-                    st.markdown(transition_bar_html(_trans_names), unsafe_allow_html=True)
-                st.markdown('</div></div>', unsafe_allow_html=True)
+                with card(key, color, "", label):
+                    rows = bulletin_data[key]
+                    if edit:
+                        df = pd.DataFrame(rows)
+                        edited = st.data_editor(df, key=f"{key}_editor", hide_index=True, use_container_width=True, num_rows="dynamic",
+                            column_config={"Transport": st.column_config.SelectboxColumn("Transport", options=TRANSPORT_OPTIONS, required=False)})
+                        bulletin_data[key] = edited.to_dict("records")
+                    else:
+                        has_data = any(any(v for v in r.values()) for r in rows)
+                        if has_data:
+                            st.markdown('<table class="data-table"><tr><th>Student</th><th>Arrives</th><th>Departs</th><th>Transport</th></tr>'+"".join([f"<tr><td>{r.get('Student','')}</td><td>{r.get('Arrival Time','')}</td><td>{r.get('Departure Time','')}</td><td>{r.get('Transport','')}</td></tr>" for r in rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
+                        else: st.markdown('<div class="empty-state"><div class="icon">\U0001f690</div>No travel today</div>', unsafe_allow_html=True)
+                    _trans_names = _transition_bp.get(key, [])
+                    if _trans_names:
+                        st.markdown(transition_bar_html(_trans_names), unsafe_allow_html=True)
 
         render_travel_card(jp_col, "travel_jp", "\U0001f7e6 Junior Primary \u2013 Travel", "#3d5d80")
         render_travel_card(py_col, "travel_py", "\U0001f7e3 Primary Years \u2013 Travel", "#5b4a75")
         render_travel_card(sy_col, "travel_sy", "\U0001f7eb Senior Years \u2013 Travel", "#7a5c3f")
 
-        st.markdown('<div style="font-size:.8rem;font-weight:600;color:#c0392b;margin:.75rem 0 .5rem;">\U0001f504 Travel Plan Changes \u2014 update if a student\u2019s plan changes during the day</div>', unsafe_allow_html=True)
-        st.markdown('<div class="section-card"><div class="section-card-header red"><h3>\U0001f504 Travel Plan Changes</h3></div><div class="section-card-body">', unsafe_allow_html=True)
-        tc_rows = bulletin_data.get("travel_changes") or []
-        if edit:
-            if not tc_rows:
-                tc_rows = [{"Student":"","Program":"","Change Type":"","Reason":"","Time":"","How Departed":""} for _ in range(3)]
-            tc_df = pd.DataFrame(tc_rows)
-            tc_edited = st.data_editor(tc_df, key="tc_editor", hide_index=True, use_container_width=True, num_rows="dynamic",
-                column_config={
-                    "Program": st.column_config.SelectboxColumn("Program", options=["JP","PY","SY"], required=False),
-                    "Change Type": st.column_config.SelectboxColumn("Change Type", options=CHANGE_TYPE_OPTIONS, required=False),
-                    "How Departed": st.column_config.SelectboxColumn("How Departed", options=TRANSPORT_OPTIONS, required=False),
-                })
-            bulletin_data["travel_changes"] = tc_edited.to_dict("records")
-            st.markdown('<div style="background:#fff8f7;border:1px solid #f5c6c0;border-radius:8px;padding:.5rem .75rem;margin-top:.5rem;font-size:.75rem;color:#7a2a2a;">\U0001f4a1 <strong>Tip:</strong> Fill in whenever a student\u2019s travel plan changes \u2014 e.g. early departure, parent collecting instead of taxi. Appears highlighted on the staff room display so staff notice it immediately.</div>', unsafe_allow_html=True)
-        else:
-            has_tc = any(any(v for v in r.values()) for r in tc_rows)
-            if has_tc:
-                st.markdown('<table class="data-table"><tr><th>Student</th><th>Program</th><th>Change</th><th>Reason</th><th>Time</th><th>How Departed</th></tr>'+"".join([f"<tr><td><strong>{r.get('Student','')}</strong></td><td>{r.get('Program','')}</td><td><span class='change-badge'>{r.get('Change Type','')}</span></td><td>{r.get('Reason','')}</td><td><strong style='color:#c0392b;'>{r.get('Time','')}</strong></td><td>{r.get('How Departed','')}</td></tr>" for r in tc_rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
-            else: st.markdown('<div class="empty-state"><div class="icon">\u2705</div>No travel changes today</div>', unsafe_allow_html=True)
-        st.markdown('</div></div>', unsafe_allow_html=True)
+        st.markdown('<div style="font-size:.8rem;font-weight:600;color:#c0392b;margin:1rem 0 .5rem;">\U0001f504 Travel Plan Changes \u2014 update if a student\u2019s plan changes during the day</div>', unsafe_allow_html=True)
+        with card("travel_changes", "red", "\U0001f504", "Travel Plan Changes"):
+            tc_rows = bulletin_data.get("travel_changes") or []
+            if edit:
+                if not tc_rows:
+                    tc_rows = [{"Student":"","Program":"","Change Type":"","Reason":"","Time":"","How Departed":""} for _ in range(3)]
+                tc_df = pd.DataFrame(tc_rows)
+                tc_edited = st.data_editor(tc_df, key="tc_editor", hide_index=True, use_container_width=True, num_rows="dynamic",
+                    column_config={
+                        "Program": st.column_config.SelectboxColumn("Program", options=["JP","PY","SY"], required=False),
+                        "Change Type": st.column_config.SelectboxColumn("Change Type", options=CHANGE_TYPE_OPTIONS, required=False),
+                        "How Departed": st.column_config.SelectboxColumn("How Departed", options=TRANSPORT_OPTIONS, required=False),
+                    })
+                bulletin_data["travel_changes"] = tc_edited.to_dict("records")
+                st.markdown('<div style="background:#fff8f7;border:1px solid #f5c6c0;border-radius:8px;padding:.5rem .75rem;margin-top:.5rem;font-size:.75rem;color:#7a2a2a;">\U0001f4a1 <strong>Tip:</strong> Fill in whenever a student\u2019s travel plan changes \u2014 e.g. early departure, parent collecting instead of taxi. Appears highlighted on the staff room display so staff notice it immediately.</div>', unsafe_allow_html=True)
+            else:
+                has_tc = any(any(v for v in r.values()) for r in tc_rows)
+                if has_tc:
+                    st.markdown('<table class="data-table"><tr><th>Student</th><th>Program</th><th>Change</th><th>Reason</th><th>Time</th><th>How Departed</th></tr>'+"".join([f"<tr><td><strong>{r.get('Student','')}</strong></td><td>{r.get('Program','')}</td><td><span class='change-badge'>{r.get('Change Type','')}</span></td><td>{r.get('Reason','')}</td><td><strong style='color:#c0392b;'>{r.get('Time','')}</strong></td><td>{r.get('How Departed','')}</td></tr>" for r in tc_rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
+                else: st.markdown('<div class="empty-state"><div class="icon">\u2705</div>No travel changes today</div>', unsafe_allow_html=True)
 
-        st.markdown('<div class="section-card"><div class="section-card-header navy"><h3>\U0001f697 Vehicle Bookings \u2014 Van &amp; Kia</h3></div><div class="section-card-body">', unsafe_allow_html=True)
-        vb_list = bulletin_data.get("vehicle_bookings",[])
-        if isinstance(vb_list, dict): vb_list = []
-        if edit:
-            if vb_list:
-                st.markdown("**Current bookings:**")
-                for _bi, _bk in enumerate(vb_list):
-                    _bc1, _bc2, _bc3, _bc4 = st.columns([1,2,2,1])
-                    with _bc1: st.markdown(f"**{'\U0001f690 Van' if _bk.get('vehicle','')=='Van' else '\U0001f699 Kia'}**")
-                    with _bc2: st.markdown(f"**{_bk.get('booker','\u2014')}**")
-                    with _bc3: st.markdown("\U0001f550 Whole day" if _bk.get("whole_day",True) else f"\U0001f550 {_bk.get('start_time','?')} \u2013 {_bk.get('end_time','?')}")
-                    with _bc4:
-                        if st.button("\U0001f5d1\ufe0f", key=f"vb_del_{_bi}"): vb_list.pop(_bi); bulletin_data["vehicle_bookings"] = vb_list; st.rerun()
-                st.markdown("---")
-            st.markdown("**Add a booking:**")
-            _av1, _av2, _av3 = st.columns([1,2,2])
-            with _av1: _new_vehicle = st.selectbox("Vehicle", ["Van","Kia"], key="vb_new_vehicle")
-            with _av2: _new_booker = st.text_input("Booked by", key="vb_new_booker", placeholder="e.g. Sarah")
-            with _av3: _new_whole = st.checkbox("Whole day", value=True, key="vb_new_whole")
-            if not _new_whole:
-                _at1, _at2 = st.columns(2)
-                with _at1: _new_start = st.text_input("Start time", key="vb_new_start", placeholder="e.g. 9:30")
-                with _at2: _new_end = st.text_input("End time", key="vb_new_end", placeholder="e.g. 12:00")
-            else: _new_start = _new_end = ""
-            if st.button("\u2795 Add Booking", type="primary", key="vb_add_btn"):
-                if _new_booker.strip(): vb_list.append({"vehicle":_new_vehicle,"booker":_new_booker.strip(),"whole_day":_new_whole,"start_time":_new_start.strip(),"end_time":_new_end.strip()}); bulletin_data["vehicle_bookings"] = vb_list; st.rerun()
-                else: st.warning("Please enter a name.")
-        else:
-            if vb_list and any(b.get("booker","") for b in vb_list):
-                def _vbt(b): return "Whole day" if b.get("whole_day",True) else f"{b.get('start_time','?')} \u2013 {b.get('end_time','?')}"
-                st.markdown('<table class="data-table"><tr><th>Vehicle</th><th>Booked By</th><th>Time</th></tr>'+"".join([f'<tr><td>{"🚐 Van" if b.get("vehicle","")=="Van" else "🚙 Kia"}</td><td><span class="vehicle-booking">{b.get("booker","")}</span></td><td class="vehicle-time">{_vbt(b)}</td></tr>' for b in vb_list if b.get("booker","")])+"</table>", unsafe_allow_html=True)
-            else: st.markdown('<div class="empty-state"><div class="icon">\U0001f697</div>No vehicle bookings today</div>', unsafe_allow_html=True)
-        st.markdown('</div></div>', unsafe_allow_html=True)
+        with card("vehicle_bookings", "navy", "\U0001f697", "Vehicle Bookings \u2014 Van & Kia"):
+            vb_list = bulletin_data.get("vehicle_bookings",[])
+            if isinstance(vb_list, dict): vb_list = []
+            if edit:
+                if vb_list:
+                    st.markdown("**Current bookings:**")
+                    for _bi, _bk in enumerate(vb_list):
+                        _bc1, _bc2, _bc3, _bc4 = st.columns([1,2,2,1])
+                        with _bc1: st.markdown(f"**{'\U0001f690 Van' if _bk.get('vehicle','')=='Van' else '\U0001f699 Kia'}**")
+                        with _bc2: st.markdown(f"**{_bk.get('booker','\u2014')}**")
+                        with _bc3: st.markdown("\U0001f550 Whole day" if _bk.get("whole_day",True) else f"\U0001f550 {_bk.get('start_time','?')} \u2013 {_bk.get('end_time','?')}")
+                        with _bc4:
+                            if st.button("\U0001f5d1\ufe0f", key=f"vb_del_{_bi}"): vb_list.pop(_bi); bulletin_data["vehicle_bookings"] = vb_list; st.rerun()
+                    st.markdown("---")
+                st.markdown("**Add a booking:**")
+                _av1, _av2, _av3 = st.columns([1,2,2])
+                with _av1: _new_vehicle = st.selectbox("Vehicle", ["Van","Kia"], key="vb_new_vehicle")
+                with _av2: _new_booker = st.text_input("Booked by", key="vb_new_booker", placeholder="e.g. Sarah")
+                with _av3: _new_whole = st.checkbox("Whole day", value=True, key="vb_new_whole")
+                if not _new_whole:
+                    _at1, _at2 = st.columns(2)
+                    with _at1: _new_start = st.text_input("Start time", key="vb_new_start", placeholder="e.g. 9:30")
+                    with _at2: _new_end = st.text_input("End time", key="vb_new_end", placeholder="e.g. 12:00")
+                else: _new_start = _new_end = ""
+                if st.button("\u2795 Add Booking", type="primary", key="vb_add_btn"):
+                    if _new_booker.strip(): vb_list.append({"vehicle":_new_vehicle,"booker":_new_booker.strip(),"whole_day":_new_whole,"start_time":_new_start.strip(),"end_time":_new_end.strip()}); bulletin_data["vehicle_bookings"] = vb_list; st.rerun()
+                    else: st.warning("Please enter a name.")
+            else:
+                if vb_list and any(b.get("booker","") for b in vb_list):
+                    def _vbt(b): return "Whole day" if b.get("whole_day",True) else f"{b.get('start_time','?')} \u2013 {b.get('end_time','?')}"
+                    st.markdown('<table class="data-table"><tr><th>Vehicle</th><th>Booked By</th><th>Time</th></tr>'+"".join([f'<tr><td>{"🚐 Van" if b.get("vehicle","")=="Van" else "🚙 Kia"}</td><td><span class="vehicle-booking">{b.get("booker","")}</span></td><td class="vehicle-time">{_vbt(b)}</td></tr>' for b in vb_list if b.get("booker","")])+"</table>", unsafe_allow_html=True)
+                else: st.markdown('<div class="empty-state"><div class="icon">\U0001f697</div>No vehicle bookings today</div>', unsafe_allow_html=True)
 
     section_divider("sec-responsibilities", 3, "\U0001f4cc", "Responsibilities & NIT")
     if True:
         resp_col, nit_col, room_col = st.columns(3)
         with resp_col:
-            st.markdown('<div class="section-card"><div class="section-card-header amber"><h3>\u2b50 Staff Responsibilities</h3></div><div class="section-card-body">', unsafe_allow_html=True)
-            sr = bulletin_data["staff_responsibilities"]
-            if edit:
-                bulletin_data["staff_responsibilities"] = {"kitchen_duties": st.text_input("\U0001f373 Kitchen Duties", sr.get("kitchen_duties",""), key="sr_k"),"meeting_pd_focus": st.text_input("\U0001f4cc Staff Meeting PD Focus", sr.get("meeting_pd_focus",""), key="sr_pd"),"chair": st.text_input("\U0001fa91 Meeting Chair", sr.get("chair",""), key="sr_c"),"minutes": st.text_input("\U0001f4dd Meeting Minutes", sr.get("minutes",""), key="sr_m"),}
-            else:
-                kitchen = sr.get("kitchen_duties","")
-                st.markdown(f'<table class="data-table"><tr class="kitchen-row"><td><span class="kitchen-badge">\U0001f373 Kitchen</span></td><td><strong>{kitchen or "\u2014"}</strong></td></tr><tr><td>\U0001f4cc PD Focus</td><td>{sr.get("meeting_pd_focus","") or "\u2014"}</td></tr><tr><td>\U0001fa91 Chair</td><td>{sr.get("chair","") or "\u2014"}</td></tr><tr><td>\U0001f4dd Minutes</td><td>{sr.get("minutes","") or "\u2014"}</td></tr></table>', unsafe_allow_html=True)
-            st.markdown('</div></div>', unsafe_allow_html=True)
+            with card("staff_responsibilities", "amber", "\u2b50", "Staff Responsibilities"):
+                sr = bulletin_data["staff_responsibilities"]
+                if edit:
+                    bulletin_data["staff_responsibilities"] = {"kitchen_duties": st.text_input("\U0001f373 Kitchen Duties", sr.get("kitchen_duties",""), key="sr_k"),"meeting_pd_focus": st.text_input("\U0001f4cc Staff Meeting PD Focus", sr.get("meeting_pd_focus",""), key="sr_pd"),"chair": st.text_input("\U0001fa91 Meeting Chair", sr.get("chair",""), key="sr_c"),"minutes": st.text_input("\U0001f4dd Meeting Minutes", sr.get("minutes",""), key="sr_m"),}
+                else:
+                    kitchen = sr.get("kitchen_duties","")
+                    st.markdown(f'<table class="data-table"><tr class="kitchen-row"><td><span class="kitchen-badge">\U0001f373 Kitchen</span></td><td><strong>{kitchen or "\u2014"}</strong></td></tr><tr><td>\U0001f4cc PD Focus</td><td>{sr.get("meeting_pd_focus","") or "\u2014"}</td></tr><tr><td>\U0001fa91 Chair</td><td>{sr.get("chair","") or "\u2014"}</td></tr><tr><td>\U0001f4dd Minutes</td><td>{sr.get("minutes","") or "\u2014"}</td></tr></table>', unsafe_allow_html=True)
         with nit_col:
-            st.markdown('<div class="section-card"><div class="section-card-header green"><h3>📅 Additional NIT Bookings</h3></div><div class="section-card-body">', unsafe_allow_html=True)
-            
-            nit_bookings = load_todays_nit_bookings(current_date)
-            
-            if nit_bookings:
-                for booking in nit_bookings:
-                    time_slot = booking.get('time_slot', '')
-                    staff_name = booking.get('staff_name', '')
-                    st.markdown(f'<div style="background:#E8F5E9;padding:0.75rem;margin:0.5rem 0;border-radius:8px;border-left:4px solid #1A7A6E;"><div style="font-weight:700;color:#1A7A6E;font-size:0.9rem;">🕐 {time_slot}</div><div style="font-size:0.85rem;color:#2d6b1a;margin-top:0.2rem;">{staff_name}</div></div>', unsafe_allow_html=True)
-                st.markdown('<div style="margin-top:0.75rem;font-size:0.75rem;color:#6b7280;">📌 <a href="/NIT_Bookings" target="_self" style="color:#1A7A6E;text-decoration:none;font-weight:600;">Manage NIT Bookings →</a></div>', unsafe_allow_html=True)
-            else:
-                st.markdown('<div class="empty-state"><div class="icon">📅</div>No NIT bookings today</div>', unsafe_allow_html=True)
-                st.markdown('<div style="margin-top:0.5rem;font-size:0.75rem;color:#6b7280;">📌 <a href="/NIT_Bookings" target="_self" style="color:#1A7A6E;text-decoration:none;font-weight:600;">Book NIT Time →</a></div>', unsafe_allow_html=True)
-
-            st.markdown('</div></div>', unsafe_allow_html=True)
+            with card("nit_bookings", "green", "📅", "Additional NIT Bookings"):
+                nit_bookings = load_todays_nit_bookings(current_date)
+                if nit_bookings:
+                    for booking in nit_bookings:
+                        time_slot = booking.get('time_slot', '')
+                        staff_name = booking.get('staff_name', '')
+                        st.markdown(f'<div style="background:#E8F5E9;padding:0.75rem;margin:0.5rem 0;border-radius:8px;border-left:4px solid #1A7A6E;"><div style="font-weight:700;color:#1A7A6E;font-size:0.9rem;">🕐 {time_slot}</div><div style="font-size:0.85rem;color:#2d6b1a;margin-top:0.2rem;">{staff_name}</div></div>', unsafe_allow_html=True)
+                    st.markdown('<div style="margin-top:0.75rem;font-size:0.75rem;color:#6b7280;">📌 <a href="/NIT_Bookings" target="_self" style="color:#1A7A6E;text-decoration:none;font-weight:600;">Manage NIT Bookings \u2192</a></div>', unsafe_allow_html=True)
+                else:
+                    st.markdown('<div class="empty-state"><div class="icon">📅</div>No NIT bookings today</div>', unsafe_allow_html=True)
+                    st.markdown('<div style="margin-top:0.5rem;font-size:0.75rem;color:#6b7280;">📌 <a href="/NIT_Bookings" target="_self" style="color:#1A7A6E;text-decoration:none;font-weight:600;">Book NIT Time \u2192</a></div>', unsafe_allow_html=True)
 
         with room_col:
-            st.markdown('<div class="section-card"><div class="section-card-header navy"><h3>🗓️ Meeting Room Bookings</h3></div><div class="section-card-body">', unsafe_allow_html=True)
-
-            room_bookings = load_todays_meeting_room_bookings(current_date)
-
-            if room_bookings:
-                for booking in room_bookings:
-                    time_slot = booking.get('time_slot', '')
-                    booked_by = booking.get('staff_name', '')
-                    purpose = booking.get('purpose', '')
-                    purpose_html = f'<div style="font-size:0.75rem;color:#6b7280;margin-top:0.1rem;">{purpose}</div>' if purpose else ""
-                    st.markdown(f'<div style="background:#eef2f7;padding:0.75rem;margin:0.5rem 0;border-radius:8px;border-left:4px solid #1a2e44;"><div style="font-weight:700;color:#1a2e44;font-size:0.9rem;">🕐 {time_slot}</div><div style="font-size:0.85rem;color:#374151;margin-top:0.2rem;">{booked_by}</div>{purpose_html}</div>', unsafe_allow_html=True)
-                st.markdown('<div style="margin-top:0.75rem;font-size:0.75rem;color:#6b7280;">📌 <a href="/meeting_room_bookings" target="_self" style="color:#1a2e44;text-decoration:none;font-weight:600;">Manage Meeting Room →</a></div>', unsafe_allow_html=True)
-            else:
-                st.markdown('<div class="empty-state"><div class="icon">🗓️</div>No meeting room bookings today</div>', unsafe_allow_html=True)
-                st.markdown('<div style="margin-top:0.5rem;font-size:0.75rem;color:#6b7280;">📌 <a href="/meeting_room_bookings" target="_self" style="color:#1a2e44;text-decoration:none;font-weight:600;">Book Meeting Room →</a></div>', unsafe_allow_html=True)
-
-            st.markdown('</div></div>', unsafe_allow_html=True)
+            with card("meeting_room_bookings", "navy", "🗓️", "Meeting Room Bookings"):
+                room_bookings = load_todays_meeting_room_bookings(current_date)
+                if room_bookings:
+                    for booking in room_bookings:
+                        time_slot = booking.get('time_slot', '')
+                        booked_by = booking.get('staff_name', '')
+                        purpose = booking.get('purpose', '')
+                        purpose_html = f'<div style="font-size:0.75rem;color:#6b7280;margin-top:0.1rem;">{purpose}</div>' if purpose else ""
+                        st.markdown(f'<div style="background:#eef2f7;padding:0.75rem;margin:0.5rem 0;border-radius:8px;border-left:4px solid #1a2e44;"><div style="font-weight:700;color:#1a2e44;font-size:0.9rem;">🕐 {time_slot}</div><div style="font-size:0.85rem;color:#374151;margin-top:0.2rem;">{booked_by}</div>{purpose_html}</div>', unsafe_allow_html=True)
+                    st.markdown('<div style="margin-top:0.75rem;font-size:0.75rem;color:#6b7280;">📌 <a href="/meeting_room_bookings" target="_self" style="color:#1a2e44;text-decoration:none;font-weight:600;">Manage Meeting Room \u2192</a></div>', unsafe_allow_html=True)
+                else:
+                    st.markdown('<div class="empty-state"><div class="icon">🗓️</div>No meeting room bookings today</div>', unsafe_allow_html=True)
+                    st.markdown('<div style="margin-top:0.5rem;font-size:0.75rem;color:#6b7280;">📌 <a href="/meeting_room_bookings" target="_self" style="color:#1a2e44;text-decoration:none;font-weight:600;">Book Meeting Room \u2192</a></div>', unsafe_allow_html=True)
 
     section_divider("sec-program", 4, "\U0001f4ca", "Program Changes")
     if True:
