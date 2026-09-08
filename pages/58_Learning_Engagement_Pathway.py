@@ -102,9 +102,10 @@ create table if not exists pathway_roll_up (
 --   alter table pathway_method_bank add column if not exists social_emotional text[] not null default '{}';
 --   alter table pathway_roll_up add column if not exists primary_disposition text;
 --   -- If you have data from BEFORE the 3-tier model (values 'Universal'/'Targeted'):
+--   -- drop the OLD constraint first, or these updates get rejected by it:
+--   alter table pathway_method_bank drop constraint if exists pathway_method_bank_universal_or_targeted_check;
 --   update pathway_method_bank set universal_or_targeted = 'Universal curriculum (Tier 1)' where universal_or_targeted = 'Universal';
 --   update pathway_method_bank set universal_or_targeted = 'Targeted curriculum (Tier 2)' where universal_or_targeted = 'Targeted';
---   alter table pathway_method_bank drop constraint if exists pathway_method_bank_universal_or_targeted_check;
 --   alter table pathway_method_bank add constraint pathway_method_bank_universal_or_targeted_check
 --     check (universal_or_targeted in ('Universal curriculum (Tier 1)','Targeted curriculum (Tier 2)','Individualised intervention (Tier 3)'));
 """
