@@ -183,21 +183,51 @@ REGULATION_OPTIONS = [
     "Settles with low-demand parallel activity first", "Needs movement before task",
     "Needs quiet/low-stimulation entry", "Responds well to a predictable greeting routine",
     "Arrives dysregulated after transitions", "Settles fastest 1:1",
+    "Shows hyperarousal signs (fidgety, loud, fast talking)",
+    "Shows hypoarousal signs (withdrawn, flat, slow to respond)",
+    "Co-regulates well with a trusted adult nearby",
+    "Needs a named \u2018reset\u2019 option before re-engaging",
+    "Responds to rhythmic/repetitive activity to settle",
+    "Needs a breathing/grounding strategy prompted",
+    "Escalates quickly under time pressure",
+    "Settles with a physical comfort item (weighted item, fidget)",
+    "Needs warning before demands increase",
+    "Regulates better after a movement break",
 ]
 SENSORY_OPTIONS = [
     "Prefers standing/moving over seated work", "Fidget object reduces shutdown",
     "Sensitive to noise", "Sensitive to lighting", "Needs tactile input",
     "Prefers minimal eye contact during instruction",
+    "Sensory seeking (craves movement/pressure/input)",
+    "Sensory avoiding (overwhelmed by input)", "Sensitive to smell",
+    "Sensitive to textures (clothing, materials)", "Needs noise-cancelling headphones",
+    "Prefers dim/natural lighting", "Benefits from weighted blanket/lap pad",
+    "Needs a chewable/oral sensory tool", "Sensitive to crowded/busy spaces",
+    "Prefers own space bubble (no touching)",
 ]
 RELATIONAL_OPTIONS = [
     "Responds to playful/curious framing", "Needs acceptance before correction",
     "Shuts down at correction in front of peers", "Builds trust slowly, tests boundaries first",
     "Responds well to shared humour", "Needs empathy named explicitly before redirection",
+    "Prefers the same trusted adult for difficult conversations",
+    "Responds to curiosity (\u2018I wonder what happened\u2019) over interrogation",
+    "Needs repair after conflict, not just consequence",
+    "Wary of new adults, needs time to warm up",
+    "Responds to genuine praise, not generic praise",
+    "Needs choice offered rather than told",
+    "Tests the relationship through provocation",
+    "Responds well to side-by-side conversation (not face-to-face)",
+    "Needs the adult to stay calm/non-reactive when escalated",
 ]
 ENVIRONMENTAL_OPTIONS = [
     "1:1 or small group only", "Needs visible/predictable end point to task",
     "Needs consistent seating", "Needs advance notice of transitions",
-    "Needs an escape/reset option available",
+    "Needs an escape/reset option available", "Needs a visual schedule/timetable",
+    "Needs clear physical boundaries (desk, mat, space)",
+    "Prefers back-to-wall or door-visible seating", "Needs reduced visual clutter",
+    "Benefits from a consistent daily routine", "Needs an adult within sight/reach",
+    "Struggles with unstructured/free time", "Needs a first/then visual structure",
+    "Benefits from a calm-down/safe space", "Needs movement breaks scheduled in",
 ]
 CONTEXT_OPTIONS = [
     "Numeracy", "Literacy", "NIT", "Café / Barista Enterprise", "SY Vocational",
@@ -436,7 +466,41 @@ with tab2:
             ctx = st.pills("Observed context", CONTEXT_OPTIONS, selection_mode="single")
             if ctx == "Other (add below)":
                 ctx = st.text_input("Custom context")
-            move = st.text_area("Instructional move — describe abstractly (e.g. \"concrete-before-abstract sequencing\", not \"used counters in maths\")")
+            concrete_move = st.text_area(
+                "What did you actually do?",
+                placeholder="e.g. I used counters to teach place value, working through ten short problems with a break in the middle",
+                key="concrete_move",
+            )
+            if st.button("\u2728 Turn this into an abstract instructional move"):
+                if not concrete_move.strip():
+                    st.warning("Describe what you actually did first, above.")
+                else:
+                    # TODO: point this at the portal's actual shared AI helper (e.g. groq_ai_call) —
+                    # not present in archive_utils.py / Student Register, so still needs its import path.
+                    try:
+                        from ai_helpers import groq_ai_call
+                        prompt = (
+                            "A teacher described a lesson activity in plain language. Rewrite it as ONE "
+                            "sentence describing the underlying instructional MOVE abstractly enough to "
+                            "transfer to a completely different subject — strip out the specific subject, "
+                            "content, and materials, and name the teaching technique itself (e.g. "
+                            "'concrete-before-abstract sequencing', 'short curiosity-framed task cycles with "
+                            "a visible end point', 'choice offered before task begins'). "
+                            f"Teacher's description: \"{concrete_move.strip()}\""
+                        )
+                        draft = groq_ai_call(prompt)
+                    except Exception:
+                        draft = (
+                            "(AI helper not wired yet — abstract it yourself: describe the TECHNIQUE, not "
+                            "the subject. E.g. \"used counters to teach place value\" → \"concrete-before-"
+                            "abstract sequencing\". Edit the field below.)"
+                        )
+                    st.session_state["move_draft"] = draft
+            move = st.text_area(
+                "Instructional move (abstracted)",
+                value=st.session_state.get("move_draft", ""),
+                help="This is what gets saved and reused across students — keep it free of subject-specific detail.",
+            )
             st.markdown("**\U0001f9ed Disposition activated** \u2014 the habit that actually transfers; capability and knowledge below are what gets demonstrated once it does.")
             disposition = st.pills("Disposition activated", DISPOSITION_OPTIONS, selection_mode="single", label_visibility="collapsed")
             if disposition:
@@ -462,6 +526,7 @@ with tab2:
                 sb.table("pathway_student_methods").insert({
                     "student_id": student_id, "method_id": new["id"],
                 }).execute()
+                st.session_state.pop("move_draft", None)
                 st.success("Created and attached.")
 
     st.divider()
