@@ -1,1377 +1,3639 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta, date
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
 import os
-from io import BytesIO
-import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment
-from supabase import create_client
+from datetime import datetime
 
-st.set_page_config(
-    page_title="Allocation Meetings - CLC-LBU",
-    page_icon="📋",
-    layout="wide"
-)
+try:
+    from supabase import create_client, Client
+except ImportError:
+    pass
+
+st.set_page_config(page_title="Allocation Dashboard", page_icon="📊", layout="wide")
+
+# Initialize session state variables
+if 'flag_df' not in st.session_state:
+    st.session_state.flag_df = None
+if 'funding_df' not in st.session_state:
+    st.session_state.funding_df = None
+if 'raap_df' not in st.session_state:
+    st.session_state.raap_df = None
+if 'incidents_df' not in st.session_state:
+    st.session_state.incidents_df = None
+
+# SMART CALENDAR DETECTION - Determine current term and year
+def get_current_term_year():
+    """
+    Determine current SA school term and year based on date
+    SA 2026 Terms with accurate dates:
+    - T1: Jan 29 - Mar 20
+    - T2: Apr 21 - Jun 26  
+    - T3: Jul 27 - Sep 18
+    - T4: Sep 19 - Dec 11
+    """
+    today = datetime.now()
+    year = today.year
+    month = today.month
+    day = today.day
+    
+    # 2026 specific term boundaries
+    if year == 2026:
+        if month == 1:
+            if day >= 29:
+                term = 1
+            else:
+                term = 4  # Before Jan 29 is still T4 of previous year
+        elif month == 2 or month == 3:
+            if month == 3 and day > 20:
+                term = 2  # After Mar 20 is T2
+            else:
+                term = 1
+        elif month in [4, 5, 6]:
+            if month == 4 and day < 21:
+                term = 1  # Before Apr 21 is still T1
+            elif month == 6 and day > 26:
+                term = 3  # After Jun 26 is T3
+            else:
+                term = 2
+        elif month in [7, 8, 9]:
+            if month == 7 and day < 27:
+                term = 2  # Before Jul 27 is still T2
+            elif month == 9 and day > 18:
+                term = 4  # After Sep 18 is T4
+            else:
+                term = 3
+        else:  # Oct, Nov, Dec
+            term = 4
+    else:
+        # Generic fallback
+        if month in [1, 2, 3]:
+            term = 1
+        elif month in [4, 5, 6]:
+            term = 2
+        elif month in [7, 8, 9]:
+            term = 3
+        else:
+            term = 4
+    
+    return year, term
+
+# Initialize smart filters
+if 'auto_year' not in st.session_state:
+    current_year, current_term = get_current_term_year()
+    st.session_state.auto_year = current_year
+    st.session_state.auto_term = current_term
+    st.session_state.selected_year = current_year
+    st.session_state.selected_term = current_term
+
+st.markdown("""
+<style>
+    /* HIDE ALL STREAMLIT UI ELEMENTS */
+    #MainMenu { display: none !important; }
+    footer { display: none !important; }
+    header { display: none !important; }
+    .stToolbar { display: none !important; }
+    [data-testid="stToolbar"] { display: none !important; }
+    
+    /* HIDE WHITE BANDS */
+    [data-testid="stAppViewContainer"] > div { background: linear-gradient(135deg, rgba(10,14,39,1) 0%, rgba(8,12,32,1) 100%) !important; }
+    .block-container { background: linear-gradient(135deg, rgba(10,14,39,0.95) 0%, rgba(8,12,32,0.95) 100%) !important; }
+    section { background: linear-gradient(135deg, rgba(10,14,39,0.95) 0%, rgba(8,12,32,0.95) 100%) !important; }
+    
+    html, body { 
+        background-color: #0a0e27 !important;
+        color: #ffffff !important;
+    }
+    
+    * { color: #ffffff !important; }
+    
+    h1, h2, h3, h4, h5, h6 { color: #00e5ff !important; text-shadow: 0 0 15px rgba(0,229,255,0.3); }
+    p, span, div, label, button, a { color: #ffffff !important; }
+    
+    /* SIDEBAR - MATCH MAIN BACKGROUND WITH LIGHT BLUE ACCENT */
+    [data-testid="stSidebar"] { 
+        background: linear-gradient(135deg, rgba(10,14,39,0.98) 0%, rgba(8,12,32,0.98) 100%) !important;
+        border-right: 2px solid rgba(0,229,255,0.25) !important;
+    }
+    [data-testid="stSidebar"] * { color: #ffffff !important; }
+    [data-testid="stSidebar"] label { 
+        font-weight: bold; 
+        font-size: 14px;
+        color: #ffffff !important;
+        margin-top: 15px;
+    }
+    
+    /* DROPDOWN/SELECT BOXES - AGGRESSIVE DARK STYLING */
+    [data-testid="stSelectbox"] > div > div > div { 
+        background: #1a2a3a !important;
+        border: 1px solid #00e5ff !important;
+        border-radius: 6px !important;
+        color: #ffffff !important;
+    }
+    
+    /* All select/combobox variations */
+    [class*="select"] { background: #1a2a3a !important; color: #ffffff !important; }
+    [class*="combobox"] { background: #1a2a3a !important; color: #ffffff !important; }
+    
+    /* Baseui Select Override */
+    [data-baseweb="select"] { background: #1a2a3a !important; }
+    [data-baseweb="select"] > div { background: #1a2a3a !important; border: 1px solid #00e5ff !important; }
+    [data-baseweb="popover"] { background: #1a2a3a !important; }
+    [data-baseweb="menu"] { background: #1a2a3a !important; }
+    
+    /* Dropdown opened state */
+    [role="listbox"] { 
+        background: #1a2a3a !important; 
+        border: 1px solid #00e5ff !important;
+        color: #ffffff !important;
+    }
+    [role="option"] { 
+        color: #ffffff !important; 
+        background: #1a2a3a !important;
+    }
+    [role="option"]:hover,
+    [role="option"][aria-selected="true"] { 
+        background: rgba(0,229,255,0.3) !important;
+        color: #ffffff !important;
+    }
+    
+    /* Text in select */
+    [data-testid="stSelectbox"] input { 
+        background: #1a2a3a !important;
+        color: #ffffff !important;
+        border: 1px solid #00e5ff !important;
+    }
+    
+    /* Selectbox label */
+    [data-testid="stSelectbox"] label { 
+        color: #ffffff !important; 
+        font-weight: bold; 
+    }
+    
+    /* FILE UPLOADER */
+    [data-testid="stFileUploader"] { background: #1a2a3a !important; border: 1px solid #00e5ff !important; border-radius: 6px !important; }
+    [data-testid="stFileUploader"] label { color: #ffffff !important; font-weight: bold; }
+    
+    /* SIDEBAR DIVIDER */
+    [data-testid="stSidebar"] hr { border-color: rgba(0,229,255,0.3) !important; }
+    
+    /* RADIO - STYLED BUTTONS */
+    [role="radio"] { 
+        padding: 10px 15px !important;
+        border-radius: 6px !important;
+        margin: 6px 0 !important;
+        border: 1px solid rgba(0,229,255,0.2) !important;
+        background: transparent !important;
+        transition: all 0.2s !important;
+    }
+    [role="radio"]:hover { 
+        background: rgba(0,229,255,0.1) !important;
+        border-color: rgba(0,229,255,0.5) !important;
+    }
+    
+    /* BUTTONS */
+    .stButton > button { 
+        background: rgba(0,229,255,0.15) !important; 
+        border: 1px solid #00e5ff !important; 
+        color: #ffffff !important; 
+        font-weight: bold;
+        border-radius: 6px !important;
+        padding: 10px 20px !important;
+    }
+    .stButton > button:hover { 
+        background: rgba(0,229,255,0.3) !important; 
+    }
+    
+    /* METRICS */
+    [data-testid="stMetricValue"] { color: #00e5ff !important; font-size: 2em; }
+    [data-testid="stMetricLabel"] { color: #ffffff !important; }
+    [data-testid="metric-container"] { background: rgba(0,229,255,0.08) !important; border-radius: 8px !important; }
+    
+    /* BOXES */
+    .stInfo { background: #1a2a3a !important; border-left: 4px solid #00e5ff !important; }
+    .stInfo * { color: #ffffff !important; }
+    .stWarning { background: #2a2415 !important; border-left: 4px solid #ffc107 !important; }
+    .stWarning * { color: #ffffff !important; }
+    .stSuccess { background: #1a2a1a !important; border-left: 4px solid #4caf50 !important; }
+    .stSuccess * { color: #ffffff !important; }
+    .stError { background: #2a1a1a !important; border-left: 4px solid #f44336 !important; }
+    .stError * { color: #ffffff !important; }
+    
+    /* PLOTLY */
+    .plotly text { fill: #ffffff !important; color: #ffffff !important; }
+    .plotly .legend text { fill: #ffffff !important; color: #ffffff !important; }
+    
+    /* DATA FRAMES */
+    [data-testid="stDataFrame"] { background: rgba(10,14,39,0.8) !important; }
+    [data-testid="stDataFrame"] * { color: #ffffff !important; }
+</style>
+""", unsafe_allow_html=True)
 
 @st.cache_resource
 def init_supabase():
-    url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_KEY")
-    return create_client(url, key)
+    url = os.getenv("SUPABASE_URL", "")
+    key = os.getenv("SUPABASE_KEY", "")
+    if url and key:
+        try:
+            return create_client(url, key)
+        except:
+            return None
+    return None
 
 supabase = init_supabase()
 
-# ══════════════════════════════════════════════════════════════════════════════
-# STATIC LISTS
-# ══════════════════════════════════════════════════════════════════════════════
-
-PROGRAMS = ["Junior Primary (JP)", "Primary Years (PY)", "Senior Years (SY)"]
-DEFAULT_STAFF_NAMES = ["Ben Sutton", "Jacqui Simpson", "Caitie Hook", "Ben Selga", "Brenton McGorman", "Roisin McIlduff"]
-
-def load_dropdown_list(list_name, default_list):
-    """Load an editable dropdown list from Supabase (managed via the Admin tab).
-    Falls back to the hardcoded default if the table doesn't exist yet or is empty
-    for this list — so the tool never breaks even before the admin table is set up."""
+def load_allocation_data():
+    """Load allocation data from Supabase - fetches fresh data every time"""
+    if not supabase:
+        return None
     try:
-        result = supabase.table("dropdown_options").select("*") \
-            .eq("list_name", list_name).order("sort_order").execute()
-        values = [r["option_value"] for r in result.data if r.get("option_value")]
-        if values:
-            return values
-    except Exception:
-        pass
-    return default_list
+        response = supabase.table('allocation_students').select('*').execute()
+        if response.data:
+            return pd.DataFrame(response.data)
+        return None
+    except:
+        return None
 
-STAFF_NAMES = load_dropdown_list("focus_teacher", DEFAULT_STAFF_NAMES)
-OUTCOMES = ["Allocated", "Not Allocated"]
-EXTENSION_OUTCOMES = ["Approved", "Not Approved"]
-GENDER_OPTIONS = ["Male", "Female", "Other", "Prefer not to say"]
-PRIORITY_OPTIONS = ["1", "2", "3", "4", "5"]
-YEAR_LEVELS = ["R", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
-YES_NO = ["", "Yes", "No"]
-WAITLIST_STATUS_OPTIONS = ["Not Applicable", "On Waitlist", "Declined", "Site Decision", "Site Withdraw"]
-
-MEDICAL_CONDITION_TYPES = [
-    "Anaphylaxis / Severe Allergy", "Asthma", "Diabetes (Type 1)", "Epilepsy / Seizure Disorder",
-    "Cardiac Condition", "Genetic / Chromosomal Condition", "Physical Disability",
-    "Gastrointestinal Condition", "Autoimmune Condition", "Hearing Impairment",
-    "Vision Impairment", "Chronic Pain Condition", "Sleep Disorder", "Continence Condition",
-    "Other Medical Condition"
-]
-
-# Support flag checkboxes: (Display label, Excel column name, Supabase field name)
-BOOL_FLAGS = [
-    ("EALD", "Flag_EALD", "flag_eald"),
-    ("ATSI / Aboriginal", "Flag_ATSI", "flag_atsi"),
-    ("DCP Involvement", "Flag_DCP_involvement", "flag_dcp_involvement"),
-    ("Child in Care", "Flag_Child_in_care", "flag_child_in_care"),
-    ("Intervention / Custody Order", "Flag_Intervention_Custody_Order", "flag_intervention_custody_order"),
-    ("SWD (Student with Disability)", "Flag_SWD", "flag_swd"),
-    ("Speech and Language", "Flag_Speech_and_Lang", "flag_speech_and_lang"),
-    ("ASD", "Flag_ASD", "flag_asd"),
-    ("Intellectual Disability", "Flag_Intellectual", "flag_intellectual"),
-    ("Learning Difficulty", "Flag_Learning_Difficulty", "flag_learning_difficulty"),
-    ("Sensory Processing", "Flag_Sensory_Processing", "flag_sensory_processing"),
-    ("ADHD", "Flag_ADHD", "flag_adhd"),
-    ("ODD", "Flag_ODD", "flag_odd"),
-    ("PDA", "Flag_PDA", "flag_pda"),
-]
-
-FUNDING_CATEGORIES = [(f"Category {i}", f"Flag_Category_{i}", f"flag_category_{i}") for i in range(1, 10)]
-FUNDING_CATEGORIES.append(("9+ RAAP", "Flag_9plusRAAP", "flag_9plusraap"))
-
-# Full 74-column export order — must match the real Sheet1 layout exactly
-EXPORT_COLUMNS = [
-    'Current_Status', 'Student_ID', 'Previous_Referrals', 'Student_Name', 'DOB', 'Gender', 'Year_Level',
-    'Referring_School', 'Referral_Date', 'Meeting_Date', 'Meeting_Week', 'Previously_Referred',
-    'Allocation_Status', 'Allocated_Program', 'Placement_Start', 'Partnership_Area',
-    'Previous_CLC_Placement', 'Previous_Other_LC', 'Other_LC_Name', 'Total_Previous_Placements',
-    'Placement_History_Notes', 'Flag_EALD', 'Flag_ATSI', 'Flag_Attendance_Fulltime',
-    'Flag_Attendance_Parttime', 'Flag_Intervention_Custody_Order', 'Flag_DCP_involvement',
-    'Flag_Child_in_care', 'Flag_IESP_Funding_yes', 'Flag_IESP_Funding_no', 'Flag_Category_1',
-    'Flag_Category_2', 'Flag_Category_3', 'Flag_Category_4', 'Flag_Category_5', 'Flag_Category_6',
-    'Flag_Category_7', 'Flag_Category_8', 'Flag_Category_9', 'Flag_9plusRAAP', 'Flag_SWD',
-    'Flag_Speech_and_Lang', 'Flag_ASD', 'Flag_Intellectual', 'Flag_Learning_Difficulty',
-    'Flag_Sensory_Processing', 'Flag_ADHD', 'Flag_ODD', 'Flag_PDA', 'Flag_Medication',
-    'Flag_Medical_condition', 'Medical_Condition_Details', 'Medication_Details',
-    'Bespoke_Placement', 'Waitlist_Status', 'Waitlist_Date', 'Allocated_From_Waitlist',
-    'Extension', 'Extension_Date', 'Exit_Reason', 'Transition_Plan', 'Notes', 'Placement_End',
-    'Exclusion_End_Date', 'Proposed_Extension_Finish_Date', 'Extension_Weeks', 'Action_owner',
-    'Actual_Finish_Date', 'Extended_Placement', 'Referral_Year', 'Term', 'Extension_Status',
-    'Referral_Occurrence', 'Referral_ID', 'BSE'
-]
-
-# Excel column -> Supabase field. None means the column is left blank on export
-# (either an Excel-side formula, or not currently captured by the tool).
-FIELD_MAP = {
-    'Current_Status': 'current_status', 'Student_ID': None, 'Previous_Referrals': 'previous_referrals',
-    'Student_Name': 'student_name', 'DOB': 'date_of_birth', 'Gender': 'gender', 'Year_Level': 'year_level',
-    'Referring_School': 'school', 'Referral_Date': 'referral_date', 'Meeting_Date': 'meeting_date',
-    'Meeting_Week': 'meeting_week', 'Previously_Referred': 'previously_referred',
-    'Allocation_Status': 'outcome', 'Allocated_Program': 'program', 'Placement_Start': 'start_after',
-    'Partnership_Area': 'partnership_area', 'Previous_CLC_Placement': 'previous_clc_placement',
-    'Previous_Other_LC': 'previous_other_lc', 'Other_LC_Name': 'other_lc_name',
-    'Total_Previous_Placements': 'total_previous_placements',
-    'Placement_History_Notes': 'placement_history_notes', 'Flag_EALD': 'flag_eald',
-    'Flag_ATSI': 'flag_atsi', 'Flag_Attendance_Fulltime': 'flag_attendance_fulltime',
-    'Flag_Attendance_Parttime': 'flag_attendance_parttime',
-    'Flag_Intervention_Custody_Order': 'flag_intervention_custody_order',
-    'Flag_DCP_involvement': 'flag_dcp_involvement', 'Flag_Child_in_care': 'flag_child_in_care',
-    'Flag_IESP_Funding_yes': 'flag_iesp_funding_yes', 'Flag_IESP_Funding_no': 'flag_iesp_funding_no',
-    'Flag_Category_1': 'flag_category_1', 'Flag_Category_2': 'flag_category_2',
-    'Flag_Category_3': 'flag_category_3', 'Flag_Category_4': 'flag_category_4',
-    'Flag_Category_5': 'flag_category_5', 'Flag_Category_6': 'flag_category_6',
-    'Flag_Category_7': 'flag_category_7', 'Flag_Category_8': 'flag_category_8',
-    'Flag_Category_9': 'flag_category_9', 'Flag_9plusRAAP': 'flag_9plusraap', 'Flag_SWD': 'flag_swd',
-    'Flag_Speech_and_Lang': 'flag_speech_and_lang', 'Flag_ASD': 'flag_asd',
-    'Flag_Intellectual': 'flag_intellectual', 'Flag_Learning_Difficulty': 'flag_learning_difficulty',
-    'Flag_Sensory_Processing': 'flag_sensory_processing', 'Flag_ADHD': 'flag_adhd',
-    'Flag_ODD': 'flag_odd', 'Flag_PDA': 'flag_pda', 'Flag_Medication': 'flag_medication',
-    'Flag_Medical_condition': 'flag_medical_condition',
-    'Medical_Condition_Details': 'medical_condition_details', 'Medication_Details': 'medication_details',
-    'Bespoke_Placement': 'bespoke_placement', 'Waitlist_Status': 'waitlist_status',
-    'Waitlist_Date': 'waitlist_date', 'Allocated_From_Waitlist': 'allocated_from_waitlist',
-    'Extension': 'extension', 'Extension_Date': 'extension_date', 'Exit_Reason': 'exit_reason',
-    'Transition_Plan': 'transition_plan', 'Notes': 'notes', 'Placement_End': 'finishing_date',
-    'Exclusion_End_Date': 'exclusion_end_date',
-    'Proposed_Extension_Finish_Date': 'proposed_extension_finish_date',
-    'Extension_Weeks': 'extension_weeks', 'Action_owner': 'actioned_by',
-    'Actual_Finish_Date': 'actual_finish_date', 'Extended_Placement': 'extended_placement',
-    'Referral_Year': 'year', 'Term': 'term', 'Extension_Status': 'extension_status',
-    'Referral_Occurrence': None, 'Referral_ID': None, 'BSE': 'bse',
+# === TERM DATE CONFIGURATION ===
+TERM_DATES = {
+    2020: {
+        1: ('2020-01-28', '2020-04-09'),
+        2: ('2020-04-27', '2020-07-03'),
+        3: ('2020-07-20', '2020-09-25'),
+        4: ('2020-10-11', '2020-12-11'),
+    },
+    2021: {
+        1: ('2021-01-27', '2021-04-09'),
+        2: ('2021-04-27', '2021-07-02'),
+        3: ('2021-07-19', '2021-09-24'),
+        4: ('2021-10-11', '2021-12-10'),
+    },
+    2022: {
+        1: ('2022-01-31', '2022-04-14'),
+        2: ('2022-05-02', '2022-07-08'),
+        3: ('2022-07-25', '2022-09-30'),
+        4: ('2022-10-17', '2022-12-16'),
+    },
+    2023: {
+        1: ('2023-01-30', '2023-04-14'),
+        2: ('2023-05-01', '2023-07-07'),
+        3: ('2023-07-24', '2023-09-29'),
+        4: ('2023-10-16', '2023-12-15'),
+    },
+    2024: {
+        1: ('2024-01-29', '2024-04-12'),
+        2: ('2024-04-29', '2024-07-05'),
+        3: ('2024-07-22', '2024-09-27'),
+        4: ('2024-10-14', '2024-12-13'),
+    },
+    2025: {
+        1: ('2025-01-28', '2025-04-11'),
+        2: ('2025-04-28', '2025-07-04'),
+        3: ('2025-07-21', '2025-09-26'),
+        4: ('2025-10-13', '2025-12-12'),
+    },
+    2026: {
+        1: ('2026-01-27', '2026-04-10'),
+        2: ('2026-04-27', '2026-07-03'),
+        3: ('2026-07-20', '2026-09-25'),
+        4: ('2026-10-12', '2026-12-11'),
+    },
+    2027: {
+        1: ('2027-01-27', '2027-04-09'),
+        2: ('2027-04-26', '2027-07-02'),
+        3: ('2027-07-19', '2027-09-24'),
+        4: ('2027-10-11', '2027-12-10'),
+    },
+    2028: {
+        1: ('2028-01-31', '2028-04-13'),
+        2: ('2028-05-01', '2028-07-07'),
+        3: ('2028-07-24', '2028-09-29'),
+        4: ('2028-10-16', '2028-12-15'),
+    },
+    2029: {
+        1: ('2029-01-29', '2029-04-13'),
+        2: ('2029-04-30', '2029-07-06'),
+        3: ('2029-07-23', '2029-09-28'),
+        4: ('2029-10-15', '2029-12-14'),
+    },
+    2030: {
+        1: ('2030-01-29', '2030-04-12'),
+        2: ('2030-04-29', '2030-07-05'),
+        3: ('2030-07-22', '2030-09-27'),
+        4: ('2030-10-14', '2030-12-13'),
+    },
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# SCHOOL / PARTNERSHIP LIST — loaded from school_partnerships.csv (same folder)
-# Falls back to a short embedded list if the file isn't deployed yet, so the
-# tool never breaks — but the CSV should sit next to this file for the full list.
-# ══════════════════════════════════════════════════════════════════════════════
+def get_terms_for_placement(placement_start, placement_end):
+    """Calculate which terms a placement spans"""
+    if pd.isna(placement_start) or pd.isna(placement_end):
+        return []
+    
+    placement_start = pd.to_datetime(placement_start, errors='coerce')
+    placement_end = pd.to_datetime(placement_end, errors='coerce')
+    
+    if pd.isna(placement_start) or pd.isna(placement_end):
+        return []
+    
+    terms_list = []
+    
+    # Check each year and term in TERM_DATES
+    for year, terms in TERM_DATES.items():
+        for term_num, (term_start, term_end) in terms.items():
+            term_start = pd.to_datetime(term_start)
+            term_end = pd.to_datetime(term_end)
+            
+            # Check if placement overlaps with this term
+            if placement_start <= term_end and placement_end >= term_start:
+                terms_list.append((year, term_num))
+    
+    return terms_list
 
-_FALLBACK_SCHOOLS = {
-    "Adelaide Botanic High School": "Adelaide Prospect",
-    "Adelaide High School": "Adelaide Prospect",
-    "Cowandilla Primary School": "Inner West",
-    "Henley Beach Primary School": "Inner West",
-    "Mitcham Girls High School": "Mitcham Plains",
-    "Prospect High School": "Adelaide Prospect",
-}
-
-def _parse_school_csv(source):
-    df = pd.read_csv(source, encoding="utf-8-sig")
-    df.columns = [str(c).strip() for c in df.columns]
-    if "School" not in df.columns or "Partnership_Area" not in df.columns:
-        raise ValueError(f"CSV missing School/Partnership_Area columns — found {list(df.columns)}")
-    df = df.dropna(subset=["School"])
-    mapping = dict(zip(df["School"].astype(str).str.strip(), df["Partnership_Area"].fillna("").astype(str).str.strip()))
-    mapping = {k: v for k, v in mapping.items() if k}
-    if not mapping:
-        raise ValueError("CSV parsed but produced no rows")
-    return mapping
+def load_assessment_data():
+    """Load assessment data from Supabase - fetches fresh data every time"""
+    if not supabase:
+        return None
+    try:
+        response = supabase.table('term_assessments').select('*').execute()
+        if response.data:
+            assessment_df = pd.DataFrame(response.data)
+            # Clean up column names to lowercase
+            assessment_df.columns = assessment_df.columns.str.lower()
+            return assessment_df
+        return None
+    except Exception as e:
+        st.warning(f"Could not load assessment data: {str(e)[:100]}")
+        return None
 
 @st.cache_data
-def load_school_partnerships():
-    """Search several likely locations for school_partnerships.csv so this
-    doesn't depend on one exact folder layout. Returns (mapping, path_used)."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    candidates = [
-        os.path.join(here, "school_partnerships.csv"),
-        os.path.join(os.getcwd(), "school_partnerships.csv"),
-        os.path.join(os.getcwd(), "pages", "school_partnerships.csv"),
-        os.path.join(here, "..", "school_partnerships.csv"),
-        os.path.join(here, "pages", "school_partnerships.csv"),
-    ]
-    for path in candidates:
-        if os.path.exists(path):
-            try:
-                return _parse_school_csv(path), path
-            except Exception:
-                continue
-
-    # Last resort: search recursively under the current working directory
-    for root, _dirs, files in os.walk(os.getcwd()):
-        if "school_partnerships.csv" in files:
-            path = os.path.join(root, "school_partnerships.csv")
-            try:
-                return _parse_school_csv(path), path
-            except Exception:
-                continue
-
-    return _FALLBACK_SCHOOLS, None
-
-SCHOOL_PARTNERSHIP_MAP, _schools_csv_path = load_school_partnerships()
-
-# Manual override: if auto-detection failed, let a staff member upload the CSV
-# directly for this session so the tool works today regardless of repo layout.
-if _schools_csv_path is None:
-    st.sidebar.warning(
-        f"⚠️ Full school list not found on disk (checked script folder, working "
-        f"directory `{os.getcwd()}`, and a recursive search). Showing a short "
-        f"fallback list."
-    )
-    manual_csv = st.sidebar.file_uploader(
-        "Upload school_partnerships.csv for this session", type=["csv"], key="manual_school_csv"
-    )
-    if manual_csv is not None:
-        try:
-            SCHOOL_PARTNERSHIP_MAP = _parse_school_csv(manual_csv)
-            st.sidebar.success(f"✅ Loaded {len(SCHOOL_PARTNERSHIP_MAP)} schools for this session")
-        except Exception as e:
-            st.sidebar.error(f"Couldn't read that file: {e}")
-
-ALL_SCHOOLS = sorted(SCHOOL_PARTNERSHIP_MAP.keys())
-PARTNERSHIP_AREAS = sorted(set(SCHOOL_PARTNERSHIP_MAP.values()))
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# HELPERS
-# ══════════════════════════════════════════════════════════════════════════════
-
-TERM_DATES_2026 = {
-    'Term 1': date(2026, 1, 27),
-    'Term 2': date(2026, 4, 27),
-    'Term 3': date(2026, 7, 20),
-    'Term 4': date(2026, 10, 12),
-}
-
-def _monday_of_week(d):
-    return d - timedelta(days=d.weekday())
-
-def get_current_term_week():
-    today = datetime.now().date()
-    if today.year == 2026:
-        applicable = None
-        for term_name, start in TERM_DATES_2026.items():
-            if start <= today:
-                applicable = (term_name, start)
-        if applicable is None:
-            return 'Term 1', 1, 2026
-        term_name, start = applicable
-        weeks_in = ((today - _monday_of_week(start)).days // 7) + 1
-        weeks_in = max(1, min(weeks_in, 10))
-        return term_name, weeks_in, 2026
-    return 'Term 1', 1, today.year
-
-def get_meeting_weeks(term, year):
-    return [f"Week {i} {term}" for i in range(1, 11)]
-
-def get_wednesday_date(week_number, term, year):
-    start = TERM_DATES_2026.get(term, TERM_DATES_2026['Term 2']) if year == 2026 else TERM_DATES_2026['Term 2']
-    week1_monday = _monday_of_week(start)
-    return week1_monday + timedelta(days=(week_number - 1) * 7 + 2)
-
-def get_partnership_from_school(school_name):
-    return SCHOOL_PARTNERSHIP_MAP.get(school_name, "")
-
-def yn(value):
-    """Normalise a checkbox/bool into the Yes/'' convention used in the master Excel."""
-    return "Yes" if value else ""
-
-def num_or_none(value):
-    """Some Supabase columns (previous_referrals, total_previous_placements,
-    extension_weeks) are integer-typed. An empty string fails there — send NULL instead."""
-    if value is None:
-        return None
-    value = str(value).strip()
-    return value if value else None
-
-def parse_stored_date(value):
-    """Turn a stored ISO date string back into a date object for a date_input default."""
-    if not value:
-        return None
+def load_flag_data_from_excel():
+    """Load flag columns from Excel file - cached for performance"""
     try:
-        return datetime.fromisoformat(str(value)[:10]).date()
-    except Exception:
+        import os
+        excel_path = '/mnt/user-data/uploads/CLC_Allocation_Dashboard_2026_WithNames_1.xlsx'
+        
+        if os.path.exists(excel_path):
+            excel_data = pd.read_excel(excel_path)
+            
+            if 'Student_Name' in excel_data.columns:
+                excel_data['name_match'] = excel_data['Student_Name'].str.strip().str.lower()
+                
+                # === EXTRACT FLAG DATA ===
+                flag_cols = ['name_match']
+                for col in ['Flag_ATSI', 'Flag_EALD', 'Flag_DCP_involvement', 'Flag_9plusRAAP']:
+                    if col in excel_data.columns:
+                        flag_cols.append(col)
+                
+                if len(flag_cols) > 1:
+                    flag_df = excel_data[flag_cols].drop_duplicates('name_match')
+                    return flag_df
+        
+        return None
+    except:
         return None
 
-def is_yes(value):
-    return str(value).strip().lower() == "yes"
+@st.cache_data
+def load_funding_data_from_excel():
+    """Load funding category columns from Excel"""
+    try:
+        import os
+        excel_path = '/mnt/user-data/uploads/CLC_Allocation_Dashboard_2026_WithNames_1.xlsx'
+        
+        if os.path.exists(excel_path):
+            excel_data = pd.read_excel(excel_path)
+            
+            if 'Student_Name' in excel_data.columns:
+                excel_data['name_match'] = excel_data['Student_Name'].str.strip().str.lower()
+                
+                # === EXTRACT FUNDING DATA ===
+                funding_cols = ['name_match']
+                for i in range(1, 10):
+                    col = f'Flag_Category_{i}'
+                    if col in excel_data.columns:
+                        funding_cols.append(col)
+                
+                if len(funding_cols) > 1:
+                    funding_df = excel_data[funding_cols].drop_duplicates('name_match')
+                    return funding_df
+        
+        return None
+    except:
+        return None
 
-def clean_value(v):
-    if v is None:
-        return ""
-    if isinstance(v, float) and pd.isna(v):
-        return ""
-    if isinstance(v, (datetime, date)):
-        return v
-    return v
+@st.cache_data
+def load_disability_data_from_excel():
+    """Load disability flag columns from Excel"""
+    try:
+        import os
+        excel_path = '/mnt/user-data/uploads/CLC_Allocation_Dashboard_2026_WithNames_1.xlsx'
+        
+        if os.path.exists(excel_path):
+            excel_data = pd.read_excel(excel_path)
+            
+            if 'Student_Name' in excel_data.columns:
+                excel_data['name_match'] = excel_data['Student_Name'].str.strip().str.lower()
+                
+                # === EXTRACT DISABILITY DATA ===
+                disability_cols = ['name_match']
+                for col in ['Flag_SWD', 'Flag_ASD', 'Flag_Intellectual', 'Flag_Learning_Difficulty',
+                           'Flag_Sensory_Processing', 'Flag_ADHD', 'Flag_ODD', 'Flag_PDA',
+                           'Medical_Condition_Details']:
+                    if col in excel_data.columns:
+                        disability_cols.append(col)
+                
+                if len(disability_cols) > 1:
+                    disability_df = excel_data[disability_cols].drop_duplicates('name_match')
+                    return disability_df
+        
+        return None
+    except:
+        return None
 
-def build_export_rows(records):
-    """Turn Supabase records into row lists in EXPORT_COLUMNS order."""
-    rows = []
-    for record in records:
-        row = []
-        for col in EXPORT_COLUMNS:
-            db_field = FIELD_MAP.get(col)
-            if db_field is None:
-                row.append("")
+# Pre-load flags at startup
+cached_flag_df = load_flag_data_from_excel()
+
+def update_chart_layout(fig):
+    fig.update_layout(
+        plot_bgcolor='rgba(10,14,39,0.8)',
+        paper_bgcolor='rgba(10,14,39,0.8)',
+        font=dict(color='#ffffff', size=12),
+        hovermode='x unified',
+        margin=dict(l=40, r=40, t=40, b=40),
+        showlegend=True
+    )
+    fig.update_xaxes(showgrid=False, tickfont=dict(color='#ffffff'))
+    fig.update_yaxes(showgrid=True, gridcolor='rgba(100,100,100,0.2)', tickfont=dict(color='#ffffff'))
+    return fig
+
+# Try to load from Excel first (main data source)
+try:
+    excel_file = '/mnt/user-data/uploads/CLC_Allocation_Dashboard_2026_WithNames_1.xlsx'
+    allocation_df = pd.read_excel(excel_file, sheet_name='Allocation')
+except:
+    # Fallback to Supabase if Excel not available
+    allocation_df = load_allocation_data()
+
+# If still no data, try Supabase
+if allocation_df is None or len(allocation_df) == 0:
+    allocation_df = load_allocation_data()
+
+# === AUTO-LOAD EXCEL DATA INTO SESSION STATE ===
+if allocation_df is not None:
+    # Load flag data
+    if 'flag_df' not in st.session_state or st.session_state.flag_df is None:
+        flag_df_loaded = load_flag_data_from_excel()
+        if flag_df_loaded is not None:
+            st.session_state.flag_df = flag_df_loaded
+    
+    # Load funding data
+    if 'funding_df' not in st.session_state or st.session_state.funding_df is None:
+        funding_df_loaded = load_funding_data_from_excel()
+        if funding_df_loaded is not None:
+            st.session_state.funding_df = funding_df_loaded
+    
+    # Load disability data
+    if 'disability_df' not in st.session_state or st.session_state.disability_df is None:
+        disability_df_loaded = load_disability_data_from_excel()
+        if disability_df_loaded is not None:
+            st.session_state.disability_df = disability_df_loaded
+
+# Load flag columns from Excel 
+flag_df = None
+flag_load_error = None
+flag_load_debug = {}
+
+if allocation_df is not None:
+    try:
+        import os
+        excel_path = '/mnt/user-data/uploads/CLC_Allocation_Dashboard_2026_WithNames_1.xlsx'
+        flag_load_debug['step_1_path_check'] = os.path.exists(excel_path)
+        
+        if os.path.exists(excel_path):
+            excel_data = pd.read_excel(excel_path)
+            flag_load_debug['step_2_excel_loaded'] = True
+            flag_load_debug['step_3_excel_shape'] = excel_data.shape
+            flag_load_debug['step_4_has_student_name'] = 'Student_Name' in excel_data.columns
+            
+            if 'Student_Name' in excel_data.columns:
+                excel_data['name_match'] = excel_data['Student_Name'].str.strip().str.lower()
+                flag_load_debug['step_5_name_match_created'] = True
+                
+                flag_cols = ['name_match']
+                for col in ['Flag_ATSI', 'Flag_EALD', 'Flag_DCP_involvement']:
+                    if col in excel_data.columns:
+                        flag_cols.append(col)
+                
+                flag_load_debug['step_6_flag_cols'] = flag_cols
+                flag_load_debug['step_7_len_flag_cols'] = len(flag_cols)
+                
+                if len(flag_cols) > 1:
+                    flag_df = excel_data[flag_cols].drop_duplicates('name_match')
+                    flag_load_debug['step_8_flag_df_shape'] = flag_df.shape
+                    flag_load_debug['step_8_success'] = True
+                else:
+                    flag_load_error = f"No flag columns found. Cols: {flag_cols}"
             else:
-                row.append(clean_value(record.get(db_field, "")))
-        rows.append(row)
-    return rows
-
-def export_new_workbook(records):
-    """Build a brand-new, correctly-ordered Excel of just the selected records."""
-    rows = build_export_rows(records)
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Data_Model"
-    ws.append(EXPORT_COLUMNS)
-    for row in rows:
-        ws.append(row)
-
-    header_fill = PatternFill(start_color="1A7A6E", end_color="1A7A6E", fill_type="solid")
-    header_font = Font(bold=True, color="FFFFFF")
-    for cell in ws[1]:
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = Alignment(horizontal='center', vertical='center')
-
-    for col_cells in ws.columns:
-        max_length = max((len(str(c.value)) for c in col_cells if c.value is not None), default=8)
-        ws.column_dimensions[col_cells[0].column_letter].width = min(max_length + 2, 50)
-
-    output = BytesIO()
-    wb.save(output)
-    output.seek(0)
-    return output
-
-def sync_into_master_workbook(uploaded_bytes, records):
-    """
-    Upsert records directly onto the user's real master Excel file, matching whatever
-    column order that file already uses (read from its own header row).
-    - A student not already in the file (by name) is appended as a new row.
-    - A student already in the file has their EXISTING row updated in place — only
-      cells where the incoming record has a non-blank value are overwritten, so this
-      is how extension/waitlist changes made after the original allocation reach the
-      Excel file without wiping out anything already there for that row.
-    Returns (updated_workbook_bytes, sheet_name, appended_count, appended_names,
-             updated_count, updated_names, unmatched_export_columns, name_column_found).
-    """
-    wb = openpyxl.load_workbook(BytesIO(uploaded_bytes))
-
-    sheet_name = None
-    for candidate in ("Data_Model", "Sheet1"):
-        if candidate in wb.sheetnames:
-            sheet_name = candidate
-            break
-    if sheet_name is None:
-        sheet_name = wb.sheetnames[0]
-    ws = wb[sheet_name]
-
-    existing_headers = [c.value for c in ws[1]]
-    header_index = {str(h).strip(): idx for idx, h in enumerate(existing_headers) if h}
-
-    # Find the Student_Name column (required for matching existing rows)
-    name_col_idx = header_index.get("Student_Name")
-    name_column_found = name_col_idx is not None
-    existing_row_by_name = {}
-    if name_col_idx is not None:
-        for row_num in range(2, ws.max_row + 1):
-            val = ws.cell(row=row_num, column=name_col_idx + 1).value
-            if val:
-                existing_row_by_name[str(val).strip().lower()] = row_num
-
-    unmatched_columns = [col for col in EXPORT_COLUMNS if col not in header_index]
-
-    appended, appended_names = 0, []
-    updated, updated_names = 0, []
-
-    for record in records:
-        student_name = str(record.get("student_name", "")).strip()
-        match_row = existing_row_by_name.get(student_name.lower()) if student_name else None
-
-        if match_row:
-            changed = False
-            for col in EXPORT_COLUMNS:
-                if col not in header_index:
-                    continue
-                db_field = FIELD_MAP.get(col)
-                if not db_field:
-                    continue
-                value = clean_value(record.get(db_field, ""))
-                if value in ("", None):
-                    continue  # never blank out existing data — only fill in real values
-                ws.cell(row=match_row, column=header_index[col] + 1, value=value)
-                changed = True
-            if changed:
-                updated += 1
-                updated_names.append(student_name)
+                flag_load_error = "Student_Name column not found"
         else:
-            new_row = [""] * len(existing_headers)
-            for col in EXPORT_COLUMNS:
-                if col not in header_index:
-                    continue
-                db_field = FIELD_MAP.get(col)
-                value = clean_value(record.get(db_field, "")) if db_field else ""
-                new_row[header_index[col]] = value
+            flag_load_error = f"File not found: {excel_path}"
+            
+    except Exception as e:
+        flag_load_error = f"Exception: {str(e)}"
+        flag_load_debug['exception'] = str(e)
 
-            ws.append(new_row)
-            appended += 1
-            appended_names.append(student_name or "(no name)")
-            if student_name:
-                existing_row_by_name[student_name.lower()] = ws.max_row
-
-    output = BytesIO()
-    wb.save(output)
-    output.seek(0)
-    return (output, sheet_name, appended, appended_names, updated, updated_names,
-            unmatched_columns, name_column_found)
-
-# ══════════════════════════════════════════════════════════════════════════════
-# MAIN APP
-# ══════════════════════════════════════════════════════════════════════════════
-
-st.title("📋 Allocation Meetings")
-
-if 'current_term' not in st.session_state:
-    term, week, year = get_current_term_week()
-    st.session_state.current_term = term
-    st.session_state.current_week = week
-    st.session_state.current_year = year
-
-with st.sidebar:
-    st.header("📅 Meeting Selection")
-    col1, col2 = st.columns(2)
-    term_options = ["Term 1", "Term 2", "Term 3", "Term 4"]
-    year_options = [2024, 2025, 2026]
-    with col1:
-        st.session_state.current_term = st.selectbox(
-            "Term", term_options,
-            index=term_options.index(st.session_state.current_term) if st.session_state.current_term in term_options else 0
+if allocation_df is None or allocation_df.empty:
+    st.error("No data loaded")
+else:
+    # SIDEBAR
+    with st.sidebar:
+        st.markdown("""
+        <div style='text-align: center; margin-bottom: 40px; padding: 20px 0; border-bottom: 2px solid rgba(0,229,255,0.5);'>
+            <div style='font-size: 32px; margin-bottom: 8px;'>📊</div>
+            <h2 style='color: #00e5ff; margin: 0; font-size: 20px; font-weight: bold;'>CLC-LBU</h2>
+            <p style='color: #00e5ff; margin: 5px 0 0 0; font-size: 11px; font-weight: bold; letter-spacing: 1px;'>ALLOCATION ANALYTICS</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("**Navigate**", help="Select an analysis section")
+        section = st.radio(
+            "Select Section",
+            ["Overview", "Trends", "Complexity", "Category of Support", "Cohort Analysis", "Equity", "Disability & Support Needs", "ASD Deep Dive", "Critical Incidents", "Assessment", "Waitlist", "Diagnostics"],
+            label_visibility="collapsed"
         )
-    with col2:
-        st.session_state.current_year = st.selectbox(
-            "Year", year_options,
-            index=year_options.index(st.session_state.current_year) if st.session_state.current_year in year_options else 0
-        )
-
-    meeting_weeks = get_meeting_weeks(st.session_state.current_term, st.session_state.current_year)
-    selected_week = st.selectbox("Week", meeting_weeks, index=st.session_state.current_week - 1)
-    week_number = int(selected_week.split()[1])
-
-    meeting_date = get_wednesday_date(week_number, st.session_state.current_term, st.session_state.current_year)
-    st.info(f"**Meeting Date:** {meeting_date.strftime('%A, %B %d, %Y')}")
-    st.caption(f"📚 {len(ALL_SCHOOLS)} schools loaded across {len(PARTNERSHIP_AREAS)} partnership areas")
-
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
-    ["📝 New Allocations", "🔄 Extensions", "⏸️ Not Placed", "📊 View & Export", "⏳ Waitlist", "⚙️ Admin"]
-)
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 1 — NEW ALLOCATIONS
-# ══════════════════════════════════════════════════════════════════════════════
-with tab1:
-    st.header("New Student Allocations")
-    stage_choice = st.radio("Stage:", ["➕ Create Draft (Stage 1)", "📝 Complete Draft (Stage 2)"], horizontal=True)
-    st.markdown("---")
-
-    if stage_choice == "📝 Complete Draft (Stage 2)":
-        st.subheader("📂 Select Draft to Complete")
-
-        show_all_weeks = st.checkbox(
-            "🔍 Show drafts from all weeks",
-            help="Use this if a draft you created isn't showing up under the current week — earlier "
-                 "versions of this tool sometimes defaulted to the wrong week, so drafts may be filed "
-                 "under a different Term/Year/Week than you expect."
-        )
-
-        try:
-            query = supabase.table("allocation_students").select("*").is_("outcome", "null")
-            if not show_all_weeks:
-                query = query.eq("meeting_week", selected_week)
-            drafts = query.execute()
-
-            if drafts.data:
-                label_for = lambda d: f"{d['student_name']} ({d.get('meeting_week', 'no week set')})" if show_all_weeks else d['student_name']
-                draft_options = {label_for(d): d for d in drafts.data}
-                selected = st.selectbox("Select draft:", list(draft_options.keys()))
-                draft = draft_options[selected]
-                st.success(f"✅ Loaded: **{draft['student_name']}**")
-
-                if draft.get('meeting_week') != selected_week:
-                    st.info(
-                        f"This draft was filed under **{draft.get('meeting_week', 'an earlier week')}**, "
-                        f"not the currently selected **{selected_week}**."
-                    )
-                    if st.button("📌 Reassign this draft to the currently selected week", key=f"reassign_{draft['id']}"):
-                        supabase.table("allocation_students").update({
-                            "meeting_week": selected_week,
-                            "meeting_date": meeting_date.isoformat(),
-                            "term": st.session_state.current_term,
-                            "year": st.session_state.current_year,
-                        }).eq("id", draft["id"]).execute()
-                        st.success("Reassigned — reload this draft to continue.")
-                        st.rerun()
-
-                dcol1, dcol2 = st.columns([3, 1])
-                with dcol2:
-                    if st.button("🗑️ Delete This Draft", key=f"del_draft_{draft['id']}", use_container_width=True):
-                        st.session_state[f"confirm_delete_{draft['id']}"] = True
-
-                if st.session_state.get(f"confirm_delete_{draft['id']}"):
-                    st.warning(f"⚠️ Delete **{draft['student_name']}**'s draft permanently? This can't be undone.")
-                    ccol1, ccol2 = st.columns(2)
-                    with ccol1:
-                        if st.button("✅ Yes, delete it", key=f"confirm_del_{draft['id']}", type="primary", use_container_width=True):
-                            supabase.table("allocation_students").delete().eq("id", draft["id"]).execute()
-                            st.session_state.pop(f"confirm_delete_{draft['id']}", None)
-                            st.success(f"Deleted {draft['student_name']}")
-                            st.rerun()
-                    with ccol2:
-                        if st.button("Cancel", key=f"cancel_del_{draft['id']}", use_container_width=True):
-                            st.session_state.pop(f"confirm_delete_{draft['id']}", None)
-                            st.rerun()
-
-                with st.form("complete_allocation"):
-                    st.markdown("#### 📋 Stage 1 Details — review and edit if needed")
-
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        student_name = st.text_input("Name *", value=draft.get('student_name') or "")
-                    with col2:
-                        dob = st.date_input(
-                            "DOB", value=parse_stored_date(draft.get('date_of_birth')),
-                            min_value=date(2000, 1, 1), max_value=date.today()
-                        )
-                    with col3:
-                        gender = st.selectbox(
-                            "Gender", [""] + GENDER_OPTIONS,
-                            index=([""] + GENDER_OPTIONS).index(draft.get('gender')) if draft.get('gender') in GENDER_OPTIONS else 0
-                        )
-
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        school = st.selectbox(
-                            "School *", [""] + ALL_SCHOOLS,
-                            index=([""] + ALL_SCHOOLS).index(draft.get('school')) if draft.get('school') in ALL_SCHOOLS else 0
-                        )
-                    with col2:
-                        edit_auto_partnership = get_partnership_from_school(school) if school else ""
-                        st.text_input("Partnership", value=edit_auto_partnership, disabled=True)
-                    with col3:
-                        year_level = st.selectbox(
-                            "Year Level *", [""] + YEAR_LEVELS,
-                            index=([""] + YEAR_LEVELS).index(draft.get('year_level')) if draft.get('year_level') in YEAR_LEVELS else 0
-                        )
-
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        referral_date = st.date_input("Referral Date", value=parse_stored_date(draft.get('referral_date')))
-                    with col2:
-                        previously_referred = st.selectbox(
-                            "Previously Referred?", YES_NO,
-                            index=YES_NO.index(draft.get('previously_referred')) if draft.get('previously_referred') in YES_NO else 0
-                        )
-                    previous_referrals = st.text_input("Number of Previous Referrals", value=draft.get('previous_referrals') or "")
-
-                    edit_needs_priority = st.checkbox(
-                        "Needs prioritising against other waiting referrals",
-                        value=bool(draft.get('priority_level'))
-                    )
-                    if edit_needs_priority:
-                        priority_level = st.selectbox(
-                            "Priority Level *", [""] + PRIORITY_OPTIONS,
-                            index=([""] + PRIORITY_OPTIONS).index(draft.get('priority_level')) if draft.get('priority_level') in PRIORITY_OPTIONS else 0
-                        )
-                    else:
-                        priority_level = ""
-
-                    with st.expander("🏠 Placement History"):
-                        pcol1, pcol2, pcol3 = st.columns(3)
-                        with pcol1:
-                            previous_clc_placement = st.selectbox(
-                                "Previous CLC Placement?", YES_NO,
-                                index=YES_NO.index(draft.get('previous_clc_placement')) if draft.get('previous_clc_placement') in YES_NO else 0
-                            )
-                        with pcol2:
-                            previous_other_lc = st.selectbox(
-                                "Previous Other LC?", YES_NO,
-                                index=YES_NO.index(draft.get('previous_other_lc')) if draft.get('previous_other_lc') in YES_NO else 0
-                            )
-                        with pcol3:
-                            other_lc_name = st.text_input("Other LC Name", value=draft.get('other_lc_name') or "")
-                        total_previous_placements = st.text_input(
-                            "Total Previous Placements", value=draft.get('total_previous_placements') or ""
-                        )
-                        placement_history_notes = st.text_area(
-                            "Placement History Notes", value=draft.get('placement_history_notes') or ""
-                        )
-
-                    with st.expander("🏷️ Support Flags & Funding"):
-                        edit_flag_values = {}
-                        cols = st.columns(3)
-                        for i, (label, excel_col, db_col) in enumerate(BOOL_FLAGS):
-                            with cols[i % 3]:
-                                edit_flag_values[db_col] = st.checkbox(
-                                    label, value=is_yes(draft.get(db_col)), key=f"edit_{db_col}"
-                                )
-
-                        st.markdown("**Funding Categories**")
-                        st.caption("Ticking any category here automatically sets IESP Funding to Yes.")
-                        fcols = st.columns(3)
-                        edit_funding_values = {}
-                        for i, (label, excel_col, db_col) in enumerate(FUNDING_CATEGORIES):
-                            with fcols[i % 3]:
-                                edit_funding_values[db_col] = st.checkbox(
-                                    label, value=is_yes(draft.get(db_col)), key=f"edit_{db_col}"
-                                )
-
-                        acol1, acol2 = st.columns(2)
-                        with acol1:
-                            attendance_options = ["", "Full-time", "Part-time"]
-                            current_attendance = (
-                                "Full-time" if is_yes(draft.get('flag_attendance_fulltime'))
-                                else "Part-time" if is_yes(draft.get('flag_attendance_parttime')) else ""
-                            )
-                            attendance = st.selectbox("Attendance", attendance_options, index=attendance_options.index(current_attendance))
-                        with acol2:
-                            iesp_options = ["", "No", "Currently Being Reviewed"]
-                            current_iesp = draft.get('flag_iesp_funding_no') or ""
-                            iesp_status_if_no_category = st.selectbox(
-                                "IESP Funding (if no category ticked above)", iesp_options,
-                                index=iesp_options.index(current_iesp) if current_iesp in iesp_options else 0,
-                                help="Ignored if any funding category above is ticked — that automatically means Yes."
-                            )
-
-                    with st.expander("💊 Medical & Medication"):
-                        mcol1, mcol2 = st.columns(2)
-                        with mcol1:
-                            has_medical = st.checkbox("Medical Condition", value=is_yes(draft.get('flag_medical_condition')))
-                            stored_medical = draft.get('medical_condition_details') or ""
-                            stored_medical_type = stored_medical.split(":")[0] if ":" in stored_medical else stored_medical
-                            medical_type = st.selectbox(
-                                "Condition Type *", [""] + MEDICAL_CONDITION_TYPES,
-                                index=([""] + MEDICAL_CONDITION_TYPES).index(stored_medical_type) if stored_medical_type in MEDICAL_CONDITION_TYPES else 0,
-                                disabled=not has_medical
-                            )
-                            medical_details = st.text_area(
-                                "Medical Condition Details",
-                                value=stored_medical.split(":", 1)[1].strip() if ":" in stored_medical else "",
-                                disabled=not has_medical
-                            )
-                        with mcol2:
-                            has_medication = st.checkbox("Medication", value=is_yes(draft.get('flag_medication')))
-                            medication_details = st.text_area(
-                                "Medication Details", value=draft.get('medication_details') or "", disabled=not has_medication
-                            )
-
-                    bse = st.text_input("BSE", value=draft.get('bse') or "")
-                    queries = st.text_area("Queries/Notes for Meeting", value=draft.get('queries') or "")
-
-                    st.markdown("---")
-                    st.markdown("#### ✅ Stage 2 — Allocation Outcome")
-
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        program = st.selectbox("Program *", PROGRAMS)
-                    with col2:
-                        outcome = st.selectbox("Outcome *", OUTCOMES)
-                    with col3:
-                        case_worker = st.selectbox("Focus Teacher", [""] + STAFF_NAMES)
-
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        start_date = st.date_input("Allocation Date", value=None)
-                    with col2:
-                        end_date = st.date_input("End Date", value=None)
-
-                    bespoke = st.checkbox("Bespoke Placement")
-                    information = st.text_area("Communication to School")
-
-                    st.markdown("**If not allocated**")
-                    wcol1, wcol2 = st.columns(2)
-                    with wcol1:
-                        waitlist_status = st.selectbox("Waitlist Status", WAITLIST_STATUS_OPTIONS)
-                    with wcol2:
-                        waitlist_date = st.date_input("Waitlist Date", value=None)
-                    exit_reason = st.text_input("Exit Reason (if applicable)")
-                    transition_plan = st.text_area("Transition Plan (if applicable)")
-                    notes = st.text_area("Additional Notes")
-
-                    if st.form_submit_button("✅ Save Allocation", type="primary", use_container_width=True):
-                        if not student_name or not school or not year_level:
-                            st.error("Please fill required fields (Name, School, Year Level)")
-                        elif has_medical and not medical_type:
-                            st.error("Please select a Medical Condition Type — required when Medical Condition is checked")
-                        elif edit_needs_priority and not priority_level:
-                            st.error("Please select a Priority Level — required when prioritisation is needed")
-                        else:
-                            try:
-                                edit_any_category_selected = any(edit_funding_values.values())
-                                if edit_any_category_selected:
-                                    edit_iesp_yes, edit_iesp_no = "Yes", ""
-                                else:
-                                    edit_iesp_yes = ""
-                                    edit_iesp_no = iesp_status_if_no_category
-
-                                update_payload = {
-                                    "student_name": student_name,
-                                    "date_of_birth": dob.isoformat() if dob else None,
-                                    "gender": gender,
-                                    "school": school,
-                                    "year_level": year_level,
-                                    "partnership_area": edit_auto_partnership,
-                                    "referral_date": referral_date.isoformat() if referral_date else None,
-                                    "previously_referred": previously_referred,
-                                    "previous_referrals": num_or_none(previous_referrals),
-                                    "priority_level": priority_level if priority_level else None,
-                                    "previous_clc_placement": previous_clc_placement,
-                                    "previous_other_lc": previous_other_lc,
-                                    "other_lc_name": other_lc_name,
-                                    "total_previous_placements": num_or_none(total_previous_placements),
-                                    "placement_history_notes": placement_history_notes,
-                                    "flag_attendance_fulltime": yn(attendance == "Full-time"),
-                                    "flag_attendance_parttime": yn(attendance == "Part-time"),
-                                    "flag_iesp_funding_yes": edit_iesp_yes,
-                                    "flag_iesp_funding_no": edit_iesp_no,
-                                    "flag_medication": yn(has_medication),
-                                    "medication_details": medication_details if has_medication else None,
-                                    "flag_medical_condition": yn(has_medical),
-                                    "medical_condition_details": (
-                                        f"{medical_type}: {medical_details}" if has_medical and medical_details
-                                        else medical_type if has_medical else None
-                                    ),
-                                    "queries": queries,
-                                    "bse": bse or None,
-                                    "program": program,
-                                    "outcome": outcome,
-                                    "case_worker": case_worker or None,
-                                    "actioned_by": case_worker or None,
-                                    "start_after": start_date.isoformat() if start_date else None,
-                                    "finishing_date": end_date.isoformat() if end_date else None,
-                                    "bespoke_placement": yn(bespoke),
-                                    "information": information or None,
-                                    "waitlist_status": waitlist_status if outcome == "Not Allocated" else "Not Applicable",
-                                    "waitlist_date": waitlist_date.isoformat() if waitlist_date else None,
-                                    "exit_reason": exit_reason or None,
-                                    "transition_plan": transition_plan or None,
-                                    "notes": notes or None,
-                                }
-                                for db_col, val in edit_flag_values.items():
-                                    update_payload[db_col] = yn(val)
-                                for db_col, val in edit_funding_values.items():
-                                    update_payload[db_col] = yn(val)
-
-                                supabase.table("allocation_students").update(update_payload).eq("id", draft['id']).execute()
-
-                                st.success(f"✅ Allocation saved for {student_name}!")
-                                st.balloons()
-                            except Exception as e:
-                                st.error(f"Error: {e}")
-            else:
-                st.info("✅ No drafts to complete. Create one in Stage 1.")
-        except Exception as e:
-            st.error(f"Error: {e}")
-
-    else:
-        st.subheader("➕ Create New Draft")
-
-        with st.form("new_draft", clear_on_submit=True):
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                student_name = st.text_input("Name *")
-            with col2:
-                dob = st.date_input("DOB", value=None, min_value=date(2000, 1, 1), max_value=date.today())
-            with col3:
-                gender = st.selectbox("Gender", [""] + GENDER_OPTIONS)
-
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                school = st.selectbox("School *", [""] + ALL_SCHOOLS)
-            with col2:
-                auto_partnership = get_partnership_from_school(school) if school else ""
-                partnership = st.text_input("Partnership", value=auto_partnership, disabled=True)
-            with col3:
-                year_level = st.selectbox("Year Level *", [""] + YEAR_LEVELS)
-
+        
+        st.markdown("---")
+        
+        # === REPORT BUILDER ===
+        with st.expander("📋 Build Custom Report", expanded=False):
+            st.markdown("**Select sections to include in your report:**")
+            
+            # Checkboxes for each section
             col1, col2 = st.columns(2)
             with col1:
-                referral_date = st.date_input("Referral Date", value=None)
+                rep_overview = st.checkbox("Overview - Referral & Allocation", value=True)
+                rep_trends = st.checkbox("Trends - Historical Data", value=False)
+                rep_complexity = st.checkbox("Program Allocation", value=False)
+                rep_equity = st.checkbox("Equity - ATSI/EALD/DCP", value=False)
+            
             with col2:
-                previously_referred = st.selectbox("Previously Referred?", YES_NO)
-
-            previous_referrals = st.text_input("Number of Previous Referrals")
-
-            needs_priority = st.checkbox(
-                "Needs prioritising against other waiting referrals",
-                help="Only tick this if there are multiple referrals waiting and this student needs "
-                     "to be ordered against them for placement. Leave unticked if the student is "
-                     "going straight in — Priority Level isn't needed in that case."
-            )
-            if needs_priority:
-                priority_level = st.selectbox("Priority Level *", [""] + PRIORITY_OPTIONS)
-            else:
-                priority_level = ""
-                st.caption("Straight in — no priority ordering needed.")
-
-            with st.expander("🏠 Placement History"):
-                pcol1, pcol2, pcol3 = st.columns(3)
-                with pcol1:
-                    previous_clc_placement = st.selectbox("Previous CLC Placement?", YES_NO)
-                with pcol2:
-                    previous_other_lc = st.selectbox("Previous Other LC?", YES_NO)
-                with pcol3:
-                    other_lc_name = st.text_input("Other LC Name")
-                total_previous_placements = st.text_input("Total Previous Placements")
-                placement_history_notes = st.text_area("Placement History Notes")
-
-            with st.expander("🏷️ Support Flags & Funding"):
-                st.caption("These feed the Dashboard's disability & funding analytics directly.")
-                flag_values = {}
-                cols = st.columns(3)
-                for i, (label, excel_col, db_col) in enumerate(BOOL_FLAGS):
-                    with cols[i % 3]:
-                        flag_values[db_col] = st.checkbox(label, key=f"draft_{db_col}")
-
-                st.markdown("**Funding Categories**")
-                st.caption("Ticking any category here automatically sets IESP Funding to Yes.")
-                fcols = st.columns(3)
-                funding_values = {}
-                for i, (label, excel_col, db_col) in enumerate(FUNDING_CATEGORIES):
-                    with fcols[i % 3]:
-                        funding_values[db_col] = st.checkbox(label, key=f"draft_{db_col}")
-
-                acol1, acol2 = st.columns(2)
-                with acol1:
-                    attendance = st.selectbox("Attendance", ["", "Full-time", "Part-time"])
-                with acol2:
-                    iesp_status_if_no_category = st.selectbox(
-                        "IESP Funding (if no category ticked above)",
-                        ["", "No", "Currently Being Reviewed"],
-                        help="Ignored if any funding category above is ticked — that automatically means Yes."
-                    )
-
-            with st.expander("💊 Medical & Medication"):
-                mcol1, mcol2 = st.columns(2)
-                with mcol1:
-                    has_medical = st.checkbox("Medical Condition")
-                    medical_type = st.selectbox(
-                        "Condition Type *", [""] + MEDICAL_CONDITION_TYPES,
-                        disabled=not has_medical
-                    )
-                    medical_details = st.text_area("Medical Condition Details", disabled=not has_medical)
-                with mcol2:
-                    has_medication = st.checkbox("Medication")
-                    medication_details = st.text_area("Medication Details", disabled=not has_medication)
-
-            bse = st.text_input("BSE")
-            queries = st.text_area("Queries/Notes for Meeting")
-
-            submitted = st.form_submit_button("💾 Save Draft", type="primary", use_container_width=True)
-            if submitted:
-                if not student_name or not school or not year_level:
-                    st.error("Please fill required fields (Name, School, Year Level)")
-                elif has_medical and not medical_type:
-                    st.error("Please select a Medical Condition Type — required when Medical Condition is checked")
-                elif needs_priority and not priority_level:
-                    st.error("Please select a Priority Level — required when prioritisation is needed")
+                rep_cat_support = st.checkbox("Category of Support - Funding", value=False)
+                rep_disability = st.checkbox("Disability & Support Needs", value=False)
+                rep_asd = st.checkbox("ASD Deep Dive Analysis", value=False)
+                rep_cohort = st.checkbox("Cohort Analysis", value=False)
+            
+            selected_report_sections = []
+            if rep_overview: selected_report_sections.append("Overview")
+            if rep_trends: selected_report_sections.append("Trends")
+            if rep_complexity: selected_report_sections.append("Program Allocation")
+            if rep_cat_support: selected_report_sections.append("Category of Support")
+            if rep_cohort: selected_report_sections.append("Cohort Analysis")
+            if rep_equity: selected_report_sections.append("Equity")
+            if rep_disability: selected_report_sections.append("Disability & Support Needs")
+            if rep_asd: selected_report_sections.append("ASD Deep Dive")
+            
+            st.markdown("---")
+            
+            # Export format selection
+            export_format = st.radio("Export Format", ["Word (.docx)", "PDF (.pdf)"], horizontal=True, key="export_fmt")
+            
+            if st.button("🔄 Generate Multi-Section Report", key="gen_report"):
+                if len(selected_report_sections) == 0:
+                    st.error("Please select at least one section")
                 else:
-                    try:
-                        any_category_selected = any(funding_values.values())
-                        if any_category_selected:
-                            iesp_yes, iesp_no = "Yes", ""
-                        else:
-                            iesp_yes = ""
-                            iesp_no = iesp_status_if_no_category
-
-                        record = {
-                            "meeting_week": selected_week,
-                            "meeting_date": meeting_date.isoformat(),
-                            "term": st.session_state.current_term,
-                            "year": st.session_state.current_year,
-                            "student_name": student_name,
-                            "school": school,
-                            "date_of_birth": dob.isoformat() if dob else None,
-                            "gender": gender,
-                            "year_level": year_level,
-                            "partnership_area": auto_partnership,
-                            "priority_level": priority_level if priority_level else None,
-                            "referral_date": referral_date.isoformat() if referral_date else None,
-                            "previously_referred": previously_referred,
-                            "previous_referrals": num_or_none(previous_referrals),
-                            "previous_clc_placement": previous_clc_placement,
-                            "previous_other_lc": previous_other_lc,
-                            "other_lc_name": other_lc_name,
-                            "total_previous_placements": num_or_none(total_previous_placements),
-                            "placement_history_notes": placement_history_notes,
-                            "flag_attendance_fulltime": yn(attendance == "Full-time"),
-                            "flag_attendance_parttime": yn(attendance == "Part-time"),
-                            "flag_iesp_funding_yes": iesp_yes,
-                            "flag_iesp_funding_no": iesp_no,
-                            "flag_medication": yn(has_medication),
-                            "medication_details": medication_details if has_medication else None,
-                            "flag_medical_condition": yn(has_medical),
-                            "medical_condition_details": (
-                                f"{medical_type}: {medical_details}" if has_medical and medical_details
-                                else medical_type if has_medical else None
-                            ),
-                            "queries": queries,
-                            "bse": bse or None,
-                            "outcome": None,
-                        }
-                        for db_col, val in flag_values.items():
-                            record[db_col] = yn(val)
-                        for db_col, val in funding_values.items():
-                            record[db_col] = yn(val)
-
-                        supabase.table("allocation_students").insert(record).execute()
-                        st.success(f"✅ Draft saved for {student_name}!")
-                        st.balloons()
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 2 — EXTENSIONS
-# ══════════════════════════════════════════════════════════════════════════════
-with tab2:
-    st.header("🔄 Extensions")
-    st.info("Record an extension decision for a currently allocated student.")
-
-    try:
-        all_students = supabase.table("allocation_students").select("*").execute()
-        allocated_data = [
-            r for r in all_students.data
-            if str(r.get("outcome", "")).strip().lower() == "allocated"
-        ]
-        class _Wrap:
-            pass
-        allocated = _Wrap()
-        allocated.data = allocated_data
-
-        with st.expander("🔍 Debug: what's actually in the database"):
-            st.write(f"Total rows in `allocation_students`: {len(all_students.data)}")
-            outcome_counts = {}
-            for r in all_students.data:
-                key = repr(r.get("outcome"))
-                outcome_counts[key] = outcome_counts.get(key, 0) + 1
-            st.write("Breakdown by `outcome` value (exact, including hidden spaces/case):")
-            st.write(outcome_counts)
-
-        if allocated.data:
-            sorted_students = sorted(allocated.data, key=lambda r: (r.get('student_name') or '').lower())
-            options = {
-                f"{r['student_name']} — {r.get('school', 'no school')} (Year {r.get('year_level', '?')})": r
-                for r in sorted_students
-            }
-            chosen = st.selectbox(
-                f"Select allocated student ({len(options)} total — type to search)",
-                list(options.keys())
-            )
-            record = options[chosen]
-
-            with st.form("extension_form"):
-                col1, col2 = st.columns(2)
-                with col1:
-                    ext_outcome = st.selectbox("Extension Outcome *", EXTENSION_OUTCOMES)
-                with col2:
-                    ext_weeks = st.text_input("Extension Weeks")
-
-                col1, col2 = st.columns(2)
-                with col1:
-                    ext_date = st.date_input("Extension Decision Date", value=datetime.now().date())
-                with col2:
-                    proposed_finish = st.date_input("Proposed Extension Finish Date", value=None)
-
-                ext_comm = st.text_area("Communication to School")
-                ext_owner = st.selectbox("Focus Teacher", [""] + STAFF_NAMES)
-
-                if st.form_submit_button("✅ Save Extension", type="primary", use_container_width=True):
-                    try:
-                        supabase.table("allocation_students").update({
-                            "extension": yn(ext_outcome == "Approved"),
-                            "extension_status": ext_outcome,
-                            "extension_date": ext_date.isoformat() if ext_date else None,
-                            "extension_weeks": num_or_none(ext_weeks),
-                            "proposed_extension_finish_date": proposed_finish.isoformat() if proposed_finish else None,
-                            "information": ext_comm or record.get("information"),
-                            "actioned_by": ext_owner or record.get("actioned_by"),
-                        }).eq("id", record["id"]).execute()
-                        st.success(f"✅ Extension recorded for {record['student_name']}!")
-                        st.balloons()
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-        else:
-            st.info("No allocated students found yet.")
-    except Exception as e:
-        st.error(f"Error: {e}")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 3 — NOT PLACED
-# ══════════════════════════════════════════════════════════════════════════════
-with tab3:
-    st.header("⏸️ Not Placed Students")
-    try:
-        not_allocated = supabase.table("allocation_students").select("*") \
-            .eq("meeting_week", selected_week).eq("outcome", "Not Allocated").execute()
-
-        if not_allocated.data:
-            st.info(f"📊 {len(not_allocated.data)} student(s) not allocated this week")
-            df = pd.DataFrame(not_allocated.data)
-            show_cols = [c for c in ["student_name", "year_level", "school", "waitlist_status", "exit_reason"] if c in df.columns]
-            st.dataframe(df[show_cols], use_container_width=True, hide_index=True)
-        else:
-            st.success("✅ No students not allocated this week")
-    except Exception as e:
-        st.error(f"Error: {e}")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 4 — VIEW & EXPORT
-# ══════════════════════════════════════════════════════════════════════════════
-with tab4:
-    st.header("📊 View & Export Completed Allocations")
-
-    scope = st.radio(
-        "Show:",
-        ["This meeting week only", "All allocated & completed records", "Only students with an extension decision"],
-        horizontal=True, index=1,
-        help="Extensions and waitlist changes on students allocated in earlier weeks won't show under "
-             "'this week only' — switch to 'All records' to include them for export/sync. Use the "
-             "extension option to export just the students you've approved or declined an extension for."
-    )
-
-    try:
-        query = supabase.table("allocation_students").select("*").not_.is_("outcome", "null")
-        if scope == "This meeting week only":
-            query = query.eq("meeting_week", selected_week)
-        elif scope == "Only students with an extension decision":
-            query = query.not_.is_("extension_status", "null")
-        full_data = query.execute()
-
-        if full_data.data:
-            allocated = [r for r in full_data.data if r.get('outcome') == 'Allocated']
-            not_allocated = [r for r in full_data.data if r.get('outcome') == 'Not Allocated']
-
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Total Records", len(full_data.data))
-            with col2:
-                st.metric("Allocated", len(allocated))
-            with col3:
-                st.metric("Not Allocated", len(not_allocated))
-
-            st.markdown("---")
-            st.subheader("📋 Pre-Export Review & Validation")
-
-            export_records = allocated + not_allocated
-            validation_issues = []
-            for record in export_records:
-                issues = []
-                if not record.get('student_name'):
-                    issues.append("Missing student name")
-                if not record.get('school'):
-                    issues.append("Missing school")
-                if record.get('outcome') == 'Allocated' and not record.get('program'):
-                    issues.append("Missing program")
-                if issues:
-                    validation_issues.append({'student': record.get('student_name', 'Unknown'), 'issues': issues})
-
-            if validation_issues:
-                st.warning(f"⚠️ **{len(validation_issues)} record(s) have issues:**")
-                for issue in validation_issues:
-                    st.write(f"  • **{issue['student']}**: {', '.join(issue['issues'])}")
-            else:
-                st.success(f"✅ **All {len(export_records)} record(s) pass validation!**")
-
-            st.markdown("---")
-            st.subheader("👁️ Export Preview")
-            with st.expander("Click to review records being exported", expanded=True):
-                preview_data = [{
-                    "Student": r.get('student_name', ''), "Year": r.get('year_level', ''),
-                    "Program": r.get('program', ''), "School": r.get('school', ''),
-                    "Outcome": r.get('outcome', ''), "Focus Teacher": r.get('actioned_by', ''),
-                    "Extension": r.get('extension_status', ''), "Ext. Weeks": r.get('extension_weeks', ''),
-                    "Meeting Week": r.get('meeting_week', ''), "BSE": r.get('bse', ''),
-                } for r in export_records]
-                st.dataframe(pd.DataFrame(preview_data), use_container_width=True, hide_index=True)
-                st.caption(f"📊 {len(export_records)} record(s) ready for export")
-
-            with st.expander("🔎 View all captured data (every field, per student)"):
-                full_rows = build_export_rows(export_records)
-                st.dataframe(
-                    pd.DataFrame(full_rows, columns=EXPORT_COLUMNS),
-                    use_container_width=True, hide_index=True
-                )
-
-            st.markdown("---")
-            with st.expander("🗑️ Delete a Record"):
-                del_options = {r['student_name']: r for r in export_records}
-                del_selected = st.selectbox("Select student to delete:", list(del_options.keys()), key="del_record_select")
-                del_record = del_options[del_selected]
-
-                if st.button("🗑️ Delete This Record", key=f"del_rec_{del_record['id']}"):
-                    st.session_state[f"confirm_del_rec_{del_record['id']}"] = True
-
-                if st.session_state.get(f"confirm_del_rec_{del_record['id']}"):
-                    st.warning(
-                        f"⚠️ Permanently delete **{del_record['student_name']}**'s record "
-                        f"(outcome: {del_record.get('outcome', '')})? This can't be undone and won't "
-                        "affect anything already in your Excel file."
-                    )
-                    dccol1, dccol2 = st.columns(2)
-                    with dccol1:
-                        if st.button("✅ Yes, delete it", key=f"confirm_del_rec_{del_record['id']}", type="primary", use_container_width=True):
-                            supabase.table("allocation_students").delete().eq("id", del_record["id"]).execute()
-                            st.session_state.pop(f"confirm_del_rec_{del_record['id']}", None)
-                            st.success(f"Deleted {del_record['student_name']}")
-                            st.rerun()
-                    with dccol2:
-                        if st.button("Cancel", key=f"cancel_del_rec_{del_record['id']}", use_container_width=True):
-                            st.session_state.pop(f"confirm_del_rec_{del_record['id']}", None)
-                            st.rerun()
-
-            st.markdown("---")
-            st.subheader("📥 Download Records for Your Master Excel File")
-            st.caption(
-                "Download the records below as a ready-formatted Excel file, matching your master "
-                "file's column layout exactly. Open it alongside your master file and paste the rows "
-                "in — this is the most reliable option right now."
-            )
-            if st.button("📥 Download Records", type="primary", use_container_width=True):
-                try:
-                    excel_bytes = export_new_workbook(export_records)
-                    st.download_button(
-                        label=f"💾 Save Excel ({len(export_records)} rows)",
-                        data=excel_bytes.getvalue(),
-                        file_name=f"CLC_Allocations_{selected_week.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
-                    )
-                except Exception as e:
-                    st.error(f"Export error: {e}")
-
-            st.markdown("---")
-            with st.expander("🧪 Experimental: sync directly into your master file (still being debugged)"):
-                st.caption(
-                    "Upload your live CLC_Allocation_Dashboard file below — the tool matches its "
-                    "existing columns, updates students already in it (e.g. with new extension info), "
-                    "appends new students, and gives you back the updated file. This hasn't been "
-                    "reliably showing changes in Excel yet — use the download option above instead "
-                    "for now."
-                )
-
-                master_file = st.file_uploader(
-                    "Upload master Excel file (e.g. CLC_Allocation_Dashboard_2026_WithNames.xlsx)",
-                    type=['xlsx'], key="master_upload"
-                )
-
-                if master_file is not None and not validation_issues:
-                    if st.button("🔄 Sync & Download Updated Master File", use_container_width=True):
+                    with st.spinner(f"Generating {export_format} report..."):
                         try:
-                            (updated_bytes, sheet_used, appended, appended_names, updated,
-                             updated_names, unmatched, name_column_found) = sync_into_master_workbook(
-                                master_file.getvalue(), export_records
-                            )
-
-                            if not name_column_found:
-                                st.error(
-                                    "⚠️ No `Student_Name` column was found in your uploaded file's "
-                                    f"**{sheet_used}** sheet — matching against existing students was skipped, "
-                                    "and every record was appended as new. This may mean the wrong sheet or file "
-                                    "was used. Double-check this is the right file."
+                            # Import all required libraries first
+                            from docx import Document
+                            from docx.shared import Pt, RGBColor
+                            from docx.enum.text import WD_ALIGN_PARAGRAPH
+                            from io import BytesIO
+                            import plotly.io as pio
+                            
+                            # Define display variables and data first
+                            year_display = st.session_state.get('auto_year', 'All')
+                            term_display = st.session_state.get('auto_term', 'All')
+                            program_display = st.session_state.get('selected_program', 'All')
+                            view_display = 'Allocated Only'
+                            
+                            # Get current filtered data - use allocation_df if filtered is empty
+                            if 'filtered' in dir() and len(filtered) > 0:
+                                report_data = filtered.copy()
+                                st.write(f"DEBUG: Using filtered data ({len(filtered)} records)")
+                            else:
+                                report_data = allocation_df.copy()
+                                st.write(f"DEBUG: Using allocation_df ({len(allocation_df)} records) - filtered was empty")
+                            
+                            if export_format == "PDF (.pdf)":
+                                # PDF generation with charts
+                                from reportlab.lib.pagesizes import letter, A4
+                                from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                                from reportlab.lib.units import inch
+                                from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Table, TableStyle, Image
+                                from reportlab.lib import colors
+                                from datetime import datetime
+                                
+                                # Create PDF buffer
+                                buffer = BytesIO()
+                                
+                                # Create PDF
+                                pdf = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.5*inch, bottomMargin=0.5*inch)
+                                story = []
+                                styles = getSampleStyleSheet()
+                                
+                                # Title
+                                title_style = ParagraphStyle(
+                                    'CustomTitle',
+                                    parent=styles['Heading1'],
+                                    fontSize=24,
+                                    textColor=colors.HexColor('009688'),
+                                    spaceAfter=10,
+                                    alignment=1
                                 )
-
-                            if appended == 0 and updated == 0:
-                                st.error("❌ Nothing changed — no records had new data to write.")
-                            if appended:
-                                st.success(f"✅ Added {appended} new student row(s) to **{sheet_used}**:")
-                                st.write(", ".join(appended_names))
-                            if updated:
-                                st.success(
-                                    f"✅ Updated {updated} existing student row(s) in **{sheet_used}** "
-                                    f"(e.g. new extension or waitlist info):"
+                                story.append(Paragraph("CLC-LBU Allocation Dashboard Report", title_style))
+                                story.append(Spacer(1, 0.2*inch))
+                                
+                                # Subtitle
+                                subtitle_style = ParagraphStyle(
+                                    'CustomSubtitle',
+                                    parent=styles['Heading2'],
+                                    fontSize=14,
+                                    alignment=1
                                 )
-                                st.write(", ".join(updated_names))
-                            if unmatched:
-                                st.info(
-                                    f"ℹ️ {len(unmatched)} field(s) had no matching column in your file and were left blank: "
-                                    f"{', '.join(unmatched)}"
-                                )
-
-                            if appended or updated:
-                                st.markdown("**🔍 Verify — read directly from the file about to be downloaded:**")
-                                verify_wb = openpyxl.load_workbook(BytesIO(updated_bytes.getvalue()))
-                                verify_ws = verify_wb[sheet_used]
-                                verify_headers = [str(c.value) for c in verify_ws[1]]
-                                name_idx = verify_headers.index("Student_Name") if "Student_Name" in verify_headers else None
-                                changed_names = set(n.lower() for n in appended_names + updated_names)
-                                verify_rows = [
-                                    row for row in verify_ws.iter_rows(min_row=2, values_only=True)
-                                    if name_idx is not None and row[name_idx] and str(row[name_idx]).strip().lower() in changed_names
+                                story.append(Paragraph("Multi-Section Report with Data Analysis", subtitle_style))
+                                story.append(Spacer(1, 0.1*inch))
+                                
+                                # Date
+                                date_text = f"Generated: {pd.Timestamp.now().strftime('%d %B %Y at %H:%M')}"
+                                story.append(Paragraph(date_text, ParagraphStyle('date', parent=styles['Normal'], fontSize=10, alignment=1)))
+                                story.append(Spacer(1, 0.2*inch))
+                                
+                                # Report Parameters
+                                params_data = [
+                                    ['Parameter', 'Value'],
+                                    ['Year', str(year_display)],
+                                    ['Term', str(term_display)],
+                                    ['Program', str(program_display)],
+                                    ['Sections', ', '.join(selected_report_sections)]
                                 ]
-                                st.dataframe(
-                                    pd.DataFrame(verify_rows, columns=verify_headers),
-                                    use_container_width=True, hide_index=True
+                                
+                                params_table = Table(params_data, colWidths=[2*inch, 4*inch])
+                                params_table.setStyle(TableStyle([
+                                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('009688')),
+                                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                                    ('FONTSIZE', (0, 0), (-1, 0), 11),
+                                    ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+                                    ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                                    ('GRID', (0, 0), (-1, -1), 1, colors.black)
+                                ]))
+                                story.append(params_table)
+                                story.append(Spacer(1, 0.3*inch))
+                                
+                                # Add matplotlib import at top
+                                import matplotlib.pyplot as plt
+                                import matplotlib
+                                matplotlib.use('Agg')
+                                
+                                # Debug: show what we're working with
+                                st.write(f"DEBUG: report_data shape = {report_data.shape}")
+                                st.write(f"DEBUG: report_data columns = {list(report_data.columns)[:10]}")
+                                
+                                # Sections with charts
+                                for idx, section in enumerate(selected_report_sections, 1):
+                                    story.append(PageBreak())
+                                    story.append(Paragraph(f"{idx}. {section}", styles['Heading1']))
+                                    story.append(Paragraph(f"Records in view: {len(report_data)}", styles['Normal']))
+                                    story.append(Spacer(1, 0.2*inch))
+                                    
+                                    try:
+                                        if section == "Overview" and len(report_data) > 0:
+                                            st.write(f"DEBUG: Overview section - checking program column")
+                                            if 'program' in report_data.columns:
+                                                prog_breakdown = report_data['program'].value_counts()
+                                                st.write(f"DEBUG: prog_breakdown = {prog_breakdown.to_dict()}")
+                                                
+                                                # Create matplotlib chart
+                                                fig, ax = plt.subplots(figsize=(6, 4))
+                                                prog_breakdown.plot(kind='bar', ax=ax, color='#009688')
+                                                ax.set_title("Students by Program", fontsize=14, fontweight='bold')
+                                                ax.set_xlabel("Program")
+                                                ax.set_ylabel("Count")
+                                                plt.tight_layout()
+                                                
+                                                # Save to buffer
+                                                chart_buffer = BytesIO()
+                                                fig.savefig(chart_buffer, format='png', dpi=100, bbox_inches='tight')
+                                                chart_buffer.seek(0)
+                                                st.write(f"DEBUG: Chart saved, buffer size = {len(chart_buffer.getvalue())} bytes")
+                                                plt.close(fig)
+                                                
+                                                # Add to PDF
+                                                chart_img = Image(chart_buffer, width=5.5*inch, height=3.5*inch)
+                                                story.append(chart_img)
+                                                st.write(f"DEBUG: Image added to story")
+                                                story.append(Spacer(1, 0.1*inch))
+                                            else:
+                                                st.write(f"DEBUG: No 'program' column found. Available: {list(report_data.columns)}")
+                                        
+                                        elif section == "Program Allocation" and len(report_data) > 0:
+                                            if 'program' in report_data.columns and 'year_level' in report_data.columns:
+                                                prog_year = report_data.groupby(['program', 'year_level']).size().unstack(fill_value=0)
+                                                
+                                                fig, ax = plt.subplots(figsize=(6, 4))
+                                                prog_year.plot(kind='bar', stacked=True, ax=ax, color=['#009688', '#00897B', '#00695C', '#004D40'])
+                                                ax.set_title("Program Distribution by Year Level", fontsize=14, fontweight='bold')
+                                                ax.set_xlabel("Program")
+                                                ax.set_ylabel("Count")
+                                                ax.legend(title="Year", bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
+                                                plt.tight_layout()
+                                                
+                                                chart_buffer = BytesIO()
+                                                fig.savefig(chart_buffer, format='png', dpi=100, bbox_inches='tight')
+                                                chart_buffer.seek(0)
+                                                plt.close(fig)
+                                                
+                                                chart_img = Image(chart_buffer, width=5.5*inch, height=3.5*inch)
+                                                story.append(chart_img)
+                                                story.append(Spacer(1, 0.1*inch))
+                                        
+                                        elif section == "ASD Deep Dive Analysis" and len(report_data) > 0:
+                                            if 'program' in report_data.columns:
+                                                prog_counts = report_data['program'].value_counts()
+                                                
+                                                fig, ax = plt.subplots(figsize=(6, 4))
+                                                colors_pie = ['#009688', '#00897B', '#00695C']
+                                                prog_counts.plot(kind='pie', ax=ax, autopct='%1.1f%%', startangle=90, colors=colors_pie[:len(prog_counts)])
+                                                ax.set_title("ASD Students by Program", fontsize=14, fontweight='bold')
+                                                ax.set_ylabel("")
+                                                plt.tight_layout()
+                                                
+                                                chart_buffer = BytesIO()
+                                                fig.savefig(chart_buffer, format='png', dpi=100, bbox_inches='tight')
+                                                chart_buffer.seek(0)
+                                                plt.close(fig)
+                                                
+                                                chart_img = Image(chart_buffer, width=5.5*inch, height=3.5*inch)
+                                                story.append(chart_img)
+                                                story.append(Spacer(1, 0.1*inch))
+                                        
+                                        else:
+                                            story.append(Paragraph(f"{section} - Analysis available in dashboard", styles['Normal']))
+                                    
+                                    except Exception as e:
+                                        st.error(f"ERROR in {section}: {str(e)}")
+                                        import traceback
+                                        st.error(traceback.format_exc())
+                                        story.append(Paragraph(f"{section} - Error: {str(e)[:50]}", styles['Normal']))
+                                    
+                                    story.append(Spacer(1, 0.2*inch))
+                                
+                                # Footer
+                                story.append(Spacer(1, 0.3*inch))
+                                story.append(Paragraph("Cowandilla Learning Centre - Learning & Behaviour Unit", ParagraphStyle('footer', parent=styles['Normal'], fontSize=9, alignment=1)))
+                                
+                                # Build PDF
+                                pdf.build(story)
+                                buffer.seek(0)
+                                
+                                filename = f"CLC_Report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+                                st.download_button(
+                                    label="⬇️ Download PDF Report",
+                                    data=buffer,
+                                    file_name=filename,
+                                    mime="application/pdf",
+                                    key="dl_pdf_report"
                                 )
-
-                            st.download_button(
-                                label="💾 Download Updated Master Excel",
-                                data=updated_bytes.getvalue(),
-                                file_name=master_file.name,
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                use_container_width=True
-                            )
+                                st.success(f"✅ PDF Report with {len(selected_report_sections)} sections and charts ready!")
+                            
+                            else:
+                                # Word (.docx) generation
+                                from io import BytesIO
+                            
+                            doc = Document()
+                            
+                            # Title
+                            title = doc.add_paragraph()
+                            title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                            title_run = title.add_run("CLC-LBU Allocation Dashboard Report")
+                            title_run.font.size = Pt(28)
+                            title_run.font.bold = True
+                            title_run.font.color.rgb = RGBColor(0, 150, 136)
+                            
+                            # Subtitle
+                            subtitle = doc.add_paragraph()
+                            subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                            subtitle_run = subtitle.add_run("Custom Multi-Section Report")
+                            subtitle_run.font.size = Pt(16)
+                            
+                            # Date
+                            date_para = doc.add_paragraph()
+                            date_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                            date_run = date_para.add_run(f"Generated: {pd.Timestamp.now().strftime('%d %B %Y at %H:%M')}")
+                            date_run.font.size = Pt(10)
+                            date_run.font.italic = True
+                            
+                            # Filters
+                            doc.add_page_break()
+                            doc.add_heading("Report Parameters", level=1)
+                            
+                            filters_table = doc.add_table(rows=5, cols=2)
+                            filters_table.style = 'Light Grid Accent 1'
+                            
+                            filters_table.rows[0].cells[0].text = "Year"
+                            filters_table.rows[0].cells[1].text = str(year_display)
+                            filters_table.rows[1].cells[0].text = "Term"
+                            filters_table.rows[1].cells[1].text = str(term_display)
+                            filters_table.rows[2].cells[0].text = "Program"
+                            filters_table.rows[2].cells[1].text = str(program_display)
+                            filters_table.rows[3].cells[0].text = "View"
+                            filters_table.rows[3].cells[1].text = str(view_display)
+                            filters_table.rows[4].cells[0].text = "Sections"
+                            filters_table.rows[4].cells[1].text = ", ".join(selected_report_sections)
+                            
+                            # TOC
+                            doc.add_page_break()
+                            doc.add_heading("Contents", level=1)
+                            for i, sec in enumerate(selected_report_sections, 1):
+                                doc.add_paragraph(f"{i}. {sec}", style='List Number')
+                            
+                            # Sections
+                            for idx, section in enumerate(selected_report_sections, 1):
+                                doc.add_page_break()
+                                doc.add_heading(f"{idx}. {section}", level=1)
+                                doc.add_paragraph(f"Records in this view: {len(report_data)}")
+                                
+                                # Add section-specific analysis (no names)
+                                if section == "Overview":
+                                    doc.add_paragraph("Referral & Allocation Summary:")
+                                    if len(report_data) > 0:
+                                        # Program breakdown
+                                        if 'program' in report_data.columns:
+                                            prog_breakdown = report_data['program'].value_counts()
+                                            doc.add_paragraph("Students by Program:")
+                                            for prog, count in prog_breakdown.items():
+                                                doc.add_paragraph(f"  {prog}: {count} students", style='List Bullet')
+                                
+                                elif section == "Program Allocation":
+                                    if 'program' in report_data.columns and 'year_level' in report_data.columns:
+                                        doc.add_paragraph("Program and Year Level Breakdown:")
+                                        for prog in report_data['program'].unique():
+                                            prog_data = report_data[report_data['program'] == prog]
+                                            doc.add_paragraph(f"{prog}:", style='List Bullet')
+                                            year_breakdown = prog_data['year_level'].value_counts()
+                                            for year, count in year_breakdown.items():
+                                                doc.add_paragraph(f"  Year {year}: {count}", style='List Bullet 2')
+                                
+                                elif section == "Equity - ATSI/EALD/DCP":
+                                    doc.add_paragraph("Equity Group Analysis (aggregated data):")
+                                    doc.add_paragraph("  ATSI students: tracked", style='List Bullet')
+                                    doc.add_paragraph("  EALD students: tracked", style='List Bullet')
+                                    doc.add_paragraph("  DCP students: tracked", style='List Bullet')
+                                
+                                elif section == "Disability & Support Needs":
+                                    doc.add_paragraph("Disability Type Analysis:")
+                                    doc.add_paragraph("  SWD (Speech & Language)", style='List Bullet')
+                                    doc.add_paragraph("  ASD (Autism Spectrum Disorder)", style='List Bullet')
+                                    doc.add_paragraph("  Intellectual Disability", style='List Bullet')
+                                    doc.add_paragraph("  Learning Difficulty", style='List Bullet')
+                                    doc.add_paragraph("  Other support needs tracked", style='List Bullet')
+                                
+                                elif section == "Category of Support":
+                                    doc.add_paragraph("Funding Category Distribution:")
+                                    if 'cat_funding' in report_data.columns or 'Funding_Category' in report_data.columns:
+                                        funding_col = 'cat_funding' if 'cat_funding' in report_data.columns else 'Funding_Category'
+                                        funding_breakdown = report_data[funding_col].value_counts()
+                                        for cat, count in funding_breakdown.items():
+                                            doc.add_paragraph(f"  {cat}: {count} students", style='List Bullet')
+                                    else:
+                                        doc.add_paragraph("  Category breakdown from current allocation data", style='List Bullet')
+                                
+                                elif section == "Cohort Analysis":
+                                    doc.add_paragraph("Cohort Breakdown:")
+                                    if 'program' in report_data.columns:
+                                        for prog in sorted(report_data['program'].unique()):
+                                            prog_count = len(report_data[report_data['program'] == prog])
+                                            pct = (prog_count / len(report_data) * 100) if len(report_data) > 0 else 0
+                                            doc.add_paragraph(f"  {prog}: {prog_count} students ({pct:.1f}%)", style='List Bullet')
+                                
+                                elif section == "Trends - Historical Data":
+                                    doc.add_paragraph("Enrollment Trends:")
+                                    doc.add_paragraph("  Historical data from current filtered view", style='List Bullet')
+                                    if 'term' in report_data.columns:
+                                        term_breakdown = report_data['term'].value_counts().sort_index()
+                                        for term, count in term_breakdown.items():
+                                            doc.add_paragraph(f"  Term {int(term) if not pd.isna(term) else 'Unknown'}: {count}", style='List Bullet 2')
+                                    if len(report_data) > 0:
+                                        doc.add_paragraph("ASD Student Analysis:")
+                                        doc.add_paragraph(f"  Total students in view: {len(report_data)}", style='List Bullet')
+                                        if 'program' in report_data.columns:
+                                            doc.add_paragraph("  Distribution by program:", style='List Bullet')
+                                            prog_breakdown = report_data['program'].value_counts()
+                                            for prog, count in prog_breakdown.items():
+                                                doc.add_paragraph(f"    {prog}: {count}", style='List Bullet 2')
+                                
+                                else:
+                                    doc.add_paragraph(f"{section} - Overview of data in current filters")
+                            
+                            # Footer
+                            doc.add_page_break()
+                            footer = doc.add_paragraph()
+                            footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                            footer_run = footer.add_run("Cowandilla Learning Centre - Learning & Behaviour Unit")
+                            footer_run.font.size = Pt(9)
+                            footer_run.font.italic = True
+                            
+                            # Save to memory buffer instead of disk
+                            try:
+                                from io import BytesIO
+                                
+                                # Save document to bytes buffer
+                                buffer = BytesIO()
+                                doc.save(buffer)
+                                buffer.seek(0)  # Reset to beginning
+                                
+                                filename = f"CLC_Report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.docx"
+                                
+                                st.download_button(
+                                    label="⬇️ Download Report",
+                                    data=buffer,
+                                    file_name=filename,
+                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                    key="dl_custom_report"
+                                )
+                                st.success(f"✅ Report with {len(selected_report_sections)} sections ready to download!")
+                            except Exception as file_error:
+                                st.error(f"Error: {str(file_error)[:100]}")
+                        
                         except Exception as e:
-                            st.error(f"Sync error: {e}")
-                            import traceback
-                            st.code(traceback.format_exc())
-                elif validation_issues:
-                    st.error("❌ Fix the validation issues above before syncing")
-        else:
-            st.info("📭 No records match the selected scope above")
-
-    except Exception as e:
-        st.error(f"Error: {e}")
-        import traceback
-        st.code(traceback.format_exc())
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 5 — WAITLIST
-# ══════════════════════════════════════════════════════════════════════════════
-with tab5:
-    st.header("⏳ Waitlist Management")
-
-    show_removed = st.checkbox(
-        "Show removed students too (Declined / Site Withdraw)",
-        help="Off by default — students disappear from this list once set to Declined or Site Withdraw."
-    )
-
-    try:
-        active_statuses = ["On Waitlist", "Site Decision", "Declined", "Site Withdraw"] if show_removed else ["On Waitlist", "Site Decision"]
-        waitlisted = supabase.table("allocation_students").select("*") \
-            .in_("waitlist_status", active_statuses).execute()
-
-        records = waitlisted.data
-        if records:
-            for r in records:
-                with st.container(border=True):
-                    st.markdown(f"**{r.get('student_name', 'Unknown')}** — {r.get('school', '')} • Year {r.get('year_level', '')}")
-                    st.caption(f"Current status: {r.get('waitlist_status', '')}")
-
-                    c1, c2 = st.columns([2, 1])
-                    with c1:
-                        status_options = ["On Waitlist", "Declined", "Site Decision", "Site Withdraw"]
-                        current = r.get('waitlist_status')
-                        new_status = st.selectbox(
-                            "Set status", status_options,
-                            index=status_options.index(current) if current in status_options else 0,
-                            key=f"status_{r['id']}"
-                        )
-                    with c2:
-                        st.write("")
-                        st.write("")
-                        if st.button("💾 Update Status", key=f"update_{r['id']}", use_container_width=True):
-                            supabase.table("allocation_students").update(
-                                {"waitlist_status": new_status}
-                            ).eq("id", r["id"]).execute()
-                            st.success(f"Status updated to {new_status}")
-                            st.rerun()
-
-                    with st.expander(f"🎓 Allocate {r.get('student_name', 'this student')} now"):
-                        with st.form(f"allocate_from_waitlist_{r['id']}"):
-                            acol1, acol2, acol3 = st.columns(3)
-                            with acol1:
-                                alloc_program = st.selectbox("Program *", PROGRAMS, key=f"prog_{r['id']}")
-                            with acol2:
-                                alloc_start = st.date_input("Allocation Date", value=None, key=f"start_{r['id']}")
-                            with acol3:
-                                alloc_worker = st.selectbox("Focus Teacher", [""] + STAFF_NAMES, key=f"worker_{r['id']}")
-
-                            if st.form_submit_button("✅ Allocate Now", type="primary", use_container_width=True):
-                                supabase.table("allocation_students").update({
-                                    "outcome": "Allocated",
-                                    "program": alloc_program,
-                                    "start_after": alloc_start.isoformat() if alloc_start else None,
-                                    "case_worker": alloc_worker or None,
-                                    "actioned_by": alloc_worker or None,
-                                    "waitlist_status": "Not Applicable",
-                                    "allocated_from_waitlist": "Yes",
-                                }).eq("id", r["id"]).execute()
-                                st.success(f"✅ {r.get('student_name')} allocated!")
-                                st.balloons()
-                                st.rerun()
-        else:
-            st.info("No students currently on the waitlist.")
-    except Exception as e:
-        st.error(f"Error: {e}")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 6 — ADMIN
-# ══════════════════════════════════════════════════════════════════════════════
-with tab6:
-    st.header("⚙️ Admin — Manage Dropdown Lists")
-    st.caption(
-        "Add or remove options for the tool's dropdowns without needing a code change. "
-        "Changes here take effect the next time the tool loads."
-    )
-
-    admin_password = st.text_input("🔐 Enter admin password", type="password", key="admin_pw")
-    if admin_password != "secret2026":
-        if admin_password:
-            st.error("❌ Incorrect password.")
-        st.stop()
-
-    st.success("✅ Access granted")
-
-    MANAGED_LISTS = {
-        "Focus Teacher": ("focus_teacher", DEFAULT_STAFF_NAMES),
-    }
-
-    list_label = st.selectbox("Which list do you want to manage?", list(MANAGED_LISTS.keys()))
-    list_name, default_values = MANAGED_LISTS[list_label]
-
-    try:
-        supabase.table("dropdown_options").select("id").limit(1).execute()
-        table_exists = True
-    except Exception:
-        table_exists = False
-
-    if not table_exists:
-        st.error(
-            "The `dropdown_options` table doesn't exist in Supabase yet. Run this once in the "
-            "Supabase SQL editor, then refresh this page:"
-        )
-        st.code(
-            "CREATE TABLE dropdown_options (\n"
-            "    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n"
-            "    list_name TEXT NOT NULL,\n"
-            "    option_value TEXT NOT NULL,\n"
-            "    sort_order INTEGER DEFAULT 0\n"
-            ");",
-            language="sql"
-        )
-        st.stop()
-
-    current = supabase.table("dropdown_options").select("*") \
-        .eq("list_name", list_name).order("sort_order").execute().data
-
-    if not current:
-        st.info(f"No custom options saved yet for **{list_label}** — currently using the built-in defaults below.")
-        st.write(", ".join(default_values))
-        if st.button(f"📋 Load these {len(default_values)} defaults into the editable list"):
-            for i, val in enumerate(default_values):
-                supabase.table("dropdown_options").insert(
-                    {"list_name": list_name, "option_value": val, "sort_order": i}
-                ).execute()
-            st.rerun()
-    else:
-        st.markdown(f"**Current {list_label} options:**")
-        for item in current:
-            ccol1, ccol2 = st.columns([4, 1])
-            with ccol1:
-                st.write(item["option_value"])
-            with ccol2:
-                if st.button("🗑️ Remove", key=f"rm_{item['id']}"):
-                    supabase.table("dropdown_options").delete().eq("id", item["id"]).execute()
-                    st.rerun()
-
+                            st.error(f"Error: {str(e)[:150]}")
+        
         st.markdown("---")
-        with st.form(f"add_option_{list_name}", clear_on_submit=True):
-            new_value = st.text_input(f"Add a new {list_label}")
-            if st.form_submit_button("➕ Add") and new_value.strip():
-                next_order = max([c.get("sort_order", 0) for c in current], default=-1) + 1
-                supabase.table("dropdown_options").insert(
-                    {"list_name": list_name, "option_value": new_value.strip(), "sort_order": next_order}
-                ).execute()
-                st.rerun()
+        st.markdown("**Data Management**")
+        
+        # Password gate for upload
+        upload_password = st.text_input("🔐 Enter password to access data upload", type="password", help="Only authorized staff have this password")
+        
+        if upload_password == "secret2026":
+            with st.expander("📤 Update Data", expanded=False):
+                st.info("This upload updates the dataset for all dashboard users. The most recent upload is the active dataset.")
+                
+                uploaded_file = st.file_uploader("Choose Excel or CSV file", type=['xlsx', 'csv'], label_visibility="collapsed")
+                
+                if uploaded_file is not None:
+                    try:
+                        df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('.xlsx') else pd.read_csv(uploaded_file)
+                    
+                    
+                        # === EXTRACT FLAG DATA (if columns exist) ===
+                        flag_cols_available = []
+                        for col in ['Flag_ATSI', 'Flag_EALD', 'Flag_DCP_involvement']:
+                            if col in df.columns:
+                                flag_cols_available.append(col)
+                        
+                        if 'Student_Name' in df.columns and flag_cols_available:
+                            # Extract and cache flag data
+                            flag_data = df[['Student_Name'] + flag_cols_available].copy()
+                            flag_data['name_match'] = flag_data['Student_Name'].str.strip().str.lower()
+                            flag_cols_for_merge = ['name_match'] + flag_cols_available
+                            st.session_state.flag_df = flag_data[flag_cols_for_merge].drop_duplicates('name_match')
+                        
+                        # === EXTRACT FUNDING CATEGORY DATA (if columns exist) ===
+                        funding_cols_available = []
+                        for i in range(1, 10):
+                            col = f'Flag_Category_{i}'
+                            if col in df.columns:
+                                funding_cols_available.append(col)
+                        
+                        if 'Student_Name' in df.columns and funding_cols_available:
+                            # Extract and cache funding data
+                            funding_data = df[['Student_Name'] + funding_cols_available].copy()
+                            funding_data['name_match'] = funding_data['Student_Name'].str.strip().str.lower()
+                            funding_cols_for_merge = ['name_match'] + funding_cols_available
+                            st.session_state.funding_df = funding_data[funding_cols_for_merge].drop_duplicates('name_match')
+                        
+                        # === EXTRACT DISABILITY FLAGS ===
+                        disability_flags = ['Flag_SWD', 'Flag_ASD', 'Flag_Intellectual', 'Flag_Learning_Difficulty',
+                                           'Flag_Sensory_Processing', 'Flag_ADHD', 'Flag_ODD', 'Flag_PDA',
+                                           'Medical_Condition_Details']
+                        
+                        disability_cols_available = [col for col in disability_flags if col in df.columns]
+                        
+                        if disability_cols_available and 'Student_Name' in df.columns:
+                            # Extract and cache disability data
+                            disability_data = df[['Student_Name'] + disability_cols_available].copy()
+                            disability_data['name_match'] = disability_data['Student_Name'].str.strip().str.lower()
+                            disability_cols_for_merge = ['name_match'] + disability_cols_available
+                            st.session_state.disability_df = disability_data[disability_cols_for_merge].drop_duplicates('name_match')
+                        
+                        # === EXTRACT RAAP FLAG (if exists) ===
+                        if 'Flag_9plusRAAP' in df.columns and 'Student_Name' in df.columns:
+                            raap_data = df[['Student_Name', 'Flag_9plusRAAP']].copy()
+                            raap_data['name_match'] = raap_data['Student_Name'].str.strip().str.lower()
+                            st.session_state.raap_df = raap_data[['name_match', 'Flag_9plusRAAP']].drop_duplicates('name_match')
+                        
+                        # === EXTRACT CRITICAL INCIDENTS (if sheet exists) ===
+                        try:
+                            if isinstance(uploaded_file.name, str) and uploaded_file.name.endswith('.xlsx'):
+                                incidents_df = pd.read_excel(uploaded_file, sheet_name='Critical_Incidents')
+                                if len(incidents_df) > 0 and 'Student_Name' in incidents_df.columns:
+                                    incidents_df['name_match'] = incidents_df['Student_Name'].str.strip().str.lower()
+                                    st.session_state.incidents_df = incidents_df
+                        except:
+                            pass
+                        
+                        # === PROCESS STUDENT DATA ===
+                        column_map = {
+                            'Student_Name': 'student_name', 'Meeting_Week': 'meeting_week', 'Meeting_Date': 'meeting_date',
+                            'Term': 'term', 'Referral_Year': 'year', 'Allocated_Program': 'program',
+                            'DOB': 'date_of_birth', 'Gender': 'gender', 'Year_Level': 'year_level',
+                            'Referring_School': 'school', 'Partnership_Area': 'partnership_area',
+                            'Previous_CLC_Placement': 'previous_clc_placement', 'Previous_Other_LC': 'previous_other_lc',
+                            'Other_LC_Name': 'other_lc_name', 'Total_Previous_Placements': 'total_previous_placements',
+                            'Placement_History_Notes': 'placement_history_notes', 'Bespoke_Placement': 'bespoke_placement',
+                            'Waitlist_Status': 'waitlist_status', 'Waitlist_Date': 'waitlist_date',
+                            'Allocated_From_Waitlist': 'allocated_from_waitlist', 'Previously_Referred': 'previously_referred',
+                            'Medical_Condition_Details': 'medical_condition_details', 'Extension_Weeks': 'extension_weeks',
+                        }
+                        
+                        df_mapped = df.copy()
+                        for excel_col, supabase_col in column_map.items():
+                            if excel_col in df_mapped.columns:
+                                df_mapped = df_mapped.rename(columns={excel_col: supabase_col})
+                        
+                        df_mapped = df_mapped[[col for col in df_mapped.columns if col in column_map.values()]]
+                        
+                        date_cols = ['meeting_date', 'date_of_birth', 'waitlist_date']
+                        for col in date_cols:
+                            if col in df_mapped.columns:
+                                df_mapped[col] = pd.to_datetime(df_mapped[col], errors='coerce')
+                                df_mapped[col] = df_mapped[col].dt.strftime('%Y-%m-%d')
+                                df_mapped[col] = df_mapped[col].replace('NaT', '')
+                        
+                        numeric_cols = ['year', 'term', 'extension_weeks', 'total_previous_placements']
+                        for col in numeric_cols:
+                            if col in df_mapped.columns:
+                                df_mapped[col] = pd.to_numeric(df_mapped[col], errors='coerce').fillna(0).astype(int)
+                        
+                        df_mapped = df_mapped.astype(str)
+                        df_mapped = df_mapped.replace('nan', '')
+                        df_mapped = df_mapped.fillna('')
+                        
+                        for col in df_mapped.columns:
+                            if df_mapped[col].dtype == 'object':
+                                df_mapped[col] = df_mapped[col].str.strip()
+                        
+                        if 'meeting_date' in df_mapped.columns:
+                            today = pd.Timestamp.now().strftime('%Y-%m-%d')
+                            df_mapped['meeting_date'] = df_mapped['meeting_date'].replace('', today)
+                        
+                        # Show status
+                        status_msg = f"Ready: {len(df_mapped)} student records"
+                        if 'flag_df' in st.session_state and st.session_state.flag_df is not None:
+                            status_msg += f" + {len(st.session_state.flag_df)} flag records"
+                        if 'funding_df' in st.session_state and st.session_state.funding_df is not None:
+                            status_msg += f" + {len(st.session_state.funding_df)} funding records"
+                        if 'raap_df' in st.session_state and st.session_state.raap_df is not None:
+                            status_msg += f" + RAAP"
+                        if 'incidents_df' in st.session_state and st.session_state.incidents_df is not None:
+                            status_msg += f" + {len(st.session_state.incidents_df)} incidents"
+                        st.success(status_msg)
+                        
+                        if st.button("Upload Now"):
+                            if not supabase:
+                                st.error("Supabase not connected")
+                            else:
+                                with st.spinner("Uploading..."):
+                                    try:
+                                        supabase.table('allocation_students').delete().gte('id', '00000000-0000-0000-0000-000000000000').execute()
+                                        
+                                        numeric_cols = ['year', 'term', 'extension_weeks', 'total_previous_placements']
+                                        date_cols = ['meeting_date', 'date_of_birth', 'waitlist_date']
+                                        
+                                        records = []
+                                        for idx, row in df_mapped.iterrows():
+                                            record = {}
+                                            for col in df_mapped.columns:
+                                                val = row[col]
+                                                if pd.isna(val) or val == 'nan' or val == '':
+                                                    record[col] = 0 if col in numeric_cols else (None if col in date_cols else '')
+                                                else:
+                                                    record[col] = str(val)
+                                            records.append(record)
+                                        
+                                        for i in range(0, len(records), 50):
+                                            supabase.table('allocation_students').insert(records[i:i+50]).execute()
+                                        
+                                        st.success(f"Uploaded {len(records)} records!")
+                                        st.cache_data.clear()
+                                        
+                                    except Exception as e:
+                                        st.error(f"Failed: {str(e)[:150]}")
+                
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+        else:
+            if upload_password:  # Only show if they entered something
+                st.error("❌ Incorrect password. Contact Candice for upload access.")
+    
+    # TOP TITLE
+    st.markdown("""
+    <div style='background: linear-gradient(135deg, rgba(0,229,255,0.15) 0%, rgba(0,229,255,0.08) 100%); 
+                border: 2px solid #00e5ff; border-radius: 12px; padding: 30px 25px; 
+                margin-bottom: 30px; text-align: center;'>
+        <h1 style='color: #00e5ff; font-size: 52px; margin: 0; font-weight: bold; 
+                   letter-spacing: 0.5px;'>Student Allocation</h1>
+        <p style='color: #00e5ff; font-size: 16px; margin: 15px 0 0 0; 
+                 font-weight: 500; opacity: 0.9;'>Comprehensive Enrollment Analytics & Equity Insights</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Data persistence notice
+    st.info("📌 **Data Persistence:** The most recently uploaded dataset remains accessible to all users until a new upload is performed. Only authorized staff can upload data.")
+    
+    st.markdown("---")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # Get unique years - handle both string and numeric
+        allocation_df['year_clean'] = pd.to_numeric(allocation_df['year'], errors='coerce')
+        years = sorted([int(y) for y in allocation_df['year_clean'].dropna().unique()])
+        if not years:
+            years = [2026]
+        year_options = ['All'] + years
+        
+        # Default to current year
+        default_year_idx = year_options.index(st.session_state.auto_year) if st.session_state.auto_year in year_options else 1
+        selected_year = st.selectbox("Year", year_options, index=default_year_idx)
+    
+    with col2:
+        # Filter terms by selected year (or show all if "All" selected)
+        if selected_year == 'All':
+            year_data = allocation_df
+        else:
+            year_data = allocation_df[allocation_df['year_clean'] == selected_year]
+        
+        year_data['term_clean'] = pd.to_numeric(year_data['term'], errors='coerce')
+        terms = sorted([int(t) for t in year_data['term_clean'].dropna().unique() if t >= 1])
+        if not terms:
+            terms = [1, 2, 3, 4]
+        term_options = ['All'] + terms
+        
+        # Default to current term (if in current year)
+        if selected_year == 'All':
+            default_term_idx = 1
+        elif selected_year == st.session_state.auto_year:
+            default_term_idx = term_options.index(st.session_state.auto_term) if st.session_state.auto_term in term_options else 1
+        else:
+            default_term_idx = 1
+        
+        selected_term = st.selectbox("Term", term_options, index=default_term_idx)
+    
+    with col3:
+        # Clean program data and build dropdown - handle variations and blanks
+        allocation_df['program_clean'] = allocation_df['program'].fillna('').str.strip().str.upper()
+        # Only include non-blank, valid programs
+        all_progs = sorted([p for p in allocation_df['program_clean'].unique() if p and p not in ['', ':', 'NONE']])
+        progs = ['All'] + all_progs
+        # Default program to "All"
+        selected_program = st.selectbox("Program", progs, index=0)
+    
+    with col1:
+        # Add allocation status filter
+        allocation_status_options = ['Allocated Only', 'All Students (Inc. Referrals)']
+        selected_allocation_view = st.selectbox("View", allocation_status_options, index=0, help="Allocated Only = funded placements. All Students = includes pending referrals")
+    
+    # FILTER DATA - handle "All" selections
+    allocation_df['year_clean'] = pd.to_numeric(allocation_df['year'], errors='coerce')
+    allocation_df['term_clean'] = pd.to_numeric(allocation_df['term'], errors='coerce')
+    
+    # CLEAN PROGRAM DATA - Remove blanks and inconsistencies
+    allocation_df['program'] = allocation_df['program'].fillna('').str.strip()
+    allocation_df['program'] = allocation_df['program'].replace(['', ':', 'None'], None)
+    allocation_df['program_clean'] = allocation_df['program'].fillna('').str.strip().str.upper()
+    allocation_df['program_clean'] = allocation_df['program_clean'].replace(['', ':', 'NONE'], '')
+    
+    # CLEAN YEAR_LEVEL - Remove blanks
+    allocation_df['year_level'] = allocation_df['year_level'].fillna('').astype(str).str.strip()
+    allocation_df['year_level'] = allocation_df['year_level'].replace(['', 'nan', 'None'], None)
+    
+    # CLEAN PARTNERSHIP AREA - Remove blanks
+    allocation_df['partnership_area'] = allocation_df['partnership_area'].fillna('').astype(str).str.strip()
+    allocation_df['partnership_area'] = allocation_df['partnership_area'].replace(['', 'nan', 'None'], None)
+    
+    filtered = allocation_df.copy()
+    
+    # Remove records with blank programs from all filtered data
+    filtered = filtered[filtered['program_clean'] != '']
+    
+    # Apply year filter
+    if selected_year != 'All':
+        filtered = filtered[filtered['year_clean'] == selected_year]
+    
+    # Apply term filter
+    if selected_term != 'All':
+        filtered = filtered[filtered['term_clean'] == selected_term]
+    
+    # Filter out term 0 (invalid term)
+    filtered = filtered[(filtered['term_clean'].fillna(0) >= 1) | (filtered['term_clean'].isna())]
+    
+    # Apply program filter
+    if selected_program != 'All':
+        filtered = filtered[filtered['program_clean'] == selected_program]
+    
+    # === APPLY ALLOCATION STATUS FILTER ===
+    if selected_allocation_view == 'Allocated Only':
+        # Try to filter by allocation status if column exists
+        if 'Allocation_Status' in filtered.columns:
+            filtered = filtered[(filtered['Allocation_Status'].fillna('').str.lower() == 'allocated')]
+        elif 'allocation_status' in filtered.columns:
+            filtered = filtered[(filtered['allocation_status'].fillna('').str.lower() == 'allocated')]
+        elif 'current_status' in filtered.columns:
+            filtered = filtered[(filtered['current_status'].fillna('').str.lower() == 'active')]
+        elif 'Current_Status' in filtered.columns:
+            filtered = filtered[(filtered['Current_Status'].fillna('').str.lower() == 'active')]
+    
+    # === MERGE ASSESSMENT DATA BY PROGRAM + TERM ===
+    assessment_df = load_assessment_data()
+    if assessment_df is not None and not assessment_df.empty:
+        # Create program + term key for matching
+        filtered['assessment_key'] = filtered['program_clean'].astype(str).str.strip() + '_' + filtered['term_clean'].astype(str).str.strip()
+        assessment_df['assessment_key'] = assessment_df['program'].astype(str).str.strip() + '_' + assessment_df['term'].astype(str).str.strip()
+        
+        # Merge assessment data
+        filtered = filtered.merge(
+            assessment_df[['assessment_key', 'sounds_write_data', 'word_aware_data', 'smartar_data', 'date_submitted']],
+            on='assessment_key',
+            how='left',
+            suffixes=('', '_assessment')
+        )
+        filtered = filtered.drop('assessment_key', axis=1)
+    
+    st.markdown(f"""
+    <div style='background: rgba(0,229,255,0.1); border-left: 4px solid #00e5ff; 
+                padding: 16px 20px; border-radius: 6px; margin: 20px 0;'>
+        <p style='color: #00e5ff; font-size: 18px; margin: 0; font-weight: 600;'>
+            📊 {len(filtered)} Active Students
+        </p>
+        <p style='color: #00e5ff; font-size: 13px; margin: 8px 0 0 0; opacity: 0.85;'>
+            Year: <strong>{selected_year if selected_year != 'All' else 'All'}</strong> 
+            | Term: <strong>{selected_term if selected_term != 'All' else 'All'}</strong> 
+            | Program: <strong>{selected_program}</strong>
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    st.markdown("---")
+    
+    # === DEBUG SECTION ===
+    with st.expander("🔍 Debug - Term & Data Calculations"):
+        st.write(f"**Selected Year:** {selected_year} | **Selected Term:** {selected_term} | **Selected Program:** {selected_program}")
+        st.write(f"**Allocation View:** {selected_allocation_view}")
+        st.write(f"**Filtered students (after all filters):** {len(filtered)}")
+        
+        st.write(f"**Total allocation_df rows:** {len(allocation_df)}")
+        
+        # Show term_clean value counts
+        if 'term_clean' in allocation_df.columns:
+            st.write("**allocation_df by term_clean:**")
+            term_counts = allocation_df['term_clean'].value_counts().sort_index()
+            for term, count in term_counts.items():
+                st.write(f"  Term {int(term) if not pd.isna(term) else 'NaN'}: {count} students")
+        
+        # Show program counts
+        if 'program' in allocation_df.columns:
+            st.write("**allocation_df by program:**")
+            prog_counts = allocation_df['program'].value_counts()
+            for prog, count in prog_counts.items():
+                st.write(f"  {prog}: {count} students")
+        
+        # Show filtered by program
+        if 'program' in filtered.columns:
+            st.write("**Filtered by program:**")
+            filtered_prog = filtered['program'].value_counts()
+            for prog, count in filtered_prog.items():
+                st.write(f"  {prog}: {count} students")
+        
+        # Show sample rows
+        if len(filtered) > 0:
+            st.write(f"**First 3 filtered students:**")
+            for idx, (_, row) in enumerate(filtered.head(3).iterrows()):
+                st.write(f"  {idx+1}. {row.get('student_name', 'N/A')} | Program: {row.get('program', 'N/A')} | Year Level: {row.get('year_level', 'N/A')}")
+    
+    st.markdown("---")
+    if section == "Overview":
+        # Display year/term context in title
+        year_display = st.session_state.auto_year if selected_year == 'All' else selected_year
+        term_display = st.session_state.auto_term if selected_term == 'All' else selected_term
+        
+        st.markdown(f"## Allocated Students Overview")
+        st.markdown(f"**Year {year_display} | Term {term_display}** - Current enrollment and placement status")
+        
+        # === EXPORT BUTTONS ===
+        st.markdown("---")
+        st.markdown("### 📥 Export This View")
+        
+        col_exp1, col_exp2 = st.columns([2, 1])
+        
+        with col_exp1:
+            export_button = st.button("Generate Word Document", key="export_overview_btn")
+        
+        if export_button:
+            try:
+                from docx import Document
+                from docx.shared import Pt, RGBColor
+                from docx.enum.text import WD_ALIGN_PARAGRAPH
+                
+                doc = Document()
+                
+                # Title
+                title = doc.add_paragraph()
+                title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                title_run = title.add_run("CLC-LBU Allocation Dashboard Report")
+                title_run.font.size = Pt(24)
+                title_run.font.bold = True
+                title_run.font.color.rgb = RGBColor(0, 150, 136)
+                
+                # Section
+                section = doc.add_paragraph()
+                section.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                section_run = section.add_run("Overview - Referral & Allocation Status")
+                section_run.font.size = Pt(16)
+                
+                # Date
+                date_para = doc.add_paragraph()
+                date_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                date_run = date_para.add_run(f"Generated: {pd.Timestamp.now().strftime('%d %B %Y at %H:%M')}")
+                date_run.font.size = Pt(10)
+                date_run.font.italic = True
+                
+                # Filters
+                doc.add_heading("Filters Applied", level=2)
+                filters_text = f"Year: {year_display} | Term: {term_display} | Program: {selected_program} | View: {selected_allocation_view}"
+                doc.add_paragraph(filters_text)
+                
+                # Metrics
+                doc.add_heading("Key Metrics", level=2)
+                metrics_table = doc.add_table(rows=2, cols=4)
+                metrics_table.style = 'Light Grid Accent 1'
+                
+                metrics_headers = metrics_table.rows[0].cells
+                metrics_headers[0].text = "Total Referrals"
+                metrics_headers[1].text = "Allocated"
+                metrics_headers[2].text = "Pending"
+                metrics_headers[3].text = "Allocation Rate"
+                
+                metrics_data = metrics_table.rows[1].cells
+                metrics_data[0].text = str(total_referrals)
+                metrics_data[1].text = str(int(total_allocated))
+                metrics_data[2].text = str(int(pending))
+                metrics_data[3].text = f"{(total_allocated/total_referrals*100):.1f}%"
+                
+                # Data summary
+                if len(filtered) > 0:
+                    doc.add_heading("Student Data Summary", level=2)
+                    doc.add_paragraph(f"Total Filtered Students: {len(filtered)}")
+                    
+                    # Add sample data table
+                    display_cols = ['student_name', 'program', 'year_level', 'school']
+                    available_cols = [c for c in display_cols if c in filtered.columns]
+                    
+                    if len(available_cols) > 0:
+                        data_table = doc.add_table(rows=1, cols=len(available_cols))
+                        data_table.style = 'Light Grid Accent 1'
+                        
+                        header_cells = data_table.rows[0].cells
+                        for i, col in enumerate(available_cols):
+                            header_cells[i].text = col.replace('_', ' ').title()
+                        
+                        # Add first 10 students
+                        for _, row in filtered.head(10).iterrows():
+                            row_cells = data_table.add_row().cells
+                            for i, col in enumerate(available_cols):
+                                row_cells[i].text = str(row.get(col, ''))
+                
+                # Footer
+                doc.add_paragraph()
+                footer = doc.add_paragraph()
+                footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                footer_run = footer.add_run("Cowandilla Learning Centre - Learning & Behaviour Unit")
+                footer_run.font.size = Pt(9)
+                footer_run.font.italic = True
+                
+                # Save to outputs
+                filename = f"CLC_Report_Overview_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.docx"
+                filepath = f'/mnt/user-data/outputs/{filename}'
+                doc.save(filepath)
+                
+                # Show download button
+                with open(filepath, 'rb') as f:
+                    st.download_button(
+                        label="⬇️ Download Word Document",
+                        data=f,
+                        file_name=filename,
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key="download_doc"
+                    )
+                st.success("✅ Report generated successfully!")
+                
+            except Exception as e:
+                st.error(f"Error generating report: {str(e)}")
+        
+        st.markdown("---")
+        
+        # Count referrals vs allocated across full allocation_df for context
+        total_referrals = len(allocation_df)
+        
+        # Try different column names for allocation status
+        allocated_mask = pd.Series(False, index=allocation_df.index)
+        if 'Allocation_Status' in allocation_df.columns:
+            allocated_mask = (allocation_df['Allocation_Status'].fillna('').str.lower() == 'allocated')
+        elif 'allocation_status' in allocation_df.columns:
+            allocated_mask = (allocation_df['allocation_status'].fillna('').str.lower() == 'allocated')
+        elif 'Current_Status' in allocation_df.columns:
+            allocated_mask = (allocation_df['Current_Status'].fillna('').str.lower() == 'active')
+        elif 'current_status' in allocation_df.columns:
+            allocated_mask = (allocation_df['current_status'].fillna('').str.lower() == 'active')
+        
+        total_allocated = allocated_mask.sum()
+        pending = total_referrals - total_allocated
+        
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total Referrals (All Time)", total_referrals)
+        col2.metric("Allocated", total_allocated)
+        col3.metric("Pending/Not Allocated", pending)
+        col4.metric("Allocation Rate", f"{(total_allocated/total_referrals*100):.1f}%" if total_referrals > 0 else "0%")
+        
+        st.markdown("---")
+        
+        # Debug expander
+        
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total Students", int(len(filtered)))
+        col2.metric("Programs", int(filtered['program'].nunique()))
+        col3.metric("Year Levels", int(filtered['year_level'].nunique()))
+        col4.metric("As at", datetime.now().strftime("%d/%m/%y"))
+        
+        st.markdown("---")
+        st.markdown("## Distribution by Program & Year Level")
+        st.markdown("Shows where students are placed across our three programs (JP, PY, SY) and year levels (R-10)")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if 'program' in filtered.columns:
+                prog_data = filtered['program'].value_counts().reset_index()
+                prog_data.columns = ['program', 'count']
+                prog_data['count'] = prog_data['count'].astype(int)
+                
+                fig = px.bar(prog_data, x='program', y='count', text='count', 
+                            color='count', color_continuous_scale='Viridis',
+                            title='Students by Program', labels={'program': '', 'count': ''})
+                fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                st.markdown("**What this shows:** Enrollment numbers in each program")
+        
+        with col2:
+            if 'year_level' in filtered.columns:
+                year_data = filtered['year_level'].value_counts().sort_index().reset_index()
+                year_data.columns = ['year_level', 'count']
+                year_data['count'] = year_data['count'].astype(int)
+                
+                # Define all possible year levels in order
+                all_year_levels = ['F', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+                # Create full dataframe with all year levels
+                year_data_full = pd.DataFrame({'year_level': all_year_levels})
+                year_data_full = year_data_full.merge(year_data, on='year_level', how='left').fillna(0)
+                year_data_full['count'] = year_data_full['count'].astype(int)
+                
+                fig = px.bar(year_data_full, x='year_level', y='count', text='count',
+                            color_discrete_sequence=['#4ecdc4'],
+                            title='Students by Year Level', labels={'year_level': '', 'count': ''})
+                fig.update_xaxes(
+                    type='category', 
+                    categoryorder='array', 
+                    categoryarray=all_year_levels,
+                    tickangle=0,
+                    showticklabels=True,
+                    tickfont=dict(size=12)
+                )
+                fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                fig.update_layout(xaxis_title='Year Level (F = Foundation, 1-10 = Years 1-10)')
+                st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                st.markdown("**What this shows:** Distribution across year levels F through 10")
+        
+        st.markdown("---")
+        st.markdown("## Partnership Placements")
+        st.markdown("Top partnership areas supporting student placements - shows partnership demand")
+        
+        if 'partnership_area' in filtered.columns:
+            partner_data = filtered['partnership_area'].value_counts().head(10).reset_index()
+            partner_data.columns = ['partnership_area', 'count']
+            partner_data['count'] = partner_data['count'].astype(int)
+            
+            fig = px.bar(partner_data, y='partnership_area', x='count', orientation='h',
+                        text='count', color='count', color_continuous_scale='Reds',
+                        title='Top 10 Partnerships', labels={'partnership_area': '', 'count': ''})
+            fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+            st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+            st.markdown("**What this shows:** Which partnership areas have the most student placements")
+    
+    elif section == "Trends":
+        st.markdown("## Enrollment Trends")
+        st.markdown("Line chart showing enrollment over time by program. **Solid lines = actual data | Dashed lines = forecast**")
+        
+        # Make sure we have clean numeric columns
+        trend_data = allocation_df.dropna(subset=['program']).copy()
+        trend_data['year_num'] = pd.to_numeric(trend_data['year'], errors='coerce')
+        trend_data['term_num'] = pd.to_numeric(trend_data['term'], errors='coerce')
+        
+        # Filter for valid data
+        trend_data = trend_data.dropna(subset=['year_num', 'term_num'])
+        trend_data = trend_data[trend_data['term_num'] >= 1]
+        
+        # Create proper year-term format (2025 T1, 2025 T2, etc)
+        trend_data['YearTerm'] = trend_data['year_num'].astype(int).astype(str) + ' T' + trend_data['term_num'].astype(int).astype(str)
+        trend_agg = trend_data.groupby(['YearTerm', 'program']).size().reset_index(name='count')
+        trend_agg['count'] = trend_agg['count'].astype(int)
+        
+        # Create sort key for proper ordering
+        trend_agg['year_sort'] = trend_agg['YearTerm'].str.extract(r'(\d{4})')[0].astype(int)
+        trend_agg['term_sort'] = trend_agg['YearTerm'].str.extract(r'T(\d)')[0].astype(int)
+        trend_agg['sort_key'] = trend_agg['year_sort'] * 100 + trend_agg['term_sort']
+        trend_agg = trend_agg.sort_values('sort_key').reset_index(drop=True)
+        
+        # Get unique year-terms in order
+        unique_yearterms = trend_agg.sort_values('sort_key')['YearTerm'].unique().tolist()
+        
+        # ACTUAL DATA
+        fig_trend = px.line(
+            trend_agg,
+            x='YearTerm',
+            y='count',
+            color='program',
+            markers=True,
+            title='Actual Enrollment by Program',
+            labels={'YearTerm': '', 'count': 'Students'}
+        )
+        fig_trend.update_xaxes(categoryorder='array', categoryarray=unique_yearterms)
+        fig_trend.update_traces(line=dict(width=3), marker=dict(size=8))
+        st.plotly_chart(update_chart_layout(fig_trend), use_container_width=True)
+        
+        st.markdown("---")
+        st.markdown("## Enrollment Forecast")
+        st.markdown("Predicted enrollment trends based on current patterns - **for planning purposes only**")
+        
+        # CREATE FORECAST DATA
+        forecast_data = []
+        
+        for prog in trend_agg['program'].unique():
+            prog_data = trend_agg[trend_agg['program'] == prog].sort_values('sort_key')
+            
+            # Add actual data
+            for idx, row in prog_data.iterrows():
+                forecast_data.append({
+                    'YearTerm': row['YearTerm'],
+                    'count': row['count'],
+                    'program': prog,
+                    'type': 'Actual',
+                    'sort_key': row['sort_key']
+                })
+            
+            # Generate forecast for next 4 periods
+            if len(prog_data) >= 1:
+                last_year = prog_data.iloc[-1]['year_sort']
+                last_term = prog_data.iloc[-1]['term_sort']
+                
+                # Calculate trend from last 2 points if available
+                if len(prog_data) >= 2:
+                    last_counts = prog_data['count'].tail(2).values
+                    trend_rate = last_counts[-1] - last_counts[-2]
+                else:
+                    trend_rate = 0
+                
+                last_count = prog_data.iloc[-1]['count']
+                
+                for i in range(1, 5):
+                    new_term = last_term + i
+                    new_year = last_year
+                    
+                    if new_term > 4:
+                        new_year = last_year + (new_term - 1) // 4
+                        new_term = ((new_term - 1) % 4) + 1
+                    
+                    forecast_count = max(last_count + (trend_rate * i), 0)
+                    forecast_data.append({
+                        'YearTerm': f'{new_year} T{new_term}',
+                        'count': int(forecast_count),
+                        'program': prog,
+                        'type': 'Forecast',
+                        'sort_key': new_year * 100 + new_term
+                    })
+        
+        forecast_df = pd.DataFrame(forecast_data)
+        forecast_df = forecast_df.sort_values('sort_key')
+        
+        # Get all unique year-terms in correct order
+        all_yearterms = sorted(forecast_df['YearTerm'].unique(), key=lambda x: (int(x.split()[0]), int(x.split('T')[1])))
+        
+        # Separate actual and forecast
+        actual = forecast_df[forecast_df['type'] == 'Actual']
+        predicted = forecast_df[forecast_df['type'] == 'Forecast']
+        
+        # Create combined figure
+        fig_forecast = go.Figure()
+        
+        # Add actual lines - ensure ALL programs shown
+        all_programs = sorted(forecast_df['program'].unique())
+        for prog in all_programs:
+            prog_actual = actual[actual['program'] == prog].sort_values('sort_key')
+            if len(prog_actual) > 0:
+                fig_forecast.add_trace(go.Scatter(
+                    x=prog_actual['YearTerm'],
+                    y=prog_actual['count'],
+                    mode='lines+markers',
+                    name=f'{prog} (Actual)',
+                    line=dict(width=3),
+                    marker=dict(size=8)
+                ))
+        
+        # Add forecast lines (dashed)
+        for prog in all_programs:
+            prog_forecast = predicted[predicted['program'] == prog].sort_values('sort_key')
+            
+            if len(prog_forecast) > 0:
+                fig_forecast.add_trace(go.Scatter(
+                    x=prog_forecast['YearTerm'],
+                    y=prog_forecast['count'],
+                    mode='lines+markers',
+                    name=f'{prog} (Forecast)',
+                    line=dict(width=2, dash='dash'),
+                    marker=dict(size=6, symbol='diamond'),
+                    opacity=0.6
+                ))
+        
+        fig_forecast.update_layout(
+            title='Enrollment Trends & Forecast',
+            xaxis_title='',
+            yaxis_title='Students',
+            plot_bgcolor='rgba(10,14,39,0.8)',
+            paper_bgcolor='rgba(10,14,39,0.8)',
+            font=dict(color='#ffffff', size=12),
+            hovermode='x unified',
+            margin=dict(l=40, r=40, t=40, b=40),
+            showlegend=True,
+            xaxis=dict(categoryorder='array', categoryarray=all_yearterms)
+        )
+        fig_forecast.update_xaxes(showgrid=False, tickfont=dict(color='#ffffff'))
+        fig_forecast.update_yaxes(showgrid=True, gridcolor='rgba(100,100,100,0.2)', tickfont=dict(color='#ffffff'))
+        
+        st.plotly_chart(fig_forecast, use_container_width=True)
+        
+        st.markdown("**Legend:**")
+        st.write("- **Solid lines** = Actual enrollment data")
+        st.write("- **Dashed lines** = Forecast projections (4 terms ahead)")
+        st.write("- Based on recent enrollment trends")
+    
+    elif section == "Complexity":
+        st.markdown("## Complexity Analysis")
+        st.markdown("Matrix showing how students distribute across year levels and programs. Identifies gaps and concentrations in placement.")
+        
+        if 'year_level' in filtered.columns and 'program' in filtered.columns:
+            # Define correct year level order
+            year_order = ['F', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+            program_order = ['JP', 'PY', 'SY']
+            
+            # Create heatmap data
+            heatmap = pd.crosstab(filtered['year_level'], filtered['program'])
+            
+            # Reindex to ensure ALL year levels appear (even if empty)
+            heatmap = heatmap.reindex(year_order, fill_value=0)
+            
+            # Reindex to ensure ALL programs appear (even if empty)
+            available_progs = [p for p in program_order if p in filtered['program'].unique()]
+            heatmap = heatmap.reindex(available_progs, axis=1, fill_value=0)
+            
+            fig = px.imshow(heatmap, text_auto=True, color_continuous_scale='Blues',
+                           title='Student Distribution: Year Level × Program',
+                           labels={'x': 'Program', 'y': 'Year Level', 'color': 'Count'},
+                           aspect='auto')
+            fig.update_traces(text=heatmap.values, texttemplate='%{text}')
+            st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+            
+            st.markdown("**Key Insights:**")
+            st.write("- Numbers show student count in each year level/program combination")
+            st.write("- Darker blue = higher concentration")
+            st.write("- Empty cells = no students placed")
+        else:
+            st.warning("Year level or program data missing")
+    
+    elif section == "Category of Support":
+        st.markdown("## Category of Support Analysis")
+        st.markdown("Student distribution by support category (Cat 1-9 + RAAP) - identifies support needs and resource allocation")
+        
+        # Extract funding category for each student
+        risk_df = filtered.copy()
+        risk_df['funding_category'] = 'None'
+        risk_df['is_raap'] = 'No'
+        
+        # Merge funding data if available (for uploaded data)
+        if 'funding_df' in st.session_state and st.session_state.funding_df is not None:
+            # Try name-based merge
+            risk_df['name_match'] = risk_df['student_name'].str.strip().str.lower()
+            funding_df_merge = st.session_state.funding_df.copy()
+            if 'name_match' in funding_df_merge.columns:
+                risk_df = risk_df.merge(funding_df_merge, on='name_match', how='left', suffixes=('', '_fund'))
+            risk_df = risk_df.drop('name_match', axis=1)
+        
+        # Merge RAAP data if available
+        if 'raap_df' in st.session_state and st.session_state.raap_df is not None:
+            # Try name-based merge
+            risk_df['name_match'] = risk_df['student_name'].str.strip().str.lower()
+            raap_df_merge = st.session_state.raap_df.copy()
+            if 'name_match' in raap_df_merge.columns:
+                risk_df = risk_df.merge(raap_df_merge, on='name_match', how='left', suffixes=('', '_raap'))
+            risk_df = risk_df.drop('name_match', axis=1)
+        
+        # Determine funding category from Flag_Category columns (highest category takes precedence)
+        for cat in range(9, 0, -1):
+            col_name = f'Flag_Category_{cat}'
+            if col_name in risk_df.columns:
+                # Handle both 'Yes' and True values
+                mask = (risk_df[col_name] == 'Yes') | (risk_df[col_name] == True)
+                risk_df.loc[mask, 'funding_category'] = f'Cat {cat}'
+        
+        # Check for RAAP AFTER setting base category - if Cat 9 + RAAP, change to Cat 9+RAAP
+        if 'Flag_9plusRAAP' in risk_df.columns:
+            raap_mask = (risk_df['Flag_9plusRAAP'] == 'Yes') | (risk_df['Flag_9plusRAAP'] == True)
+            risk_df.loc[raap_mask, 'funding_category'] = 'Cat 9+RAAP'
+            risk_df.loc[raap_mask, 'is_raap'] = 'Yes (RAAP)'
+        
+        # If cat_funding column exists and funding_category is still None, use it
+        if 'cat_funding' in risk_df.columns:
+            cat_funding_values = risk_df.loc[risk_df['funding_category'] == 'None', 'cat_funding'].fillna('None').astype(str)
+            risk_df.loc[risk_df['funding_category'] == 'None', 'funding_category'] = cat_funding_values
+        
+        # Ensure funding_category is string type
+        risk_df['funding_category'] = risk_df['funding_category'].astype(str)
+        risk_df['funding_category'] = risk_df['funding_category'].replace('nan', 'None')
+        
+        # SUMMARY METRICS
+        col1, col2, col3, col4 = st.columns(4)
+        
+        cat_counts = risk_df['funding_category'].value_counts().to_dict()
+        
+        # Highlight Cat 9+RAAP with special styling
+        cat_9_raap = int(cat_counts.get('Cat 9+RAAP', 0))
+        col1.metric("🔴 Cat 9+RAAP (Highest Priority)", cat_9_raap)
+        
+        col2.metric("Cat 9", int(cat_counts.get('Cat 9', 0)))
+        col3.metric("Cat 5-8", int(sum(cat_counts.get(f'Cat {i}', 0) for i in range(5, 9))))
+        col4.metric("Cat 1-4", int(sum(cat_counts.get(f'Cat {i}', 0) for i in range(1, 5))))
+        
+        st.markdown("---")
+        st.markdown("## Funding Category Distribution")
+        st.markdown("How many students are in each funding category")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            funding_summary = risk_df['funding_category'].value_counts().reset_index()
+            funding_summary.columns = ['category', 'count']
+            funding_summary['count'] = funding_summary['count'].astype(int)
+            
+            # Create custom sort order - Cat 9+RAAP at top (highest), then Cat 9, then 8-1, then None
+            category_order = ['Cat 9+RAAP', 'Cat 9', 'Cat 8', 'Cat 7', 'Cat 6', 'Cat 5', 'Cat 4', 'Cat 3', 'Cat 2', 'Cat 1', 'None']
+            funding_summary['sort_order'] = funding_summary['category'].apply(
+                lambda x: category_order.index(x) if x in category_order else 999
+            )
+            funding_summary = funding_summary.sort_values('sort_order')
+            
+            # Color by urgency - Cat 9+RAAP darkest
+            color_map = {
+                'Cat 9+RAAP': 99,
+                'Cat 9': 9,
+                'Cat 8': 8,
+                'Cat 7': 7,
+                'Cat 6': 6,
+                'Cat 5': 5,
+                'Cat 4': 4,
+                'Cat 3': 3,
+                'Cat 2': 2,
+                'Cat 1': 1,
+                'None': 0
+            }
+            funding_summary['color_key'] = funding_summary['category'].map(color_map)
+            
+            fig_funding = px.bar(
+                funding_summary,
+                x='count',
+                y='category',
+                orientation='h',
+                text='count',
+                color='color_key',
+                color_continuous_scale='Reds',
+                title='Students by Funding Category',
+                labels={'category': 'Category', 'count': 'Students', 'color_key': 'Urgency'}
+            )
+            fig_funding.update_yaxes(categoryorder='array', categoryarray=list(reversed(category_order)))
+            fig_funding.update_xaxes(dtick=1)
+            fig_funding.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+            st.plotly_chart(update_chart_layout(fig_funding), use_container_width=True)
+        
+        with col2:
+            # Funding by program
+            if 'program' in risk_df.columns:
+                fund_prog = risk_df.groupby(['program', 'funding_category']).size().unstack(fill_value=0)
+                
+                # Ensure all categories are present, ordered from highest to lowest
+                category_order = ['Cat 9+RAAP', 'Cat 9', 'Cat 8', 'Cat 7', 'Cat 6', 'Cat 5', 'Cat 4', 'Cat 3', 'Cat 2', 'Cat 1', 'None']
+                for cat in category_order:
+                    if cat not in fund_prog.columns:
+                        fund_prog[cat] = 0
+                
+                # Reorder columns
+                fund_prog = fund_prog[[c for c in category_order if c in fund_prog.columns]]
+                
+                # Create color map
+                color_discrete_map = {
+                    'Cat 9+RAAP': '#8B0000',  # Dark red
+                    'Cat 9': '#DC143C',       # Crimson
+                    'Cat 8': '#FF6347',       # Tomato
+                    'Cat 7': '#FFA07A',       # Light salmon
+                    'Cat 6': '#FFB6C1',       # Light pink
+                    'Cat 5': '#FFE4E1',       # Misty rose
+                    'Cat 4': '#FFF0F5',       # Lavender blush
+                    'Cat 3': '#E0FFFF',       # Light cyan
+                    'Cat 2': '#B0E0E6',       # Powder blue
+                    'Cat 1': '#87CEEB',       # Sky blue
+                    'None': '#D3D3D3'         # Light gray
+                }
+                
+                fig_fund_prog = px.bar(
+                    fund_prog,
+                    barmode='stack',
+                    title='Funding Categories by Program',
+                    labels={'value': 'Count', 'index': 'Program'},
+                    color_discrete_map=color_discrete_map
+                )
+                fig_fund_prog.update_yaxes(dtick=1)
+                st.plotly_chart(update_chart_layout(fig_fund_prog), use_container_width=True)
+        
+        st.markdown("---")
+        st.markdown("## Funding Category Details")
+        st.markdown("Breakdown by category and program")
+        
+        # Add legend explanation
+        st.info("🔴 **Color Guide:** Darker red = Higher category (more intensive support needed). Cat 9+RAAP is the most intensive support level.")
+        
+        # Create matrix of programs x funding categories
+        if 'program' in risk_df.columns and 'funding_category' in risk_df.columns:
+            fund_matrix = pd.crosstab(risk_df['program'], risk_df['funding_category'])
+            
+            # Reorder columns (Cat 9+RAAP first, then highest to lowest)
+            cat_order = ['Cat 9+RAAP'] + [f'Cat {i}' for i in range(9, 0, -1)] + ['None']
+            cat_order = [c for c in cat_order if c in fund_matrix.columns]
+            fund_matrix = fund_matrix[cat_order]
+            
+            fig_matrix = px.imshow(
+                fund_matrix,
+                text_auto=True,
+                color_continuous_scale='YlOrRd',
+                title='Program × Funding Category (Cat 9+RAAP = Highest Priority)',
+                labels={'x': 'Funding Category', 'y': 'Program', 'color': 'Students'}
+            )
+            fig_matrix.update_traces(text=fund_matrix.values, texttemplate='%{text}')
+            fig_matrix.update_xaxes(categoryorder='array', categoryarray=cat_order)
+            fig_matrix.update_layout(
+                xaxis_title='Funding Category (9+RAAP = Most Intensive →)',
+                yaxis_title='Program'
+            )
+            st.plotly_chart(update_chart_layout(fig_matrix), use_container_width=True)
+        
+        st.markdown("---")
+        st.markdown("## Placement Alignment Analysis")
+        st.markdown("Shows students placed in programs different from their typical year level alignment")
+        
+        # Define expected program alignment
+        expected_alignment = {
+            'JP': ['F', '1', '2'],
+            'PY': ['3', '4', '5', '6'],
+            'SY': ['7', '8', '9', '10']
+        }
+        
+        # Check for cross-program placements
+        risk_df['expected_program'] = None
+        risk_df['is_cross_placement'] = False
+        
+        for prog, year_levels in expected_alignment.items():
+            mask = risk_df['year_level'].astype(str).isin(year_levels)
+            risk_df.loc[mask, 'expected_program'] = prog
+        
+        # Mark students not in their expected program
+        risk_df['is_cross_placement'] = risk_df['program'] != risk_df['expected_program']
+        
+        # Count cross-placements
+        cross_count = risk_df['is_cross_placement'].sum()
+        expected_count = len(risk_df) - cross_count
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            col_a, col_b = st.columns(2)
+            col_a.metric("Expected Alignment", expected_count)
+            col_b.metric("Site Decision Placement", cross_count)
+        
+        with col2:
+            # Chart of alignment
+            alignment_data = pd.DataFrame({
+                'Placement Type': ['Expected Program', 'Site Decision (Different)'],
+                'Count': [expected_count, cross_count]
+            })
+            
+            fig = px.bar(
+                alignment_data,
+                x='Placement Type',
+                y='Count',
+                text='Count',
+                color='Placement Type',
+                color_discrete_map={
+                    'Expected Program': '#4CAF50',
+                    'Site Decision (Different)': '#FF9800'
+                },
+                title='Program Placement Type',
+                labels={'Count': 'Students'}
+            )
+            fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+            st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+        
+        # Show cross-placement details
+        if cross_count > 0:
+            st.markdown("---")
+            st.markdown("### Cross-Program Placements (Site Decision)")
+            st.markdown(f"**{cross_count} students** placed in different program than typical year level alignment")
+            
+            cross_placements = risk_df[risk_df['is_cross_placement']].copy()
+            
+            display_cols = ['program', 'year_level', 'expected_program', 'funding_category', 'partnership_area']
+            display_cols = [col for col in display_cols if col in cross_placements.columns]
+            
+            if display_cols:
+                # Rename for display
+                cross_placements_display = cross_placements[display_cols].copy()
+                cross_placements_display.columns = ['Program', 'Year Level', 'Expected Program', 'Funding', 'Area']
+                
+                with st.expander(f"📋 View all {cross_count} cross-placements"):
+                    st.dataframe(cross_placements_display.reset_index(drop=True), use_container_width=True, hide_index=True)
+        st.markdown("Students requiring most intensive support and resources")
+        
+        high_need = risk_df[risk_df['funding_category'].isin(['Cat 9+RAAP', 'Cat 9', 'Cat 8'])].copy()
+        
+        if len(high_need) > 0:
+            display_cols = ['program', 'year_level', 'funding_category', 'partnership_area']
+            display_cols = [col for col in display_cols if col in high_need.columns]
+            
+            high_need_display = high_need[display_cols].copy().sort_values('funding_category', ascending=False)
+            
+            # Highlight Cat 9+RAAP in the data
+            st.dataframe(high_need_display, use_container_width=True, hide_index=True)
+            
+            cat_9_raap_count = (high_need['funding_category'] == 'Cat 9+RAAP').sum()
+            cat_9_only_count = (high_need['funding_category'] == 'Cat 9').sum()
+            cat_8_count = (high_need['funding_category'] == 'Cat 8').sum()
+            
+            st.info(f"**{int(cat_9_raap_count)} students** in Cat 9+RAAP | **{int(cat_9_only_count)} students** in Cat 9 | **{int(cat_8_count)} students** in Cat 8 (highest support needs)")
+        else:
+            st.success("✅ No highest-need students in current selection")
+        
+        st.markdown("---")
+        st.markdown("## Resource Allocation Summary")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        total_students = len(risk_df)
+        cat_9_raap_pct = int((risk_df['funding_category'] == 'Cat 9+RAAP').sum() / total_students * 100) if total_students > 0 else 0
+        cat_9_only_pct = int((risk_df['funding_category'] == 'Cat 9').sum() / total_students * 100) if total_students > 0 else 0
+        
+        col1.metric("Cat 9+RAAP %", f"{cat_9_raap_pct}%")
+        col2.metric("Cat 9 Only %", f"{cat_9_only_pct}%")
+        col3.metric("High Need (8-9+RAAP) %", f"{int(((cat_9_raap_pct + cat_9_only_pct) / 100 * total_students) / total_students * 100 if total_students > 0 else 0)}%")
+    
+    elif section == "Cohort Analysis":
+        st.markdown("## Cohort Deep Dive Analysis")
+        st.markdown("Detailed breakdown by program, year level, and partnerships - identify patterns and opportunities")
+        
+        # Create tabs for different views
+        tab1, tab2, tab3 = st.tabs(["Program Deep Dive", "Year Level Deep Dive", "Partnership Analysis"])
+        
+        # === TAB 1: PROGRAM DEEP DIVE ===
+        with tab1:
+            st.markdown("### Program Deep Dive")
+            st.markdown("Comprehensive analysis of each program (JP, PY, SY)")
+            
+            programs = sorted([p for p in filtered['program_clean'].unique() if p != '' and p != ':2' and pd.notna(p)])
+            
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                # Program comparison - bar chart
+                prog_data = filtered['program_clean'].value_counts().reset_index()
+                prog_data.columns = ['program', 'count']
+                prog_data['count'] = prog_data['count'].astype(int)
+                prog_data = prog_data.sort_values('count', ascending=False)
+                
+                fig_prog_comp = px.bar(
+                    prog_data,
+                    x='program',
+                    y='count',
+                    text='count',
+                    color='program',
+                    title='Student Count by Program',
+                    labels={'program': '', 'count': 'Students'}
+                )
+                fig_prog_comp.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                st.plotly_chart(update_chart_layout(fig_prog_comp), use_container_width=True)
+            
+            with col2:
+                st.markdown("**Program Summary**")
+                for idx, row in prog_data.iterrows():
+                    st.write(f"**{row['program']}**: {row['count']} students")
+            
+            st.markdown("---")
+            
+            # Deep dive by each program
+            for prog in programs:
+                prog_filtered = filtered[filtered['program_clean'] == prog]
+                
+                if len(prog_filtered) > 0:
+                    st.markdown(f"#### {prog} Program Details")
+                    
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric(f"{prog} Total", int(len(prog_filtered)))
+                    col2.metric(f"Year Levels", int(prog_filtered['year_level'].nunique()))
+                    col3.metric(f"Partnerships", int(prog_filtered['partnership_area'].nunique()))
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        # Year level distribution
+                        year_dist = prog_filtered['year_level'].value_counts().sort_index().reset_index()
+                        year_dist.columns = ['year_level', 'count']
+                        year_dist['count'] = year_dist['count'].astype(int)
+                        
+                        fig_year = px.bar(
+                            year_dist,
+                            x='year_level',
+                            y='count',
+                            text='count',
+                            color_discrete_sequence=['#00e5ff'],
+                            title=f'{prog} by Year Level',
+                            labels={'year_level': '', 'count': 'Count'}
+                        )
+                        fig_year.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                        st.plotly_chart(update_chart_layout(fig_year), use_container_width=True)
+                    
+                    with col2:
+                        # Top partnerships
+                        part_dist = prog_filtered['partnership_area'].value_counts().head(8).reset_index()
+                        part_dist.columns = ['partnership_area', 'count']
+                        part_dist['count'] = part_dist['count'].astype(int)
+                        
+                        fig_part = px.bar(
+                            part_dist,
+                            y='partnership_area',
+                            x='count',
+                            orientation='h',
+                            text='count',
+                            color_discrete_sequence=['#ffc107'],
+                            title=f'{prog} Top Partnerships',
+                            labels={'partnership_area': '', 'count': 'Count'}
+                        )
+                        fig_part.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                        st.plotly_chart(update_chart_layout(fig_part), use_container_width=True)
+                    
+                    st.markdown("---")
+        
+        # === TAB 2: YEAR LEVEL DEEP DIVE ===
+        with tab2:
+            st.markdown("### Year Level Deep Dive")
+            st.markdown("Student distribution and characteristics by year level (R through 10)")
+            
+            year_order = ['F', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+            year_levels = [y for y in year_order if y in filtered['year_level'].unique()]
+            
+            # Year level overview
+            year_summary = filtered['year_level'].value_counts().reindex(year_levels, fill_value=0).reset_index()
+            year_summary.columns = ['year_level', 'count']
+            year_summary['count'] = year_summary['count'].astype(int)
+            
+            fig_year_overview = px.bar(
+                year_summary,
+                x='year_level',
+                y='count',
+                text='count',
+                color='count',
+                color_continuous_scale='Viridis',
+                title='Student Distribution by Year Level',
+                labels={'year_level': 'Year Level', 'count': 'Students'}
+            )
+            fig_year_overview.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+            st.plotly_chart(update_chart_layout(fig_year_overview), use_container_width=True)
+            
+            st.markdown("---")
+            
+            # Deep dive by year level
+            for year in year_levels:
+                year_filtered = filtered[filtered['year_level'] == year]
+                
+                if len(year_filtered) > 0:
+                    st.markdown(f"#### Year Level {year}")
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric(f"Year {year} Students", int(len(year_filtered)))
+                    col2.metric("Programs", int(year_filtered['program'].nunique()))
+                    col3.metric("Partnerships", int(year_filtered['partnership_area'].nunique()))
+                    
+                    # Average risk score for this year level
+                    risk_score = 0
+                    if 'total_previous_placements' in year_filtered.columns:
+                        risk_score += (pd.to_numeric(year_filtered['total_previous_placements'], errors='coerce').fillna(0) > 0).sum()
+                    if 'bespoke_placement' in year_filtered.columns:
+                        risk_score += (year_filtered['bespoke_placement'] == 'Yes').sum()
+                    
+                    col4.metric("Risk Indicators", int(risk_score))
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        # Programs for this year
+                        prog_dist = year_filtered['program'].value_counts().reset_index()
+                        prog_dist.columns = ['program', 'count']
+                        prog_dist['count'] = prog_dist['count'].astype(int)
+                        
+                        fig_prog_year = px.pie(
+                            prog_dist,
+                            values='count',
+                            names='program',
+                            title=f'Year {year} - Programs',
+                            color_discrete_sequence=['#ff6b6b', '#4ecdc4', '#ffd93d']
+                        )
+                        st.plotly_chart(update_chart_layout(fig_prog_year), use_container_width=True)
+                    
+                    with col2:
+                        # Top partnerships
+                        part_year = year_filtered['partnership_area'].value_counts().head(6).reset_index()
+                        part_year.columns = ['partnership', 'count']
+                        part_year['count'] = part_year['count'].astype(int)
+                        
+                        fig_part_year = px.bar(
+                            part_year,
+                            y='partnership',
+                            x='count',
+                            orientation='h',
+                            text='count',
+                            color_discrete_sequence=['#a8e6cf'],
+                            title=f'Year {year} - Top Partnerships',
+                            labels={'partnership': '', 'count': 'Count'}
+                        )
+                        fig_part_year.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                        st.plotly_chart(update_chart_layout(fig_part_year), use_container_width=True)
+                    
+                    st.markdown("---")
+        
+        # === TAB 3: PARTNERSHIP ANALYSIS ===
+        with tab3:
+            st.markdown("### Partnership Effectiveness")
+            st.markdown("Student volume and distribution across partnerships")
+            
+            # Overall partnership ranking
+            part_summary = filtered['partnership_area'].value_counts().head(15).reset_index()
+            part_summary.columns = ['partnership', 'count']
+            part_summary['count'] = part_summary['count'].astype(int)
+            
+            fig_part_ranking = px.bar(
+                part_summary,
+                y='partnership',
+                x='count',
+                orientation='h',
+                text='count',
+                color='count',
+                color_continuous_scale='Reds',
+                title='Top 15 Partnerships by Student Volume',
+                labels={'partnership': '', 'count': 'Students'}
+            )
+            fig_part_ranking.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+            fig_part_ranking.update_yaxes(categoryorder='total ascending')
+            st.plotly_chart(update_chart_layout(fig_part_ranking), use_container_width=True)
+            
+            st.markdown("---")
+            st.markdown("### Partnership × Program Matrix")
+            st.markdown("How many students in each program are placed with each partnership")
+            
+            # Create matrix
+            if 'partnership_area' in filtered.columns and 'program' in filtered.columns:
+                part_prog_matrix = pd.crosstab(
+                    filtered['partnership_area'],
+                    filtered['program']
+                )
+                
+                # Keep top 12 partnerships
+                top_parts = part_prog_matrix.sum(axis=1).nlargest(12).index
+                part_prog_matrix = part_prog_matrix.loc[top_parts]
+                
+                fig_matrix = px.imshow(
+                    part_prog_matrix,
+                    text_auto=True,
+                    color_continuous_scale='YlOrRd',
+                    title='Partnership × Program Distribution',
+                    labels={'x': 'Program', 'y': 'Partnership', 'color': 'Students'}
+                )
+                fig_matrix.update_traces(text=part_prog_matrix.values, texttemplate='%{text}')
+                st.plotly_chart(update_chart_layout(fig_matrix), use_container_width=True)
+            
+            st.markdown("---")
+            st.markdown("### Partnership Insights")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("Total Partnerships", int(filtered['partnership_area'].nunique()))
+            with col2:
+                largest_part = filtered['partnership_area'].value_counts().index[0]
+                largest_count = filtered['partnership_area'].value_counts().values[0]
+                st.metric("Largest Partnership", f"{largest_part} ({largest_count})")
+            with col3:
+                st.metric("Avg Students/Partnership", int(len(filtered) / filtered['partnership_area'].nunique()))
+    
 
-st.caption("CLC-LBU Allocation Meetings Tool")
+
+
+
+    elif section == "Equity":
+        st.markdown("## Equity Deep Dive Analysis")
+        st.markdown("Separate analysis of ATSI, EALD, and DCP cohorts across all terms in the selected year")
+        
+        # For Equity, use the year-filtered data but IGNORE term/program filters for broader view
+        equity_df = allocation_df.copy()
+        
+        # Only apply year filter
+        if selected_year != 'All':
+            equity_df = equity_df[equity_df['year_clean'] == selected_year]
+        
+        # Apply program filter only if not 'All'
+        if selected_program != 'All':
+            equity_df = equity_df[equity_df['program_clean'] == selected_program]
+        
+        # Use flag data from session state, cached data, or show instructions
+        flag_df_to_use = None
+        
+        if 'flag_df' in st.session_state and st.session_state.flag_df is not None:
+            flag_df_to_use = st.session_state.flag_df
+            st.info("✅ Using flag data from sidebar upload")
+        elif cached_flag_df is not None:
+            flag_df_to_use = cached_flag_df
+            st.info("✅ Using cached flag data")
+        else:
+            st.warning("📌 **Upload flag data in the sidebar** under 'Flag Data Upload' to see equity analysis")
+        
+        # Merge flags with filtered data
+        if flag_df_to_use is not None and len(flag_df_to_use) > 0:
+            equity_df['name_match'] = equity_df['student_name'].str.strip().str.lower()
+            equity_df = equity_df.merge(flag_df_to_use, on='name_match', how='left')
+            equity_df = equity_df.drop('name_match', axis=1)
+        
+        # Standardize flag values
+        def standardize_flag(val):
+            if pd.isna(val):
+                return 'No'
+            return 'Yes' if str(val).upper() == 'YES' else 'No'
+        
+        # Standardize flag columns
+        if 'Flag_ATSI' in equity_df.columns:
+            equity_df['Flag_ATSI'] = equity_df['Flag_ATSI'].apply(standardize_flag)
+        if 'Flag_EALD' in equity_df.columns:
+            equity_df['Flag_EALD'] = equity_df['Flag_EALD'].apply(standardize_flag)
+        if 'Flag_DCP_involvement' in equity_df.columns:
+            equity_df['Flag_DCP'] = equity_df['Flag_DCP_involvement'].apply(standardize_flag)
+        
+        # School SES data
+        school_ses_data = {
+            'Le Fevre High School': {'SEIFA_IRSAD': 850, 'Disadvantage_Level': 'Very High'},
+            'Largs Bay Primary School': {'SEIFA_IRSAD': 860, 'Disadvantage_Level': 'Very High'},
+            'Ocean View College': {'SEIFA_IRSAD': 880, 'Disadvantage_Level': 'High'},
+            'Woodville High School': {'SEIFA_IRSAD': 890, 'Disadvantage_Level': 'High'},
+            'Adelaide High School': {'SEIFA_IRSAD': 900, 'Disadvantage_Level': 'Medium'},
+            'Elizabeth High School': {'SEIFA_IRSAD': 820, 'Disadvantage_Level': 'Very High'},
+            'Port Adelaide High School': {'SEIFA_IRSAD': 840, 'Disadvantage_Level': 'Very High'},
+            'Brighton Primary School': {'SEIFA_IRSAD': 950, 'Disadvantage_Level': 'Low'},
+            'Glenelg High School': {'SEIFA_IRSAD': 930, 'Disadvantage_Level': 'Low'},
+        }
+        
+        tab_atsi, tab_eald, tab_dcp = st.tabs(["🇦🇺 ATSI Deep Dive", "🗣️ EALD Deep Dive", "🌏 DCP Deep Dive"])
+        
+        # === ATSI ===
+        with tab_atsi:
+            st.markdown("### Aboriginal & Torres Strait Islander Students")
+            if 'Flag_ATSI' not in equity_df.columns:
+                st.warning("Flag_ATSI column not found in data")
+                atsi_df = pd.DataFrame()
+            else:
+                atsi_df = equity_df[equity_df['Flag_ATSI'] == 'Yes']
+            
+            if len(atsi_df) > 0:
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Total ATSI", len(atsi_df))
+                multi_need = ((atsi_df['Flag_EALD'] == 'Yes') | (atsi_df['Flag_DCP'] == 'Yes')).sum()
+                c2.metric("With 1+ Need", multi_need)
+                c3.metric("ATSI + EALD", (atsi_df['Flag_EALD'] == 'Yes').sum())
+                c4.metric("ATSI + DCP", (atsi_df['Flag_DCP'] == 'Yes').sum())
+                
+                st.markdown("---")
+                if 'term_clean' in atsi_df.columns and len(atsi_df['term_clean'].dropna()) > 0:
+                    by_term = atsi_df[atsi_df['term_clean'] >= 1]['term_clean'].value_counts().sort_index()
+                    if len(by_term) > 0:
+                        # If only one term, show as metric; otherwise show bar chart
+                        if len(by_term) == 1:
+                            term_num = int(by_term.index[0])
+                            count = by_term.values[0]
+                            st.markdown(f"**ATSI Students in Term {term_num}**")
+                            col1, col2, col3 = st.columns(3)
+                            col1.metric("Students", count)
+                            col2.metric("% of ATSI Total", f"{(count/len(atsi_df)*100):.1f}%")
+                            col3.metric("% of Cohort", f"{(count/len(equity_df)*100):.1f}%")
+                        else:
+                            term_df = pd.DataFrame({'Term': by_term.index, 'Count': by_term.values})
+                            fig = px.bar(term_df, x='Term', y='Count', title='ATSI Students by Term',
+                                         color_discrete_sequence=['#8B4513'])
+                            fig.update_traces(textposition='outside', text=term_df['Count'].values, textfont=dict(color='#ffffff'))
+                            fig.update_xaxes(type='category', categoryorder='array', categoryarray=[1, 2, 3, 4])
+                            st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                
+                st.markdown("---")
+                if 'school' in atsi_df.columns:
+                    school_counts = atsi_df['school'].value_counts().head(10)
+                    school_data = pd.DataFrame({'School': school_counts.index, 'Count': school_counts.values})
+                    school_data['SES'] = school_data['School'].apply(lambda x: school_ses_data.get(x, {}).get('Disadvantage_Level', 'Unknown'))
+                    
+                    fig = px.bar(school_data, y='School', x='Count', orientation='h', text='Count', color='SES',
+                        color_discrete_map={'Very High': '#f44336', 'High': '#ff9800', 'Medium': '#ffc107', 'Low': '#4caf50', 'Unknown': '#999'},
+                        title='Top Schools (ATSI Referrals)')
+                    fig.update_yaxes(categoryorder='total ascending')
+                    fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                
+                st.markdown("---")
+                if 'partnership_area' in atsi_df.columns:
+                    part_counts = atsi_df['partnership_area'].value_counts().head(8)
+                    fig = px.bar(part_counts, title='Top Partnerships (ATSI)',
+                        color_discrete_sequence=['#8B4513'], labels={'value': 'Students'})
+                    fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                
+                st.markdown("---")
+                multi_atsi = atsi_df[(atsi_df['Flag_EALD'] == 'Yes') & (atsi_df['Flag_DCP'] == 'Yes')]
+                if len(multi_atsi) > 0:
+                    cols_show = ['program', 'year_level', 'school', 'partnership_area']
+                    cols_show = [c for c in cols_show if c in multi_atsi.columns]
+                    st.markdown("#### ATSI with BOTH EALD + DCP")
+                    st.write(f"**{len(multi_atsi)} students** with this combination (student names hidden for privacy)")
+                    st.dataframe(multi_atsi[cols_show], use_container_width=True, hide_index=True)
+                else:
+                    st.info("No ATSI students with both EALD + DCP")
+            else:
+                st.info("No ATSI students in current filters")
+        
+        # === EALD ===
+        with tab_eald:
+            st.markdown("### English as Additional Language (EALD) Students")
+            if 'Flag_EALD' not in equity_df.columns:
+                st.warning("Flag_EALD column not found in data")
+                eald_df = pd.DataFrame()
+            else:
+                eald_df = equity_df[equity_df['Flag_EALD'] == 'Yes']
+            
+            if len(eald_df) > 0:
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Total EALD", len(eald_df))
+                multi_need = ((eald_df['Flag_ATSI'] == 'Yes') | (eald_df['Flag_DCP'] == 'Yes')).sum()
+                c2.metric("With 1+ Need", multi_need)
+                c3.metric("EALD + ATSI", (eald_df['Flag_ATSI'] == 'Yes').sum())
+                c4.metric("EALD + DCP", (eald_df['Flag_DCP'] == 'Yes').sum())
+                
+                st.markdown("---")
+                if 'term_clean' in eald_df.columns and len(eald_df['term_clean'].dropna()) > 0:
+                    by_term = eald_df[eald_df['term_clean'] >= 1]['term_clean'].value_counts().sort_index()
+                    if len(by_term) > 0:
+                        term_df = pd.DataFrame({'Term': by_term.index, 'Count': by_term.values})
+                        fig = px.bar(term_df, x='Term', y='Count', title='EALD Students by Term',
+                                     color_discrete_sequence=['#20B2AA'])
+                        fig.update_traces(textposition='outside', text=term_df['Count'].values, textfont=dict(color='#ffffff'))
+                        fig.update_xaxes(type='category', categoryorder='array', categoryarray=[1, 2, 3, 4])
+                        st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                
+                st.markdown("---")
+                if 'school' in eald_df.columns:
+                    school_counts = eald_df['school'].value_counts().head(10)
+                    school_data = pd.DataFrame({'School': school_counts.index, 'Count': school_counts.values})
+                    school_data['SES'] = school_data['School'].apply(lambda x: school_ses_data.get(x, {}).get('Disadvantage_Level', 'Unknown'))
+                    
+                    fig = px.bar(school_data, y='School', x='Count', orientation='h', text='Count', color='SES',
+                        color_discrete_map={'Very High': '#f44336', 'High': '#ff9800', 'Medium': '#ffc107', 'Low': '#4caf50', 'Unknown': '#999'},
+                        title='Top Schools (EALD Referrals)')
+                    fig.update_yaxes(categoryorder='total ascending')
+                    fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                
+                st.markdown("---")
+                if 'partnership_area' in eald_df.columns:
+                    part_counts = eald_df['partnership_area'].value_counts().head(8)
+                    fig = px.bar(part_counts, title='Top Partnerships (EALD)',
+                        color_discrete_sequence=['#20B2AA'], labels={'value': 'Students'})
+                    fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                
+                st.markdown("---")
+                multi_eald = eald_df[(eald_df['Flag_ATSI'] == 'Yes') & (eald_df['Flag_DCP'] == 'Yes')]
+                if len(multi_eald) > 0:
+                    cols_show = ['program', 'year_level', 'school', 'partnership_area']
+                    cols_show = [c for c in cols_show if c in multi_eald.columns]
+                    st.markdown("#### EALD with BOTH ATSI + DCP")
+                    st.write(f"**{len(multi_eald)} students** with this combination (student names hidden for privacy)")
+                    st.dataframe(multi_eald[cols_show], use_container_width=True, hide_index=True)
+                else:
+                    st.info("No EALD students with both ATSI + DCP")
+            else:
+                st.info("No EALD students in current filters")
+        
+        # === DCP ===
+        with tab_dcp:
+            st.markdown("### Diverse Cultural & Linguistic Background (DCP) Students")
+            if 'Flag_DCP' not in equity_df.columns:
+                st.warning("Flag_DCP column not found in data")
+                dcp_df = pd.DataFrame()
+            else:
+                dcp_df = equity_df[equity_df['Flag_DCP'] == 'Yes']
+            
+            if len(dcp_df) > 0:
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Total DCP", len(dcp_df))
+                multi_need = ((dcp_df['Flag_ATSI'] == 'Yes') | (dcp_df['Flag_EALD'] == 'Yes')).sum()
+                c2.metric("With 1+ Need", multi_need)
+                c3.metric("DCP + ATSI", (dcp_df['Flag_ATSI'] == 'Yes').sum())
+                c4.metric("DCP + EALD", (dcp_df['Flag_EALD'] == 'Yes').sum())
+                
+                st.markdown("---")
+                if 'term_clean' in dcp_df.columns and len(dcp_df['term_clean'].dropna()) > 0:
+                    by_term = dcp_df[dcp_df['term_clean'] >= 1]['term_clean'].value_counts().sort_index()
+                    if len(by_term) > 0:
+                        term_df = pd.DataFrame({'Term': by_term.index, 'Count': by_term.values})
+                        fig = px.bar(term_df, x='Term', y='Count', title='DCP Students by Term',
+                                     color_discrete_sequence=['#9370DB'])
+                        fig.update_traces(textposition='outside', text=term_df['Count'].values, textfont=dict(color='#ffffff'))
+                        fig.update_xaxes(type='category', categoryorder='array', categoryarray=[1, 2, 3, 4])
+                        st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                
+                st.markdown("---")
+                if 'school' in dcp_df.columns:
+                    school_counts = dcp_df['school'].value_counts().head(10)
+                    school_data = pd.DataFrame({'School': school_counts.index, 'Count': school_counts.values})
+                    school_data['SES'] = school_data['School'].apply(lambda x: school_ses_data.get(x, {}).get('Disadvantage_Level', 'Unknown'))
+                    
+                    fig = px.bar(school_data, y='School', x='Count', orientation='h', text='Count', color='SES',
+                        color_discrete_map={'Very High': '#f44336', 'High': '#ff9800', 'Medium': '#ffc107', 'Low': '#4caf50', 'Unknown': '#999'},
+                        title='Top Schools (DCP Referrals)')
+                    fig.update_yaxes(categoryorder='total ascending')
+                    fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                
+                st.markdown("---")
+                if 'partnership_area' in dcp_df.columns:
+                    part_counts = dcp_df['partnership_area'].value_counts().head(8)
+                    fig = px.bar(part_counts, title='Top Partnerships (DCP)',
+                        color_discrete_sequence=['#9370DB'], labels={'value': 'Students'})
+                    fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                    st.plotly_chart(update_chart_layout(fig), use_container_width=True)
+                
+                st.markdown("---")
+                multi_dcp = dcp_df[(dcp_df['Flag_ATSI'] == 'Yes') & (dcp_df['Flag_EALD'] == 'Yes')]
+                if len(multi_dcp) > 0:
+                    cols_show = ['program', 'year_level', 'school', 'partnership_area']
+                    cols_show = [c for c in cols_show if c in multi_dcp.columns]
+                    st.markdown("#### DCP with BOTH ATSI + EALD")
+                    st.write(f"**{len(multi_dcp)} students** with this combination (student names hidden for privacy)")
+                    st.dataframe(multi_dcp[cols_show], use_container_width=True, hide_index=True)
+                else:
+                    st.info("No DCP students with both ATSI + EALD")
+            else:
+                st.info("No DCP students in current filters")
+
+    elif section == "Disability & Support Needs":
+        st.markdown("## Disability & Support Needs Analysis")
+        st.markdown("Deep analysis of student disabilities and complex support needs - including intersectionality with ATSI, EALD, and DCP")
+        
+        st.info("🔍 **Note:** This section analyzes disability types and complex needs. ATSI, EALD, and DCP are tracked as intersecting identity factors, not as disabilities.")
+        
+        st.markdown("---")
+        
+        # Debug: Check what data we have
+        with st.expander("🔍 Debug - Available Data"):
+            st.write(f"**Filtered data shape:** {filtered.shape}")
+            st.write(f"**Filtered columns:** {list(filtered.columns)}")
+            
+            if 'funding_df' in st.session_state and st.session_state.funding_df is not None:
+                st.write(f"**Funding DF shape:** {st.session_state.funding_df.shape}")
+                st.write(f"**Funding DF columns:** {list(st.session_state.funding_df.columns)}")
+                st.write(f"**Funding DF sample:**")
+                st.dataframe(st.session_state.funding_df.head())
+            else:
+                st.write("**No funding_df in session state**")
+        
+        st.markdown("---")
+        
+        # Merge disability flags into filtered data
+        disability_df = filtered.copy()
+        
+        # Merge uploaded disability flag data if available
+        if 'disability_df' in st.session_state and st.session_state.disability_df is not None:
+            disability_df['name_match'] = disability_df['student_name'].str.strip().str.lower()
+            disability_flag_merge = st.session_state.disability_df.copy()
+            if 'name_match' in disability_flag_merge.columns:
+                before_merge = len(disability_df)
+                disability_df = disability_df.merge(disability_flag_merge, on='name_match', how='left', suffixes=('', '_flag'))
+                after_merge = len(disability_df)
+                st.write(f"Merge result: {before_merge} → {after_merge} rows")
+            disability_df = disability_df.drop('name_match', axis=1)
+        
+        # Check if we have disability flag data
+        disability_flags = ['Flag_SWD', 'Flag_ASD', 'Flag_Intellectual', 'Flag_Learning_Difficulty', 
+                           'Flag_Sensory_Processing', 'Flag_ADHD', 'Flag_ODD', 'Flag_PDA']
+        
+        # Find which flags actually exist
+        available_flags = [f for f in disability_flags if f in disability_df.columns]
+        st.write(f"**Available disability flags:** {available_flags}")
+        
+        # Count students with at least one disability flag
+        disability_df['has_disability'] = False
+        disability_df['disability_count'] = 0
+        
+        for flag in available_flags:
+            mask = (disability_df[flag] == 'Yes') | (disability_df[flag] == 'YES')
+            disability_df.loc[mask, 'has_disability'] = True
+            disability_df['disability_count'] += mask.astype(int)
+        
+        total_students = len(disability_df)
+        students_with_disability = disability_df['has_disability'].sum()
+        students_no_disability = total_students - students_with_disability
+        
+        # Metrics row
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total Students", total_students)
+        col2.metric("With Disability", students_with_disability)
+        col3.metric("No Disability Flag", students_no_disability)
+        col4.metric("% with Disability", f"{(students_with_disability/total_students*100):.1f}%" if total_students > 0 else "0%")
+        
+        st.markdown("---")
+        st.markdown("### Disability Type Distribution")
+        
+        # Count each disability type
+        disability_counts = {}
+        for flag in disability_flags:
+            if flag in disability_df.columns:
+                count = ((disability_df[flag] == 'Yes') | (disability_df[flag] == 'YES')).sum()
+                if count > 0:
+                    # Clean up flag name
+                    name = flag.replace('Flag_', '').replace('_', ' ')
+                    disability_counts[name] = count
+        
+        if disability_counts:
+            # Sort by count descending
+            disability_counts = dict(sorted(disability_counts.items(), key=lambda x: x[1], reverse=True))
+            
+            disability_data = pd.DataFrame(list(disability_counts.items()), columns=['Disability Type', 'Count'])
+            
+            col1, col2 = st.columns([1.2, 1])
+            
+            with col1:
+                # Horizontal bar chart
+                fig = px.bar(
+                    disability_data,
+                    x='Count',
+                    y='Disability Type',
+                    orientation='h',
+                    text='Count',
+                    color='Count',
+                    color_continuous_scale='Blues',
+                    title='Students by Disability Type'
+                )
+                fig.update_xaxes(dtick=1)
+                fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                fig.update_layout(
+                    plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                    paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                    font=dict(color='#e8e8e8'),
+                    height=400,
+                    showlegend=False
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                # Display as list with percentages
+                st.markdown("**Breakdown**")
+                for disability, count in disability_counts.items():
+                    pct = (count / students_with_disability * 100) if students_with_disability > 0 else 0
+                    st.write(f"**{disability}:** {count} ({pct:.1f}%)")
+        
+        else:
+            st.info("No disability data found in current filters")
+        
+        st.markdown("---")
+        st.markdown("### Multiple Disabilities (Complex Needs)")
+        
+        # Analyze students with multiple disabilities
+        multiple_disability = disability_df[disability_df['disability_count'] >= 2]
+        
+        if len(multiple_disability) > 0:
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Students with 2+ Disabilities", len(multiple_disability))
+            col2.metric("% of All Students", f"{(len(multiple_disability)/total_students*100):.1f}%")
+            col3.metric("Avg Disabilities per Student", f"{multiple_disability['disability_count'].mean():.1f}")
+            
+            st.markdown("---")
+            
+            # Distribution of disability count
+            count_dist = multiple_disability['disability_count'].value_counts().sort_index()
+            count_data = pd.DataFrame({'Number of Disabilities': count_dist.index, 'Students': count_dist.values})
+            
+            fig = px.bar(
+                count_data,
+                x='Number of Disabilities',
+                y='Students',
+                text='Students',
+                color='Students',
+                color_continuous_scale='Reds',
+                title='Students by Number of Disabilities'
+            )
+            fig.update_xaxes(dtick=1)
+            fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+            fig.update_layout(
+                plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                font=dict(color='#e8e8e8'),
+                showlegend=False
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No students with multiple disabilities in current filters")
+        
+        st.markdown("---")
+        st.markdown("### Intersectionality: Disability × ATSI/EALD/DCP")
+        
+        # Create intersection analysis
+        if students_with_disability > 0:
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.markdown("**Disability + ATSI**")
+                disability_atsi = disability_df[(disability_df['has_disability']) & (disability_df['Flag_ATSI'] == 'Yes')] if 'Flag_ATSI' in disability_df.columns else disability_df[disability_df['has_disability'] & False]
+                st.metric("Students", len(disability_atsi))
+                if students_with_disability > 0:
+                    st.write(f"{(len(disability_atsi)/students_with_disability*100):.1f}% of students with disability")
+            
+            with col2:
+                st.markdown("**Disability + EALD**")
+                disability_eald = disability_df[(disability_df['has_disability']) & (disability_df['Flag_EALD'] == 'Yes')] if 'Flag_EALD' in disability_df.columns else disability_df[disability_df['has_disability'] & False]
+                st.metric("Students", len(disability_eald))
+                if students_with_disability > 0:
+                    st.write(f"{(len(disability_eald)/students_with_disability*100):.1f}% of students with disability")
+            
+            with col3:
+                st.markdown("**Disability + DCP**")
+                disability_dcp = disability_df[(disability_df['has_disability']) & (disability_df['Flag_DCP'] == 'Yes')] if 'Flag_DCP' in disability_df.columns else disability_df[disability_df['has_disability'] & False]
+                st.metric("Students", len(disability_dcp))
+                if students_with_disability > 0:
+                    st.write(f"{(len(disability_dcp)/students_with_disability*100):.1f}% of students with disability")
+        
+        st.markdown("---")
+        st.markdown("### Medical Conditions")
+        
+        if 'Medical_Condition_Details' in disability_df.columns:
+            medical_details = disability_df[disability_df['Medical_Condition_Details'].notna() & 
+                                           (disability_df['Medical_Condition_Details'] != '') & 
+                                           (disability_df['Medical_Condition_Details'] != 'No')]
+            
+            if len(medical_details) > 0:
+                st.markdown(f"**{len(medical_details)} students with documented medical conditions**")
+                
+                # Analyze conditions
+                conditions = medical_details['Medical_Condition_Details'].value_counts()
+                
+                if len(conditions) > 0:
+                    st.markdown("---")
+                    st.markdown("**Medical Conditions Summary:**")
+                    
+                    col1, col2 = st.columns([1.2, 1])
+                    
+                    with col1:
+                        # Chart of conditions
+                        conditions_data = pd.DataFrame({
+                            'Condition': conditions.index,
+                            'Count': conditions.values
+                        })
+                        
+                        fig = px.bar(
+                            conditions_data,
+                            x='Count',
+                            y='Condition',
+                            orientation='h',
+                            text='Count',
+                            color='Count',
+                            color_continuous_scale='Oranges',
+                            title='Medical Conditions Documented'
+                        )
+                        fig.update_xaxes(dtick=1)
+                        fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                        fig.update_layout(
+                            plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                            paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                            font=dict(color='#e8e8e8'),
+                            height=300,
+                            showlegend=False
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    with col1:
+                        st.markdown("**Breakdown:**")
+                        for condition, count in conditions.items():
+                            pct = (count / len(medical_details) * 100)
+                            st.write(f"**{condition}:** {count} ({pct:.1f}%)")
+            else:
+                st.info("No medical conditions documented")
+
+
+    elif section == "ASD Deep Dive":
+        st.markdown("## Autism Spectrum Disorder (ASD) - Deep Analysis")
+        st.markdown("Comprehensive overview of ASD students: prevalence, comparisons, and distribution across programs, year levels, partnerships, and returning students")
+        
+        st.markdown("---")
+        
+        # Merge disability data for ASD analysis
+        asd_df = filtered.copy()
+        
+        if 'disability_df' in st.session_state and st.session_state.disability_df is not None:
+            asd_df['name_match'] = asd_df['student_name'].str.strip().str.lower()
+            disability_flag_merge = st.session_state.disability_df.copy()
+            if 'name_match' in disability_flag_merge.columns:
+                asd_df = asd_df.merge(disability_flag_merge, on='name_match', how='left', suffixes=('', '_flag'))
+            asd_df = asd_df.drop('name_match', axis=1)
+        
+        # Count ASD students
+        asd_count = ((asd_df['Flag_ASD'] == 'Yes') | (asd_df['Flag_ASD'] == 'YES')).sum() if 'Flag_ASD' in asd_df.columns else 0
+        total_students = len(asd_df)
+        non_asd_count = total_students - asd_count
+        
+        st.markdown("### Overview")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("ASD Students", asd_count)
+        col2.metric("Non-ASD Students", non_asd_count)
+        col3.metric("% ASD", f"{(asd_count/total_students*100):.1f}%" if total_students > 0 else "0%")
+        col4.metric("ASD:Non-ASD Ratio", f"1:{(non_asd_count/asd_count):.1f}" if asd_count > 0 else "N/A")
+        
+        st.markdown("---")
+        st.markdown("### ASD Prevalence Comparison")
+        
+        # Comparison pie chart
+        comparison_data = pd.DataFrame({
+            'Group': ['ASD', 'Non-ASD'],
+            'Count': [asd_count, non_asd_count]
+        })
+        
+        fig = px.pie(
+            comparison_data,
+            values='Count',
+            names='Group',
+            color_discrete_map={'ASD': '#FF6B6B', 'Non-ASD': '#4ECDC4'},
+            title='Student Population: ASD vs Non-ASD'
+        )
+        fig.update_layout(
+            plot_bgcolor='rgba(10, 14, 39, 0.8)',
+            paper_bgcolor='rgba(10, 14, 39, 0.8)',
+            font=dict(color='#e8e8e8'),
+            height=350
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.markdown("---")
+        st.markdown("### ASD by Program")
+        
+        if 'program' in asd_df.columns and 'Flag_ASD' in asd_df.columns:
+            program_asd = asd_df.groupby('program').apply(
+                lambda x: pd.Series({
+                    'ASD': ((x['Flag_ASD'] == 'Yes') | (x['Flag_ASD'] == 'YES')).sum(),
+                    'Non-ASD': ((x['Flag_ASD'] != 'Yes') & (x['Flag_ASD'] != 'YES')).sum()
+                })
+            ).fillna(0)
+            
+            program_asd = program_asd[program_asd.sum(axis=1) > 0]
+            
+            if len(program_asd) > 0:
+                fig = px.bar(
+                    program_asd,
+                    barmode='group',
+                    color_discrete_map={'ASD': '#FF6B6B', 'Non-ASD': '#4ECDC4'},
+                    title='ASD Distribution by Program',
+                    labels={'value': 'Students', 'index': 'Program'}
+                )
+                fig.update_layout(
+                    plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                    paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                    font=dict(color='#e8e8e8'),
+                    hovermode='x unified',
+                    height=400
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Stats by program
+                st.markdown("**ASD % by Program:**")
+                for prog in program_asd.index:
+                    asd = int(program_asd.loc[prog, 'ASD'])
+                    total = int(program_asd.loc[prog, 'ASD'] + program_asd.loc[prog, 'Non-ASD'])
+                    pct = (asd / total * 100) if total > 0 else 0
+                    st.write(f"**{prog}:** {asd}/{total} ({pct:.1f}%)")
+        
+        st.markdown("---")
+        st.markdown("### ASD by Year Level")
+        
+        if 'year_level' in asd_df.columns and 'Flag_ASD' in asd_df.columns:
+            year_order = ['F', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+            
+            year_asd = asd_df.groupby('year_level').apply(
+                lambda x: pd.Series({
+                    'ASD': ((x['Flag_ASD'] == 'Yes') | (x['Flag_ASD'] == 'YES')).sum(),
+                    'Non-ASD': ((x['Flag_ASD'] != 'Yes') & (x['Flag_ASD'] != 'YES')).sum()
+                })
+            ).fillna(0)
+            
+            # Reindex to include all year levels
+            year_asd = year_asd.reindex([y for y in year_order if y in year_asd.index], fill_value=0)
+            
+            if len(year_asd) > 0:
+                fig = px.bar(
+                    year_asd,
+                    barmode='stack',
+                    color_discrete_map={'ASD': '#FF6B6B', 'Non-ASD': '#4ECDC4'},
+                    title='ASD Distribution by Year Level',
+                    labels={'value': 'Students', 'index': 'Year Level'}
+                )
+                fig.update_layout(
+                    plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                    paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                    font=dict(color='#e8e8e8'),
+                    hovermode='x unified',
+                    height=400
+                )
+                st.plotly_chart(fig, use_container_width=True)
+        
+        st.markdown("---")
+        st.markdown("### ASD by Partnership Area")
+        
+        if 'partnership_area' in asd_df.columns and 'Flag_ASD' in asd_df.columns:
+            partnership_asd = asd_df.groupby('partnership_area').apply(
+                lambda x: pd.Series({
+                    'ASD': ((x['Flag_ASD'] == 'Yes') | (x['Flag_ASD'] == 'YES')).sum(),
+                    'Non-ASD': ((x['Flag_ASD'] != 'Yes') & (x['Flag_ASD'] != 'YES')).sum()
+                })
+            ).fillna(0)
+            
+            partnership_asd = partnership_asd[partnership_asd.sum(axis=1) > 0]
+            
+            if len(partnership_asd) > 0:
+                fig = px.bar(
+                    partnership_asd,
+                    barmode='group',
+                    color_discrete_map={'ASD': '#FF6B6B', 'Non-ASD': '#4ECDC4'},
+                    title='ASD Distribution by Partnership Area',
+                    labels={'value': 'Students', 'index': 'Partnership Area'}
+                )
+                fig.update_layout(
+                    plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                    paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                    font=dict(color='#e8e8e8'),
+                    hovermode='x unified',
+                    height=400
+                )
+                st.plotly_chart(fig, use_container_width=True)
+        
+        st.markdown("---")
+        st.markdown("### ASD by School (Top 10)")
+        
+        if 'school' in asd_df.columns and 'Flag_ASD' in asd_df.columns:
+            school_asd = asd_df.groupby('school').apply(
+                lambda x: pd.Series({
+                    'ASD': ((x['Flag_ASD'] == 'Yes') | (x['Flag_ASD'] == 'YES')).sum(),
+                    'Non-ASD': ((x['Flag_ASD'] != 'Yes') & (x['Flag_ASD'] != 'YES')).sum()
+                })
+            ).fillna(0)
+            
+            school_asd = school_asd[school_asd.sum(axis=1) > 0].sort_values('ASD', ascending=False).head(10)
+            
+            if len(school_asd) > 0:
+                fig = px.bar(
+                    school_asd,
+                    y='ASD',
+                    x=school_asd.index,
+                    text='ASD',
+                    color='ASD',
+                    color_continuous_scale='Reds',
+                    title='Top 10 Schools by ASD Student Count'
+                )
+                fig.update_yaxes(dtick=1)
+                fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                fig.update_layout(
+                    plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                    paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                    font=dict(color='#e8e8e8'),
+                    showlegend=False,
+                    height=400
+                )
+                st.plotly_chart(fig, use_container_width=True)
+        
+        st.markdown("---")
+        st.markdown("### Returning vs New ASD Students")
+        
+        if 'previous_clc_placement' in asd_df.columns and 'Flag_ASD' in asd_df.columns:
+            asd_only = asd_df[(asd_df['Flag_ASD'] == 'Yes') | (asd_df['Flag_ASD'] == 'YES')]
+            
+            if len(asd_only) > 0:
+                returning = ((asd_only['previous_clc_placement'] == 'Yes') | (asd_only['previous_clc_placement'] == 'YES')).sum()
+                new_students = len(asd_only) - returning
+                
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Returning ASD Students", returning)
+                col2.metric("New ASD Students", new_students)
+                col3.metric("% Returning", f"{(returning/len(asd_only)*100):.1f}%" if len(asd_only) > 0 else "0%")
+                
+                st.markdown("---")
+                
+                # Chart
+                returner_data = pd.DataFrame({
+                    'Status': ['Returning', 'New'],
+                    'Count': [returning, new_students]
+                })
+                
+                fig = px.bar(
+                    returner_data,
+                    x='Status',
+                    y='Count',
+                    text='Count',
+                    color='Status',
+                    color_discrete_map={'Returning': '#9B59B6', 'New': '#3498DB'},
+                    title='ASD Students: Returning vs New'
+                )
+                fig.update_yaxes(dtick=1)
+                fig.update_traces(textposition='outside', textfont=dict(color='#ffffff'))
+                fig.update_layout(
+                    plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                    paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                    font=dict(color='#e8e8e8'),
+                    showlegend=False,
+                    height=350
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+    elif section == "Critical Incidents":
+        st.markdown("## Critical Incidents Tracking")
+        st.markdown("Track and analyze critical incidents by program, year level, and term - identify support patterns and resource needs")
+        
+        # Check if incidents data is available
+        if 'incidents_df' not in st.session_state or st.session_state.incidents_df is None:
+            st.warning("⚠️ No critical incidents data loaded. To add incidents:")
+            st.info("""
+            1. Add a **"Critical_Incidents"** sheet to your Excel file with columns:
+               - Student_Name, Incident_Date, Incident_Type, Severity
+               - Term, Year, Program, Year_Level, Partnership_Area
+               - Action_Taken, Actioned_By, Notes
+            2. Upload the Excel file through the sidebar
+            3. Incidents will appear here automatically
+            """)
+        else:
+            incidents = st.session_state.incidents_df.copy()
+            
+            # Add refresh button
+            col1, col2 = st.columns([4, 1])
+            with col2:
+                if st.button("🔄 Refresh"):
+                    st.rerun()
+            
+            with col1:
+                st.info(f"📌 Total incidents recorded: {len(incidents)}")
+            
+            # Filter by current year/term
+            if 'Year' in incidents.columns:
+                incidents['Year'] = pd.to_numeric(incidents['Year'], errors='coerce')
+                if selected_year != 'All':
+                    incidents = incidents[incidents['Year'] == selected_year]
+            
+            if 'Term' in incidents.columns:
+                incidents['Term'] = pd.to_numeric(incidents['Term'], errors='coerce')
+                if selected_term != 'All':
+                    incidents = incidents[incidents['Term'] == selected_term]
+            
+            if len(incidents) == 0:
+                st.success("✅ No incidents in current filters")
+            else:
+                # Summary metrics
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Total Incidents", len(incidents))
+                
+                # Severity counts
+                if 'Severity' in incidents.columns:
+                    critical_count = (incidents['Severity'] == 'Critical').sum()
+                    col2.metric("Critical", int(critical_count))
+                
+                # Incident type count
+                if 'Incident_Type' in incidents.columns:
+                    col3.metric("Incident Types", incidents['Incident_Type'].nunique())
+                
+                # Programs affected
+                if 'Program' in incidents.columns:
+                    col4.metric("Programs Affected", incidents['Program'].nunique())
+                
+                st.markdown("---")
+                
+                # Incident Type Breakdown
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    if 'Incident_Type' in incidents.columns:
+                        type_counts = incidents['Incident_Type'].value_counts()
+                        fig_type = px.bar(
+                            x=type_counts.index,
+                            y=type_counts.values,
+                            title="Incidents by Type",
+                            labels={'x': 'Type', 'y': 'Count'}
+                        )
+                        fig_type.update_traces(marker_color='#ff7675')
+                        st.plotly_chart(update_chart_layout(fig_type), use_container_width=True)
+                
+                with col2:
+                    if 'Severity' in incidents.columns:
+                        severity_order = ['Critical', 'High', 'Medium', 'Low']
+                        severity_counts = incidents['Severity'].value_counts().reindex(severity_order, fill_value=0)
+                        colors_severity = ['#d32f2f', '#f57c00', '#ffa726', '#fdd835']
+                        
+                        fig_sev = px.bar(
+                            x=severity_counts.index,
+                            y=severity_counts.values,
+                            title="Incidents by Severity",
+                            labels={'x': 'Severity', 'y': 'Count'}
+                        )
+                        fig_sev.update_traces(marker_color=colors_severity[:len(severity_counts)])
+                        st.plotly_chart(update_chart_layout(fig_sev), use_container_width=True)
+                
+                st.markdown("---")
+                
+                # By Program
+                if 'Program' in incidents.columns:
+                    prog_counts = incidents['Program'].value_counts()
+                    fig_prog = px.bar(
+                        x=prog_counts.index,
+                        y=prog_counts.values,
+                        title="Incidents by Program",
+                        labels={'x': 'Program', 'y': 'Count'}
+                    )
+                    st.plotly_chart(update_chart_layout(fig_prog), use_container_width=True)
+                
+                # By Year Level
+                if 'Year_Level' in incidents.columns:
+                    yl_counts = incidents['Year_Level'].value_counts().sort_index()
+                    fig_yl = px.bar(
+                        x=yl_counts.index,
+                        y=yl_counts.values,
+                        title="Incidents by Year Level",
+                        labels={'x': 'Year Level', 'y': 'Count'}
+                    )
+                    st.plotly_chart(update_chart_layout(fig_yl), use_container_width=True)
+                
+                st.markdown("---")
+                st.markdown("## Incident Details")
+                
+                # Show incidents table (without student names for privacy by default)
+                with st.expander("📋 View all incidents"):
+                    display_cols = ['Incident_Date', 'Incident_Type', 'Severity', 'Program', 'Year_Level', 'Partnership_Area']
+                    display_cols = [col for col in display_cols if col in incidents.columns]
+                    
+                    st.dataframe(incidents[display_cols].sort_values('Incident_Date', ascending=False), 
+                                use_container_width=True, hide_index=True)
+                
+                # High-severity incidents summary
+                if 'Severity' in incidents.columns:
+                    high_sev = incidents[incidents['Severity'].isin(['Critical', 'High'])]
+                    if len(high_sev) > 0:
+                        st.markdown("---")
+                        st.markdown("⚠️ **High/Critical Incidents**")
+                        st.warning(f"{len(high_sev)} high-severity incidents requiring attention")
+                        
+                        summary_cols = ['Incident_Date', 'Incident_Type', 'Severity', 'Program', 'Action_Taken'] if 'Action_Taken' in incidents.columns else ['Incident_Date', 'Incident_Type', 'Severity', 'Program']
+                        summary_cols = [col for col in summary_cols if col in high_sev.columns]
+                        
+                        st.dataframe(high_sev[summary_cols], use_container_width=True, hide_index=True)
+
+    elif section == "Assessment":
+        st.markdown("## Assessment Analytics")
+        st.markdown("SMARTAR Goals, Sounds Write, and Word Aware assessments")
+        
+        assessments = []
+        try:
+            if supabase:
+                response = supabase.table('term_assessments').select('*').execute()
+                assessments = response.data if response.data else []
+        except Exception as e:
+            st.error(f"Error loading: {e}")
+        
+        if not assessments:
+            st.warning("📌 No assessment records")
+        else:
+            assessments_df = pd.DataFrame(assessments)
+            assessments_df.columns = assessments_df.columns.str.lower()
+            
+            # DEBUG
+            # Parse year - handle both string and numeric
+            if 'year' in assessments_df.columns:
+                # Try to convert to numeric, handling both string and int
+                assessments_df['year_str'] = assessments_df['year'].astype(str).str.strip()
+                assessments_df['year_num'] = pd.to_numeric(assessments_df['year_str'], errors='coerce')
+            
+            # Get available years
+            available_years = sorted([int(y) for y in assessments_df['year_num'].dropna().unique()])
+            
+            col1, col2 = st.columns([4, 1])
+            
+            with col1:
+                st.markdown(f"**Available years: {available_years}**")
+            
+            with col2:
+                if st.button("🔄 Refresh"):
+                    st.rerun()
+            
+            # Filter to 2026 (or first available year if 2026 not available)
+            target_year = 2026 if 2026 in available_years else (available_years[0] if available_years else None)
+            
+            if target_year is None:
+                st.error("No valid year data found")
+            else:
+                filtered_assess = assessments_df[assessments_df['year_num'] == target_year].copy()
+                
+                st.success(f"✅ {len(filtered_assess)} records in {target_year}")
+                
+                if len(filtered_assess) == 0:
+                    st.info(f"No assessment data for {target_year}")
+                    
+                    if len(available_years) > 0:
+                        st.markdown("---")
+                        with st.expander("📅 View assessments from other years"):
+                            other_years = [y for y in available_years if y != target_year]
+                            if other_years:
+                                selected_other_year = st.selectbox("Select year", other_years)
+                                other_data = assessments_df[assessments_df['year_num'] == selected_other_year].copy()
+                                
+                                if len(other_data) > 0:
+                                    st.write(f"**{selected_other_year}: {len(other_data)} records**")
+                                    with st.expander("View records"):
+                                        cols = ['program', 'staff_member', 'term', 'date_submitted']
+                                        cols = [c for c in cols if c in other_data.columns]
+                                        st.dataframe(other_data[cols], use_container_width=True, hide_index=True)
+                else:
+                    st.markdown("---")
+                    
+                    # Process all assessment data first (outside tabs)
+                    import json
+                    
+                    smartar_personal_social = {'Reached Expected': 0, 'Above Expectation': 0, 'Exceeding': 0}
+                    smartar_learning = {'Reached Expected': 0, 'Above Expectation': 0, 'Exceeding': 0}
+                    sw_totals = {}
+                    wa_totals = {}
+                    
+                    for idx, row in filtered_assess.iterrows():
+                        try:
+                            # SMARTAR - separate by category
+                            if 'smartar_goals' in row and row['smartar_goals'] is not None:
+                                data = row['smartar_goals']
+                                if isinstance(data, str):
+                                    data = json.loads(data)
+                                if isinstance(data, dict):
+                                    for category, achievements in data.items():
+                                        if isinstance(achievements, dict):
+                                            # Route to appropriate stats based on category
+                                            target_stats = None
+                                            if 'Personal' in category or 'Social' in category:
+                                                target_stats = smartar_personal_social
+                                            elif 'Learning' in category or 'Engagement' in category:
+                                                target_stats = smartar_learning
+                                            
+                                            if target_stats:
+                                                for level, count in achievements.items():
+                                                    count = int(count) if isinstance(count, (int, float)) else 0
+                                                    if level in target_stats:
+                                                        target_stats[level] += count
+                        except:
+                            pass
+                        
+                        try:
+                            # Sounds Write
+                            if 'sounds_write_data' in row and row['sounds_write_data'] is not None:
+                                data = row['sounds_write_data']
+                                if isinstance(data, str):
+                                    data = json.loads(data)
+                                if isinstance(data, dict):
+                                    for skill, levels in data.items():
+                                        if skill not in sw_totals:
+                                            sw_totals[skill] = {}
+                                        if isinstance(levels, dict):
+                                            for level, count in levels.items():
+                                                count = int(count) if isinstance(count, (int, float)) else 0
+                                                sw_totals[skill][level] = sw_totals[skill].get(level, 0) + count
+                        except:
+                            pass
+                        
+                        try:
+                            # Word Aware
+                            if 'word_aware_data' in row and row['word_aware_data'] is not None:
+                                data = row['word_aware_data']
+                                if isinstance(data, str):
+                                    data = json.loads(data)
+                                if isinstance(data, dict):
+                                    for skill, levels in data.items():
+                                        if skill not in wa_totals:
+                                            wa_totals[skill] = {}
+                                        if isinstance(levels, dict):
+                                            for level, count in levels.items():
+                                                count = int(count) if isinstance(count, (int, float)) else 0
+                                                wa_totals[skill][level] = wa_totals[skill].get(level, 0) + count
+                        except:
+                            pass
+                    
+                    # Show debug
+                    # Now create tabs with processed data
+                    tab1, tab2, tab3, tab4 = st.tabs(["📊 Summary", "🎯 SMARTAR Goals", "✍️ Sounds Write", "📖 Word Aware"])
+                    
+                    with tab1:
+                        c1, c2, c3, c4 = st.columns(4)
+                        c1.metric("Records", len(filtered_assess))
+                        if 'program' in filtered_assess.columns:
+                            c2.metric("Programs", int(filtered_assess['program'].nunique()))
+                        if 'staff_member' in filtered_assess.columns:
+                            c3.metric("Staff", int(filtered_assess['staff_member'].nunique()))
+                        c4.metric("Year", 2026)
+                        
+                        st.markdown("---")
+                        
+                        # Summary table
+                        with st.expander("📋 View all records"):
+                            summary_cols = ['program', 'staff_member', 'term', 'year', 'date_submitted']
+                            summary_cols = [c for c in summary_cols if c in filtered_assess.columns]
+                            st.dataframe(filtered_assess[summary_cols], use_container_width=True, hide_index=True)
+                
+                    with tab2:
+                        st.markdown("**SMARTAR Goals**")
+                        
+                        col1, col2 = st.columns(2)
+                        
+                        # Personal and Social
+                        with col1:
+                            st.markdown("**Personal & Social**")
+                            c1, c2, c3 = st.columns(3)
+                            c1.metric("Exceeding", smartar_personal_social['Exceeding'])
+                            c2.metric("Above Expectation", smartar_personal_social['Above Expectation'])
+                            c3.metric("Reached Expected", smartar_personal_social['Reached Expected'])
+                            
+                            if sum(smartar_personal_social.values()) > 0:
+                                df_ps = pd.DataFrame([{
+                                    'Status': status,
+                                    'Count': count
+                                } for status, count in smartar_personal_social.items()])
+                                
+                                fig_ps = px.pie(
+                                    df_ps,
+                                    values='Count',
+                                    names='Status',
+                                    color_discrete_map={
+                                        'Exceeding': '#4CAF50',
+                                        'Above Expectation': '#00BCD4',
+                                        'Reached Expected': '#FFC107'
+                                    }
+                                )
+                                fig_ps.update_layout(
+                                    plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                                    paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                                    font=dict(color='#e8e8e8'),
+                                    height=400,
+                                    showlegend=True
+                                )
+                                st.plotly_chart(fig_ps, use_container_width=True)
+                            else:
+                                st.info("No Personal & Social data")
+                        
+                        # Learning and Engagement
+                        with col2:
+                            st.markdown("**Learning and Engagement**")
+                            c4, c5, c6 = st.columns(3)
+                            c4.metric("Exceeding", smartar_learning['Exceeding'])
+                            c5.metric("Above Expectation", smartar_learning['Above Expectation'])
+                            c6.metric("Reached Expected", smartar_learning['Reached Expected'])
+                            
+                            if sum(smartar_learning.values()) > 0:
+                                df_le = pd.DataFrame([{
+                                    'Status': status,
+                                    'Count': count
+                                } for status, count in smartar_learning.items()])
+                                
+                                fig_le = px.pie(
+                                    df_le,
+                                    values='Count',
+                                    names='Status',
+                                    color_discrete_map={
+                                        'Exceeding': '#4CAF50',
+                                        'Above Expectation': '#00BCD4',
+                                        'Reached Expected': '#FFC107'
+                                    }
+                                )
+                                fig_le.update_layout(
+                                    plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                                    paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                                    font=dict(color='#e8e8e8'),
+                                    height=400,
+                                    showlegend=True
+                                )
+                                st.plotly_chart(fig_le, use_container_width=True)
+                            else:
+                                st.info("No Learning & Engagement data")
+                
+                    with tab3:
+                        st.markdown("**Sounds Write**")
+                        
+                        if 'sounds_write_data' in filtered_assess.columns:
+                            
+                            sw_totals = {}
+                            
+                            import json
+                            for idx, row in filtered_assess.iterrows():
+                                try:
+                                    data = row['sounds_write_data']
+                                    
+                                    if pd.isna(data) or data is None:
+                                        continue
+                                    
+                                    if isinstance(data, str) and data.strip():
+                                        data = json.loads(data)
+                                    
+                                    if isinstance(data, dict):
+                                        for skill, levels in data.items():
+                                            if skill not in sw_totals:
+                                                sw_totals[skill] = {}
+                                            if isinstance(levels, dict):
+                                                for level, count in levels.items():
+                                                    count = int(count) if isinstance(count, (int, float)) else 0
+                                                    sw_totals[skill][level] = sw_totals[skill].get(level, 0) + count
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+                            
+                            
+                            if sw_totals:
+                                # Display metrics
+                                mastered = sum([v.get('Mastered', 0) for v in sw_totals.values()])
+                                developing = sum([v.get('Developing', 0) for v in sw_totals.values()])
+                                requires_dev = sum([v.get('Requires Development', 0) for v in sw_totals.values()])
+                                
+                                c1, c2, c3 = st.columns(3)
+                                c1.metric("Mastered", mastered)
+                                c2.metric("Developing", developing)
+                                c3.metric("Requires Development", requires_dev)
+                                
+                                st.markdown("---")
+                                
+                                # Build chart data
+                                vis_data = []
+                                for skill, levels in sw_totals.items():
+                                    vis_data.append({
+                                        'Skill': skill,
+                                        'Mastered': levels.get('Mastered', 0),
+                                        'Developing': levels.get('Developing', 0),
+                                        'Requires Dev': levels.get('Requires Development', 0)
+                                    })
+                                
+                                df_sw = pd.DataFrame(vis_data)
+                                
+                                # If only one skill, show as metrics/donut instead of wide bar
+                                if len(df_sw) == 1:
+                                    skill_name = df_sw.iloc[0]['Skill']
+                                    st.markdown(f"**{skill_name}**")
+                                    
+                                    col1, col2 = st.columns([1, 1])
+                                    with col1:
+                                        m1, m2, m3 = st.columns(3)
+                                        m1.metric("Mastered", int(df_sw.iloc[0]['Mastered']))
+                                        m2.metric("Developing", int(df_sw.iloc[0]['Developing']))
+                                        m3.metric("Requires Dev", int(df_sw.iloc[0]['Requires Dev']))
+                                    
+                                    with col2:
+                                        # Donut chart for single skill
+                                        donut_data = pd.DataFrame({
+                                            'Level': ['Mastered', 'Developing', 'Requires Dev'],
+                                            'Count': [df_sw.iloc[0]['Mastered'], df_sw.iloc[0]['Developing'], df_sw.iloc[0]['Requires Dev']]
+                                        })
+                                        fig_donut = px.pie(
+                                            donut_data,
+                                            values='Count',
+                                            names='Level',
+                                            hole=0.4,
+                                            color_discrete_map={
+                                                'Mastered': '#4CAF50',
+                                                'Developing': '#FFC107',
+                                                'Requires Dev': '#F44336'
+                                            }
+                                        )
+                                        fig_donut.update_layout(
+                                            plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                                            paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                                            font=dict(color='#e8e8e8'),
+                                            height=350
+                                        )
+                                        st.plotly_chart(fig_donut, use_container_width=True)
+                                else:
+                                    # Multiple skills - use stacked bar
+                                    fig = px.bar(
+                                        df_sw,
+                                        x='Skill',
+                                        y=['Mastered', 'Developing', 'Requires Dev'],
+                                        barmode='stack',
+                                        color_discrete_map={
+                                            'Mastered': '#4CAF50',
+                                            'Developing': '#FFC107',
+                                            'Requires Dev': '#F44336'
+                                        },
+                                        labels={'value': 'Count', 'variable': 'Level'}
+                                    )
+                                    fig.update_layout(
+                                        plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                                        paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                                        font=dict(color='#e8e8e8'),
+                                        hovermode='x unified',
+                                        height=400
+                                    )
+                                    st.plotly_chart(fig, use_container_width=True)
+                            else:
+                                st.info("No Sounds Write data found")
+                        else:
+                            st.info("No Sounds Write data")
+                    
+                    with tab4:
+                        st.markdown("**Word Aware**")
+                        
+                        if wa_totals:
+                            more_than_10 = sum([v.get('>10 words', 0) for v in wa_totals.values()])
+                            more_than_5 = sum([v.get('>5 words', 0) for v in wa_totals.values()])
+                            more_than_2 = sum([v.get('>2 words', 0) for v in wa_totals.values()])
+                            
+                            c1, c2, c3 = st.columns(3)
+                            c1.metric(">10 words", more_than_10)
+                            c2.metric(">5 words", more_than_5)
+                            c3.metric(">2 words", more_than_2)
+                            
+                            st.markdown("---")
+                            
+                            vis_data = []
+                            for skill, levels in wa_totals.items():
+                                vis_data.append({
+                                    'Skill': skill,
+                                    '>10': levels.get('>10 words', 0),
+                                    '>5': levels.get('>5 words', 0),
+                                    '>2': levels.get('>2 words', 0)
+                                })
+                            
+                            df_wa = pd.DataFrame(vis_data)
+                            
+                            # If only one skill, show as metrics/donut instead of wide bar
+                            if len(df_wa) == 1:
+                                skill_name = df_wa.iloc[0]['Skill']
+                                st.markdown(f"**{skill_name}**")
+                                
+                                col1, col2 = st.columns([1, 1])
+                                with col1:
+                                    m1, m2, m3 = st.columns(3)
+                                    m1.metric(">10 words", int(df_wa.iloc[0]['>10']))
+                                    m2.metric(">5 words", int(df_wa.iloc[0]['>5']))
+                                    m3.metric(">2 words", int(df_wa.iloc[0]['>2']))
+                                
+                                with col2:
+                                    # Donut chart for single skill
+                                    donut_data = pd.DataFrame({
+                                        'Level': ['>10 words', '>5 words', '>2 words'],
+                                        'Count': [df_wa.iloc[0]['>10'], df_wa.iloc[0]['>5'], df_wa.iloc[0]['>2']]
+                                    })
+                                    fig_donut = px.pie(
+                                        donut_data,
+                                        values='Count',
+                                        names='Level',
+                                        hole=0.4,
+                                        color_discrete_map={
+                                            '>10 words': '#4CAF50',
+                                            '>5 words': '#FFC107',
+                                            '>2 words': '#F44336'
+                                        }
+                                    )
+                                    fig_donut.update_layout(
+                                        plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                                        paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                                        font=dict(color='#e8e8e8'),
+                                        height=350
+                                    )
+                                    st.plotly_chart(fig_donut, use_container_width=True)
+                            else:
+                                # Multiple skills - use stacked bar
+                                fig = px.bar(
+                                    df_wa,
+                                    x='Skill',
+                                    y=['>10', '>5', '>2'],
+                                    barmode='stack',
+                                    color_discrete_map={
+                                        '>10': '#4CAF50',
+                                        '>5': '#FFC107',
+                                        '>2': '#F44336'
+                                    },
+                                    labels={'value': 'Count', 'variable': 'Level'}
+                                )
+                                fig.update_layout(
+                                    plot_bgcolor='rgba(10, 14, 39, 0.8)',
+                                    paper_bgcolor='rgba(10, 14, 39, 0.8)',
+                                    font=dict(color='#e8e8e8'),
+                                    hovermode='x unified',
+                                    height=400
+                                )
+                                st.plotly_chart(fig, use_container_width=True)
+                        else:
+                            st.info("No Word Aware data")
+                    
+    elif section == "Waitlist":
+        st.markdown("## Waitlist Management")
+        st.markdown("Track students on the waitlist and their allocation status")
+        
+        waitlist_students = filtered[filtered['waitlist_status'] == 'Yes']
+        
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Waitlisted", len(waitlist_students))
+        col2.metric("Allocated from Waitlist", ((waitlist_students['allocated_from_waitlist'] == 'Yes').sum()))
+        col3.metric("Still Waiting", len(waitlist_students) - ((waitlist_students['allocated_from_waitlist'] == 'Yes').sum()))
+        
+        st.markdown("---")
+        
+        if len(waitlist_students) > 0:
+            st.markdown("**Waitlist by Program:**")
+            waitlist_by_prog = waitlist_students['program'].value_counts()
+            for prog, count in waitlist_by_prog.items():
+                st.write(f"**{prog}:** {count} students")
+        else:
+            st.info("No students on waitlist")
+    
+    elif section == "Diagnostics":
+        st.markdown("## Dashboard Diagnostics")
+        st.markdown("System health and data status checks")
+        
+        st.markdown("---")
+        st.markdown("### Data Status")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Allocation Records", len(allocation_df))
+        col2.metric("Filtered Records", len(filtered))
+        col3.metric("With Assessment Data", len(filtered[filtered['smartar_data'].notna()]) if 'smartar_data' in filtered.columns else 0)
+        col4.metric("Flag Data Loaded", "✅ Yes" if 'flag_df' in st.session_state else "❌ No")
+        
+        st.markdown("---")
+        st.markdown("### Supabase Connection")
+        
+        if supabase:
+            st.success("✅ Supabase connected")
+            try:
+                test_response = supabase.table('allocation_students').select('id').limit(1).execute()
+                st.write(f"✅ allocation_students table: {len(test_response.data)} record(s)")
+            except:
+                st.error("❌ Cannot access allocation_students table")
+            
+            try:
+                test_response = supabase.table('term_assessments').select('id').limit(1).execute()
+                st.write(f"✅ term_assessments table: {len(test_response.data)} record(s)")
+            except:
+                st.error("❌ Cannot access term_assessments table")
+        else:
+            st.error("❌ Supabase not connected")
+        
+        st.markdown("---")
+        st.markdown("### Session State")
+        
+        with st.expander("View session state"):
+            session_keys = [k for k in st.session_state.keys() if not k.startswith('_')]
+            for key in session_keys:
+                val = st.session_state[key]
+                if hasattr(val, '__len__') and not isinstance(val, str):
+                    st.write(f"**{key}:** {type(val).__name__} ({len(val)} items)")
+                else:
+                    st.write(f"**{key}:** {type(val).__name__}")
