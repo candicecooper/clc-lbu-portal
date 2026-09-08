@@ -28,10 +28,11 @@ instead of dropdowns and radio dots — these need streamlit>=1.36 in
 requirements.txt. If Render is pinned to an older version, bump it there
 first or these widgets will fail to import.
 
-Still needs from you: the shared AI helper's import path (e.g.
-groq_ai_call) to wire the "Draft evidence summary" button — everything
-else below is fully wired against the real archive_utils.py / student
-register you shared.
+The AI-assisted buttons (instructional move abstraction, evidence summary
+drafting) use a self-contained groq_ai_call() defined in this file — not
+dependent on locating the portal's shared helper. It needs GROQ_API_KEY
+in the environment (same as your other Groq-backed tools) and `groq` in
+requirements.txt (see requirements-additions.txt in the deploy bundle).
 
 --------------------------------------------------------------------------
 SUPABASE SCHEMA — run once in the SAME project archive_utils.py connects
@@ -121,6 +122,47 @@ from archive_utils import (
     fetch_register,
     _get_client,  # reuse the same self-locating Supabase client as the rest of the archive module
 )
+
+
+def groq_ai_call(prompt, system=None, max_tokens=800):
+    """Self-contained AI call for this page — not dependent on finding the portal's
+    shared helper. Mirrors the resilience pattern already rolled out fleet-wide
+    (Behaviour Support, Minutes Polisher, etc.): a model fallback chain, a fix for
+    the httpx/'proxies' client-init clash on older groq wheels, reasoning_effort
+    disabled on the Qwen hybrid-thinking model so it returns plain text instead of
+    a <think> block, and self-healing max_tokens halving on 413 "too large" errors.
+    Reads GROQ_API_KEY from the environment, same as your other Groq-backed tools.
+    Requires `groq` in requirements.txt (see requirements-additions.txt in the deploy bundle).
+    """
+    from groq import Groq
+    import httpx
+
+    models = ["openai/gpt-oss-120b", "qwen/qwen3.6-27b", "llama-3.3-70b-versatile"]
+    messages = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
+
+    try:
+        client = Groq()
+    except TypeError:
+        client = Groq(http_client=httpx.Client())
+
+    last_err = None
+    for model in models:
+        tokens = max_tokens
+        for _ in range(3):
+            try:
+                kwargs = {"reasoning_effort": "none"} if "qwen" in model else {}
+                resp = client.chat.completions.create(
+                    model=model, messages=messages, max_tokens=tokens, temperature=0.3, **kwargs,
+                )
+                return resp.choices[0].message.content.strip()
+            except Exception as e:
+                last_err = e
+                if "413" in str(e) or "too large" in str(e).lower():
+                    tokens = max(400, tokens // 2)
+                    continue
+                break  # non-413 error on this model — try the next model in the chain
+    raise RuntimeError(f"Groq call failed on every model in the chain: {last_err}")
+
 
 st.set_page_config(page_title="Learning Engagement & Transfer Pathway", page_icon="\U0001f9ed", layout="wide")
 
@@ -475,10 +517,7 @@ with tab2:
                 if not concrete_move.strip():
                     st.warning("Describe what you actually did first, above.")
                 else:
-                    # TODO: point this at the portal's actual shared AI helper (e.g. groq_ai_call) —
-                    # not present in archive_utils.py / Student Register, so still needs its import path.
                     try:
-                        from ai_helpers import groq_ai_call
                         prompt = (
                             "A teacher described a lesson activity in plain language. Rewrite it as ONE "
                             "sentence describing the underlying instructional MOVE abstractly enough to "
@@ -489,11 +528,11 @@ with tab2:
                             f"Teacher's description: \"{concrete_move.strip()}\""
                         )
                         draft = groq_ai_call(prompt)
-                    except Exception:
+                    except Exception as e:
                         draft = (
-                            "(AI helper not wired yet — abstract it yourself: describe the TECHNIQUE, not "
-                            "the subject. E.g. \"used counters to teach place value\" → \"concrete-before-"
-                            "abstract sequencing\". Edit the field below.)"
+                            f"(AI call failed — {e}. Abstract it yourself in the meantime: describe the "
+                            "TECHNIQUE, not the subject. E.g. \"used counters to teach place value\" → "
+                            "\"concrete-before-abstract sequencing\". Edit the field below.)"
                         )
                     st.session_state["move_draft"] = draft
             move = st.text_area(
@@ -668,18 +707,15 @@ with tab5:
         smartar_goal = st.text_input("Linked SMARTAR / GAS goal", value=existing_rollup.get("linked_smartar_goal", ""))
 
         if st.button("\u2728 Draft evidence summary from logged data"):
-            # TODO: point this at the portal's actual shared AI helper (e.g. groq_ai_call) —
-            # not present in archive_utils.py / Student Register, so still needs its import path.
             try:
-                from ai_helpers import groq_ai_call
                 prompt = (
                     "Summarise, in 2-3 sentences for a staff report, the evidence that this student's "
                     f"dispositions have transferred across contexts. Disposition -> contexts held up in: "
                     f"{ {k: sorted(v) for k, v in disposition_contexts.items()} }. Log detail: {all_logs}"
                 )
                 draft = groq_ai_call(prompt)
-            except Exception:
-                draft = "(AI helper not wired yet — draft manually below.)"
+            except Exception as e:
+                draft = f"(AI call failed — {e}. Draft manually below.)"
             st.session_state["evidence_draft"] = draft
 
         evidence = st.text_area("Evidence of transfer", value=st.session_state.get("evidence_draft", existing_rollup.get("evidence_of_transfer", "")))
