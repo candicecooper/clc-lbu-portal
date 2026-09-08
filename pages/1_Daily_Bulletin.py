@@ -186,13 +186,25 @@ def init_state():
         "authenticated": False, "edit_mode": False,
         "selected_date": _default_date(), "page": "bulletin",
         "show_login": False, "show_inline_login": False,
-        "_pc_form_id": 0,
+        "_pc_form_id": 0, "_last_seen_day": date.today(),
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
 init_state()
+
+# If this browser tab has been left open since an earlier calendar day -
+# which is exactly how staff actually use this, opening it once in the
+# morning and leaving it up - Streamlit's session state just keeps
+# whatever date was last viewed instead of knowing a new day has
+# started. Only the very first rerun after midnight sees a mismatch
+# here, so deliberately browsing to a past or future date during the
+# same day is untouched; this only forces things back to today when the
+# day has actually rolled over underneath an idle tab.
+if st.session_state._last_seen_day != date.today():
+    st.session_state.selected_date = _default_date()
+    st.session_state._last_seen_day = date.today()
 
 # Staff-tier password for editing the bulletin (viewing needs no password).
 # Reads STAFF_PASSWORD from secrets/env — do NOT use ADMIN_PASSWORD here:
@@ -832,7 +844,14 @@ if params.get("display") == "true":
 
     st.markdown("""<style>
     html,body{margin:0!important;padding:0!important}
-    [data-testid="stAppViewContainer"]{background:#eef4ec!important;padding:0!important}
+    /* Only the .dt tables were actually getting the DM Sans font - every
+       other piece of text on this screen (card headers, the responsibility
+       values, vehicle/travel badges, the fun-fact bar) had no font-family
+       set anywhere and so fell back to the browser's plain default sans,
+       which read as noticeably plainer/less polished than the rest of the
+       portal. Setting it once here on the whole app view means everything
+       inherits it unless something more specific overrides it. */
+    [data-testid="stAppViewContainer"]{background:#eef4ec!important;padding:0!important;font-family:'DM Sans',Arial,sans-serif!important}
     [data-testid="stMainBlockContainer"],.main .block-container{padding:0!important;margin:0!important;max-width:100%!important}
     [data-testid="stHeader"],[data-testid="stToolbar"],[data-testid="stDecoration"]{display:none!important}
     #MainMenu,footer,.stDeployButton{display:none}
@@ -871,6 +890,12 @@ if params.get("display") == "true":
     .dp-header.py{background:#5b4a75}
     .dp-header.sy{background:#7a5c3f}
     .dp-body{padding:.75rem 1rem;background:white}
+    /* A smaller footprint for a card that's useful but doesn't need the
+       same visual weight as attendance/travel - one dense line of
+       label:value pairs instead of four stacked blocks. */
+    .dp-body.dp-body-compact{padding:.55rem .9rem;display:flex;flex-wrap:wrap;gap:.35rem 1.1rem;align-items:baseline}
+    .dp-body-compact .resp-item{font-size:1rem;color:#2a3a2a;white-space:nowrap}
+    .dp-body-compact .resp-item strong{color:#4a8f33}
     .dp-grid{column-width:420px;column-gap:1.1rem;margin:.9rem 1.25rem 0}
     .dp-full{margin:0 1.25rem 1rem}
     /* table-layout:fixed made every column share the card's width evenly,
@@ -905,21 +930,28 @@ if params.get("display") == "true":
     </style>""", unsafe_allow_html=True)
     import streamlit.components.v1 as _components
     _date_str = today.strftime("%A %-d %B %Y").upper()
-    _components.html(f"""<div style="background:#1a2e44;padding:.7rem 1.25rem;display:flex;align-items:center;justify-content:space-between;">
+    # components.html renders in its own standalone iframe document, which
+    # never sees the Google Fonts <link> injected into the outer page via
+    # st.markdown above - so this whole header (title, date, clock) was
+    # silently falling back to the browser's default font the entire time,
+    # the most visually obvious instance of the font problem since it sits
+    # at the very top of the screen. It needs its own font link.
+    _components.html(f"""<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700&family=DM+Mono:wght@500;700&display=swap" rel="stylesheet">
+    <div style="background:#1a2e44;padding:.7rem 1.25rem;display:flex;align-items:center;justify-content:space-between;font-family:'DM Sans',Arial,sans-serif;">
       <div>
-        <div style="font-size:1.5rem;color:white;font-weight:700;">CLC Daily Bulletin</div>
+        <div style="font-size:1.55rem;color:white;font-weight:700;letter-spacing:.01em;">CLC Daily Bulletin</div>
         <div style="font-size:1.05rem;color:#8fd468;font-weight:600;">{_date_str}</div>
       </div>
       <div style="display:flex;align-items:center;gap:1.25rem;">
-        <div style="font-size:2rem;color:#e8a125;font-weight:700;font-family:monospace;" id="live-clock">--:-- --</div>
-        <a href="/Daily_Bulletin?quickadd=true" style="background:#6BBF4E;color:#1a2e44;font-size:.85rem;font-weight:700;padding:.4rem .75rem;border-radius:5px;text-decoration:none;">+ Add</a>
-        <a href="/Daily_Bulletin?from_display=true" style="background:rgba(255,255,255,0.12);color:white;font-size:.85rem;font-weight:600;padding:.4rem .75rem;border-radius:5px;text-decoration:none;">Staff</a>
+        <div style="font-size:2.1rem;color:#e8a125;font-weight:700;font-family:'DM Mono',monospace;letter-spacing:.02em;" id="live-clock">--:-- --</div>
+        <a href="/Daily_Bulletin?quickadd=true" style="background:#6BBF4E;color:#1a2e44;font-size:.85rem;font-weight:700;padding:.4rem .75rem;border-radius:5px;text-decoration:none;font-family:'DM Sans',sans-serif;">+ Add</a>
+        <a href="/Daily_Bulletin?from_display=true" style="background:rgba(255,255,255,0.12);color:white;font-size:.85rem;font-weight:600;padding:.4rem .75rem;border-radius:5px;text-decoration:none;font-family:'DM Sans',sans-serif;">Staff</a>
       </div>
     </div>
     <script>
     function updateClock(){{var n=new Date();var h=n.getHours();var m=n.getMinutes();var ap=h>=12?'PM':'AM';h=h%12||12;document.getElementById('live-clock').textContent=h+':'+(m<10?'0':'')+m+' '+ap;}}
     updateClock();setInterval(updateClock,30000);
-    </script>""", height=76, scrolling=False)
+    </script>""", height=78, scrolling=False)
 
     prev_day = today - timedelta(days=1); next_day = today + timedelta(days=1)
     with st.container(key="display_daynav"):
@@ -982,7 +1014,6 @@ if params.get("display") == "true":
     _cards.append(f'<div class="dp"><div class="dp-header navy">\U0001f68c Excursions</div><div class="dp-body"><table class="dt dt-compact"><tr><th>Program</th><th>Staff</th><th>Depart</th><th>Return</th><th>Location</th></tr>{tbl_rows(d_data.get("excursions",[]), ["Program","Staff Member","Time Departing","Time Returning","Location"])}</table></div></div>')
     _cards.append(f'<div class="dp"><div class="dp-header navy">\U0001f91d Staff Meetings</div><div class="dp-body"><table class="dt dt-compact"><tr><th>Type</th><th>Staff</th><th>Location</th><th>Depart</th><th>Return</th><th>Student</th></tr>{tbl_rows(_all_mtgs, ["Type","Staff Member","Location","Time Departing","Time Returning","Student"])}</table></div></div>')
     _cards.append(f'<div class="dp"><div class="dp-header navy">\U0001f4e5 Entry Meetings</div><div class="dp-body"><table class="dt"><tr><th>Time</th><th>Program</th><th>Student</th></tr>{tbl_rows(d_data.get("entry_meetings",[]), ["Time","Program","Student"])}</table></div></div>')
-    _cards.append(f'<div class="dp"><div class="dp-header amber">\u2b50 Staff Responsibilities</div><div class="dp-body"><div style="margin-bottom:.4rem;"><span class="kitchen-val">\U0001f373 Kitchen: {kitchen}</span></div><div style="margin-bottom:.25rem;"><span class="resp-label">\U0001f4cc PD Focus</span><br><span class="resp-val">{sr.get("meeting_pd_focus","") or "\u2014"}</span></div><div style="margin-bottom:.25rem;"><span class="resp-label">\U0001fa91 Chair</span><br><span class="resp-val">{sr.get("chair","") or "\u2014"}</span></div><div><span class="resp-label">\U0001f4dd Minutes</span><br><span class="resp-val">{sr.get("minutes","") or "\u2014"}</span></div></div></div>')
     if _vis_rows:
         _vis_html = "".join([f'<tr><td><strong style="color:#1a2e44;">{r.get("Visitor Name","")}</strong></td><td style="font-size:.95rem;">{r.get("Reason","")}</td><td style="font-size:.95rem;">{r.get("Staff Responsible","")}</td><td style="font-size:.95rem;">{r.get("Arriving","")}</td><td style="font-size:.95rem;">{r.get("Departing","")}</td><td style="font-size:.95rem;">{r.get("Location","")}</td></tr>' for r in _vis_rows])
         _cards.append(f'<div class="dp"><div class="dp-header green">\U0001f465 Visitors</div><div class="dp-body"><table class="dt dt-compact"><tr><th>Visitor</th><th>Reason</th><th>Staff</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>{_vis_html}</table></div></div>')
@@ -992,6 +1023,21 @@ if params.get("display") == "true":
     _cards.append(f'<div class="dp"><div class="dp-header navy">\U0001f697 Vehicles</div><div class="dp-body"><table class="dt"><tr><th>Vehicle</th><th>Booked By</th><th>Time</th></tr>{vb_html}</table></div></div>')
     _cards.append(f'<div class="dp"><div class="dp-header green">\U0001f4c5 NIT</div><div class="dp-body"><p style="font-size:1.05rem;color:#2a3a2a;margin:0;line-height:1.35;">{nit}</p></div></div>')
     _cards.append(f'<div class="dp"><div class="dp-header navy">\U0001f5d3\ufe0f Meeting Room</div><div class="dp-body">{_mrb_html}</div></div>')
+    # Staff Responsibilities moved here (was up front, the same size as
+    # every attendance/travel card) and condensed to one dense line of
+    # label:value pairs instead of four stacked blocks - it's useful but
+    # doesn't need the same visual weight, so it now takes a noticeably
+    # smaller spot near the end of the board rather than competing with
+    # the higher-priority cards for the most prominent positions.
+    _cards.append(
+        f'<div class="dp"><div class="dp-header amber">\u2b50 Staff Responsibilities</div>'
+        f'<div class="dp-body dp-body-compact">'
+        f'<span class="resp-item">\U0001f373 <strong>Kitchen:</strong> {kitchen}</span>'
+        f'<span class="resp-item">\U0001f4cc <strong>PD:</strong> {sr.get("meeting_pd_focus","") or "\u2014"}</span>'
+        f'<span class="resp-item">\U0001fa91 <strong>Chair:</strong> {sr.get("chair","") or "\u2014"}</span>'
+        f'<span class="resp-item">\U0001f4dd <strong>Minutes:</strong> {sr.get("minutes","") or "\u2014"}</span>'
+        f'</div></div>'
+    )
 
     st.markdown(f'<div class="dp-grid">{"".join(_cards)}</div>', unsafe_allow_html=True)
 
