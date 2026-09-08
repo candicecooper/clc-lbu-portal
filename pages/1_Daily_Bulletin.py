@@ -832,65 +832,106 @@ if params.get("display") == "true":
 
     st.markdown("""<style>
     html,body{margin:0!important;padding:0!important}
-    [data-testid="stAppViewContainer"]{background:#f4f8f2!important;padding:0!important}
+    [data-testid="stAppViewContainer"]{background:#eef4ec!important;padding:0!important}
     [data-testid="stMainBlockContainer"],.main .block-container{padding:0!important;margin:0!important;max-width:100%!important}
     [data-testid="stHeader"],[data-testid="stToolbar"],[data-testid="stDecoration"]{display:none!important}
     #MainMenu,footer,.stDeployButton{display:none}
     [data-baseweb="tab-list"]{display:none!important}
     [data-testid="stVerticalBlock"]{gap:.4rem!important}
-    [data-testid="stVerticalBlockBorderWrapper"]{gap:.4rem!important}
     [data-testid="element-container"],.element-container{margin-bottom:0!important}
     iframe{display:block}
+    /* Day-nav button row, sized up for a TV viewed from across the room and
+       bled flush against the header bar above it (same trick used on the
+       main bulletin page) so the two read as one continuous control strip
+       instead of two stacked bars. */
+    .st-key-display_daynav{background:white;padding:.5rem 1.25rem .65rem;margin-top:-4px}
+    .st-key-display_daynav .stButton button{font-size:1.15rem!important;font-weight:700!important;padding:.7rem 1rem!important;min-height:3.1rem!important;border-radius:10px!important}
     </style>""", unsafe_allow_html=True)
     st.markdown('<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">', unsafe_allow_html=True)
     sr = d_data.get("staff_responsibilities", {}); fun = d_data.get("fun_fact","")
     st.markdown("""<style>
-    .dp{background:#ffffff;border:1px solid #e0e8e0;border-radius:6px;overflow:hidden;margin-bottom:5px;box-shadow:0 1px 2px rgba(0,0,0,0.04)}
-    .dp-header{padding:.4rem .65rem;font-size:1.05rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:white}
-    .dp-header.green{background:#4a8f33}.dp-header.navy{background:#1a2e44}.dp-header.brown{background:#7a5c4a}
-    .dp-header.amber{background:#c97b1a;color:#1a2e44}.dp-header.blue{background:#3a6a9a}
-    .dp-header.purple{background:#6a4a9a}.dp-header.slate{background:#4a5a6a}.dp-header.red{background:#c0392b}
-    .dp-body{padding:.45rem .55rem;background:white}
-    .dt{width:100%;border-collapse:collapse;font-size:1.08rem;color:#1a2e44;font-family:'Segoe UI',Arial,sans-serif}
-    .dt th{color:#4a8f33;font-weight:700;font-size:.85rem;text-transform:uppercase;letter-spacing:.02em;padding:.3rem .4rem;border-bottom:1px solid #ddd;text-align:left}
-    .dt td{padding:.28rem .4rem;border-bottom:1px solid #f0f0f0;vertical-align:top;line-height:1.3}
+    /* ── Same visual language as the redesigned Daily Bulletin page:
+       green/navy/amber/red as the four meaningful colors, the JP/PY/SY
+       travel cards keeping their own one-off accent hues, real card
+       borders + radius + shadow, uppercase colored header strips. Sizes
+       are pushed up well beyond the bulletin's own scale on top of that,
+       since this is read from across a room on a wall-mounted TV rather
+       than close-up on a laptop. ─────────────────────────────────────── */
+    .dp{background:#ffffff;border:1px solid #e9eee7;border-radius:12px;overflow:hidden;
+        box-shadow:0 2px 8px rgba(0,0,0,0.07);margin-bottom:1rem;break-inside:avoid;
+        -webkit-column-break-inside:avoid;page-break-inside:avoid}
+    .dp-header{padding:.6rem 1rem;font-size:1.2rem;font-weight:800;letter-spacing:.06em;
+        text-transform:uppercase;color:white;display:flex;align-items:center;gap:.5rem;
+        text-shadow:0 1px 2px rgba(0,0,0,0.12)}
+    .dp-header.green{background:#6BBF4E}
+    .dp-header.navy{background:#1a2e44}
+    .dp-header.amber{background:#e8a125;color:#1a2e44;text-shadow:none}
+    .dp-header.red{background:#c0392b}
+    .dp-header.jp{background:#3d5d80}
+    .dp-header.py{background:#5b4a75}
+    .dp-header.sy{background:#7a5c3f}
+    .dp-body{padding:.75rem 1rem;background:white}
+    .dp-grid{column-width:420px;column-gap:1.1rem;margin:.9rem 1.25rem 0}
+    .dp-full{margin:0 1.25rem 1rem}
+    /* table-layout:fixed made every column share the card's width evenly,
+       which fixed the earlier clipping but made anything with 4+ narrow
+       columns (Staff Meetings, the travel cards) wrap one letter per
+       line - unreadable, worse than the clipping it replaced. Natural
+       (auto) column sizing reads properly, so a wide table just gets a
+       smaller "compact" type size instead (applied by column count,
+       below) so it fits the card without either clipping or squeezing
+       column headers into vertical letter-stacks. */
+    .dt{width:100%;border-collapse:collapse;font-size:1.2rem;color:#1a2e44;font-family:'DM Sans',Arial,sans-serif}
+    .dt.dt-compact{font-size:.98rem}
+    .dt th{color:#4a8f33;font-weight:700;font-size:.92rem;text-transform:uppercase;letter-spacing:.03em;
+        padding:.4rem .55rem;border-bottom:2px solid #d8ead2;text-align:left;background:#f4f8f2;
+        overflow-wrap:break-word;word-break:break-word;white-space:normal}
+    .dt.dt-compact th{font-size:.76rem;padding:.3rem .4rem}
+    .dt.dt-compact td{padding:.35rem .4rem}
+    .dt td{padding:.5rem .55rem;border-bottom:1px solid #f0f4ee;vertical-align:top;line-height:1.35;
+        overflow-wrap:break-word;word-break:break-word}
     .dt tr:last-child td{border-bottom:none}
-    .dt-em{color:#999;font-style:italic;font-size:.95rem}
-    .vb-tag{background:#e8f5e1;color:#2d6b1a;padding:.15rem .5rem;border-radius:4px;font-size:1rem;font-weight:600}
-    .kitchen-val{background:#e8a125;border-radius:5px;padding:.2rem .55rem;color:#1a2e44;font-weight:800;font-size:1.05rem;display:inline-block}
-    .resp-label{font-size:.85rem;color:#4a8f33;font-weight:600;text-transform:uppercase}.resp-val{font-size:1.05rem;color:#2a3a2a;margin-top:.15rem}
-    .tc-badge{background:#fdd;color:#c00;padding:.15rem .5rem;border-radius:4px;font-size:1rem;font-weight:700}
-    .fact-bar{display:flex;align-items:center;gap:.6rem;background:#1a2e44;color:white;padding:.55rem 1rem;margin-top:4px;border-radius:6px;font-size:1.05rem;line-height:1.35}
-    .fact-label{background:#6BBF4E;color:#1a2e44;font-weight:800;font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;padding:.25rem .6rem;border-radius:20px;white-space:nowrap}
+    .dt-em{color:#9ab09a;font-style:italic;font-size:1.1rem}
+    .vb-tag{background:#e8f5e1;color:#2d6b1a;padding:.2rem .6rem;border-radius:5px;font-size:1.1rem;font-weight:600}
+    .kitchen-val{background:#e8a125;border-radius:6px;padding:.25rem .65rem;color:#1a2e44;font-weight:800;
+        font-size:1.15rem;display:inline-block}
+    .resp-label{font-size:.92rem;color:#4a8f33;font-weight:700;text-transform:uppercase;letter-spacing:.03em}
+    .resp-val{font-size:1.15rem;color:#2a3a2a;margin-top:.2rem}
+    .tc-badge{background:#fde2e2;color:#c0392b;padding:.2rem .6rem;border-radius:5px;font-size:1.1rem;font-weight:700}
+    .fact-bar{display:flex;align-items:center;gap:.7rem;background:#1a2e44;color:white;padding:.7rem 1.25rem;
+        margin:0 1.25rem 1rem;border-radius:10px;font-size:1.2rem;line-height:1.35}
+    .fact-label{background:#6BBF4E;color:#1a2e44;font-weight:800;font-size:.85rem;text-transform:uppercase;
+        letter-spacing:.05em;padding:.3rem .7rem;border-radius:20px;white-space:nowrap}
     </style>""", unsafe_allow_html=True)
     import streamlit.components.v1 as _components
     _date_str = today.strftime("%A %-d %B %Y").upper()
-    _components.html(f"""<div style="background:#1a2e44;padding:.5rem 1rem;display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #6BBF4E;">
+    _components.html(f"""<div style="background:#1a2e44;padding:.7rem 1.25rem;display:flex;align-items:center;justify-content:space-between;">
       <div>
-        <div style="font-size:1.1rem;color:white;font-weight:700;">CLC Daily Bulletin</div>
-        <div style="font-size:.9rem;color:#6BBF4E;font-weight:600;">{_date_str}</div>
+        <div style="font-size:1.5rem;color:white;font-weight:700;">CLC Daily Bulletin</div>
+        <div style="font-size:1.05rem;color:#8fd468;font-weight:600;">{_date_str}</div>
       </div>
-      <div style="display:flex;align-items:center;gap:1rem;">
-        <div style="font-size:1.3rem;color:#e8a125;font-weight:700;font-family:monospace;" id="live-clock">--:-- --</div>
-        <a href="/Daily_Bulletin?quickadd=true" style="background:#6BBF4E;color:#1a2e44;font-size:.7rem;font-weight:700;padding:.3rem .6rem;border-radius:4px;text-decoration:none;">+ Add</a>
-        <a href="/Daily_Bulletin?from_display=true" style="background:rgba(255,255,255,0.1);color:white;font-size:.7rem;font-weight:600;padding:.3rem .6rem;border-radius:4px;text-decoration:none;">Staff</a>
+      <div style="display:flex;align-items:center;gap:1.25rem;">
+        <div style="font-size:2rem;color:#e8a125;font-weight:700;font-family:monospace;" id="live-clock">--:-- --</div>
+        <a href="/Daily_Bulletin?quickadd=true" style="background:#6BBF4E;color:#1a2e44;font-size:.85rem;font-weight:700;padding:.4rem .75rem;border-radius:5px;text-decoration:none;">+ Add</a>
+        <a href="/Daily_Bulletin?from_display=true" style="background:rgba(255,255,255,0.12);color:white;font-size:.85rem;font-weight:600;padding:.4rem .75rem;border-radius:5px;text-decoration:none;">Staff</a>
       </div>
     </div>
     <script>
     function updateClock(){{var n=new Date();var h=n.getHours();var m=n.getMinutes();var ap=h>=12?'PM':'AM';h=h%12||12;document.getElementById('live-clock').textContent=h+':'+(m<10?'0':'')+m+' '+ap;}}
     updateClock();setInterval(updateClock,30000);
-    </script>""", height=60, scrolling=False)
+    </script>""", height=76, scrolling=False)
 
     prev_day = today - timedelta(days=1); next_day = today + timedelta(days=1)
-    dn1, dn2, dn3, dn4 = st.columns([1,4,1,1])
-    with dn1:
-        if st.button(f"\u2190 {prev_day.strftime('%a %-d %b')}", key="dn_prev", use_container_width=True): st.session_state.display_date = prev_day; st.rerun()
-    with dn2:
-        st.markdown(f'<div style="text-align:center;color:#2d7d4f;font-size:.75rem;font-weight:700;font-family:DM Mono,monospace;letter-spacing:.08em;padding:.45rem 0;">VIEWING: {today.strftime("%A %-d %B %Y").upper()}</div>', unsafe_allow_html=True)
-    with dn3:
-        if st.button(f"{next_day.strftime('%a %-d %b')} \u2192", key="dn_next", use_container_width=True): st.session_state.display_date = next_day; st.rerun()
-    with dn4:
-        if st.button("Today", key="dn_today", use_container_width=True): st.session_state.display_date = date.today(); st.rerun()
+    with st.container(key="display_daynav"):
+        dn1, dn2, dn3, dn4 = st.columns([1,4,1,1])
+        with dn1:
+            if st.button(f"\u2190 {prev_day.strftime('%a %-d %b')}", key="dn_prev", use_container_width=True): st.session_state.display_date = prev_day; st.rerun()
+        with dn2:
+            st.markdown(f'<div style="text-align:center;color:#2d7d4f;font-size:1.05rem;font-weight:700;font-family:DM Mono,monospace;letter-spacing:.06em;padding:.7rem 0;">VIEWING: {today.strftime("%A %-d %B %Y").upper()}</div>', unsafe_allow_html=True)
+        with dn3:
+            if st.button(f"{next_day.strftime('%a %-d %b')} \u2192", key="dn_next", use_container_width=True): st.session_state.display_date = next_day; st.rerun()
+        with dn4:
+            if st.button("Today", key="dn_today", use_container_width=True): st.session_state.display_date = date.today(); st.rerun()
 
     def tbl_rows(rows, keys):
         filtered = [r for r in rows if any(r.get(k,"") for k in keys)]
@@ -902,88 +943,88 @@ if params.get("display") == "true":
         n_parts = []
         for n in d_notices:
             cat = n.get("category","General"); nc = NOTICE_CATS.get(cat, NOTICE_CATS["General"])
-            n_parts.append(f'<span style="background:{nc["bg"]};color:{nc["color"]};font-size:.65rem;font-weight:700;text-transform:uppercase;padding:.08rem .3rem;border-radius:3px;">{cat}</span> <strong style="color:#1a2e44;font-size:.75rem;">{n.get("title","")}</strong> <span style="color:#4a6a4a;font-size:.72rem;">{n.get("body","")}</span> <span style="color:#999;font-size:.65rem;">({n.get("submitted_by","")})</span>')
-        st.markdown(f'<div class="dp"><div class="dp-header green">📋 Notices</div><div class="dp-body"><div style="line-height:1.6;">{"<br>".join(n_parts)}</div></div></div>', unsafe_allow_html=True)
+            n_parts.append(f'<span style="background:{nc["bg"]};color:{nc["color"]};font-size:.78rem;font-weight:700;text-transform:uppercase;padding:.1rem .4rem;border-radius:4px;">{cat}</span> <strong style="color:#1a2e44;font-size:1.05rem;">{n.get("title","")}</strong> <span style="color:#4a6a4a;font-size:1rem;">{n.get("body","")}</span> <span style="color:#999;font-size:.85rem;">({n.get("submitted_by","")})</span>')
+        st.markdown(f'<div class="dp dp-full"><div class="dp-header green">\U0001f4cb Notices</div><div class="dp-body"><div style="line-height:1.7;">{"<br>".join(n_parts)}</div></div></div>', unsafe_allow_html=True)
 
-    r1c1, r1c2, r1c3, r1c4, r1c5 = st.columns([2,2,2.5,1.5,2])
-    with r1c1:
-        _staff_rows   = [r for r in d_data.get("staff_absent",  []) if (r.get("Staff Member") or "").strip() or (r.get("TRT") or "").strip()]
-        _student_rows = [r for r in d_data.get("student_absent", []) if (r.get("Student") or "").strip()]
-        st.markdown(f'<div class="dp"><div class="dp-header green">\U0001f645 Staff Absent</div><div class="dp-body"><table class="dt"><tr><th>Staff</th><th>TRT</th></tr>{tbl_rows(_staff_rows, ["Staff Member","TRT"])}</table></div></div><div style="height:6px;"></div><div class="dp"><div class="dp-header blue">\U0001f392 Student Absent</div><div class="dp-body"><table class="dt"><tr><th>Student</th><th>Program</th><th>Reason</th></tr>{tbl_rows(_student_rows, ["Student","Program","Reason"])}</table></div></div>', unsafe_allow_html=True)
-    with r1c2:
-        st.markdown(f'<div class="dp"><div class="dp-header blue">\U0001f68c Excursions</div><div class="dp-body"><table class="dt"><tr><th>Program</th><th>Staff</th><th>Depart</th><th>Return</th><th>Location</th></tr>{tbl_rows(d_data.get("excursions",[]), ["Program","Staff Member","Time Departing","Time Returning","Location"])}</table></div></div>', unsafe_allow_html=True)
-    with r1c3:
-        _sched = load_scheduled_meetings(today); _all_mtgs = list(d_data.get("staff_meetings") or []) + _sched
-        st.markdown(f'<div class="dp"><div class="dp-header navy">\U0001f91d Staff Meetings</div><div class="dp-body"><table class="dt"><tr><th>Type</th><th>Staff</th><th>Location</th><th>Depart</th><th>Return</th><th>Student</th></tr>{tbl_rows(_all_mtgs, ["Type","Staff Member","Location","Time Departing","Time Returning","Student"])}</table></div></div>', unsafe_allow_html=True)
-    with r1c4:
-        st.markdown(f'<div class="dp"><div class="dp-header brown">\U0001f4e5 Entry Meetings</div><div class="dp-body"><table class="dt"><tr><th>Time</th><th>Program</th><th>Student</th></tr>{tbl_rows(d_data.get("entry_meetings",[]), ["Time","Program","Student"])}</table></div></div>', unsafe_allow_html=True)
-    with r1c5:
-        kitchen = sr.get("kitchen_duties","") or "\u2014"
-        st.markdown(f'<div class="dp"><div class="dp-header amber">\u2b50 Staff Responsibilities</div><div class="dp-body"><div style="margin-bottom:.35rem;"><span class="kitchen-val">\U0001f373 Kitchen: {kitchen}</span></div><div style="margin-bottom:.2rem;"><span class="resp-label">\U0001f4cc PD Focus</span><br><span class="resp-val">{sr.get("meeting_pd_focus","") or "\u2014"}</span></div><div style="margin-bottom:.2rem;"><span class="resp-label">\U0001fa91 Chair</span><br><span class="resp-val">{sr.get("chair","") or "\u2014"}</span></div><div><span class="resp-label">\U0001f4dd Minutes</span><br><span class="resp-val">{sr.get("minutes","") or "\u2014"}</span></div></div></div>', unsafe_allow_html=True)
-
+    # ── One continuous masonry grid for every compact info card ──────
+    # Previously five st.columns() side by side, then another five below -
+    # with cards of very different natural heights (a one-line "None
+    # today" next to a five-row table) that leaves ragged, uneven gaps
+    # of bare background under the shorter columns before the next row
+    # starts. CSS multi-column layout (column-width, with break-inside:
+    # avoid on each card) packs every card into whichever column has
+    # room next, the way a real noticeboard would, instead of reserving
+    # a fixed-height row per group.
+    _staff_rows   = [r for r in d_data.get("staff_absent",  []) if (r.get("Staff Member") or "").strip() or (r.get("TRT") or "").strip()]
+    _student_rows = [r for r in d_data.get("student_absent", []) if (r.get("Student") or "").strip()]
+    _sched = load_scheduled_meetings(today); _all_mtgs = list(d_data.get("staff_meetings") or []) + _sched
+    kitchen = sr.get("kitchen_duties","") or "\u2014"
     _vis_rows = [r for r in d_data.get("visitors_on_site", []) if any(r.get(k,"") for k in ["Visitor Name","Reason","Staff Responsible"])]
-    if _vis_rows:
-        _vis_html = "".join([f'<tr><td><strong style="color:#1a2e44;">{r.get("Visitor Name","")}</strong></td><td style="font-size:.7rem;">{r.get("Reason","")}</td><td style="font-size:.7rem;">{r.get("Staff Responsible","")}</td><td style="font-size:.7rem;">{r.get("Arriving","")}</td><td style="font-size:.7rem;">{r.get("Departing","")}</td><td style="font-size:.7rem;">{r.get("Location","")}</td></tr>' for r in _vis_rows])
-        st.markdown(f'<div class="dp"><div class="dp-header green">👥 Visitors</div><div class="dp-body"><table class="dt"><tr><th>Visitor</th><th>Reason</th><th>Staff</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>{_vis_html}</table></div></div>', unsafe_allow_html=True)
-
-    r2c1, r2c2, r2c3, r2c4, r2c5 = st.columns([2,2,2,1.5,1])
     _transition_d = transition_students_by_program(d_data.get("student_absent", []))
-    with r2c1:
-        st.markdown(f'<div class="dp"><div class="dp-header blue">\U0001f7e6 JP \u2013 Travel</div><div class="dp-body"><table class="dt"><tr><th>Student</th><th>Arrives</th><th>Departs</th><th>Transport</th></tr>{tbl_rows(d_data.get("travel_jp",[]), ["Student","Arrival Time","Departure Time","Transport"])}</table>{transition_bar_html(_transition_d.get("travel_jp",[]), compact=True)}</div></div>', unsafe_allow_html=True)
-    with r2c2:
-        st.markdown(f'<div class="dp"><div class="dp-header purple">\U0001f7e3 PY \u2013 Travel</div><div class="dp-body"><table class="dt"><tr><th>Student</th><th>Arrives</th><th>Departs</th><th>Transport</th></tr>{tbl_rows(d_data.get("travel_py",[]), ["Student","Arrival Time","Departure Time","Transport"])}</table>{transition_bar_html(_transition_d.get("travel_py",[]), compact=True)}</div></div>', unsafe_allow_html=True)
-    with r2c3:
-        st.markdown(f'<div class="dp"><div class="dp-header slate">\U0001f7eb SY \u2013 Travel</div><div class="dp-body"><table class="dt"><tr><th>Student</th><th>Arrives</th><th>Departs</th><th>Transport</th></tr>{tbl_rows(d_data.get("travel_sy",[]), ["Student","Arrival Time","Departure Time","Transport"])}</table>{transition_bar_html(_transition_d.get("travel_sy",[]), compact=True)}</div></div>', unsafe_allow_html=True)
-    with r2c4:
-        vb = d_data.get("vehicle_bookings",[]); 
-        if isinstance(vb, dict): vb = []
-        if vb:
-            def _dm_vb_time_d(b): return "All day" if b.get("whole_day",True) else f"{b.get('start_time','?')}\u2013{b.get('end_time','?')}"
-            vb_html = "".join([f'<tr><td style="font-size:.7rem;color:#666;">{"🚐 Van" if b.get("vehicle")=="Van" else "🚙 Kia"}</td><td><span class="vb-tag">{b.get("booker","")}</span></td><td style="font-size:.7rem;color:#4a8f33;">{_dm_vb_time_d(b)}</td></tr>' for b in vb if b.get("booker","")])
-        else:
-            vb_html = '<tr><td colspan="3" class="dt-em">No bookings</td></tr>'
-        st.markdown(f'<div class="dp"><div class="dp-header navy">🚗 Vehicles</div><div class="dp-body"><table class="dt"><tr><th>Vehicle</th><th>Booked By</th><th>Time</th></tr>{vb_html}</table></div></div>', unsafe_allow_html=True)
-    with r2c5:
-        nit = d_data.get("nit_booking","") or '<span class="dt-em">None</span>'
-        st.markdown(f'<div class="dp"><div class="dp-header green">📅 NIT</div><div class="dp-body"><p style="font-size:.75rem;color:#2a3a2a;margin:0;line-height:1.3;">{nit}</p></div></div>', unsafe_allow_html=True)
-
-    # Meeting Room bookings for the day being viewed (today or a future date)
+    vb = d_data.get("vehicle_bookings",[])
+    if isinstance(vb, dict): vb = []
+    if vb:
+        def _dm_vb_time_d(b): return "All day" if b.get("whole_day",True) else f"{b.get('start_time','?')}\u2013{b.get('end_time','?')}"
+        vb_html = "".join([f'<tr><td style="font-size:.95rem;color:#666;">{"\U0001f690 Van" if b.get("vehicle")=="Van" else "\U0001f699 Kia"}</td><td><span class="vb-tag">{b.get("booker","")}</span></td><td style="font-size:.95rem;color:#4a8f33;">{_dm_vb_time_d(b)}</td></tr>' for b in vb if b.get("booker","")])
+    else:
+        vb_html = '<tr><td colspan="3" class="dt-em">No bookings</td></tr>'
+    nit = d_data.get("nit_booking","") or '<span class="dt-em">None</span>'
     _mrb_today = load_todays_meeting_room_bookings(today)
     if _mrb_today:
-        _mrb_rows = "".join([f'<tr><td style="font-family:\'DM Mono\',monospace;font-size:.7rem;color:#4a8f33;font-weight:700;white-space:nowrap;">{b.get("time_slot","")}</td><td>{b.get("staff_name","")}</td><td style="font-size:.7rem;color:#666;">{b.get("purpose","") or ""}</td></tr>' for b in _mrb_today])
-        st.markdown(f'<div class="dp"><div class="dp-header navy">🗓️ Meeting Room</div><div class="dp-body"><table class="dt"><tr><th>Time</th><th>Booked By</th><th>Purpose</th></tr>{_mrb_rows}</table></div></div>', unsafe_allow_html=True)
+        _mrb_rows = "".join([f'<tr><td style="font-family:\'DM Mono\',monospace;font-size:.95rem;color:#4a8f33;font-weight:700;white-space:nowrap;">{b.get("time_slot","")}</td><td>{b.get("staff_name","")}</td><td style="font-size:.95rem;color:#666;">{b.get("purpose","") or ""}</td></tr>' for b in _mrb_today])
+        _mrb_html = f'<table class="dt"><tr><th>Time</th><th>Booked By</th><th>Purpose</th></tr>{_mrb_rows}</table>'
     else:
-        st.markdown('<div class="dp"><div class="dp-header navy">🗓️ Meeting Room</div><div class="dp-body"><span class="dt-em">No meeting room bookings today</span></div></div>', unsafe_allow_html=True)
+        _mrb_html = '<span class="dt-em">No meeting room bookings today</span>'
 
-    # Travel Changes — highlighted red if anything entered
+    _cards = []
+    _cards.append(f'<div class="dp"><div class="dp-header green">\U0001f645 Staff Absent</div><div class="dp-body"><table class="dt"><tr><th>Staff</th><th>TRT</th></tr>{tbl_rows(_staff_rows, ["Staff Member","TRT"])}</table></div></div>')
+    _cards.append(f'<div class="dp"><div class="dp-header navy">\U0001f392 Student Absent</div><div class="dp-body"><table class="dt"><tr><th>Student</th><th>Program</th><th>Reason</th></tr>{tbl_rows(_student_rows, ["Student","Program","Reason"])}</table></div></div>')
+    _cards.append(f'<div class="dp"><div class="dp-header navy">\U0001f68c Excursions</div><div class="dp-body"><table class="dt dt-compact"><tr><th>Program</th><th>Staff</th><th>Depart</th><th>Return</th><th>Location</th></tr>{tbl_rows(d_data.get("excursions",[]), ["Program","Staff Member","Time Departing","Time Returning","Location"])}</table></div></div>')
+    _cards.append(f'<div class="dp"><div class="dp-header navy">\U0001f91d Staff Meetings</div><div class="dp-body"><table class="dt dt-compact"><tr><th>Type</th><th>Staff</th><th>Location</th><th>Depart</th><th>Return</th><th>Student</th></tr>{tbl_rows(_all_mtgs, ["Type","Staff Member","Location","Time Departing","Time Returning","Student"])}</table></div></div>')
+    _cards.append(f'<div class="dp"><div class="dp-header navy">\U0001f4e5 Entry Meetings</div><div class="dp-body"><table class="dt"><tr><th>Time</th><th>Program</th><th>Student</th></tr>{tbl_rows(d_data.get("entry_meetings",[]), ["Time","Program","Student"])}</table></div></div>')
+    _cards.append(f'<div class="dp"><div class="dp-header amber">\u2b50 Staff Responsibilities</div><div class="dp-body"><div style="margin-bottom:.4rem;"><span class="kitchen-val">\U0001f373 Kitchen: {kitchen}</span></div><div style="margin-bottom:.25rem;"><span class="resp-label">\U0001f4cc PD Focus</span><br><span class="resp-val">{sr.get("meeting_pd_focus","") or "\u2014"}</span></div><div style="margin-bottom:.25rem;"><span class="resp-label">\U0001fa91 Chair</span><br><span class="resp-val">{sr.get("chair","") or "\u2014"}</span></div><div><span class="resp-label">\U0001f4dd Minutes</span><br><span class="resp-val">{sr.get("minutes","") or "\u2014"}</span></div></div></div>')
+    if _vis_rows:
+        _vis_html = "".join([f'<tr><td><strong style="color:#1a2e44;">{r.get("Visitor Name","")}</strong></td><td style="font-size:.95rem;">{r.get("Reason","")}</td><td style="font-size:.95rem;">{r.get("Staff Responsible","")}</td><td style="font-size:.95rem;">{r.get("Arriving","")}</td><td style="font-size:.95rem;">{r.get("Departing","")}</td><td style="font-size:.95rem;">{r.get("Location","")}</td></tr>' for r in _vis_rows])
+        _cards.append(f'<div class="dp"><div class="dp-header green">\U0001f465 Visitors</div><div class="dp-body"><table class="dt dt-compact"><tr><th>Visitor</th><th>Reason</th><th>Staff</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>{_vis_html}</table></div></div>')
+    _cards.append(f'<div class="dp"><div class="dp-header jp">\U0001f7e6 JP \u2013 Travel</div><div class="dp-body"><table class="dt dt-compact"><tr><th>Student</th><th>Arrives</th><th>Departs</th><th>Transport</th></tr>{tbl_rows(d_data.get("travel_jp",[]), ["Student","Arrival Time","Departure Time","Transport"])}</table>{transition_bar_html(_transition_d.get("travel_jp",[]), compact=True)}</div></div>')
+    _cards.append(f'<div class="dp"><div class="dp-header py">\U0001f7e3 PY \u2013 Travel</div><div class="dp-body"><table class="dt dt-compact"><tr><th>Student</th><th>Arrives</th><th>Departs</th><th>Transport</th></tr>{tbl_rows(d_data.get("travel_py",[]), ["Student","Arrival Time","Departure Time","Transport"])}</table>{transition_bar_html(_transition_d.get("travel_py",[]), compact=True)}</div></div>')
+    _cards.append(f'<div class="dp"><div class="dp-header sy">\U0001f7eb SY \u2013 Travel</div><div class="dp-body"><table class="dt dt-compact"><tr><th>Student</th><th>Arrives</th><th>Departs</th><th>Transport</th></tr>{tbl_rows(d_data.get("travel_sy",[]), ["Student","Arrival Time","Departure Time","Transport"])}</table>{transition_bar_html(_transition_d.get("travel_sy",[]), compact=True)}</div></div>')
+    _cards.append(f'<div class="dp"><div class="dp-header navy">\U0001f697 Vehicles</div><div class="dp-body"><table class="dt"><tr><th>Vehicle</th><th>Booked By</th><th>Time</th></tr>{vb_html}</table></div></div>')
+    _cards.append(f'<div class="dp"><div class="dp-header green">\U0001f4c5 NIT</div><div class="dp-body"><p style="font-size:1.05rem;color:#2a3a2a;margin:0;line-height:1.35;">{nit}</p></div></div>')
+    _cards.append(f'<div class="dp"><div class="dp-header navy">\U0001f5d3\ufe0f Meeting Room</div><div class="dp-body">{_mrb_html}</div></div>')
+
+    st.markdown(f'<div class="dp-grid">{"".join(_cards)}</div>', unsafe_allow_html=True)
+
+    # ── Full-width, below the grid: things that deserve a second look
+    # rather than being squeezed into a masonry column ───────────────
     tc_today = d_data.get("travel_changes", [])
     tc_filtered = [r for r in tc_today if any(r.get(k,"") for k in ["Student","Change Type","Reason","Time","How Departed"])]
     if tc_filtered:
         tc_rows_html = "".join([
             f'<tr><td><strong style="color:#1a2e44;">{r.get("Student","")}</strong></td>'
-            f'<td style="font-size:.7rem;">{r.get("Program","")}</td>'
+            f'<td style="font-size:.95rem;">{r.get("Program","")}</td>'
             f'<td><span class="tc-badge">{r.get("Change Type","")}</span></td>'
-            f'<td style="font-size:.7rem;color:#666;">{r.get("Reason","")}</td>'
-            f'<td style="font-family:monospace;font-size:.7rem;color:#c00;font-weight:700;">{r.get("Time","")}</td>'
-            f'<td style="font-size:.7rem;">{r.get("How Departed","")}</td></tr>'
+            f'<td style="font-size:.95rem;color:#666;">{r.get("Reason","")}</td>'
+            f'<td style="font-family:monospace;font-size:.95rem;color:#c0392b;font-weight:700;">{r.get("Time","")}</td>'
+            f'<td style="font-size:.95rem;">{r.get("How Departed","")}</td></tr>'
             for r in tc_filtered
         ])
-        st.markdown(f'<div class="dp" style="border-left:3px solid #c00;"><div class="dp-header red">🔄 Travel Changes</div><div class="dp-body"><table class="dt"><tr><th>Student</th><th>Program</th><th>Change</th><th>Reason</th><th>Time</th><th>How Departed</th></tr>{tc_rows_html}</table></div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="dp dp-full" style="border-left:4px solid #c0392b;"><div class="dp-header red">\U0001f504 Travel Changes</div><div class="dp-body"><table class="dt"><tr><th>Student</th><th>Program</th><th>Change</th><th>Reason</th><th>Time</th><th>How Departed</th></tr>{tc_rows_html}</table></div></div>', unsafe_allow_html=True)
 
     bc_today = load_bulletin_changes(today)
     if bc_today:
         pc_parts = []
         for ch in bc_today:
             reason = ch.get("reason",""); absent = ch.get("staff_absent",""); has_trt = ch.get("has_trt",False); trt_name = ch.get("trt_name",""); staff_rows = ch.get("staff_rows",[])
-            color = "#dc2626" if reason == "Staff Absence" else "#0e7490"
+            color = "#c0392b" if reason == "Staff Absence" else "#0e7490"
             meta = []
             if absent: meta.append(f"Absent: <strong>{absent}</strong>")
             if has_trt: meta.append(f"TRT: {trt_name or 'On site'}")
             tt_html = _timetable_grid_html(staff_rows, PC_TIME_SLOTS_30, dark=True)
-            pc_parts.append(f'<div style="margin-bottom:10px;border-left:3px solid {color};padding-left:8px;"><div style="font-size:.6rem;color:#a8c8a8;margin-bottom:3px;font-weight:700;">{reason.upper()}{(" \u00b7 " + " \u00b7 ".join(meta)) if meta else ""}</div>{tt_html or "<span style=\'color:#3a5a3a;font-size:.6rem;\'>No timetable entered</span>"}</div>')
-        st.markdown(f'<div class="dp"><div class="dp-header green">\U0001f4ca Program Changes</div><div class="dp-body">{"".join(pc_parts)}</div></div>', unsafe_allow_html=True)
+            pc_parts.append(f'<div style="margin-bottom:10px;border-left:3px solid {color};padding-left:8px;"><div style="font-size:.85rem;color:#a8c8a8;margin-bottom:3px;font-weight:700;">{reason.upper()}{(" \u00b7 " + " \u00b7 ".join(meta)) if meta else ""}</div>{tt_html or "<span style=\'color:#3a5a3a;font-size:.85rem;\'>No timetable entered</span>"}</div>')
+        st.markdown(f'<div class="dp dp-full"><div class="dp-header green">\U0001f4ca Program Changes</div><div class="dp-body">{"".join(pc_parts)}</div></div>', unsafe_allow_html=True)
     else:
-        st.markdown('<div class="dp"><div class="dp-header green">\U0001f4ca Program Changes</div><div class="dp-body"><span class="dt-em">No program changes today</span></div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="dp dp-full"><div class="dp-header green">\U0001f4ca Program Changes</div><div class="dp-body"><span class="dt-em">No program changes today</span></div></div>', unsafe_allow_html=True)
 
     # ── Program Changes Manager entries (from standalone tool) ──
     _pcm_today = load_pc_manager_changes(today)
@@ -993,24 +1034,24 @@ if params.get("display") == "true":
             _pcm_staff = _pcm.get("staff_name","N/A"); _pcm_reason = _pcm.get("reason","")
             _pcm_covered = _pcm.get("covered_by",""); _pcm_blocks = _pcm.get("time_blocks",[]) or []
             _block_rows = "".join([
-                f'<tr><td style="color:#C8760A;font-weight:600;white-space:nowrap;font-size:.58rem;">'
+                f'<tr><td style="color:#C8760A;font-weight:600;white-space:nowrap;font-size:.85rem;">'
                 f'{_fmt_pc_time(b.get("start_time",""))} \u2192 {_fmt_pc_time(b.get("end_time",""))}</td>'
-                f'<td style="font-size:.58rem;">{b.get("modified_program","")}'
+                f'<td style="font-size:.85rem;">{b.get("modified_program","")}'
                 f'{"<br><span style=\'color:#6BBF4E;font-size:0.9em;\'>Release: "+b["released_by"]+"</span>" if b.get("released_by") else ""}'
                 f'</td></tr>'
                 for b in _pcm_blocks
             ])
-            _cov_html = f'<div style="font-size:.58rem;color:#6BBF4E;font-weight:600;margin:.2rem 0;">Covered by: {_pcm_covered}</div>' if _pcm_covered else ""
+            _cov_html = f'<div style="font-size:.85rem;color:#6BBF4E;font-weight:600;margin:.2rem 0;">Covered by: {_pcm_covered}</div>' if _pcm_covered else ""
             _pcm_parts.append(
                 f'<div style="margin-bottom:8px;border-left:3px solid #C8760A;padding-left:7px;">'
-                f'<div style="font-size:.62rem;font-weight:700;color:#6BBF4E;">{_pcm_staff}</div>'
-                f'<div style="font-size:.58rem;color:#a8c8a8;margin-bottom:3px;">{_pcm_reason}</div>'
+                f'<div style="font-size:.9rem;font-weight:700;color:#6BBF4E;">{_pcm_staff}</div>'
+                f'<div style="font-size:.85rem;color:#a8c8a8;margin-bottom:3px;">{_pcm_reason}</div>'
                 f'{_cov_html}'
                 f'{"<table style=\'border-collapse:collapse;width:100%;\'>" + _block_rows + "</table>" if _block_rows else ""}'
                 f'</div>'
             )
         st.markdown(
-            f'<div class="dp"><div class="dp-header amber">\U0001f4cb Staff Timetable Changes</div>'
+            f'<div class="dp dp-full"><div class="dp-header amber">\U0001f4cb Staff Timetable Changes</div>'
             f'<div class="dp-body">{"".join(_pcm_parts)}</div></div>',
             unsafe_allow_html=True
         )
