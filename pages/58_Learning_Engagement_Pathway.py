@@ -731,60 +731,165 @@ with tab5:
 
     def build_docx() -> bytes:
         """Build a Word report mirroring the CLC-LBU_Learning_Engagement_Transfer_Pathway.docx
-        template, filled with this student's live data."""
+        template's visual design — navy header banner, bordered/shaded tables, tier-coloured
+        cells — filled with this student's live data."""
         from docx import Document
-        from docx.shared import Pt, RGBColor
+        from docx.shared import Pt, RGBColor, Cm
         from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.enum.table import WD_ALIGN_VERTICAL
+        from docx.oxml.ns import qn
+        from docx.oxml import OxmlElement
 
         NAVY = RGBColor(0x1F, 0x38, 0x64)
+        WHITE = RGBColor(0xFF, 0xFF, 0xFF)
+        GREY_FILL = "F2F2F2"
+        TIER_FILLS = {
+            "Universal curriculum (Tier 1)": ("DCE6F1", "0C447C"),
+            "Targeted curriculum (Tier 2)": ("FFF2CC", "854F0B"),
+            "Individualised intervention (Tier 3)": ("FADBD8", "943126"),
+        }
+        HELD_COLOURS = {"Y": ("E2F0D9", "375623"), "Partial": ("FFF2CC", "854F0B"), "N": ("FADBD8", "943126")}
+
+        def shade_cell(cell, hex_fill):
+            shd = OxmlElement("w:shd")
+            shd.set(qn("w:val"), "clear")
+            shd.set(qn("w:color"), "auto")
+            shd.set(qn("w:fill"), hex_fill)
+            cell._tc.get_or_add_tcPr().append(shd)
+
+        def set_cell_text(cell, text, bold=False, color=None, size=10, align=None):
+            cell.text = ""
+            p = cell.paragraphs[0]
+            if align:
+                p.alignment = align
+            run = p.add_run(text)
+            run.bold = bold
+            run.font.size = Pt(size)
+            if color:
+                run.font.color.rgb = color
+            cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+
+        def header_row(table, labels, widths_cm):
+            row = table.rows[0].cells
+            for i, label in enumerate(labels):
+                shade_cell(row[i], "1F3864")
+                set_cell_text(row[i], label, bold=True, color=WHITE, size=10)
+                table.columns[i].width = Cm(widths_cm[i])
+
         doc = Document()
+        doc.styles["Normal"].font.name = "Calibri"
+        doc.styles["Normal"].font.size = Pt(10)
+        for section in doc.sections:
+            section.left_margin = Cm(1.8)
+            section.right_margin = Cm(1.8)
+            section.top_margin = Cm(1.5)
+            section.bottom_margin = Cm(1.5)
 
-        doc.add_heading("Learning Engagement & Transfer Pathway", level=0)
-        p = doc.add_paragraph(f"Student: {student_id}   \u00b7   Program: {selected_label.split('-')[-1]}")
-        p.runs[0].font.size = Pt(11)
+        # ---- navy header banner ----
+        banner = doc.add_table(rows=1, cols=1)
+        banner.autofit = False
+        cell = banner.rows[0].cells[0]
+        shade_cell(cell, "1F3864")
+        cell.width = Cm(17.5)
+        p = cell.paragraphs[0]
+        p.paragraph_format.space_before = Pt(6)
+        p.paragraph_format.space_after = Pt(2)
+        run = p.add_run("Learning Engagement & Transfer Pathway")
+        run.bold = True
+        run.font.size = Pt(20)
+        run.font.color.rgb = WHITE
+        p2 = cell.add_paragraph()
+        p2.paragraph_format.space_after = Pt(6)
+        run2 = p2.add_run(f"{student_id}  \u00b7  Program: {selected_label.split('-')[-1]}  \u00b7  Teaching for Transfer series")
+        run2.font.size = Pt(11)
+        run2.font.color.rgb = RGBColor(0xD6, 0xE0, 0xEE)
+        for c in banner.rows[0].cells:
+            c.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+        doc.add_paragraph().paragraph_format.space_after = Pt(2)
 
-        doc.add_heading("Part 1 \u2014 Engagement Profile", level=1)
+        # ---- Part 1: Engagement Profile ----
+        h = doc.add_heading("Part 1 \u2014 Engagement Profile", level=1)
+        h.runs[0].font.color.rgb = NAVY
+        t1 = doc.add_table(rows=1, cols=2)
+        t1.style = "Table Grid"
+        header_row(t1, ["Domain", "What supports engagement"], [4.5, 13.0])
         for label_, vals in [
             ("Regulation state", existing.get("regulation_state", [])),
             ("Sensory preferences", existing.get("sensory_preferences", [])),
             ("Relational trust (PACE)", existing.get("relational_trust", [])),
             ("Environmental needs", existing.get("environmental_needs", [])),
         ]:
-            doc.add_paragraph(f"{label_}: {', '.join(vals) or '\u2014'}")
+            row = t1.add_row().cells
+            set_cell_text(row[0], label_, bold=True, size=10)
+            set_cell_text(row[1], ", ".join(vals) or "\u2014", size=10)
+        doc.add_paragraph().paragraph_format.space_after = Pt(4)
 
-        doc.add_heading("Part 2 \u2014 Method Signatures", level=1)
+        # ---- Part 2: Method Signatures ----
+        h = doc.add_heading("Part 2 \u2014 Method Signatures", level=1)
+        h.runs[0].font.color.rgb = NAVY
+        t2 = doc.add_table(rows=1, cols=6)
+        t2.style = "Table Grid"
+        header_row(
+            t2, ["Observed context", "Instructional move", "Disposition", "SEL", "AC Capability", "Tier"],
+            [2.6, 4.2, 2.2, 2.4, 2.6, 3.3],
+        )
         for a in attached:
             m = a["pathway_method_bank"]
-            doc.add_paragraph(
-                f"[{m['universal_or_targeted']}] {m['instructional_move']} "
-                f"\u2014 {m['observed_context']} \u00b7 disposition: {m.get('disposition') or '\u2014'} "
-                f"\u00b7 SEL: {', '.join(m.get('social_emotional') or []) or '\u2014'} "
-                f"\u00b7 {', '.join(m['ac_capabilities'])}"
-            )
+            row = t2.add_row().cells
+            set_cell_text(row[0], m["observed_context"], size=9)
+            set_cell_text(row[1], m["instructional_move"], size=9)
+            set_cell_text(row[2], m.get("disposition") or "\u2014", bold=True, size=9)
+            set_cell_text(row[3], ", ".join(m.get("social_emotional") or []) or "\u2014", bold=True, size=9)
+            set_cell_text(row[4], ", ".join(m["ac_capabilities"]) or "\u2014", size=9)
+            tier = m["universal_or_targeted"]
+            fill, text_col = TIER_FILLS.get(tier, (GREY_FILL, "444444"))
+            shade_cell(row[5], fill)
+            set_cell_text(row[5], tier, bold=True, size=9, color=RGBColor.from_string(text_col))
+        doc.add_paragraph().paragraph_format.space_after = Pt(4)
 
-        doc.add_heading("Part 4 \u2014 Application Log", level=1)
-        table = doc.add_table(rows=1, cols=5)
-        table.style = "Light Grid Accent 1"
-        hdr = table.rows[0].cells
-        for i, h in enumerate(["Date", "Staff", "Context", "Held up?", "Adaptation"]):
-            hdr[i].text = h
+        # ---- Part 4: Application Log ----
+        h = doc.add_heading("Part 4 \u2014 Application Log", level=1)
+        h.runs[0].font.color.rgb = NAVY
+        t4 = doc.add_table(rows=1, cols=5)
+        t4.style = "Table Grid"
+        header_row(t4, ["Date", "Staff", "Context", "Held up?", "Adaptation"], [2.3, 3.7, 3.7, 2.0, 5.5])
         for e in all_logs:
-            row = table.add_row().cells
-            row[0].text = str(e.get("log_date") or "")
-            row[1].text = str(e.get("staff") or "")
-            row[2].text = str(e.get("context_applied") or "")
-            row[3].text = str(e.get("held_up") or "")
-            row[4].text = str(e.get("adaptation_needed") or "")
+            row = t4.add_row().cells
+            set_cell_text(row[0], str(e.get("log_date") or ""), size=9)
+            set_cell_text(row[1], str(e.get("staff") or ""), size=9)
+            set_cell_text(row[2], str(e.get("context_applied") or ""), size=9)
+            held = str(e.get("held_up") or "")
+            fill, text_col = HELD_COLOURS.get(held, (GREY_FILL, "444444"))
+            shade_cell(row[3], fill)
+            set_cell_text(row[3], held, bold=True, size=9, color=RGBColor.from_string(text_col), align=WD_ALIGN_PARAGRAPH.CENTER)
+            set_cell_text(row[4], str(e.get("adaptation_needed") or ""), size=9)
+        doc.add_paragraph().paragraph_format.space_after = Pt(4)
 
-        doc.add_heading("Part 5 \u2014 Reporting Roll-up", level=1)
-        doc.add_paragraph(f"Primary disposition(s) demonstrated: {primary_disposition or '\u2014'}")
-        disp_summary = "; ".join(f"{d}: {len(c)} context(s) ({', '.join(sorted(c)) or '\u2014'})" for d, c in disposition_contexts.items())
-        doc.add_paragraph(f"Contexts the disposition held up in: {disp_summary or '\u2014'}")
-        doc.add_paragraph(f"Linked SMARTAR / GAS goal: {smartar_goal or '\u2014'}")
-        doc.add_paragraph(f"Capability & knowledge evidence (supporting detail): contexts replicated overall — {len(replicated_contexts)} ({', '.join(sorted(replicated_contexts)) or '\u2014'})")
-        doc.add_paragraph(f"Social & emotional capability demonstrated (LBU priority): {', '.join(sel_seen) or '\u2014'}")
-        doc.add_paragraph(f"Evidence of transfer: {evidence or '\u2014'}")
-        doc.add_paragraph(f"Next steps: {next_steps or '\u2014'}")
+        # ---- Part 5: Reporting Roll-up ----
+        h = doc.add_heading("Part 5 \u2014 Reporting Roll-up", level=1)
+        h.runs[0].font.color.rgb = NAVY
+        disp_summary = "; ".join(
+            f"{d}: {len(c)} context(s) ({', '.join(sorted(c)) or '\u2014'})" for d, c in disposition_contexts.items()
+        ) or "\u2014"
+        rollup_rows = [
+            ("Primary disposition(s) demonstrated", primary_disposition or "\u2014"),
+            ("Contexts the disposition held up in", disp_summary),
+            ("Linked SMARTAR / GAS goal", smartar_goal or "\u2014"),
+            ("Capability & knowledge evidence (supporting detail)",
+             f"Contexts replicated overall \u2014 {len(replicated_contexts)} ({', '.join(sorted(replicated_contexts)) or '\u2014'})"),
+            ("Social & Emotional Capability demonstrated (LBU priority)", ", ".join(sel_seen) or "\u2014"),
+            ("Evidence of transfer", evidence or "\u2014"),
+            ("Next steps", next_steps or "\u2014"),
+        ]
+        t5 = doc.add_table(rows=0, cols=2)
+        t5.style = "Table Grid"
+        for label_, value in rollup_rows:
+            row = t5.add_row().cells
+            t5.columns[0].width = Cm(5.5)
+            t5.columns[1].width = Cm(12.0)
+            shade_cell(row[0], GREY_FILL)
+            set_cell_text(row[0], label_, bold=True, size=9.5)
+            set_cell_text(row[1], value, size=9.5)
 
         buf = io.BytesIO()
         doc.save(buf)
