@@ -920,84 +920,139 @@ elif view == "📋 Goal Builder":
                             f'sessions show NOT YET. Please refine this goal.</div>',
                             unsafe_allow_html=True,
                         )
-                    if g.get("exclusion_goal"):
+
+                    editing_goal = st.session_state.get(f"editgoal_open_{g['id']}", False)
+
+                    if not editing_goal:
+                        # ── READ-ONLY DISPLAY ─────────────────────────────────
+                        if g.get("exclusion_goal"):
+                            st.markdown(
+                                f'<div class="exclusion-box">🏫 <b>Exclusion Goal:</b> '
+                                f'{g.get("exclusion_goal","—")}</div>',
+                                unsafe_allow_html=True,
+                            )
                         st.markdown(
-                            f'<div class="exclusion-box">🏫 <b>Exclusion Goal:</b> '
-                            f'{g.get("exclusion_goal","—")}</div>',
+                            f'<div class="smartar-box">🎯 <b>SMARTAR Goal:</b> {goal_text}</div>',
                             unsafe_allow_html=True,
                         )
-                    st.markdown(
-                        f'<div class="smartar-box">🎯 <b>SMARTAR Goal:</b> {goal_text}</div>',
-                        unsafe_allow_html=True,
-                    )
-                    st.markdown(
-                        f'<div class="period-box">📅 Tracking period: <strong>{period}</strong>'
-                        f' — {", ".join(SESSIONS_FOR_PERIOD.get(period, ALL_SESSIONS))}</div>',
-                        unsafe_allow_html=True,
-                    )
-                    if st.button("✏️ Change tracking period", key=f"editper_gb_{g['id']}"):
-                        st.session_state[f"editper_open_{g['id']}"] = True
-                    if st.session_state.get(f"editper_open_{g['id']}"):
-                        new_period = st.selectbox(
-                            "New tracking period",
-                            TRACKING_PERIODS,
+                        st.markdown(
+                            f'<div class="period-box">📅 Tracking period: <strong>{period}</strong>'
+                            f' — {", ".join(SESSIONS_FOR_PERIOD.get(period, ALL_SESSIONS))}</div>',
+                            unsafe_allow_html=True,
+                        )
+
+                        gas = get_gas_dict(g)
+                        if any(gas.values()):
+                            st.markdown("**GAS Performance Levels:**")
+                            for lvl in LEVEL_ORDER:
+                                desc = gas.get(lvl, "")
+                                if desc:
+                                    color = LEVEL_COLOR[lvl]
+                                    st.markdown(
+                                        f'<div class="gas-level-bar">'
+                                        f'<span class="gas-level-label" style="color:{color}">'
+                                        f'{LEVEL_EMOJI[lvl]} {lvl}</span>'
+                                        f'<span class="gas-level-desc">{desc}</span></div>',
+                                        unsafe_allow_html=True,
+                                    )
+                        if g.get("meeting_id"):
+                            st.caption(f"📋 Created from {g.get('program','')} Team Meeting · "
+                                       f"Term {g.get('term','')} Week {g.get('week','')}")
+
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        ec1, ec2 = st.columns(2)
+                        with ec1:
+                            if st.button("✏️ Edit Goal", key=f"editgoal_btn_{g['id']}",
+                                         use_container_width=True):
+                                st.session_state[f"editgoal_open_{g['id']}"] = True
+                                st.rerun()
+                        with ec2:
+                            if st.button(f"🗑 Archive Goal {idx}", key=f"del_{g['id']}",
+                                         use_container_width=True):
+                                st.session_state[f"arch_gb_{g['id']}"] = True
+                        if st.session_state.get(f"arch_gb_{g['id']}"):
+                            reason = st.text_input("Archive reason (optional):",
+                                                   key=f"arch_gb_r_{g['id']}")
+                            ca, cb = st.columns(2)
+                            with ca:
+                                if st.button("Confirm Archive", key=f"arch_gb_d_{g['id']}", type="primary"):
+                                    if archive_goal(g["id"], reason):
+                                        st.session_state.pop(f"arch_gb_{g['id']}", None)
+                                        # Pre-fill exclusion goal from archived goal for new build
+                                        st.session_state["build_new_after_archive"] = True
+                                        st.session_state["archived_excl_goal"] = g.get("exclusion_goal","")
+                                        st.session_state["archived_student"] = g.get("student_name","")
+                                        st.rerun()
+                            with cb:
+                                if st.button("Cancel", key=f"arch_gb_x_{g['id']}"):
+                                    st.session_state.pop(f"arch_gb_{g['id']}", None)
+                                    st.rerun()
+
+                    else:
+                        # ── FULL EDIT FORM — change anything about a saved goal ─
+                        st.markdown(
+                            '<div class="success-box">✏️ <b>Editing this goal.</b> '
+                            'Changes save directly — no need to archive and rebuild.</div>',
+                            unsafe_allow_html=True,
+                        )
+                        edit_excl = st.text_area(
+                            "🏫 Exclusion Goal", value=g.get("exclusion_goal", "") or "",
+                            height=80, key=f"editgoal_excl_{g['id']}",
+                        )
+                        edit_smartar = st.text_area(
+                            "🎯 SMARTAR Goal", value=g.get("smartar_goal", ""),
+                            height=100, key=f"editgoal_smt_{g['id']}",
+                        )
+                        edit_period = st.selectbox(
+                            "📅 Tracking Period", TRACKING_PERIODS,
                             index=TRACKING_PERIODS.index(period) if period in TRACKING_PERIODS else 0,
-                            key=f"editper_sel_{g['id']}",
+                            key=f"editgoal_per_{g['id']}",
                             help="Determines which sessions Quick Track / Daily Tracking shows for this goal.",
                         )
-                        epc1, epc2 = st.columns(2)
-                        with epc1:
-                            if st.button("💾 Save period", key=f"editper_save_{g['id']}", type="primary"):
+                        cur_start = g.get("start_date")
+                        try:
+                            cur_start_d = date.fromisoformat(str(cur_start)[:10]) if cur_start else date.today()
+                        except Exception:
+                            cur_start_d = date.today()
+                        edit_start = st.date_input(
+                            "Start Date (update when refining goal)",
+                            value=cur_start_d, key=f"editgoal_start_{g['id']}",
+                        )
+
+                        st.markdown("**GAS Performance Levels:**")
+                        gas_current = get_gas_dict(g)
+                        edit_gas = {}
+                        for lvl in LEVEL_ORDER:
+                            edit_gas[lvl] = st.text_area(
+                                f"{LEVEL_EMOJI[lvl]} {lvl}",
+                                value=gas_current.get(lvl, ""),
+                                height=70, key=f"editgoal_gas_{lvl}_{g['id']}",
+                            )
+
+                        svc1, svc2 = st.columns(2)
+                        with svc1:
+                            if st.button("💾 Save Changes", key=f"editgoal_save_{g['id']}",
+                                         type="primary", use_container_width=True,
+                                         disabled=not edit_smartar.strip()):
                                 sb.table("smartar_goals").update({
-                                    "tracking_period": new_period,
+                                    "exclusion_goal":  edit_excl.strip() or None,
+                                    "smartar_goal":    edit_smartar.strip(),
+                                    "tracking_period": edit_period,
+                                    "start_date":      edit_start.isoformat(),
+                                    "gas_exceeding":   edit_gas.get("EXCEEDING", ""),
+                                    "gas_above":       edit_gas.get("ABOVE", ""),
+                                    "gas_expected":    edit_gas.get("EXPECTED", ""),
+                                    "gas_below":       edit_gas.get("BELOW", ""),
+                                    "gas_not_yet":     edit_gas.get("NOT YET", ""),
                                     "updated_at":      datetime.utcnow().isoformat(),
                                 }).eq("id", g["id"]).execute()
-                                st.session_state.pop(f"editper_open_{g['id']}", None)
-                                st.success(f"✅ Tracking period updated to {new_period}.")
+                                st.session_state.pop(f"editgoal_open_{g['id']}", None)
+                                st.success("✅ Goal updated.")
                                 st.rerun()
-                        with epc2:
-                            if st.button("Cancel", key=f"editper_cancel_{g['id']}"):
-                                st.session_state.pop(f"editper_open_{g['id']}", None)
-                                st.rerun()
-
-                    gas = get_gas_dict(g)
-                    if any(gas.values()):
-                        st.markdown("**GAS Performance Levels:**")
-                        for lvl in LEVEL_ORDER:
-                            desc = gas.get(lvl, "")
-                            if desc:
-                                color = LEVEL_COLOR[lvl]
-                                st.markdown(
-                                    f'<div class="gas-level-bar">'
-                                    f'<span class="gas-level-label" style="color:{color}">'
-                                    f'{LEVEL_EMOJI[lvl]} {lvl}</span>'
-                                    f'<span class="gas-level-desc">{desc}</span></div>',
-                                    unsafe_allow_html=True,
-                                )
-                    if g.get("meeting_id"):
-                        st.caption(f"📋 Created from {g.get('program','')} Team Meeting · "
-                                   f"Term {g.get('term','')} Week {g.get('week','')}")
-
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        if st.button(f"🗑 Archive Goal {idx}", key=f"del_{g['id']}"):
-                            st.session_state[f"arch_gb_{g['id']}"] = True
-                    if st.session_state.get(f"arch_gb_{g['id']}"):
-                        reason = st.text_input("Archive reason (optional):",
-                                               key=f"arch_gb_r_{g['id']}")
-                        ca, cb = st.columns(2)
-                        with ca:
-                            if st.button("Confirm Archive", key=f"arch_gb_d_{g['id']}", type="primary"):
-                                if archive_goal(g["id"], reason):
-                                    st.session_state.pop(f"arch_gb_{g['id']}", None)
-                                    # Pre-fill exclusion goal from archived goal for new build
-                                    st.session_state["build_new_after_archive"] = True
-                                    st.session_state["archived_excl_goal"] = g.get("exclusion_goal","")
-                                    st.session_state["archived_student"] = g.get("student_name","")
-                                    st.rerun()
-                        with cb:
-                            if st.button("Cancel", key=f"arch_gb_x_{g['id']}"):
-                                st.session_state.pop(f"arch_gb_{g['id']}", None)
+                        with svc2:
+                            if st.button("Cancel", key=f"editgoal_cancel_{g['id']}",
+                                         use_container_width=True):
+                                st.session_state.pop(f"editgoal_open_{g['id']}", None)
                                 st.rerun()
 
         # ── ARCHIVED GOALS — restore button ──────────────────────────────────
