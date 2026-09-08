@@ -124,6 +124,37 @@ except Exception:
 user_email = st.session_state.get("user_email", "unknown")
 sb = _get_client()
 
+# ---- light visual polish, scoped to this page only ----
+st.markdown("""
+<style>
+[data-testid="stAppViewContainer"] .main .block-container { padding-top: 1.5rem; max-width: 1100px; }
+.stTabs [data-baseweb="tab-list"] { gap: 4px; }
+.stTabs [data-baseweb="tab"] {
+    border-radius: 10px 10px 0 0; padding: 8px 18px; font-weight: 500;
+    background-color: rgba(31,56,100,0.04);
+}
+.stTabs [aria-selected="true"] { background-color: rgba(31,56,100,0.10); }
+div[data-testid="stExpander"] { border-radius: 12px; border: 1px solid rgba(31,56,100,0.12); }
+div[data-testid="stMetric"] {
+    background-color: rgba(31,56,100,0.04); border-radius: 12px;
+    padding: 12px 16px; border: 1px solid rgba(31,56,100,0.10);
+}
+.stButton>button { border-radius: 8px; }
+.stButton>button[kind="primary"] { background-color: #1F3864; border-color: #1F3864; }
+.pathway-header {
+    background: linear-gradient(135deg, #1F3864 0%, #2E5E8C 100%);
+    border-radius: 16px; padding: 22px 28px; margin-bottom: 18px; color: white;
+}
+.pathway-header h1 { color: white; font-size: 26px; margin: 0 0 4px 0; }
+.pathway-header p { color: rgba(255,255,255,0.85); margin: 0; font-size: 14px; }
+.student-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 44px; height: 44px; border-radius: 50%; background: #1F3864;
+    color: white; font-weight: 600; font-size: 15px; margin-right: 12px;
+}
+</style>
+""", unsafe_allow_html=True)
+
 with st.expander("\U0001f527 Connection info (for setup/troubleshooting)"):
     st.code(connected_project())
     st.caption(
@@ -238,153 +269,202 @@ if not student_labels:
     st.info("No active students on the register yet — add them in Student Register first.")
     st.stop()
 
-st.title("Learning Engagement & Transfer Pathway")
-st.caption("Capture HOW a student engages, so the teaching METHOD can be replicated — not duplicated.")
+st.markdown("""
+<div class="pathway-header">
+<h1>\U0001f9ed Learning Engagement &amp; Transfer Pathway</h1>
+<p>Capture HOW a student engages, so the teaching METHOD can be replicated — not duplicated.</p>
+</div>
+""", unsafe_allow_html=True)
 
-selected_label = st.selectbox("Student", sorted(student_labels.keys()))
+col_pick, col_badge = st.columns([3, 1])
+with col_pick:
+    selected_label = st.selectbox("Student", sorted(student_labels.keys()))
 student_id = student_labels[selected_label]  # student's initials
 
+# ---- fetch this student's data once, reuse across the header dashboard and every tab ----
+existing = sb.table("pathway_profile").select("*").eq("student_id", student_id).execute().data
+existing = existing[0] if existing else {}
+attached = sb.table("pathway_student_methods").select("id, method_id, pathway_method_bank(*)").eq("student_id", student_id).execute().data
+
+profile_items = sum(len(existing.get(k, [])) for k in
+                     ("regulation_state", "sensory_preferences", "relational_trust", "environmental_needs"))
+held_contexts = set()
+for a in attached:
+    logs = sb.table("pathway_application_log").select("context_applied, held_up").eq("student_method_id", a["id"]).execute().data
+    held_contexts.update(e["context_applied"] for e in logs if e.get("held_up") in ("Y", "Partial"))
+
+with col_badge:
+    initials = student_id[:2].upper()
+    st.markdown(f"<div style='padding-top:26px'><span class='student-badge'>{initials}</span></div>", unsafe_allow_html=True)
+
+m1, m2, m3 = st.columns(3)
+m1.metric("Engagement notes", profile_items)
+m2.metric("Methods attached", len(attached))
+m3.metric("Contexts held in", len(held_contexts))
+st.divider()
+
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "1 \u00b7 Engagement Profile", "2 \u00b7 Method Signature", "3 \u00b7 Transfer Mapping",
-    "4 \u00b7 Application Log", "5 \u00b7 Reporting Roll-up",
+    f"{'\u2705 ' if profile_items else ''}\U0001f9e9 Engagement Profile",
+    f"{'\u2705 ' if attached else ''}\U0001f9ed Method Signature",
+    "\U0001f501 Transfer Mapping",
+    "\U0001f4dd Application Log",
+    "\U0001f4ca Reporting Roll-up",
 ])
 
 # ================= TAB 1 — Engagement Profile =================
 with tab1:
-    st.subheader("How this student comes online")
-    existing = sb.table("pathway_profile").select("*").eq("student_id", student_id).execute().data
-    existing = existing[0] if existing else {}
+    st.subheader("\U0001f9e9 How this student comes online")
+    st.caption("Click what applies — add your own if it's not listed. This becomes the foundation everything else builds on.")
 
-    reg = chip_picker("Regulation state / Window of Tolerance", REGULATION_OPTIONS, existing.get("regulation_state", []), "reg")
-    sens = chip_picker("Sensory preferences", SENSORY_OPTIONS, existing.get("sensory_preferences", []), "sens")
-    rel = chip_picker("Relational trust markers (PACE)", RELATIONAL_OPTIONS, existing.get("relational_trust", []), "rel")
-    env = chip_picker("Environmental needs", ENVIRONMENTAL_OPTIONS, existing.get("environmental_needs", []), "env")
+    with st.container(border=True):
+        reg = chip_picker("Regulation state / Window of Tolerance", REGULATION_OPTIONS, existing.get("regulation_state", []), "reg")
+        sens = chip_picker("Sensory preferences", SENSORY_OPTIONS, existing.get("sensory_preferences", []), "sens")
+        rel = chip_picker("Relational trust markers (PACE)", RELATIONAL_OPTIONS, existing.get("relational_trust", []), "rel")
+        env = chip_picker("Environmental needs", ENVIRONMENTAL_OPTIONS, existing.get("environmental_needs", []), "env")
 
-    if st.button("Save Engagement Profile", type="primary"):
+    if st.button("\U0001f4be Save Engagement Profile", type="primary"):
         sb.table("pathway_profile").upsert({
             "student_id": student_id, "regulation_state": reg, "sensory_preferences": sens,
             "relational_trust": rel, "environmental_needs": env,
         }).execute()
-        st.success("Saved.")
+        st.success("Saved — nice work building this student's profile!")
 
 # ================= TAB 2 — Method Signature =================
 with tab2:
-    st.subheader("The transferable teaching move")
-    st.caption("Blue = Universal (works for most students) \u00b7 Yellow = Targeted (specific to this student)")
+    st.subheader("\U0001f9ed The transferable teaching move")
+    st.markdown(
+        "<span style='background:#DCE6F1;color:#0C447C;padding:2px 10px;border-radius:12px;font-size:13px;'>\u25cf Universal</span> "
+        "&nbsp;works for most students&nbsp;&nbsp;&nbsp; "
+        "<span style='background:#FFF2CC;color:#854F0B;padding:2px 10px;border-radius:12px;font-size:13px;'>\u25cf Targeted</span> "
+        "&nbsp;specific to this student",
+        unsafe_allow_html=True,
+    )
+    st.write("")
 
     bank = sb.table("pathway_method_bank").select("*").order("instructional_move").execute().data
     bank_labels = {f"{m['instructional_move']} \u2014 {m.get('disposition') or 'no disposition set'} ({m['observed_context']})": m for m in bank}
 
     mode = st.segmented_control("Attach a method to this student", ["Pick from existing bank", "+ New method signature"])
 
-    if mode == "Pick from existing bank" and bank_labels:
-        pick = st.selectbox("Method", sorted(bank_labels.keys()))
-        if st.button("Attach to student"):
-            sb.table("pathway_student_methods").insert({
-                "student_id": student_id, "method_id": bank_labels[pick]["id"],
-            }).execute()
-            st.success("Attached.")
-    else:
-        ctx = st.pills("Observed context", CONTEXT_OPTIONS, selection_mode="single")
-        if ctx == "Other (add below)":
-            ctx = st.text_input("Custom context")
-        move = st.text_area("Instructional move — describe abstractly (e.g. \"concrete-before-abstract sequencing\", not \"used counters in maths\")")
-        st.markdown("**Disposition activated** \u2014 the habit that actually transfers; capability and knowledge below are what gets demonstrated once it does.")
-        disposition = st.pills("Disposition activated", DISPOSITION_OPTIONS, selection_mode="single", label_visibility="collapsed")
-        if disposition:
-            areas = ", ".join(SA_DISPOSITION_LEARNING_AREAS.get(disposition, []))
-            st.caption(f"SA Curriculum: *{SA_DISPOSITION_WHAT_IT_IS[disposition]}* Highlighted in: {areas}.")
+    with st.container(border=True):
+        if mode == "Pick from existing bank" and bank_labels:
+            pick = st.selectbox("Method", sorted(bank_labels.keys()))
+            if st.button("\U0001f517 Attach to student"):
+                sb.table("pathway_student_methods").insert({
+                    "student_id": student_id, "method_id": bank_labels[pick]["id"],
+                }).execute()
+                st.success("Attached.")
         else:
-            disposition = st.text_input("Not listed? Name it here")
-        caps = st.pills("AC General Capability targeted", AC_CAPABILITIES, selection_mode="multi") or []
-        ut = st.segmented_control("Universal or Targeted?", ["Universal", "Targeted"])
-        if st.button("Create & attach", type="primary"):
-            new = sb.table("pathway_method_bank").insert({
-                "observed_context": ctx, "instructional_move": move, "disposition": disposition,
-                "ac_capabilities": caps, "universal_or_targeted": ut,
-            }).execute().data[0]
-            sb.table("pathway_student_methods").insert({
-                "student_id": student_id, "method_id": new["id"],
-            }).execute()
-            st.success("Created and attached.")
+            ctx = st.pills("Observed context", CONTEXT_OPTIONS, selection_mode="single")
+            if ctx == "Other (add below)":
+                ctx = st.text_input("Custom context")
+            move = st.text_area("Instructional move — describe abstractly (e.g. \"concrete-before-abstract sequencing\", not \"used counters in maths\")")
+            st.markdown("**\U0001f9ed Disposition activated** \u2014 the habit that actually transfers; capability and knowledge below are what gets demonstrated once it does.")
+            disposition = st.pills("Disposition activated", DISPOSITION_OPTIONS, selection_mode="single", label_visibility="collapsed")
+            if disposition:
+                areas = ", ".join(SA_DISPOSITION_LEARNING_AREAS.get(disposition, []))
+                st.caption(f"SA Curriculum: *{SA_DISPOSITION_WHAT_IT_IS[disposition]}* Highlighted in: {areas}.")
+            else:
+                disposition = st.text_input("Not listed? Name it here")
+            caps = st.pills("AC General Capability targeted", AC_CAPABILITIES, selection_mode="multi") or []
+            ut = st.segmented_control("Universal or Targeted?", ["Universal", "Targeted"])
+            if st.button("\u2728 Create & attach", type="primary"):
+                new = sb.table("pathway_method_bank").insert({
+                    "observed_context": ctx, "instructional_move": move, "disposition": disposition,
+                    "ac_capabilities": caps, "universal_or_targeted": ut,
+                }).execute().data[0]
+                sb.table("pathway_student_methods").insert({
+                    "student_id": student_id, "method_id": new["id"],
+                }).execute()
+                st.success("Created and attached.")
 
     st.divider()
-    st.markdown("**Methods attached to this student**")
-    attached = sb.table("pathway_student_methods").select("id, method_id, pathway_method_bank(*)").eq("student_id", student_id).execute().data
+    st.markdown("**\U0001f4cc Methods attached to this student**")
+    if not attached:
+        st.caption("Nothing attached yet — pick or create a method signature above to get started.")
     for a in attached:
         m = a["pathway_method_bank"]
-        colour = "\U0001f535" if m["universal_or_targeted"] == "Universal" else "\U0001f7e1"
-        st.write(
-            f"{colour} **{m['instructional_move']}** \u2014 {m['observed_context']} \u00b7 "
-            f"disposition: **{m.get('disposition') or '\u2014'}** \u00b7 {', '.join(m['ac_capabilities'])}"
-        )
+        badge_colour, badge_text = ("#DCE6F1", "#0C447C") if m["universal_or_targeted"] == "Universal" else ("#FFF2CC", "#854F0B")
+        with st.container(border=True):
+            st.markdown(
+                f"<span style='background:{badge_colour};color:{badge_text};padding:2px 10px;"
+                f"border-radius:12px;font-size:12px;font-weight:600;'>{m['universal_or_targeted']}</span>"
+                f"&nbsp;&nbsp;**{m['instructional_move']}**",
+                unsafe_allow_html=True,
+            )
+            st.caption(f"{m['observed_context']} \u00b7 disposition: **{m.get('disposition') or '\u2014'}** \u00b7 {', '.join(m['ac_capabilities'])}")
 
 # ================= TAB 3 — Transfer Mapping =================
 with tab3:
-    st.subheader("Where else this disposition shows up")
+    st.subheader("\U0001f501 Where else this disposition shows up")
     st.caption("Disposition-led, not method-led: a disposition like curiosity doesn't care which subject it's in. Ask where else it could be invited — capability and knowledge will follow it in.")
     if not attached:
-        st.info("Attach a method signature in Tab 2 first.")
+        st.info("\U0001f449 Attach a method signature in Tab 2 first — Transfer Mapping needs one to work from.")
     else:
-        method_choice = st.selectbox(
-            "Method signature (for its disposition)", attached,
-            format_func=lambda a: f"{a['pathway_method_bank']['instructional_move']} — {a['pathway_method_bank'].get('disposition') or 'no disposition set'}",
-        )
-        st.write(f"Disposition: **{method_choice['pathway_method_bank'].get('disposition') or '\u2014'}**")
-        disp = method_choice["pathway_method_bank"].get("disposition")
-        suggested = curriculum_suggested_contexts(disp) if disp else []
-        if suggested:
-            areas = ", ".join(SA_DISPOSITION_LEARNING_AREAS.get(disp, []))
-            st.caption(f"SA Curriculum highlights {disp} in: {areas} \u2014 pre-selected below, adjust as needed.")
-        other_contexts = st.pills(
-            "Other contexts this disposition could show up in", CONTEXT_OPTIONS,
-            selection_mode="multi", default=suggested, key="tm_ctx",
-        ) or []
-        staff_trial = st.text_input("Staff to invite it (comma-separated)")
-        if st.button("Save transfer mapping", type="primary"):
-            sb.table("pathway_transfer_map").insert({
-                "student_method_id": method_choice["id"],
-                "other_contexts": other_contexts,
-                "staff_to_trial": [s.strip() for s in staff_trial.split(",") if s.strip()],
-            }).execute()
-            st.success("Saved.")
+        with st.container(border=True):
+            method_choice = st.selectbox(
+                "Method signature (for its disposition)", attached,
+                format_func=lambda a: f"{a['pathway_method_bank']['instructional_move']} — {a['pathway_method_bank'].get('disposition') or 'no disposition set'}",
+            )
+            st.write(f"Disposition: **{method_choice['pathway_method_bank'].get('disposition') or '\u2014'}**")
+            disp = method_choice["pathway_method_bank"].get("disposition")
+            suggested = curriculum_suggested_contexts(disp) if disp else []
+            if suggested:
+                areas = ", ".join(SA_DISPOSITION_LEARNING_AREAS.get(disp, []))
+                st.caption(f"\U0001f4a1 SA Curriculum highlights {disp} in: {areas} \u2014 pre-selected below, adjust as needed.")
+            other_contexts = st.pills(
+                "Other contexts this disposition could show up in", CONTEXT_OPTIONS,
+                selection_mode="multi", default=suggested, key="tm_ctx",
+            ) or []
+            staff_trial = st.text_input("Staff to invite it (comma-separated)")
+            if st.button("\U0001f4be Save transfer mapping", type="primary"):
+                sb.table("pathway_transfer_map").insert({
+                    "student_method_id": method_choice["id"],
+                    "other_contexts": other_contexts,
+                    "staff_to_trial": [s.strip() for s in staff_trial.split(",") if s.strip()],
+                }).execute()
+                st.success("Saved.")
 
 # ================= TAB 4 — Application Log =================
 with tab4:
-    st.subheader("Evidence the replication happened")
+    st.subheader("\U0001f4dd Evidence the replication happened")
     if not attached:
-        st.info("Attach a method signature in Tab 2 first.")
+        st.info("\U0001f449 Attach a method signature in Tab 2 first — the log needs one to record against.")
     else:
-        log_method = st.selectbox(
-            "Method signature", attached,
-            format_func=lambda a: a["pathway_method_bank"]["instructional_move"],
-            key="log_method",
-        )
-        c1, c2 = st.columns(2)
-        with c1:
-            log_date = st.date_input("Date", value=date.today())
-            staff = st.text_input("Staff")
-        with c2:
-            ctx_applied = st.pills("Context applied in", CONTEXT_OPTIONS, selection_mode="single", key="log_ctx")
-            held_up = st.segmented_control("Held up?", ["Y", "Partial", "N"])
-        adaptation = st.text_area("Adaptation needed (if any)")
-        if st.button("Log entry", type="primary"):
-            sb.table("pathway_application_log").insert({
-                "student_method_id": log_method["id"], "log_date": str(log_date),
-                "staff": staff, "context_applied": ctx_applied,
-                "held_up": held_up, "adaptation_needed": adaptation,
-            }).execute()
-            st.success("Logged.")
+        with st.container(border=True):
+            log_method = st.selectbox(
+                "Method signature", attached,
+                format_func=lambda a: a["pathway_method_bank"]["instructional_move"],
+                key="log_method",
+            )
+            c1, c2 = st.columns(2)
+            with c1:
+                log_date = st.date_input("Date", value=date.today())
+                staff = st.text_input("Staff")
+            with c2:
+                ctx_applied = st.pills("Context applied in", CONTEXT_OPTIONS, selection_mode="single", key="log_ctx")
+                held_up = st.segmented_control("Held up?", ["Y", "Partial", "N"])
+            adaptation = st.text_area("Adaptation needed (if any)")
+            if st.button("\U0001f4be Log entry", type="primary"):
+                sb.table("pathway_application_log").insert({
+                    "student_method_id": log_method["id"], "log_date": str(log_date),
+                    "staff": staff, "context_applied": ctx_applied,
+                    "held_up": held_up, "adaptation_needed": adaptation,
+                }).execute()
+                st.success("Logged.")
 
-        st.divider()
         entries = sb.table("pathway_application_log").select("*").eq("student_method_id", log_method["id"]).order("log_date").execute().data
         if entries:
-            st.table([{"Date": e["log_date"], "Staff": e["staff"], "Context": e["context_applied"],
-                       "Held up?": e["held_up"], "Adaptation": e["adaptation_needed"]} for e in entries])
+            st.markdown("**\U0001f4c3 Log history**")
+            st.dataframe(
+                [{"Date": e["log_date"], "Staff": e["staff"], "Context": e["context_applied"],
+                  "Held up?": e["held_up"], "Adaptation": e["adaptation_needed"]} for e in entries],
+                use_container_width=True, hide_index=True,
+            )
 
 # ================= TAB 5 — Reporting Roll-up =================
 with tab5:
-    st.subheader("SMARTAR / GAS-aligned roll-up")
+    st.subheader("\U0001f4ca SMARTAR / GAS-aligned roll-up")
     st.caption("Leads with disposition strength — how many contexts the disposition itself has been seen operating in — since that's the strongest evidence of transfer.")
 
     all_logs = []
@@ -405,51 +485,50 @@ with tab5:
         cols = st.columns(len(disposition_contexts))
         for col, (disp, ctxs) in zip(cols, disposition_contexts.items()):
             with col:
-                st.metric(disp, len(ctxs))
+                st.metric(f"\U0001f9ed {disp}", len(ctxs))
                 if ctxs:
                     st.caption(", ".join(sorted(ctxs)))
     else:
-        st.info("No methods attached yet — disposition strength will show here once logged.")
+        st.info("\U0001f449 No methods attached yet — disposition strength will show here once logged.")
 
     st.divider()
-    st.markdown("**Capability & knowledge evidence** _(supporting detail — where the disposition showed up, not the headline)_")
+    st.markdown("**\U0001f4da Capability & knowledge evidence** _(supporting detail — where the disposition showed up, not the headline)_")
     replicated_contexts = {e["context_applied"] for e in all_logs if e["held_up"] in ("Y", "Partial")}
     st.write(f"Contexts replicated in overall: {len(replicated_contexts)} — {', '.join(sorted(replicated_contexts)) or '\u2014'}")
 
     existing_rollup = sb.table("pathway_roll_up").select("*").eq("student_id", student_id).execute().data
     existing_rollup = existing_rollup[0] if existing_rollup else {}
 
-    default_primary = ", ".join(disposition_contexts.keys()) if disposition_contexts else ""
-    primary_disposition = st.text_input("Primary disposition(s) demonstrated", value=existing_rollup.get("primary_disposition", default_primary))
-    smartar_goal = st.text_input("Linked SMARTAR / GAS goal", value=existing_rollup.get("linked_smartar_goal", ""))
+    with st.container(border=True):
+        default_primary = ", ".join(disposition_contexts.keys()) if disposition_contexts else ""
+        primary_disposition = st.text_input("Primary disposition(s) demonstrated", value=existing_rollup.get("primary_disposition", default_primary))
+        smartar_goal = st.text_input("Linked SMARTAR / GAS goal", value=existing_rollup.get("linked_smartar_goal", ""))
 
-    if st.button("\u2728 Draft evidence summary from logged data"):
-        # TODO: point this at the portal's actual shared AI helper (e.g. groq_ai_call) —
-        # not present in archive_utils.py / Student Register, so still needs its import path.
-        try:
-            from ai_helpers import groq_ai_call
-            prompt = (
-                "Summarise, in 2-3 sentences for a staff report, the evidence that this student's "
-                f"dispositions have transferred across contexts. Disposition -> contexts held up in: "
-                f"{ {k: sorted(v) for k, v in disposition_contexts.items()} }. Log detail: {all_logs}"
-            )
-            draft = groq_ai_call(prompt)
-        except Exception:
-            draft = "(AI helper not wired yet — draft manually below.)"
-        st.session_state["evidence_draft"] = draft
+        if st.button("\u2728 Draft evidence summary from logged data"):
+            # TODO: point this at the portal's actual shared AI helper (e.g. groq_ai_call) —
+            # not present in archive_utils.py / Student Register, so still needs its import path.
+            try:
+                from ai_helpers import groq_ai_call
+                prompt = (
+                    "Summarise, in 2-3 sentences for a staff report, the evidence that this student's "
+                    f"dispositions have transferred across contexts. Disposition -> contexts held up in: "
+                    f"{ {k: sorted(v) for k, v in disposition_contexts.items()} }. Log detail: {all_logs}"
+                )
+                draft = groq_ai_call(prompt)
+            except Exception:
+                draft = "(AI helper not wired yet — draft manually below.)"
+            st.session_state["evidence_draft"] = draft
 
-    evidence = st.text_area("Evidence of transfer", value=st.session_state.get("evidence_draft", existing_rollup.get("evidence_of_transfer", "")))
-    next_steps = st.text_area("Next steps", value=existing_rollup.get("next_steps", ""))
+        evidence = st.text_area("Evidence of transfer", value=st.session_state.get("evidence_draft", existing_rollup.get("evidence_of_transfer", "")))
+        next_steps = st.text_area("Next steps", value=existing_rollup.get("next_steps", ""))
 
-    if st.button("Save roll-up", type="primary"):
-        sb.table("pathway_roll_up").upsert({
-            "student_id": student_id, "linked_smartar_goal": smartar_goal,
-            "primary_disposition": primary_disposition,
-            "evidence_of_transfer": evidence, "next_steps": next_steps,
-        }).execute()
-        st.success("Saved.")
-
-    st.divider()
+        if st.button("\U0001f4be Save roll-up", type="primary"):
+            sb.table("pathway_roll_up").upsert({
+                "student_id": student_id, "linked_smartar_goal": smartar_goal,
+                "primary_disposition": primary_disposition,
+                "evidence_of_transfer": evidence, "next_steps": next_steps,
+            }).execute()
+            st.success("Saved.")
 
     def build_docx() -> bytes:
         """Build a Word report mirroring the CLC-LBU_Learning_Engagement_Transfer_Pathway.docx
@@ -510,7 +589,9 @@ with tab5:
         doc.save(buf)
         return buf.getvalue()
 
-    if st.button("\U0001f4c4 Generate & save to archive"):
+    st.divider()
+    st.markdown("**\U0001f4c4 Export**")
+    if st.button("\U0001f4c4 Generate & save to archive", type="primary"):
         file_bytes = build_docx()
         filename = f"Learning_Engagement_Pathway_{student_id}.docx"
         rec = archive_document(
