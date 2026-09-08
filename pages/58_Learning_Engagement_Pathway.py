@@ -33,6 +33,7 @@ create table if not exists pathway_method_bank (
     id bigint generated always as identity primary key,
     observed_context text not null,
     instructional_move text not null,
+    disposition text not null default '',
     ac_capabilities text[] not null default '{}',
     universal_or_targeted text not null check (universal_or_targeted in ('Universal','Targeted')),
     created_at timestamptz default now()
@@ -76,10 +77,16 @@ create table if not exists pathway_application_log (
 create table if not exists pathway_roll_up (
     student_id text primary key,
     linked_smartar_goal text,
+    primary_disposition text,
     evidence_of_transfer text,
     next_steps text,
     updated_at timestamptz default now()
 );
+
+-- MIGRATION: if you already ran the schema above before this update, run this
+-- against your existing tables instead of the create-table statements:
+--   alter table pathway_method_bank add column if not exists disposition text not null default '';
+--   alter table pathway_roll_up add column if not exists primary_disposition text;
 """
 
 import io
@@ -148,6 +155,11 @@ AC_CAPABILITIES = [
     "Literacy", "Numeracy", "ICT Capability", "Critical & Creative Thinking",
     "Personal & Social Capability", "Ethical Understanding", "Intercultural Understanding",
 ]
+DISPOSITION_OPTIONS = [
+    "Curiosity", "Persistence", "Self-regulation", "Collaboration", "Bravery",
+    "Kindness", "Fairness", "Honesty", "Gratitude", "Hope", "Humour / playfulness",
+    "Love of learning", "Creativity", "Leadership", "Social intelligence", "Zest",
+]
 
 def chip_picker(label, options, existing, key):
     """Pill buttons (st.pills, multi-select) + a small free-text add-on for genuinely new
@@ -205,7 +217,7 @@ with tab2:
     st.caption("Blue = Universal (works for most students) \u00b7 Yellow = Targeted (specific to this student)")
 
     bank = sb.table("pathway_method_bank").select("*").order("instructional_move").execute().data
-    bank_labels = {f"{m['instructional_move']} ({m['observed_context']})": m for m in bank}
+    bank_labels = {f"{m['instructional_move']} \u2014 {m.get('disposition') or 'no disposition set'} ({m['observed_context']})": m for m in bank}
 
     mode = st.segmented_control("Attach a method to this student", ["Pick from existing bank", "+ New method signature"])
 
@@ -221,11 +233,15 @@ with tab2:
         if ctx == "Other (add below)":
             ctx = st.text_input("Custom context")
         move = st.text_area("Instructional move — describe abstractly (e.g. \"concrete-before-abstract sequencing\", not \"used counters in maths\")")
+        st.markdown("**Disposition activated** \u2014 the habit that actually transfers; capability and knowledge below are what gets demonstrated once it does.")
+        disposition = st.pills("Disposition activated", DISPOSITION_OPTIONS, selection_mode="single", label_visibility="collapsed")
+        if not disposition:
+            disposition = st.text_input("Not listed? Name it here")
         caps = st.pills("AC General Capability targeted", AC_CAPABILITIES, selection_mode="multi") or []
         ut = st.segmented_control("Universal or Targeted?", ["Universal", "Targeted"])
         if st.button("Create & attach", type="primary"):
             new = sb.table("pathway_method_bank").insert({
-                "observed_context": ctx, "instructional_move": move,
+                "observed_context": ctx, "instructional_move": move, "disposition": disposition,
                 "ac_capabilities": caps, "universal_or_targeted": ut,
             }).execute().data[0]
             sb.table("pathway_student_methods").insert({
@@ -239,20 +255,25 @@ with tab2:
     for a in attached:
         m = a["pathway_method_bank"]
         colour = "\U0001f535" if m["universal_or_targeted"] == "Universal" else "\U0001f7e1"
-        st.write(f"{colour} **{m['instructional_move']}** — {m['observed_context']} \u00b7 {', '.join(m['ac_capabilities'])}")
+        st.write(
+            f"{colour} **{m['instructional_move']}** \u2014 {m['observed_context']} \u00b7 "
+            f"disposition: **{m.get('disposition') or '\u2014'}** \u00b7 {', '.join(m['ac_capabilities'])}"
+        )
 
 # ================= TAB 3 — Transfer Mapping =================
 with tab3:
-    st.subheader("Where else this method applies")
+    st.subheader("Where else this disposition shows up")
+    st.caption("Disposition-led, not method-led: a disposition like curiosity doesn't care which subject it's in. Ask where else it could be invited — capability and knowledge will follow it in.")
     if not attached:
         st.info("Attach a method signature in Tab 2 first.")
     else:
         method_choice = st.selectbox(
-            "Method signature", attached,
-            format_func=lambda a: a["pathway_method_bank"]["instructional_move"],
+            "Method signature (for its disposition)", attached,
+            format_func=lambda a: f"{a['pathway_method_bank']['instructional_move']} — {a['pathway_method_bank'].get('disposition') or 'no disposition set'}",
         )
-        other_contexts = st.pills("Other contexts it could apply", CONTEXT_OPTIONS, selection_mode="multi", key="tm_ctx") or []
-        staff_trial = st.text_input("Staff to try it (comma-separated)")
+        st.write(f"Disposition: **{method_choice['pathway_method_bank'].get('disposition') or '\u2014'}**")
+        other_contexts = st.pills("Other contexts this disposition could show up in", CONTEXT_OPTIONS, selection_mode="multi", key="tm_ctx") or []
+        staff_trial = st.text_input("Staff to invite it (comma-separated)")
         if st.button("Save transfer mapping", type="primary"):
             sb.table("pathway_transfer_map").insert({
                 "student_method_id": method_choice["id"],
@@ -297,20 +318,42 @@ with tab4:
 # ================= TAB 5 — Reporting Roll-up =================
 with tab5:
     st.subheader("SMARTAR / GAS-aligned roll-up")
+    st.caption("Leads with disposition strength — how many contexts the disposition itself has been seen operating in — since that's the strongest evidence of transfer.")
 
     all_logs = []
     for a in attached:
         entries = sb.table("pathway_application_log").select("*").eq("student_method_id", a["id"]).execute().data
         all_logs.extend(entries)
 
+    # Group by DISPOSITION first — the headline metric — not by method
+    disposition_contexts = {}
+    for a in attached:
+        m = a["pathway_method_bank"]
+        disp = m.get("disposition") or "(no disposition set)"
+        held = {e["context_applied"] for e in all_logs if e.get("held_up") in ("Y", "Partial")
+                and e["student_method_id"] == a["id"]}
+        disposition_contexts.setdefault(disp, set()).update(held)
+
+    if disposition_contexts:
+        cols = st.columns(len(disposition_contexts))
+        for col, (disp, ctxs) in zip(cols, disposition_contexts.items()):
+            with col:
+                st.metric(disp, len(ctxs))
+                if ctxs:
+                    st.caption(", ".join(sorted(ctxs)))
+    else:
+        st.info("No methods attached yet — disposition strength will show here once logged.")
+
+    st.divider()
+    st.markdown("**Capability & knowledge evidence** _(supporting detail — where the disposition showed up, not the headline)_")
     replicated_contexts = {e["context_applied"] for e in all_logs if e["held_up"] in ("Y", "Partial")}
-    st.metric("Contexts replicated in", len(replicated_contexts))
-    if replicated_contexts:
-        st.write(", ".join(sorted(replicated_contexts)))
+    st.write(f"Contexts replicated in overall: {len(replicated_contexts)} — {', '.join(sorted(replicated_contexts)) or '\u2014'}")
 
     existing_rollup = sb.table("pathway_roll_up").select("*").eq("student_id", student_id).execute().data
     existing_rollup = existing_rollup[0] if existing_rollup else {}
 
+    default_primary = ", ".join(disposition_contexts.keys()) if disposition_contexts else ""
+    primary_disposition = st.text_input("Primary disposition(s) demonstrated", value=existing_rollup.get("primary_disposition", default_primary))
     smartar_goal = st.text_input("Linked SMARTAR / GAS goal", value=existing_rollup.get("linked_smartar_goal", ""))
 
     if st.button("\u2728 Draft evidence summary from logged data"):
@@ -319,9 +362,9 @@ with tab5:
         try:
             from ai_helpers import groq_ai_call
             prompt = (
-                "Summarise, in 2-3 sentences for a staff report, the evidence that this teaching "
-                f"method has transferred across contexts. Contexts replicated: {sorted(replicated_contexts)}. "
-                f"Log detail: {all_logs}"
+                "Summarise, in 2-3 sentences for a staff report, the evidence that this student's "
+                f"dispositions have transferred across contexts. Disposition -> contexts held up in: "
+                f"{ {k: sorted(v) for k, v in disposition_contexts.items()} }. Log detail: {all_logs}"
             )
             draft = groq_ai_call(prompt)
         except Exception:
@@ -334,6 +377,7 @@ with tab5:
     if st.button("Save roll-up", type="primary"):
         sb.table("pathway_roll_up").upsert({
             "student_id": student_id, "linked_smartar_goal": smartar_goal,
+            "primary_disposition": primary_disposition,
             "evidence_of_transfer": evidence, "next_steps": next_steps,
         }).execute()
         st.success("Saved.")
@@ -368,7 +412,8 @@ with tab5:
             m = a["pathway_method_bank"]
             doc.add_paragraph(
                 f"[{m['universal_or_targeted']}] {m['instructional_move']} "
-                f"\u2014 {m['observed_context']} \u00b7 {', '.join(m['ac_capabilities'])}"
+                f"\u2014 {m['observed_context']} \u00b7 disposition: {m.get('disposition') or '\u2014'} "
+                f"\u00b7 {', '.join(m['ac_capabilities'])}"
             )
 
         doc.add_heading("Part 4 \u2014 Application Log", level=1)
@@ -386,8 +431,11 @@ with tab5:
             row[4].text = str(e.get("adaptation_needed") or "")
 
         doc.add_heading("Part 5 \u2014 Reporting Roll-up", level=1)
-        doc.add_paragraph(f"Contexts replicated in: {len(replicated_contexts)} ({', '.join(sorted(replicated_contexts)) or '\u2014'})")
+        doc.add_paragraph(f"Primary disposition(s) demonstrated: {primary_disposition or '\u2014'}")
+        disp_summary = "; ".join(f"{d}: {len(c)} context(s) ({', '.join(sorted(c)) or '\u2014'})" for d, c in disposition_contexts.items())
+        doc.add_paragraph(f"Contexts the disposition held up in: {disp_summary or '\u2014'}")
         doc.add_paragraph(f"Linked SMARTAR / GAS goal: {smartar_goal or '\u2014'}")
+        doc.add_paragraph(f"Capability & knowledge evidence (supporting detail): contexts replicated overall — {len(replicated_contexts)} ({', '.join(sorted(replicated_contexts)) or '\u2014'})")
         doc.add_paragraph(f"Evidence of transfer: {evidence or '\u2014'}")
         doc.add_paragraph(f"Next steps: {next_steps or '\u2014'}")
 
