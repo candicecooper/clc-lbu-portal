@@ -17,6 +17,12 @@ a generic list — each with its official definition and the learning
 areas the Department highlights it in. Transfer Mapping uses that same
 mapping to suggest which CLC-LBU delivery contexts are worth trying next.
 
+Social and emotional capability is prioritised at LBU, so it has its own
+field (not buried inside the generic AC Capability multiselect) — using
+the Australian Curriculum's own four organising elements of Personal and
+Social Capability (Self-awareness, Self-management, Social awareness,
+Social management).
+
 Uses st.pills() and st.segmented_control() for real pill/toggle buttons
 instead of dropdowns and radio dots — these need streamlit>=1.36 in
 requirements.txt. If Render is pinned to an older version, bump it there
@@ -40,8 +46,9 @@ create table if not exists pathway_method_bank (
     observed_context text not null,
     instructional_move text not null,
     disposition text not null default '',
+    social_emotional text[] not null default '{}',
     ac_capabilities text[] not null default '{}',
-    universal_or_targeted text not null check (universal_or_targeted in ('Universal','Targeted')),
+    universal_or_targeted text not null check (universal_or_targeted in ('Universal curriculum (Tier 1)','Targeted curriculum (Tier 2)','Individualised intervention (Tier 3)')),
     created_at timestamptz default now()
 );
 
@@ -92,7 +99,14 @@ create table if not exists pathway_roll_up (
 -- MIGRATION: if you already ran the schema above before this update, run this
 -- against your existing tables instead of the create-table statements:
 --   alter table pathway_method_bank add column if not exists disposition text not null default '';
+--   alter table pathway_method_bank add column if not exists social_emotional text[] not null default '{}';
 --   alter table pathway_roll_up add column if not exists primary_disposition text;
+--   -- If you have data from BEFORE the 3-tier model (values 'Universal'/'Targeted'):
+--   update pathway_method_bank set universal_or_targeted = 'Universal curriculum (Tier 1)' where universal_or_targeted = 'Universal';
+--   update pathway_method_bank set universal_or_targeted = 'Targeted curriculum (Tier 2)' where universal_or_targeted = 'Targeted';
+--   alter table pathway_method_bank drop constraint if exists pathway_method_bank_universal_or_targeted_check;
+--   alter table pathway_method_bank add constraint pathway_method_bank_universal_or_targeted_check
+--     check (universal_or_targeted in ('Universal curriculum (Tier 1)','Targeted curriculum (Tier 2)','Individualised intervention (Tier 3)'));
 """
 
 import io
@@ -191,6 +205,66 @@ CONTEXT_OPTIONS = [
 AC_CAPABILITIES = [
     "Literacy", "Numeracy", "ICT Capability", "Critical & Creative Thinking",
     "Personal & Social Capability", "Ethical Understanding", "Intercultural Understanding",
+]
+# LBU prioritises social and emotional capability, so it gets its own field rather than
+# sitting as one item inside the generic AC Capability multiselect. These four are the
+# Australian Curriculum's own organising elements of Personal and Social Capability —
+# not a separate framework bolted on.
+SEL_ELEMENTS = ["Self-awareness", "Self-management", "Social awareness", "Social management"]
+SEL_WHAT_IT_IS = {
+    "Self-awareness": "Recognising and naming one's own emotions, strengths, values and limitations.",
+    "Self-management": "Regulating emotions, showing self-discipline, setting goals, and adapting to change.",
+    "Social awareness": "Recognising and understanding others' emotions and perspectives, and appreciating diversity.",
+    "Social management": "Communicating, collaborating and resolving conflict effectively in relationships.",
+}
+# Source: LBU's own "Personal and Social Capability Program Map" (uploaded doc) — the
+# actual named programs/BSEM domains staff already run against each SEL element, shown
+# as reference so a pick is grounded in a real intervention, not just a label.
+SEL_LBU_PROGRAMS = {
+    "Self-awareness": [
+        "Interoception \u2014 Ready to Learn Kit (DfE)", "BSEM Stamina \u2014 Growth Mindset (self-assessment rubric)",
+        "BSEM Stamina \u2014 Emotional Intelligence (savouring)", "BSEM Engagement \u2014 Willingness (gratitude, mindgames)",
+        "BSEM Body \u2014 Mindfulness / Present Centred Grounded", "BSEM Body \u2014 De-escalation (what is stress, de/escalation maps)",
+        "BSEM Character \u2014 Hope (images of the future)", "BSEM Character \u2014 Character Strengths (VIA Survey, strength ranking)",
+    ],
+    "Self-management": [
+        "BSEM Body \u2014 Self-regulation", "BSEM Body \u2014 De-escalation (Ready to Learn Plan / WOT)",
+        "BSEM Stamina \u2014 Growth Mindset (mindset awareness)", "BSEM Stamina \u2014 Emotional Intelligence (turning down the volume)",
+        "BSEM Stamina \u2014 Resilience (unhelpful thinking, mindhooks, diffusion)", "BSEM Character \u2014 Hope (the hope map)",
+        "Zones of Regulation", "Alert Program (How Fast Does Your Engine Run) \u2014 JP",
+    ],
+    "Social awareness": [
+        "BSEM Engagement \u2014 Positive Movement and Rhythm (brain breaks)", "Rhythm to Recovery (NIT lessons)",
+        "Relational Mapping (ACF)", "BSEM Stamina \u2014 Emotional Intelligence (emotional communication)",
+        "BSEM Engagement \u2014 Willingness (SMART goals, motivational interviewing)",
+        "BSEM Character \u2014 Character Strengths (strength of community)", "Secret Agent Society",
+    ],
+    "Social management": [
+        "Child Protection Curriculum", "Restorative Practice", "Relational Mapping",
+        "BSEM Relationships \u2014 Attachment (redefining power)", "A 5 is Against the Law (social boundaries)",
+        "BSEM Body \u2014 Self Regulation (percussion games, action stations)",
+        "BSEM Stamina \u2014 Emotional Intelligence (empathy, how full are their buckets)",
+        "BSEM Engagement \u2014 Willingness (problem solving) / Cultivating Wonder (wall of awesome)",
+    ],
+}
+# LBU runs a 3-tier PBS model (confirmed across Zones of Regulation, Secret Agent Society,
+# and the Alert Program in the same program map), not a binary Universal/Targeted split.
+TIER_OPTIONS = ["Universal curriculum (Tier 1)", "Targeted curriculum (Tier 2)", "Individualised intervention (Tier 3)"]
+# Formal/informal assessment sources already in use at LBU (from the same uploaded doc) —
+# shown as a reference so an Engagement Profile note can point back to real evidence.
+LBU_ASSESSMENTS = [
+    "Visual comprehension assessment (formal, once)",
+    "Sensory overview (formal pre) / responses to sensory input (informal)",
+    "Forced Choice Reinforcement Survey \u2014 likes/dislikes/tolerates (formal pre-test)",
+    "ABC (Antecedent-Behaviour-Consequence) scatter plot data (formal, frequent)",
+    "Anxiety Scale assessment \u2014 complex Autism (formal pre)",
+    "Sounds-Write assessments (formal)",
+    "Word Aware vocabulary assessment (formal, every 5 weeks)",
+    "Relational Mapping (individualised, needs basis, via Transition Coordinator)",
+    "States of arousal \u2014 Window of Tolerance",
+    "Memory: Narrative Autobiographical (informal)",
+    "Use of language (informal)",
+    "Use of higher cognitive functions and social interactions (informal)",
 ]
 DISPOSITION_OPTIONS = [
     "Community-minded", "Confident", "Creative", "Curious", "Empathetic", "Open-minded",
@@ -315,6 +389,9 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 with tab1:
     st.subheader("\U0001f9e9 How this student comes online")
     st.caption("Click what applies — add your own if it's not listed. This becomes the foundation everything else builds on.")
+    with st.expander(f"\U0001f4cb LBU assessment sources that can inform this ({len(LBU_ASSESSMENTS)})"):
+        for a_item in LBU_ASSESSMENTS:
+            st.write(f"\u2022 {a_item}")
 
     with st.container(border=True):
         reg = chip_picker("Regulation state / Window of Tolerance", REGULATION_OPTIONS, existing.get("regulation_state", []), "reg")
@@ -333,12 +410,12 @@ with tab1:
 with tab2:
     st.subheader("\U0001f9ed The transferable teaching move")
     st.markdown(
-        "<span style='background:#DCE6F1;color:#0C447C;padding:2px 10px;border-radius:12px;font-size:13px;'>\u25cf Universal</span> "
-        "&nbsp;works for most students&nbsp;&nbsp;&nbsp; "
-        "<span style='background:#FFF2CC;color:#854F0B;padding:2px 10px;border-radius:12px;font-size:13px;'>\u25cf Targeted</span> "
-        "&nbsp;specific to this student",
+        "<span style='background:#DCE6F1;color:#0C447C;padding:2px 10px;border-radius:12px;font-size:13px;'>\u25cf Universal curriculum (Tier 1)</span> "
+        "<span style='background:#FFF2CC;color:#854F0B;padding:2px 10px;border-radius:12px;font-size:13px;'>\u25cf Targeted curriculum (Tier 2)</span> "
+        "<span style='background:#FADBD8;color:#943126;padding:2px 10px;border-radius:12px;font-size:13px;'>\u25cf Individualised intervention (Tier 3)</span>",
         unsafe_allow_html=True,
     )
+    st.caption("LBU's own 3-tier PBS model (seen across Zones of Regulation, Secret Agent Society, and the Alert Program).")
     st.write("")
 
     bank = sb.table("pathway_method_bank").select("*").order("instructional_move").execute().data
@@ -366,12 +443,20 @@ with tab2:
                 st.caption(f"SA Curriculum: *{SA_DISPOSITION_WHAT_IT_IS[disposition]}* Highlighted in: {areas}.")
             else:
                 disposition = st.text_input("Not listed? Name it here")
+            st.markdown("**\U0001f49b Social & emotional capability** \u2014 prioritised at LBU; from the Australian Curriculum's own Personal and Social Capability elements.")
+            social_emotional = st.pills("Social & emotional capability", SEL_ELEMENTS, selection_mode="multi", label_visibility="collapsed") or []
+            if social_emotional:
+                st.caption(" \u00b7 ".join(f"**{e}**: {SEL_WHAT_IT_IS[e]}" for e in social_emotional))
+                lbu_programs = sorted({p for e in social_emotional for p in SEL_LBU_PROGRAMS.get(e, [])})
+                with st.expander(f"\U0001f4d6 LBU programs that build this ({len(lbu_programs)})"):
+                    for p in lbu_programs:
+                        st.write(f"\u2022 {p}")
             caps = st.pills("AC General Capability targeted", AC_CAPABILITIES, selection_mode="multi") or []
-            ut = st.segmented_control("Universal or Targeted?", ["Universal", "Targeted"])
+            ut = st.segmented_control("Tier", TIER_OPTIONS)
             if st.button("\u2728 Create & attach", type="primary"):
                 new = sb.table("pathway_method_bank").insert({
                     "observed_context": ctx, "instructional_move": move, "disposition": disposition,
-                    "ac_capabilities": caps, "universal_or_targeted": ut,
+                    "social_emotional": social_emotional, "ac_capabilities": caps, "universal_or_targeted": ut,
                 }).execute().data[0]
                 sb.table("pathway_student_methods").insert({
                     "student_id": student_id, "method_id": new["id"],
@@ -384,15 +469,23 @@ with tab2:
         st.caption("Nothing attached yet — pick or create a method signature above to get started.")
     for a in attached:
         m = a["pathway_method_bank"]
-        badge_colour, badge_text = ("#DCE6F1", "#0C447C") if m["universal_or_targeted"] == "Universal" else ("#FFF2CC", "#854F0B")
+        tier = m["universal_or_targeted"]
+        badge_colour, badge_text = {
+            "Universal curriculum (Tier 1)": ("#DCE6F1", "#0C447C"),
+            "Targeted curriculum (Tier 2)": ("#FFF2CC", "#854F0B"),
+            "Individualised intervention (Tier 3)": ("#FADBD8", "#943126"),
+        }.get(tier, ("#F2F2F2", "#444441"))
         with st.container(border=True):
             st.markdown(
                 f"<span style='background:{badge_colour};color:{badge_text};padding:2px 10px;"
-                f"border-radius:12px;font-size:12px;font-weight:600;'>{m['universal_or_targeted']}</span>"
+                f"border-radius:12px;font-size:12px;font-weight:600;'>{tier}</span>"
                 f"&nbsp;&nbsp;**{m['instructional_move']}**",
                 unsafe_allow_html=True,
             )
-            st.caption(f"{m['observed_context']} \u00b7 disposition: **{m.get('disposition') or '\u2014'}** \u00b7 {', '.join(m['ac_capabilities'])}")
+            st.caption(
+                f"{m['observed_context']} \u00b7 disposition: **{m.get('disposition') or '\u2014'}** \u00b7 "
+                f"SEL: **{', '.join(m.get('social_emotional') or []) or '\u2014'}** \u00b7 {', '.join(m['ac_capabilities'])}"
+            )
 
 # ================= TAB 3 — Transfer Mapping =================
 with tab3:
@@ -496,6 +589,10 @@ with tab5:
     replicated_contexts = {e["context_applied"] for e in all_logs if e["held_up"] in ("Y", "Partial")}
     st.write(f"Contexts replicated in overall: {len(replicated_contexts)} — {', '.join(sorted(replicated_contexts)) or '\u2014'}")
 
+    sel_seen = sorted({el for a in attached for el in (a["pathway_method_bank"].get("social_emotional") or [])})
+    st.markdown("**\U0001f49b Social & emotional capability demonstrated** _(LBU priority — shown here as supporting evidence, not separate from the disposition story)_")
+    st.write(", ".join(sel_seen) or "\u2014")
+
     existing_rollup = sb.table("pathway_roll_up").select("*").eq("student_id", student_id).execute().data
     existing_rollup = existing_rollup[0] if existing_rollup else {}
 
@@ -559,6 +656,7 @@ with tab5:
             doc.add_paragraph(
                 f"[{m['universal_or_targeted']}] {m['instructional_move']} "
                 f"\u2014 {m['observed_context']} \u00b7 disposition: {m.get('disposition') or '\u2014'} "
+                f"\u00b7 SEL: {', '.join(m.get('social_emotional') or []) or '\u2014'} "
                 f"\u00b7 {', '.join(m['ac_capabilities'])}"
             )
 
@@ -582,6 +680,7 @@ with tab5:
         doc.add_paragraph(f"Contexts the disposition held up in: {disp_summary or '\u2014'}")
         doc.add_paragraph(f"Linked SMARTAR / GAS goal: {smartar_goal or '\u2014'}")
         doc.add_paragraph(f"Capability & knowledge evidence (supporting detail): contexts replicated overall — {len(replicated_contexts)} ({', '.join(sorted(replicated_contexts)) or '\u2014'})")
+        doc.add_paragraph(f"Social & emotional capability demonstrated (LBU priority): {', '.join(sel_seen) or '\u2014'}")
         doc.add_paragraph(f"Evidence of transfer: {evidence or '\u2014'}")
         doc.add_paragraph(f"Next steps: {next_steps or '\u2014'}")
 
